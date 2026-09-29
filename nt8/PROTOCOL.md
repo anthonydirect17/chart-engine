@@ -224,8 +224,11 @@ that would reduce the position (by both position readings) it is refused.
   its own), the page gets a `status` `error`, once per situation and again if it happens on a later trade.
   When the stop was cancelled or rejected and NinjaTrader's OCO cancelled its target too (0.3.1, from the
   Sim101 test), the text says so: "... working stops cover 0 contract(s); the target was cancelled too (OCO),
-  so the position has no stop and no target; check NinjaTrader and add a stop". The start of the text is
-  unchanged. Pairs ChartBridge cancels itself (Flatten, a flat position, the legs check) are not called lost;
+  so the position has no stop and no target; check NinjaTrader and add a stop". When the target went first (a
+  rejected target, or a target cancelled by hand, whose OCO then cancelled the stop), it says "the target was
+  rejected (or cancelled) and the stop was cancelled with it (OCO)" instead. A lone rejected leg is taken as the
+  one that went first (an OCO partner is cancelled, never rejected); otherwise the first leg reported gone. The
+  start of the text is unchanged. Pairs ChartBridge cancels itself (Flatten, a flat position, the legs check) are not called lost;
   after a reload only pairs lost since then are known.
   A market exit that is rejected or cancelled raises an error too.
 - **Reconnects.** The scan never decides "no legs needed" while the account's connection is not steady

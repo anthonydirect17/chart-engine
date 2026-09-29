@@ -756,6 +756,32 @@ public static class OrdersHarness
         ChartBridgeOrders.CheckLegs(tO + 20000); ChartBridgeOrders.CheckLegs(tO + 24500);
         List<string> al3 = sent.Where(m => m.Contains("SimO3") && m.Contains("working stops cover 0")).ToList();
         Check(al3.Count == 1 && !al3[0].Contains("OCO"), "legs cancelled by Flatten: the alarm (position still open) does not blame an OCO cancel: " + string.Join(" | ", al3));
+        // the reviewer's P4: the TARGET is rejected first and the OCO cancels the stop; the alarm says which went first
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3, SimP4");
+        Account p4 = NewAccount("SimP4");
+        Msg("order", Order("SimP4", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(p4, p4.Orders[0], 1, 25000);
+        SetPos(p4, mnq, 1);
+        Order p4s = p4.Orders[1], p4t = p4.Orders[2];
+        p4t.OrderState = OrderState.Rejected; Update(p4, p4t);   // the target is rejected
+        p4s.OrderState = OrderState.Cancelled; Update(p4, p4s);  // and NinjaTrader's OCO cancels the stop
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 26000); ChartBridgeOrders.CheckLegs(tO + 30500);
+        List<string> al5 = sent.Where(m => m.Contains("SimP4") && m.Contains("working stops cover 0")).ToList();
+        Check(al5.Count == 1 && al5[0].Contains("working stops cover 0 contract(s); the target was rejected and the stop was cancelled with it (OCO), so the position has no stop and no target; check NinjaTrader and add a stop")
+              && !al5[0].Contains("cancelled too"), "target rejected first, the stop cancelled by its OCO: the alarm says the target went first: " + string.Join(" | ", al5));
+        // both cancelled, the target first (cancelled by hand, the OCO took the stop): event order decides
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3, SimP4, SimP5");
+        Account p5 = NewAccount("SimP5");
+        Msg("order", Order("SimP5", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(p5, p5.Orders[0], 1, 25000);
+        SetPos(p5, mnq, 1);
+        p5.Orders[2].OrderState = OrderState.Cancelled; Update(p5, p5.Orders[2]);   // target cancelled while the stop still works
+        p5.Orders[1].OrderState = OrderState.Cancelled; Update(p5, p5.Orders[1]);   // then the OCO cancels the stop
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 26000); ChartBridgeOrders.CheckLegs(tO + 30500);
+        Check(sent.Count(m => m.Contains("SimP5") && m.Contains("working stops cover 0 contract(s); the target was cancelled and the stop was cancelled with it (OCO), so the position has no stop and no target")) == 1,
+              "target cancelled first, then its OCO stop: the alarm says the target went first");
         // a stop cancelled while its target still works: the plain alarm, no OCO words
         SetPos(o1, mnq, 0);
         ChartBridgeOrders.CheckLegs(tO + 30000);   // flat: the lost target of the last trade is forgotten

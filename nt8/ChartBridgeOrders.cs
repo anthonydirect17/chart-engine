@@ -222,7 +222,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -1163,9 +1163,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // (Sim101 test, 2026-09-29). The missing-stop alarm says so. Learned from order events while the
         // position is open, per account|contract, and forgotten when the position is flat; pairs ChartBridge
         // itself cancels (Flatten, a flat position, the legs check) never count. After a reload only pairs
-        // lost since then are known; the alarm then has its plain text.
-        private static readonly Dictionary<string, List<Order>> LostTargets = new Dictionary<string, List<Order>>();
+        // lost since then are known; the alarm then has its plain text. The alarm also says which leg went
+        // first: usually the stop (cancelled or rejected) takes the target with it, but a rejected target
+        // takes the stop with it just the same.
+        private class LostPair { public Order Target; public string FirstRole, FirstState; }
+        private static readonly Dictionary<string, List<LostPair>> LostTargets = new Dictionary<string, List<LostPair>>();
         private static readonly Dictionary<string, string> OcoWeCancel = new Dictionary<string, string>();   // OCO id -> account|contract
+        private static readonly Dictionary<string, string[]> FirstGone = new Dictionary<string, string[]>();   // OCO id -> { role, state, account|contract } of the first leg reported gone
 
         private static void NoteWeCancel(IEnumerable<Order> orders)
         {
@@ -1177,6 +1181,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             LostTargets.Remove(key);
             foreach (string oco in OcoWeCancel.Where(kv => kv.Value == key).Select(kv => kv.Key).ToList()) OcoWeCancel.Remove(oco);
+            foreach (string oco in FirstGone.Where(kv => kv.Value[2] == key).Select(kv => kv.Key).ToList()) FirstGone.Remove(oco);
         }
 
         private static bool Gone(Order o) { return o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Rejected; }
@@ -1185,6 +1190,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (string.IsNullOrEmpty(leg.Oco) || leg.Instrument == null) return;
             if (SignedPosition(account, leg.Instrument) == 0) return;   // flat: nothing left unprotected
+            string key = PosKey(account, leg.Instrument);
+            Match own = LegNameRx.Match(leg.Name ?? "");
+            lock (Sync)
+                if (own.Success && !FirstGone.ContainsKey(leg.Oco))
+                    FirstGone[leg.Oco] = new[] { own.Groups[2].Value, leg.OrderState == OrderState.Rejected ? "rejected" : "cancelled", key };
             List<Order> orders;
             lock (account.Orders) orders = account.Orders.ToList();
             lock (Sync) foreach (Order x in Ours) if (x.Account == account && !orders.Contains(x)) orders.Add(x);
@@ -1197,14 +1207,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (m.Groups[2].Value == "stop") stop = x; else if (m.Groups[2].Value == "target") target = x;
             }
             if (stop == null || target == null || !Gone(stop) || !Gone(target) || target.Filled >= target.Quantity) return;
-            string key = PosKey(account, leg.Instrument);
             lock (Sync)
             {
                 if (OcoWeCancel.ContainsKey(leg.Oco)) return;
                 Manage(account, leg.Instrument);   // watched by the missing-stop alarm, and forgotten when flat
-                List<Order> lost;
-                if (!LostTargets.TryGetValue(key, out lost)) LostTargets[key] = lost = new List<Order>();
-                if (!lost.Contains(target)) lost.Add(target);
+                List<LostPair> lost;
+                if (!LostTargets.TryGetValue(key, out lost)) LostTargets[key] = lost = new List<LostPair>();
+                if (lost.Any(x => x.Target == target)) return;
+                // An OCO partner is cancelled, never rejected: a lone rejected leg went first. Two cancelled legs:
+                // the first one reported gone.
+                string[] first;
+                bool stopRej = stop.OrderState == OrderState.Rejected, targetRej = target.OrderState == OrderState.Rejected;
+                if (stopRej != targetRej) first = new[] { stopRej ? "stop" : "target", "rejected" };
+                else if (!FirstGone.TryGetValue(leg.Oco, out first)) first = new[] { "stop", stopRej ? "rejected" : "cancelled" };
+                lost.Add(new LostPair { Target = target, FirstRole = first[0], FirstState = first[1] });
             }
         }
 
@@ -1231,7 +1247,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int pos = SignedPosition(a, inst);
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
-                bool legsWorking = false, lostTarget = false;
+                bool legsWorking = false;
+                LostPair lostTarget = null;
                 int stops = 0, targets = 0;
                 foreach (Order o in orders)
                 {
@@ -1258,17 +1275,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                     FlatSince.Remove(key);
                     int along = Math.Abs(pos);
                     if (stops >= along) { Uncovered.Remove(key); Alarmed.RemoveWhere(x => x.StartsWith(key + "|", StringComparison.Ordinal)); continue; }
-                    List<Order> lost;
-                    lostTarget = targets < along && LostTargets.TryGetValue(key, out lost) && lost.Any(t => IsBuy(t) == (pos < 0));
-                    string snap = pos + ":" + stops + (lostTarget ? ":" + targets + ":oco" : "");
+                    List<LostPair> lost;
+                    if (targets < along && LostTargets.TryGetValue(key, out lost)) lostTarget = lost.LastOrDefault(x => IsBuy(x.Target) == (pos < 0));
+                    string snap = pos + ":" + stops + (lostTarget != null ? ":" + targets + ":oco:" + lostTarget.FirstRole : "");
                     KeyValuePair<string, double> was;
                     if (!Uncovered.TryGetValue(key, out was) || was.Key != snap) { Uncovered[key] = new KeyValuePair<string, double>(snap, now); continue; }
                     if (now - was.Value < SettleMs || !Alarmed.Add(key + "|" + snap)) continue;
                 }
                 // The text up to "contract(s)" is unchanged from 0.3.0, so a search for the old alarm still finds it.
-                string oco = !lostTarget ? ""
-                    : stops == 0 && targets == 0 ? "; the target was cancelled too (OCO), so the position has no stop and no target"
-                    : "; the target was cancelled too (OCO), so working targets cover " + targets + " contract(s)";
+                string oco = "";
+                if (lostTarget != null)
+                {
+                    oco = lostTarget.FirstRole == "target"
+                        ? "; the target was " + lostTarget.FirstState + " and the stop was cancelled with it (OCO)"
+                        : "; the target was cancelled too (OCO)";
+                    oco += stops == 0 && targets == 0 ? ", so the position has no stop and no target" : ", so working targets cover " + targets + " contract(s)";
+                }
                 Alarm(Where(a, inst) + ": the position is " + pos + " but ChartBridge's working stops cover " + stops + " contract(s)" + oco + "; check NinjaTrader and add a stop");
             }
         }

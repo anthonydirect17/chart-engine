@@ -15,8 +15,8 @@ and recompile in NinjaTrader.
   wildcard; The Desk's Live trading page goes there). No `Origin` header (a local program) is allowed;
   `null` is refused. Trading still needs ChartBridge's own page. `/diag` shows the rules under `network`.
 - **Missing-stop alarm** (from the Sim101 test): when the stop's OCO target was cancelled too, the alarm says
-  "... the target was cancelled too (OCO), so the position has no stop and no target". The start of the text
-  is unchanged.
+  "... the target was cancelled too (OCO), so the position has no stop and no target" (or, when the target went
+  first, "the target was rejected and the stop was cancelled with it (OCO)"). The start of the text is unchanged.
 - Tests: the Mono harness unit-tests the address check (IPv4, IPv6, mapped IPv4, LAN, Tailscale, none) and
   the origin check (own page, listed, unlisted, null, missing), runs the real request handler behind a
   listener on every interface with plain GETs (a forged `Host: localhost` from another address is 403 on every
