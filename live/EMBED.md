@@ -67,6 +67,21 @@ on up to every 5 s. Before the first connection the chart shows "Waiting for Cha
 Colors panel, and removes the chart's element. Calling it twice is harmless. Mounting again afterwards,
 in the same container or another, works.
 
+## Connecting straight to ChartBridge: allowOrigins
+
+ChartBridge 0.3.1 and newer accept a browser WebSocket only from their own page or from an origin listed in
+`allowOrigins` in `Documents\NinjaTrader 8\ChartBridge\config.txt`. A host page that connects straight to
+`ws://localhost:8765/ws` (The Desk on the trading PC) must have its own origin there, exactly as the browser sends
+it (`scheme://host[:port]`, no wildcard, the last `allowOrigins` line wins), for example:
+
+```
+allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800, http://localhost:8800
+```
+
+Otherwise ChartBridge answers 403, the chart stays on CONNECTING and "Waiting for ChartBridge", and `onStatus`
+reports `offline` after every try. A relay that connects from a server program sends no `Origin` header and
+needs no entry. Listed origins can read, never trade (see nt8/PROTOCOL.md, Network access).
+
 ## What the chart sends (for a relay)
 
 A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in between only has to pass them on:

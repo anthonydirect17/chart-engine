@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import http from 'node:http';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -317,6 +318,46 @@ try {
     await shot(p2, 'embed-phone.png');
     await p2.evaluate(() => window.__a.destroy());
     await p2.close();
+  }
+
+  /* ---------------- host on its own origin, connecting straight to the bridge: allowOrigins (ChartBridge 0.3.1) */
+  {
+    const HOST_PORT = PORT + 4;
+    const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css' };
+    const host = http.createServer((req, res) => {                // a plain static server: another origin than the bridge
+      const full = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
+      if (!full.startsWith(root) || !fs.existsSync(full) || fs.statSync(full).isDirectory()) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': TYPES[path.extname(full)] || 'application/octet-stream' });
+      fs.createReadStream(full).pipe(res);
+    });
+    await new Promise(r => host.listen(HOST_PORT, '127.0.0.1', r));
+    const origin = 'http://localhost:' + HOST_PORT;
+    await startBridge(PORT + 2, ['--allow-origins=' + origin]);           // lists the host
+    await startBridge(PORT + 3, ['--allow-origins=http://localhost:1']);  // lists someone else
+    try {
+      const p3 = await ctx.newPage();
+      p3.on('pageerror', e => fail('cross-origin pageerror: ' + e.message));
+      await p3.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+      await p3.goto(origin + '/test/embed-host.html');
+      await p3.evaluate(port => {
+        document.getElementById('paneB').hidden = true; window.__st = [];
+        window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws', storagePrefix: 'desk:', onStatus: s => window.__st.push(s.state) });
+      }, PORT + 3);
+      await until(() => p3.evaluate(() => window.__st.filter(s => s === 'offline').length >= 2), 'not listed: refused, offline after each try');
+      const diag3 = await (await fetch(`http://127.0.0.1:${PORT + 3}/diag`)).json();
+      const pill3 = await p3.textContent('#paneA .pill[id$="-connPill"]');
+      check(!(await p3.evaluate(() => window.__st.includes('live'))) && diag3.network.refusedOrigin >= 2 && /CONNECTING|OFFLINE/.test(pill3),
+        'host origin not in allowOrigins: refused (' + diag3.network.refusedOrigin + ' refusals), never live, pill ' + pill3);
+      await p3.evaluate(port => {
+        window.__a.destroy(); window.__st = [];
+        window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws', storagePrefix: 'desk:', onStatus: s => window.__st.push(s.state) });
+      }, PORT + 2);
+      await until(() => p3.evaluate(() => window.__st.includes('live')), 'listed in allowOrigins: connects', 10000);
+      const diag2 = await (await fetch(`http://127.0.0.1:${PORT + 2}/diag`)).json();
+      check(await p3.evaluate(() => window.__a.chart.bars().length > 100) && diag2.network.refusedOrigin === 0, 'host origin in allowOrigins: live with bars, no refusals');
+      await p3.evaluate(() => window.__a.destroy());
+      await p3.close();
+    } finally { host.close(); host.closeAllConnections(); }
   }
   await ctx.close();
 } finally {
