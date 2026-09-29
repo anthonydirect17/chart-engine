@@ -19,10 +19,12 @@
  * Keys (versioned):
  *   live-settings-v2    { root, tf, glide, rangeMode }
  *   live-range-v2       { NQ: 40, ... } range bar size in ticks, per instrument root; only roots set by hand
- *   live-indicators-v1  { <paneId>: { volume, vwap, levels, fills, ib } } indicators on each chart pane (ib: 1.5.3)
+ *   live-indicators-v2  { <paneId>: { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null } }
+ *                       the Indicators menu per chart pane (1.6.0): on = on this chart, shown = drawn (hidden keeps it on
+ *                       the chart), pin = a chip on the pane's strip; the last 5 used; what Hide all hid, for Restore
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
- * The 1.3 keys live-settings-v1 and live-range-v1 are read once, when the new keys do not exist yet, and left
- * in place.
+ * The 1.3 keys live-settings-v1 and live-range-v1, and 1.4 to 1.5.3's live-indicators-v1 ({ <paneId>: { volume, vwap,
+ * levels, fills, ib } }), are read once, when the new keys do not exist yet, and left in place.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = { LivePrefs: factory() };
@@ -36,22 +38,41 @@ const GLIDES = ['smooth', 'fast', 'off'];
 const RANGE_MODES = ['nt', 'traded'];
 const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };
 const RANGE_MIN = 1, RANGE_MAX = 400;
+/*
+ * The indicators (1.6.0 menu). `id` is also the chart layer (fills: the fill marks). Listed in the order the menu's
+ * "On this chart" group and the chip strip show them. `sw` is the CSS color of the swatch; `short` is the chip text and
+ * `letter` the chip on a narrow pane; `alias` holds the short names search matches; `opt` is the read-only setting the
+ * gear shows (only what the chart really does; the Fills gear also holds the fill account choice).
+ */
 const INDICATORS = [
-  { id: 'volume', name: 'Volume' },
-  { id: 'vwap', name: 'VWAP' },
-  { id: 'levels', name: 'Levels' },
-  { id: 'fills', name: 'Fills' },
-  { id: 'ib', name: 'IB 1h' },
+  { id: 'volume', name: 'Volume bars', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
+    opt: 'Bottom 16% of the plot, in the candle colors' },
+  { id: 'vwap', name: 'VWAP', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
+    opt: 'Session VWAP from 18:00 ET; its color is in Colors' },
+  { id: 'levels', name: 'Levels', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
+    alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val value area',
+    opt: 'Prior day high, low, close and value area; overnight high and low' },
+  { id: 'ib', name: 'Initial balance', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
+    opt: '1 hour, locks 10:30 ET' },
+  { id: 'fills', name: 'Fills', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
+    opt: 'Side and size at the fill price' },
 ];
+/* Listed in the menu, tagged "coming" and not selectable until they exist (the volume profile branch). */
+const COMING = [
+  { id: 'profile', name: 'Volume profile', short: 'PROFILE', cat: 'volume', sw: 'var(--line-strong)', alias: 'vp volume profile poc', coming: true },
+];
+const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }];
+const IND_IDS = INDICATORS.map(x => x.id);
+const RECENT_MAX = 5;
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
-   starts here. A main pane saved before 1.5.3 has no ib choice yet and gets this default too. */
+   starts here, each on the chart, shown and pinned to the chip strip. */
 const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true };
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
 const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false };
 const MAIN_PANE = 'main';
 
-const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v1', bracket: 'live-bracket-v1' };
-const OLD = { settings: 'live-settings-v1', range: 'live-range-v1' };
+const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1' };
+const OLD = { settings: 'live-settings-v1', range: 'live-range-v1', indicators: 'live-indicators-v1' };
 
 /** A whole number of ticks from 1 to 400, or null when the text is not one (half typed, empty, 0, 4.5). */
 function parseRange(v) {
@@ -66,10 +87,127 @@ function clampRange(v) {
   return Math.max(RANGE_MIN, Math.min(RANGE_MAX, n));
 }
 
+/* The 1.4 to 1.5.3 per-pane flags (live-indicators-v1): known ids only, booleans only, the rest from `base`. */
 function cleanIndicators(v, base) {
   const out = Object.assign({}, base || NEW_PANE_INDICATORS);
   if (v && typeof v === 'object') for (const k of Object.keys(out)) if (typeof v[k] === 'boolean') out[k] = v[k];
   return out;
+}
+
+/*
+ * One pane's indicator state (1.6.0): { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null }.
+ *   on      on this chart (listed under "On this chart"); off means it waits in its group with a + to add it
+ *   shown   drawn; a hidden one stays on the chart with everything it had (the switch, a chip, Hide all)
+ *   pin     a chip on the pane's strip (only while it is on the chart)
+ *   recent  the last 5 used from the menu, newest first
+ *   restore what Hide all hid, so Restore brings back that same mix (cleared by any other show or hide)
+ * The functions below never change the state they are given; they return a new one.
+ */
+const isList = v => Array.isArray(v);
+function defaultPane(paneId) {
+  const main = paneId === MAIN_PANE, ind = {};
+  for (const id of IND_IDS) ind[id] = { on: main, shown: true, pin: main };
+  return { ind, recent: [], restore: null };
+}
+function cleanIdList(v, max) {
+  if (!isList(v)) return [];
+  const out = [];
+  for (const id of v) if (IND_IDS.includes(id) && !out.includes(id)) out.push(id);
+  return max ? out.slice(0, max) : out;
+}
+function cleanPane(v, paneId) {
+  const out = defaultPane(paneId);
+  if (!v || typeof v !== 'object' || isList(v)) return out;
+  const ind = v.ind && typeof v.ind === 'object' && !isList(v.ind) ? v.ind : {};
+  for (const id of IND_IDS) {
+    const x = ind[id];
+    if (!x || typeof x !== 'object') continue;
+    for (const f of ['on', 'shown', 'pin']) if (typeof x[f] === 'boolean') out.ind[id][f] = x[f];
+  }
+  out.recent = cleanIdList(v.recent, RECENT_MAX);
+  out.restore = isList(v.restore) ? cleanIdList(v.restore) : null;
+  return out;
+}
+/*
+ * A pane saved by 1.4 to 1.5.3 (live-indicators-v1), carried over so every indicator draws exactly as before; an
+ * explicit off stays off. The main pane listed all five as its own, so each stays on the chart: the ones that were
+ * off are hidden (one click brings one back, as before) and all five are pinned. Any other pane started empty, so
+ * only the ones that were on are on its chart (pinned); an off there is off, as on a new pane.
+ */
+function paneFromV1(v1, paneId) {
+  const main = paneId === MAIN_PANE;
+  const flags = cleanIndicators(v1, main ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
+  const out = defaultPane(paneId);
+  for (const id of IND_IDS) out.ind[id] = main ? { on: true, shown: flags[id], pin: true } : { on: flags[id], shown: true, pin: flags[id] };
+  return out;
+}
+function copyPane(st) {
+  const ind = {};
+  for (const id of IND_IDS) ind[id] = Object.assign({}, st.ind[id]);
+  return { ind, recent: st.recent.slice(), restore: st.restore ? st.restore.slice() : null };
+}
+const touch = (st, id) => { st.recent = [id].concat(st.recent.filter(x => x !== id)).slice(0, RECENT_MAX); };
+const Pane = {
+  /** Drawn or not, per indicator: what the chart shows. */
+  drawn(st) { const out = {}; for (const id of IND_IDS) out[id] = !!(st.ind[id].on && st.ind[id].shown); return out; },
+  /** { shown, hidden, on } counts for the button ("shown/on") and the menu. */
+  counts(st) {
+    let shown = 0, on = 0;
+    for (const id of IND_IDS) if (st.ind[id].on) { on++; if (st.ind[id].shown) shown++; }
+    return { shown, on, hidden: on - shown };
+  },
+  /** The menu's switch or +, and a Recent button: add it (shown) when it is not on the chart, else show or hide it. */
+  toggle(st, id) {
+    if (!IND_IDS.includes(id)) return st;
+    const n = copyPane(st), x = n.ind[id];
+    if (!x.on) { x.on = true; x.shown = true; } else x.shown = !x.shown;
+    touch(n, id); n.restore = null;
+    return n;
+  },
+  /** A chip: show or hide one that is on the chart (not counted as a recent use). */
+  setShown(st, id, shown) {
+    if (!IND_IDS.includes(id) || !st.ind[id].on) return st;
+    const n = copyPane(st);
+    n.ind[id].shown = !!shown; n.restore = null;
+    return n;
+  },
+  /** The x: take it off the chart (its pin is kept for when it comes back). */
+  remove(st, id) {
+    if (!IND_IDS.includes(id)) return st;
+    const n = copyPane(st);
+    n.ind[id].on = false; n.ind[id].shown = true;
+    if (n.restore) { n.restore = n.restore.filter(x => x !== id); if (!n.restore.length) n.restore = null; }
+    return n;
+  },
+  pin(st, id, pinned) {
+    if (!IND_IDS.includes(id)) return st;
+    const n = copyPane(st);
+    n.ind[id].pin = pinned === undefined ? !n.ind[id].pin : !!pinned;
+    return n;
+  },
+  /** Hide all shown ones and remember them; with none shown, Restore brings back exactly that mix. */
+  hideAll(st) {
+    const ids = IND_IDS.filter(id => st.ind[id].on && st.ind[id].shown);
+    const n = copyPane(st);
+    if (ids.length) { for (const id of ids) n.ind[id].shown = false; n.restore = ids; return n; }
+    if (n.restore && n.restore.some(id => n.ind[id].on)) { for (const id of n.restore) if (n.ind[id].on) n.ind[id].shown = true; n.restore = null; return n; }
+    return st;
+  },
+  /** The footer button's label: "Hide all (n)", or "Restore" when Hide all left nothing shown. */
+  hideLabel(st) {
+    const c = Pane.counts(st);
+    return c.shown ? 'Hide all (' + c.shown + ')' : st.restore && st.restore.some(id => st.ind[id].on) ? 'Restore' : 'Hide all (0)';
+  },
+};
+
+/* Search: every word typed must be found in the name, the chip text or a short name ("vw", "ib", "pdh", "vol"). */
+function searchIndicators(q) {
+  const words = String(q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  return INDICATORS.concat(COMING).filter(d => {
+    const hay = (d.name + ' ' + d.short + ' ' + d.alias).toLowerCase();
+    return words.every(w => hay.includes(w));
+  });
 }
 
 function create(storage) {
@@ -90,15 +228,25 @@ function create(storage) {
       if (TFS.includes(s.tf)) next.tf = s.tf;
       if (GLIDES.includes(s.glide)) next.glide = s.glide;
       raw.set(KEYS.settings, next);
-      if (!raw.has(KEYS.indicators) && s.layers) raw.set(KEYS.indicators, { [MAIN_PANE]: cleanIndicators(s.layers, DEFAULT_INDICATORS) });
+      if (!raw.has(OLD.indicators) && !raw.has(KEYS.indicators) && s.layers) raw.set(OLD.indicators, { [MAIN_PANE]: cleanIndicators(s.layers, DEFAULT_INDICATORS) });
     }
     if (!raw.has(KEYS.range)) {
       const r = obj(OLD.range), next = {};
       for (const root of ROOTS) { const n = parseRange(r[root]); if (n !== null) next[root] = n; }
       raw.set(KEYS.range, next);
     }
+    /* 1.6.0: each pane saved by 1.4 to 1.5.3 carried over once (paneFromV1); panes never saved keep their defaults */
+    if (!raw.has(KEYS.indicators)) {
+      const v1 = raw.get(OLD.indicators);
+      if (v1 && typeof v1 === 'object' && !isList(v1)) {
+        const next = {};
+        for (const paneId of Object.keys(v1)) if (paneId && v1[paneId] && typeof v1[paneId] === 'object' && !isList(v1[paneId])) next[paneId] = paneFromV1(v1[paneId], paneId);
+        raw.set(KEYS.indicators, next);
+      }
+    }
   }
   migrate();
+  const paneOk = paneId => typeof paneId === 'string' && !!paneId && !Object.prototype.hasOwnProperty.call(Object.prototype, paneId);
 
   return {
     raw,
@@ -116,17 +264,18 @@ function create(storage) {
     /** Range bar size in ticks for a root: the saved one, else the default. */
     range(root) { const n = parseRange(obj(KEYS.range)[root]); return n !== null ? n : (DEFAULT_RANGE[root] || 20); },
     setRange(root, ticks) { const n = parseRange(ticks); if (n === null || !ROOTS.includes(root)) return false; return patch(KEYS.range, root, n); },
-    /** Indicators on a pane: the saved set, the 1.3 set for the main pane, else the clean set for a new pane. */
-    indicators(paneId) {
+    /** One pane's indicator state (see Pane above): the saved one, else the pane's default. */
+    pane(paneId) { return cleanPane(paneOk(paneId) ? obj(KEYS.indicators)[paneId] : null, paneId); },
+    /** Drawn or not per indicator on a pane. */
+    indicators(paneId) { return Pane.drawn(this.pane(paneId)); },
+    /**
+     * Change one pane: read the key fresh, apply `fn` (one of the Pane functions) to that pane's saved state and write it
+     * back, so a change made in another tab (another pane, or another indicator on this one) is never undone.
+     */
+    updatePane(paneId, fn) {
+      if (!paneOk(paneId) || typeof fn !== 'function') return false;
       const all = obj(KEYS.indicators);
-      return cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
-    },
-    /** Turn one indicator on or off on one pane; the pane's other indicators are read fresh, not overwritten. */
-    setIndicator(paneId, id, on) {
-      if (!INDICATORS.some(x => x.id === id) || typeof paneId !== 'string' || !paneId) return false;
-      const all = obj(KEYS.indicators);
-      const cur = cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
-      cur[id] = !!on; all[paneId] = cur;
+      all[paneId] = fn(cleanPane(all[paneId], paneId));
       return raw.set(KEYS.indicators, all);
     },
     bracket(root) { return obj(KEYS.bracket)[root]; },
@@ -151,7 +300,8 @@ function debounce(fn, ms) {
   return d;
 }
 
-return { create, debounce, parseRange, clampRange, cleanIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, DEFAULT_RANGE, INDICATORS, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+return { create, debounce, parseRange, clampRange, cleanIndicators, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 });
 
 
@@ -180,6 +330,10 @@ const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 2
 const SCRIPT = document.currentScript;
 const EMBED_PREFIX = 'embed:';            // storage prefix when a host passes none (live/EMBED.md)
 let mountCount = 0;
+/* The "/" key opens the Indicators menu of the chart under the mouse (1.6.0): each mounted chart notes when the pointer
+   is over it. */
+let hoverRoot = null;
+const mountedRoots = new Set();
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -243,19 +397,23 @@ function markup(p, o) {
           <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
     </div>
 
-    <div class="group">
+    <div class="group ind-group">
       <div class="ind" id="${p}indWrap" data-pane="${esc(o.paneId)}">
-        <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
-        <div class="ind-panel" id="${p}indPanel" role="group" aria-label="Indicators on this chart" hidden>
-          <label class="ind-row"><input type="checkbox" data-layer="volume"><span class="sw" style="--sw: var(--text3)"></span>Volume</label>
-          <label class="ind-row"><input type="checkbox" data-layer="vwap"><span class="sw" style="--sw: var(--vwap-sw)"></span>VWAP</label>
-          <label class="ind-row"><input type="checkbox" data-layer="levels"><span class="sw" style="--sw: var(--info)"></span>Levels</label>
-          <label class="ind-row"><input type="checkbox" data-layer="fills"><span class="sw" style="--sw: var(--profit)"></span>Fills</label>
-          <label class="ind-row"><input type="checkbox" data-layer="ib"><span class="sw" style="--sw: var(--ib-sw)"></span>IB 1h</label>
+        <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel" aria-haspopup="dialog" title="Indicators on this chart (/ with the mouse over the chart)">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
+        <div class="ind-panel" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
+          <div class="ind-head"><span class="ind-title">Indicators</span><span class="ind-sum" id="${p}indSum"></span></div>
+          <div class="ind-search">
+            <label class="visually-hidden" for="${p}indQ">Search indicators</label>
+            <input id="${p}indQ" type="text" placeholder="Search: vwap, ib, pdh, profile" autocomplete="off" spellcheck="false" data-f="q">
+            <kbd aria-hidden="true" title="Press / with the mouse over the chart to open this menu">/</kbd>
+          </div>
+          <div class="ind-body" id="${p}indBody"></div>
+          <div class="ind-sep"></div>
+          <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
+          <div hidden id="${p}indParked"><span class="ind-acct" id="${p}fillAcctBox"><label class="glabel" for="${p}fillAcct">Show fills from</label><select class="acct-sel" id="${p}fillAcct" title="Which account's fills to show"><option value="">All accounts</option></select></span></div>
         </div>
       </div>
-      <label class="visually-hidden" for="${p}fillAcct">Show fills from</label>
-      <select class="acct-sel" id="${p}fillAcct" title="Which account's fills to show"><option value="">All accounts</option></select>
+      <div class="ind-chips" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide" hidden></div>
     </div>
 
     <div class="group" role="group" aria-label="Drawing tools">
@@ -361,7 +519,8 @@ function start(container, opt, PAGE) {
 
   /* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
-  const S = Object.assign(prefs.settings(), { layers: prefs.indicators(PANE) });
+  let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
+  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS) });   // layers: what is drawn
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   const saveSetting = k => prefs.setSetting(k, S[k]);
@@ -968,30 +1127,204 @@ function start(container, opt, PAGE) {
     S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSetting('glide'); syncButtons();
   });
 
-  /* Indicators: one menu per chart pane, saved per pane id. */
+  /*
+   * Indicators (1.6.0, Anthony's menu "E2"): one menu per chart pane, saved per pane id (LivePrefs.Pane).
+   * The menu: a search box (focused on open), the last 5 used, "On this chart" (a show or hide switch that keeps
+   * everything, the swatch, the name, a pin for the chip strip, a gear with the one open settings panel, an x to take it
+   * off), then the groups, folded, one open at a time, each with a + to add, and Hide all / Restore. The chip strip next
+   * to the button holds the pinned ones: one click shows or hides; on a narrow pane each chip is one letter.
+   */
+  const IND = LP.INDICATORS, ALL_DEFS = IND.concat(LP.COMING);
+  const defOf = id => ALL_DEFS.find(d => d.id === id);
+  const M = { q: '', cat: null, gear: null, returnTo: null };      // menu state that is not saved
+  const SVG = {
+    plus: '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 1v8M1 5h8"/></svg>',
+    pin: '<svg width="13" height="13" viewBox="0 0 14 14" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5l1.7 3.5 3.8.5-2.8 2.6.7 3.8L7 10.1 3.6 11.9l.7-3.8L1.5 5.5l3.8-.5z"/></svg>',
+    gear: '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h6M11 4h1M2 10h1M6 10h6"/><circle cx="9.5" cy="4" r="1.5"/><circle cx="4.5" cy="10" r="1.5"/></svg>',
+    x: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>',
+  };
+
+  /* Draw what the state says: only the layers that changed are handed to the chart. */
+  function applyIndicators() {
+    const drawn = LP.Pane.drawn(IS);
+    for (const k of Object.keys(drawn)) {
+      if (drawn[k] === S.layers[k]) continue;
+      S.layers[k] = drawn[k];
+      if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
+      if (k === 'ib') ibNote(D.ib);
+    }
+    legendKey = '';
+    syncIndicators();
+  }
+  /* One change, here and in storage (read fresh there, so another tab's choices are kept). */
+  function changeIndicators(fn) {
+    IS = fn(IS);
+    prefs.updatePane(PANE, fn);
+    applyIndicators();
+  }
+
+  function rowHtml(d) {
+    const st = IS.ind[d.id], coming = !!d.coming, on = !coming && st.on, shown = on && st.shown, pinned = !coming && st.pin, open = M.gear === d.id;
+    const name = esc(d.name), setId = p + 'indSet-' + d.id;
+    const lead = coming ? '<span class="ind-lead" aria-hidden="true"></span>'
+      : on ? `<button type="button" class="ind-switch" data-act="toggle" data-id="${d.id}" data-f="sw:${d.id}" aria-pressed="${shown}" aria-label="Show ${name}" title="Show or hide; its settings are kept"><span class="knob" aria-hidden="true"></span></button>`
+      : `<button type="button" class="ind-add" data-act="toggle" data-id="${d.id}" data-f="add:${d.id}" aria-label="Add ${name} to this chart" title="Add to this chart">${SVG.plus}</button>`;
+    const tools = coming ? '<span class="ind-ic-sp" aria-hidden="true"></span><span class="ind-ic-sp" aria-hidden="true"></span>'
+      : `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="Pin ${name} to the chip strip" title="Pin to the chip strip">${SVG.pin}</button>` +
+        `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}" aria-controls="${setId}" aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
+    const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
+    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${d.id === 'fills' ? '<div class="ind-set-acct"></div>' : ''}</div>` : '';
+    return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
+      `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-name">${name}</span>` +
+      (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
+  }
+  function renderMenu() {
+    const body = $('indBody'), c = LP.Pane.counts(IS);
+    $('indSum').textContent = c.on ? c.shown + ' shown' + (c.hidden ? ', ' + c.hidden + ' hidden' : '') : 'none on this chart';
+    const hide = $('indHideAll'), label = LP.Pane.hideLabel(IS);
+    hide.textContent = label;
+    hide.disabled = label === 'Hide all (0)';
+    hide.title = label === 'Restore' ? 'Show again the ones Hide all hid' : 'Hide every indicator on this chart; their settings are kept';
+    const focusKey = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.f : null;
+    $('indParked').appendChild($('fillAcctBox'));                  // the account choice lives in the Fills settings panel
+    let html = '';
+    const q = M.q.trim();
+    if (q) {
+      const found = LP.searchIndicators(q);
+      html += `<div class="ind-cap" role="status">${found.length ? 'Results' : 'No match'}</div>` + found.map(rowHtml).join('');
+    } else {
+      if (IS.recent.length) html += '<div class="ind-recent"><span class="ind-cap-in">Recent</span>' + IS.recent.map(id => {
+        const d = defOf(id), shown = IS.ind[id].on && IS.ind[id].shown;
+        return `<button type="button" class="ind-rec" data-act="toggle" data-id="${id}" data-f="rec:${id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: click to ${IS.ind[id].on ? (shown ? 'hide' : 'show') : 'add'}">${esc(d.short)}</button>`;
+      }).join('') + '</div>';
+      html += '<div class="ind-cap">On this chart</div>';
+      const onChart = IND.filter(d => IS.ind[d.id].on);
+      html += onChart.length ? onChart.map(rowHtml).join('') : '<div class="ind-empty">Nothing on this chart yet: add one from a group below.</div>';
+      html += '<div class="ind-sep"></div>';
+      for (const cat of LP.CATEGORIES) {
+        const all = ALL_DEFS.filter(d => d.cat === cat.id), open = M.cat === cat.id;
+        html += `<button type="button" class="ind-cat" data-act="cat" data-id="${cat.id}" data-f="cat:${cat.id}" aria-expanded="${open}"><span class="ind-caret${open ? ' is-open' : ''}" aria-hidden="true"></span><span class="ind-cat-name">${esc(cat.name)}</span><span class="ind-cat-n">${all.length}</span></button>`;
+        if (open) {
+          const rows = all.filter(d => d.coming || !IS.ind[d.id].on);
+          html += rows.length ? rows.map(rowHtml).join('') : '<div class="ind-empty">All on this chart</div>';
+        }
+      }
+      html += '<div class="ind-coming">Coming: cumulative delta, time and sales</div>';
+    }
+    body.innerHTML = html;
+    const acctHost = body.querySelector('.ind-set[data-id="fills"] .ind-set-acct');
+    if (acctHost) acctHost.appendChild($('fillAcctBox'));
+    if (focusKey) {                                                 // keep the keyboard where it was
+      const alt = { 'sw:': 'add:', 'add:': 'sw:', 'x:': 'add:', 'rec:': 'rec:' };
+      let el = body.querySelector(`[data-f="${focusKey}"]`);
+      if (!el) for (const k of Object.keys(alt)) if (focusKey.startsWith(k)) el = body.querySelector(`[data-f="${alt[k] + focusKey.slice(k.length)}"]`);
+      (el || $('indQ')).focus();
+    }
+  }
+  function renderChips() {
+    const strip = $('indChips'), pinned = IND.filter(d => IS.ind[d.id].on && IS.ind[d.id].pin);
+    strip.hidden = !pinned.length;
+    strip.innerHTML = pinned.map(d => {
+      const shown = IS.ind[d.id].shown;
+      return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
+        `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span></button>`;
+    }).join('');
+    fitChips();
+  }
+  /* The strip never wraps: when the full chips do not fit on the toolbar line, each shrinks to one letter. */
+  function fitChips() {
+    const strip = $('indChips');
+    strip.classList.remove('is-narrow');
+    if (!strip.hidden && strip.scrollWidth > strip.clientWidth + 1) strip.classList.add('is-narrow');
+  }
   function syncIndicators() {
-    let on = 0;
-    for (const c of $('indPanel').querySelectorAll('input[data-layer]')) { c.checked = !!S.layers[c.dataset.layer]; if (c.checked) on++; }
-    $('indCount').textContent = on + '/' + LP.INDICATORS.length;
+    const c = LP.Pane.counts(IS);
+    $('indCount').textContent = c.shown + '/' + c.on;
+    $('indBtn').setAttribute('aria-label', 'Indicators, ' + c.shown + ' shown of ' + c.on + ' on this chart');
+    renderChips();
+    if (!$('indPanel').hidden) renderMenu();
   }
-  function setIndicator(k, v) {
-    if (!(k in S.layers)) return;
-    S.layers[k] = !!v;
-    if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: S.layers[k] });
-    if (k === 'ib') ibNote(D.ib);
-    legendKey = ''; prefs.setIndicator(PANE, k, S.layers[k]); syncIndicators();
+  function indAction(act, id) {
+    if (act === 'toggle') changeIndicators(st => LP.Pane.toggle(st, id));
+    else if (act === 'remove') { if (M.gear === id) M.gear = null; changeIndicators(st => LP.Pane.remove(st, id)); }
+    else if (act === 'pin') changeIndicators(st => LP.Pane.pin(st, id, !IS.ind[id].pin));
+    else if (act === 'gear') { M.gear = M.gear === id ? null : id; renderMenu(); }
+    else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
+  let openMenu;
   {
-    const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel');
-    const open = v => {
-      panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
-      if (v) { const first = panel.querySelector('input'); if (first) first.focus(); }
+    const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel'), q = $('indQ');
+    /* The panel stays inside the chart's own element (a pane can be narrow, and a host may clip it). */
+    const place = () => {
+      const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect();
+      panel.style.maxWidth = Math.max(220, Math.floor(r.right - b.left - 8)) + 'px';
+      panel.style.maxHeight = Math.max(240, Math.floor(Math.min(r.bottom, window.innerHeight) - b.bottom - 14)) + 'px';
     };
-    btn.addEventListener('click', () => open(panel.hidden));
-    panel.addEventListener('change', e => { const c = e.target.closest('input[data-layer]'); if (c) setIndicator(c.dataset.layer, c.checked); });
-    listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) open(false); });
-    wrap.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hidden) { e.preventDefault(); open(false); btn.focus(); } });
-    wrap.addEventListener('focusout', e => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) open(false); });
+    openMenu = (v, from) => {
+      if (v === !panel.hidden) { if (v) q.focus(); return; }
+      panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
+      if (v) {
+        M.returnTo = from && from !== document.body && !wrap.contains(from) ? from : btn;
+        place(); renderMenu(); q.focus(); q.select();
+      } else { M.gear = null; $('indParked').appendChild($('fillAcctBox')); }
+    };
+    const close = refocus => {
+      if (panel.hidden) return;
+      openMenu(false);
+      if (refocus) { const to = M.returnTo && M.returnTo.isConnected ? M.returnTo : btn; to.focus(); }
+    };
+    btn.addEventListener('click', () => { if (panel.hidden) openMenu(true, btn); else close(false); });
+    q.addEventListener('input', () => { M.q = q.value; renderMenu(); });
+    q.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || !M.q.trim()) return;                 // Enter: add, show or hide the first match
+      const first = LP.searchIndicators(M.q).find(d => !d.coming);
+      if (first) { e.preventDefault(); indAction('toggle', first.id); }
+    });
+    panel.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]');
+      if (b && panel.contains(b)) indAction(b.dataset.act, b.dataset.id);
+    });
+    $('indHideAll').addEventListener('click', () => changeIndicators(st => LP.Pane.hideAll(st)));
+    $('indChips').addEventListener('click', e => {
+      const b = e.target.closest('button[data-id]'); if (!b) return;
+      const id = b.dataset.id;
+      changeIndicators(st => LP.Pane.setShown(st, id, !IS.ind[id].shown));
+    });
+    listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
+    wrap.addEventListener('keydown', e => {
+      if (panel.hidden) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && panel.contains(e.target) && e.target.tagName !== 'SELECT') {
+        const list = [...panel.querySelectorAll('input, button, select')].filter(el => !el.disabled && el.offsetParent !== null);
+        const i = list.indexOf(e.target);
+        if (i < 0) return;
+        e.preventDefault();
+        const next = list[(i + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length];
+        if (next) next.focus();
+      }
+    });
+    wrap.addEventListener('focusout', e => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) openMenu(false); });
+    /* "/" opens the menu of the chart under the mouse (else the one holding the focus, else the only one on the page).
+       Never while typing in a box (order quantity, bracket ticks, range size, a host's own fields), never with Ctrl,
+       Alt or Cmd, and the PIN pad stops every key before it gets here. */
+    listen(document, 'keydown', e => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || destroyed) return;
+      const a = document.activeElement;
+      if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+      const mine = hoverRoot ? hoverRoot === rootEl : a && a !== document.body ? rootEl.contains(a) : mountedRoots.size === 1;
+      if (!mine) return;
+      e.preventDefault();
+      openMenu(true, a);
+    });
+    rootEl.addEventListener('pointerenter', () => { hoverRoot = rootEl; });
+    rootEl.addEventListener('pointerleave', () => { if (hoverRoot === rootEl) hoverRoot = null; });
+    mountedRoots.add(rootEl);
+    cleanups.push(() => { mountedRoots.delete(rootEl); if (hoverRoot === rootEl) hoverRoot = null; });
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => { fitChips(); if (!panel.hidden) place(); });
+      ro.observe(rootEl);
+      cleanups.push(() => ro.disconnect());
+    }
   }
   $('fillAcct').addEventListener('change', e => {
     fillAccount = e.target.value; store.set('live-fill-account-v1', fillAccount); applyMarkers();
@@ -1098,7 +1431,7 @@ function start(container, opt, PAGE) {
   }, 500);
 
   if (document.fonts && document.fonts.load) {
-    Promise.all([document.fonts.load('500 11px "IBM Plex Mono"'), document.fonts.load('600 10px "IBM Plex Sans Condensed"')]).then(() => { if (!destroyed) chart.setLayers({}); }, () => {});
+    Promise.all([document.fonts.load('500 11px "IBM Plex Mono"'), document.fonts.load('600 10px "IBM Plex Sans Condensed"'), document.fonts.load('600 11px "IBM Plex Mono"')]).then(() => { if (!destroyed) { chart.setLayers({}); fitChips(); } }, () => {});
   }
   connect();
 

@@ -38,19 +38,78 @@
 .chart-live .seg button:hover { color: var(--text); }
 .chart-live .seg button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-border); }
 .chart-live .seg.sans button { font-family: var(--sans); }
-/* indicator menu: one per chart pane */
-.chart-live .ind { position: relative; display: inline-block; }
+/* indicator menu: one per chart pane (1.6.0, Anthony's "E2"), and the pane's chip strip of pinned indicators */
+.chart-live .ind-group { flex-wrap: nowrap; min-width: 0; max-width: 100%; }
+.chart-live .ind { position: relative; display: inline-block; flex: none; }
 .chart-live .ind-btn { display: inline-flex; align-items: center; gap: 8px; }
 .chart-live .ind-count { font: 500 11px var(--mono); color: var(--text3); }
-.chart-live .ind-caret { width: 6px; height: 6px; border-right: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3); transform: translateY(-2px) rotate(45deg); }
+.chart-live .ind-caret { width: 6px; height: 6px; flex: none; border-right: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3); transform: translateY(-2px) rotate(45deg); }
 .chart-live .ind-btn[aria-expanded="true"] { background: var(--s3); border-color: var(--accent-border); }
-.chart-live .ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; max-width: calc(100vw - 32px); box-sizing: border-box; background: var(--panel, #0B1016); border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; display: grid; gap: 2px; box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
-.chart-live .ind-row { display: flex; align-items: center; gap: 9px; font: 500 12px var(--sans); color: var(--text2); padding: 6px 8px; min-height: 32px; box-sizing: border-box; border-radius: 8px; cursor: pointer; }
-.chart-live .ind-row:hover { background: var(--s2); color: var(--text); }
-.chart-live .ind-row:has(input:checked) { color: var(--text); }
-.chart-live .ind-row input { margin: 0; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
-.chart-live .ind-row .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--line-strong); }
-.chart-live .ind-row:has(input:checked) .sw { background: var(--sw); }
+.chart-live .ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: 460px; max-width: calc(100vw - 32px); box-sizing: border-box; background: var(--panel, #0B1016); border: 1px solid var(--line-strong); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 4px; box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
+.chart-live .ind-head, .chart-live .ind-search, .chart-live .ind-foot { flex: none; }
+.chart-live .ind-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 6px; }
+.chart-live .ind-title { font-size: 13px; font-weight: 600; color: var(--head); }
+.chart-live .ind-sum { font: 500 11px var(--mono); color: var(--text3); }
+.chart-live .ind-search { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.chart-live .ind-search input { flex: 1 1 auto; min-width: 0; height: 34px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; background: var(--s2); border: 1px solid var(--accent-border); color: var(--text); font: 400 13px var(--sans); }
+.chart-live .ind-search input::placeholder { color: var(--text3); }
+.chart-live .ind-search kbd { min-width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; background: var(--s3); border: 1px solid var(--line-strong); font: 600 11px var(--mono); color: var(--text2); }
+.chart-live .ind-body { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.chart-live .ind-recent { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 8px 2px; }
+.chart-live .ind-cap-in { font: 500 11px var(--mono); color: var(--text3); text-transform: uppercase; }
+.chart-live .ind-rec { height: 24px; padding: 0 8px; border-radius: 6px; background: transparent; border: 1px solid var(--line-strong); color: var(--text2); font: 500 11px var(--mono); cursor: pointer; }
+.chart-live .ind-rec:hover { color: var(--text); background: var(--s2); }
+.chart-live .ind-cap { font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--text3); padding: 8px 8px 2px; }
+.chart-live .ind-sep { height: 1px; background: var(--line); margin: 6px 6px; flex: none; }
+.chart-live .ind-row { display: flex; align-items: center; gap: 9px; min-height: 36px; padding: 0 2px 0 8px; border-radius: 8px; }
+.chart-live .ind-row:hover { background: var(--s2); }
+.chart-live .ind-row .sw { width: 12px; height: 3px; border-radius: 2px; flex: none; background: var(--sw); }
+.chart-live .ind-name { flex: 1 1 auto; min-width: 0; font-size: 13px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-live .ind-item.is-shown .ind-name { color: var(--text); }
+.chart-live .ind-item.is-coming .ind-name { color: var(--text3); }
+.chart-live .ind-tag { font: 500 10px var(--mono); color: var(--text3); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 5px; line-height: 16px; }
+.chart-live .ind-lead { width: 32px; flex: none; }
+.chart-live .ind-switch { width: 32px; height: 18px; flex: none; border-radius: 999px; position: relative; cursor: pointer; padding: 0; background: var(--s3); border: 1px solid var(--line-strong); }
+.chart-live .ind-switch .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text3); }
+.chart-live .ind-switch[aria-pressed="true"] { background: var(--accent-tint); border-color: var(--accent-border); }
+.chart-live .ind-switch[aria-pressed="true"] .knob { left: 16px; background: var(--accent-text); }
+.chart-live .ind-add { width: 32px; height: 22px; flex: none; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; padding: 0; background: transparent; border: 1px dashed var(--accent-border); color: var(--accent-text); }
+.chart-live .ind-add:hover { background: var(--accent-tint); }
+.chart-live .ind-ic, .chart-live .ind-ic-sp { width: 28px; height: 28px; flex: none; }
+.chart-live .ind-ic { display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; padding: 0; background: transparent; border: 0; cursor: pointer; color: var(--text2); }
+.chart-live .ind-ic:hover { background: var(--s3); color: var(--text); }
+.chart-live .ind-pin { color: var(--text3); }
+.chart-live .ind-pin svg { fill: none; }
+.chart-live .ind-pin[aria-pressed="true"] { color: var(--accent-text); }
+.chart-live .ind-pin[aria-pressed="true"] svg { fill: currentColor; }
+.chart-live .ind-ic[data-act="remove"] { color: var(--text3); }
+.chart-live .ind-set { margin: 0 8px 6px 50px; padding: 8px 10px; border-radius: 8px; background: var(--s2); border: 1px solid var(--line); display: grid; gap: 8px; font-size: 12px; color: var(--text2); }
+.chart-live .ind-set-line { display: flex; align-items: center; gap: 10px; }
+.chart-live .ind-set-sw { width: 14px; height: 14px; flex: none; border-radius: 4px; background: var(--sw); border: 1px solid var(--line-strong); box-sizing: border-box; }
+.chart-live .ind-set-t { font: 500 11px var(--mono); color: var(--text); }
+.chart-live .ind-acct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.chart-live .ind-cat { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; border-radius: 8px; background: transparent; border: 0; cursor: pointer; color: var(--text); font: 500 13px var(--sans); text-align: left; }
+.chart-live .ind-cat:hover { background: var(--s2); }
+.chart-live .ind-cat .ind-caret { transform: rotate(-45deg); }
+.chart-live .ind-cat .ind-caret.is-open { transform: translateY(-2px) rotate(45deg); }
+.chart-live .ind-cat-name { flex: 1 1 auto; }
+.chart-live .ind-cat-n { font: 500 11px var(--mono); color: var(--text3); }
+.chart-live .ind-empty { display: flex; align-items: center; min-height: 30px; padding: 0 8px; font-size: 12px; color: var(--text3); }
+.chart-live .ind-coming { display: flex; align-items: center; min-height: 30px; padding: 0 8px; font-size: 12px; color: var(--text3); }
+.chart-live .ind-foot { display: flex; align-items: center; gap: 8px; padding: 2px 6px 4px; }
+.chart-live .ind-foot .btn:disabled { opacity: .5; cursor: default; }
+/* chip strip: pinned indicators only; lit = shown (solid, its color line), dashed grey = hidden */
+.chart-live .ind-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.chart-live .ind-chips::-webkit-scrollbar { display: none; }
+.chart-live .ind-chip { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; font: 600 11px var(--mono); letter-spacing: .06em; cursor: pointer; background: transparent; color: var(--text3); border: 1px dashed var(--line-strong); }
+.chart-live .ind-chip[aria-pressed="true"] { background: var(--s3); color: var(--text); border-style: solid; }
+.chart-live .ind-chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--sw); }
+.chart-live .ind-chip-l { display: none; }
+.chart-live .ind-chips.is-narrow { gap: 4px; }
+.chart-live .ind-chips.is-narrow .ind-chip { width: 30px; padding: 0; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; letter-spacing: 0; }
+.chart-live .ind-chips.is-narrow .ind-chip .sw { height: 2px; }
+.chart-live .ind-chips.is-narrow .ind-chip-t { display: none; }
+.chart-live .ind-chips.is-narrow .ind-chip-l { display: inline; line-height: 1; }
 .chart-live .range-mode { max-width: 160px; }
 .chart-live .btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
 .chart-live .btn:hover { background: var(--s3); }
