@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.0 (2026-09-29): the live chart as a mountable piece (ChartLive.mount), for The Desk
+
+Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also copies `live/live.css`. Run
+`nt8\install.ps1` again after pulling (no NinjaTrader recompile).
+- **ChartLive.mount(container, options)**: the same live chart code runs in a host page such as The Desk's
+  Live trading section, returning `{ destroy(), chart, element, paneId }`. Options: `wsUrl` (a string, or a
+  function asked again for every connect and reconnect, so a relay can hand out a fresh single-use ticket),
+  `trading` (false by default: read only), `paneId`, `storagePrefix`, `onStatus`, `brand`. See `live/EMBED.md`
+  for the files to vendor, in load order.
+- **Read only when embedded**: no `GET /session`, no `auth`, only `subscribe` and `ping` ever sent (anything
+  else is dropped), no order bar, Armed switch, Shift+click orders or draggable order lines.
+- **Nothing global**: each chart keeps to its own element (class `chart-live`, element ids prefixed per mount);
+  its listeners on document and window, timers and WebSocket go with `destroy()`. Mount, destroy and mount
+  again all work, and several charts can run in one page with their own indicators (`paneId`).
+- **Settings apart**: every storage key gets the `storagePrefix` in front (default `embed:`), so an embedded
+  chart and the standalone page on one origin never share settings.
+- **The standalone page is unchanged**: it now builds itself with the same code (`<script src="live.js"
+  data-mount="page">`), with the ids it always had. Its styles moved to `live/live.css`, scoped under
+  `.chart-live`; computed styles and layout of every page element match 1.4.1 at 1440, 900 and 400 px, with
+  trading on and off. The Armed border sits on the chart root instead of `body`.
+- Engine: `mountThemePanel` returns `destroy()` (removes the Colors panel and its document listener).
+- Tests: `npm run smoke:embed` (a plain host page with one and two panes against the fake bridge); the fake
+  bridge gets `--tickets` (single-use WebSocket tickets, like The Desk's relay) and, with `--test-controls`,
+  `/test/drop` and `/test/received`; a unit test checks `install.ps1` copies every local stylesheet.
+
 ## 1.4.1 (2026-09-29): fixes from the review of 1.4.0
 
 Page only again; nt8/ unchanged. Run `nt8\install.ps1` to copy the page files.

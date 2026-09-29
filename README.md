@@ -34,7 +34,8 @@ On the page, the **Indicators** menu turns Volume, VWAP, Levels and Fills on and
 dropdown** next to it picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
 built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_BARS.md`), or from traded
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
-this browser as soon as it is made. `http://localhost:8765/diag` shows what ChartBridge
+this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
+`ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
 sees (accounts, fill counts, clock, The Desk queue); see `nt8/PROTOCOL.md`.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
@@ -201,6 +202,7 @@ npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
 npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
+npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in
