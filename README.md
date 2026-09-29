@@ -38,7 +38,8 @@ built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
 `ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
-sees (accounts, fill counts, clock, The Desk queue); see `nt8/PROTOCOL.md`.
+sees (accounts, fill counts, clock, The Desk queue, and since 0.3.3 where each load's backfill met the live
+trades); see `nt8/PROTOCOL.md`.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
 line; recompile or restart NinjaTrader after a change):

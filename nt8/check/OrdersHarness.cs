@@ -846,6 +846,7 @@ public static class OrdersHarness
 
         NetworkChecks();
         DeskQueueChecks();
+        SeamHarness.Run(Check);  // where the backfill meets the live trades (check/SeamHarness.cs, 0.3.3)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
