@@ -39,7 +39,7 @@ test('background presets: the current dark (default), pure black, dark blue-grey
    apart to begin with, and the IB high always the brighter of its pair, by a visible step. */
 function apart(bg, T, extra, ib) {
   const src = Object.assign({}, CE.DEFAULT_THEME, extra || {});
-  for (const [a, b] of [['up', 'down'], ['long', 'short'], ['profit', 'loss']]) {
+  for (const [a, b] of [['up', 'down'], ['profit', 'loss']]) {
     if (!U.distinct(src[a], src[b])) continue;
     assert.ok(U.distinct(T[a], T[b]), bg + ' ' + a + ' ' + T[a] + ' and ' + b + ' ' + T[b] + ' merge (contrast ' + U.contrast(T[a], T[b]).toFixed(2) + ')');
   }
@@ -78,7 +78,16 @@ function readable(bg, extra) {
   need(T.upText, bg, F.text, 'bull text'); need(T.downText, bg, F.text, 'bear text');
   need(T.vwap, bg, F.line, 'VWAP line', mark(F.line)); need(T.vwapText, bg, F.text, 'VWAP text');
   need(T.drawing, bg, F.line, 'drawings', mark(F.line));
-  for (const k of ['long', 'short', 'profit', 'loss']) need(T[k], bg, F.text, k, pair(F.text));
+  for (const k of ['profit', 'loss']) need(T[k], bg, F.text, k, pair(F.text));
+  // buy / long and sell / short keep their chosen color on every ground (review 2, S1); a mark that does not read
+  // at 3:1 gets an outline, text under 4.5:1 a halo, in whichever house ink stands out more from the ground
+  for (const k of ['long', 'short']) {
+    assert.equal(T[k], (extra && extra[k]) || CE.DEFAULT_THEME[k], bg + ' ' + k + ' keeps its color');
+    const c = U.contrast(T[k], bg);
+    assert.ok(c >= F.line || (T.ring[k] && U.contrast(T.ring[k], bg) >= 3), bg + ' ' + k + ' mark: fill ' + c.toFixed(2) + ', outline ' + T.ring[k]);
+    assert.ok(c >= F.text || (T.halo[k] && U.contrast(T.halo[k], bg) >= 3.9), bg + ' ' + k + ' text: ' + c.toFixed(2) + ', halo ' + T.halo[k]);
+    if (T.ground === 'default') assert.equal(T.ring[k], null, 'the default ground draws the marks as 1.5.2');
+  }
   for (const k of ['exit', 'live']) need(T[k], bg, F.text, k);
   for (const k of ['prior', 'overnight', 'value', 'close']) need(U.markOnGround(CE.LEVEL_COLORS[k], bg, F.text, T.to), bg, F.text, 'level ' + k, mark(F.text));
   const ib = T.ground === 'default' ? [CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow] : U.pairOnGround(CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow, bg, F.text, T.to, true);
@@ -96,6 +105,15 @@ test('presets: every role readable on black, blue-grey and light', () => {
   for (const b of CE.BACKGROUNDS) for (const p of CE.PRESETS) readable(b.bg, { up: p.up, down: p.down });
 });
 
+test('the IB pair on the presets: the high the lighter, at least 1.5:1 apart (review 2)', () => {
+  for (const b of CE.BACKGROUNDS) {
+    const T = U.buildTheme({ bg: b.bg });
+    const [hi, lo] = T.ground === 'default' ? [CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow] : U.pairOnGround(CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow, b.bg, F.text, T.to, true);
+    assert.ok(U.luminance(hi) > U.luminance(lo) && U.contrast(hi, lo) >= 1.5, b.name + ': ' + hi + ' / ' + lo + ' at ' + U.contrast(hi, lo).toFixed(2));
+    assert.ok(U.contrast(hi, b.bg) >= 4.5 && U.contrast(lo, b.bg) >= 4.5, b.name + ': both read');
+  }
+});
+
 test('extremes: white, mid-greys, pure black and saturated colors', () => {
   for (const bg of ['#FFFFFF', '#000000', '#777777', '#767676', '#808080', '#7F7F7F', '#959595', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#4B9CD3', '#6D28D9', '#3DDC97'])
     readable(bg);
@@ -108,7 +126,7 @@ test('all 256 greys: every role readable, and buy/sell, bull/bear and the IB pai
   for (let v = 0; v < 256; v++) { const h = v.toString(16).padStart(2, '0').toUpperCase(); readable('#' + h + h + h); }
   // the smoke's own mid-grey: buy and sell are now told apart by lightness
   const T = U.buildTheme({ bg: '#767676' });
-  assert.ok(U.distinct(T.long, T.short) && U.distinct(T.up, T.down), JSON.stringify([T.long, T.short, T.up, T.down]));
+  assert.ok(T.long === '#3DDC97' && T.short === '#FF7A7A' && U.distinct(T.up, T.down), JSON.stringify([T.long, T.short, T.up, T.down]));
 });
 
 test('a sweep of 2,000 random grounds (seeded): every role readable', () => {
@@ -243,10 +261,17 @@ test('chart: the IB lines start at 9:30 (Anthony), the other levels run across t
 test('light ground: the toolbar, menus and status line go light, text at the chart floors (Anthony)', () => {
   assert.equal(U.chromeColors(U.buildTheme()), null, 'default ground: the page keeps its dark style');
   for (const bg of ['#000000', '#1B2433', '#333333']) assert.equal(U.chromeColors(U.buildTheme({ bg })), null, bg + ' is dark: no change');
+  // only clearly light grounds (review 2, B1): 9:1 or more against the house near-black; every grey below keeps the dark chrome
+  for (let v = 0; v < 256; v++) {
+    const h = v.toString(16).padStart(2, '0'), bg = '#' + h + h + h, light = U.contrast(bg, '#080B10') >= U.CHROME_LIGHT;
+    assert.equal(!!U.chromeColors(U.buildTheme({ bg })), light, bg + (light ? ' light chrome' : ' dark chrome'));
+  }
+  assert.equal(U.chromeColors(U.buildTheme({ bg: '#888888' })), null, '#888888 keeps the dark chrome');
+  assert.ok(U.chromeColors(U.buildTheme({ bg: '#F5F7FA' })), 'the Light preset takes it light');
   let s = 99;
   const rnd = () => (s = (s * 48271) % 2147483647) / 2147483647;
   const grounds = ['#F5F7FA', '#FFFFFF', '#E8E0C8', '#CFE3FF', '#B0B0B0', '#FFFF00', '#00FF00'];
-  while (grounds.length < 300) { const h = '#' + [0, 0, 0].map(() => Math.floor(160 + rnd() * 96).toString(16).padStart(2, '0')).join(''); if (U.buildTheme({ bg: h }).ground === 'light') grounds.push(h); }
+  while (grounds.length < 300) { const h = '#' + [0, 0, 0].map(() => Math.floor(160 + rnd() * 96).toString(16).padStart(2, '0')).join(''); if (U.chromeColors(U.buildTheme({ bg: h }))) grounds.push(h); }
   for (const bg of grounds) {
     const T = U.buildTheme({ bg }), v = U.chromeColors(T);
     assert.ok(v, bg + ' light');
@@ -262,4 +287,16 @@ test('light ground: the toolbar, menus and status line go light, text at the cha
     on('--accent-text', F.text, v['--accent-tint']); on('--ce-tint-text', F.text, v['--ce-tint']);
     on('--warn', F.text, v['--bg']);                            // the Armed switch: ground-colored text on warn
   }
+});
+
+test('merged level names draw as in 1.5.2: one string in the first (highest) level\'s color, IB included (review 2)', () => {
+  const { E, chart, texts, frame } = stubChart();
+  chart.setLevels([
+    { name: 'PDH', price: 104, color: E.LEVEL_COLORS.prior, dash: [6, 4] },
+    { name: 'ONH', price: 104.05, color: E.LEVEL_COLORS.overnight, dash: [6, 4] },
+  ].concat(E.util.ibLines({ state: 'forming', high: 97.05, low: 97, start: 1790000000 })));
+  frame();
+  const merged = texts.filter(x => / · /.test(x.s));
+  assert.deepEqual(merged.map(x => [x.s, x.color]).sort(), [['IBH · IBL', E.LEVEL_COLORS.ibHigh], ['ONH · PDH', E.LEVEL_COLORS.overnight]]);
+  assert.ok(!texts.some(x => x.s === 'PDH' || x.s === ' · PDH'), 'no name drawn apart in its own color');
 });
