@@ -89,3 +89,7 @@ npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in
 `package.json` and `src/chart-engine.js` for every release.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Manrae.
