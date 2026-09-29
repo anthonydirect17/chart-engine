@@ -1393,6 +1393,194 @@ function mountThemePanel(chart, host, options) {
   };
 }
 
+/* ---------------------------------------------------------------- volume profile (compute core, unreleased) */
+/*
+ * VolumeProfile: the session volume profile from trades, with no drawing. Anthony picks the look and controls.
+ *
+ * Input: trades (t, price, v), with t in exchange wall-clock seconds stored as if UTC like every time here.
+ * The trades carry no aggressor side (ChartBridge sends [t, p, v] for the backfill and {t, p, v} live, from
+ * NinjaTrader's Last events), so there is no buy/sell split per row. Nothing is inferred.
+ *
+ * Rows: each price is turned into a whole number of ticks once, P = round(price / tick), and rows are whole
+ * groups of `rowTicks` ticks, row = floor(P / rowTicks), so a row covers ticks row * rowTicks to
+ * row * rowTicks + rowTicks - 1 and rows line up on multiples of rowTicks ticks from zero (rowTicks 4 on NQ:
+ * whole points). Volumes live in one Float64Array indexed by row, never in a map keyed by a float price, and
+ * prices are only made back from whole ticks for output. Rows with no trades between the lowest and highest
+ * row are rows of volume 0 (they are prices inside the profile).
+ *
+ * Session: the profile holds one trading session, the engine's tradeDay(t, sessionStart), the same 18:00 ET
+ * boundary as the range bars and the session VWAP. The first trade of a later session (or advance(t)) empties
+ * it; a trade from an earlier session than the one held is left out and counted in `skipped`.
+ *
+ * Cost: add() is O(1) (a row outside the array grows it to twice the span, so growth is amortised O(1)).
+ * poc() and valueArea() walk the rows once (a session of NQ is a few thousand rows) and are cached until the
+ * next trade.
+ *
+ * POC: the row with the most volume. Tie-break (a question for Anthony): of the rows tied for the most volume,
+ * the one closest to the middle of the profile (halfway between its lowest and highest row); if two are equally
+ * close, the lower one.
+ *
+ * Value area, the CBOT Market Profile method applied to volume rows:
+ *   1. Start with the POC row. The value area must hold at least `valueArea` (default 70%) of the volume.
+ *   2. Take the next two rows above the value area and add their volumes; do the same for the next two rows
+ *      below. Where fewer than two rows are left on a side, that side's sum is what is left.
+ *   3. Add the pair with the larger sum to the value area. If one side has no rows left, add the other side.
+ *      If the two sums are equal, add both pairs (a question for Anthony).
+ *   4. Repeat 2 and 3 until the value area holds at least that share of the volume.
+ * VAH is the top tick of the highest row in the value area and VAL the bottom tick of the lowest.
+ *
+ * History, then live, with nothing counted twice: the page keeps every trade in its TickStore
+ * (live/bar-builder.js). Until ChartBridge sends `ready`, trades arrive only as the backfill (onTick drops live
+ * ticks before then, and ChartBridge holds them back until after `ready`); after it, only as `tick` messages,
+ * each pushed to the store once. So, like the range bars: at `ready`, feed the store into a new profile
+ * (store.feed(profile, 0), or with minT set to this session's start to skip older sessions), then in onTick
+ * call profile.add(t, p, v) right after the store's push. A rebuild is a new profile fed from the store again.
+ * Not settled: whether a trade at the very moment ChartBridge starts the backfill can come both in the backfill
+ * and as a held live tick (it would touch the range bars the same way); trades carry no id to tell.
+ */
+const VP_MAX_ROWS = 1 << 20;                             // a trade that would stretch the profile past this is left out
+class VolumeProfile {
+  constructor(opts) {
+    const o = opts || {};
+    this.tick = o.tick === undefined ? 0.25 : o.tick;
+    this.rowTicks = o.rowTicks === undefined ? 1 : o.rowTicks;
+    this.valueAreaShare = o.valueArea === undefined ? 0.7 : o.valueArea;
+    this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
+    if (!(this.tick > 0 && isFinite(this.tick))) throw new RangeError('VolumeProfile: tick must be a positive number');
+    if (!(Number.isInteger(this.rowTicks) && this.rowTicks >= 1)) throw new RangeError('VolumeProfile: rowTicks must be a whole number of ticks, 1 or more');
+    VolumeProfile._share(this.valueAreaShare);
+    this._vol = new Float64Array(0); this._base = 0;
+    this.reset();
+  }
+  static _share(p) {
+    if (!(p > 0 && p <= 1)) throw new RangeError('VolumeProfile: the value area share must be above 0 and at most 1');
+    return p;
+  }
+  /** Empty the profile (it takes the session of the next trade). */
+  reset() { this._clear(); this.day = null; this.skipped = 0; }
+  _clear() {
+    if (this._lo <= this._hi) this._vol.fill(0, this._lo - this._base, this._hi - this._base + 1);
+    this._lo = Infinity; this._hi = -Infinity;           // rows used; lo > hi when empty
+    this.total = 0; this.trades = 0; this._ver = (this._ver || 0) + 1; this._cache = null;
+  }
+  /** Changes with every trade taken and every reset: a cheap check for a caller that caches drawing. */
+  get version() { return this._ver; }
+  get empty() { return this.trades === 0; }
+  _px(n) { return +(n * this.tick).toFixed(10); }
+  _row(price) { return Math.floor(Math.round(price / this.tick) / this.rowTicks); }
+
+  /*
+   * Grow the array to hold row r: twice the span needed, centred on it. Returns false when the span would pass
+   * VP_MAX_ROWS (a stray price far from the rest), and the caller then leaves the trade out.
+   */
+  _grow(r) {
+    const lo = Math.min(this._lo, r), hi = Math.max(this._hi, r), span = hi - lo + 1;
+    if (span > VP_MAX_ROWS) return false;
+    const cap = Math.max(64, span * 2), base = lo - Math.floor((cap - span) / 2), next = new Float64Array(cap);
+    if (this._lo <= this._hi) next.set(this._vol.subarray(this._lo - this._base, this._hi - this._base + 1), this._lo - base);
+    this._vol = next; this._base = base;
+    return true;
+  }
+
+  /**
+   * Add one trade. O(1). Returns true when the trade started a new session (the profile was emptied first).
+   * Left out and counted in `skipped`: a time, price or volume that is not a finite number, a volume of 0 or
+   * less, a trade from an earlier session than the one held, and a price that would stretch the profile past
+   * VP_MAX_ROWS rows.
+   */
+  add(t, price, v) {
+    if (!(v > 0 && v < Infinity) || !isFinite(price) || !isFinite(t)) { this.skipped++; return false; }
+    const d = tradeDay(t, this.sessionStart);
+    let fresh = false;
+    if (d !== this.day) {
+      if (this.day !== null && d < this.day) { this.skipped++; return false; }
+      this._clear(); this.day = d; fresh = true;
+    }
+    const r = this._row(price);
+    if ((r < this._base || r >= this._base + this._vol.length) && !this._grow(r)) { this.skipped++; return fresh; }
+    this._vol[r - this._base] += v;
+    this.total += v; this.trades++;
+    if (r < this._lo) this._lo = r;
+    if (r > this._hi) this._hi = r;
+    this._ver++; this._cache = null;
+    return fresh;
+  }
+  /** add() with no result, so TickStore.feed(profile, from, minT) builds a profile from the page's ticks. */
+  addQuiet(t, price, v) { this.add(t, price, v); }
+  /** Add trades as ChartBridge sends them, [[t, p, v], ...]. */
+  addAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.add(x[0], x[1], x[2]); } return this; }
+  /**
+   * Move to the session holding t with no trade (for example on the clock at 18:00 ET before the first trade of
+   * the new session). Returns true when the profile moved to that later session (it is then empty).
+   */
+  advance(t) {
+    const d = tradeDay(t, this.sessionStart);
+    if (!isFinite(d) || (this.day !== null && d <= this.day)) return false;
+    this._clear(); this.day = d;
+    return true;
+  }
+
+  _rowOut(r) {
+    const p = r * this.rowTicks, price = this._px(p);
+    return { price, high: this.rowTicks === 1 ? price : this._px(p + this.rowTicks - 1), volume: this._vol[r - this._base] };
+  }
+  /** Lowest and highest traded price (bottom tick of the lowest row, top tick of the highest), or null. */
+  get low() { return this.trades ? this._px(this._lo * this.rowTicks) : null; }
+  get high() { return this.trades ? this._px(this._hi * this.rowTicks + this.rowTicks - 1) : null; }
+  /** Volume of the row holding `price` (0 outside the profile). */
+  volumeAt(price) {
+    const r = this._row(price);
+    return this.trades && r >= this._lo && r <= this._hi ? this._vol[r - this._base] : 0;
+  }
+  /** Rows from the lowest price up: { price (bottom tick), high (top tick; the same when rowTicks is 1), volume }. */
+  rows() {
+    const out = [];
+    for (let r = this._lo; r <= this._hi; r++) out.push(this._rowOut(r));
+    return out;
+  }
+  _pocRow() {
+    if (!this.trades) return null;
+    const V = this._vol, b = this._base, mid2 = this._lo + this._hi;   // twice the middle row, to stay in whole numbers
+    let best = this._lo, bv = V[best - b], bd = Math.abs(2 * best - mid2);
+    for (let r = this._lo + 1; r <= this._hi; r++) {
+      const v = V[r - b];
+      if (v < bv) continue;
+      const dist = Math.abs(2 * r - mid2);
+      if (v > bv || dist < bd) { best = r; bv = v; bd = dist; }   // rows run upward, so an equal distance keeps the lower
+    }
+    return best;
+  }
+  /** The point of control: { price, high, volume } of the row with the most volume (tie-break above), or null. */
+  poc() { const r = this._pocRow(); return r === null ? null : this._rowOut(r); }
+  /**
+   * The value area by the CBOT method above, for `share` of the volume (default: the profile's valueArea).
+   * Returns { val, vah, volume, share, poc } or null when empty. Cached until the next trade.
+   */
+  valueArea(share) {
+    const s = share === undefined ? this.valueAreaShare : VolumeProfile._share(share);
+    if (!this.trades) return null;
+    const c = this._cache;
+    if (c && c.share === s) return c;
+    const V = this._vol, b = this._base, L = this._lo, H = this._hi, poc = this._pocRow();
+    const need = s * this.total * (1 - 1e-12);          // 70% of 100 is 70.00000000000001 in floats: 70 must do
+    let lo = poc, hi = poc, acc = V[poc - b];
+    while (acc < need && (lo > L || hi < H)) {
+      const nUp = Math.min(2, H - hi), nDn = Math.min(2, lo - L);
+      let up = 0, dn = 0;
+      for (let k = 1; k <= nUp; k++) up += V[hi + k - b];
+      for (let k = 1; k <= nDn; k++) dn += V[lo - k - b];
+      const takeUp = nUp > 0 && (nDn === 0 || up >= dn), takeDn = nDn > 0 && (nUp === 0 || dn >= up);
+      if (takeUp) { hi += nUp; acc += up; }
+      if (takeDn) { lo -= nDn; acc += dn; }
+    }
+    this._cache = Object.freeze({
+      share: s, volume: acc, poc: Object.freeze(this._rowOut(poc)),
+      val: this._px(lo * this.rowTicks), vah: this._px(hi * this.rowTicks + this.rowTicks - 1),
+    });
+    return this._cache;
+  }
+}
+
 return {
   VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, LEVEL_COLORS,
   util: {
@@ -1401,5 +1589,6 @@ return {
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
   },
+  VolumeProfile,
 };
 });

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Volume profile, compute core only** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`; nothing drawn, no menu,
+  no version bump yet: Anthony picks the look and controls). A session volume profile from trades (t, price, size):
+  rows at the tick (NQ 0.25) with optional grouping of N ticks per row, all in whole ticks; total volume; POC (ties go
+  to the row closest to the middle of the profile, then the lower); value area high and low for a set share (default
+  70%) by the CBOT method (from the POC, add the larger of the next two rows above or the next two below, both when
+  equal). One profile per trading session, emptied at the same 18:00 ET boundary as the range bars and VWAP (the
+  engine's `tradeDay`). `add` is O(1); on 500,000 trades building takes about 10 to 20 ms and POC plus value area
+  under 1 ms (Node 22). Built from the page's TickStore at `ready` and then from each live tick, so nothing is
+  counted twice. No buy/sell split: ChartBridge's ticks carry no aggressor side. Tests in
+  `test/volume-profile.test.js`.
+
 ## 1.5.2 (2026-09-29): ChartBridge 0.3.2, a PIN on ChartBridge's own page
 
 ChartBridge (nt8/), the standalone page and the engine file (`src/chart-engine.js`, its version, shown in the
