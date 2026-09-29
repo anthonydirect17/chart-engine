@@ -120,9 +120,12 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(keep, /Bracket rec = Recover\(entry, out pairs\);\s*lock \(Sync\)/);   // Recover reads account orders outside Sync
   // from an order event the legs are placed in full, never sized from a position read at fill time;
   // only the scan path (a gap that lasted SettleMs) reads the settled position
-  assert.match(keep, /int qty = inc;\s*if \(fromScan\)/);
+  assert.match(keep, /if \(fromScan\) \{ KeepBracketFromScan\(entry, br, now\); return; \}/);
+  assert.match(keep, /PlaceLegs\(br, filled, inc, incPrice, where\);/);   // the event path places the full increment
   assert.ok(!/EffectivePosition/.test(keep), 'KeepBracket must not size legs from the fill-time ledger');
-  assert.match(keep, /if \(now - since < SettleMs\) return;/);
+  const scan = fnBody('KeepBracketFromScan');
+  assert.match(scan, /if \(now - g\[1\] < SettleMs\) return;/);
+  assert.match(scan, /int advance = steady \? inc : qty;/);   // never settles "no legs needed" on an unsteady connection
   assert.match(keep, /if \(Settled\.Contains\(entry\)\) return;/);
   assert.match(fnBody('CancelLeftoverLegs'), /IsWorking\(o\.OrderState\) \|\| !IsChartBridgeLeg\(o\)/);
   assert.match(fnBody('CancelLeftoverLegs'), /now - born < YoungMs/);

@@ -91,7 +91,7 @@ the broker and the prop firm see NinjaTrader orders.
    default **1** for any root without a line. No single order may exceed the cap, and the cap limits what
    the position could become: the current position (read two ways, as NinjaTrader lists it and with fills
    it has reported that are not in the position yet, taking the worse, since event order differs between
-   connections), plus every order on the same side that may still fill (working, part filled,
+   connections; a position update consumes only the fills its change explains), plus every order on the same side that may still fill (working, part filled,
    or with a cancel still pending; orders placed in NinjaTrader and bracket legs too; ChartBridge's own
    orders from the moment they are sent; orders that share an OCO id count once, at the largest), plus
    the new order. One order is checked and sent at a time, across all pages. Selling out of a long, or
@@ -151,9 +151,15 @@ that would reduce the position (by both position readings) it is refused.
   is checked; a fill without legs that has stayed that way for 4 seconds (so an order event still on its
   way is never raced) gets legs for the contracts the settled position holds in the entry's direction
   beyond what ChartBridge's other legs cover, with a `status` `warn`. Never twice.
-- **A stop that goes missing is loud.** For a position ChartBridge put a stop on, if the working
-  ChartBridge stops cover fewer contracts than the position holds for 4 seconds (a stop rejected,
-  cancelled by hand, or contracts added without a bracket), the page gets a `status` `error` once.
+- **A stop that goes missing is loud.** For any contract ChartBridge has put legs on (remembered across
+  reloads from the working legs), whatever direction the position now has, if the working ChartBridge
+  stops on the closing side cover fewer contracts than the position holds for 4 seconds (a stop rejected
+  or cancelled by hand, contracts added without a bracket, or a leg that filled and left a position of
+  its own), the page gets a `status` `error`, once per situation and again if it happens on a later trade.
+  A market exit that is rejected or cancelled raises an error too.
+- **Reconnects.** The scan never decides "no legs needed" while the account's connection is not steady
+  (a reconnect can list orders before positions); it places what the listed position shows and looks
+  again later.
 - **Partner follows.** When one leg fills in part, its partner is shrunk to what is still open; when
   one fills in full, its partner is cancelled.
 - **Never opens a position.** When the position goes flat (and is still flat when checked, on a
