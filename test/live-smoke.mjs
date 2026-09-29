@@ -56,7 +56,56 @@ try {
   await page.fill('#rangeTicks', '12'); await page.press('#rangeTicks', 'Enter'); await page.waitForTimeout(500);
   const tfText = await page.textContent('#lgTf');
   if (!/Range 12t/.test(tfText)) fail('range label: ' + tfText);
+  if (await page.inputValue('#rangeMode') !== 'nt') fail('range mode is not NinjaTrader by default');
+  await page.waitForTimeout(2500);                     // live ticks jump up to 3 ticks: some break past the range
+  // NinjaTrader style: every finished bar is exactly 12 ticks (the last bar of a session can be short)
+  const spans = await page.evaluate(() => {
+    const b = window.liveChart.bars(), day = t => Math.floor((t + 86400 - 64800) / 86400), bad = [];
+    for (let i = 0; i < b.length - 1; i++) if (day(b[i].t) === day(b[i + 1].t) && Math.round((b[i].h - b[i].l) / 0.25) !== 12) bad.push(i + ':' + b[i].l + '-' + b[i].h);
+    return { n: b.length, bad };
+  });
+  if (spans.n < 20 || spans.bad.length) fail('NinjaTrader range bars not exact: ' + JSON.stringify(spans).slice(0, 300));
   await page.screenshot({ path: path.join(out, 'live-range.png') });
+  await page.selectOption('#rangeMode', 'traded'); await page.waitForTimeout(400);
+  if (!/Range 12t traded/.test(await page.textContent('#lgTf'))) fail('traded mode label: ' + await page.textContent('#lgTf'));
+  await page.screenshot({ path: path.join(out, 'live-range-traded.png') });
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForTimeout(400);
+  if (await page.inputValue('#rangeMode') !== 'traded' || await page.inputValue('#rangeTicks') !== '12') fail('range mode or size not remembered: ' + await page.inputValue('#rangeMode') + ' ' + await page.inputValue('#rangeTicks'));
+  await page.selectOption('#rangeMode', 'nt'); await page.waitForTimeout(300);
+
+  // indicator menu: one control, keyboard and pointer, saved for the pane
+  if (await page.textContent('#indCount') !== '4/4') fail('indicators on at first run: ' + await page.textContent('#indCount'));
+  if (!(await page.isHidden('#indPanel'))) fail('indicator menu open at load');
+  await page.focus('#indBtn'); await page.keyboard.press('Enter');
+  if (await page.isHidden('#indPanel') || await page.getAttribute('#indBtn', 'aria-expanded') !== 'true') fail('Enter did not open the indicator menu');
+  if (await page.evaluate(() => document.activeElement.dataset.layer) !== 'volume') fail('focus not on the first indicator');
+  await page.keyboard.press('Space');
+  if (await page.evaluate(() => window.liveChart.getLayers().volume) !== false) fail('Space did not turn volume off');
+  await page.keyboard.press('Tab'); await page.keyboard.press('Space'); await page.waitForTimeout(400);   // VWAP off
+  if (!(await page.isHidden('#lgVwWrap'))) fail('VWAP legend still shown with VWAP off');
+  await page.screenshot({ path: path.join(out, 'live-indicators-open.png') });
+  await page.keyboard.press('Escape');
+  if (!(await page.isHidden('#indPanel'))) fail('Escape did not close the indicator menu');
+  if (await page.evaluate(() => document.activeElement.id) !== 'indBtn') fail('focus not back on the Indicators button');
+  if (await page.textContent('#indCount') !== '2/4') fail('count after two off: ' + await page.textContent('#indCount'));
+  await page.click('#indBtn');
+  await page.click('#indPanel input[data-layer="fills"]');
+  if ((await page.textContent('#lgFill')).trim() !== '') fail('fills still marked with Fills off');
+  await page.mouse.click(700, 600);                                                     // outside: closes
+  if (!(await page.isHidden('#indPanel'))) fail('outside click did not close the indicator menu');
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForTimeout(400);
+  const layers = await page.evaluate(() => window.liveChart.getLayers());
+  if (layers.volume !== false || layers.vwap !== false || layers.levels !== true) fail('indicators not remembered: ' + JSON.stringify(layers));
+  const savedInd = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v1')));
+  if (!savedInd || !savedInd.main || savedInd.main.fills !== false) fail('indicators not saved under the pane id: ' + JSON.stringify(savedInd));
+  await page.click('#indBtn');
+  for (const k of ['volume', 'vwap', 'fills']) await page.click(`#indPanel input[data-layer="${k}"]`);
+  await page.keyboard.press('Escape');
+  if (await page.textContent('#indCount') !== '4/4') fail('indicators back on: ' + await page.textContent('#indCount'));
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();
@@ -92,6 +141,11 @@ try {
   await phone.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
   if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways');
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
+  await phone.click('#indBtn');
+  const pb = await phone.locator('#indPanel').boundingBox();
+  if (!pb || pb.x < 0 || pb.x + pb.width > 400) fail('phone: indicator menu off screen ' + JSON.stringify(pb));
+  if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways with the menu open');
+  await phone.screenshot({ path: path.join(out, 'live-phone-indicators.png') });
 } finally {
   if (browser) await browser.close();
   bridge.kill();
