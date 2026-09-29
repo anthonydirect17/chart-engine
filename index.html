@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chart Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Layout: one-screen trading terminal. Toolbar on top, the chart fills the rest, gesture keys below.
+   Dark only on purpose: Anthony's house style (Obsidian, purple and red). */
+:root {
+  color-scheme: dark;
+  --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
+  --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
+  --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
+  --crimson: #9F1239; --crimson-word: #E0445E;
+  --info: #7FB2FF; --warn: #E0B45A; --level: #7FB2FF; --vwap-sw: #B69CFF;
+  --up-text: #4B9CD3; --down-text: #925EE3;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; }
+.app { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; padding-inline: 16px; padding-block: 12px; }
+
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.logo { width: 30px; height: 30px; border-radius: 8px; background: var(--crimson); display: grid; place-items: center; flex: none; }
+.brand-text { display: grid; line-height: 1.15; }
+.wordmark { font: 700 11px var(--cond); letter-spacing: .14em; color: var(--crimson-word); text-transform: uppercase; }
+.page-name { font-weight: 600; font-size: 14px; color: var(--head); }
+.group { display: flex; align-items: center; gap: 7px; }
+.glabel { font: 600 10px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--text3); }
+.seg { display: inline-flex; background: var(--s2); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { font: 500 12px var(--mono); color: var(--text2); background: transparent; border: 0; border-radius: 6px; padding: 4px 9px; min-height: 28px; cursor: pointer; white-space: nowrap; }
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-border); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 500 12px var(--sans); border: 1px solid var(--line); background: transparent; color: var(--text3); border-radius: 999px; padding: 3px 10px 3px 8px; min-height: 28px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--line-strong); }
+.chip[aria-pressed="true"] { color: var(--text); background: var(--s2); border-color: var(--line-strong); }
+.chip[aria-pressed="true"] .sw { background: var(--sw); }
+.btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 12px; min-height: 30px; cursor: pointer; }
+.btn:hover { background: var(--s3); }
+button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.meter { margin-left: auto; font: 500 11px var(--mono); color: var(--text3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.stage { position: relative; flex: 1; min-height: 380px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+#chart { position: absolute; inset: 0; }
+.legend { position: absolute; left: 10px; top: 10px; z-index: 3; pointer-events: none; display: grid; gap: 3px; padding: 7px 10px; border-radius: 8px; background: rgba(8, 11, 16, 0.78); font-size: 12px; max-width: calc(100% - 110px); }
+.lg1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.lg1 b { color: var(--head); font-weight: 600; }
+.tfbadge { font: 500 11px var(--mono); color: var(--text2); }
+.dim { color: var(--text3); }
+.feedpill { font: 600 10px/1.6 var(--mono); letter-spacing: .06em; padding: 0 7px; border-radius: 999px; color: var(--accent-soft); background: var(--accent-tint); border: 1px solid var(--accent-border); display: inline-flex; align-items: center; gap: 5px; }
+.feedpill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.feedpill.paused { color: var(--warn); background: rgba(224, 180, 90, 0.10); border-color: rgba(224, 180, 90, 0.40); }
+.lg2, .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--text3); display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.lg2 span span, .lg3 span span { color: var(--head); }
+.lg2 .up { color: var(--up-text); }
+.lg2 .down { color: var(--down-text); }
+.lg3 .vw { color: var(--vwap-sw); }
+
+.foot { display: grid; gap: 6px; }
+.hints { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--text2); font-size: 12px; }
+.hints span { white-space: nowrap; }
+kbd { font: 500 11px var(--mono); border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--text); background: var(--s2); }
+.fine { margin: 0; color: var(--text3); font-size: 12px; max-width: 110ch; line-height: 1.5; }
+.fine b { color: var(--text2); font-weight: 500; }
+
+@media (max-width: 720px) {
+  .meter { margin-left: 0; width: 100%; }
+  .legend { max-width: calc(100% - 100px); padding: 5px 8px; font-size: 11px; }
+  .lg1 .dim, .lg3 { display: none; }
+  .lg2 { font-size: 11px; gap: 0 8px; }
+  .ce-live { right: 86px !important; bottom: 34px !important; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFE4EA" stroke-width="2"><path d="M7 4v16M17 4v16"/><rect x="4.5" y="8" width="5" height="7" rx="1"/><rect x="14.5" y="6" width="5" height="9" rx="1"/></svg>
+      </div>
+      <div class="brand-text"><span class="wordmark">[App name]</span><span class="page-name">Chart engine</span></div>
+    </div>
+
+    <div class="group">
+      <span class="glabel" id="tfLabel">Bars</span>
+      <div class="seg" id="tfSeg" role="group" aria-labelledby="tfLabel">
+        <button type="button" data-v="1">1m</button>
+        <button type="button" data-v="5">5m</button>
+        <button type="button" data-v="15">15m</button>
+        <button type="button" data-v="60">1h</button>
+      </div>
+    </div>
+
+    <div class="chips" id="layerChips" role="group" aria-label="Layers">
+      <button type="button" class="chip" data-layer="volume" style="--sw: var(--text3)"><span class="sw"></span>Volume</button>
+      <button type="button" class="chip" data-layer="vwap" style="--sw: var(--vwap-sw)"><span class="sw"></span>VWAP</button>
+      <button type="button" class="chip" data-layer="levels" style="--sw: var(--level)"><span class="sw"></span>Levels</button>
+      <button type="button" class="chip" data-layer="trades" style="--sw: var(--text)"><span class="sw"></span>Trades</button>
+    </div>
+
+    <div class="group">
+      <span class="glabel" id="speedLabel">Feed</span>
+      <div class="seg" id="speedSeg" role="group" aria-labelledby="speedLabel">
+        <button type="button" data-v="0">Pause</button>
+        <button type="button" data-v="1">1x</button>
+        <button type="button" data-v="5">5x</button>
+        <button type="button" data-v="30">30x</button>
+      </div>
+    </div>
+
+    <span id="colorsHost"></span>
+    <button type="button" class="btn" id="resetBtn">Reset view</button>
+    <div class="meter" id="meter" aria-live="off">starting</div>
+  </header>
+
+  <main class="stage">
+    <div id="chart" aria-label="MNQ candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis."></div>
+    <div class="legend" id="legend">
+      <div class="lg1"><b>MNQ Z26</b><span class="tfbadge" id="lgTf">1m</span><span class="dim">Micro Nasdaq · sample data</span><span class="feedpill" id="feedPill">SIM 1x</span></div>
+      <div class="lg2"><span class="dim" id="lgTime">--:--</span><span>O <span id="lgO">-</span></span><span>H <span id="lgH">-</span></span><span>L <span id="lgL">-</span></span><span>C <span id="lgC">-</span></span><span id="lgChg">-</span><span>Vol <span id="lgV">-</span></span></div>
+      <div class="lg3" id="lgRow3"><span id="lgVwWrap">VWAP <span class="vw" id="lgVw">-</span></span><span id="lgTrade" class="dim"></span></div>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <div class="hints">
+      <span>Drag to pan, let go mid-drag to throw it</span>
+      <span>Wheel or pinch zooms where the pointer is</span>
+      <span>Drag the price axis to stretch it, double-click it for auto</span>
+      <span>Drag the time axis to zoom</span>
+      <span>Double-click the chart to reset</span>
+      <span><kbd>←</kbd> <kbd>→</kbd> pan · <kbd>+</kbd> <kbd>−</kbd> zoom · <kbd>End</kbd> live · <kbd>A</kbd> auto scale</span>
+    </div>
+    <p class="fine"><b>Sample data only.</b> Prices come from a seeded random walk shaped like MNQ (quiet overnight, busy open), and the feed is simulated. Levels, VWAP and the four trades are computed from that sample, so none of it is your market data or your trades. <b>Colors</b> sets bull, bear and VWAP colors and remembers them in this browser.</p>
+  </footer>
+</div>
+
+<script src="src/chart-engine.js"></script>
+<script src="demo/sample-feed.js"></script>
+<script>
+(() => {
+'use strict';
+const CE = window.ChartEngine, U = CE.util;
+const $ = id => document.getElementById(id);
+
+const S = { tf: 1, speed: 1, layers: { volume: true, vwap: true, levels: true, trades: true } };
+const STORE = 'chart-engine-demo-v1';
+try {
+  const s = JSON.parse(localStorage.getItem(STORE) || 'null');
+  if (s) {
+    if ([1, 5, 15, 60].includes(s.tf)) S.tf = s.tf;
+    if ([0, 1, 5, 30].includes(s.speed)) S.speed = s.speed;
+    if (s.layers) for (const k in S.layers) if (typeof s.layers[k] === 'boolean') S.layers[k] = s.layers[k];
+  }
+} catch (e) { /* storage blocked: defaults are fine */ }
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) { /* ignore */ } };
+
+const feed = SampleFeed.create();
+feed.setSpeed(S.speed);
+const chart = CE.create($('chart'), {
+  barSeconds: S.tf * 60, precision: 2, tick: feed.tick,
+  session: { start: feed.sessionStart, rthStart: 34200, rthEnd: 57600 },
+  layers: S.layers, clock: feed.now,
+});
+chart.setBars(U.aggregate(feed.base, S.tf * 60));
+chart.setLevels(feed.levels);
+chart.setTrades(feed.trades);
+chart.setPaused(S.speed === 0);
+feed.onTick(() => chart.update(U.foldLast(feed.base, S.tf * 60)));
+
+let lastKey = '', lastEvt = null;
+CE.mountThemePanel(chart, $('colorsHost'), {
+  onChange: c => {
+    const T = chart.colors(), st = document.documentElement.style;
+    st.setProperty('--vwap-sw', T.vwapText); st.setProperty('--up-text', T.upText); st.setProperty('--down-text', T.downText);
+    lastKey = '';
+  },
+});
+
+/* legend */
+const lg = { tf: $('lgTf'), time: $('lgTime'), o: $('lgO'), h: $('lgH'), l: $('lgL'), c: $('lgC'), chg: $('lgChg'), v: $('lgV'), vw: $('lgVw'), vwWrap: $('lgVwWrap'), row3: $('lgRow3'), trade: $('lgTrade') };
+function renderLegend(e) {
+  if (e) lastEvt = e; else e = lastEvt;
+  if (!e) return;
+  const { bar: b, prev, forming } = e;
+  const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap, S.layers.trades].join('|');
+  if (key === lastKey) return;
+  lastKey = key;
+  const fmt = p => U.fmtPrice(p, 2);
+  const chg = prev ? b.c - prev.c : 0, pct = prev ? chg / prev.c * 100 : 0;
+  lg.tf.textContent = S.tf === 60 ? '1h' : S.tf + 'm';
+  lg.time.textContent = U.fmtFull(b.t) + (forming ? ' · forming' : '');
+  lg.o.textContent = fmt(b.o); lg.h.textContent = fmt(b.h); lg.l.textContent = fmt(b.l); lg.c.textContent = fmt(b.c);
+  lg.chg.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
+  lg.chg.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
+  lg.v.textContent = U.fmtVolume(b.v);
+  lg.row3.hidden = !S.layers.vwap && !S.layers.trades;
+  lg.vwWrap.hidden = !S.layers.vwap;
+  lg.vw.textContent = b.vw !== undefined ? fmt(U.roundTo(b.vw, feed.tick)) : '-';
+  const sec = S.tf * 60, bk = Math.floor(b.t / sec);
+  const tr = S.layers.trades ? feed.trades.find(t => Math.floor(t.tIn / sec) <= bk && Math.floor(t.tOut / sec) >= bk) : null;
+  lg.trade.textContent = tr ? 'Sample trade: ' + (tr.dir > 0 ? 'long' : 'short') + ' ' + fmt(tr.pIn) + ' → ' + fmt(tr.pOut) + ', ' + ((tr.pOut - tr.pIn) * tr.dir > 0 ? '+' : '') + ((tr.pOut - tr.pIn) * tr.dir).toFixed(2) + ' pt' : '';
+}
+chart.on('legend', renderLegend);
+
+/* toolbar */
+function syncButtons() {
+  for (const b of $('tfSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === S.tf));
+  for (const b of $('speedSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === S.speed));
+  for (const b of $('layerChips').children) b.setAttribute('aria-pressed', String(!!S.layers[b.dataset.layer]));
+  const pill = $('feedPill');
+  pill.textContent = S.speed === 0 ? 'PAUSED' : 'SIM ' + S.speed + 'x';
+  pill.classList.toggle('paused', S.speed === 0);
+}
+$('tfSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || +b.dataset.v === S.tf) return;
+  S.tf = +b.dataset.v;
+  chart.setBars(U.aggregate(feed.base, S.tf * 60), { barSeconds: S.tf * 60 });
+  lastKey = ''; syncButtons(); save();
+});
+$('speedSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.speed = +b.dataset.v; feed.setSpeed(S.speed); chart.setPaused(S.speed === 0); syncButtons(); save();
+});
+$('layerChips').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const k = b.dataset.layer; S.layers[k] = !S.layers[k];
+  chart.setLayers({ [k]: S.layers[k] }); lastKey = ''; renderLegend(); syncButtons(); save();
+});
+$('resetBtn').addEventListener('click', () => chart.reset());
+syncButtons();
+
+/* feed + meter */
+const meter = $('meter'); let meterAt = 0;
+function loop(now) {
+  feed.step(now);
+  if (now - meterAt > 300) {
+    meterAt = now;
+    const s = chart.stats();
+    const text = s.idle ? 'idle · last frame ' + s.drawMs.toFixed(1) + ' ms to draw' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms per frame';
+    if (meter.textContent !== text) meter.textContent = text;
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+if (document.fonts && document.fonts.load) {
+  Promise.all([document.fonts.load('500 11px "IBM Plex Mono"'), document.fonts.load('600 10px "IBM Plex Sans Condensed"')]).then(() => chart.setLayers({}), () => {});
+}
+})();
+</script>
+</body>
+</html>
