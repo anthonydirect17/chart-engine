@@ -1,0 +1,276 @@
+// Order entry smoke test: drives the live page in Chromium against the fake bridge (protocol v2).
+// Sample data only; nothing reaches a broker. Screenshots in test/out/ (and SHOTS_DIR when set).
+//   npm run smoke:orders        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const out = path.join(root, 'test', 'out');
+fs.mkdirSync(out, { recursive: true });
+const SHOTS = process.env.SHOTS_DIR || '';
+if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
+const BASE = +(process.env.ORDERS_SMOKE_PORT || 8796);
+const errors = [];
+const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
+const check = (ok, m) => { if (!ok) fail(m); };
+const bridges = [];
+
+async function startBridge(port, flags) {
+  const child = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port)].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
+  bridges.push(child);
+  await new Promise(r => child.stdout.once('data', r));
+  return child;
+}
+const control = async (port, what, q) => (await fetch(`http://127.0.0.1:${port}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' })).json();
+async function shot(page, name) {
+  const file = path.join(out, name);
+  await page.screenshot({ path: file });
+  if (SHOTS) fs.copyFileSync(file, path.join(SHOTS, name));
+}
+async function until(fn, what, ms) {
+  const end = Date.now() + (ms || 5000);
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > end) { fail('timed out: ' + what); return null; }
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+async function open(browser, port, width, height) {
+  const page = await browser.newPage({ viewport: { width, height: height || 860 }, deviceScaleFactor: 2 });
+  page.on('pageerror', e => fail(width + 'px pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
+  await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+  await page.goto(`http://localhost:${port}/live/`);
+  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForTimeout(600);
+  return page;
+}
+const status = page => page.evaluate(() => { const el = document.getElementById('statusMsg'); return { text: el.textContent, cls: el.className }; });
+const noSideScroll = async (page, width) => check(await page.evaluate(() => document.documentElement.scrollWidth) <= width, width + 'px: the page scrolls sideways');
+
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+try {
+  /* ---------------- trading on: Sim101 and DEMO-EVAL, MNQ cap 5 */
+  const PORT = BASE;
+  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--test-controls']);
+  const page = await open(browser, PORT, 1440);
+  const L = Math.round((await control(PORT, 'hold', { root: 'MNQ' })).last);    // hold the sample walk at a round price
+  await control(PORT, 'price', { root: 'MNQ', p: L });
+  const state = () => control(PORT, 'state', { root: 'MNQ' });
+
+  // auth happened: the bar is on, lists only the allowed accounts, Sim101 first choice, qty capped at 5, Armed off
+  await until(() => page.evaluate(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled), 'trading enabled after auth');
+  check(JSON.stringify(await page.$$eval('#oAcct option', os => os.map(o => o.value))) === '["Sim101","DEMO-EVAL"]', 'trade accounts');
+  check(await page.inputValue('#oAcct') === 'Sim101', 'default account Sim101');
+  check(await page.getAttribute('#oQty', 'max') === '5', 'qty max 5');
+  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after load');
+  check(/Trading through ChartBridge/.test(await page.textContent('#statusRo')), 'footer says trading');
+
+  // Armed off: buttons, Shift+click and flatten send nothing
+  await page.click('#buyMkt');
+  let st = await status(page);
+  check(/Armed is off: nothing was sent/.test(st.text) && /warn/.test(st.cls), 'disarmed click message: ' + st.text);
+  const cbox = () => page.locator('#chart canvas').boundingBox();   // measured fresh before each use
+  let box = await cbox();
+  const box0 = box;
+  const yAt = p => page.evaluate(pr => window.liveChart.priceToY(pr), p);
+  await page.keyboard.down('Shift'); await page.mouse.click(box.x + box.width * 0.5, box.y + await yAt(L - 10)); await page.keyboard.up('Shift');
+  await page.click('#flattenBtn');
+  await page.waitForTimeout(400);
+  check((await state()).orders.length === 0 && !Object.values((await state()).positions).some(p => p.qty), 'nothing traded while disarmed');
+  await shot(page, 'orders-1440-disarmed.png');
+
+  // arm, bracket 40 / 80 ticks, buy 2 at market
+  await page.click('#armBtn');
+  check(await page.getAttribute('#armBtn', 'aria-checked') === 'true', 'armed');
+  check((await page.title()).startsWith('ARMED'), 'title shows ARMED');
+  check(await page.isVisible('#armPill'), 'ARMED pill on the chart legend');
+  await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
+  await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');
+  await page.fill('#oQty', '2');
+  await page.click('#buyMkt');
+  await until(async () => (await page.textContent('#oPos')).startsWith('LONG 2'), 'position LONG 2 in the bar');
+  let s = await until(async () => { const x = await state(); return x.orders.length === 2 ? x : null; }, 'two bracket legs');
+  const stopLeg = s && s.orders.find(o => o.role === 'stop'), targetLeg = s && s.orders.find(o => o.role === 'target');
+  check(stopLeg && stopLeg.price === L - 10 && stopLeg.qty === 2 && stopLeg.side === 'sell', 'stop leg at L - 10: ' + JSON.stringify(stopLeg));
+  check(targetLeg && targetLeg.price === L + 20 && targetLeg.oco === stopLeg.oco, 'target leg at L + 20, same OCO');
+  check(JSON.parse(await page.evaluate(() => localStorage.getItem('live-bracket-v1'))).MNQ.stop === 40, 'bracket remembered per root');
+  await until(() => page.evaluate(() => window.liveChart.getOrders().length === 2 && !!window.liveChart.getPosition()), 'order and position lines on the chart');
+  await page.waitForTimeout(300);
+  box = await page.locator('#chart canvas').boundingBox();
+  check(Math.abs(box.y - box0.y) < 1 && Math.abs(box.height - box0.height) < 1, 'the chart did not move when the position changed');
+  await shot(page, 'orders-1440-bracket.png');
+
+  // drag the target label up; the live tag follows; release sends change
+  box = await cbox();
+  let h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), targetLeg.id);
+  const gx = box.x + h.box.x + h.box.w / 2, gy = box.y + h.box.y + h.box.h / 2;
+  await page.mouse.move(gx, gy); await page.mouse.down();
+  await page.mouse.move(gx, gy - 30, { steps: 6 });
+  await page.waitForTimeout(150);
+  await shot(page, 'orders-1440-drag.png');
+  await page.mouse.up();
+  s = await until(async () => { const x = await state(); const t = x.orders.find(o => o.id === targetLeg.id); return t && t.price > L + 20 ? x : null; }, 'target moved up');
+  const moved = s && s.orders.find(o => o.id === targetLeg.id).price;
+  check(moved && Math.abs(moved / 0.25 - Math.round(moved / 0.25)) < 1e-9, 'moved target on the tick grid: ' + moved);
+  await until(() => page.evaluate(p => window.liveChart.getOrders().some(o => o.role === 'target' && o.price === p), moved), 'chart shows the moved target');
+
+  // Escape during a drag reverts: nothing sent
+  box = await cbox();
+  h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLeg.id);
+  await page.mouse.move(box.x + h.box.x + 8, box.y + h.box.y + 9); await page.mouse.down();
+  await page.mouse.move(box.x + h.box.x + 8, box.y + h.box.y + 49, { steps: 4 });
+  await page.keyboard.press('Escape'); await page.mouse.up();
+  await page.waitForTimeout(400);
+  check((await state()).orders.find(o => o.id === stopLeg.id).price === L - 10, 'Escape reverted the stop drag');
+
+  // cancel the stop with its x: the OCO pair goes together
+  box = await cbox();
+  h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLeg.id);
+  await page.mouse.click(box.x + h.xbox.x + h.xbox.w / 2, box.y + h.xbox.y + h.xbox.h / 2);
+  await until(async () => (await state()).orders.length === 0, 'x cancelled the stop and its target');
+  await until(() => page.evaluate(() => window.liveChart.getOrders().length === 0), 'order lines gone');
+
+  // Shift+click places a limit (below the market, Buy side): preview first, then the click
+  box = await cbox();
+  const px = box.x + box.width * 0.45; let py = box.y + await yAt(L - 15);
+  await page.mouse.click(px, py);                                              // a plain click places nothing
+  await page.mouse.move(px, py); await page.mouse.down(); await page.mouse.move(px + 60, py + 10, { steps: 5 }); await page.waitForTimeout(150); await page.mouse.up();   // nor does a drag (held still: no throw)
+  await page.keyboard.down('Shift'); await page.mouse.move(px + 60, py + 10); await page.mouse.down(); await page.mouse.move(px, py, { steps: 5 }); await page.waitForTimeout(150); await page.mouse.up();   // nor a Shift+drag
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(500);
+  check((await state()).orders.length === 0, 'plain click, drag or Shift+drag placed an order');
+  await page.evaluate(() => window.liveChart.goLive());
+  for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt(L - 15); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await page.waitForTimeout(200); }   // the view has settled
+  box = await cbox(); py = box.y + await yAt(L - 15);                                              // the view moved: find the price again
+  await page.keyboard.down('Shift');
+  await page.mouse.move(px, py + 1); await page.mouse.move(px, py);
+  await page.waitForTimeout(200);
+  await shot(page, 'orders-1440-preview.png');
+  await page.mouse.click(px, py);
+  await page.keyboard.up('Shift');
+  s = await until(async () => { const x = await state(); return x.orders.length === 1 ? x : null; }, 'Shift+click placed an order');
+  const lim = s && s.orders[0];
+  check(lim && lim.side === 'buy' && lim.kind === 'limit' && lim.qty === 2 && Math.abs(lim.price - (L - 15)) <= 0.5, 'Shift+click buy limit near L - 15: ' + JSON.stringify(lim));
+  check(lim && lim.cid && lim.cid.startsWith('p'), 'order carries the page cid');
+
+  // Sell side below the market: a sell stop. Long 2 with a 40 / 80 bracket set: the page sends no bracket on this
+  // reducing order (ChartBridge would refuse one), so it is accepted.
+  await page.click('#sideSeg >> text="Sell"');
+  box = await cbox();
+  await page.keyboard.down('Shift'); await page.mouse.click(px, box.y + await yAt(L - 5)); await page.keyboard.up('Shift');
+  s = await until(async () => { const x = await state(); return x.orders.length === 2 ? x : null; }, 'Shift+click sell stop');
+  const sst = s && s.orders.find(o => o.side === 'sell');
+  check(sst && sst.kind === 'stop', 'sell below the market is a stop: ' + JSON.stringify(sst));
+  await page.waitForTimeout(300);
+  await shot(page, 'orders-1440-working.png');
+
+  // flatten: every order on Sim101 MNQ cancelled and the position closed
+  await page.click('#flattenBtn');
+  await until(async () => { const x = await state(); return x.orders.length === 0 && !Object.values(x.positions).some(p => p.qty); }, 'flatten');
+  await until(async () => (await page.textContent('#oPos')) === 'Flat', 'bar shows Flat');
+  await until(() => page.evaluate(() => !window.liveChart.getPosition() && window.liveChart.getOrders().length === 0), 'position and orders gone from the chart');
+
+  // rejects: qty over the cap (stopped in the page), and a ChartBridge refusal (more than 200 ticks away)
+  await page.fill('#oQty', '9');
+  await page.click('#buyMkt');
+  st = await status(page);
+  check(/Not sent: Qty 9 is over the MNQ cap of 5/.test(st.text) && /error/.test(st.cls), 'over-cap qty refused: ' + st.text);
+  await shot(page, 'orders-1440-reject-qty.png');
+  await page.fill('#oQty', '1');
+  await page.click('#sideSeg >> text="Buy"');
+  for (let k = 0; k < 20 && (await page.evaluate(() => window.liveChart.yToPrice(12))) < L + 60; k++) {
+    await page.mouse.move(box.x + box.width - 30, box.y + box.height * 0.5); await page.mouse.wheel(0, 240); await page.waitForTimeout(60);
+  }
+  box = await cbox();
+  await page.keyboard.down('Shift'); await page.mouse.click(px, box.y + 14); await page.keyboard.up('Shift');
+  await until(async () => /^Refused by ChartBridge: .* ticks from the last price/.test((await status(page)).text), 'ChartBridge reject shown');
+  st = await status(page);
+  check(/error/.test(st.cls), 'reject in the error color');
+  await shot(page, 'orders-1440-reject.png');
+  check((await state()).orders.length === 0, 'rejected order not working');
+  await page.dblclick('.stage', { position: { x: 1360, y: 400 } });            // price axis back to auto-fit
+
+  // an error-level status from ChartBridge stays on screen until dismissed
+  await control(PORT, 'status', { level: 'error', text: 'MNQ Sim101: bracket stop rejected; the position may have NO STOP' });
+  await until(() => page.isVisible('#alertBar'), 'error alert shown');
+  await page.waitForTimeout(7000);
+  check(await page.isVisible('#alertBar') && /NO STOP/.test(await page.textContent('#alertText')), 'error alert still shown after 7 s');
+  await shot(page, 'orders-1440-alert.png');
+  await page.click('#alertClose');
+  check(await page.isHidden('#alertBar'), 'alert dismissed');
+
+  // reload: Armed is off again
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading after reload');
+  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after reload');
+  check(!(await page.title()).startsWith('ARMED'), 'title not ARMED after reload');
+  check(await page.inputValue('#bStop') === '40', 'bracket kept after reload');
+  await noSideScroll(page, 1440);
+
+  // 400 px: armed with a position and a bracket
+  const phone = await open(browser, PORT, 400, 860);
+  await until(() => phone.evaluate(() => !document.getElementById('buyMkt').disabled), 'phone: trading enabled');
+  await phone.click('#armBtn');
+  await phone.click('#buyMkt');
+  await until(async () => (await phone.textContent('#oPos')).startsWith('LONG 1'), 'phone: position');
+  await phone.waitForTimeout(400);
+  await noSideScroll(phone, 400);
+  await shot(phone, 'orders-400-armed.png');
+  await phone.click('#flattenBtn');
+  await until(async () => (await phone.textContent('#oPos')) === 'Flat', 'phone: flatten');
+  await phone.close();
+  await page.close();
+
+  /* ---------------- trading off in config.txt: the bar says why, every control disabled */
+  await startBridge(PORT + 1, []);
+  const off = await open(browser, PORT + 1, 1440);
+  await until(() => off.evaluate(() => !document.getElementById('obar').hidden), 'disabled bar visible');
+  check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent('#oOff')), 'reason shown: ' + await off.textContent('#oOff'));
+  const enabled = await off.$$eval('#obar button, #obar input, #obar select', els => els.filter(e => !e.disabled).map(e => e.id));
+  check(enabled.length === 0, 'controls enabled while trading is off: ' + enabled.join(','));
+  check(/^Read only/.test(await off.textContent('#statusRo')), 'footer read only');
+  await shot(off, 'orders-1440-trading-off.png');
+  const offPhone = await open(browser, PORT + 1, 400, 860);
+  await noSideScroll(offPhone, 400);
+  await shot(offPhone, 'orders-400-trading-off.png');
+  await offPhone.close(); await off.close();
+
+  /* ---------------- clickjacking: ChartBridge refuses frames; the page also refuses to trade inside one */
+  const host = await browser.newPage({ viewport: { width: 1300, height: 900 } });
+  await host.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+  await host.setContent(`<iframe id="f" src="http://localhost:${PORT}/live/" style="width:1260px;height:860px;border:0"></iframe>`);
+  await host.waitForTimeout(2500);
+  const blocked = host.frames().find(f => f !== host.mainFrame());
+  check(!blocked || !(await blocked.evaluate(() => !!document.getElementById('connPill')).catch(() => false)), 'ChartBridge page loaded inside a frame');
+  await startBridge(PORT + 3, ['--trading', '--trade-accounts=Sim101', '--allow-frames']);
+  await host.setContent(`<iframe id="f" src="http://localhost:${PORT + 3}/live/" style="width:1260px;height:860px;border:0"></iframe>`);
+  const fr = await until(async () => { const f = host.frames().find(x => x !== host.mainFrame()); return f && await f.evaluate(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE').catch(() => false) ? f : null; }, 'framed page loads with --allow-frames', 15000);
+  if (fr) {
+    await fr.waitForTimeout(800);
+    check(/inside another page/.test(await fr.textContent('#oOff')), 'framed page says why it cannot trade: ' + await fr.textContent('#oOff'));
+    check(await fr.isDisabled('#armBtn'), 'framed page cannot arm');
+    await shot(host, 'orders-framed-refused.png');
+  }
+  await host.close();
+
+  /* ---------------- ChartBridge 0.2 (protocol v1): read only exactly as before */
+  await startBridge(PORT + 2, ['--v1']);
+  const v1 = await open(browser, PORT + 2, 1440);
+  await v1.waitForTimeout(500);
+  check(await v1.isHidden('#obar'), 'no order bar with ChartBridge 0.2');
+  check(await v1.textContent('#statusRo') === 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.', 'v1 footer');
+  check(/Last fill (BUY|SELL)/.test(await v1.textContent('#legend')), 'v1 fills still shown');
+  await shot(v1, 'orders-1440-v1-read-only.png');
+  await v1.close();
+} finally {
+  await browser.close();
+  for (const b of bridges) b.kill();
+}
+if (errors.length) { console.error('FAIL\n' + errors.join('\n')); process.exit(1); }
+console.log('orders smoke: ok');

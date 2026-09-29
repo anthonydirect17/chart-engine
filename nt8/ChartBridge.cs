@@ -1,10 +1,12 @@
-// ChartBridge 0.2.1 for NinjaTrader 8
+// ChartBridge 0.3.0 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only).
-// READ ONLY: this add-on never places, changes or cancels an order.
+// READ ONLY by default. Order entry from the chart (Step 2) lives only in ChartBridgeOrders.cs and stays
+// off unless config.txt has "trading = true" and names the accounts in "tradeAccounts"; this file never
+// places, changes or cancels an order itself.
 // Protocol: nt8/PROTOCOL.md in https://github.com/anthonydirect17/chart-engine (MIT).
 //
-// Install: copy this file to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
+// Install: copy this file and ChartBridgeOrders.cs to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
 // Documents\NinjaTrader 8\ChartBridge\www\ (nt8\install.ps1 does both), then compile in the
 // NinjaScript Editor. Output from the add-on appears in the Output window (New > NinjaScript Output).
 //
@@ -40,7 +42,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (State == State.SetDefaults)
             {
                 Name = "ChartBridge";
-                Description = "Streams live data and fills to the chart-engine live page at http://localhost:8765/ (read only).";
+                Description = "Streams live data and fills to the chart-engine live page at http://localhost:8765/ (read only unless order entry is turned on in config.txt).";
             }
             else if (State == State.Configure || State == State.Active)
             {
@@ -69,6 +71,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (string.IsNullOrEmpty(name)) return false;
             if (name.StartsWith("Backtest", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Playback", StringComparison.OrdinalIgnoreCase)) return false;
+            if (ChartBridgeOrders.AccountTradable(name)) return true;      // accounts the chart may trade are always watched
             if (AccountAllow.Count == 0) return true;
             foreach (string pat in AccountAllow)
             {
@@ -91,10 +94,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
         //   deskUrl = http://localhost:8800
-        //   accounts = Sim101, LFE*        (only these accounts' fills; * matches a prefix; default all,
+        //   accounts = Sim101, EVAL*       (only these accounts' fills; * matches a prefix; default all,
         //                                   Backtest and Playback accounts are always skipped)
+        //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
+        //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
+        //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
         public static void Load()
         {
+            ChartBridgeOrders.ResetConfig();
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -114,6 +121,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
                 else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
         }
     }
@@ -245,14 +253,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         public readonly int Id;
         public volatile string Root;            // subscribed instrument root, null until subscribe
         public volatile bool Ready;             // backfill sent; live ticks go straight out
+        public string Origin;                   // the WebSocket's Origin header (orders only from ChartBridge's own page)
+        public volatile bool Trader;            // signed in for orders (ChartBridgeOrders.Auth)
+        public readonly Queue<double> Actions = new Queue<double>();   // recent order actions, for the rate limit
         public readonly List<string> Pending = new List<string>();   // live ticks held during backfill
         private readonly BlockingCollection<string> outbox = new BlockingCollection<string>(new ConcurrentQueue<string>(), 5000);
         private readonly CancellationTokenSource cts = new CancellationTokenSource();
 
         public ChartBridgeClient(WebSocket socket, int id) { Socket = socket; Id = id; }
 
+        public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
+
         public void Send(string json)
         {
+            if (Tap != null) Tap(json);
             if (cts.IsCancellationRequested) return;
             if (!outbox.TryAdd(json))
             {
@@ -458,7 +472,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.2.1";
+        public const string Version = "0.3.0";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -490,11 +504,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Directory.CreateDirectory(ChartBridgeConfig.WwwFolder);
                     cts = new CancellationTokenSource();
                     ResolveInstruments();
+                    ChartBridgeOrders.NewToken();
+                    Log(ChartBridgeOrders.Enabled
+                        ? "order entry is ON for " + ChartBridgeOrders.TradeAccounts.Count + " account(s): " + string.Join(", ", ChartBridgeOrders.TradeAccounts)
+                        : "order entry is off (read only)");
                     SubscribeMarketData();
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
                     WatchAccounts();
+                    ChartBridgeOrders.WatchConnections();
+                    try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } }, null, 10000, 10000);
-                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } }, null, 2000, 2000);
+                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } }, null, 2000, 2000);
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
@@ -526,9 +546,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (MarketData md in Feeds) { try { md.Update -= OnMarketData; } catch (Exception) { } }
                 Feeds.Clear();
                 Unwatch();
+                ChartBridgeOrders.UnwatchConnections();
                 try { if (listener != null) { listener.Stop(); listener.Close(); } } catch (Exception) { }
                 listener = null;
                 Instruments.Clear();
+                ChartBridgeOrders.Clear();
                 Log("stopped");
             }
         }
@@ -587,11 +609,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string path = ctx.Request.Url.AbsolutePath;
                 if (path == "/ws" && ctx.Request.IsWebSocketRequest)
                 {
+                    string origin = ctx.Request.Headers["Origin"];
                     HttpListenerWebSocketContext wsc = await ctx.AcceptWebSocketAsync(null);
-                    await RunClient(wsc.WebSocket, token);
+                    await RunClient(wsc.WebSocket, token, origin);
                     return;
                 }
                 if (path == "/diag") { ServeText(ctx, DiagJson(), "application/json"); return; }
+                if (path == "/session")   // same origin only: no CORS headers; and only when asked for by the localhost name (a second guard against DNS rebinding)
+                {
+                    if (ctx.Request.Headers["Host"] != "localhost:" + ChartBridgeConfig.Port) { ctx.Response.StatusCode = 403; ctx.Response.Close(); return; }
+                    ServeText(ctx, ChartBridgeOrders.SessionJson(), "application/json");
+                    return;
+                }
                 ServeFile(ctx, path);
             }
             catch (Exception ex)
@@ -607,9 +636,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             HttpListenerResponse res = ctx.Response;
             res.ContentType = type + "; charset=utf-8";
             res.AddHeader("Cache-Control", "no-store");
+            NoFraming(res);
             res.ContentLength64 = body.Length;
             res.OutputStream.Write(body, 0, body.Length);
             res.Close();
+        }
+
+        // The page can place orders, so no other site may show it inside a frame (clickjacking).
+        private static void NoFraming(HttpListenerResponse res)
+        {
+            res.AddHeader("X-Frame-Options", "DENY");
+            res.AddHeader("Content-Security-Policy", "frame-ancestors 'none'");
+            res.AddHeader("X-Content-Type-Options", "nosniff");
         }
 
         private static void ServeFile(HttpListenerContext ctx, string path)
@@ -621,6 +659,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
             {
                 res.StatusCode = 404;
+                NoFraming(res);
                 byte[] msg = Encoding.UTF8.GetBytes("Not found. Page files go in " + root);
                 res.OutputStream.Write(msg, 0, msg.Length);
                 res.Close();
@@ -633,15 +672,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             byte[] body = File.ReadAllBytes(full);
             res.ContentType = type;
             res.AddHeader("Cache-Control", "no-cache");
+            NoFraming(res);
             res.ContentLength64 = body.Length;
             res.OutputStream.Write(body, 0, body.Length);
             res.Close();
         }
 
-        private static async Task RunClient(WebSocket ws, CancellationToken token)
+        private const int MaxMessageBytes = 65536;   // page messages are small; anything bigger is not the page
+
+        private static async Task RunClient(WebSocket ws, CancellationToken token, string origin)
         {
             int id = Interlocked.Increment(ref nextId);
             ChartBridgeClient client = new ChartBridgeClient(ws, id);
+            client.Origin = origin;
             Clients[id] = client;
             Task sending = Task.Run(() => client.SendLoop());   // SendLoop blocks on its queue; never run it inline (0.1.0 deadlock)
             client.Send(HelloJson());
@@ -651,16 +694,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 while (ws.State == WebSocketState.Open && !token.IsCancellationRequested)
                 {
-                    StringBuilder sb = new StringBuilder();
+                    MemoryStream bytes = new MemoryStream();   // whole message first: a UTF-8 character can span two frames
+                    int size = 0;
                     WebSocketReceiveResult r;
                     do
                     {
                         r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), token);
                         if (r.MessageType == WebSocketMessageType.Close) break;
-                        sb.Append(Encoding.UTF8.GetString(buf, 0, r.Count));
+                        size += r.Count;
+                        if (size > MaxMessageBytes) break;
+                        bytes.Write(buf, 0, r.Count);
                     } while (!r.EndOfMessage);
                     if (r.MessageType == WebSocketMessageType.Close) break;
-                    OnClientMessage(client, sb.ToString());
+                    if (size > MaxMessageBytes)
+                    {
+                        Log("client " + id + " sent a message over " + MaxMessageBytes + " bytes; closing it");
+                        try { await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "message too big", CancellationToken.None); } catch (Exception) { }
+                        break;
+                    }
+                    string text = Encoding.UTF8.GetString(bytes.ToArray());
+                    OnClientMessage(client, text);
                 }
             }
             catch (Exception) { }
@@ -693,6 +746,27 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int tickHours = hm.Success ? Math.Max(0, Math.Min(48, int.Parse(hm.Groups[1].Value))) : ChartBridgeConfig.DefaultTickHours;
                 Subscribe(client, root, days, tickHours);
             }
+            else if (type == "auth" || type == "order" || type == "change" || type == "cancel" || type == "flatten")
+                ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
+        }
+
+        public static Instrument InstrumentFor(string root)
+        {
+            Instrument inst;
+            return root != null && Instruments.TryGetValue(root, out inst) ? inst : null;
+        }
+
+        // The root ChartBridge serves for this exact contract, or null (other contracts are not ours).
+        public static string RootFor(Instrument inst)
+        {
+            if (inst == null) return null;
+            foreach (KeyValuePair<string, Instrument> kv in Instruments) if (kv.Value == inst || kv.Value.FullName == inst.FullName) return kv.Key;
+            return null;
+        }
+
+        public static void SendToTraders(string json)
+        {
+            foreach (ChartBridgeClient c in Clients.Values) if (c.Trader) c.Send(json);
         }
 
         // ---------------------------------------------------------- instruments and front month
@@ -756,7 +830,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 foreach (Account a in Watched) { if (!first) b.Append(','); first = false; b.Append(CbJson.Str(a.Name)); }
             }
-            b.Append("]}");
+            b.Append("],\"trading\":").Append(ChartBridgeOrders.TradingJson(false, null)).Append("}");
             return b.ToString();
         }
 
@@ -779,6 +853,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double rx = ChartBridgeTime.NowUtcMs();
                 DateTime utc = ChartBridgeTime.ToUtc(e.Time);
                 string root = RootOf(e.Instrument);
+                ChartBridgeOrders.NoteLast(root, e.Price);
                 string json = "{\"type\":\"tick\",\"root\":" + CbJson.Str(root) +
                     ",\"t\":" + CbJson.Num3(ChartBridgeTime.EtSeconds(utc)) +
                     ",\"u\":" + CbJson.Num3(ChartBridgeTime.UtcMs(utc)) +
@@ -1035,6 +1110,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n > 0) ChartBridgeDesk.Flush();
         }
 
+        // Order code calls this before trading an account: an account that just connected may not be watched yet,
+        // and an unwatched account's fills and order updates would never reach the page.
+        public static bool EnsureWatched(Account a)
+        {
+            if (a == null) return false;
+            lock (Watched) { if (Watched.Contains(a)) return true; }
+            try { WatchAccounts(); } catch (Exception ex) { Log("watch accounts failed: " + ex.Message); }
+            lock (Watched) return Watched.Contains(a);
+        }
+
         private static void Unwatch()
         {
             lock (Watched)
@@ -1050,9 +1135,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Seen) Seen.Clear();
         }
 
-        private static void OnOrderUpdate(object sender, OrderEventArgs e) { Account a = sender as Account; Count(a != null ? a.Name : "", 1); }
+        private static void OnOrderUpdate(object sender, OrderEventArgs e)
+        {
+            Account a = sender as Account;
+            Count(a != null ? a.Name : "", 1);
+            try { ChartBridgeOrders.OnOrderUpdate(a, e); } catch (Exception ex) { Log("order update error: " + ex.Message); }
+        }
 
-        private static void OnPositionUpdate(object sender, PositionEventArgs e) { Account a = sender as Account; Count(a != null ? a.Name : "", 2); }
+        private static void OnPositionUpdate(object sender, PositionEventArgs e)
+        {
+            Account a = sender as Account;
+            Count(a != null ? a.Name : "", 2);
+            try { ChartBridgeOrders.OnPositionUpdate(a, e); } catch (Exception ex) { Log("position update error: " + ex.Message); }
+        }
 
         // GET /diag: what ChartBridge sees, for checking why fills do or do not arrive. This PC only.
         private static string DiagJson()

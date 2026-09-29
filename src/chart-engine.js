@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.2.1
+ * chart-engine 1.3.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -61,6 +61,65 @@ function fmtPrice(p, precision) {
 }
 const fmtVolume = v => v >= 10000 ? (v / 1000).toFixed(1) + 'K' : String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const roundTo = (p, tick) => tick ? Math.round(p / tick) * tick : p;
+
+/* ---------------------------------------------------------------- orders and position (1.3.0) */
+const KIND_ABBR = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL' };
+/** Short order label: "BUY LMT 2"; bracket legs read "SELL TGT 2" and "SELL STP 2". Qty is what is left to fill. */
+function orderLabel(ord) {
+  const side = ord.side === 'sell' ? 'SELL' : 'BUY';
+  const kind = ord.role === 'target' ? 'TGT' : ord.role === 'stop' ? 'STP' : (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase());
+  const left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
+  return side + ' ' + kind + ' ' + left;
+}
+/** Open P&L of a signed position (long > 0): points per contract, and dollars for the whole position. */
+function openPnl(qty, avgPrice, last, pointValue) {
+  if (!qty || !isFinite(avgPrice) || !isFinite(last)) return { points: 0, dollars: null };
+  const points = (last - avgPrice) * Math.sign(qty);
+  const dollars = pointValue > 0 ? (last - avgPrice) * qty * pointValue : null;
+  return { points, dollars };
+}
+/* ---------------------------------------------------------------- fill marks (1.3.1) */
+/**
+ * Fills merged for drawing: one mark per bar, side and price (to the tick), with the summed qty, so a
+ * 3-lot target filled as three 1-lot executions reads "3", not "1". `indexOf(t)` gives the bar index.
+ * Sorted by bar; within a bar sells come first, lowest price first, then buys, highest price first,
+ * which is the order their labels stack away from the price (sells up, buys down).
+ */
+function groupFills(list, indexOf, tick) {
+  const byKey = new Map(), out = [];
+  for (const f of list || []) {
+    const i = indexOf(f.t), side = f.side === 'buy' ? 'buy' : 'sell';
+    const key = i + '|' + side + '|' + (tick ? Math.round(f.price / tick) : f.price);
+    const m = byKey.get(key);
+    if (m) m.qty += +f.qty || 0;
+    else { const g = { i, side, price: f.price, qty: +f.qty || 0 }; byKey.set(key, g); out.push(g); }
+  }
+  return out.sort((a, b) => a.i - b.i || (a.side === b.side ? (a.side === 'sell' ? a.price - b.price : b.price - a.price) : a.side === 'sell' ? -1 : 1));
+}
+/**
+ * Label rows for marks from groupFills: `y` is the tip (the fill price), `ly` the label's middle, `s` the
+ * triangle half width. A label sits beside its triangle (buys below the price, sells above) and, when it
+ * would overlap another label on the same bar (closer than `gap` px), steps away by `gap` until clear.
+ */
+function stackFillLabels(marks, yOf, s, gap) {
+  const out = []; let bar = null, placed = [];
+  for (const m of marks) {
+    if (m.i !== bar) { bar = m.i; placed = []; }
+    const dir = m.side === 'buy' ? 1 : -1, y = yOf(m.price);
+    let ly = y + dir * s;
+    if (m.qty) {
+      for (let k = 0; k <= 2 * placed.length && placed.some(p => Math.abs(p - ly) < gap); k++) ly += dir * gap;
+      placed.push(ly);
+    }
+    out.push({ m, y, ly });
+  }
+  return out;
+}
+
+/** "+$14.00", "-$1,250.50" */
+function fmtMoney(v) { return (v < 0 ? '-' : v > 0 ? '+' : '') + '$' + fmtPrice(Math.abs(v), 2); }
+/** "+3.50 pt" style signed number. */
+function fmtSigned(v, precision) { return (v > 0 ? '+' : v < 0 ? '-' : '') + fmtPrice(Math.abs(v), precision); }
 
 /** Grid step: 1, 2, 2.5 or 5 times a power of ten, at least `raw`, and a whole number of ticks. */
 function niceStep(raw, tick) {
@@ -268,6 +327,7 @@ function create(container, options) {
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
     unit: opt.unit !== undefined ? opt.unit : 'pt',
+    pointValue: opt.pointValue || 0,
   };
   injectStyle();
   const REDUCED = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -287,7 +347,11 @@ function create(container, options) {
   let T = buildTheme(opt.theme);
   let bars = [], levels = [], trades = [], markers = [], paused = false, countdownFn = null;
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
-  const listeners = { legend: [], live: [], drawings: [], tool: [] };
+  // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
+  let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
+  let od = null, xDown = null, orderHits = [];
+  const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
+  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -316,6 +380,14 @@ function create(container, options) {
     if (t < bars[0].t) return 0;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (bars[mid].t <= t) lo = mid; else hi = mid - 1; }
     return lo;
+  }
+  /* merged fill marks, rebuilt only when the fills, the bars or the tick change (not every frame) */
+  let fillCache = { markers: null, bars: null, count: -1, tick: null, marks: [] };
+  function fillMarks() {
+    const c = fillCache;
+    if (c.markers !== markers || c.bars !== bars || c.count !== bars.length || c.tick !== o.tick)
+      fillCache = { markers, bars, count: bars.length, tick: o.tick, marks: groupFills(markers, idxAtTime, o.tick) };
+    return fillCache.marks;
   }
   /* fractional bar index for any time, extrapolating past either end at barSeconds per bar */
   function idxOfTime(t) {
@@ -354,6 +426,15 @@ function create(container, options) {
     }
     return null;
   }
+  /* order label, close handle or axis tag under the pointer (only while order editing is on) */
+  function hitOrder(p) {
+    if (!orderEditing) return null;
+    const inR = r => r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+    for (let k = orderHits.length - 1; k >= 0; k--) if (inR(orderHits[k].xbox)) return { id: orderHits[k].id, part: 'x' };
+    for (let k = orderHits.length - 1; k >= 0; k--) if (inR(orderHits[k].box) || inR(orderHits[k].tag)) return { id: orderHits[k].id, part: 'body' };
+    return null;
+  }
+  const orderPrice = ord => od && od.id === ord.id ? od.price : pendingMoves.has(ord.id) ? pendingMoves.get(ord.id) : ord.price;
   const cloneDrawing = d => JSON.parse(JSON.stringify(d));
   function drawingsChanged() { emit('drawings', drawings.map(cloneDrawing)); }
   function setToolInternal(t) { if (tool !== t) { tool = t; draft = null; emit('tool', tool); } dirty = true; }
@@ -646,15 +727,16 @@ function create(container, options) {
       }
     }
 
-    // fills: buy triangles point up, sell triangles point down, tip at the fill price
+    // fills: buy triangles point up, sell triangles point down, tip at the fill price. Fills on one bar, side
+    // and price draw as one mark with the summed qty; labels on one bar stack apart (1.3.1)
     if (markers.length && n >= 0) {
       ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle';
-      for (const m of markers) {
-        const i = idxAtTime(m.t); if (i < from - 1 || i > to + 1) continue;
-        const x = xOf(i), y = yOf(m.price), s = 5, buy = m.side === 'buy', dir = buy ? 1 : -1;
+      const s = 5, inView = fillMarks().filter(m => m.i >= from - 1 && m.i <= to + 1);
+      for (const { m, y, ly } of stackFillLabels(inView, yOf, s, 10)) {
+        const x = xOf(m.i), buy = m.side === 'buy', dir = buy ? 1 : -1;
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - s, y + dir * s * 1.6); ctx.lineTo(x + s, y + dir * s * 1.6); ctx.closePath();
         ctx.fillStyle = buy ? T.long : T.short; ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5; ctx.stroke(); ctx.fill();
-        if (V.spacing >= 4 && m.qty) { ctx.fillStyle = buy ? T.long : T.short; ctx.textAlign = 'left'; ctx.fillText(String(m.qty), x + s + 3, y + dir * s); }
+        if (V.spacing >= 4 && m.qty) { ctx.fillStyle = buy ? T.long : T.short; ctx.textAlign = 'left'; ctx.fillText(String(m.qty), x + s + 3, ly); }
       }
     }
 
@@ -673,6 +755,85 @@ function create(container, options) {
           const ax = xOf(idxOfTime(d.a.t)), ay = yOf(d.a.p), bx = xOf(idxOfTime(d.b.t)), by = yOf(d.b.p);
           ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
           if (sel) { ctx.lineWidth = 1.5; handle(ax, ay); handle(bx, by); }
+        }
+      }
+    }
+
+    // working orders, the position and the Shift+click preview: a line across the plot, a label at its
+    // right end (with a close handle while editing) and a tag on the price axis (added to the tag stack below)
+    const orderTags = [], orderLabels = [];   // labels draw after the last price line, so the live dot never covers them
+    orderHits = [];
+    if (n >= 0 && (orders.length || position || orderPreview)) {
+      const boxes = [], LH = 18;
+      ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
+      const place = (y, w) => {                                  // right-aligned, stepping left past labels it would overlap
+        let x = plotW - 6 - w; const top = clamp(y - LH / 2, 0, Math.max(0, plotH - LH));
+        for (let k = 0; k < 8; k++) {
+          const hit = boxes.find(b => x < b.x + b.w + 4 && x + w + 4 > b.x && Math.abs(b.top - top) < LH + 1);
+          if (!hit) break; x = hit.x - 4 - w;
+        }
+        boxes.push({ x, top, w }); return { x, top };
+      };
+      const hline = (y, col, dash, alpha, width) => {
+        const lw = Math.max(1, Math.round(dpr * (width || 1)));
+        ctx.strokeStyle = col; ctx.lineWidth = lw / dpr; ctx.setLineDash(dash || []); ctx.globalAlpha = alpha;
+        ctx.beginPath(); ctx.moveTo(0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha = 1;
+      };
+      const label = (y, parts, border, dash, alpha, closer) => {   // parts: [[text, color], ...]
+        const gap = 7, widths = parts.map(pt => ctx.measureText(pt[0]).width);
+        const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + (closer ? LH : 0);
+        const { x, top } = place(y, w);
+        orderLabels.push(() => {
+          ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
+          ctx.globalAlpha = alpha;
+          roundRect(x, top, w, LH, 4); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
+          ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
+          let cx = x + 5; ctx.textAlign = 'left';
+          parts.forEach((pt, k) => { ctx.fillStyle = pt[1]; ctx.fillText(pt[0], cx, top + LH / 2 + 0.5); cx += widths[k] + gap; });
+          if (closer) {                                             // close handle: a small x in its own cell
+            const bx = x + tw;
+            ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(bx + 0.5, top + 3); ctx.lineTo(bx + 0.5, top + LH - 3); ctx.stroke();
+            const mx = bx + LH / 2, my = top + LH / 2;
+            ctx.strokeStyle = T.tagText; ctx.lineWidth = 1.5; ctx.beginPath();
+            ctx.moveTo(mx - 3.5, my - 3.5); ctx.lineTo(mx + 3.5, my + 3.5); ctx.moveTo(mx + 3.5, my - 3.5); ctx.lineTo(mx - 3.5, my + 3.5); ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+        });
+        return { box: { x, y: top, w: tw, h: LH }, xbox: closer ? { x: x + tw, y: top, w: LH, h: LH } : null };
+      };
+      // position: neutral line at the average price, open P&L in points and dollars
+      if (position && position.qty) {
+        const y = yOf(position.avgPrice), long = position.qty > 0;
+        if (y >= 0 && y <= plotH) {
+          const pnl = openPnl(position.qty, position.avgPrice, bars[n].c, position.pointValue || o.pointValue);
+          const pc = pnl.points > 0 ? T.profit : pnl.points < 0 ? T.loss : T.axisText;
+          hline(y, T.exit, null, 0.6, 1.5);
+          const parts = [[(long ? 'LONG ' : 'SHORT ') + Math.abs(position.qty), long ? T.long : T.short], [fmtSigned(pnl.points, o.precision) + ' pt', pc]];
+          if (pnl.dollars !== null) parts.push([fmtMoney(pnl.dollars), pc]);
+          label(y, parts, T.exit, null, 1, false);
+          orderTags.push({ price: position.avgPrice, style: { fill: T.tagFill, fg: T.exit, border: T.exit } });
+        }
+      }
+      for (const ord of orders) {
+        const price = orderPrice(ord), y = yOf(price);
+        if (y < 0 || y > plotH) continue;
+        const col = ord.side === 'sell' ? T.short : T.long, stop = ord.kind === 'stop' || ord.kind === 'stopLimit', dash = stop ? [6, 4] : null;
+        const dragging = od && od.id === ord.id, alpha = pendingMoves.has(ord.id) && !dragging ? 0.55 : 1;
+        hline(y, col, dash, 0.9 * alpha, dragging ? 1.5 : 1);
+        const hit = label(y, [[orderLabel(ord), col]], col, dash ? [3, 2] : null, alpha, orderEditing);
+        orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
+        orderTags.push({ price, id: ord.id, style: stop ? { fill: T.bg, fg: col, border: col, dash: [3, 2] } : { fill: col, fg: readableOn(col), border: null } });
+      }
+      // Shift+click preview: what one click would place here
+      if (orderPreview && orderEditing && shiftHeld && hover && !drag && !od && !tool && hover.x >= 0 && hover.x < plotW && hover.y >= 0 && hover.y < plotH) {
+        const price = roundTo(priceAt(hover.y), o.tick);
+        let pv = null; try { pv = orderPreview(price); } catch (e) { pv = null; }
+        if (pv) {
+          const col = pv.side === 'sell' ? T.short : T.long, dash = [2, 3];
+          hline(hover.y, col, dash, 0.7, 1);
+          label(hover.y, [[orderLabel(pv), col], [pv.note || 'click to place', T.axisText]], col, dash, 0.85, false);
+          orderTags.push({ price, style: { fill: T.bg, fg: col, border: col, dash } });
         }
       }
     }
@@ -698,6 +859,7 @@ function create(container, options) {
         ctx.beginPath(); ctx.arc(lx, ly, 2.5, 0, Math.PI * 2); ctx.fillStyle = T.live; ctx.fill();
       }
     }
+    for (const f of orderLabels) f();
 
     // crosshair
     let hi = null;
@@ -717,7 +879,7 @@ function create(container, options) {
     ctx.strokeStyle = T.axisLine; ctx.lineWidth = Math.max(1, Math.round(dpr)) / dpr;
     ctx.beginPath(); ctx.moveTo(crisp(plotW, 1), 0); ctx.lineTo(crisp(plotW, 1), H); ctx.moveTo(0, crisp(plotH, 1)); ctx.lineTo(W, crisp(plotH, 1)); ctx.stroke();
 
-    const tagSrc = (o.layers.levels ? levels : []).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })));
+    const tagSrc = (o.layers.levels ? levels : []).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })), orderTags);
     const tags = tagSrc.filter(L => L.price >= V.lo && L.price <= V.hi).map(L => ({ L, y: yOf(L.price) })).sort((a, b) => a.y - b.y);
     if (n >= 0) {
       // Keep level tags clear of the last price tag (32 px tall): tags priced at or above the last price
@@ -746,7 +908,15 @@ function create(container, options) {
       ctx.font = (l.strong ? '600 11px ' : '400 11px ') + T.fontMono;
       ctx.fillText(l.text, l.x, plotH + TIME_H / 2 + 1);
     }
-    for (const t of tags) axisTag(t.y, fmtPrice(t.L.price, o.precision), T.bg, t.L.color || T.axisText, t.L.color || T.axisText, null);
+    for (const t of tags) if (!t.L.style) axisTag(t.y, fmtPrice(t.L.price, o.precision), T.bg, t.L.color || T.axisText, t.L.color || T.axisText, null);
+    for (const t of tags) {                                         // order and position tags on top; an order tag is a grab handle too
+      const s = t.L.style; if (!s) continue;
+      ctx.setLineDash(s.dash || []); axisTag(t.y, fmtPrice(t.L.price, o.precision), s.fill, s.fg, s.border, null); ctx.setLineDash([]);
+      if (t.L.id !== undefined) {
+        const hit = orderHits.find(h => h.id === t.L.id);
+        if (hit) hit.tag = { x: plotW + 2, y: clamp(t.y - 9, 0, Math.max(0, plotH - 18)), w: AXIS_W - 4, h: 18 };
+      }
+    }
 
     // last price tag with countdown; flashes on each tick
     if (n >= 0) {
@@ -796,7 +966,9 @@ function create(container, options) {
     dirty = true;
   }
   function setCursor(z, p) {
+    if (od) { cv.style.cursor = 'ns-resize'; return; }
     if (dd && dd.mode !== 'draft') { cv.style.cursor = 'grabbing'; return; }
+    if (!drag && !tool && !draft && p && orderEditing) { const h = hitOrder(p); if (h) { cv.style.cursor = h.part === 'x' ? 'pointer' : 'ns-resize'; return; } }
     if (tool || draft) { cv.style.cursor = 'crosshair'; return; }
     if (!drag && p && z === 'plot' && drawings.length) { const h = hitDrawing(p); if (h) { cv.style.cursor = h.part === 'body' ? 'move' : 'pointer'; return; } }
     cv.style.cursor = drag ? (drag.zone === 'plot' ? 'grabbing' : drag.zone === 'price' ? 'ns-resize' : 'ew-resize') : z === 'price' ? 'ns-resize' : z === 'time' ? 'ew-resize' : 'crosshair';
@@ -826,9 +998,21 @@ function create(container, options) {
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, logS0: V.logS, i: indexAt((a.x + b.x) / 2) };
-      drag = null; dd = null; draft = null; V.follow = false; return;
+      drag = null; dd = null; draft = null; od = null; xDown = null; V.follow = false; return;
     }
-    if (zoneOf(p) === 'plot' && (e.button === 0 || e.button === undefined)) {
+    shiftHeld = !!e.shiftKey;
+    const primary = e.button === 0 || e.button === undefined;
+    // Order lines come first (over drawings): the close handle, or the label / axis tag to drag. Not while a
+    // drawing tool is active, so drawing never grabs an order by accident.
+    if (primary && orderEditing && !tool && !draft) {
+      const oh = hitOrder(p);
+      if (oh && oh.part === 'x') { xDown = oh.id; return; }
+      if (oh) {
+        const ord = orders.find(x => x.id === oh.id);
+        if (ord) { const p0 = orderPrice(ord); od = { id: ord.id, y0: p.y, price0: p0, price: p0, moved: false }; setCursor('plot', p); dirty = true; return; }
+      }
+    }
+    if (zoneOf(p) === 'plot' && primary) {
       if (draft) { draft.b = { t: timeOfIdx(indexAt(p.x)), p: priceAt(p.y) }; finishDraft(); return; }
       if (tool === 'hline') {
         const d = { id: genId(), type: 'hline', price: roundTo(priceAt(p.y), o.tick) };
@@ -839,11 +1023,12 @@ function create(container, options) {
         draft = { id: genId(), type: 'trend', a: pt, b: { t: pt.t, p: pt.p }, x0: p.x, y0: p.y };
         dd = { mode: 'draft' }; dirty = true; return;
       }
-      const hit = hitDrawing(p);
+      const hit = e.shiftKey ? null : hitDrawing(p);          // Shift+click is for placing orders, never for drawings
       if (hit) { selectedId = hit.d.id; dd = { d: hit.d, part: hit.part, x0: p.x, y0: p.y, orig: cloneDrawing(hit.d) }; setCursor('plot', p); dirty = true; return; }
       if (selectedId) { selectedId = null; dirty = true; }
     }
-    drag = { zone: zoneOf(p), x0: p.x, y0: p.y, right0: V.right, lo0: V.lo, hi0: V.hi, logS0: V.logS, samples: [{ t: e.timeStamp, r: V.right }], moved: false };
+    drag = { zone: zoneOf(p), x0: p.x, y0: p.y, right0: V.right, lo0: V.lo, hi0: V.hi, logS0: V.logS, samples: [{ t: e.timeStamp, r: V.right }], moved: false,
+      place: orderEditing && !!e.shiftKey && !tool && zoneOf(p) === 'plot' && primary };   // Shift+click places an order if the pointer does not move
     hover = e.pointerType === 'mouse' ? p : null;
     setCursor(drag.zone); dirty = true;
   }
@@ -856,6 +1041,12 @@ function create(container, options) {
       V.logS = V.logT = clamp(pinch.logS0 + Math.log(d / pinch.d0), Math.log(o.minSpacing), Math.log(o.maxSpacing));
       V.spacing = Math.exp(V.logS);
       V.right = pinch.i + (plotW - Math.min(mx, plotW)) / V.spacing; clampRight(); dirty = true; return;
+    }
+    if (e.shiftKey !== shiftHeld) { shiftHeld = !!e.shiftKey; dirty = true; }
+    if (od) {
+      od.price = roundTo(od.price0 + (priceAt(p.y) - priceAt(od.y0)), o.tick);
+      if (Math.abs(p.y - od.y0) > 2) od.moved = true;
+      hover = p; setCursor('plot', p); dirty = true; return;
     }
     if (draft && (dd || e.pointerType === 'mouse')) {
       draft.b = { t: timeOfIdx(indexAt(Math.min(p.x, plotW))), p: priceAt(clamp(p.y, 0, plotH)) };
@@ -896,6 +1087,17 @@ function create(container, options) {
   function onUp(e) {
     pointers.delete(e.pointerId);
     if (pinch) { if (pointers.size < 2) { pinch = null; setFollowFromPosition(); } return; }
+    const cancelled = e.type === 'pointercancel';
+    if (xDown !== null) {                                        // close handle: pressed and released on the same order
+      const h = cancelled ? null : hitOrder(local(e)), id = xDown; xDown = null;
+      if (h && h.part === 'x' && h.id === id && orderEditing) emit('orderCancel', { id });
+      dirty = true; return;
+    }
+    if (od) {
+      const d = od; od = null;
+      if (!cancelled && d.moved && d.price !== d.price0 && orderEditing) { pendingMoves.set(d.id, d.price); emit('orderMove', { id: d.id, price: d.price }); }
+      setCursor(zoneOf(local(e)), local(e)); dirty = true; return;
+    }
     if (dd) {
       const p = local(e);
       if (dd.mode === 'draft') { if (draft && Math.hypot(p.x - draft.x0, p.y - draft.y0) > 4) finishDraft(); }   // drag-to-draw; a click waits for a second click
@@ -911,11 +1113,15 @@ function create(container, options) {
       if (e.timeStamp - lastS.t < 60 && Math.abs(v * V.spacing) > 0.2 && !REDUCED) V.kin = { v };
       else setFollowFromPosition();
     }
+    if (drag && drag.place && !drag.moved && !cancelled && e.shiftKey && orderEditing) {
+      const p = local(e);
+      if (zoneOf(p) === 'plot') emit('orderPlace', { price: roundTo(priceAt(p.y), o.tick) });
+    }
     drag = null;
     if (e.pointerType !== 'mouse') hover = null;
     setCursor('plot'); dirty = true;
   }
-  function onLeave(e) { if (!drag && e.pointerType === 'mouse') { hover = null; dirty = true; } }
+  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; dirty = true; } }
   function onDbl(e) {
     const z = zoneOf(local(e));
     if (z === 'price') V.auto = true;
@@ -925,6 +1131,8 @@ function create(container, options) {
   }
   function onKey(e) {
     const vis = plotW / V.spacing;
+    if (e.key === 'Shift') { if (!shiftHeld) { shiftHeld = true; dirty = true; } return; }
+    if (e.key === 'Escape' && (od || xDown !== null)) { od = null; xDown = null; setCursor('plot'); e.preventDefault(); dirty = true; return; }   // revert the drag
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dist = vis * 0.2 * (e.key === 'ArrowLeft' ? -1 : 1);
       V.follow = false; V.kin = { v: dist / o.motion.friction };
@@ -945,6 +1153,8 @@ function create(container, options) {
   cv.addEventListener('pointerleave', onLeave);
   cv.addEventListener('dblclick', onDbl);
   container.addEventListener('keydown', onKey);
+  const onKeyUp = e => { if (e.key === 'Shift' && shiftHeld) { shiftHeld = false; dirty = true; } };
+  container.addEventListener('keyup', onKeyUp);
   if (liveBtn) liveBtn.addEventListener('click', () => api.goLive());
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
   if (ro) ro.observe(container);
@@ -1028,6 +1238,34 @@ function create(container, options) {
     deleteSelected() { if (!selectedId) return false; drawings = drawings.filter(d => d.id !== selectedId); selectedId = null; drawingsChanged(); dirty = true; return true; },
     clearDrawings() { drawings = []; selectedId = null; draft = null; drawingsChanged(); dirty = true; },
     setBarSeconds(sec) { o.barSeconds = sec; dirty = true; },
+    /**
+     * Working orders: [{ id, side: 'buy' | 'sell', kind: 'limit' | 'stop' | 'market', price, qty, filled, role }].
+     * role 'stop' / 'target' marks bracket legs. Replaces the list and drops prices still waiting on a move.
+     */
+    setOrders(list) {
+      orders = (list || []).filter(x => x && x.id !== undefined && isFinite(x.price) && x.price !== null)
+        .map(x => ({ id: x.id, side: x.side === 'sell' ? 'sell' : 'buy', kind: x.kind, price: +x.price, qty: +x.qty || 0, filled: +x.filled || 0, role: x.role || null }));
+      pendingMoves.clear();
+      if (od && !orders.some(x => x.id === od.id)) od = null;
+      dirty = true;
+    },
+    getOrders() { return orders.map(x => Object.assign({}, x)); },
+    /** Position line: { qty (long > 0, short < 0), avgPrice } or null. pointValue (here or in options) adds dollars. */
+    setPosition(pos, opts) {
+      const pv = (opts && opts.pointValue) || (pos && pos.pointValue) || 0;
+      position = pos && +pos.qty && isFinite(pos.avgPrice) ? { qty: +pos.qty, avgPrice: +pos.avgPrice, pointValue: pv } : null;
+      dirty = true;
+    },
+    getPosition() { return position ? Object.assign({}, position) : null; },
+    /** Order editing on: drag order labels to move, x to cancel, Shift+click to place. Off: orders are display only. */
+    setOrderEditing(on) { orderEditing = !!on; if (!orderEditing) { od = null; xDown = null; } dirty = true; },
+    /** fn(price) -> { side, kind, qty, note } or null: what Shift+click would place, shown while Shift is held. */
+    setOrderPreview(fn) { orderPreview = typeof fn === 'function' ? fn : null; dirty = true; },
+    /** Where each order's label, close handle and axis tag were last drawn (CSS px in the chart), for tests and tooltips. */
+    orderHandles() { return orderHits.map(h => JSON.parse(JSON.stringify(h))); },
+    /** Price to y and back, in CSS px from the top of the chart (as last drawn). */
+    priceToY(price) { return yOf(price); },
+    yToPrice(y) { return priceAt(y); },
     goLive() { V.kin = null; V.follow = true; dirty = true; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
     isLive() { return V.follow; },
@@ -1041,6 +1279,7 @@ function create(container, options) {
     destroy() {
       cancelAnimationFrame(raf); if (ro) ro.disconnect();
       container.removeEventListener('keydown', onKey);
+      container.removeEventListener('keyup', onKeyUp);
       cv.remove(); if (liveBtn) liveBtn.remove();
       container.classList.remove('ce-host');
     },
@@ -1122,6 +1361,7 @@ return {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, buildTheme,
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines,
+    orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
   },
 };
 });

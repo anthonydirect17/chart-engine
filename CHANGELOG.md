@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.3.1 (2026-09-29): fill marks that add up
+
+From a report on the trading PC: a 3-lot trade whose target filled as three 1-lot executions drew as
+"▲3" and one "▼1", because the three sell marks sat on top of each other.
+- Engine 1.3.1: fills on the same bar, side and price (to the tick) draw as one mark with the summed
+  quantity, so that trade reads ▲3 and ▼3. Fills on one bar at different prices keep their own marks, and
+  their labels stack apart (sells up from the price, buys down) so each quantity reads. Triangle tips stay
+  at the fill prices. Merging is for drawing only; `setMarkers` keeps every execution. The merged marks
+  are rebuilt only when the fills, the bars or the tick change. Helpers `groupFills` and `stackFillLabels`.
+  Nothing else in the look or the motion changed.
+- Tests: `test/fill-marks.test.js`.
+
+## 1.3.0 (2026-09-29): trading from the chart, the chart side (Step 2)
+
+Order entry on the live page through ChartBridge protocol v2 (`nt8/PROTOCOL.md`, "Orders"). Everything is
+checked by ChartBridge; the page adds its own checks on top. With ChartBridge 0.2 the page is read only,
+exactly as before.
+- Engine 1.3.0: `setOrders` (order lines with a label, a close x and a price-axis tag; green buy, red sell,
+  stops dashed), `setPosition` (average price line with open P&L in points and dollars, `pointValue`),
+  `setOrderEditing`, `setOrderPreview`, events `orderMove` (drag a label or tag, tick-snapped, Escape
+  reverts), `orderCancel` (the x) and `orderPlace` (Shift+click without moving), plus `orderHandles`,
+  `priceToY`, `yToPrice` and the helpers `orderLabel`, `openPnl`, `fmtMoney`, `fmtSigned`. Nothing else in
+  the look or the motion changed.
+- Live page: signs in with the token from `GET /session`; an order bar with the **Armed** switch (off after
+  every load; off again when the account or instrument changes or the connection or trading is lost),
+  account (only `trading.accounts`), qty (1 to the root's `maxQty`), Buy / Sell MKT, Shift+click side,
+  bracket stop / target ticks per root (remembered in this browser), Flatten and Cancel all; working orders,
+  the position and fills on the chart; order messages and refusals in the status line; ChartBridge errors
+  stay on screen. No bracket on an order that reduces the position. No trading inside a frame. A repeat
+  click on the same action within 0.4 s is ignored. No order hotkeys.
+- Fake bridge: protocol v2 with the same gates as ChartBridge and a small matching engine
+  (`test/fake-orders.mjs`, the reference behaviour), `--trading`, `--trade-accounts`, `--max-qty`, `--v1`,
+  `--test-controls`, `--allow-frames`.
+- Tests: gates, matching, brackets, flatten, Origin and token (`test/fake-bridge.test.js`), the page helpers
+  (`test/order-ticket.test.js`), and `npm run smoke:orders` in Chromium at 1440 and 400 px.
+  `npm run smoke:live` now runs against the fake as ChartBridge 0.2.
+
 ## 1.2.2 (2026-09-29): ChartBridge 0.2.1
 
 From an overnight code review of 0.2.0. Checked by running the real queue code under Mono against a
