@@ -120,3 +120,26 @@ test('sample feed is seeded, and ticks keep bars consistent', () => {
   }
   for (let i = 1; i < a.base.length; i++) assert.ok(a.base[i].t > a.base[i - 1].t);
 });
+
+test('orderLabel: side, kind and the quantity still to fill; bracket legs read TGT and STP', () => {
+  assert.equal(U.orderLabel({ side: 'buy', kind: 'limit', qty: 2, filled: 0 }), 'BUY LMT 2');
+  assert.equal(U.orderLabel({ side: 'sell', kind: 'stop', qty: 3, filled: 1 }), 'SELL STP 2');
+  assert.equal(U.orderLabel({ side: 'sell', kind: 'limit', qty: 1, role: 'target' }), 'SELL TGT 1');
+  assert.equal(U.orderLabel({ side: 'buy', kind: 'stop', qty: 1, role: 'stop' }), 'BUY STP 1');
+  assert.equal(U.orderLabel({ side: 'buy', kind: 'market', qty: 4 }), 'BUY MKT 4');
+});
+
+test('openPnl: points per contract by direction, dollars for the whole position', () => {
+  assert.deepEqual(U.openPnl(2, 25410.25, 25413.75, 2), { points: 3.5, dollars: 14 });
+  assert.deepEqual(U.openPnl(-3, 100, 101, 50), { points: -1, dollars: -150 });
+  assert.deepEqual(U.openPnl(1, 100, 99, 0), { points: -1, dollars: null });   // no point value: points only
+  assert.deepEqual(U.openPnl(0, 100, 99, 2), { points: 0, dollars: null });
+});
+
+test('fmtMoney and fmtSigned', () => {
+  assert.equal(U.fmtMoney(14), '+$14.00');
+  assert.equal(U.fmtMoney(-1250.5), '-$1,250.50');
+  assert.equal(U.fmtSigned(3.5, 2), '+3.50');
+  assert.equal(U.fmtSigned(-0.25, 2), '-0.25');
+  assert.equal(U.fmtSigned(0, 2), '0.00');
+});
