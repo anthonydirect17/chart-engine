@@ -63,7 +63,7 @@ const fmtVolume = v => v >= 10000 ? (v / 1000).toFixed(1) + 'K' : String(Math.ro
 const roundTo = (p, tick) => tick ? Math.round(p / tick) * tick : p;
 
 /* ---------------------------------------------------------------- orders and position (1.3.0) */
-const KIND_ABBR = { market: 'MKT', limit: 'LMT', stop: 'STP' };
+const KIND_ABBR = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL' };
 /** Short order label: "BUY LMT 2"; bracket legs read "SELL TGT 2" and "SELL STP 2". Qty is what is left to fill. */
 function orderLabel(ord) {
   const side = ord.side === 'sell' ? 'SELL' : 'BUY';
@@ -79,7 +79,7 @@ function openPnl(qty, avgPrice, last, pointValue) {
   return { points, dollars };
 }
 /** "+$14.00", "-$1,250.50" */
-function fmtMoney(v) { return (v < 0 ? '-' : '+') + '$' + fmtPrice(Math.abs(v), 2); }
+function fmtMoney(v) { return (v < 0 ? '-' : v > 0 ? '+' : '') + '$' + fmtPrice(Math.abs(v), 2); }
 /** "+3.50 pt" style signed number. */
 function fmtSigned(v, precision) { return (v > 0 ? '+' : v < 0 ? '-' : '') + fmtPrice(Math.abs(v), precision); }
 
@@ -714,7 +714,7 @@ function create(container, options) {
 
     // working orders, the position and the Shift+click preview: a line across the plot, a label at its
     // right end (with a close handle while editing) and a tag on the price axis (added to the tag stack below)
-    const orderTags = [];
+    const orderTags = [], orderLabels = [];   // labels draw after the last price line, so the live dot never covers them
     orderHits = [];
     if (n >= 0 && (orders.length || position || orderPreview)) {
       const boxes = [], LH = 18;
@@ -737,19 +737,22 @@ function create(container, options) {
         const gap = 7, widths = parts.map(pt => ctx.measureText(pt[0]).width);
         const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + (closer ? LH : 0);
         const { x, top } = place(y, w);
-        ctx.globalAlpha = alpha;
-        roundRect(x, top, w, LH, 4); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
-        ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
-        let cx = x + 5; ctx.textAlign = 'left';
-        parts.forEach((pt, k) => { ctx.fillStyle = pt[1]; ctx.fillText(pt[0], cx, top + LH / 2 + 0.5); cx += widths[k] + gap; });
-        if (closer) {                                             // close handle: a small x in its own cell
-          const bx = x + tw;
-          ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(bx + 0.5, top + 3); ctx.lineTo(bx + 0.5, top + LH - 3); ctx.stroke();
-          const mx = bx + LH / 2, my = top + LH / 2;
-          ctx.strokeStyle = T.tagText; ctx.lineWidth = 1.5; ctx.beginPath();
-          ctx.moveTo(mx - 3.5, my - 3.5); ctx.lineTo(mx + 3.5, my + 3.5); ctx.moveTo(mx + 3.5, my - 3.5); ctx.lineTo(mx - 3.5, my + 3.5); ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
+        orderLabels.push(() => {
+          ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
+          ctx.globalAlpha = alpha;
+          roundRect(x, top, w, LH, 4); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
+          ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
+          let cx = x + 5; ctx.textAlign = 'left';
+          parts.forEach((pt, k) => { ctx.fillStyle = pt[1]; ctx.fillText(pt[0], cx, top + LH / 2 + 0.5); cx += widths[k] + gap; });
+          if (closer) {                                             // close handle: a small x in its own cell
+            const bx = x + tw;
+            ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(bx + 0.5, top + 3); ctx.lineTo(bx + 0.5, top + LH - 3); ctx.stroke();
+            const mx = bx + LH / 2, my = top + LH / 2;
+            ctx.strokeStyle = T.tagText; ctx.lineWidth = 1.5; ctx.beginPath();
+            ctx.moveTo(mx - 3.5, my - 3.5); ctx.lineTo(mx + 3.5, my + 3.5); ctx.moveTo(mx + 3.5, my - 3.5); ctx.lineTo(mx - 3.5, my + 3.5); ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+        });
         return { box: { x, y: top, w: tw, h: LH }, xbox: closer ? { x: x + tw, y: top, w: LH, h: LH } : null };
       };
       // position: neutral line at the average price, open P&L in points and dollars
@@ -768,7 +771,7 @@ function create(container, options) {
       for (const ord of orders) {
         const price = orderPrice(ord), y = yOf(price);
         if (y < 0 || y > plotH) continue;
-        const col = ord.side === 'sell' ? T.short : T.long, stop = ord.kind === 'stop', dash = stop ? [6, 4] : null;
+        const col = ord.side === 'sell' ? T.short : T.long, stop = ord.kind === 'stop' || ord.kind === 'stopLimit', dash = stop ? [6, 4] : null;
         const dragging = od && od.id === ord.id, alpha = pendingMoves.has(ord.id) && !dragging ? 0.55 : 1;
         hline(y, col, dash, 0.9 * alpha, dragging ? 1.5 : 1);
         const hit = label(y, [[orderLabel(ord), col]], col, dash ? [3, 2] : null, alpha, orderEditing);
@@ -809,6 +812,7 @@ function create(container, options) {
         ctx.beginPath(); ctx.arc(lx, ly, 2.5, 0, Math.PI * 2); ctx.fillStyle = T.live; ctx.fill();
       }
     }
+    for (const f of orderLabels) f();
 
     // crosshair
     let hi = null;
@@ -1210,6 +1214,11 @@ function create(container, options) {
     setOrderEditing(on) { orderEditing = !!on; if (!orderEditing) { od = null; xDown = null; } dirty = true; },
     /** fn(price) -> { side, kind, qty, note } or null: what Shift+click would place, shown while Shift is held. */
     setOrderPreview(fn) { orderPreview = typeof fn === 'function' ? fn : null; dirty = true; },
+    /** Where each order's label, close handle and axis tag were last drawn (CSS px in the chart), for tests and tooltips. */
+    orderHandles() { return orderHits.map(h => JSON.parse(JSON.stringify(h))); },
+    /** Price to y and back, in CSS px from the top of the chart (as last drawn). */
+    priceToY(price) { return yOf(price); },
+    yToPrice(y) { return priceAt(y); },
     goLive() { V.kin = null; V.follow = true; dirty = true; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
     isLive() { return V.follow; },

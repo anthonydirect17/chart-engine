@@ -16,6 +16,7 @@ Copy-Item (Join-Path $repo 'nt8\ChartBridge.cs') (Join-Path $addons 'ChartBridge
 Copy-Item (Join-Path $repo 'live\index.html') (Join-Path $www 'index.html') -Force
 Copy-Item (Join-Path $repo 'live\live.js') (Join-Path $www 'live.js') -Force
 Copy-Item (Join-Path $repo 'live\bar-builder.js') (Join-Path $www 'bar-builder.js') -Force
+Copy-Item (Join-Path $repo 'live\order-ticket.js') (Join-Path $www 'order-ticket.js') -Force
 Copy-Item (Join-Path $repo 'src\chart-engine.js') (Join-Path $www 'src\chart-engine.js') -Force
 
 Write-Host "ChartBridge.cs  -> $addons"

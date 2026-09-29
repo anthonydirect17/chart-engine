@@ -2,15 +2,17 @@
 // The fake bridge (test/fake-bridge.mjs) runs this, the tests check it, and the C# side should match it.
 // Everything here is simulated: prices are sample data, not market data, and nothing reaches a broker.
 //
-// Reading order: the safety gates (checkAction, checkOrder, checkPrice), then the matching engine
-// (tick, fill), then brackets (bracketsAfterFill, resizeLegs).
+// Reading order: the safety gates (checkAction, check_order, checkPrice), then the matching engine
+// (tick, fill), then brackets (bracketsAfterFill, legFilled, flatLegs).
 
 export const MAX_TICKS_AWAY = 200;          // gate 5: limit and stop prices within 200 ticks of the last price
 export const RATE_LIMIT = 10;               // gate 7: order actions per connection in any 1 second window
 export const DEFAULT_MAX_QTY = 1;           // gate 3: roots without a maxQty line
-export const MAX_BRACKET_TICKS = 200;       // bracket stop and target, like gate 5 (not in the spec text; see README)
-// Gate 3, extended: the cap also limits the position a new order could build (position plus working
-// orders on that side). The spec text caps each order; this closes the "click Buy five times" gap.
+export const MAX_BRACKET_TICKS = 200;       // bracket stop and target: JSON whole numbers 0 to 200 (0 = none)
+export const STALE_MS = 300000;             // gate 5: limit and stop prices refused when the last trade is older than 300 s
+// Gate 3 caps the POSITION (coordinator, 2026-09-29): the worst case after this order (position plus working
+// orders on the same side plus this order) must stay within maxQty. Orders that reduce are allowed.
+// Working orders placed elsewhere (role 'other') count as entries here too, the safer reading.
 export const CAP_COUNTS_POSITION = true;
 // A limit touched (traded at exactly its price) fills this many contracts per trade; traded through fills all.
 export const TOUCH_FILL = 1;
@@ -45,9 +47,10 @@ export class OrderDesk {
     this.now = now || (() => Date.now());
     this.barTime = barTime || (() => this.now() / 1000);
     this.last = {};                 // root -> last traded price
+    this.lastAt = {};               // root -> when it traded (now() ms), for the stale check
     this.orders = new Map();        // id -> order (every order this session, final ones included)
     this.positions = new Map();     // 'account|root' -> { qty, avgPrice }
-    this.seq = 0; this.execSeq = 0;
+    this.seq = 0; this.execSeq = 0; this.ocoSeq = 0;
   }
 
   /* ---------------- connection and auth (gates 1, 4) */
@@ -114,6 +117,7 @@ export class OrderDesk {
   checkPrice(root, side, kind, price) {
     const tick = this.instruments[root].tick, last = this.last[root];
     if (typeof price !== 'number' || !isFinite(price) || price <= 0) return 'A ' + kind + ' order needs a price.';
+    if (!(this.now() - (this.lastAt[root] || -Infinity) <= STALE_MS)) return 'The last price for ' + root + ' is stale (no trade for over ' + STALE_MS / 1000 + ' seconds).';
     if (!onTickGrid(price, tick)) return fmt(price) + ' is not on the ' + root + ' tick grid (' + tick + ').';
     const away = Math.round(Math.abs(price - last) / tick);
     if (away > MAX_TICKS_AWAY) return fmt(price) + ' is ' + away + ' ticks from the last price ' + fmt(last) + '; the limit is ' + MAX_TICKS_AWAY + '.';
@@ -134,12 +138,15 @@ export class OrderDesk {
       if (would > cap) return (m.side === 'buy' ? 'Buying ' : 'Selling ') + m.qty + ' could take the ' + m.root + ' position on ' + m.account + ' to ' + would + ' (with working orders), over the cap of ' + cap + '.';
     }
     if (m.kind !== 'market') { const p = this.checkPrice(m.root, m.side, m.kind, m.price); if (p) return p; }
-    if (m.bracket !== undefined && m.bracket !== null) {
+    if (m.bracket !== undefined) {
       const b = m.bracket;
-      for (const k of ['stop', 'target']) {
-        const v = b[k] === undefined ? 0 : b[k];
-        if (!Number.isInteger(v) || v < 0 || v > MAX_BRACKET_TICKS) return 'Bracket ' + k + ' must be 0 to ' + MAX_BRACKET_TICKS + ' ticks.';
+      if (b === null || typeof b !== 'object') return 'A bracket must be { "stop": ticks, "target": ticks }.';
+      for (const k of ['stop', 'target']) {        // JSON numbers only: "8" or null is refused, never read as 0
+        const v = b[k];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v > MAX_BRACKET_TICKS) return 'Bracket ' + k + ' must be a whole number of ticks from 0 to ' + MAX_BRACKET_TICKS + '.';
       }
+      const pos = this.pos(m.account, m.root).qty;
+      if ((b.stop > 0 || b.target > 0) && pos !== 0 && (pos > 0) !== (m.side === 'buy')) return 'A bracket can only go on an order that opens or adds to a position.';
     }
     return null;
   }
@@ -147,6 +154,7 @@ export class OrderDesk {
     const o = this.orders.get(m.id);
     if (!o || !isWorking(o) || !this.accounts.includes(o.account)) return 'No working order ' + m.id + '.';
     if (o.kind === 'market') return 'A market order has no price to move.';
+    if (o.kind !== 'limit' && o.kind !== 'stop') return 'Only limit and stop market orders can be moved (this one is ' + o.kind + ').';
     return this.checkPrice(o.root, o.side, o.kind, m.price);
   }
   check_cancel(m) {
@@ -172,8 +180,8 @@ export class OrderDesk {
   do_order(m) {
     const o = this.newOrder({ cid: m.cid, account: m.account, root: m.root, side: m.side, kind: m.kind, qty: m.qty,
       price: m.kind === 'market' ? null : m.price, role: 'entry' });
-    const b = m.bracket || {};
-    o.bracket = (b.stop > 0 || b.target > 0) ? { stop: b.stop || 0, target: b.target || 0 } : null;
+    const b = m.bracket;
+    o.bracket = b && (b.stop > 0 || b.target > 0) ? { stop: b.stop, target: b.target } : null;
     this.emitOrder(o);
     this.matchOne(o, this.last[o.root], true);
   }
@@ -185,6 +193,7 @@ export class OrderDesk {
   }
   do_cancel(m) { this.cancel(this.orders.get(m.id)); }
   do_flatten(m) {
+    for (const o of this.orders.values()) if (o.account === m.account && o.root === m.root && o.role === 'entry') o.bracket = null;   // late fills get no legs
     for (const o of [...this.orders.values()]) if (isWorking(o) && o.account === m.account && o.root === m.root) this.cancelOne(o);
     const p = this.pos(m.account, m.root);
     if (p.qty) {                        // close at market; no cap check, closing must always work
@@ -204,7 +213,7 @@ export class OrderDesk {
   /* ---------------- orders */
   newOrder(f) {
     const o = Object.assign({ id: 'NT' + (++this.seq), filled: 0, avgFill: null, state: 'working', oco: null, text: null, bracket: null, parent: null }, f);
-    o.name = this.instruments[o.root].name;
+    o.name = this.instruments[o.root] ? this.instruments[o.root].name : o.root;
     this.orders.set(o.id, o);
     return o;
   }
@@ -213,7 +222,7 @@ export class OrderDesk {
       qty: o.qty, filled: o.filled, price: o.price, avgFill: o.avgFill, state: o.state, role: o.role, oco: o.oco, text: o.text };
   }
   broadcast(msg) { for (const c of this.conns()) if (c.authed) this.send(c, msg); }
-  emitOrder(o) { if (this.accounts.includes(o.account)) this.broadcast(this.orderMsg(o)); }
+  emitOrder(o) { if (this.accounts.includes(o.account) && this.instruments[o.root]) this.broadcast(this.orderMsg(o)); }
   cancelOne(o) { if (isWorking(o)) { o.state = 'cancelled'; this.emitOrder(o); } }
   /** Cancel one order; a bracket leg takes its OCO partner with it. */
   cancel(o) {
@@ -223,7 +232,7 @@ export class OrderDesk {
 
   /* ---------------- matching engine: every trade on a root runs through the working orders */
   tick(root, price) {
-    this.last[root] = price;
+    this.last[root] = price; this.lastAt[root] = this.now();
     for (const o of [...this.orders.values()]) if (o.root === root && isWorking(o)) this.matchOne(o, price, false);
   }
   /**
@@ -236,6 +245,7 @@ export class OrderDesk {
     const left = o.qty - o.filled, buy = o.side === 'buy';
     if (o.kind === 'market') return this.fill(o, left, price);
     if (o.kind === 'stop') { if (buy ? price >= o.price : price <= o.price) this.fill(o, left, price); return; }
+    if (o.kind === 'stopLimit') { if (buy ? price >= o.price : price <= o.price) this.fill(o, left, o.price); return; }   // only from NinjaTrader (role other); stop and limit at one price here
     const through = buy ? price < o.price : price > o.price;
     if (through) return this.fill(o, left, placing ? price : o.price);
     if (price === o.price && !placing) this.fill(o, Math.min(left, TOUCH_FILL), o.price);
@@ -262,45 +272,37 @@ export class OrderDesk {
     p.qty = now;
     this.emitOrder(o);
     if (this.accounts.includes(o.account)) this.broadcast({ type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.avgPrice });
-    if (o.role === 'entry' && o.bracket) this.bracketsAfterFill(o);
     if (isLeg(o)) this.legFilled(o);
+    if (p.qty === 0) this.flatLegs(o.account, o.root);
+    else if (o.role === 'entry' && o.bracket) this.bracketsAfterFill(o, qty, price);
   }
   broadcastAll(msg) { for (const c of this.conns()) this.send(c, msg); }   // exec goes to every page (the fills layer)
 
-  /* ---------------- brackets: an OCO pair for the filled quantity, following partial fills */
-  legsOf(entry) { return [...this.orders.values()].filter(x => x.parent === entry.id); }
-  /** First fill places the legs around the entry's average fill; later fills resize them. */
-  bracketsAfterFill(entry) {
-    const legs = this.legsOf(entry);
-    if (!legs.length) {
-      const tick = this.instruments[entry.root].tick, dir = entry.side === 'buy' ? 1 : -1, exit = entry.side === 'buy' ? 'sell' : 'buy';
-      const b = entry.bracket, both = b.stop > 0 && b.target > 0, oco = both ? 'OCO-' + entry.id : null;
-      const made = [];
-      if (b.stop > 0) made.push(this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'stop', qty: entry.filled,
-        price: entry.avgFill - dir * b.stop * tick, role: 'stop', oco, parent: entry.id }));
-      if (b.target > 0) made.push(this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'limit', qty: entry.filled,
-        price: entry.avgFill + dir * b.target * tick, role: 'target', oco, parent: entry.id }));
-      for (const x of made) this.emitOrder(x);
-      for (const x of made) this.matchOne(x, this.last[x.root], true);
-      return;
-    }
-    this.resizeLegs(entry);
+  /* ---------------- brackets: each entry fill gets its own OCO pair (stop and target) for that quantity */
+  /** The legs go around this fill's price; several pairs can exist for one entry. Legs are GTC in ChartBridge. */
+  bracketsAfterFill(entry, qty, price) {
+    const tick = this.instruments[entry.root].tick, dir = entry.side === 'buy' ? 1 : -1, exit = entry.side === 'buy' ? 'sell' : 'buy';
+    const b = entry.bracket, both = b.stop > 0 && b.target > 0, oco = both ? 'OCO-' + entry.id + '-' + (++this.ocoSeq) : null;
+    const made = [];
+    if (b.stop > 0) made.push(this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'stop', qty,
+      price: price - dir * b.stop * tick, role: 'stop', oco, parent: entry.id }));
+    if (b.target > 0) made.push(this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'limit', qty,
+      price: price + dir * b.target * tick, role: 'target', oco, parent: entry.id }));
+    for (const x of made) this.emitOrder(x);
+    for (const x of made) this.matchOne(x, this.last[x.root], true);
   }
-  /** Each working leg covers what is still open: entry filled minus what the legs have already closed. */
-  resizeLegs(entry) {
-    const legs = this.legsOf(entry);
-    const open = entry.filled - legs.reduce((s, x) => s + x.filled, 0);
-    for (const x of legs) {
-      if (!isWorking(x)) continue;
-      if (open <= 0) { this.cancelOne(x); continue; }
-      if (x.qty - x.filled !== open) { x.qty = x.filled + open; this.emitOrder(x); }
-    }
-  }
-  /** A leg filled: the partner shrinks to match (OCO). Once the bracket has closed everything, the entry's rest is cancelled. */
+  /** A leg filled: its OCO partner shrinks to what the leg still has open, or is cancelled when the leg is done. */
   legFilled(leg) {
-    const entry = this.orders.get(leg.parent);
-    if (!entry) return;
-    this.resizeLegs(entry);
-    if (leg.state === 'filled' && isWorking(entry)) this.cancelOne(entry);
+    if (!leg.oco) return;
+    const open = leg.qty - leg.filled;
+    for (const x of this.orders.values()) {
+      if (x === leg || x.oco !== leg.oco || !isWorking(x)) continue;
+      if (open <= 0) this.cancelOne(x);
+      else if (x.qty - x.filled !== open) { x.qty = x.filled + open; this.emitOrder(x); }
+    }
+  }
+  /** Flat: any ChartBridge legs left for that account and instrument are cancelled. */
+  flatLegs(account, root) {
+    for (const x of [...this.orders.values()]) if (isLeg(x) && isWorking(x) && x.account === account && x.root === root) this.cancelOne(x);
   }
 }

@@ -6,7 +6,9 @@
 //   --trade-accounts=Sim101,DEMO-EVAL   tradeAccounts
 //   --max-qty=MNQ:5,NQ:2            maxQty.MNQ = 5 and so on (default 1)
 //   --v1                            behave like ChartBridge 0.2 (protocol v1, read only: no trading, no /session)
-//   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk
+//   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
+//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
+//   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -24,7 +26,7 @@ const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
-const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls');
+const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames');
 const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
@@ -135,7 +137,7 @@ function subscribe(c, m) {
 }
 
 const last = {}, held = {};
-for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.last[r] = last[r]; }
+for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
 function trade(r, p) {
   last[r] = p;
   const now = Date.now();
@@ -159,6 +161,8 @@ const fillsSample = () => {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
+  // clickjacking: ChartBridge's page may never sit in another page's frame (protocol v2)
+  if (!V1 && !ALLOW_FRAMES) { res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Content-Security-Policy', "frame-ancestors 'none'"); }
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/') { res.writeHead(302, { Location: '/live/' }); return res.end(); }
   if (p === '/session' && !V1) {
@@ -171,6 +175,12 @@ const server = http.createServer((req, res) => {
     const q = new URL(req.url, 'http://x').searchParams, r = q.get('root') || 'MNQ';
     if (p === '/test/price') { held[r] = true; trade(r, rq(+q.get('p'), INSTR[r].tick)); }
     else if (p === '/test/hold') held[r] = q.get('on') !== '0';
+    else if (p === '/test/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ last: last[r], orders: [...desk.orders.values()].filter(o => o.state === 'working' || o.state === 'partFilled').map(o => desk.orderMsg(o)),
+        positions: Object.fromEntries(desk.positions) }));
+    }
+    else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
     else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ root: r, last: last[r], held: !!held[r] }));

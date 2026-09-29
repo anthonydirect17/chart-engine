@@ -138,6 +138,7 @@ test('openPnl: points per contract by direction, dollars for the whole position'
 
 test('fmtMoney and fmtSigned', () => {
   assert.equal(U.fmtMoney(14), '+$14.00');
+  assert.equal(U.fmtMoney(0), '$0.00');
   assert.equal(U.fmtMoney(-1250.5), '-$1,250.50');
   assert.equal(U.fmtSigned(3.5, 2), '+3.50');
   assert.equal(U.fmtSigned(-0.25, 2), '-0.25');

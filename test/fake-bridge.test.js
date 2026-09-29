@@ -22,7 +22,7 @@ async function makeDesk(cfg) {
     instruments: INSTR, knownAccounts: KNOWN, token: 'tok-123',
     send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000,
   });
-  desk.last.MNQ = 25400; desk.last.ES = 6500;
+  desk.tick('MNQ', 25400); desk.tick('ES', 6500);
   const d = {
     desk, conn, out,
     advance(ms) { clock += ms; },
@@ -171,25 +171,80 @@ test('bracket: an OCO pair around the fill; target fill cancels the stop', async
   assert.equal(d.working().length, 0);
 });
 
-test('bracket follows partial fills: legs grow with the entry, shrink with each other, and a done bracket ends the entry', async () => {
+test('bracket follows partial fills: each fill increment gets its own OCO pair; OCO partners shrink together', async () => {
   const d = await makeDesk(); d.auth();
   d.order({ kind: 'limit', price: 25390, qty: 3, bracket: { stop: 8, target: 8 } });
   const entry = d.working()[0];
-  d.tick(25390);                                                   // 1 filled: legs for 1
+  d.tick(25390);                                                   // 1 filled: a pair for 1
   let legs = d.working().filter(o => o.role !== 'entry');
   assert.deepEqual(legs.map(o => [o.role, o.qty, o.price]).sort(), [['stop', 1, 25388], ['target', 1, 25392]]);
-  d.tick(25390);                                                   // 2 filled: legs resized to 2, prices kept
+  d.tick(25390.25); d.tick(25390);                                 // 2 filled: a second pair for 1, its own OCO id
   legs = d.working().filter(o => o.role !== 'entry');
-  assert.deepEqual(legs.map(o => o.qty), [2, 2]);
-  d.tick(25392);                                                   // target touched: 1 closes, stop shrinks to 1
-  const stop = legs.find(o => o.role === 'stop'), target = legs.find(o => o.role === 'target');
-  assert.equal(target.filled, 1); assert.equal(stop.qty - stop.filled, 1); assert.equal(target.qty - target.filled, 1);
-  assert.equal(d.pos().qty, 1);
-  const out = d.tick(25392.25);                                    // target through: bracket done, entry's last contract cancelled
-  assert.equal(target.state, 'filled'); assert.equal(stop.state, 'cancelled'); assert.equal(entry.state, 'cancelled');
-  assert.equal(entry.filled, 2);
+  assert.equal(legs.length, 4);
+  assert.equal(new Set(legs.map(o => o.oco)).size, 2);
+  d.tick(25389.75);                                                // through: the last contract, a third pair
+  assert.equal(entry.state, 'filled');
+  legs = d.working().filter(o => o.role !== 'entry');
+  assert.equal(legs.length, 6);
+  assert.deepEqual(d.pos(), { qty: 3, avgPrice: 25390 });
+  d.tick(25392);                                                   // all three targets touched (1 each): flat, every stop cancelled
   assert.equal(d.pos().qty, 0);
-  assert.ok(out.some(m => m.type === 'order' && m.id === entry.id && m.state === 'cancelled'));
+  assert.equal(d.working().length, 0);
+});
+
+test('an OCO partner shrinks with a partial fill of its leg', async () => {
+  const d = await makeDesk(); d.auth();
+  d.order({ qty: 3, bracket: { stop: 8, target: 8 } });           // market: one fill of 3, one pair of 3
+  const stop = d.working().find(o => o.role === 'stop'), target = d.working().find(o => o.role === 'target');
+  d.tick(25402);                                                   // target touched: 1 of 3
+  assert.equal(target.filled, 1); assert.equal(stop.qty - stop.filled, 2);
+  d.tick(25397.75);                                                // stop through: the other 2
+  assert.equal(stop.state, 'filled'); assert.equal(target.state, 'cancelled'); assert.equal(d.pos().qty, 0);
+});
+
+test('flat position cancels leftover legs; after Flatten a late entry fill gets no legs', async () => {
+  const d = await makeDesk(); d.auth();
+  d.order({ qty: 1, bracket: { stop: 8, target: 8 } });
+  d.order({ side: 'sell', qty: 1 });                               // closed by hand: the legs are left over, then cancelled
+  assert.equal(d.pos().qty, 0);
+  assert.equal(d.working().length, 0);
+  d.order({ kind: 'limit', price: 25390, qty: 2, bracket: { stop: 8, target: 8 } });
+  const entry = d.working()[0];
+  d.act({ type: 'flatten', account: 'Sim101', root: 'MNQ' });
+  entry.state = 'working';                                         // a fill that raced the cancel
+  d.desk.fill(entry, 1, 25390);
+  assert.equal(d.pos().qty, 1);
+  assert.equal(d.working().filter(o => o.role !== 'entry').length, 0, 'no legs after flatten');
+});
+
+test('brackets: JSON whole numbers only, and only on an order that opens or adds', async () => {
+  const d = await makeDesk(); d.auth();
+  assert.match(reasonOf(d.order({ bracket: { stop: '8', target: 8 } })), /Bracket stop must be a whole number/);
+  assert.match(reasonOf(d.order({ bracket: { stop: 8, target: null } })), /Bracket target must be a whole number/);
+  assert.match(reasonOf(d.order({ bracket: { stop: 8 } })), /Bracket target/);
+  assert.match(reasonOf(d.order({ bracket: { stop: 201, target: 0 } })), /0 to 200/);
+  assert.match(reasonOf(d.order({ bracket: null })), /must be \{/);
+  assert.equal(reasonOf(d.order({ bracket: { stop: 0, target: 0 } })), null);   // long 1, no legs
+  assert.equal(d.working().length, 0);
+  assert.equal(reasonOf(d.order({ bracket: { stop: 8, target: 8 } })), null);   // adds: long 2
+  assert.equal(reasonOf(d.order({ side: 'sell', bracket: { stop: 0, target: 0 } })), null);   // reduces, no bracket: fine
+  assert.match(reasonOf(d.order({ side: 'sell', bracket: { stop: 8, target: 8 } })), /^A bracket can only go on an order that opens or adds to a position\.$/);
+});
+
+test('stale last price refuses limit and stop prices, not market; stop-limits cannot move', async () => {
+  const d = await makeDesk(); d.auth();
+  d.advance(299000);
+  assert.equal(reasonOf(d.order({ kind: 'limit', price: 25390 })), null);
+  d.advance(2000);
+  assert.match(reasonOf(d.order({ kind: 'limit', price: 25390 })), /last price for MNQ is stale/);
+  const id = d.working()[0].id;
+  assert.match(reasonOf(d.act({ type: 'change', id, price: 25391 })), /stale/);
+  assert.equal(reasonOf(d.order({ side: 'sell', qty: 1 })), null);
+  d.tick(25400);
+  const sl = d.desk.placeElsewhere({ account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'stopLimit', qty: 1, price: 25380 });
+  assert.match(reasonOf(d.act({ type: 'change', id: sl.id, price: 25381 })), /Only limit and stop market orders can be moved/);
+  d.desk.placeElsewhere({ account: 'Sim101', root: 'CL', side: 'sell', kind: 'limit', qty: 1, price: 80 });
+  assert.equal(d.take('order').length, 0, 'no order messages for roots ChartBridge does not serve');
 });
 
 test('cancel: one bracket leg cancels its pair; change moves a leg; stop side still checked', async () => {
@@ -301,6 +356,9 @@ test('server: /session is same-origin only, the token is checked, and only Chart
   const port = 18700 + Math.floor(Math.random() * 200);
   const child = await startBridge(port, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5']);
   try {
+    const pg = await get(port, '/live/');
+    assert.equal(pg.headers['x-frame-options'], 'DENY');
+    assert.equal(pg.headers['content-security-policy'], "frame-ancestors 'none'");
     const s = await get(port, '/session');
     assert.equal(s.status, 200);
     assert.equal(s.headers['access-control-allow-origin'], undefined, 'no CORS headers');
@@ -360,17 +418,4 @@ test('server: trading off by default; --v1 behaves like ChartBridge 0.2 (no trad
     assert.equal(await a.next('trading', 500), null);
     a.close();
   } finally { child.kill(); }
-});
-
-test('a stop leg fills first: the target is cancelled (OCO), and when the entry fills more the legs cover it again', async () => {
-  const d = await makeDesk(); d.auth();
-  d.order({ kind: 'limit', price: 25390, qty: 2, bracket: { stop: 4, target: 8 } });
-  const entry = d.working()[0];
-  d.tick(25390);                                                   // 1 filled, legs for 1 (stop 25389, target 25392)
-  const out = d.tick(25388.75);                                    // through the entry (rest fills at 25390), legs grow to 2, then the stop triggers
-  assert.equal(entry.state, 'filled'); assert.equal(entry.avgFill, 25390);
-  const stop = [...d.desk.orders.values()].find(o => o.role === 'stop'), target = [...d.desk.orders.values()].find(o => o.role === 'target');
-  assert.equal(stop.state, 'filled'); assert.equal(stop.filled, 2); assert.equal(target.state, 'cancelled');
-  assert.equal(d.pos().qty, 0);
-  assert.equal(out.filter(m => m.type === 'exec').length, 2);
 });
