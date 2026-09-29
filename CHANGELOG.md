@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.5.1 (2026-09-29): Range bars smooth again
+
+Page and engine only; nt8/ is unchanged. Run `nt8\install.ps1` again after pulling (no NinjaTrader recompile).
+Anthony found the live NQ Range 40 chart choppier on 1.4.1 than before. Measured with the new `test/perf-live.mjs`
+(sample NQ trades from the fake bridge, 150 a second with bursts of 450, headless Chromium): the cost of each
+tick and each frame had not changed, but three things had.
+- **The chart could stop drawing for good** (engine, since 1.0; exposed by 1.4.0). A tick handled after a frame
+  began, when that frame's time stamp was more than 166 ms old, gave the live price ring a negative radius; the
+  canvas threw and the frame loop never asked for another frame. 1.4.0 made Range load up to 33 hours of ticks,
+  and building them is a long task that leaves such a stale frame behind: at 01:30 ET the loop stopped after
+  8 of 10 loads in the benchmark (0 of 10 with 1.3.1 and 1.2.1, which load 8 hours; 0 of 10 now). The ring and
+  the price tag flash now treat such a tick as brand new (no visible change), and the next frame is asked for
+  before drawing, so an error while drawing no longer stops the chart. What was drawn stays on screen (never a
+  black canvas), the error is reported at most once per 5 s per message (again after a clean frame), and a new
+  engine event `on('error')` puts it on the live page's status line until the next clean frame. The embedded chart
+  (ChartLive.mount) runs the same code and was measured the same way.
+- **Ticks off the JavaScript heap** (`TickStore` in `live/bar-builder.js`). The page kept every trade of the
+  backfill as its own small array: 33 hours of NQ is about 1.8 million objects, some 100 to 150 MB of heap for
+  the garbage collector to walk and move (in 60 s windows after a load, single pauses of 34 to 78 ms seen on
+  1.5.0 and at most 12 ms now; shorter windows often show neither). They are now
+  columns of numbers in 65,536-trade blocks (never copied as they grow, dropped whole when the page trims):
+  heap about 52 MB instead of 96 to 150 MB, and the bars are built exactly as before.
+- **Faster range builds** (`live/bar-builder.js`, NinjaTrader style; Traded prices only is a little faster from
+  the tick store alone): a trade that stays inside the forming NinjaTrader-style bar
+  takes a short path (same arithmetic, checked against the full path on millions of trades), and building from
+  the tick store allocates nothing per trade. Changing the range size or style on 33 hours of ticks now blocks
+  the page for about 50 ms instead of about 150 ms (1.3.1 took about 18 ms on its 8 hours); the load's last step
+  shrinks the same way.
+- **Legend**: the source line names both versions, "NinjaTrader via ChartBridge 0.3.1 · chart 1.5.1".
+- **Range style**: the NinjaTrader / Traded prices only select has a visible "Range style" label.
+- Tests: `test/perf.test.js` in `npm test` (a stale frame time stamp never stops the frame loop, a drawing error
+  never blanks the canvas and is reported at most once per 5 s per message, per-frame cost does not grow with bars held, 2 million ticks add
+  under 16 MB of heap and a live tick costs the same as with none, TickStore); `npm run smoke:perf` (Range 40
+  with 33 hours of sample ticks, three loads: fails on a page error, a stopped chart, frames over 50 ms or ticks
+  back on the heap; it fails on 1.5.0). The fake bridge gets `--tick-rate`, `--live-rate`, `--serve-root` and
+  `--clock-offset` for load tests.
+
 ## 1.5.0 (2026-09-29): the live chart as a mountable piece (ChartLive.mount), for The Desk
 
 Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also copies `live/live.css`. Run

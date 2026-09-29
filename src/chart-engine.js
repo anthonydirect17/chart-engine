@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.5.0
+ * chart-engine 1.5.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -351,7 +351,7 @@ function create(container, options) {
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [] };
+  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], error: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -852,7 +852,9 @@ function create(container, options) {
       if (lx > -10 && lx < plotW + 10) {
         const age = now - pulseT0;
         if (age < 500 && !REDUCED) {
-          const k = age / 500;
+          // A tick handled after this frame began (its time stamp can be well behind the clock after a long task,
+          // such as building a day and a half of range bars) counts as age 0: the ring never gets a negative radius.
+          const k = Math.max(0, age / 500);
           ctx.beginPath(); ctx.arc(lx, ly, 3 + k * 9, 0, Math.PI * 2);
           ctx.strokeStyle = lastCol; ctx.globalAlpha = 0.5 * (1 - k); ctx.lineWidth = 1.5; ctx.stroke(); ctx.globalAlpha = 1;
         }
@@ -922,7 +924,7 @@ function create(container, options) {
     if (n >= 0) {
       axisTag(ly, fmtPrice(bars[n].c, o.precision), lastCol, lastTag, null, countdown());
       if (flash) {
-        const k = Math.exp(-(now - flash) / 160);
+        const k = Math.exp(-Math.max(0, now - flash) / 160);
         if (k > 0.02) {
           const top = clamp(ly - 9, 0, Math.max(0, plotH - 32));
           roundRect(plotW + 2, top, AXIS_W - 4, 32, 3);
@@ -1166,23 +1168,43 @@ function create(container, options) {
 
   /* ---------------- frame loop */
   let raf = 0, lastFrame = 0, lastDraw = 0, emaInt = 16.7, emaDraw = 1, streak = 0;
+  /* Drawing errors: each message is reported (window error and the chart's 'error' event) at most once per 5 s;
+     after a clean frame the slate is wiped, so the same fault coming back later is reported again. */
+  const reported = new Map();                            // message -> when it was last reported (performance.now)
+  let failing = false;
   function frame(now) {
-    const dt = lastFrame ? Math.min(64, now - lastFrame) : 16.7;
-    lastFrame = now;
-    const t0 = performance.now();
-    const moving = step(dt, now);
-    if (moving || dirty) {
-      dirty = false; draw(now);
-      const cost = performance.now() - t0;
-      emaDraw = emaDraw * 0.92 + cost * 0.08;
-      const gap = now - lastDraw;
-      if (gap < 40) { emaInt = emaInt * 0.9 + gap * 0.1; streak++; } else streak = 0;
-      lastDraw = now;
-      emitLegend();
-    }
-    const live = V.follow;
-    if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+    // The next frame is asked for first, so an error while drawing can never stop the chart for good (up to 1.5.0
+    // one throw ended the loop and the chart froze).
     raf = requestAnimationFrame(frame);
+    try {
+      const dt = lastFrame ? Math.min(64, now - lastFrame) : 16.7;
+      lastFrame = now;
+      const t0 = performance.now();
+      const moving = step(dt, now);
+      if (moving || dirty) {
+        dirty = false; draw(now);
+        const cost = performance.now() - t0;
+        emaDraw = emaDraw * 0.92 + cost * 0.08;
+        const gap = now - lastDraw;
+        if (gap < 40) { emaInt = emaInt * 0.9 + gap * 0.1; streak++; } else streak = 0;
+        lastDraw = now;
+        emitLegend();
+      }
+      const live = V.follow;
+      if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+      if (failing) { failing = false; reported.clear(); emit('error', null); }   // a clean frame: recovered
+    } catch (e) {
+      // draw() has one save() (the plot clip); restore() with nothing saved does nothing, so one call balances it.
+      // No reset(): the canvas is opaque and would go black. What was drawn before the throw stays on screen.
+      ctx.restore();
+      dirty = true; failing = true;
+      const msg = String(e && e.message), t = performance.now(), at = reported.get(msg);
+      if (at === undefined || t - at >= 5000) {
+        reported.set(msg, t);
+        emit('error', { message: msg, error: e });
+        setTimeout(() => { throw e; });
+      }
+    }
   }
   raf = requestAnimationFrame(frame);
 

@@ -19,6 +19,13 @@
 //                                   (a missing or reused one is refused), so every reconnect needs a fresh URL
 // With --test-controls, also: /test/drop closes every WebSocket (a dropped connection); /test/received lists
 // what the pages sent (message types, GET /session count, WebSocket URLs, ticketsRefused).
+// Load and performance testing (test/perf-live.mjs); sample data, seeded, never market data:
+//   --tick-rate=15                  tick history this dense: 15 trades a second on average (weighted by each
+//                                   minute's volume), so 33 hours of NQ come to about 1.8 million ticks
+//   --live-rate=100                 live trades per second on average, with a burst of 3 times that for 1.5 s in
+//                                   every 10 s (a busy market), instead of one trade every 120 ms
+//   --serve-root=DIR                serve the page files from another checkout (to compare versions)
+//   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day)
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -31,13 +38,15 @@ import { OrderDesk } from './fake-orders.mjs';
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
 const SampleFeed = require('../demo/sample-feed.js');
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const root = flagValueEarly('serve-root') ? path.resolve(flagValueEarly('serve-root')) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+function flagValueEarly(name) { const a = process.argv.slice(2).find(x => x.startsWith('--' + name + '=')); return a ? a.slice(a.indexOf('=') + 1) : ''; }
 const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
+const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
@@ -49,7 +58,8 @@ const config = {
 };
 const ACCOUNTS = ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
 
-const etNow = () => CE.util.zoneSeconds(Date.now() / 1000);
+const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
+const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
 const INSTR = {
   MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2, scale: 1 },
   NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20, scale: 1 },
@@ -83,10 +93,33 @@ function ticksFrom(bars, hours) {
       const dir = way[s] > p ? 1 : -1;
       while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
+    if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
     const v = Math.max(1, Math.round(b.v / prices.length));
     prices.forEach((p, i) => out.push([+(b.t + i * 59.9 / prices.length).toFixed(3), p, v]));
   }
   return out;
+}
+/* --tick-rate: fill a minute's walk up to n trades with trades at the same price or one tick away, inside the bar */
+function pad(prices, b, n, rnd) {
+  const extra = n - prices.length;
+  if (extra <= 0) return;
+  const out = [];
+  const every = extra / prices.length;
+  let owe = 0;
+  for (const p of prices) {
+    out.push(p);
+    for (owe += every; owe >= 1; owe--) {
+      const r = rnd(), q = r < 0.6 ? p : r < 0.8 ? p + 0.25 : p - 0.25;
+      out.push(q > b.h || q < b.l ? p : q);
+    }
+  }
+  prices.splice(0, prices.length, ...out);
+}
+let avgVolCache = new WeakMap();
+function avgVol(bars) {
+  let a = avgVolCache.get(bars);
+  if (a === undefined) { a = bars.reduce((s, b) => s + b.v, 0) / bars.length || 1; avgVolCache.set(bars, a); }
+  return a;
 }
 
 const data = {};
@@ -151,6 +184,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (['order', 'change', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);
 }
+const tickCache = new Map();             // --tick-rate: millions of ticks, made once per root and hours
 function subscribe(c, m) {
   const r = INSTR[m.root] ? m.root : 'MNQ';
   c.root = r; c.ready = false;
@@ -159,7 +193,8 @@ function subscribe(c, m) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
     send(c, { type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length });
   }
-  const ticks = ticksFrom(bars, Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours));
+  const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours), key = r + '|' + hours;
+  const ticks = TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
   for (let i = 0; i < ticks.length || i === 0; i += 20000) {
     send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
     if (!ticks.length) break;
@@ -177,9 +212,28 @@ function trade(r, p) {
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade
 }
-setInterval(() => {
+if (!LIVE_RATE) setInterval(() => {
   for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
+else {
+  // --live-rate: a busy market. Every 10 ms a Poisson number of trades; mostly 0 or 1 tick apart, and a fast jump of
+  // 8 to 16 ticks now and then (NinjaTrader-style range bars then add phantom bars). Seeded, so runs compare.
+  let seed = 424242;
+  const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  const poisson = mean => { let k = 0, p = Math.exp(-mean), s = p; const u = rnd(); while (u > s && k < 200) { k++; p *= mean / k; s += p; } return k; };
+  const t0 = Date.now();
+  setInterval(() => {
+    const burst = ((Date.now() - t0) % 10000) < 1500 ? 3 : 1;
+    for (const r of Object.keys(INSTR)) {
+      if (held[r] || ![...clients].some(c => c.ready && c.root === r)) continue;
+      const n = poisson(LIVE_RATE * burst / 100);
+      for (let k = 0; k < n; k++) {
+        const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
+        trade(r, rq(last[r] + (rnd() < 0.5 ? -1 : 1) * steps * INSTR[r].tick, INSTR[r].tick));
+      }
+    }
+  }, 10);
+}
 
 const fillsSample = () => {
   const b = data.MNQ, n = b.length;

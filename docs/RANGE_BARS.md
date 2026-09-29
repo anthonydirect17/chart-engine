@@ -66,6 +66,8 @@ Range R = the range in ticks times the tick size. For each trade at price P:
   mid-session. The page then builds from there and says so in the status line ("Range bars start at 10:13 ET:
   NinjaTrader sent less tick history than asked ..."), whenever the first tick used is more than 10 minutes after
   its session's 18:00 start. Those bars can differ from NinjaTrader's until the next session starts.
+- The ticks are kept in columns of numbers (`TickStore` in `live/bar-builder.js`, 1.5.1), not as one small array per
+  trade, so 33 hours of NQ (about 2 million trades) cost the garbage collector nothing.
 - On a very long session the page drops its oldest 500,000 ticks once it holds 2.5 million. Switching to Range
   after that reloads the backfill only if the ticks left no longer reach this session's start; otherwise it
   rebuilds from this session's first trade and leaves out the older, now partial, session.
