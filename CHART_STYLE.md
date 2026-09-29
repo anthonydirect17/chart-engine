@@ -76,6 +76,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
+- **Fills (1.3.1):** a triangle in the side color with its tip at the fill price (buy up, sell down),
+  quantity beside it in 10 px mono (buys below the price, sells above). Fills on one bar, side and price
+  merge into one mark with the summed quantity; labels on one bar that would overlap step away from the
+  price by 10 px, keeping price order.
 - **Orders (1.3.0):** a 1 px line across the plot in the side color (buy green, sell red): limits and
   targets solid, stops dashed 6/4. A label at the right end of the plot ("BUY LMT 2", bracket legs "SELL TGT
   2" / "SELL STP 2", the quantity still to fill) on the ground at 92% with a side-colored border (dashed for

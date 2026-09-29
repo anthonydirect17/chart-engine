@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.1 (2026-09-29): fill marks that add up
+
+From a report on the trading PC: a 3-lot trade whose target filled as three 1-lot executions drew as
+"▲3" and one "▼1", because the three sell marks sat on top of each other.
+- Engine 1.3.1: fills on the same bar, side and price (to the tick) draw as one mark with the summed
+  quantity, so that trade reads ▲3 and ▼3. Fills on one bar at different prices keep their own marks, and
+  their labels stack apart (sells up from the price, buys down) so each quantity reads. Triangle tips stay
+  at the fill prices. Merging is for drawing only; `setMarkers` keeps every execution. The merged marks
+  are rebuilt only when the fills, the bars or the tick change. Helpers `groupFills` and `stackFillLabels`.
+  Nothing else in the look or the motion changed.
+- Tests: `test/fill-marks.test.js`.
+
 ## 1.3.0 (2026-09-29): trading from the chart, the chart side (Step 2)
 
 Order entry on the live page through ChartBridge protocol v2 (`nt8/PROTOCOL.md`, "Orders"). Everything is

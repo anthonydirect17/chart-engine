@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.3.0
+ * chart-engine 1.3.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -78,6 +78,44 @@ function openPnl(qty, avgPrice, last, pointValue) {
   const dollars = pointValue > 0 ? (last - avgPrice) * qty * pointValue : null;
   return { points, dollars };
 }
+/* ---------------------------------------------------------------- fill marks (1.3.1) */
+/**
+ * Fills merged for drawing: one mark per bar, side and price (to the tick), with the summed qty, so a
+ * 3-lot target filled as three 1-lot executions reads "3", not "1". `indexOf(t)` gives the bar index.
+ * Sorted by bar; within a bar sells come first, lowest price first, then buys, highest price first,
+ * which is the order their labels stack away from the price (sells up, buys down).
+ */
+function groupFills(list, indexOf, tick) {
+  const byKey = new Map(), out = [];
+  for (const f of list || []) {
+    const i = indexOf(f.t), side = f.side === 'buy' ? 'buy' : 'sell';
+    const key = i + '|' + side + '|' + (tick ? Math.round(f.price / tick) : f.price);
+    const m = byKey.get(key);
+    if (m) m.qty += +f.qty || 0;
+    else { const g = { i, side, price: f.price, qty: +f.qty || 0 }; byKey.set(key, g); out.push(g); }
+  }
+  return out.sort((a, b) => a.i - b.i || (a.side === b.side ? (a.side === 'sell' ? a.price - b.price : b.price - a.price) : a.side === 'sell' ? -1 : 1));
+}
+/**
+ * Label rows for marks from groupFills: `y` is the tip (the fill price), `ly` the label's middle, `s` the
+ * triangle half width. A label sits beside its triangle (buys below the price, sells above) and, when it
+ * would overlap another label on the same bar (closer than `gap` px), steps away by `gap` until clear.
+ */
+function stackFillLabels(marks, yOf, s, gap) {
+  const out = []; let bar = null, placed = [];
+  for (const m of marks) {
+    if (m.i !== bar) { bar = m.i; placed = []; }
+    const dir = m.side === 'buy' ? 1 : -1, y = yOf(m.price);
+    let ly = y + dir * s;
+    if (m.qty) {
+      for (let k = 0; k <= 2 * placed.length && placed.some(p => Math.abs(p - ly) < gap); k++) ly += dir * gap;
+      placed.push(ly);
+    }
+    out.push({ m, y, ly });
+  }
+  return out;
+}
+
 /** "+$14.00", "-$1,250.50" */
 function fmtMoney(v) { return (v < 0 ? '-' : v > 0 ? '+' : '') + '$' + fmtPrice(Math.abs(v), 2); }
 /** "+3.50 pt" style signed number. */
@@ -342,6 +380,14 @@ function create(container, options) {
     if (t < bars[0].t) return 0;
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (bars[mid].t <= t) lo = mid; else hi = mid - 1; }
     return lo;
+  }
+  /* merged fill marks, rebuilt only when the fills, the bars or the tick change (not every frame) */
+  let fillCache = { markers: null, bars: null, count: -1, tick: null, marks: [] };
+  function fillMarks() {
+    const c = fillCache;
+    if (c.markers !== markers || c.bars !== bars || c.count !== bars.length || c.tick !== o.tick)
+      fillCache = { markers, bars, count: bars.length, tick: o.tick, marks: groupFills(markers, idxAtTime, o.tick) };
+    return fillCache.marks;
   }
   /* fractional bar index for any time, extrapolating past either end at barSeconds per bar */
   function idxOfTime(t) {
@@ -681,15 +727,16 @@ function create(container, options) {
       }
     }
 
-    // fills: buy triangles point up, sell triangles point down, tip at the fill price
+    // fills: buy triangles point up, sell triangles point down, tip at the fill price. Fills on one bar, side
+    // and price draw as one mark with the summed qty; labels on one bar stack apart (1.3.1)
     if (markers.length && n >= 0) {
       ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle';
-      for (const m of markers) {
-        const i = idxAtTime(m.t); if (i < from - 1 || i > to + 1) continue;
-        const x = xOf(i), y = yOf(m.price), s = 5, buy = m.side === 'buy', dir = buy ? 1 : -1;
+      const s = 5, inView = fillMarks().filter(m => m.i >= from - 1 && m.i <= to + 1);
+      for (const { m, y, ly } of stackFillLabels(inView, yOf, s, 10)) {
+        const x = xOf(m.i), buy = m.side === 'buy', dir = buy ? 1 : -1;
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - s, y + dir * s * 1.6); ctx.lineTo(x + s, y + dir * s * 1.6); ctx.closePath();
         ctx.fillStyle = buy ? T.long : T.short; ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5; ctx.stroke(); ctx.fill();
-        if (V.spacing >= 4 && m.qty) { ctx.fillStyle = buy ? T.long : T.short; ctx.textAlign = 'left'; ctx.fillText(String(m.qty), x + s + 3, y + dir * s); }
+        if (V.spacing >= 4 && m.qty) { ctx.fillStyle = buy ? T.long : T.short; ctx.textAlign = 'left'; ctx.fillText(String(m.qty), x + s + 3, ly); }
       }
     }
 
@@ -1314,7 +1361,7 @@ return {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, buildTheme,
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines,
-    orderLabel, openPnl, fmtMoney, fmtSigned,
+    orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
   },
 };
 });
