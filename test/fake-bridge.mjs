@@ -1,18 +1,39 @@
 // A stand-in for the ChartBridge NT8 add-on, speaking nt8/PROTOCOL.md with sample data.
-// For tests and offline work only; prices are NOT market data.
-//   node test/fake-bridge.mjs [port]      then open http://localhost:<port>/live/
+// For tests and offline work only; prices are NOT market data and no order reaches a broker.
+//   node test/fake-bridge.mjs [port] [flags]      then open http://localhost:<port>/live/
+// Flags (the config.txt keys of the real add-on):
+//   --trading                       trading = true (off by default, like ChartBridge)
+//   --trade-accounts=Sim101,DEMO-EVAL   tradeAccounts
+//   --max-qty=MNQ:5,NQ:2            maxQty.MNQ = 5 and so on (default 1)
+//   --v1                            behave like ChartBridge 0.2 (protocol v1, read only: no trading, no /session)
+//   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
+//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
+//   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
+// Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { OrderDesk } from './fake-orders.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
 const SampleFeed = require('../demo/sample-feed.js');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = +(process.argv[2] || process.env.PORT || 8765);
+const args = process.argv.slice(2);
+const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
+const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
+const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
+const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames');
+const config = {
+  trading: !V1 && !!flag('trading'),
+  tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
+  maxQty: Object.fromEntries(flagValue('max-qty').split(',').filter(Boolean).map(x => { const [r, n] = x.split(':'); return [r.trim(), +n]; })),
+  port: PORT,
+};
+const ACCOUNTS = ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
 
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000);
 const INSTR = {
@@ -85,9 +106,20 @@ function parseFrames(buf, onText) {
 const clients = new Set();
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
+// a new random session token each start, served same-origin at GET /session (gate 4)
+const desk = new OrderDesk({
+  config, instruments: INSTR, knownAccounts: ACCOUNTS, token: crypto.randomBytes(24).toString('base64url'),
+  send, conns: () => clients, barTime: () => etNow(),
+});
+
 function onMessage(c, text) {
   let m; try { m = JSON.parse(text); } catch (e) { return; }
-  if (m.type !== 'subscribe') return;
+  if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
+  if (m.type === 'subscribe') subscribe(c, m);
+  else if (m.type === 'auth') desk.auth(c, m.token);
+  else if (['order', 'change', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);
+}
+function subscribe(c, m) {
   const r = INSTR[m.root] ? m.root : 'MNQ';
   c.root = r; c.ready = false;
   const bars = data[r];
@@ -104,15 +136,17 @@ function onMessage(c, text) {
   c.ready = true;
 }
 
-const last = {};
-for (const r of Object.keys(INSTR)) last[r] = data[r][data[r].length - 1].c;
+const last = {}, held = {};
+for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
+function trade(r, p) {
+  last[r] = p;
+  const now = Date.now();
+  const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
+  for (const c of clients) if (c.ready && c.root === r) send(c, msg);
+  desk.tick(r, p);                        // the matching engine sees every trade
+}
 setInterval(() => {
-  for (const r of Object.keys(INSTR)) {
-    last[r] = rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25);
-    const now = Date.now();
-    const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p: last[r], v: 1 + Math.floor(Math.random() * 5) };
-    for (const c of clients) if (c.ready && c.root === r) send(c, msg);
-  }
+  for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 
 const fillsSample = () => {
@@ -127,13 +161,35 @@ const fillsSample = () => {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
+  // clickjacking: ChartBridge's page may never sit in another page's frame (protocol v2)
+  if (!V1 && !ALLOW_FRAMES) { res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Content-Security-Policy', "frame-ancestors 'none'"); }
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/') { res.writeHead(302, { Location: '/live/' }); return res.end(); }
+  if (p === '/session' && !V1) {
+    // same-origin only: no CORS headers, and (like HttpListener's localhost prefix) only Host localhost:<port>
+    if (req.headers.host !== 'localhost:' + PORT) { res.writeHead(400); return res.end('bad host'); }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ token: desk.token }));
+  }
+  if (p.startsWith('/test/') && TEST_CONTROLS && req.method === 'POST') {
+    const q = new URL(req.url, 'http://x').searchParams, r = q.get('root') || 'MNQ';
+    if (p === '/test/price') { held[r] = true; trade(r, rq(+q.get('p'), INSTR[r].tick)); }
+    else if (p === '/test/hold') held[r] = q.get('on') !== '0';
+    else if (p === '/test/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ last: last[r], orders: [...desk.orders.values()].filter(o => o.state === 'working' || o.state === 'partFilled').map(o => desk.orderMsg(o)),
+        positions: Object.fromEntries(desk.positions) }));
+    }
+    else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
+    else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ root: r, last: last[r], held: !!held[r] }));
+  }
   if (p === '/diag') {   // same shape as ChartBridge's /diag, sample values
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
       desk: { postFills: false, deskUrl: 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
-      accounts: ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'].map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })) }));
+      accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })) }));
   }
   if (p.endsWith('/')) p += 'index.html';
   const full = path.join(root, p);
@@ -145,9 +201,11 @@ server.on('upgrade', (req, sock) => {
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
-  const c = { sock, root: null, ready: false, buf: Buffer.alloc(0) };
+  const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  send(c, { type: 'hello', version: 'fake-0.1.0', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'] });
+  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.0', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ACCOUNTS };
+  if (!V1) hello.trading = desk.helloTrading(c);
+  send(c, hello);
   send(c, { type: 'execs', list: fillsSample() });
   sock.on('data', d => {
     const r = parseFrames(Buffer.concat([c.buf, d]), t => onMessage(c, t));
@@ -156,4 +214,5 @@ server.on('upgrade', (req, sock) => {
   sock.on('close', () => clients.delete(c));
   sock.on('error', () => clients.delete(c));
 });
-server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/'));
+server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
+  (V1 ? ' (v1, read only)' : config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)')));

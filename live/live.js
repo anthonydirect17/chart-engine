@@ -1,10 +1,12 @@
 /*
  * Live chart page: connects to ChartBridge (NinjaTrader 8 add-on) and drives chart-engine.
- * Protocol: nt8/PROTOCOL.md. Read only: nothing here can place or change an order.
+ * Protocol: nt8/PROTOCOL.md. With ChartBridge 0.2 (protocol v1) the page is read only. With protocol v2 it
+ * can trade, but only after ChartBridge enables it (trading = true in config.txt, this page signed in with
+ * the session token) and only while the Armed switch is on. Armed is off after every page load.
  */
 (() => {
 'use strict';
-const CE = window.ChartEngine, U = CE.util, BarBuilder = window.BarBuilder.BarBuilder;
+const CE = window.ChartEngine, U = CE.util, BarBuilder = window.BarBuilder.BarBuilder, OT = window.OrderTicket;
 const $ = id => document.getElementById(id);
 const SESSION = 18 * 3600;
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
@@ -47,6 +49,8 @@ const chart = CE.create($('chart'), {
   motion: GLIDE[S.glide], clock: etNow,
 });
 
+window.liveChart = chart;            // for tests and the console; order actions still go through the checks below
+
 /* ---------------- per-instrument data */
 const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null, tickHours: 0 };
 /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load). */
@@ -67,6 +71,7 @@ function resetData(root) {
   chart.setLevels([]);
   chart.setDrawings(store.get('live-drawings-v1-' + root, []));
   applyMarkers();
+  renderTrading();
   legendKey = '';
 }
 
@@ -188,7 +193,7 @@ function connect() {
   try { ws = new WebSocket(wsUrl); } catch (e) { scheduleReconnect(); return; }
   ws.onopen = () => { wsTries = 0; everConnected = true; setStatus('', ''); };
   ws.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch (e) { return; } handle(m); };
-  ws.onclose = () => { ws = null; D.ready = false; setConn('offline'); scheduleReconnect(); };
+  ws.onclose = () => { ws = null; D.ready = false; setConn('offline'); tradingLost('Not connected to ChartBridge.'); scheduleReconnect(); };
   ws.onerror = () => { /* onclose follows */ };
 }
 function scheduleReconnect() {
@@ -214,6 +219,7 @@ function handle(m) {
       $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version || '');
       syncAccounts(m.accounts || []);
       subscribe(S.root);
+      if (m.trading) { applyTrading(m.trading); signIn(); }   // protocol v2; ChartBridge 0.2 has no trading field
       break;
     case 'history':
       if (m.root !== D.root) return;
@@ -234,8 +240,175 @@ function handle(m) {
     case 'tick': onTick(m); break;
     case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
     case 'exec': addFill(m); applyMarkers(); break;
-    case 'status': setStatus(m.text, m.level); break;
+    case 'status': if (m.level === 'error') alertLoud(m.text); else setStatus(m.text, m.level); break;
+    case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); break;
+    case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); renderTrading(); break;
+    case 'order': onOrder(m); break;
+    case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); break;
+    case 'reject': flash('Refused by ChartBridge: ' + m.reason, 'error'); renderTrading(); break;
   }
+}
+
+/* ---------------- trading (protocol v2) */
+const TR = {
+  v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false,
+  armed: false,                        // never saved: Armed is off after every page load
+  account: '', side: 'buy',
+  orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
+  positions: new Map(),                // 'account|root' -> { qty, avgPrice }
+};
+const brackets = {};
+{ const b = store.get('live-bracket-v1', {}); for (const r of ROOTS) brackets[r] = OT.cleanBracket(b && b[r]); }
+const sameAction = OT.repeatGuard(400);
+let cidSeq = 0;
+const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
+
+const served = r => !Object.keys(instruments).length || !!instruments[r];
+/* Clickjacking guard: never trade from inside another page's frame (ChartBridge also sends X-Frame-Options DENY). */
+const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
+const FRAMED_REASON = 'This chart is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own tab.';
+
+/* Sign in: read the session token from GET /session (same origin as this page) and send auth. */
+function signIn() {
+  TR.signInStarted = true;
+  if (FRAMED) { applyTrading({ enabled: false, reason: FRAMED_REASON }); return; }
+  const sock = ws;
+  fetch('/session', { cache: 'no-store' })
+    .then(r => r.ok ? r.text() : Promise.reject(new Error('GET /session answered ' + r.status)))
+    .then(body => {
+      let token = null;
+      try { const j = JSON.parse(body); token = typeof j === 'string' ? j : j && j.token; } catch (e) { token = body.trim(); }
+      if (!token) throw new Error('no token in GET /session');
+      if (sock === ws) send({ type: 'auth', token });
+    })
+    .catch(e => {
+      if (sock !== ws) return;
+      applyTrading({ enabled: false, reason: 'Could not sign in to ChartBridge (' + e.message + '). Open the chart from ChartBridge itself to trade.' });
+    });
+}
+function applyTrading(t) {
+  TR.v2 = true;
+  TR.enabled = !!t.enabled && !FRAMED;
+  TR.reason = FRAMED ? FRAMED_REASON : t.enabled ? '' : (t.reason || 'Trading is not enabled in ChartBridge.');
+  TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
+  TR.maxQty = t.maxQty || {};
+  TR.account = OT.defaultAccount(TR.accounts, TR.account);
+  if (!TR.enabled) setArmed(false);
+  syncTradeAccounts();
+  renderTrading();
+}
+function tradingLost(reason) {
+  TR.signInStarted = false;
+  if (!TR.v2) return;
+  TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
+  setArmed(false); renderTrading();
+}
+function onOrder(o) {
+  if (!served(o.root)) return;
+  const prev = TR.orders.get(o.id) || null;
+  const ev = OT.orderEvent(o, prev, p => U.fmtPrice(p, precisionOf()));
+  if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
+  if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
+  renderTrading();
+}
+
+const lastPrice = () => (D.m1 && D.m1.last ? D.m1.last.c : null);
+const capNow = () => OT.maxQtyFor(TR, D.root);
+const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
+
+/* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded. */
+function ready() {
+  if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
+  if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
+  if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
+  if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
+  if (!D.ready || !TR.account) { flash('Still loading: nothing was sent.', 'warn'); return false; }
+  return true;
+}
+function sendOrder(side, kind, price) {
+  if (!ready()) return;
+  const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), D.root);
+  if (bad) { flash('Not sent: ' + bad, 'error'); return; }
+  if (!sameAction.call(null, [side, kind, price, qty].join('|'), performance.now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
+  const msg = { type: 'order', cid: newCid(), account: TR.account, root: D.root, side, kind, qty };
+  if (kind !== 'market') msg.price = price;
+  const b = brackets[D.root], pos = TR.positions.get(TR.account + '|' + D.root);
+  const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
+  if ((b.stop > 0 || b.target > 0) && !reduces) msg.bracket = { stop: b.stop, target: b.target };   // JSON numbers, 0 = none
+  send(msg);
+  flash('Sent ' + side.toUpperCase() + ' ' + (kind === 'market' ? 'MKT' : kind === 'limit' ? 'LMT' : 'STP') + ' ' + qty + ' ' + D.root +
+    (kind === 'market' ? '' : ' @ ' + U.fmtPrice(price, precisionOf())) + (msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
+}
+function workingHere() { return [...TR.orders.values()].filter(o => o.account === TR.account && o.root === D.root && OT.isWorking(o)); }
+
+/* Cancel all: one cancel per order (a bracket leg takes its pair), at most 8 a second (ChartBridge allows 10). */
+function cancelAll() {
+  if (!ready()) return;
+  const ids = OT.cancelAllIds([...TR.orders.values()], TR.account, D.root);
+  if (!ids.length) { flash('No working orders on ' + TR.account + ' ' + D.root + '.', ''); return; }
+  ids.forEach((id, i) => setTimeout(() => { if (TR.armed) send({ type: 'cancel', id }); }, Math.floor(i / 8) * 1100));
+  flash('Cancelling ' + ids.length + ' order' + (ids.length > 1 ? 's' : '') + ' on ' + TR.account + ' ' + D.root, '');
+}
+
+function setArmed(on) {
+  const v = !!on && TR.enabled;
+  TR.armed = v;
+  const btn = $('armBtn');
+  btn.setAttribute('aria-checked', String(v));
+  $('armText').textContent = v ? 'ARMED: one click trades' : 'Armed off';
+  $('obar').classList.toggle('armed', v);
+  document.body.classList.toggle('is-armed', v);
+  $('armPill').hidden = !v;
+  document.title = v ? 'ARMED · Live Chart' : 'Live Chart';
+  chart.setOrderEditing(v);
+  renderTrading();
+}
+function syncTradeAccounts() {
+  const sel = $('oAcct');
+  sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
+  sel.value = TR.account;
+}
+/* Order bar, order lines, position line; also run on every instrument switch and order message. */
+function renderTrading() {
+  if (!TR.v2) return;
+  const bar = $('obar'); bar.hidden = false;
+  const on = TR.enabled, root = D.root || S.root, cap = OT.maxQtyFor(TR, root);
+  for (const el of bar.querySelectorAll('button, input, select')) el.disabled = !on;
+  const q = $('oQty'); q.max = String(cap);
+  if (!q.value) q.value = '1';
+  for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
+  $('oOff').textContent = on ? '' : 'Trading off: ' + TR.reason;
+  $('oOff').hidden = on;
+  for (const b of $('sideSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === TR.side));
+  const br = brackets[root] || { stop: 0, target: 0 };
+  if (document.activeElement !== $('bStop')) $('bStop').value = br.stop;
+  if (document.activeElement !== $('bTarget')) $('bTarget').value = br.target;
+  $('bStop').setAttribute('aria-label', 'Bracket stop for ' + root + ' in ticks, 0 for none');
+  $('bTarget').setAttribute('aria-label', 'Bracket target for ' + root + ' in ticks, 0 for none');
+  $('statusRo').textContent = on ? 'Trading through ChartBridge. Live CME data is for this screen only.' : 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.';
+  chart.setOrders(on ? workingHere() : []);
+  const pos = on ? TR.positions.get(TR.account + '|' + root) : null;
+  const inst = instruments[root] || {};
+  chart.setPosition(pos && pos.qty ? pos : null, { pointValue: inst.pointValue || 0 });
+  renderPositionInfo();
+}
+/* Position and other accounts in the bar (P&L refreshes with the status line). */
+function renderPositionInfo() {
+  const el = $('oPos'), other = $('oOther');
+  if (!TR.v2 || !TR.enabled) { el.textContent = ''; other.textContent = ''; return; }
+  const root = D.root, pos = TR.positions.get(TR.account + '|' + root), dp = precisionOf();
+  if (pos && pos.qty) {
+    const pnl = U.openPnl(pos.qty, pos.avgPrice, lastPrice(), (instruments[root] || {}).pointValue || 0);
+    const cls = pnl.points > 0 ? 'profit' : pnl.points < 0 ? 'loss' : '';
+    el.innerHTML = '';
+    const side = document.createElement('span'); side.className = pos.qty > 0 ? 'long' : 'short'; side.textContent = (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty);
+    const res = document.createElement('span'); res.className = cls; res.textContent = U.fmtSigned(pnl.points, dp) + ' pt' + (pnl.dollars !== null ? ' ' + U.fmtMoney(pnl.dollars) : '');
+    el.append(side, ' @ ' + U.fmtPrice(pos.avgPrice, dp) + ' ', res);
+  } else el.textContent = 'Flat';
+  let n = 0, p = 0;
+  for (const o of TR.orders.values()) if (o.root === root && o.account !== TR.account && OT.isWorking(o)) n++;
+  for (const [k, v] of TR.positions) if (v.qty && k.endsWith('|' + root) && !k.startsWith(TR.account + '|')) p++;
+  other.textContent = n || p ? 'Other accounts on ' + root + ': ' + [n ? n + ' order' + (n > 1 ? 's' : '') : '', p ? p + ' position' + (p > 1 ? 's' : '') : ''].filter(Boolean).join(', ') : '';
 }
 
 /* ---------------- UI */
@@ -245,7 +418,18 @@ function setConn(state) {
   const [text, cls] = map[state] || map.connecting;
   pill.textContent = text; pill.className = 'pill' + (cls ? ' ' + cls : '');
 }
-function setStatus(text, level) { const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); }
+function setStatus(text, level) { clearTimeout(flashTimer); const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); }
+/* Error-level status from ChartBridge (for example a bracket leg rejected: the position may have no stop) stays
+   on screen until dismissed. The newest three are kept. */
+const alerts = [];
+function alertLoud(text) {
+  alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
+  $('alertText').textContent = alerts.join('\n'); $('alertBar').hidden = false;
+}
+$('alertClose').addEventListener('click', () => { alerts.length = 0; $('alertBar').hidden = true; });
+/* Order messages show for a while, then clear (errors stay longer). */
+let flashTimer = 0;
+function flash(text, level) { setStatus(text, level); const t = text; flashTimer = setTimeout(() => { if ($('statusMsg').textContent === t) setStatus('', ''); }, level === 'error' ? 12000 : 6000); }
 function showNotice(title, text) { $('noticeTitle').textContent = title; $('noticeText').textContent = text; $('notice').hidden = false; }
 
 let legendKey = '';
@@ -289,7 +473,9 @@ function syncButtons() {
 }
 $('symSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === S.root) return;
-  S.root = b.dataset.v; saveSettings(); syncButtons(); subscribe(S.root);
+  S.root = b.dataset.v; saveSettings(); syncButtons();
+  if (TR.armed) { setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
+  subscribe(S.root);
 });
 $('tfSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === S.tf) return;
@@ -320,6 +506,58 @@ $('clearDraw').addEventListener('click', () => chart.clearDrawings());
 $('resetBtn').addEventListener('click', () => chart.reset());
 syncButtons();
 
+/* order bar */
+$('armBtn').addEventListener('click', () => {
+  if (FRAMED) { flash(FRAMED_REASON, 'error'); return; }
+  if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return; }
+  setArmed(!TR.armed);
+  flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
+});
+$('oAcct').addEventListener('change', e => {
+  TR.account = e.target.value;
+  if (TR.armed) { setArmed(false); flash('Armed turned off: the account changed.', 'warn'); }
+  renderTrading();
+});
+$('oQty').addEventListener('change', () => {
+  const q = $('oQty'), v = Math.round(+q.value);
+  if (isFinite(v) && v >= 1) q.value = String(v);
+});
+$('buyMkt').addEventListener('click', () => sendOrder('buy', 'market', null));
+$('sellMkt').addEventListener('click', () => sendOrder('sell', 'market', null));
+$('sideSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; TR.side = b.dataset.v; renderTrading(); chart.setOrderPreview(previewAt); });
+for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
+  $(id).addEventListener('change', e => {
+    brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: e.target.value }));
+    e.target.value = brackets[D.root][k];
+    store.set('live-bracket-v1', brackets);
+  });
+}
+$('flattenBtn').addEventListener('click', () => {
+  if (!ready()) return;
+  if (!sameAction('flatten', performance.now())) return;
+  send({ type: 'flatten', account: TR.account, root: D.root });
+  flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
+});
+$('cancelAllBtn').addEventListener('click', cancelAll);
+
+/* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
+const previewAt = price => {
+  const qty = qtyNow();
+  return { side: TR.side, kind: OT.placeKind(TR.side, price, lastPrice()), qty: isFinite(qty) ? qty : 0, note: 'click to place' };
+};
+chart.setOrderPreview(previewAt);
+chart.on('orderPlace', e => sendOrder(TR.side, OT.placeKind(TR.side, e.price, lastPrice()), e.price));
+chart.on('orderMove', e => {
+  if (!ready()) { renderTrading(); return; }
+  send({ type: 'change', id: e.id, price: e.price });
+  flash('Moving order ' + e.id + ' to ' + U.fmtPrice(e.price, precisionOf()), '');
+});
+chart.on('orderCancel', e => {
+  if (!ready()) return;
+  send({ type: 'cancel', id: e.id });
+  flash('Cancelling order ' + e.id, '');
+});
+
 /* ---------------- status line */
 setInterval(() => {
   const f = median(delays.feed), l = median(delays.local);
@@ -328,6 +566,7 @@ setInterval(() => {
   const s = chart.stats();
   $('fps').textContent = s.idle ? 'idle' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms/frame';
   $('ticksSeen').textContent = ticksSeen.toLocaleString() + ' live ticks';
+  renderPositionInfo();
 }, 500);
 
 if (document.fonts && document.fonts.load) {

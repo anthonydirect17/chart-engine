@@ -1,4 +1,6 @@
-// Live page smoke test against the fake bridge (test/fake-bridge.mjs). Screenshots in test/out/.
+// Live page smoke test against the fake bridge (test/fake-bridge.mjs) acting as ChartBridge 0.2 (protocol v1,
+// read only), so the page is checked to work exactly as before. Order entry: test/orders-smoke.mjs.
+// Screenshots in test/out/.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +11,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
 fs.mkdirSync(out, { recursive: true });
 const PORT = 8799;
-const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'inherit'] });
+const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v1'], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const errors = [];
 const fail = m => errors.push(m);
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+let browser = null;
 try {
+  browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
   const page = await browser.newPage({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 2 });
   page.on('pageerror', e => fail('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
@@ -22,6 +25,7 @@ try {
   await page.goto(`http://localhost:${PORT}/live/`);
   await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(1500);
+  if (!(await page.isHidden('#obar'))) fail('order bar shown with a read-only ChartBridge');
   const legend = (await page.textContent('#legend')).replace(/\s+/g, ' ');
   if (!/MNQ 12-26/.test(legend)) fail('legend missing contract: ' + legend);
   if (!/Last fill (BUY|SELL)/.test(legend)) fail('legend missing last fill: ' + legend);
@@ -89,7 +93,7 @@ try {
   if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways');
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
 } finally {
-  await browser.close();
+  if (browser) await browser.close();
   bridge.kill();
 }
 if (errors.length) { console.error('FAIL\n' + errors.join('\n')); process.exit(1); }

@@ -8,6 +8,7 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
+- **Engine version:** 1.3.0 (order lines and the position line added; nothing else in the look changed).
 
 ## Colors
 
@@ -22,6 +23,9 @@ pickers, saved per browser). Defaults:
 | Trade entry | `#3DDC97` long, `#FF7A7A` short (house trade-side colors) |
 | Trade result line and chip | `#3DDC97` profit, `#FF7A7A` loss |
 | Trade exit, live dot | `#F2F6FA` |
+| Working orders (1.3.0) | `#3DDC97` buy, `#FF7A7A` sell (house trade-side colors) |
+| Position line and tag | `#F2F6FA`; open P&L text `#3DDC97` profit, `#FF7A7A` loss |
+| Armed (live page only) | `#E0B45A` amber outline on the order bar and chart, ARMED pill |
 | Chart ground | `#080B10` |
 | Regular-hours ground (bars under 1 hour) | `#0B1016` |
 | Grid hairlines | `rgba(42,54,69,0.30)` |
@@ -72,6 +76,15 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
+- **Orders (1.3.0):** a 1 px line across the plot in the side color (buy green, sell red): limits and
+  targets solid, stops dashed 6/4. A label at the right end of the plot ("BUY LMT 2", bracket legs "SELL TGT
+  2" / "SELL STP 2", the quantity still to fill) on the ground at 92% with a side-colored border (dashed for
+  stops), plus a close x while order editing is on. Labels that would overlap step left. The price-axis tag
+  is filled in the side color for limits and outlined (dashed) for stops, and stacks with the level tags.
+  An order moved and waiting for its answer draws at 55%. Labels draw above the last price line and live dot.
+- **Position (1.3.0):** a 1.5 px `#F2F6FA` line at 60% at the average price, a label "LONG 2  +3.50 pt
+  +$14.00" (side word in the side color, P&L in the result color; points per contract, dollars for the
+  position) and an outlined tag on the price axis.
 - **Last price:** dotted line in the forming bar's color; filled tag with price and countdown to bar
   close. Each tick flashes the tag white (38%, fading over about 160 ms) and pulses a ring from the
   live dot (500 ms).
@@ -100,6 +113,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Drag the price axis to stretch price (auto-fit off; chart drag then pans price too). Double-click
   the price axis or press A for auto-fit. Drag the time axis to zoom. Double-click the chart to reset.
 - Keys: left/right pan with a glide, + and - zoom, End live, A auto-fit. The chart is focusable.
+- Orders (only while order editing is on, which the live page ties to Armed): drag an order's label or
+  price tag to move it, snapped to the tick, with its tag following; Escape during the drag puts it back;
+  the x cancels. Order labels take the pointer before drawings (not while a drawing tool is active).
+  Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
+  Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
 
 ## Honesty rules
