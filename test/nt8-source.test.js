@@ -34,3 +34,31 @@ test('C# 5 only: no string interpolation or null-conditional operators', () => {
   assert.ok(!/\$"/.test(code), 'string interpolation');
   assert.ok(!/\?\.\w/.test(code), 'null-conditional ?.');
 });
+
+test('fills arrive two ways (event and a 2 second poll), each delivered once', () => {
+  assert.match(code, /pollTimer = new System\.Threading\.Timer\(delegate \{ try \{ PollExecutions\(\); \}/);
+  assert.match(code, /, null, 2000, 2000\)/);
+  const onExec = code.slice(code.indexOf('private static void OnExecutionUpdate('));
+  assert.match(onExec, /if \(!FirstTime\(ExecKey\(/, 'the event must skip executions the poll already delivered');
+  const catchUp = code.slice(code.indexOf('private static int CatchUp('), code.indexOf('private static void PollExecutions('));
+  assert.ok(catchUp.length > 0 && catchUp.length < 2000, 'CatchUp not found');
+  assert.match(catchUp, /if \(!FirstTime\(ExecKey\(/, 'the poll must skip executions the event already delivered');
+});
+
+test('order and position events are only counted, never acted on', () => {
+  const on = code.slice(code.indexOf('private static void OnOrderUpdate('), code.indexOf('private static string DiagJson('));
+  assert.ok(!/Send|Queue|Deliver/.test(on), 'order/position handlers must only count');
+});
+
+test('/diag is served, and the clock re-anchors to the PC clock', () => {
+  assert.match(code, /if \(path == "\/diag"\) \{ ServeText\(ctx, DiagJson\(\), "application\/json"\); return; \}/);
+  assert.match(code, /RecheckEveryMs = 5000, StepIfOffByMs = 50/);
+  assert.ok(!/ClockAnchor/.test(code), 'the fixed 0.1.x clock anchor is gone');
+});
+
+test('fills go to The Desk only when postFills is on', () => {
+  const deliver = code.slice(code.indexOf('private static void Deliver('), code.indexOf('private static int CatchUp('));
+  assert.ok(deliver.length > 0 && deliver.length < 1200, 'Deliver not found');
+  assert.match(deliver, /if \(!ChartBridgeConfig\.PostFills\) return;[\s\S]*ChartBridgeDesk\.Queue\(desk\)/);
+  assert.match(code, /public static bool PostFills = false;/);
+});

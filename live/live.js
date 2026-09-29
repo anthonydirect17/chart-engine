@@ -53,6 +53,8 @@ const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [
 const needsTicks = () => TF[S.tf].mode === 'range' || TF[S.tf].sec < 60;
 let instruments = {};
 const fills = new Map();            // id -> fill, all instruments
+let fillAccount = store.get('live-fill-account-v1', '');   // '' = all accounts
+const accountsSeen = new Set();
 let ticksSeen = 0;
 const delays = { feed: [], local: [] };
 
@@ -144,9 +146,20 @@ function median(arr) { if (!arr.length) return null; const s = arr.slice().sort(
 function addFill(f) {
   if (!f || !f.id) return;
   fills.set(f.account + '|' + f.id, { t: f.t, price: f.p, side: f.side, qty: f.qty, root: f.root, name: f.name, account: f.account });
+  if (f.account && !accountsSeen.has(f.account)) { accountsSeen.add(f.account); syncAccounts(); }
+}
+/* Account dropdown: All accounts, or one account (Anthony, 2026-09-29). Accounts with fills come first. */
+function syncAccounts(listed) {
+  if (listed) for (const a of listed) accountsSeen.add(a);
+  const sel = $('fillAcct');
+  const withFills = new Set([...fills.values()].map(f => f.account));
+  const names = [...accountsSeen].sort((a, b) => (withFills.has(b) - withFills.has(a)) || a.localeCompare(b));
+  if (fillAccount && !accountsSeen.has(fillAccount)) names.unshift(fillAccount);   // keep a saved choice even before it reconnects
+  sel.replaceChildren(new Option('All accounts', ''), ...names.map(n => new Option(withFills.has(n) ? n : n + ' (no fills yet)', n)));
+  sel.value = fillAccount;
 }
 function applyMarkers() {
-  const list = S.layers.fills ? [...fills.values()].filter(f => f.root === D.root) : [];
+  const list = S.layers.fills ? [...fills.values()].filter(f => f.root === D.root && (!fillAccount || f.account === fillAccount)) : [];
   chart.setMarkers(list);
   const lastFill = list.sort((a, b) => a.t - b.t)[list.length - 1];
   const el = $('lgFill');
@@ -199,6 +212,7 @@ function handle(m) {
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version || '');
+      syncAccounts(m.accounts || []);
       subscribe(S.root);
       break;
     case 'history':
@@ -218,7 +232,7 @@ function handle(m) {
       onReady();
       break;
     case 'tick': onTick(m); break;
-    case 'execs': for (const f of m.list || []) addFill(f); applyMarkers(); break;
+    case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
     case 'exec': addFill(m); applyMarkers(); break;
     case 'status': setStatus(m.text, m.level); break;
   }
@@ -296,6 +310,9 @@ $('layerChips').addEventListener('click', e => {
   const k = b.dataset.layer; S.layers[k] = !S.layers[k];
   if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: S.layers[k] });
   legendKey = ''; saveSettings(); syncButtons();
+});
+$('fillAcct').addEventListener('change', e => {
+  fillAccount = e.target.value; store.set('live-fill-account-v1', fillAccount); applyMarkers();
 });
 $('toolTrend').addEventListener('click', () => chart.setTool(chart.getTool() === 'trend' ? null : 'trend'));
 $('toolHline').addEventListener('click', () => chart.setTool(chart.getTool() === 'hline' ? null : 'hline'));

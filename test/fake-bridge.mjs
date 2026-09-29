@@ -120,6 +120,8 @@ const fillsSample = () => {
   return [
     { account: 'Sim101', name: 'MNQ 12-26', root: 'MNQ', side: 'buy', qty: 2, p: b[n - 30].l, t: b[n - 30].t + 20, u: 0, id: 'x1', order: 'o1' },
     { account: 'Sim101', name: 'MNQ 12-26', root: 'MNQ', side: 'sell', qty: 2, p: b[n - 22].h, t: b[n - 22].t + 40, u: 0, id: 'x2', order: 'o2' },
+    { account: 'DEMO-EVAL', name: 'MNQ 12-26', root: 'MNQ', side: 'sell', qty: 1, p: b[n - 12].h, t: b[n - 12].t + 10, u: 0, id: 'x3', order: 'o3' },
+    { account: 'DEMO-EVAL', name: 'MNQ 12-26', root: 'MNQ', side: 'buy', qty: 1, p: b[n - 8].l, t: b[n - 8].t + 30, u: 0, id: 'x4', order: 'o4' },
   ];
 };
 
@@ -127,6 +129,12 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const server = http.createServer((req, res) => {
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/') { res.writeHead(302, { Location: '/live/' }); return res.end(); }
+  if (p === '/diag') {   // same shape as ChartBridge's /diag, sample values
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
+      desk: { postFills: false, deskUrl: 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
+      accounts: ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'].map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })) }));
+  }
   if (p.endsWith('/')) p += 'index.html';
   const full = path.join(root, p);
   if (!full.startsWith(root) || !fs.existsSync(full)) { res.writeHead(404); return res.end('not found'); }
@@ -139,7 +147,7 @@ server.on('upgrade', (req, sock) => {
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0) };
   clients.add(c);
-  send(c, { type: 'hello', version: 'fake-0.1.0', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ['Sim101'] });
+  send(c, { type: 'hello', version: 'fake-0.1.0', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'] });
   send(c, { type: 'execs', list: fillsSample() });
   sock.on('data', d => {
     const r = parseFrames(Buffer.concat([c.buf, d]), t => onMessage(c, t));
