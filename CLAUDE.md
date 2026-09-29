@@ -14,4 +14,4 @@
 - Every release: a `CHANGELOG.md` entry, and the version bumped in `package.json` and the file header /
   `VERSION` in `src/chart-engine.js`.
 - Sample data (`demo/sample-feed.js`) is fake and must stay labelled as sample data wherever it shows.
-- Ask Anthony before anything uncertain; he does not want guessing.
+- Ask Anthony before anything uncertain; Anthony does not want guessing.
