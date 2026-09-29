@@ -8,8 +8,8 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.4.0 (same drawing code as 1.3.1; 1.4.0 changed the live page only: the Indicators menu,
-  NinjaTrader-style range bars and the leg summary).
+- **Engine version:** 1.4.1 (same drawing code as 1.3.1; 1.4.0 and 1.4.1 changed the live page only: the
+  Indicators menu, NinjaTrader-style range bars and the leg summary).
 
 ## Colors
 

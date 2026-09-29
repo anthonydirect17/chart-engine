@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.1 (2026-09-29): fixes from the review of 1.4.0
+
+Page only again; nt8/ unchanged. Run `nt8\install.ps1` to copy the page files.
+- **Range box** (S1): the chart rebuilds only when the size is committed (Enter, the arrows, leaving the box),
+  never on a half-typed number, so a slow "1" on the way to "12" no longer rebuilds at 1 tick (1.3 s on a 2M tick
+  backfill). A whole number typed is still saved for a reload; an invalid one ("450") drops that and keeps the
+  committed size; a reload mid-typing saves the box with the same clamp as Enter (450 becomes 400).
+- **Two tabs** (S2): indicators are saved one indicator per pane, and brackets one stop or target per root, at a
+  time, so a tab loaded earlier no longer undoes another tab's change.
+- **New panes start with no indicators on** (Anthony's decision). The main pane keeps today's set.
+- **Range bar times** (N1): the trade's own bar keeps the trade's time and phantom bars sit in the gap since the
+  previous trade, so a fill on a jump trade lands on the bar holding its price, and bar times no longer run ahead
+  of the trades (only same-instant trades step on, by 10 microseconds a bar).
+- **Leg summary** (N3): stops or targets over the position show in the warning color with the reason (a fill would
+  reverse it); orders ChartBridge reports as kind "other" (MIT, LIT) are not counted and the summary says how many.
+- **Range backfill** (N4, N5): after the tick cap trims, switching to Range reloads only if this session's start is
+  no longer covered; when NinjaTrader sends less tick history than asked, the status line says the first session
+  is partial.
+- `docs/RANGE_BARS.md`: Break at EOD is on in Anthony's charts (confirmed by Anthony); NinjaTrader stamps a bar
+  with its close time, the page with its open time (N2).
+- Tests: the settings smoke covers "450", a slow "12" and a reload mid-typing; two-tab indicator and bracket
+  tests; a fill on a jump trade; bar time bounds; over-coverage and not-counted orders (unit and orders smoke);
+  the tick trim and partial history helpers; the live smoke checks the partial note with 2 hours of history
+  (fake bridge `--tick-hours-max`).
+
 ## 1.4.0 (2026-09-29): quick wins on the live page (Phase A: B1, B2, indicator menu, leg summary)
 
 Page and engine only; ChartBridge (nt8/) is unchanged, so no NinjaTrader recompile. After pulling, run
