@@ -8,7 +8,8 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.3.0 (order lines and the position line added; nothing else in the look changed).
+- **Engine version:** 1.4.1 (same drawing code as 1.3.1; 1.4.0 and 1.4.1 changed the live page only: the
+  Indicators menu, NinjaTrader-style range bars and the leg summary).
 
 ## Colors
 
@@ -123,6 +124,14 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
   Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
+- Live page (1.4.0): Volume, VWAP, Levels and Fills are turned on and off in one **Indicators** menu per chart
+  pane (a `.btn` with the count on, opening a panel on `#0B1016` with a `#2A3645` border, radius 12, the Colors
+  panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
+  the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane. The main pane
+  starts with today's set (all four on, or the 1.3 choices); a new pane starts with none on (Anthony, 2026-09-29).
+- Range bars (live page, 1.4.0) are built like NinjaTrader's by default: every finished bar is exactly the range,
+  the next opens one tick on, and a jump is filled with phantom bars (no volume). "Traded prices only" keeps the
+  older way. See `docs/RANGE_BARS.md`.
 
 ## Honesty rules
 

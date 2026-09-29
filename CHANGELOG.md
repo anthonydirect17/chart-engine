@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.4.1 (2026-09-29): fixes from the review of 1.4.0
+
+Page only again; nt8/ unchanged. Run `nt8\install.ps1` to copy the page files.
+- **Range box** (S1): the chart rebuilds only when the size is committed (Enter, the arrows, leaving the box),
+  never on a half-typed number, so a slow "1" on the way to "12" no longer rebuilds at 1 tick (1.3 s on a 2M tick
+  backfill). A whole number typed is still saved for a reload; an invalid one ("450") drops that and keeps the
+  committed size; a reload mid-typing saves the box with the same clamp as Enter (450 becomes 400).
+- **Two tabs** (S2): indicators are saved one indicator per pane, and brackets one stop or target per root, at a
+  time, so a tab loaded earlier no longer undoes another tab's change.
+- **New panes start with no indicators on** (Anthony's decision). The main pane keeps today's set.
+- **Range bar times** (N1): the trade's own bar keeps the trade's time and phantom bars sit in the gap since the
+  previous trade, so a fill on a jump trade lands on the bar holding its price, and bar times no longer run ahead
+  of the trades (only same-instant trades step on, by 10 microseconds a bar).
+- **Leg summary** (N3): stops or targets over the position show in the warning color with the reason (a fill would
+  reverse it); orders ChartBridge reports as kind "other" (MIT, LIT) are not counted and the summary says how many.
+- **Range backfill** (N4, N5): after the tick cap trims, switching to Range reloads only if this session's start is
+  no longer covered; when NinjaTrader sends less tick history than asked, the status line says the first session
+  is partial.
+- `docs/RANGE_BARS.md`: Break at EOD is on in Anthony's charts (confirmed by Anthony); NinjaTrader stamps a bar
+  with its close time, the page with its open time (N2).
+- Tests: the settings smoke covers "450", a slow "12" and a reload mid-typing; two-tab indicator and bracket
+  tests; a fill on a jump trade; bar time bounds; over-coverage and not-counted orders (unit and orders smoke);
+  the tick trim and partial history helpers; the live smoke checks the partial note with 2 hours of history
+  (fake bridge `--tick-hours-max`).
+
+## 1.4.0 (2026-09-29): quick wins on the live page (Phase A: B1, B2, indicator menu, leg summary)
+
+Page and engine only; ChartBridge (nt8/) is unchanged, so no NinjaTrader recompile. After pulling, run
+`nt8\install.ps1` again to copy the page files.
+- **B1, the range size did not stick** (NQ set to 40 ticks, back to 20 after a reload). Two causes, both
+  reproduced by the new `npm run smoke:settings` on 1.3.1: a size typed and not committed (no Enter, no click
+  elsewhere) was never saved, since the page saved only on the input's change event; and every save wrote the
+  tab's whole copy of the sizes back, so a second chart tab saving its own size put NQ back to 20. Now each
+  choice is saved one field at a time (read fresh, change one field, write), as it is typed (whole numbers only,
+  350 ms after the last key) and at once on Enter or leaving the box, and anything still waiting is saved when
+  the page is hidden or closed. This covers the instrument, bars, range size (per instrument), range mode, glide,
+  indicators (per pane) and bracket ticks (per instrument). New keys `live-settings-v2`, `live-range-v2`,
+  `live-indicators-v1`; the 1.3 keys are read once, so earlier choices carry over. All storage access is in
+  try/catch.
+- **B2, range bars like NinjaTrader's.** From NinjaTrader's own `@RangeBarsType.cs`: a finished bar is exactly
+  the range and closes on its high or low (even a price that did not trade), the next bar opens one tick
+  further on, a jump of more than one range is filled with phantom bars (exactly the range, no volume), and a
+  new session starts a new bar at its first trade. This is the default; the 1.3 behaviour stays as **Traded
+  prices only** in a select next to the range size. Range bars now start from a session's first trade (the tick
+  backfill reaches back to this session's start, or also the previous one while this one is under 8 hours old,
+  at most 33 hours), so a reload gives the same bars; backfill and live use the same code. Sources, dates and
+  open points: `docs/RANGE_BARS.md`.
+- **Indicator menu.** The row of indicator chips is now one **Indicators** menu with checkboxes, per chart pane
+  (state keyed by pane id, `main` today). The first run shows the same indicators as before. Keyboard: Enter
+  opens it with focus on the first box, Space toggles, Escape or a click outside closes it. Fits at 400 px.
+- **Leg summary** (trading on only): next to the position, "stops cover 2 of 2, targets cover 2 of 2", from the
+  working orders the page already has, in the error color when stops cover less than the position. Orders sent
+  are unchanged.
+- Engine: version 1.4.0; no drawing or motion change. Nothing added per frame.
+- Tests: `test/prefs.test.js` (storage, carry-over, a throwing storage, every page script is on the
+  `install.ps1` list), range bar known answers for both modes (multi-range jumps, a session boundary, live
+  equals a rebuild, the same bars from two backfill windows), `legSummary`; the live smoke drives the menu and
+  checks every finished NinjaTrader range bar on the page is exactly the range; the orders smoke fills a 2-lot
+  in two pieces. Fake bridge: `--tick-gaps` for tick history with price jumps.
+
 ## 1.3.1 (2026-09-29): fill marks that add up
 
 From a report on the trading PC: a 3-lot trade whose target filled as three 1-lot executions drew as

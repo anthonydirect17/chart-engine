@@ -98,3 +98,64 @@ test('repeatGuard ignores the same action within the window only', () => {
   assert.equal(g('sell', 1300), true);
   assert.equal(g('sell', 1800), true);
 });
+
+test('legSummary: a 2-lot filled in two pieces has two stop and target pairs that cover 2 of 2', () => {
+  const leg = (id, role, kind, qty, extra) => Object.assign({ id, account: 'Sim101', root: 'MNQ', side: 'sell', role, kind, qty, filled: 0, state: 'working', oco: 'O' + id.slice(-1) }, extra);
+  const orders = [leg('s1', 'stop', 'stop', 1), leg('t1', 'target', 'limit', 1), leg('s2', 'stop', 'stop', 1), leg('t2', 'target', 'limit', 1)];
+  const r = OT.legSummary(orders, 'Sim101', 'MNQ', 2);
+  assert.equal(r.text, 'stops cover 2 of 2, targets cover 2 of 2');
+  assert.deepEqual([r.stopLegs, r.targetLegs, r.stopsShort], [2, 2, false]);
+  // one pair gone: stops short of the position
+  const short = OT.legSummary(orders.slice(0, 2), 'Sim101', 'MNQ', 2);
+  assert.equal(short.text, 'stops cover 1 of 2, targets cover 1 of 2');
+  assert.equal(short.stopsShort, true);
+  // a stop part filled counts only what is left; other accounts, roots, sides and finished orders do not count
+  const mixed = [
+    leg('s1', 'stop', 'stop', 3, { filled: 1, state: 'partFilled' }),
+    leg('s2', 'stop', 'stop', 5, { account: 'DEMO-EVAL' }),
+    leg('s3', 'stop', 'stop', 5, { root: 'ES' }),
+    leg('s4', 'stop', 'stop', 5, { side: 'buy' }),
+    leg('s5', 'stop', 'stop', 5, { state: 'filled' }),
+    leg('s6', 'other', 'stop', 1),                    // a stop placed in NinjaTrader
+    leg('t1', 'other', 'limit', 2),                   // a limit placed in NinjaTrader acts as a target
+    leg('m1', 'other', 'market', 2),                  // a market order is neither
+  ];
+  const m = OT.legSummary(mixed, 'Sim101', 'MNQ', 3);
+  assert.equal(m.text, 'stops cover 3 of 3, targets cover 2 of 3');
+  assert.equal(m.stopsShort, false);
+  // short position: the buys protect it
+  const sh = OT.legSummary([leg('b1', 'stop', 'stop', 1, { side: 'buy' })], 'Sim101', 'MNQ', -2);
+  assert.equal(sh.text, 'stops cover 1 of 2, targets cover 0 of 2');
+  assert.equal(sh.stopsShort, true);
+  assert.equal(OT.legSummary(orders, 'Sim101', 'MNQ', 0), null);
+});
+
+test('legSummary: more stops or targets than the position is a warning (a fill would reverse it)', () => {
+  const leg = (id, role, kind, qty, extra) => Object.assign({ id, account: 'Sim101', root: 'MNQ', side: 'sell', role, kind, qty, filled: 0, state: 'working' }, extra);
+  // long 2 with two pairs, then 1 closed by hand: long 1 with 2 stops and 2 targets working
+  const two = [leg('s1', 'stop', 'stop', 1), leg('t1', 'target', 'limit', 1), leg('s2', 'stop', 'stop', 1), leg('t2', 'target', 'limit', 1)];
+  const over = OT.legSummary(two, 'Sim101', 'MNQ', 1);
+  assert.equal(over.level, 'warn');
+  assert.deepEqual([over.stopsOver, over.targetsOver, over.stopsShort], [true, true, false]);
+  assert.equal(over.text, 'stops cover 2 of 1, targets cover 2 of 1 · stops 1, targets 1 over the position: a fill would reverse it');
+  // stops exactly right, one target too many
+  const t = OT.legSummary([leg('s1', 'stop', 'stop', 2), leg('t1', 'target', 'limit', 3)], 'Sim101', 'MNQ', 2);
+  assert.equal(t.level, 'warn');
+  assert.equal(t.text, 'stops cover 2 of 2, targets cover 3 of 2 · targets 1 over the position: a fill would reverse it');
+  // short of the position is the error, and wins over a target that is over
+  const s = OT.legSummary([leg('s1', 'stop', 'stop', 1), leg('t1', 'target', 'limit', 3)], 'Sim101', 'MNQ', 2);
+  assert.equal(s.level, 'error');
+  // covered exactly: no level, no note
+  const ok = OT.legSummary([leg('s1', 'stop', 'stop', 2), leg('t1', 'target', 'limit', 2)], 'Sim101', 'MNQ', 2);
+  assert.equal(ok.level, '');
+  assert.equal(ok.text, 'stops cover 2 of 2, targets cover 2 of 2');
+});
+
+test('legSummary: MIT, LIT and other kinds are not counted, and the summary says so', () => {
+  const leg = (id, kind, qty) => ({ id, account: 'Sim101', root: 'MNQ', side: 'sell', role: 'other', kind, qty, filled: 0, state: 'working' });
+  const r = OT.legSummary([leg('s', 'stop', 1), leg('mit', 'other', 1), leg('lit', 'other', 1), leg('m', 'market', 1)], 'Sim101', 'MNQ', 1);
+  assert.equal(r.notCounted, 2);
+  assert.equal(r.stops, 1);
+  assert.equal(r.targets, 0);
+  assert.equal(r.text, 'stops cover 1 of 1, targets cover 0 of 1 · 2 other orders (MIT, LIT) not counted');
+});

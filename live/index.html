@@ -39,11 +39,20 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .seg button:hover { color: var(--text); }
 .seg button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-border); }
 .seg.sans button { font-family: var(--sans); }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { font: 500 12px var(--sans); border: 1px solid var(--line); background: transparent; color: var(--text3); border-radius: 999px; padding: 3px 10px 3px 8px; min-height: 28px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
-.chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--line-strong); }
-.chip[aria-pressed="true"] { color: var(--text); background: var(--s2); border-color: var(--line-strong); }
-.chip[aria-pressed="true"] .sw { background: var(--sw); }
+/* indicator menu: one per chart pane */
+.ind { position: relative; display: inline-block; }
+.ind-btn { display: inline-flex; align-items: center; gap: 8px; }
+.ind-count { font: 500 11px var(--mono); color: var(--text3); }
+.ind-caret { width: 6px; height: 6px; border-right: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3); transform: translateY(-2px) rotate(45deg); }
+.ind-btn[aria-expanded="true"] { background: var(--s3); border-color: var(--accent-border); }
+.ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; max-width: calc(100vw - 32px); box-sizing: border-box; background: #0B1016; border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.ind-row { display: flex; align-items: center; gap: 9px; font: 500 12px var(--sans); color: var(--text2); padding: 6px 8px; min-height: 32px; box-sizing: border-box; border-radius: 8px; cursor: pointer; }
+.ind-row:hover { background: var(--s2); color: var(--text); }
+.ind-row:has(input:checked) { color: var(--text); }
+.ind-row input { margin: 0; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+.ind-row .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--line-strong); }
+.ind-row:has(input:checked) .sw { background: var(--sw); }
+.range-mode { max-width: 160px; }
 .btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
 .btn:hover { background: var(--s3); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -110,6 +119,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-text
 .oinfo { font: 500 12px var(--mono); color: var(--text2); font-variant-numeric: tabular-nums; }
 .oinfo .long, .oinfo .profit { color: var(--profit); }
 .oinfo .short, .oinfo .loss { color: var(--loss); }
+#oLegs { color: var(--text3); }
+#oLegs.uncovered { color: var(--loss); }
+#oLegs.over { color: var(--warn); }
 .ostate { flex-basis: 100%; min-height: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; }   /* its own row, so the chart never jumps */
 .ooff { font-size: 12px; color: var(--warn); }
 .obar.armed { border-color: var(--warn); background: rgba(224, 180, 90, 0.07); box-shadow: 0 0 0 1px var(--warn) inset; }
@@ -161,14 +173,21 @@ select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2p
         <button type="button" data-v="h1">1h</button>
         <button type="button" data-v="range">Range</button>
       </div>
-      <label class="range-box" id="rangeBox" for="rangeTicks" hidden><input id="rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="rangeUnit">ticks</span></label>
+      <span class="range-box" id="rangeBox" hidden><label class="range-box" for="rangeTicks"><input id="rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="rangeUnit">ticks</span></label>
+        <select class="acct-sel range-mode" id="rangeMode" aria-label="How range bars are built" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
+          <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
     </div>
 
-    <div class="chips" id="layerChips" role="group" aria-label="Layers">
-      <button type="button" class="chip" data-layer="volume" style="--sw: var(--text3)"><span class="sw"></span>Volume</button>
-      <button type="button" class="chip" data-layer="vwap" style="--sw: var(--vwap-sw)"><span class="sw"></span>VWAP</button>
-      <button type="button" class="chip" data-layer="levels" style="--sw: var(--info)"><span class="sw"></span>Levels</button>
-      <button type="button" class="chip" data-layer="fills" style="--sw: var(--profit)"><span class="sw"></span>Fills</button>
+    <div class="group">
+      <div class="ind" id="indWrap" data-pane="main">
+        <button type="button" class="btn ind-btn" id="indBtn" aria-expanded="false" aria-controls="indPanel">Indicators <span class="ind-count" id="indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
+        <div class="ind-panel" id="indPanel" role="group" aria-label="Indicators on this chart" hidden>
+          <label class="ind-row"><input type="checkbox" data-layer="volume"><span class="sw" style="--sw: var(--text3)"></span>Volume</label>
+          <label class="ind-row"><input type="checkbox" data-layer="vwap"><span class="sw" style="--sw: var(--vwap-sw)"></span>VWAP</label>
+          <label class="ind-row"><input type="checkbox" data-layer="levels"><span class="sw" style="--sw: var(--info)"></span>Levels</label>
+          <label class="ind-row"><input type="checkbox" data-layer="fills"><span class="sw" style="--sw: var(--profit)"></span>Fills</label>
+        </div>
+      </div>
       <label class="visually-hidden" for="fillAcct">Show fills from</label>
       <select class="acct-sel" id="fillAcct" title="Which account's fills to show"><option value="">All accounts</option></select>
     </div>
@@ -210,7 +229,7 @@ select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2p
       <button type="button" class="btn" id="flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
       <button type="button" class="btn" id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
-    <span class="ostate"><span class="oinfo" id="oPos"></span><span class="oinfo dim" id="oOther"></span><span class="ooff" id="oOff"></span></span>
+    <span class="ostate"><span class="oinfo" id="oPos"></span><span class="oinfo" id="oLegs"></span><span class="oinfo dim" id="oOther"></span><span class="ooff" id="oOff"></span></span>
   </section>
 
   <div class="alert" id="alertBar" role="alert" hidden>
