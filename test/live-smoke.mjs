@@ -207,12 +207,13 @@ try {
   await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // pin again: refused, with a note
   if (!/holds 4/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="vwap"]') || await page.getAttribute('#indBody [data-act="pin"][data-id="vwap"]', 'aria-pressed') !== 'false') fail('pinning onto a full strip was not refused with a note');
   if (!/holds 4/.test(await page.textContent('#indLive'))) fail('the note is not announced');
-  await page.click('#indBody [data-act="remove"][data-id="fills"]');
+  await page.click('#indBody [data-act="remove"][data-id="fills"]');                // 3 chips: room for VWAP again
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // 4: full
   await page.click('#indBody .ind-cat[data-id="trades"]'); await page.click('#indBody [data-f="add:fills"]');
   if (!/Fills added without a chip/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="fills"]')) fail('an indicator added to a full strip got a chip');
   await page.screenshot({ path: path.join(out, 'live-indicators-strip-full.png') });
   await page.evaluate(() => { window.LivePrefs.PIN_MAX = 6; });
-  for (const id of ['vwap', 'fills']) await page.click(`#indBody [data-act="pin"][data-id="${id}"]`);
+  await page.click('#indBody [data-act="pin"][data-id="fills"]');
   if (await page.$('#indBody [data-act="pin"][data-id="profile"]') || await page.$$eval('#indBody .ind-cat ~ .ind-item [data-act="pin"]', b => b.length)) fail('a pin on a row that is not on the chart');
   await page.keyboard.press('Escape');
   if ((await chips()).length !== 5) fail('five chips again: ' + JSON.stringify(await chips()));

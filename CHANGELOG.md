@@ -1,46 +1,79 @@
 # Changelog
 
-## 1.6.0 (2026-09-29): the Indicators menu "E2" and a chip strip per pane
+## 1.6.0 (2026-09-29): the Indicators menu "E2", a chip strip per pane, and one account picker
 
-Page only; the engine draws exactly as in 1.5.3 (only its version changes), nt8/ is unchanged (works with ChartBridge
-0.3.2 and 0.3.3). Run `nt8\install.ps1` again after pulling. The Desk gets it with the new `live/live.js`, `live/live.css` and
-`src/chart-engine.js`.
+Page only (the engine gains `getMarkers()` and draws exactly as in 1.5.3); works with ChartBridge 0.3.2 and 0.3.3, no
+recompile. Run `nt8\install.ps1` again after pulling. The Desk gets it with the new `live/live.js`, `live/live.css`,
+`live/order-ticket.js` and `src/chart-engine.js`.
 - **The menu Anthony approved in the design canvas (E2)**, one per chart pane, from the same Indicators button (its
   count now reads shown/on this chart, "4/5"): a search box, focused on open, that matches names and short names
-  (vwap; ib, ibh, ibl; pdh, pdl, onh, onl, levels; vol, volume; fills), and Enter acts on the first match; a Recent
-  line with the last 5 used; "On this chart" with every indicator on the pane, each with a show or hide switch (hiding
-  keeps it and its settings), its swatch, a pin for the chip strip, a gear for its settings (one panel open at a
-  time) and an x that takes it off the chart; then the groups, folded, one open at a time: Price (VWAP, Levels,
-  Initial balance), Volume (Volume bars; Volume profile listed, tagged "coming", not selectable until the profile
-  branch lands) and Trades (Fills), each added with a +; "Coming: cumulative delta, time and sales"; and "Hide all
-  (n)", which becomes "Restore" and brings back the same mix, not everything. Saved sets are not in this build.
-- **Names:** "Volume bars" and "Initial balance" in the menu (VOL and IB on the chips); "IB 1h" is now "Initial
-  balance". The status line's IB notes are unchanged.
-- **Settings panels hold only what is real:** the Fills panel has "Show fills from" (the account choice that sat
-  next to the Indicators button, same key, `live-fill-account-v1`); the others say what the indicator does, read
-  only (Initial balance: "1 hour, locks 10:30 ET").
-- **Chip strip** beside the button: pinned indicators only, one click shows or hides. Shown: filled, solid border,
-  its color line; hidden: no fill, dashed border, grey text and line (not only a color change). When the chips do not
-  fit on the toolbar line (a narrow pane), each becomes one letter (V W L I F), so the strip never wraps.
-- **"/"** opens the menu of the chart under the mouse, with the focus in its search box. It never acts while a box
-  has the focus (order quantity, bracket ticks, range size, a host's fields) or with Ctrl, Alt or Cmd; no chart or
-  order-bar key used "/", and the PIN pad still takes every key first. Arrows move through the menu; Escape closes it
-  and puts the focus back where it was (the chart, or the button). Real buttons with `aria-pressed` and
-  `aria-expanded`, labels on every icon.
+  (vwap; ib, ibh, ibl; pdh, pdl, onh, onl, levels; vol, volume; fills); Enter adds or shows the first match and never
+  hides it (review); a Recent line with the last 5 used; "On this chart" with every indicator on the pane, each with
+  a show or hide switch (hiding keeps it and its settings), its swatch, a pin for the chip strip, a gear for what it
+  does (one panel open at a time) and an x that takes it off the chart; then the groups, folded on every open, one open
+  at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars; Volume profile listed, tagged "coming", not
+  selectable until the profile branch lands) and Trades (Fills), each with a + and the gear (no pin: pins are only on
+  rows on the chart, Anthony); "Coming: cumulative delta, time and sales"; and "Hide all (n)", which becomes "Restore"
+  and brings back the same mix, not everything. Saved sets are not in this build. The search is cleared when the menu
+  closes (review).
+- **Names** (Anthony): "Initial balance" (chip IB; "IB 1h" before) and "Volume bars" (chip VOL) in the menu, chips,
+  status line ("Initial balance not shown: ...") and docs. The legend's "Vol" is the bar's volume and stays.
+- **Chip strip** beside the button: pinned indicators only, **at most 6** (Anthony). An indicator added gets a chip
+  while there is room; added to a full strip it gets none, and pinning onto a full strip is refused, each with a short
+  note in the menu ("The chip strip holds 6: unpin one to pin another."). One click shows or hides. Shown: filled,
+  solid border, its color line; hidden: no fill, dashed border, grey text and line (not only a color change). The
+  strip always keeps room for six one-letter chips and shows the names only when that adds no toolbar line, so it
+  never wraps and pinning or unpinning never moves the order bar or the chart (review N4; toolbar heights at 1920,
+  1680, 1440, 1280 and 1024 px are those of 1.5.3).
+- **One account picker** (Anthony). The order bar's Account picker is now the one account control, larger (600 13px
+  mono, 34 px): orders go to it, and the chart marks **its fills only**. There is no "All accounts" any more and no
+  fills filter anywhere else (the 1.6.0 draft had one in the Fills gear, hidden: review B1). With trading off the
+  picker still works: it lists every account ChartBridge knows and switches the fills (the other order controls stay
+  off, and nothing can be sent). With no order bar (a mounted chart such as The Desk's, or ChartBridge 0.2) a compact
+  Account picker sits in the toolbar. Saved in `live-account-v1`, per prefix; a 1.5 `live-fill-account-v1` choice is
+  read once when there is none ("All accounts" means none picked). The order path is unchanged: while trading, the
+  order account is chosen exactly as before (Sim101 first, never from storage), the Armed switch still turns off when
+  it changes, and nothing new is sent to ChartBridge.
+- **The live trade always stays visible** (Anthony). Hide all includes Fills, and hiding Fills hides past fills and
+  trade marks, but never the open trade: its entry fills stay marked (`OrderTicket.openEntryFills`, checked against
+  the position ChartBridge reports while trading), and the position line and label, working orders and stop and
+  target lines were never indicators. The Fills gear says so.
+- **"/"** opens this chart's menu, with the focus in its search box, when the focus is inside the chart, or with
+  nothing focused, the chart under the mouse (review N6: never while a host dialog or anything outside the chart has
+  the focus). Never while a box has the focus (order quantity, bracket ticks, range size, a host's fields) or with
+  Ctrl, Alt or Cmd; no chart or order-bar key used "/", and the PIN pad still takes every key first. Arrows move
+  through the menu; Escape closes it and puts the focus back where it was.
+- **The panel opens below the order bar** (review N5), so the Armed switch, the account and the position readout stay
+  in view at every width; its list scrolls inside when the space is short, and it never gets wider than its pane.
+- Accessibility: real buttons, `aria-pressed` and `aria-expanded`; switch and pin labels say what a press does
+  ("Hide VWAP", "Unpin VWAP from the chip strip"); `aria-controls` only while its panel exists; one live region for
+  the result count and notes, changed only when its text changes (review N8).
 - **Saved per pane** in `live-indicators-v2` (`{ <paneId>: { ind: { <id>: { on, shown, pin } }, recent, restore }
-  }`), per storage prefix (The Desk's `desk:` keys stay its own), each change read fresh and written for that pane so
-  two tabs never undo each other. **Carried over once** from `live-indicators-v1` (left in place): every indicator
-  draws exactly as before and an explicit off stays off. On the main pane all five stay on its chart, pinned, the
-  ones that were off hidden (one click brings one back, as the checkbox did); on any other pane only the ones that
-  were on are on its chart. New panes start with nothing on (Anthony's rule); the main pane with the five on.
-- Works the same in `ChartLive.mount`, read only included (nothing is sent to ChartBridge for indicators).
-- Tests: `test/prefs.test.js` (the state model: add, show, hide, remove, pin, Recent, Hide all and Restore, counts,
-  two tabs, junk in storage, search; the migration: explicit offs, a main pane saved before 1.5.3, other panes,
-  junk, read once, per prefix). `npm run smoke:live` (open by Enter and by "/", search and Enter, the switch by
-  Space with focus kept, one settings panel, chips, Hide all and Restore, pin, x and +, "/" ignored in a box, reload,
-  one-letter chips at 400 px), `npm run smoke:embed` (a new pane empty, search and group adds, "/" opens the pane
-  under the mouse only, a 351 px pane with one-letter chips on one line and the menu inside it, a 1.5.3 embed's
-  indicators carried over under its prefix), `smoke:settings` and `smoke:ib` updated.
+  }`), per storage prefix (The Desk's `desk:` keys stay its own). What a click means is worked out from what the tab
+  shows and saved as that fixed result on a fresh read, so two tabs never undo each other and a tab never saves the
+  opposite of what it shows (review S1: the switch, +, Recent, Enter and Hide all were saved as relative toggles).
+  **Carried over once** from `live-indicators-v1` (left in place): every indicator draws exactly as before and an
+  explicit off stays off. On the main pane all five stay on its chart, pinned, the ones that were off hidden; on any
+  other pane only the ones that were on are on its chart. A damaged `live-indicators-v2` is carried over from v1 again
+  (review N3). New panes start with nothing on (Anthony's rule); the main pane with the five on.
+- **Going back to 1.5.x** (review N2): 1.6.0 never writes `live-indicators-v1`, so a 1.5.x page opened afterwards (or a
+  1.5.3 tab left open) shows the set from before the upgrade, and what it saves is not read by 1.6.0 again. Nothing is
+  lost; each version keeps its own key.
+- Works the same in `ChartLive.mount`, read only included (nothing is sent to ChartBridge for indicators or the
+  account).
+- Tests: `test/prefs.test.js` (add, show, hide, remove, pin, the 6-chip cap with the auto-pin and the refusal, Recent,
+  Hide all and Restore, counts, two tabs on different and on the same indicator and both pressing Hide all, junk in
+  storage, search; the migration: explicit offs, a main pane saved before 1.5.3, other panes, junk, a damaged v2,
+  read once, per prefix); `test/order-ticket.test.js` (`openEntryFills`: flat, scaled out, turned over, the reported
+  position). `npm run smoke:live` (search and Enter that never hides, the switch by Space with its label, one settings
+  panel, chips, Hide all and Restore, pin, x and +, the cap note, "/" and a clean reopen, "/" ignored in a box, reload,
+  the toolbar account picker with the fills always its account's, one-letter chips at 400 px), `npm run smoke:orders`
+  (the order bar's picker switching the fills; Hide all and hidden Fills with an open position and its stop and
+  target: the position, both legs and the entry fill stay; trading off: only the picker works and the fills follow it,
+  remembered; ChartBridge 0.2: the toolbar picker), `npm run smoke:embed` (the embed's toolbar picker and its fills,
+  saved under the prefix; "/" by focus, by hover with nothing focused, and not with a host control focused; a 351 px
+  pane with one-letter chips on one line and the menu inside it; a 1.5.3 embed's indicators carried over under its
+  prefix), `smoke:settings` and `smoke:ib` updated.
 
 ## ChartBridge 0.3.3 (2026-09-29): the backfill and live trades meet at one seam
 

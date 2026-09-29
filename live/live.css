@@ -107,7 +107,7 @@
 .chart-live .ind-chip-l { display: none; }
 .chart-live .ind-chips.is-narrow { gap: 4px; }
 .chart-live .ind-chips.is-narrow .ind-chip { width: 30px; padding: 0; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; letter-spacing: 0; }
-.chart-live .ind-chips.is-narrow .ind-chip .sw { height: 2px; }
+.chart-live .ind-chips.is-narrow .ind-chip .sw { height: 2px; order: 2; }   /* the letter over its line */
 .chart-live .ind-chips.is-narrow .ind-chip-t { display: none; }
 .chart-live .ind-chips.is-narrow .ind-chip-l { display: inline; line-height: 1; }
 .chart-live .range-mode { max-width: 160px; }

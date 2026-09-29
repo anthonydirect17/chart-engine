@@ -33,8 +33,10 @@ data).
 
 On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills and the
 **Initial balance** (today's 1-hour IB, 1.5.3) per chart pane, with a search box ("/" opens it), a Recent line, Hide
-all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides). The Fills
-settings panel in that menu picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
+all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). Hiding
+Fills never hides the open trade (its entry fills, the position line, working orders, stop and target lines). One
+**Account** picker, the order bar's (or, with no order bar, a compact one in the toolbar), chooses the account for
+orders and whose fills are marked. **Range** bars are
 built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_BARS.md`), or from traded
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
@@ -149,7 +151,9 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   changes, the connection drops or ChartBridge turns trading off. While it is on, the bar and the chart are
   outlined in amber, the legend shows ARMED and the tab title starts with ARMED. **Nothing trades while it
   is off**, and nothing asks for confirmation while it is on: one click sends the order.
-- **Account** (only `tradeAccounts`; Sim101 is chosen first), **Qty** (1 to that instrument's cap).
+- **Account** (only `tradeAccounts`; Sim101 is chosen first), **Qty** (1 to that instrument's cap). The chart
+  marks this account's fills (1.6.0). With trading off the picker lists every account ChartBridge knows and still
+  switches the fills.
 - **Buy MKT / Sell MKT**.
 - **Shift+click** a price on the chart to place a limit or stop at that price. The side is the bar's
   Buy / Sell choice; the kind follows from where you click: a better price than the last trade is a limit
@@ -285,7 +289,7 @@ npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
-npm run smoke:ib         # IB 1h forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 ```
 

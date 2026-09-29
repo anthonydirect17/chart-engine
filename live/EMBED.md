@@ -45,12 +45,18 @@ pane.destroy();
 The container needs a height: the chart fills it (`.chart-live` is `height: 100%`) and the chart area keeps a
 minimum of 360 px. Several charts can be mounted in one page, each in its own container.
 
-Keys (1.6.0): each mounted chart listens on `document` for **"/"**, which opens the Indicators menu of the chart
-under the mouse (with the mouse over none, the one holding the focus; with a single chart on the page, that one). It
-never acts while a text box, select or editable element has the focus (the host's own fields included), nor with
-Ctrl, Alt or Cmd, nor on a key the host has already handled (`preventDefault`). The menu stays inside the chart's
-own width, so a narrow pane in a host that clips its panes still shows all of it. Read-only mounts can show, hide,
-add, remove and pin indicators like the standalone page (nothing is sent to ChartBridge for it).
+Keys (1.6.0): each mounted chart listens on `document` (bubbling) for **"/"**, which opens its Indicators menu when
+the focus is inside that chart, or, with nothing focused (the page body), when the mouse is over it (or it is the
+only chart on the page). It never acts while any element outside the chart has the focus (a host dialog, button or
+field), nor while a text box, select or editable element has it, nor with Ctrl, Alt or Cmd. It also skips a key
+already marked handled (`preventDefault`), but only a host listener that runs before the chart's (capture phase, or
+added on `document` earlier) can do that; one on `window` runs after. The menu stays inside the chart's own width,
+so a narrow pane in a host that clips its panes still shows all of it. Read-only mounts can show, hide, add, remove
+and pin indicators like the standalone page (nothing is sent to ChartBridge for it).
+
+Account (1.6.0): a mounted chart has no order bar, so a compact **Account** picker sits in its toolbar; the chart
+marks that account's fills only (there is no "All accounts" any more). It lists the accounts ChartBridge names in
+`hello` and any with fills, those with fills first, and remembers the choice per prefix (`live-account-v1`).
 
 `mount` returns `{ destroy(), chart, element, paneId }`: `chart` is the chart-engine instance (for reading,
 such as `chart.bars()`), `element` the `.chart-live` element it created in the container.
@@ -132,7 +138,7 @@ Every storage key the chart uses is `storagePrefix + <the standalone page's key>
 | `live-range-v2` | range size per instrument | all charts with this prefix |
 | `live-indicators-v2` | `{ <paneId>: { ind: { <id>: { on, shown, pin } }, recent, restore } }` (1.6.0; carried over once from `live-indicators-v1`, left in place) | one entry per `paneId` |
 | `live-bracket-v1` | bracket ticks per instrument (trading only) | all charts with this prefix |
-| `live-fill-account-v1` | whose fills are marked | all charts with this prefix |
+| `live-account-v1` | the account picked, whose fills are marked (1.6.0; the 1.5 `live-fill-account-v1` is read once when it is missing, its "All accounts" meaning none picked) | all charts with this prefix |
 | `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |
 | `live-drawings-v1-<paneId>-<ROOT>` | drawings per instrument on any other pane | that pane |
 | `live-colors-v1` | candle, VWAP and background colors (Colors panel), saved one color at a time | all charts with this prefix |

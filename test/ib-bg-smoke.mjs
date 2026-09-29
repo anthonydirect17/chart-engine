@@ -116,7 +116,7 @@ try {
       return { first: row.length ? Math.min(...row) / devicePixelRatio : null, n: row.length, plotW: c.width / devicePixelRatio - 78 };
     }, ib[0].price);
     check(drawn.n > 20 && drawn.first > 200, 'IBH pixels start well right of the left edge (at the 9:30 bar): first orchid at x ' + drawn.first);
-    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === true, 'IB 1h on by default on the main pane');
+    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === true, 'Initial balance on by default on the main pane');
     check(/5\/5/.test(await p.textContent('#indCount')), 'indicator count 5/5: ' + await p.textContent('#indCount'));
     await p.screenshot({ path: path.join(SHOTS, 'ib-forming-1000.png') });
     // the same IB on every view
@@ -132,15 +132,15 @@ try {
     await p.click('#indBtn');
     check(await p.isVisible('#indPanel [data-f="sw:ib"]') && /Initial balance/.test(await p.textContent('#indPanel')), 'Indicators menu has "Initial balance" (1.6.0; IB 1h before)');
     await p.click('#indPanel [data-f="sw:ib"]'); await p.keyboard.press('Escape');
-    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false && (await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2')).main.ind.ib.shown)) === false, 'IB 1h hidden: layer off and saved for the main pane');
+    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false && (await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2')).main.ind.ib.shown)) === false, 'Initial balance hidden: layer off and saved for the main pane');
     await p.reload(); await live(p);
-    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false, 'IB 1h off after a reload');
+    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false, 'Initial balance hidden after a reload');
     await p.click('#indBtn'); await p.click('#indPanel [data-f="sw:ib"]'); await p.keyboard.press('Escape');
     // the mounted chart (The Desk): same IB; a new pane starts with it off
     const host = await openPageEmbed(ctx, br.port);
     const mA = await ibOf(host, '__a');
     check(JSON.stringify(mA) === JSON.stringify(ib), 'ChartLive.mount main pane: same IB: ' + JSON.stringify(mA.map(l => l.price)));
-    check((await host.evaluate(() => window.__b.chart.getLayers().ib)) === false, 'a new mounted pane starts with IB 1h off');
+    check((await host.evaluate(() => window.__b.chart.getLayers().ib)) === false, 'a new mounted pane starts with the Initial balance off');
     await host.close();
     await ctx.close(); br.kill();
   }
@@ -192,7 +192,7 @@ try {
     const ctx = await context(off, { dropHistoryBefore: todayAt(off, 9, 45) });
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
     const note = await p.textContent('#ibNote');
-    check((await ibOf(p)).length === 0 && /does not reach back before 9:30/.test(note) && await p.isVisible('#ibNote'), 'history from 9:45: no IB, and the status line says why: ' + note);
+    check((await ibOf(p)).length === 0 && /^Initial balance not shown: the history does not reach back before 9:30/.test(note) && await p.isVisible('#ibNote'), 'history from 9:45: no IB, and the status line says why: ' + note);
     await p.screenshot({ path: path.join(SHOTS, 'ib-uncovered.png') });
     await ctx.close(); br.kill();
   }

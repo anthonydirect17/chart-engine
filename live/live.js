@@ -777,7 +777,7 @@ function start(container, opt, PAGE) {
     if (tradeMode() && TR.account) viewAccount = TR.account;       // trading off later keeps showing the same account
     const { names, withFills } = knownAccounts(), cur = account();
     const opts = () => names.length ? names.map(n => new Option(withFills.has(n) ? n : n + ' (no fills yet)', n)) : [new Option('No accounts yet', '')];
-    $('acctWrap').hidden = orderBarShown();
+    if ($('acctWrap').hidden !== orderBarShown()) { $('acctWrap').hidden = orderBarShown(); fitChips(); }   // the toolbar changed
     if (!orderBarShown()) { $('acctPick').replaceChildren(...opts()); $('acctPick').value = cur; $('acctPick').disabled = !names.length; }
     else if (tradeMode()) syncTradeAccounts();                    // trading: the accounts ChartBridge allows, as before
     else { $('oAcct').replaceChildren(...opts()); $('oAcct').value = cur; $('oAcct').disabled = !names.length; }
@@ -1447,6 +1447,7 @@ function start(container, opt, PAGE) {
     if (typeof ResizeObserver === 'function') {
       const ro = new ResizeObserver(() => { fitChips(); if (!panel.hidden) place(); });
       ro.observe(rootEl);
+      ro.observe(rootEl.querySelector('.bar'));                  // the toolbar's own width (a host resizing the pane)
       cleanups.push(() => ro.disconnect());
     }
   }

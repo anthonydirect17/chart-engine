@@ -140,7 +140,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     Independence, Labor, Thanksgiving, Christmas, with the NYSE's observed-day rules) have no regular session:
     nothing, even though Globex trades; a holiday gets a note naming the day, a weekend none. Early-close days have
     an IB. Not detectable from bars: a minute that has a bar but lost some trades.
-  - Its own Indicators entry, **Initial balance** (chip "IB"; "IB 1h" in 1.5.3), per pane: on for the main pane
+  - Its own Indicators entry, **Initial balance** (chip "IB"; "IB 1h" in 1.5.3; its status notes read "Initial
+    balance not shown: ..."), per pane: on for the main pane
     (also for a main pane saved before 1.5.3), off for a new pane. It is independent of Levels.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
@@ -198,27 +199,41 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   `#2A3645` border, radius 12, the Colors panel's shadow, padding 8:
   - Title "Indicators" (600 13px) and "4 shown, 1 hidden" (mono 11px `#8392A5`); a search box (34 px, `#0F151D`, a
     `#3B2A6B` border) with a "/" key cap, focused on open. It matches names and short names (vwap; ib ibh ibl; pdh pdl
-    onh onl levels; vol volume; fills); Enter acts on the first match.
+    onh onl levels; vol volume; fills); Enter adds or shows the first match, never hides it. Groups folded and the
+    search empty on every open.
   - "Recent": the last 5 used (mono 11px outlined buttons); a click adds, shows or hides.
   - "On this chart" (caps mono 10px): every indicator on the pane, a row each (36 px): a switch (32 by 18; on: the
     accent tint with a `#B69CFF` knob) that shows or hides and keeps everything, the swatch (12 by 3, grey when hidden),
     the name (13px), a pin (star, filled `#B69CFF` when pinned) for the chip strip, a gear opening the one settings panel
-    open at a time (`#0F151D`, what the indicator does, read only; Fills holds "Show fills from", the account choice
-    that sat in the toolbar before 1.6.0), and an x that takes it off the chart.
+    open at a time (`#0F151D`, what the indicator does, read only), and an x that takes it off the chart. Pins only on
+    these rows; group rows have the + and the gear.
   - The groups, folded, one open at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars; Volume
     profile tagged "coming", not selectable), Trades (Fills); a dashed + adds one. Then "Coming: cumulative delta,
     time and sales".
-  - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything).
-  - Keys: "/" opens the menu of the pane under the mouse (not while typing in a box, not with Ctrl, Alt or Cmd; no
-    other key of the chart or the order bar uses it), arrows move through the menu, Escape or a click outside closes it
-    and Escape puts the focus back where it was.
-  - **Chip strip** next to the button: pinned indicators only, one click shows or hides. A chip is 30 px tall, mono
-    600 11px: shown = `#141C26` with a solid `#2A3645` border and its color line; hidden = no fill, a dashed border,
-    grey text and a grey line. When the chips do not fit on the toolbar line (a narrow pane) each becomes one letter
-    (V W L I F) over its line, so the strip never wraps.
+  - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything). Fills are included.
+  - **The live trade always stays** (Anthony): hiding Fills (switch, chip or Hide all) hides past fills and trade
+    marks, never the open trade: its entry fills stay marked, and the position line and label, working orders and
+    stop and target lines are not indicators at all.
+  - Keys: "/" opens the menu of this chart when the focus is inside it, or with nothing focused, of the chart under
+    the mouse (not while typing in a box, not while anything outside the chart has the focus, not with Ctrl, Alt or
+    Cmd; no other key of the chart or the order bar uses it); arrows move through the menu; Escape or a click outside
+    closes it and Escape puts the focus back where it was.
+  - The panel opens below the order bar when there is one (the Armed switch, the account and the position readout
+    stay in view) and its list scrolls inside when the space is short.
+  - **Chip strip** next to the button: pinned indicators only, at most 6 (Anthony): an added indicator gets a chip
+    while there is room; pinning onto a full strip is refused with a note in the menu. One click shows or hides. A chip
+    is 30 px tall, mono 600 11px: shown = `#141C26` with a solid `#2A3645` border and its color line; hidden = no fill,
+    a dashed border, grey text and a grey line. The strip always keeps room for six one-letter chips, and shows the
+    names only when that adds no toolbar line; otherwise each chip is one letter (V W L I F) over its line. So it never
+    wraps and pinning or unpinning never moves the order bar or the chart.
   - Saved per pane (`live-indicators-v2`). The main pane starts with the five on, shown and pinned (a pane saved by
     1.4 to 1.5.3 keeps its choices: the ones that were off stay on its chart, hidden); a new pane starts with none on
     (Anthony, 2026-09-29).
+- **Account** (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker (600 13px
+  mono in the head text color, 34 px tall, at least 150 px wide) is the only account control: orders go to it and the
+  chart marks its fills only. With trading off it still works (the fills follow it; no order can be sent). With no
+  order bar (a mounted chart, or ChartBridge 0.2) a compact picker (600 12px mono) sits in the toolbar after the
+  instruments. No "All accounts"; no colors per account. Saved in `live-account-v1` (the 1.5 fills choice is read once).
 - PIN pad (live page, 1.5.2, ChartBridge 0.3.2; `live/pin.css`): a centered card on `#0B1016` with a `#2A3645`
   border, radius 12 and the Colors panel's shadow, over the `#080B10` ground (at 90% with a light blur over the
   chart for Change PIN). The logo and wordmark as in the toolbar, a 600 18px title, four 14 px dots (filled
