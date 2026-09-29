@@ -238,7 +238,7 @@ class TickStore {
       const j = i + this.start, b = this.blocks[j >>> SHIFT];
       const end = Math.min(this.length, i + BLOCK - (j & MASK));
       for (let k = (j & MASK) * 3; i < end; i++, k += 3) {
-        if (b[k] < min) continue;
+        if (!(b[k] >= min)) continue;                  // a NaN time is skipped too, as before 1.5.1
         if (quiet) builder.addQuiet(b[k], b[k + 1], b[k + 2]); else builder.add(b[k], b[k + 1], b[k + 2]);
       }
     }

@@ -217,3 +217,71 @@ test('range fast path: the same bars and results as the full path, on trades wit
     assert.ok(full.bars.length > 20);
   }
 });
+
+/* frames that throw inside the plot clip: counts save/restore/reset, collects 'error' events, controls the clock */
+function failingChart() {
+  const { dom, CE } = engine();
+  const calls = { save: 0, restore: 0, reset: 0 };
+  let fail = null;
+  dom.ctx.save = () => { calls.save++; };
+  dom.ctx.restore = () => { calls.restore++; };
+  dom.ctx.reset = () => { calls.reset++; };
+  dom.ctx.fill = () => { if (fail) throw new Error(fail); };           // candles fill inside the clipped section
+  const chart = CE.create(dom.container, {});
+  chart.setBars(barsOf(50));
+  const events = [], thrown = [];
+  chart.on('error', e => events.push(e && e.message));
+  const realNow = performance.now, realSetTimeout = global.setTimeout;
+  let clock = 1000;
+  performance.now = () => clock;
+  global.setTimeout = fn => { try { fn(); } catch (e) { thrown.push(e.message); } return 0; };
+  let ts = 1000;
+  return {
+    calls, events, thrown,
+    set fail(v) { fail = v; },
+    frames(n, stepMs) { for (let i = 0; i < n; i++) { clock += stepMs || 16; chart.setLayers({}); dom.frame(ts += stepMs || 16); } },
+    done() { performance.now = realNow; global.setTimeout = realSetTimeout; },
+  };
+}
+
+test('a drawing error never blanks the opaque canvas: no reset(), save and restore stay balanced, an error event fires', () => {
+  const c = failingChart();
+  try {
+    c.fail = 'bad price';
+    c.frames(3);
+    assert.equal(c.calls.reset, 0, 'reset() would turn the opaque canvas black');
+    assert.equal(c.calls.save, c.calls.restore, 'save/restore balanced: ' + JSON.stringify(c.calls));
+    assert.deepEqual(c.events, ['bad price']);
+    assert.deepEqual(c.thrown, ['bad price']);
+    c.fail = null;
+    c.frames(2);
+    assert.deepEqual(c.events, ['bad price', null], 'a clean frame reports the recovery');
+    assert.equal(c.calls.save, c.calls.restore);
+  } finally { c.done(); }
+});
+
+test('drawing errors: at most once per 5 s per message, alternating errors do not flood, a recurrence after recovery is reported', () => {
+  const c = failingChart();
+  try {
+    c.fail = 'A';
+    c.frames(60);                                   // about 1 s of failing frames
+    assert.deepEqual(c.thrown, ['A']);
+    c.frames(1, 5000);                              // 5 s later, still failing: reported again
+    assert.deepEqual(c.thrown, ['A', 'A']);
+    c.fail = null; c.frames(1);                     // recovered
+    c.fail = 'A'; c.frames(1);                      // the same fault again, right away: reported
+    assert.deepEqual(c.thrown, ['A', 'A', 'A']);
+    c.fail = null; c.frames(1);
+    for (let i = 0; i < 60; i++) { c.fail = i % 2 ? 'B' : 'C'; c.frames(1); }   // two faults alternating
+    assert.deepEqual(c.thrown.slice(3), ['C', 'B']);
+    assert.deepEqual(c.events.filter(Boolean).length, c.thrown.length, 'every report is also an error event');
+  } finally { c.done(); }
+});
+
+test('TickStore.feed with a time floor skips a tick whose time is NaN, like the array loop before it', () => {
+  const s = new BB.TickStore();
+  s.push(NaN, 25000, 1); s.push(T0 + 1, 25000.25, 2);
+  const got = [];
+  s.feed({ add: (t) => got.push(t) }, 0, T0);
+  assert.deepEqual(got, [T0 + 1]);
+});

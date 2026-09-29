@@ -351,7 +351,7 @@ function create(container, options) {
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [] };
+  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], error: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1168,10 +1168,13 @@ function create(container, options) {
 
   /* ---------------- frame loop */
   let raf = 0, lastFrame = 0, lastDraw = 0, emaInt = 16.7, emaDraw = 1, streak = 0;
-  let lastError = '';
+  /* Drawing errors: each message is reported (window error and the chart's 'error' event) at most once per 5 s;
+     after a clean frame the slate is wiped, so the same fault coming back later is reported again. */
+  const reported = new Map();                            // message -> when it was last reported (performance.now)
+  let failing = false;
   function frame(now) {
     // The next frame is asked for first, so an error while drawing can never stop the chart for good (up to 1.5.0
-    // one throw ended the loop and the chart froze). The error is still reported, once per message.
+    // one throw ended the loop and the chart froze).
     raf = requestAnimationFrame(frame);
     try {
       const dt = lastFrame ? Math.min(64, now - lastFrame) : 16.7;
@@ -1189,11 +1192,18 @@ function create(container, options) {
       }
       const live = V.follow;
       if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+      if (failing) { failing = false; reported.clear(); emit('error', null); }   // a clean frame: recovered
     } catch (e) {
-      if (typeof ctx.reset === 'function') ctx.reset();   // drop any save() the throw skipped the restore() of
-      dirty = true;
-      const msg = String(e && e.message);
-      if (msg !== lastError) { lastError = msg; setTimeout(() => { throw e; }); }
+      // draw() has one save() (the plot clip); restore() with nothing saved does nothing, so one call balances it.
+      // No reset(): the canvas is opaque and would go black. What was drawn before the throw stays on screen.
+      ctx.restore();
+      dirty = true; failing = true;
+      const msg = String(e && e.message), t = performance.now(), at = reported.get(msg);
+      if (at === undefined || t - at >= 5000) {
+        reported.set(msg, t);
+        emit('error', { message: msg, error: e });
+        setTimeout(() => { throw e; });
+      }
     }
   }
   raf = requestAnimationFrame(frame);
