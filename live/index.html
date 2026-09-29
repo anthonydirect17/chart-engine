@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live Chart</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<style>
+/* Live trading chart fed by ChartBridge (NinjaTrader 8). One screen: toolbar, chart, status line.
+   Dark only on purpose: Anthony's house style. */
+:root {
+  color-scheme: dark;
+  --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
+  --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
+  --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
+  --crimson: #9F1239; --crimson-word: #E0445E;
+  --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
+  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+html, body { height: 100%; margin: 0; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; }
+.app { height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding-inline: 12px; padding-block: 10px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.logo { width: 28px; height: 28px; border-radius: 8px; background: var(--crimson); display: grid; place-items: center; flex: none; }
+.brand-text { display: grid; line-height: 1.15; }
+.wordmark { font: 700 11px var(--cond); letter-spacing: .14em; color: var(--crimson-word); text-transform: uppercase; }
+.page-name { font-weight: 600; font-size: 14px; color: var(--head); }
+.group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.glabel { font: 600 10px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--text3); }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--s2); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { font: 500 12px var(--mono); color: var(--text2); background: transparent; border: 0; border-radius: 6px; padding: 4px 8px; min-height: 28px; cursor: pointer; white-space: nowrap; }
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-border); }
+.seg.sans button { font-family: var(--sans); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 500 12px var(--sans); border: 1px solid var(--line); background: transparent; color: var(--text3); border-radius: 999px; padding: 3px 10px 3px 8px; min-height: 28px; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--line-strong); }
+.chip[aria-pressed="true"] { color: var(--text); background: var(--s2); border-color: var(--line-strong); }
+.chip[aria-pressed="true"] .sw { background: var(--sw); }
+.btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
+.btn:hover { background: var(--s3); }
+.btn[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); border-color: var(--accent-border); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.range-box { display: inline-flex; align-items: center; gap: 6px; }
+.range-box input { width: 54px; background: var(--s2); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); font: 500 12px var(--mono); padding: 4px 6px; min-height: 28px; box-sizing: border-box; }
+.range-box span { font: 500 11px var(--mono); color: var(--text3); }
+
+.stage { position: relative; flex: 1; min-height: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+#chart { position: absolute; inset: 0; }
+.legend { position: absolute; left: 10px; top: 10px; z-index: 3; pointer-events: none; display: grid; gap: 3px; padding: 7px 10px; border-radius: 8px; background: rgba(8, 11, 16, 0.78); font-size: 12px; max-width: calc(100% - 110px); }
+.lg1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.lg1 b { color: var(--head); font-weight: 600; }
+.tfbadge { font: 500 11px var(--mono); color: var(--text2); }
+.dim { color: var(--text3); }
+.pill { font: 600 10px/1.6 var(--mono); letter-spacing: .06em; padding: 0 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); color: var(--text2); background: var(--s3); }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.live { color: var(--accent-soft); background: var(--accent-tint); border-color: var(--accent-border); }
+.pill.warn { color: var(--warn); background: rgba(224, 180, 90, 0.10); border-color: rgba(224, 180, 90, 0.40); }
+.pill.bad { color: var(--loss); background: rgba(255, 122, 122, 0.10); border-color: rgba(255, 122, 122, 0.40); }
+.lg2, .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--text3); display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.lg2 span span, .lg3 span span { color: var(--head); }
+.lg2 .up { color: var(--up-text); }
+.lg2 .down { color: var(--down-text); }
+.lg3 .vw { color: var(--vwap-sw); }
+.lg3 .buy { color: var(--profit); }
+.lg3 .sell { color: var(--loss); }
+.notice { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: min(460px, calc(100% - 40px)); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.notice h2 { margin: 0; font-size: 15px; color: var(--head); }
+.notice p { margin: 0; color: var(--text2); line-height: 1.5; }
+.notice code { font: 500 12px var(--mono); color: var(--accent-soft); }
+
+.status { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; font: 500 11px var(--mono); color: var(--text3); font-variant-numeric: tabular-nums; }
+.status b { color: var(--text2); font-weight: 500; }
+.status .sep { color: var(--line-strong); }
+.status .msg.warn { color: var(--warn); }
+.status .msg.error { color: var(--loss); }
+.status .ro { margin-left: auto; font-family: var(--sans); }
+
+@media (max-width: 720px) {
+  .legend { max-width: calc(100% - 100px); padding: 5px 8px; font-size: 11px; }
+  .lg1 .dim, .lg3 { display: none; }
+  .lg2 { font-size: 11px; gap: 0 8px; }
+  .status .ro { margin-left: 0; }
+  .seg button { padding: 4px 7px; }
+  .ce-live { right: 86px !important; bottom: 34px !important; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#FFE4EA" stroke-width="2"><path d="M7 4v16M17 4v16"/><rect x="4.5" y="8" width="5" height="7" rx="1"/><rect x="14.5" y="6" width="5" height="9" rx="1"/></svg>
+      </div>
+      <div class="brand-text"><span class="wordmark">The Desk</span><span class="page-name">Live chart</span></div>
+    </div>
+
+    <div class="seg" id="symSeg" role="group" aria-label="Instrument">
+      <button type="button" data-v="MNQ">MNQ</button>
+      <button type="button" data-v="NQ">NQ</button>
+      <button type="button" data-v="MES">MES</button>
+      <button type="button" data-v="ES">ES</button>
+    </div>
+
+    <div class="group">
+      <span class="glabel" id="tfLabel">Bars</span>
+      <div class="seg" id="tfSeg" role="group" aria-labelledby="tfLabel">
+        <button type="button" data-v="s15">15s</button>
+        <button type="button" data-v="s30">30s</button>
+        <button type="button" data-v="m1">1m</button>
+        <button type="button" data-v="m5">5m</button>
+        <button type="button" data-v="m15">15m</button>
+        <button type="button" data-v="h1">1h</button>
+        <button type="button" data-v="range">Range</button>
+      </div>
+      <label class="range-box" id="rangeBox" for="rangeTicks" hidden><input id="rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="rangeUnit">ticks</span></label>
+    </div>
+
+    <div class="chips" id="layerChips" role="group" aria-label="Layers">
+      <button type="button" class="chip" data-layer="volume" style="--sw: var(--text3)"><span class="sw"></span>Volume</button>
+      <button type="button" class="chip" data-layer="vwap" style="--sw: var(--vwap-sw)"><span class="sw"></span>VWAP</button>
+      <button type="button" class="chip" data-layer="levels" style="--sw: var(--info)"><span class="sw"></span>Levels</button>
+      <button type="button" class="chip" data-layer="fills" style="--sw: var(--profit)"><span class="sw"></span>Fills</button>
+    </div>
+
+    <div class="group" role="group" aria-label="Drawing tools">
+      <button type="button" class="btn" id="toolTrend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
+      <button type="button" class="btn" id="toolHline" aria-pressed="false" title="Horizontal line: click a price">Price line</button>
+      <button type="button" class="btn" id="clearDraw" title="Remove all drawings on this instrument">Clear</button>
+    </div>
+
+    <div class="group">
+      <span class="glabel" id="glideLabel">Glide</span>
+      <div class="seg sans" id="glideSeg" role="group" aria-labelledby="glideLabel">
+        <button type="button" data-v="smooth">Smooth</button>
+        <button type="button" data-v="fast">Fast</button>
+        <button type="button" data-v="off">Off</button>
+      </div>
+    </div>
+
+    <span id="colorsHost"></span>
+    <button type="button" class="btn" id="resetBtn">Reset view</button>
+  </header>
+
+  <main class="stage">
+    <div id="chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
+    <div class="legend" id="legend">
+      <div class="lg1"><b id="lgName">MNQ</b><span class="tfbadge" id="lgTf">1m</span><span class="dim" id="lgSrc">NinjaTrader via ChartBridge</span><span class="pill" id="connPill">CONNECTING</span></div>
+      <div class="lg2"><span class="dim" id="lgTime">--:--</span><span>O <span id="lgO">-</span></span><span>H <span id="lgH">-</span></span><span>L <span id="lgL">-</span></span><span>C <span id="lgC">-</span></span><span id="lgChg">-</span><span>Vol <span id="lgV">-</span></span></div>
+      <div class="lg3" id="lgRow3"><span id="lgVwWrap">VWAP <span class="vw" id="lgVw">-</span></span><span id="lgFill"></span></div>
+    </div>
+    <div class="notice" id="notice" hidden>
+      <h2 id="noticeTitle">Waiting for ChartBridge</h2>
+      <p id="noticeText">Start NinjaTrader with the ChartBridge add-on compiled, then this page connects on its own.</p>
+    </div>
+  </main>
+
+  <footer class="status" aria-live="off">
+    <span>feed <b id="dFeed">-</b></span><span class="sep">·</span>
+    <span>local <b id="dLocal">-</b></span><span class="sep">·</span>
+    <span id="fps">-</span><span class="sep">·</span>
+    <span id="ticksSeen">0 ticks</span>
+    <span class="msg" id="statusMsg"></span>
+    <span class="ro">Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.</span>
+  </footer>
+</div>
+
+<script src="../src/chart-engine.js"></script>
+<script src="bar-builder.js"></script>
+<script src="live.js"></script>
+</body>
+</html>

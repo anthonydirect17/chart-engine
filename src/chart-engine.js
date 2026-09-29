@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.0.0
+ * chart-engine 1.1.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -117,6 +117,7 @@ const DEFAULT_THEME = {
   long: '#3DDC97', short: '#FF7A7A',     // trade side (house style: green/red only for sides and P&L)
   profit: '#3DDC97', loss: '#FF7A7A',    // trade result
   exit: '#F2F6FA', live: '#F2F6FA',
+  drawing: '#D8CCFF',                    // trend lines and horizontal lines
   fontMono: '"IBM Plex Mono", ui-monospace, Consolas, monospace',
   fontCond: '"IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif',
 };
@@ -284,8 +285,9 @@ function create(container, options) {
   }
 
   let T = buildTheme(opt.theme);
-  let bars = [], levels = [], trades = [], paused = false;
-  const listeners = { legend: [], live: [] };
+  let bars = [], levels = [], trades = [], markers = [], paused = false, countdownFn = null;
+  let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
+  const listeners = { legend: [], live: [], drawings: [], tool: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -315,6 +317,54 @@ function create(container, options) {
     while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (bars[mid].t <= t) lo = mid; else hi = mid - 1; }
     return lo;
   }
+  /* fractional bar index for any time, extrapolating past either end at barSeconds per bar */
+  function idxOfTime(t) {
+    const n = bars.length; if (!n) return 0;
+    const bs = o.barSeconds;
+    if (t <= bars[0].t) return (t - bars[0].t) / bs;
+    if (t >= bars[n - 1].t) return n - 1 + (t - bars[n - 1].t) / bs;
+    const i = idxAtTime(t), a = bars[i].t, b = bars[i + 1].t;
+    return i + (b > a ? (t - a) / (b - a) : 0);
+  }
+  function timeOfIdx(x) {
+    const n = bars.length; if (!n) return 0;
+    const bs = o.barSeconds;
+    if (x <= 0) return bars[0].t + x * bs;
+    if (x >= n - 1) return bars[n - 1].t + (x - (n - 1)) * bs;
+    const i = Math.floor(x), f = x - i;
+    return bars[i].t + (bars[i + 1].t - bars[i].t) * f;
+  }
+  const priceAt = y => V.hi - y / plotH * (V.hi - V.lo);
+  const genId = () => 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  function distToSeg(px, py, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+    const k = len ? clamp(((px - ax) * dx + (py - ay) * dy) / len, 0, 1) : 0;
+    return Math.hypot(px - (ax + k * dx), py - (ay + k * dy));
+  }
+  function hitDrawing(p) {
+    for (let k = drawings.length - 1; k >= 0; k--) {
+      const d = drawings[k];
+      if (d.type === 'hline') { if (Math.abs(yOf(d.price) - p.y) <= 5) return { d, part: 'body' }; }
+      else if (d.type === 'trend') {
+        const ax = xOf(idxOfTime(d.a.t)), ay = yOf(d.a.p), bx = xOf(idxOfTime(d.b.t)), by = yOf(d.b.p);
+        if (Math.hypot(p.x - ax, p.y - ay) <= 7) return { d, part: 'a' };
+        if (Math.hypot(p.x - bx, p.y - by) <= 7) return { d, part: 'b' };
+        if (distToSeg(p.x, p.y, ax, ay, bx, by) <= 5) return { d, part: 'body' };
+      }
+    }
+    return null;
+  }
+  const cloneDrawing = d => JSON.parse(JSON.stringify(d));
+  function drawingsChanged() { emit('drawings', drawings.map(cloneDrawing)); }
+  function setToolInternal(t) { if (tool !== t) { tool = t; draft = null; emit('tool', tool); } dirty = true; }
+  function finishDraft() {
+    const d = draft; draft = null;
+    if (!d) return;
+    const same = Math.abs(d.a.t - d.b.t) < 1e-6 && Math.abs(d.a.p - d.b.p) < 1e-9;
+    if (!same) { drawings.push({ id: d.id, type: 'trend', a: d.a, b: d.b }); selectedId = d.id; drawingsChanged(); }
+    setToolInternal(null);
+  }
+
   function clampRight() {
     const vis = plotW / V.spacing;
     const lo = Math.min(10, Math.max(0, last())), hi = last() + Math.max(o.rightOffset, vis * 0.5);
@@ -423,6 +473,7 @@ function create(container, options) {
   function countdown() {
     const n = last(); if (n < 0) return '';
     if (paused) return 'paused';
+    if (countdownFn) { try { return String(countdownFn(bars[n]) || ''); } catch (e) { return ''; } }
     const remain = Math.max(0, Math.ceil(bars[n].t + o.barSeconds - o.clock()));
     if (remain >= DAY) return Math.floor(remain / DAY) + 'd ' + pad(Math.floor(remain % DAY / 3600)) + 'h';
     if (remain >= 3600) return Math.floor(remain / 3600) + ':' + pad(Math.floor(remain % 3600 / 60)) + ':' + pad(remain % 60);
@@ -434,15 +485,20 @@ function create(container, options) {
     if (to < from) return labels;
     if (bs < DAY) {
       for (let i = Math.max(from, 1); i <= to; i++) if (isSessionStart(i)) labels.push({ i, x: xOf(i), text: fmtDay(bars[i].t + DAY - (o.session.start || DAY)), strong: true });
+      // Seconds per bar actually on screen (range and tick bars are irregular; gaps count too).
+      const eff = to > from ? Math.max(1e-6, (bars[to].t - bars[from].t) / (to - from)) : bs;
       const cands = [15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 43200];
       let s = 0;
-      for (const c of cands) if (c % bs === 0 && (c / bs) * V.spacing >= 84) { s = c; break; }
+      for (const c of cands) if (c >= Math.min(bs, eff) && (c / eff) * V.spacing >= 84) { s = c; break; }
       if (s) {
         for (let i = from; i <= to; i++) {
-          if (tod(bars[i].t) % s !== 0 || isSessionStart(i)) continue;
+          // label the bar that crosses a round time (exactly on it for regular bars)
+          const k = Math.floor(bars[i].t / s);
+          const crosses = i > 0 ? k !== Math.floor(bars[i - 1].t / s) : tod(bars[i].t) % s === 0;
+          if (!crosses || isSessionStart(i)) continue;
           const x = xOf(i);
           if (labels.some(l => Math.abs(l.x - x) < 70)) continue;
-          labels.push({ i, x, text: s < 60 ? fmtHMS(bars[i].t) : fmtHM(bars[i].t), strong: false });
+          labels.push({ i, x, text: s < 60 ? fmtHMS(k * s) : fmtHM(k * s), strong: false });
         }
       }
     } else {
@@ -590,6 +646,37 @@ function create(container, options) {
       }
     }
 
+    // fills: buy triangles point up, sell triangles point down, tip at the fill price
+    if (markers.length && n >= 0) {
+      ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle';
+      for (const m of markers) {
+        const i = idxAtTime(m.t); if (i < from - 1 || i > to + 1) continue;
+        const x = xOf(i), y = yOf(m.price), s = 5, buy = m.side === 'buy', dir = buy ? 1 : -1;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - s, y + dir * s * 1.6); ctx.lineTo(x + s, y + dir * s * 1.6); ctx.closePath();
+        ctx.fillStyle = buy ? T.long : T.short; ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5; ctx.stroke(); ctx.fill();
+        if (V.spacing >= 4 && m.qty) { ctx.fillStyle = buy ? T.long : T.short; ctx.textAlign = 'left'; ctx.fillText(String(m.qty), x + s + 3, y + dir * s); }
+      }
+    }
+
+    // drawings: horizontal lines and trend lines
+    if (drawings.length || draft) {
+      const all = draft ? drawings.concat([draft]) : drawings;
+      const handle = (x, y) => { ctx.fillStyle = T.bg; ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7); };
+      for (const d of all) {
+        const sel = d.id === selectedId || d === draft, col = d.color || T.drawing;
+        ctx.strokeStyle = col; ctx.lineWidth = sel ? 2 : 1.5; ctx.setLineDash([]);
+        if (d.type === 'hline') {
+          const y = yOf(d.price);
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke();
+          if (sel) { ctx.lineWidth = 1.5; handle(plotW / 2, y); }
+        } else if (d.type === 'trend') {
+          const ax = xOf(idxOfTime(d.a.t)), ay = yOf(d.a.p), bx = xOf(idxOfTime(d.b.t)), by = yOf(d.b.p);
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+          if (sel) { ctx.lineWidth = 1.5; handle(ax, ay); handle(bx, by); }
+        }
+      }
+    }
+
     // last price line and live dot
     let ly = 0, lastCol = T.up, lastTag = T.upOnTag;
     if (n >= 0) {
@@ -630,7 +717,8 @@ function create(container, options) {
     ctx.strokeStyle = T.axisLine; ctx.lineWidth = Math.max(1, Math.round(dpr)) / dpr;
     ctx.beginPath(); ctx.moveTo(crisp(plotW, 1), 0); ctx.lineTo(crisp(plotW, 1), H); ctx.moveTo(0, crisp(plotH, 1)); ctx.lineTo(W, crisp(plotH, 1)); ctx.stroke();
 
-    const tags = (o.layers.levels ? levels : []).filter(L => L.price >= V.lo && L.price <= V.hi).map(L => ({ L, y: yOf(L.price) })).sort((a, b) => a.y - b.y);
+    const tagSrc = (o.layers.levels ? levels : []).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })));
+    const tags = tagSrc.filter(L => L.price >= V.lo && L.price <= V.hi).map(L => ({ L, y: yOf(L.price) })).sort((a, b) => a.y - b.y);
     { let prev = -1e9; for (const t of tags) { t.y = Math.max(t.y, prev + 19); prev = t.y; } }
     ctx.font = '400 11px ' + T.fontMono; ctx.fillStyle = T.axisText; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (let k = k0; k <= k1 && k - k0 < 400; k++) {
@@ -694,7 +782,10 @@ function create(container, options) {
     V.anchor = V.follow ? null : { i: indexAt(x), x };
     dirty = true;
   }
-  function setCursor(z) {
+  function setCursor(z, p) {
+    if (dd && dd.mode !== 'draft') { cv.style.cursor = 'grabbing'; return; }
+    if (tool || draft) { cv.style.cursor = 'crosshair'; return; }
+    if (!drag && p && z === 'plot' && drawings.length) { const h = hitDrawing(p); if (h) { cv.style.cursor = h.part === 'body' ? 'move' : 'pointer'; return; } }
     cv.style.cursor = drag ? (drag.zone === 'plot' ? 'grabbing' : drag.zone === 'price' ? 'ns-resize' : 'ew-resize') : z === 'price' ? 'ns-resize' : z === 'time' ? 'ew-resize' : 'crosshair';
   }
   function onWheel(e) {
@@ -722,7 +813,22 @@ function create(container, options) {
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, logS0: V.logS, i: indexAt((a.x + b.x) / 2) };
-      drag = null; V.follow = false; return;
+      drag = null; dd = null; draft = null; V.follow = false; return;
+    }
+    if (zoneOf(p) === 'plot' && (e.button === 0 || e.button === undefined)) {
+      if (draft) { draft.b = { t: timeOfIdx(indexAt(p.x)), p: priceAt(p.y) }; finishDraft(); return; }
+      if (tool === 'hline') {
+        const d = { id: genId(), type: 'hline', price: roundTo(priceAt(p.y), o.tick) };
+        drawings.push(d); selectedId = d.id; drawingsChanged(); setToolInternal(null); return;
+      }
+      if (tool === 'trend') {
+        const pt = { t: timeOfIdx(indexAt(p.x)), p: priceAt(p.y) };
+        draft = { id: genId(), type: 'trend', a: pt, b: { t: pt.t, p: pt.p }, x0: p.x, y0: p.y };
+        dd = { mode: 'draft' }; dirty = true; return;
+      }
+      const hit = hitDrawing(p);
+      if (hit) { selectedId = hit.d.id; dd = { d: hit.d, part: hit.part, x0: p.x, y0: p.y, orig: cloneDrawing(hit.d) }; setCursor('plot', p); dirty = true; return; }
+      if (selectedId) { selectedId = null; dirty = true; }
     }
     drag = { zone: zoneOf(p), x0: p.x, y0: p.y, right0: V.right, lo0: V.lo, hi0: V.hi, logS0: V.logS, samples: [{ t: e.timeStamp, r: V.right }], moved: false };
     hover = e.pointerType === 'mouse' ? p : null;
@@ -737,6 +843,21 @@ function create(container, options) {
       V.logS = V.logT = clamp(pinch.logS0 + Math.log(d / pinch.d0), Math.log(o.minSpacing), Math.log(o.maxSpacing));
       V.spacing = Math.exp(V.logS);
       V.right = pinch.i + (plotW - Math.min(mx, plotW)) / V.spacing; clampRight(); dirty = true; return;
+    }
+    if (draft && (dd || e.pointerType === 'mouse')) {
+      draft.b = { t: timeOfIdx(indexAt(Math.min(p.x, plotW))), p: priceAt(clamp(p.y, 0, plotH)) };
+      hover = p; dirty = true; return;
+    }
+    if (dd && dd.d) {
+      const d = dd.d, org = dd.orig;
+      if (d.type === 'hline') d.price = roundTo(org.price + (priceAt(p.y) - priceAt(dd.y0)), o.tick);
+      else if (dd.part === 'a' || dd.part === 'b') d[dd.part] = { t: timeOfIdx(indexAt(Math.min(p.x, plotW))), p: priceAt(clamp(p.y, 0, plotH)) };
+      else {
+        const di = indexAt(p.x) - indexAt(dd.x0), dp = priceAt(p.y) - priceAt(dd.y0);
+        d.a = { t: timeOfIdx(idxOfTime(org.a.t) + di), p: org.a.p + dp };
+        d.b = { t: timeOfIdx(idxOfTime(org.b.t) + di), p: org.b.p + dp };
+      }
+      hover = p; dirty = true; return;
     }
     if (e.pointerType === 'mouse' || drag) hover = p;
     if (drag) {
@@ -756,12 +877,18 @@ function create(container, options) {
         V.spacing = Math.exp(V.logS); clampRight();
       }
     }
-    setCursor(zoneOf(p));
+    setCursor(zoneOf(p), p);
     dirty = true;
   }
   function onUp(e) {
     pointers.delete(e.pointerId);
     if (pinch) { if (pointers.size < 2) { pinch = null; setFollowFromPosition(); } return; }
+    if (dd) {
+      const p = local(e);
+      if (dd.mode === 'draft') { if (draft && Math.hypot(p.x - draft.x0, p.y - draft.y0) > 4) finishDraft(); }   // drag-to-draw; a click waits for a second click
+      else drawingsChanged();
+      dd = null; setCursor(zoneOf(p), p); dirty = true; return;
+    }
     if (drag && drag.zone === 'plot' && drag.moved) {
       const s = drag.samples, lastS = s[s.length - 1];
       let first = lastS;
@@ -792,6 +919,8 @@ function create(container, options) {
     else if (e.key === '-' || e.key === '_') zoomBy(-0.3, plotW * 0.75);
     else if (e.key === 'End') { V.kin = null; V.follow = true; }
     else if (e.key === 'a' || e.key === 'A') V.auto = true;
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) { drawings = drawings.filter(d => d.id !== selectedId); selectedId = null; drawingsChanged(); }
+    else if (e.key === 'Escape' && (tool || draft || selectedId)) { selectedId = null; setToolInternal(null); }
     else return;
     e.preventDefault(); dirty = true;
   }
@@ -870,6 +999,21 @@ function create(container, options) {
     /** Derived colors, e.g. upText / downText for legend text that stays readable. */
     colors() { return Object.assign({}, T); },
     setPaused(v) { paused = !!v; dirty = true; },
+    /** Glide and other motion time constants in ms, e.g. setMotion({ candle: 0 }) for no candle glide. */
+    setMotion(partial) { Object.assign(o.motion, partial || {}); dirty = true; },
+    getMotion() { return Object.assign({}, o.motion); },
+    setPriceFormat(f) { if (f && f.precision !== undefined) o.precision = f.precision; if (f && f.tick !== undefined) o.tick = f.tick; V.init = false; dirty = true; },
+    /** Replace the bar-close countdown under the price tag (e.g. ticks left in a range bar). null restores it. */
+    setCountdown(fn) { countdownFn = typeof fn === 'function' ? fn : null; dirty = true; },
+    /** Fill markers: [{ t, price, side: 'buy' | 'sell', qty }] */
+    setMarkers(list) { markers = (list || []).filter(m => isFinite(m.price) && isFinite(m.t)); dirty = true; },
+    /** Drawing tool: 'hline', 'trend' or null. */
+    setTool(t) { setToolInternal(t === 'hline' || t === 'trend' ? t : null); },
+    getTool() { return tool; },
+    setDrawings(list) { drawings = (list || []).filter(d => d && (d.type === 'hline' || d.type === 'trend')).map(cloneDrawing); selectedId = null; draft = null; dirty = true; },
+    getDrawings() { return drawings.map(cloneDrawing); },
+    deleteSelected() { if (!selectedId) return false; drawings = drawings.filter(d => d.id !== selectedId); selectedId = null; drawingsChanged(); dirty = true; return true; },
+    clearDrawings() { drawings = []; selectedId = null; draft = null; drawingsChanged(); dirty = true; },
     setBarSeconds(sec) { o.barSeconds = sec; dirty = true; },
     goLive() { V.kin = null; V.follow = true; dirty = true; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },

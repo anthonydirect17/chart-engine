@@ -16,6 +16,20 @@ project (see [CHART_STYLE.md](CHART_STYLE.md)).
 **Live demo:** https://anthonydirect17.github.io/chart-engine/ (sample MNQ data and a simulated feed;
 not market data). It updates on every push to `main`. To run it offline, open `index.html` in a browser.
 
+## Live trading chart (NinjaTrader 8)
+
+`live/` is the chart fed by real market data through **ChartBridge**, a NinjaTrader 8 add-on in `nt8/`.
+It is **read only**: you watch and read the market here and place orders in NinjaTrader.
+
+1. From this folder on the Windows PC: `powershell -ExecutionPolicy Bypass -File nt8\install.ps1`
+2. NinjaTrader > New > NinjaScript Editor > compile (F5). Check New > NinjaScript Output for
+   `ChartBridge: serving http://localhost:8765/`.
+3. Open `http://localhost:8765/` in Chrome or Edge.
+
+Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
+data). Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at
+`http://localhost:8765/live/`.
+
 ## Use it
 
 ```html
