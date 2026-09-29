@@ -130,6 +130,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
   the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane. The main pane
   starts with today's set (all four on, or the 1.3 choices); a new pane starts with none on (Anthony, 2026-09-29).
+- PIN pad (live page, 1.5.1, ChartBridge 0.3.2; `live/pin.css`): a centered card on `#0B1016` with a `#2A3645`
+  border, radius 12 and the Colors panel's shadow, over the `#080B10` ground (at 90% with a light blur over the
+  chart for Change PIN). The logo and wordmark as in the toolbar, a 600 18px title, four 14 px dots (filled
+  `#B69CFF`), a 3 by 4 pad of 56 px keys (500 20px IBM Plex Mono digits; Clear in 600 11px Condensed caps;
+  a delete icon). A refused PIN reads in the warn amber `#E0B45A` with a 300 ms shake (none with reduced motion).
+  Keyboard: digits, Backspace, Delete clears, Escape clears (or closes Change PIN).
 - Range bars (live page, 1.4.0) are built like NinjaTrader's by default: every finished bar is exactly the range,
   the next opens one tick on, and a jump is filled with phantom bars (no volume). "Traded prices only" keeps the
   older way. See `docs/RANGE_BARS.md`.

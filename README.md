@@ -25,7 +25,8 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 1. From this folder on the Windows PC: `powershell -ExecutionPolicy Bypass -File nt8\install.ps1`
 2. NinjaTrader > New > NinjaScript Editor > compile (F5). Check New > NinjaScript Output for
    `ChartBridge: serving http://localhost:8765/`.
-3. Open `http://localhost:8765/` in Chrome or Edge.
+3. Open `http://localhost:8765/` in Chrome or Edge. The first time on each PC it asks Anthony to **set a
+   4-digit PIN** (see [The PIN on ChartBridge's page](#the-pin-on-chartbridges-page)).
 
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
@@ -75,9 +76,41 @@ portproxy`, `ssh -R` or local reverse proxy pointing at it. A forwarded client a
 this-PC rule. The rules keep out other devices and web pages, not software running on this PC: any local program
 can connect from 127.0.0.1 and send any `Origin`.
 
+### The PIN on ChartBridge's page
+
+ChartBridge 0.3.2 locks its own page (`http://localhost:8765/`) with a 4-digit PIN, so someone else at this PC
+cannot open it and see or trade Anthony's accounts. It is a kid lock, not high security, and it never locks
+Anthony out of a trade:
+
+- **Setting it.** While no PIN is set, the page shows **Set a PIN** (enter four digits, then the same four
+  again). Nothing streams and no order bar shows until then. Each PC has its own PIN, set on that PC.
+- **Unlocking.** Each time the page opens (or is reloaded) it asks for the PIN, with a pad that works with
+  the mouse, touch or the keyboard (digits, Backspace, Delete clears). A wrong PIN is simply refused:
+  **there is no lockout**, nothing is counted and nothing waits, so the right PIN always works at once.
+- **Staying unlocked.** Once unlocked, the page stays unlocked while it is open, including across a
+  ChartBridge restart (a recompile with F5, or restarting NinjaTrader): the page reconnects on its own and
+  signs in again without asking. The unlock lives only in the open page (never saved in the browser), so
+  a reload asks again. Armed is still off after a reload or a dropped connection, as before.
+- **Changing it.** The **PIN** button in the toolbar asks for the current PIN, then the new one twice.
+  Pages already open stay unlocked.
+- **Forgotten PIN.** Delete `pin.txt` in `Documents\NinjaTrader 8\ChartBridge\` on this PC (NinjaTrader
+  may stay open; no recompile). The page then asks for a new PIN the next time it opens or reconnects. Only
+  someone at this PC can do this. Pages that were open keep their current connection, but once they
+  reconnect they ask for the new PIN like any other page.
+- **What is stored.** `pin.txt` holds a salted PBKDF2-SHA256 hash of the PIN (600,000 iterations), never
+  the PIN, plus a random key that lets ChartBridge recognise pages it has unlocked. ChartBridge never logs
+  the PIN or any token; `/diag` shows only whether a PIN is set.
+- **What it does not touch.** The Desk's Live tab (listed in `allowOrigins`, with its own PIN) and local
+  programs such as The Desk's relay connect exactly as before, without ChartBridge's PIN. The chart mounted
+  in The Desk (`ChartLive.mount`) never shows the PIN pad.
+
+Details: "PIN" in `nt8/PROTOCOL.md`.
+
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
-simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`).
+simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`). The fake has the same PIN; it
+asks for one to be set unless started with `--test-pin=<made-up PIN>`, and `--pin-file=<path>` keeps it
+across fake restarts.
 
 ## Trading from the chart
 
@@ -136,7 +169,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
    the new order may not exceed it. Orders that reduce the position are always allowed.
 4. Only ChartBridge's own page: the WebSocket Origin must be `http://localhost:<port>` (pages listed in
    `allowOrigins` can read, never trade), and the page must
-   sign in with the token from `GET /session` (a new one each start). The page may not sit in another
+   sign in with the token from `GET /session` (a new one each start; 0.3.2: only for a page unlocked with
+   the PIN). The page may not sit in another
    page's frame; it also refuses to arm or trade inside one.
 5. Limit and stop prices on the tick grid, within 200 ticks of the last price, stops on the right side of
    the market, and refused when the last trade is more than 300 seconds old.
@@ -225,6 +259,7 @@ npm run smoke:live       # the live page against the fake bridge as ChartBridge 
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
+npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in

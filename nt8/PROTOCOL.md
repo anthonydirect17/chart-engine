@@ -4,6 +4,7 @@ ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
 **Read only by default.** Nothing in v1 can place, change or cancel an order. Order entry (v2, ChartBridge
 0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
+ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
 
 ## Network access (0.3.1)
 
@@ -73,6 +74,79 @@ WebSocket), so there the order of the checks is only guarded in the source.
 `/diag` shows the rules in force under `network`: `loopbackOnly` (true), `allowOrigins` (ChartBridge's own page
 first, then the listed ones; not secret), `refusedNotThisPc` and `refusedOrigin` (refusals since the start).
 
+## PIN (0.3.2)
+
+ChartBridge's own page is locked with a 4-digit PIN. Rules (Anthony, 2026-09-29): a kid lock, not high
+security; Anthony sets the PIN on each PC; **no lockout, ever** (a wrong PIN is refused, nothing is counted,
+delayed or blocked, so a trade can always be managed); and nothing may send an open page back to the PIN
+while a trade could be open.
+
+**What it gates.** Only ChartBridge's own page (`Origin` `http://localhost:<port>`, compared trimmed and
+lower-cased like the WebSocket origin rule, whatever `allowOrigins` says):
+
+- the WebSocket: the page connects to `/ws?unlock=<token>`; without a valid token the upgrade gets **403**
+  before it happens, so no `hello`, fills or ticks are sent. The check sits after the address and Origin
+  checks and before the upgrade;
+- `GET /session` (the order sign-in token): it needs the header `X-ChartBridge-Unlock: <token>` as well as the
+  `Host` check, or it gets **403**.
+
+Origins listed in `allowOrigins` (The Desk's Live tab, which has its own PIN) and connections with no `Origin`
+(local programs such as The Desk's relay) keep the 0.3.1 rules and never need ChartBridge's PIN. Every order
+gate below is unchanged (Armed off after a reload, own page only, caps and the rest). The page files
+themselves are served as before, so the page can show the pad.
+
+**Storage.** `Documents\NinjaTrader 8\ChartBridge\pin.txt`, one data line after two `#` comment lines:
+
+```
+v1 pbkdf2-sha256 <iterations> <salt, 16 bytes hex> <hash, 32 bytes hex> <secret, 32 bytes hex>
+```
+
+The hash is PBKDF2-HMAC-SHA256 of the PIN's four ASCII digits (`Rfc2898DeriveBytes` with
+`HashAlgorithmName.SHA256`, .NET Framework 4.7.2 and later) at 600,000 iterations for a new PIN; the file
+records its own count, so a later change of the default still reads older files. The secret is random and
+signs unlock tokens. The file is written to a temp file and swapped in, and read fresh on every check (no
+copy in memory), so deleting it takes effect at once. A missing or unreadable file means no PIN is set.
+
+**The unlock token and a restart (F5).** A successful set, unlock or change answers a token:
+`v1.<nonce, 16 random bytes hex>.<HMAC-SHA256(secret, "chartbridge-unlock|v1|" + nonce) hex>`. It has no expiry
+(a page stays unlocked while it is open). ChartBridge keeps no list of tokens: it checks one by recomputing
+the HMAC with the secret from `pin.txt` (constant-time compare). So a restarted ChartBridge (a recompile, or
+NinjaTrader restarted) accepts a token issued before the restart, because the secret survived on disk. The page
+holds its token in memory only (never localStorage, sessionStorage, a cookie or the URL bar). When ChartBridge
+goes away, the page keeps retrying as always; on every reconnect it first asks `POST /pin/status` with its token
+and then opens `/ws?unlock=<token>` and signs in again with a fresh `GET /session`. It shows the PIN pad again
+only when ChartBridge **answers** that the token no longer holds (`set` false, or `unlocked` false); a status
+call that fails (ChartBridge down or restarting) keeps the unlock. A reload starts a new page, so it asks for
+the PIN again (and Armed is off, as always).
+
+- **Change** keeps the secret: every page already unlocked stays unlocked.
+- **Forgotten PIN**: delete `pin.txt` (NinjaTrader may keep running, no recompile). ChartBridge answers
+  "no PIN set", and the page shows **Set a PIN** the next time it opens or reconnects. The secret goes with
+  the file and a new PIN gets a new one, so tokens from before stop working. A connection already open is not
+  cut; it asks for the new PIN on its next reconnect. Only someone at this PC can delete the file.
+- Anyone who can read `pin.txt` could make a token: that is anyone at this PC, which the PIN is not meant to
+  stop anyway (a kid lock). The secret never leaves the file.
+
+**Endpoints** (all `POST`, from ChartBridge's own page only: the exact `Origin` check orders use, no case
+folding; `Host` must be `localhost:<port>`; loopback only, like every request; `Content-Type:
+application/json`; a body of at most 256 bytes; one flat JSON object with exactly the keys named, each a
+string of four ASCII digits; anything else is refused. No CORS headers; `Cache-Control: no-store`.)
+
+| path | body | answer |
+|---|---|---|
+| `/pin/status` | `{}` (and the `X-ChartBridge-Unlock` header, when the page has a token) | `200 {"set": bool, "unlocked": bool}` |
+| `/pin/set` | `{"pin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `409` when a PIN is already set |
+| `/pin/unlock` | `{"pin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `403 {"ok":false,"reason":"wrong PIN"}`; `409` when none is set |
+| `/pin/change` | `{"pin":"<current>","newPin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `403` when the current PIN is wrong; `409` when none is set |
+
+Other answers: `405` (not POST), `403` (another origin or host), `415` (not JSON), `413` (over 256 bytes),
+`400` (anything malformed), `404` (another `/pin/` path). ChartBridge 0.3.1 and older answer `404` to
+`/pin/status`; the page then goes on without a PIN, as before.
+
+**Never logged**: the PIN, the hash, the secret or any token (the Output window notes only that a PIN was set
+or changed; the refusal log takes the path without its query). `/diag` shows `"pin": {"set": true|false}` and
+nothing else about the PIN.
+
 ## Messages
 
 All messages are JSON text. Times:
@@ -124,7 +198,7 @@ Order and position events are counted for `/diag` only. ChartBridge never acts o
 
 ## Diagnostics: `GET /diag` (this PC only)
 
-JSON: `version`; `network` (0.3.1: see Network access); `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 once the clock has
+JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": bool}`, see PIN); `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 once the clock has
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
@@ -262,7 +336,8 @@ Stop-limit orders are shown but can only be moved in NinjaTrader.
 ### Signing in
 
 1. `GET /session` (same origin, no CORS headers) answers `{"token": "<48 hex characters>", "trading": true|false}`.
-   The token is new each time ChartBridge starts.
+   The token is new each time ChartBridge starts. Since 0.3.2 it also needs the page's PIN unlock in the
+   `X-ChartBridge-Unlock` header (see PIN), or it answers 403.
 2. After `hello`, the page sends `{"type":"auth","token":"..."}` on the WebSocket and gets a `trading`
    message back; when `enabled` is true, `orders` and one `position` per open position follow.
 3. A page that is shown inside a frame should not sign in (ChartBridge's headers already stop other
