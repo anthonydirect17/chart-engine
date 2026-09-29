@@ -15,6 +15,10 @@
 //                                   (like a PC with little local tick data)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
+//   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
+//                                   (a missing or reused one is refused), so every reconnect needs a fresh URL
+// With --test-controls, also: /test/drop closes every WebSocket (a dropped connection); /test/received lists
+// what the pages sent (message types, GET /session count, WebSocket URLs, ticketsRefused).
 // Load and performance testing (test/perf-live.mjs); sample data, seeded, never market data:
 //   --tick-rate=15                  tick history this dense: 15 trades a second on average (weighted by each
 //                                   minute's volume), so 33 hours of NQ come to about 1.8 million ticks
@@ -40,7 +44,7 @@ const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
-const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
+const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const config = {
@@ -161,6 +165,8 @@ function wsOriginAllowed(origin) {
 const refused = { notThisPc: 0, origin: 0 };
 
 const clients = new Set();
+const received = { types: {}, sessionRequests: 0, urls: [], ticketsRefused: 0 };   // for /test/received
+const ticketsUsed = new Set();
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
 // a new random session token each start, served same-origin at GET /session (gate 4)
@@ -171,6 +177,8 @@ const desk = new OrderDesk({
 
 function onMessage(c, text) {
   let m; try { m = JSON.parse(text); } catch (e) { return; }
+  const type = m && typeof m.type === 'string' ? m.type : '?';
+  received.types[type] = (received.types[type] || 0) + 1;
   if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
   if (m.type === 'subscribe') subscribe(c, m);
   else if (m.type === 'auth') desk.auth(c, m.token);
@@ -244,6 +252,7 @@ const server = http.createServer((req, res) => {
   if (!V1 && !ALLOW_FRAMES) { res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Content-Security-Policy', "frame-ancestors 'none'"); }
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (p === '/') { res.writeHead(302, { Location: '/live/' }); return res.end(); }
+  if (p === '/session') received.sessionRequests++;
   if (p === '/session' && !V1) {
     // same-origin only: no CORS headers, and (like HttpListener's localhost prefix) only Host localhost:<port>
     if (req.headers.host !== 'localhost:' + PORT) { res.writeHead(400); return res.end('bad host'); }
@@ -260,6 +269,8 @@ const server = http.createServer((req, res) => {
         positions: Object.fromEntries(desk.positions) }));
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
+    else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
+    else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ root: r, last: last[r], held: !!held[r] }));
@@ -281,6 +292,12 @@ server.on('upgrade', (req, sock) => {
   if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
   if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  if (TICKETS) {
+    const ticket = new URL(req.url, 'http://x').searchParams.get('ticket');
+    if (!ticket || ticketsUsed.has(ticket)) { received.ticketsRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
+    ticketsUsed.add(ticket);
+  }
+  received.urls.push(req.url);
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };

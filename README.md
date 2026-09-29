@@ -34,7 +34,8 @@ On the page, the **Indicators** menu turns Volume, VWAP, Levels and Fills on and
 dropdown** next to it picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
 built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_BARS.md`), or from traded
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
-this browser as soon as it is made. `http://localhost:8765/diag` shows what ChartBridge
+this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
+`ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
 sees (accounts, fill counts, clock, The Desk queue); see `nt8/PROTOCOL.md`.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
@@ -118,7 +119,7 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   and says how many it kept. Cancel those one by one with their x, or use Flatten.
 - Working orders show as lines with a label and a price tag (green buy, red sell; stops dashed, limits and
   targets solid). While Armed, drag a label (or its price tag) to move the order, press Escape during the
-  drag to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
+  drag (or let go outside the chart's plot) to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
   shows as a light line at the average price with open P&L in points and dollars.
 - Confirmations and refusals show in the status line; a refusal is in red with ChartBridge's reason. An
   error from ChartBridge (for example a bracket leg NinjaTrader rejected) stays on screen until dismissed.
@@ -223,6 +224,7 @@ npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
 npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
+npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in

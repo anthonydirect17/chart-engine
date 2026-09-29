@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.5.0 (2026-09-29): the live chart as a mountable piece (ChartLive.mount), for The Desk
+
+Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also copies `live/live.css`. Run
+`nt8\install.ps1` again after pulling (no NinjaTrader recompile).
+- **ChartLive.mount(container, options)**: the same live chart code runs in a host page such as The Desk's
+  Live trading section, returning `{ destroy(), chart, element, paneId }`. Options: `wsUrl` (a string, or a
+  function asked again for every connect and reconnect, so a relay can hand out a fresh single-use ticket),
+  `paneId`, `storagePrefix`, `onStatus`, `brand`. See `live/EMBED.md` for the files to vendor, in load order.
+- **Always read only when mounted** (review N1: a `trading` option is ignored; only the standalone page, booted
+  with `data-mount="page"`, can trade): no `GET /session`, no `auth`, only `subscribe` and `ping` ever sent (anything
+  else is dropped), no order bar, Armed switch, Shift+click orders or draggable order lines.
+- **Nothing global**: each chart keeps to its own element (class `chart-live`, element ids prefixed per mount);
+  its listeners on document and window, timers and WebSocket go with `destroy()`. Mount, destroy and mount
+  again all work, and several charts can run in one page with their own indicators (`paneId`).
+- **Settings apart**: every storage key gets the `storagePrefix` in front (default `embed:`), so an embedded
+  chart and the standalone page on one origin never share settings.
+- **The standalone page is unchanged**: it now builds itself with the same code (`<script src="live.js"
+  data-mount="page">`), with the ids it always had. Its styles moved to `live/live.css`, scoped under
+  `.chart-live`; computed styles and layout of every page element match 1.4.1 at 1440, 900 and 400 px, with
+  trading on and off. The Armed border sits on the chart root instead of `body`.
+- `live/EMBED.md`: a host connecting straight to `ws://localhost:8765` needs its origin in ChartBridge's
+  `allowOrigins`; smoke:embed runs the host on its own origin, refused when not listed, live when listed (S3).
+- `live/EMBED.md` lists what the chart sends for a relay: `subscribe` with `days` 5 and `tickHours` 0, 8 or, for
+  Range bars, 9 to 33 (never over 48); a relay that clamps `tickHours` gets the partial-session note (review S2).
+- **Drawings per pane** (review S1): a pane other than `main` keeps its lines under
+  `live-drawings-v1-<paneId>-<ROOT>`, so two panes on one instrument no longer overwrite each other; the main
+  pane (and the standalone page) keeps `live-drawings-v1-<ROOT>`.
+- **Order drag safety** (review N4, also on 1.4.2): an order drag let go outside the plot (over the toolbar, an
+  axis, off the chart) or at a price not on screen is cancelled; the line goes back and nothing is sent. Before,
+  it sent a move to an extrapolated price Anthony never saw. Engine unit test and an orders smoke case.
+- Engine: `mountThemePanel` returns `destroy()` (removes the Colors panel and its document listener), and saves
+  only the colors a change sets, on a fresh read, so two charts sharing the key no longer undo each other.
+- Tests: `npm run smoke:embed` (a plain host page with one and two panes against the fake bridge); the fake
+  bridge gets `--tickets` (single-use WebSocket tickets, like The Desk's relay) and, with `--test-controls`,
+  `/test/drop` and `/test/received` (its `ticketsRefused` is apart from the network `refused` counters); a unit
+  test checks `install.ps1` copies every local stylesheet.
+
 ## 1.4.2 (2026-09-29): ChartBridge 0.3.1, network hardening
 
 ChartBridge (nt8/) only; the page and the engine are unchanged apart from the version. Run `nt8\install.ps1`

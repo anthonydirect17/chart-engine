@@ -119,7 +119,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   the price axis or press A for auto-fit. Drag the time axis to zoom. Double-click the chart to reset.
 - Keys: left/right pan with a glide, + and - zoom, End live, A auto-fit. The chart is focusable.
 - Orders (only while order editing is on, which the live page ties to Armed): drag an order's label or
-  price tag to move it, snapped to the tick, with its tag following; Escape during the drag puts it back;
+  price tag to move it, snapped to the tick, with its tag following; Escape during the drag puts it back, and
+  so does letting go anywhere but inside the plot at a price on screen (nothing is sent);
   the x cancels. Order labels take the pointer before drawings (not while a drawing tool is active).
   Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
   Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.

@@ -128,6 +128,22 @@ try {
   await page.waitForTimeout(400);
   check((await state()).orders.find(o => o.id === stopLeg.id).price === L - 10, 'Escape reverted the stop drag');
 
+  // a drag released outside the plot (over the toolbar) is cancelled: nothing sent, the line goes back (review N4)
+  box = await cbox();
+  h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), targetLeg.id);
+  const tagY0 = h.box.y, changes0 = (await control(PORT, 'received')).types.change || 0;
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y + h.box.h / 2); await page.mouse.down();
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y - 40, { steps: 4 });
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, 20, { steps: 6 });                // up over the toolbar
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const changes1 = (await control(PORT, 'received')).types.change || 0;
+  check(changes1 === changes0 && (await state()).orders.find(o => o.id === targetLeg.id).price === moved, 'drag released over the toolbar sent nothing (' + (changes1 - changes0) + ' change messages)');
+  check(await page.evaluate(([id, p]) => window.liveChart.getOrders().find(o => o.id === id).price === p, [targetLeg.id, moved]), 'the chart still shows the target at its price');
+  h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), targetLeg.id);
+  check(Math.abs(h.box.y - tagY0) < 2, 'the target label went back: ' + tagY0 + ' -> ' + h.box.y);
+  check(!/^Moving order/.test((await status(page)).text), 'no "Moving order" message');
+
   // cancel the stop with its x: the OCO pair goes together
   box = await cbox();
   h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLeg.id);
