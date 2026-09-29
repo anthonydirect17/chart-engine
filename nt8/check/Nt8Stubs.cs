@@ -17,13 +17,22 @@ namespace NinjaTrader.NinjaScript
     }
     public abstract class AddOnBase : NinjaScriptBase { }
 }
-namespace NinjaTrader.Code { public static class Output { public static void Process(string s, NinjaTrader.NinjaScript.PrintTo t) { Console.WriteLine(s); } } }
+namespace NinjaTrader.Code
+{
+    // Prints, and keeps every line so the harness can check what reached the Output window.
+    public static class Output
+    {
+        public static readonly List<string> Lines = new List<string>();
+        public static void Process(string s, NinjaTrader.NinjaScript.PrintTo t) { lock (Lines) Lines.Add(s); Console.WriteLine(s); }
+    }
+}
 namespace NinjaTrader.Core
 {
     public class GeneralOptionsClass { public TimeZoneInfo TimeZoneInfo { get { return TimeZoneInfo.Local; } } }
     public static class Globals
     {
-        public static string UserDataDir { get { return "/tmp/nt8/"; } }
+        private static string userDataDir = "/tmp/nt8/";
+        public static string UserDataDir { get { return userDataDir; } set { userDataDir = value; } }   // settable here only, for the harness
         public static DateTime MaxDate = new DateTime(2099, 12, 1);
         public static GeneralOptionsClass GeneralOptions = new GeneralOptionsClass();
     }

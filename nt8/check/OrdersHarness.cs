@@ -4,8 +4,13 @@
 // states and fills are set here by hand, the way NinjaTrader would report them.
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using NinjaTrader.Cbi;
 using NinjaTrader.NinjaScript.AddOns;
@@ -731,7 +736,132 @@ public static class OrdersHarness
         Msg("flatten", "{\"type\":\"flatten\",\"account\":\"Sim101\",\"root\":\"MNQ\"}");
         Check(Rejected("trading is off") && sim.Calls.Count == n, "after config reset: refused");
 
+        NetworkChecks();
+
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
+    }
+    // ------------------------------------------------------------ who may connect (ChartBridge.cs, ChartBridgeAccess)
+    // Example addresses only: a LAN-style address from the documentation range, a Tailscale-style 100.x address.
+    static bool Loop(string ip) { return ChartBridgeAccess.IsLoopback(new IPEndPoint(IPAddress.Parse(ip), 50000)); }
+
+    static void NetworkChecks()
+    {
+        Check(Loop("127.0.0.1") && Loop("127.0.0.2"), "address check: IPv4 loopback allowed");
+        Check(Loop("::1"), "address check: IPv6 loopback ::1 allowed");
+        Check(Loop("::ffff:127.0.0.1"), "address check: IPv4 loopback mapped into IPv6 (::ffff:127.0.0.1) allowed");
+        Check(!Loop("192.0.2.10"), "address check: a LAN address refused");
+        Check(!Loop("100.88.192.33"), "address check: a Tailscale 100.x address refused");
+        Check(!Loop("::ffff:192.0.2.10") && !Loop("::ffff:100.88.192.33"), "address check: LAN and Tailscale addresses mapped into IPv6 refused");
+        Check(!Loop("2001:db8::1") && !Loop("fe80::1") && !Loop("::") && !Loop("0.0.0.0") && !Loop("::2"), "address check: other IPv6, link-local, unspecified refused");
+        Check(!ChartBridgeAccess.IsLoopback((IPEndPoint)null) && !ChartBridgeAccess.IsLoopback((IPAddress)null), "address check: no address (null) refused");
+
+        // origin allow-list for the read-only WebSocket
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://Desk.GoLivePage.com/, https://desk.golivepage.com:443, *, https://*.golivepage.com, null, http://x.example/path, http://100.88.192.33:8800, ftp://x.example");
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800",
+              "allowOrigins: lower-cased, default port and trailing slash dropped, wildcards, null, paths and other schemes skipped: " + string.Join(" ", ChartBridgeConfig.AllowOrigins));
+        Check(ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"), "origin: ChartBridge's own page allowed");
+        Check(ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://100.88.192.33:8800"), "origin: listed origins allowed");
+        Check(ChartBridgeAccess.WsOriginAllowed("HTTPS://DESK.GOLIVEPAGE.COM"), "origin: compared lower-cased");
+        Check(!ChartBridgeAccess.WsOriginAllowed("https://evil.example") && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com.evil.example")
+              && !ChartBridgeAccess.WsOriginAllowed("http://desk.golivepage.com") && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com:8443")
+              && !ChartBridgeAccess.WsOriginAllowed("http://localhost:8766") && !ChartBridgeAccess.WsOriginAllowed("http://127.0.0.1:8765"), "origin: unlisted origins refused (exact scheme, host and port)");
+        Check(!ChartBridgeAccess.WsOriginAllowed("null") && !ChartBridgeAccess.WsOriginAllowed("NULL"), "origin: \"null\" refused");
+        Check(!ChartBridgeAccess.WsOriginAllowed("") && !ChartBridgeAccess.WsOriginAllowed(" "), "origin: an empty Origin header refused");
+        Check(ChartBridgeAccess.WsOriginAllowed(null), "origin: no Origin header (a local program, not a browser) allowed");
+        Check(!ChartBridgeOrders.OriginAllowed("https://desk.golivepage.com") && ChartBridgeOrders.OriginAllowed("http://localhost:8765"), "a listed origin still cannot trade: orders only from ChartBridge's own page");
+
+        // refusals are logged once an hour per address
+        Check(ChartBridgeAccess.ShouldLog("t|a", 0) && !ChartBridgeAccess.ShouldLog("t|a", 1000) && ChartBridgeAccess.ShouldLog("t|b", 1000)
+              && !ChartBridgeAccess.ShouldLog("t|a", 3599999) && ChartBridgeAccess.ShouldLog("t|a", 3600000), "refusal log: once an hour per key");
+        int logged = 0;
+        for (int i = 0; i < 1500; i++) if (ChartBridgeAccess.ShouldLog("flood|" + i, 5000)) logged++;
+        Check(logged < 1000 && logged > 900, "refusal log: a scan from many addresses cannot flood the Output window (" + logged + " lines for 1500 addresses)");
+        Check(ChartBridgeAccess.ShouldLog("flood|late", 5000 + ChartBridgeAccess.RefusalLogEveryMs), "refusal log: an hour later, logging works again");
+
+        // config.txt: the allowOrigins line
+        string dir = Path.Combine(Path.GetTempPath(), "cb-harness-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "ChartBridge"));
+        NinjaTrader.Core.Globals.UserDataDir = dir;
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "# test", "allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800" });
+        ChartBridgeConfig.Load();
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800", "config.txt: allowOrigins is read");
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "port = 8765" });
+        ChartBridgeConfig.Load();
+        Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),
+              "config.txt without allowOrigins: only ChartBridge's own page");
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.golivepage.com");
+        string diag = ChartBridgeAccess.DiagJson();
+        Check(diag.Contains("\"allowOrigins\":[\"http://localhost:8765\",\"https://desk.golivepage.com\"]") && diag.Contains("\"loopbackOnly\":true"), "/diag lists the allowed origins: " + diag);
+
+        // The real request handler behind a listener on every interface (what HTTP.sys does on Windows):
+        // a request from another address that says "Host: localhost" is refused on every path; from this PC it is served.
+        IPAddress outside = null;
+        try
+        {
+            foreach (System.Net.NetworkInformation.NetworkInterface ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                foreach (System.Net.NetworkInformation.UnicastIPAddressInformation ua in ni.GetIPProperties().UnicastAddresses)
+                    if (outside == null && ua.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ua.Address)) outside = ua.Address;
+        }
+        catch (Exception) { outside = null; }
+        int port = 20000 + new Random().Next(9000);
+        HttpListener l = new HttpListener();
+        l.Prefixes.Add("http://*:" + port + "/");
+        l.Start();
+        MethodInfo handle = typeof(ChartBridgeServer).GetMethod("Handle", BindingFlags.NonPublic | BindingFlags.Static);
+        Task serving = Task.Run(() =>
+        {
+            while (l.IsListening)
+            {
+                HttpListenerContext ctx;
+                try { ctx = l.GetContext(); } catch (Exception) { break; }
+                try { ((Task)handle.Invoke(null, new object[] { ctx, CancellationToken.None })).Wait(); } catch (Exception ex) { Console.WriteLine("handler threw: " + ex.Message); }
+            }
+        });
+        int portWas = ChartBridgeConfig.Port;
+        ChartBridgeConfig.Port = port;   // so "Host: localhost:<port>" is the name /session wants
+        ChartBridgeOrders.NewToken();
+        try
+        {
+            int s1; string b1 = Get(IPAddress.Loopback, port, "/diag", out s1);
+            Check(s1 == 200 && b1.Contains("\"network\":{\"loopbackOnly\":true"), "listener: /diag from this PC is served (" + s1 + ")");
+            int s2; Get(IPAddress.Loopback, port, "/session", out s2);
+            Check(s2 == 200, "listener: /session from this PC with Host localhost is served (" + s2 + ")");
+            if (outside == null) Console.WriteLine("skip listener: no non-loopback IPv4 address on this machine");
+            else
+            {
+                lock (NinjaTrader.Code.Output.Lines) NinjaTrader.Code.Output.Lines.Clear();
+                string[] paths = { "/diag", "/session", "/", "/index.html", "/ws", "/nothing" };
+                List<string> codes = new List<string>();
+                foreach (string p in paths) { int sc; string body = Get(outside, port, p, out sc); codes.Add(p + "=" + sc + (body.Length > 0 ? "+body" : "")); }
+                Check(codes.All(x => x.EndsWith("=403")), "listener: from another address with a forged Host localhost, every path is 403 with no body: " + string.Join(" ", codes));
+                int logs;
+                lock (NinjaTrader.Code.Output.Lines) logs = NinjaTrader.Code.Output.Lines.Count(x => x.Contains("refused a request from " + outside));
+                Check(logs == 1, "listener: " + paths.Length + " refused requests from one address make one Output line (" + logs + ")");
+                Check(ChartBridgeAccess.DiagJson().Contains("\"refusedNotThisPc\":" + paths.Length), "/diag counts the refusals: " + ChartBridgeAccess.DiagJson());
+            }
+        }
+        finally { ChartBridgeConfig.Port = portWas; try { l.Stop(); l.Close(); } catch (Exception) { } }
+    }
+
+    // GET with a forged "Host: localhost:<port>", straight to the address (no proxy).
+    static string Get(IPAddress to, int port, string path, out int status)
+    {
+        HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://" + to + ":" + port + path);
+        req.Proxy = null;
+        req.Host = "localhost:" + port;
+        req.Timeout = 5000;
+        try
+        {
+            using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
+            using (StreamReader r = new StreamReader(res.GetResponseStream())) { status = (int)res.StatusCode; return r.ReadToEnd(); }
+        }
+        catch (WebException ex)
+        {
+            HttpWebResponse res = ex.Response as HttpWebResponse;
+            status = res != null ? (int)res.StatusCode : -1;
+            if (res == null) return ex.Message;
+            using (StreamReader r = new StreamReader(res.GetResponseStream())) return r.ReadToEnd();
+        }
     }
 }

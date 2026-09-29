@@ -227,3 +227,63 @@ test('ChartBridgeOrders.cs is C# 5 too', () => {
   assert.ok(!/\?\.\w/.test(ocode), 'null-conditional ?.');
   assert.ok(!/\bnameof\(/.test(ocode), 'nameof');
 });
+
+// ---- 0.3.1: network access. HTTP.sys listens on every interface and matches only the Host header, so
+// ChartBridge itself refuses anything not from this PC, first, on every path; and the read-only WebSocket
+// takes browsers only from its own page or an allowOrigins entry.
+const bodyOf = (text, signature) => {
+  const start = text.indexOf(signature);
+  assert.ok(start >= 0, signature + ' not found');
+  const i = text.indexOf('{', start);
+  let depth = 0;
+  for (let j = i; j < text.length; j++) { if (text[j] === '{') depth++; else if (text[j] === '}' && --depth === 0) return text.slice(start, j + 1); }
+  return text.slice(start);
+};
+
+test('every request is refused unless it comes from this PC, checked first, before any routing', () => {
+  const handle = bodyOf(code, 'private static async Task Handle(HttpListenerContext ctx, CancellationToken token)');
+  const check = handle.indexOf('if (!ChartBridgeAccess.IsLoopback(remote)) { ChartBridgeAccess.NoteRefusedAddress(remote, SafePath(ctx)); Refuse(ctx); return; }');
+  assert.ok(check > 0, 'the address check is in the request handler and refuses');
+  // nothing but reading the source address comes before it
+  assert.match(handle, /^[^{]*\{\s*try\s*\{\s*IPEndPoint remote = RemoteOf\(ctx\);\s*if \(!ChartBridgeAccess\.IsLoopback\(remote\)\)/);
+  for (const route of ['ctx.Request.Url', 'IsWebSocketRequest', 'Headers["Origin"]', '"/diag"', '"/session"', 'ServeFile(', 'ServeText(', 'AcceptWebSocketAsync(', 'RunClient(', 'DiagJson(', 'SessionJson('])
+    assert.ok(handle.indexOf(route) > check, route + ' must come after the address check');
+  // the handler is the only way in: the accept loop hands every request to it, and routing happens nowhere else
+  const accept = bodyOf(code, 'private static async Task AcceptLoop(');
+  assert.match(accept, /Task handling = Task\.Run\(\(\) => Handle\(c, token\)\);/);
+  for (const re of [/\bAcceptWebSocketAsync\(/g, /\bRunClient\(ws|\bRunClient\(wsc/g, /\bServeFile\(ctx, path\)/g, /\bGetContextAsync\(/g])
+    assert.equal((code.match(re) || []).length, 1, 'exactly one ' + re);
+  assert.ok(accept.indexOf('GetContextAsync(') > 0, 'requests are taken only in AcceptLoop');
+  // the WebSocket upgrade: address check, then the Origin check, then the upgrade
+  const ws = handle.indexOf('if (path == "/ws" && ctx.Request.IsWebSocketRequest)');
+  const origin = handle.indexOf('if (!ChartBridgeAccess.WsOriginAllowed(origin)) { ChartBridgeAccess.NoteRefusedOrigin(origin); Refuse(ctx); return; }');
+  const upgrade = handle.indexOf('await ctx.AcceptWebSocketAsync(null)');
+  assert.ok(check < ws && ws < origin && origin < upgrade, 'address check, then origin check, then the upgrade');
+  // a missing or unreadable address is not loopback; mapped IPv4 is unwrapped before the test
+  assert.match(bodyOf(code, 'private static IPEndPoint RemoteOf('), /try \{ return ctx\.Request\.RemoteEndPoint; \} catch \(Exception\) \{ return null; \}/);
+  assert.match(code, /public static bool IsLoopback\(IPEndPoint remote\) \{ return remote != null && IsLoopback\(remote\.Address\); \}/);
+  const loop = bodyOf(code, 'public static bool IsLoopback(IPAddress a)');
+  assert.match(loop, /if \(a == null\) return false;/);
+  assert.match(loop, /if \(a\.AddressFamily == AddressFamily\.InterNetworkV6 && a\.IsIPv4MappedToIPv6\) a = a\.MapToIPv4\(\);/);
+  assert.match(loop, /catch \(Exception\) \{ return false; \}/);
+  assert.match(bodyOf(code, 'private static void Refuse('), /ctx\.Response\.StatusCode = 403;/);
+  // a refusal is logged at most once an hour per address
+  assert.match(code, /RefusalLogEveryMs = 3600000;/);
+  assert.match(bodyOf(code, 'public static void NoteRefusedAddress('), /if \(ShouldLog\("addr\|" \+ who, ChartBridgeTime\.NowUtcMs\(\)\)\)/);
+});
+
+test('the read-only WebSocket takes a browser only from ChartBridge\'s own page or allowOrigins', () => {
+  const allowed = bodyOf(code, 'public static bool WsOriginAllowed(string origin)');
+  assert.match(allowed, /if \(origin == null\) return true;/);                 // no Origin header: not a browser, still this PC only
+  assert.match(allowed, /if \(o\.Length == 0 \|\| o == "null"\) return false;/);
+  assert.match(allowed, /if \(o == OwnOrigin\) return true;/);
+  assert.match(allowed, /return list != null && list\.Contains\(o\);/);        // exact matches only
+  assert.ok(!/StartsWith|EndsWith|IndexOf|Regex|\*/.test(allowed.replace(/^[^{]*/, '')), 'no prefix, suffix or wildcard matching');
+  assert.match(code, /public static string OwnOrigin \{ get \{ return "http:\/\/localhost:" \+ ChartBridgeConfig\.Port/);
+  assert.match(code, /else if \(key == "allowOrigins"\) AllowOrigins = ChartBridgeAccess\.ParseOrigins\(val\);/);
+  assert.match(bodyOf(code, 'public static void Load()'), /ChartBridgeOrders\.ResetConfig\(\);\s*AllowOrigins = new List<string>\(\);/);
+  // /diag lists them (not secret)
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"network\\":"\)\.Append\(ChartBridgeAccess\.DiagJson\(\)\);/);
+  // trading keeps its stricter rule: an allowOrigins page can never trade
+  assert.ok(!/AllowOrigins|WsOriginAllowed/.test(ocode), 'ChartBridgeOrders.cs never looks at allowOrigins');
+});
