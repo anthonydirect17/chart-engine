@@ -8,8 +8,9 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.5.3 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
-  default ground every color below is unchanged).
+- **Engine version:** 1.6.0 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
+  default ground every color below is unchanged. 1.6.0 is the live page's Indicators menu "E2" and chip strip; the
+  chart itself draws exactly as in 1.5.3).
 
 ## Colors
 
@@ -139,8 +140,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     Independence, Labor, Thanksgiving, Christmas, with the NYSE's observed-day rules) have no regular session:
     nothing, even though Globex trades; a holiday gets a note naming the day, a weekend none. Early-close days have
     an IB. Not detectable from bars: a minute that has a bar but lost some trades.
-  - Its own Indicators entry, **IB 1h**, per pane: on for the main pane (also for a main pane saved before
-    1.5.3), off for a new pane. It is independent of Levels.
+  - Its own Indicators entry, **Initial balance** (chip "IB"; "IB 1h" in 1.5.3), per pane: on for the main pane
+    (also for a main pane saved before 1.5.3), off for a new pane. It is independent of Levels.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
@@ -192,11 +193,32 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
   Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
-- Live page (1.4.0): Volume, VWAP, Levels, Fills and IB 1h (1.5.3) are turned on and off in one **Indicators** menu per chart
-  pane (a `.btn` with the count on, opening a panel on `#0B1016` with a `#2A3645` border, radius 12, the Colors
-  panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
-  the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane. The main pane
-  starts with today's set (all five on, or the 1.3 choices plus IB 1h); a new pane starts with none on (Anthony, 2026-09-29).
+- Live page, **Indicators menu "E2"** (1.6.0, as Anthony approved it in the design canvas): one per chart pane, a
+  `.btn` showing shown/on-this-chart ("4/5"), opening a 460 px panel (never wider than the pane) on `#0B1016` with a
+  `#2A3645` border, radius 12, the Colors panel's shadow, padding 8:
+  - Title "Indicators" (600 13px) and "4 shown, 1 hidden" (mono 11px `#8392A5`); a search box (34 px, `#0F151D`, a
+    `#3B2A6B` border) with a "/" key cap, focused on open. It matches names and short names (vwap; ib ibh ibl; pdh pdl
+    onh onl levels; vol volume; fills); Enter acts on the first match.
+  - "Recent": the last 5 used (mono 11px outlined buttons); a click adds, shows or hides.
+  - "On this chart" (caps mono 10px): every indicator on the pane, a row each (36 px): a switch (32 by 18; on: the
+    accent tint with a `#B69CFF` knob) that shows or hides and keeps everything, the swatch (12 by 3, grey when hidden),
+    the name (13px), a pin (star, filled `#B69CFF` when pinned) for the chip strip, a gear opening the one settings panel
+    open at a time (`#0F151D`, what the indicator does, read only; Fills holds "Show fills from", the account choice
+    that sat in the toolbar before 1.6.0), and an x that takes it off the chart.
+  - The groups, folded, one open at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars; Volume
+    profile tagged "coming", not selectable), Trades (Fills); a dashed + adds one. Then "Coming: cumulative delta,
+    time and sales".
+  - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything).
+  - Keys: "/" opens the menu of the pane under the mouse (not while typing in a box, not with Ctrl, Alt or Cmd; no
+    other key of the chart or the order bar uses it), arrows move through the menu, Escape or a click outside closes it
+    and Escape puts the focus back where it was.
+  - **Chip strip** next to the button: pinned indicators only, one click shows or hides. A chip is 30 px tall, mono
+    600 11px: shown = `#141C26` with a solid `#2A3645` border and its color line; hidden = no fill, a dashed border,
+    grey text and a grey line. When the chips do not fit on the toolbar line (a narrow pane) each becomes one letter
+    (V W L I F) over its line, so the strip never wraps.
+  - Saved per pane (`live-indicators-v2`). The main pane starts with the five on, shown and pinned (a pane saved by
+    1.4 to 1.5.3 keeps its choices: the ones that were off stay on its chart, hidden); a new pane starts with none on
+    (Anthony, 2026-09-29).
 - PIN pad (live page, 1.5.2, ChartBridge 0.3.2; `live/pin.css`): a centered card on `#0B1016` with a `#2A3645`
   border, radius 12 and the Colors panel's shadow, over the `#080B10` ground (at 90% with a light blur over the
   chart for Change PIN). The logo and wordmark as in the toolbar, a 600 18px title, four 14 px dots (filled
@@ -208,7 +230,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   older way. See `docs/RANGE_BARS.md`.
   The select that picks between them has a visible **Range style** label (the toolbar's `.glabel` style, like
   "Bars"), 1.5.1.
-- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.2 · chart 1.5.3" (1.5.1).
+- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.2 · chart 1.6.0" (1.5.1).
 
 ## Honesty rules
 

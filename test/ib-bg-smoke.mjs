@@ -4,7 +4,7 @@
 //   npm run smoke:ib        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: nothing before 9:30; forming (dashed, "(forming)") at 10:00 and the same values on every view, after a
 // reload and in ChartLive.mount; locked (solid) at 11:15; a weekend and an NYSE holiday show nothing; history that
-// starts after 9:30 shows nothing and says so; the IB 1h menu entry per pane. Background: the four presets and a
+// starts after 9:30 shows nothing and says so; the Initial balance menu entry per pane. Background: the four presets and a
 // picked color draw the ground and the legend follows; saved per prefix, across a reload, and a second tab changing
 // another color does not undo it. Screenshots of each go to SHOTS (default test/out).
 import { chromium } from 'playwright';
@@ -130,12 +130,12 @@ try {
     check(JSON.stringify(await ibOf(p)) === JSON.stringify(ib), 'same IB after a reload');
     // the menu entry: off hides the lines and is saved for this pane only
     await p.click('#indBtn');
-    check(await p.isVisible('#indPanel input[data-layer="ib"]') && /IB 1h/.test(await p.textContent('#indPanel')), 'Indicators menu has "IB 1h"');
-    await p.click('#indPanel input[data-layer="ib"]'); await p.keyboard.press('Escape');
-    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false && (await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v1')).main.ib)) === false, 'IB 1h off: layer off and saved for the main pane');
+    check(await p.isVisible('#indPanel [data-f="sw:ib"]') && /Initial balance/.test(await p.textContent('#indPanel')), 'Indicators menu has "Initial balance" (1.6.0; IB 1h before)');
+    await p.click('#indPanel [data-f="sw:ib"]'); await p.keyboard.press('Escape');
+    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false && (await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2')).main.ind.ib.shown)) === false, 'IB 1h hidden: layer off and saved for the main pane');
     await p.reload(); await live(p);
     check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false, 'IB 1h off after a reload');
-    await p.click('#indBtn'); await p.click('#indPanel input[data-layer="ib"]'); await p.keyboard.press('Escape');
+    await p.click('#indBtn'); await p.click('#indPanel [data-f="sw:ib"]'); await p.keyboard.press('Escape');
     // the mounted chart (The Desk): same IB; a new pane starts with it off
     const host = await openPageEmbed(ctx, br.port);
     const mA = await ibOf(host, '__a');

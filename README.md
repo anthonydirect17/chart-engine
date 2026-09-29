@@ -31,9 +31,10 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
-On the page, the **Indicators** menu turns Volume, VWAP, Levels, Fills and **IB 1h** (today's 1-hour Initial
-Balance, 1.5.3) on and off, and the **account
-dropdown** next to it picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
+On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills and the
+**Initial balance** (today's 1-hour IB, 1.5.3) per chart pane, with a search box ("/" opens it), a Recent line, Hide
+all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides). The Fills
+settings panel in that menu picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
 built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_BARS.md`), or from traded
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with

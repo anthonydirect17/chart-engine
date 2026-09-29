@@ -1159,7 +1159,8 @@ function start(container, opt, PAGE) {
     legendKey = '';
     syncIndicators();
   }
-  /* One change, here and in storage (read fresh there, so another tab's choices are kept). */
+  /* One change, here and in storage (read fresh there, so another tab's choices are kept). `fn` runs twice, so it
+     must not read IS: values are worked out before. */
   function changeIndicators(fn) {
     IS = fn(IS);
     prefs.updatePane(PANE, fn);
@@ -1250,7 +1251,7 @@ function start(container, opt, PAGE) {
   function indAction(act, id) {
     if (act === 'toggle') changeIndicators(st => LP.Pane.toggle(st, id));
     else if (act === 'remove') { if (M.gear === id) M.gear = null; changeIndicators(st => LP.Pane.remove(st, id)); }
-    else if (act === 'pin') changeIndicators(st => LP.Pane.pin(st, id, !IS.ind[id].pin));
+    else if (act === 'pin') { const v = !IS.ind[id].pin; changeIndicators(st => LP.Pane.pin(st, id, v)); }
     else if (act === 'gear') { M.gear = M.gear === id ? null : id; renderMenu(); }
     else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
@@ -1290,8 +1291,8 @@ function start(container, opt, PAGE) {
     $('indHideAll').addEventListener('click', () => changeIndicators(st => LP.Pane.hideAll(st)));
     $('indChips').addEventListener('click', e => {
       const b = e.target.closest('button[data-id]'); if (!b) return;
-      const id = b.dataset.id;
-      changeIndicators(st => LP.Pane.setShown(st, id, !IS.ind[id].shown));
+      const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
+      changeIndicators(st => LP.Pane.setShown(st, id, v));
     });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
     wrap.addEventListener('keydown', e => {
