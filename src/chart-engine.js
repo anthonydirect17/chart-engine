@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.1.0
+ * chart-engine 1.2.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
