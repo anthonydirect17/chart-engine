@@ -69,6 +69,11 @@ The firewall does not filter traffic within the PC, so the chart and The Desk on
 installing 0.3.1, check once that a plain request and a WebSocket upgrade to the PC's Tailscale or LAN address
 get 403 (the two `curl` lines are in "Network access" in `nt8/PROTOCOL.md`).
 
+**Never forward anything to 8765**: no cloudflared ingress, `tailscale serve` or `funnel`, `netsh interface
+portproxy`, `ssh -R` or local reverse proxy pointing at it. A forwarded client arrives as 127.0.0.1 and passes the
+this-PC rule. The rules keep out other devices and web pages, not software running on this PC: any local program
+can connect from 127.0.0.1 and send any `Origin`.
+
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
 simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`).

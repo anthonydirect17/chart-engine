@@ -36,6 +36,18 @@ check already limits it to this PC. Without this, any web site open in the brows
 **Trading stays stricter.** An `allowOrigins` page can read the stream but can never sign in or trade: orders
 need ChartBridge's own page (gate 4 below, unchanged).
 
+**Never forward anything to 8765.** Do not point any local proxy, tunnel or port forward at port 8765: no
+cloudflared ingress, no `tailscale serve` or `tailscale funnel`, no `netsh interface portproxy`, no `ssh -R`, no
+local reverse proxy. A forwarded client reaches ChartBridge from the forwarding program on this PC, so it
+arrives as 127.0.0.1, and the loopback rule cannot tell it from a local one. Through such a forward, a remote
+client could read `/session`, send ChartBridge's own Origin and, with `trading = true`, trade.
+
+**The rules are about other machines and web pages, not local software.** Any program running on this PC can
+connect from 127.0.0.1 and send any `Origin` header it likes (including ChartBridge's own), so neither the
+loopback rule nor the Origin list is a guard against local software. The Origin list stops web pages open in
+a browser (a browser always sends the true Origin); the loopback rule stops other devices. Keep untrusted
+programs off the trading PC.
+
 **Second layer.** A Windows firewall rule blocking inbound TCP 8765 is still recommended (admin PowerShell:
 `New-NetFirewallRule -DisplayName "ChartBridge 8765 block inbound" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Block`).
 The firewall does not filter traffic within the PC. Safety does not rest on it.

@@ -146,6 +146,9 @@ namespace NinjaTrader.NinjaScript.AddOns
     // so another web site open in the browser cannot read accounts, fills and ticks. A connection with no
     // Origin header is not a browser (a local program such as The Desk's relay) and is allowed: the
     // address check already limits it to this PC. Placing orders needs more (ChartBridgeOrders.cs, gate 4).
+    // Neither rule guards against software on this PC (it can connect from 127.0.0.1 and send any Origin), and
+    // a proxy, tunnel or port forward pointed at this port (cloudflared, tailscale serve or funnel, netsh
+    // portproxy, ssh -R) makes its remote clients arrive as 127.0.0.1: never point one at ChartBridge.
     public static class ChartBridgeAccess
     {
         public const double RefusalLogEveryMs = 3600000;   // one Output line per address (or origin) per hour
