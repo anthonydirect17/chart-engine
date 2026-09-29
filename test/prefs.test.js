@@ -119,6 +119,14 @@ test('every script the live page loads is copied by nt8/install.ps1', () => {
   }
 });
 
+test('every local stylesheet the live page loads is copied by nt8/install.ps1', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8');
+  const install = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install.ps1'), 'utf8');
+  const hrefs = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(m => m[1]).filter(h => !/^https?:/.test(h));
+  assert.ok(hrefs.includes('live.css'));
+  for (const href of hrefs) assert.ok(install.includes("'live\\" + href + "'"), href + ' is not in install.ps1');
+});
+
 /* A chart tab as the page holds it: choices read once at load, then changed one at a time. Before 1.4.1 the page
    wrote the whole pane set (setIndicators) or the whole bracket (setBracket); the fallbacks below do exactly that,
    so these tests show the old failure when run against 1.4.0 (review S2). */

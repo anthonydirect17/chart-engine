@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.4.2
+ * chart-engine 1.5.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.4.2';
+const VERSION = '1.5.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -1094,9 +1094,13 @@ function create(container, options) {
       dirty = true; return;
     }
     if (od) {
-      const d = od; od = null;
-      if (!cancelled && d.moved && d.price !== d.price0 && orderEditing) { pendingMoves.set(d.id, d.price); emit('orderMove', { id: d.id, price: d.price }); }
-      setCursor(zoneOf(local(e)), local(e)); dirty = true; return;
+      // A move is sent only for a release inside the plot at a price on screen. Released anywhere else (the
+      // toolbar, the axes, off the chart), the drag is cancelled: the line goes back and nothing is sent.
+      const d = od, p = local(e); od = null;
+      const inPlot = p.x >= 0 && p.x < plotW && p.y >= 0 && p.y < plotH;
+      const shown = d.price >= Math.min(V.lo, V.hi) && d.price <= Math.max(V.lo, V.hi);
+      if (!cancelled && inPlot && shown && d.moved && d.price !== d.price0 && orderEditing) { pendingMoves.set(d.id, d.price); emit('orderMove', { id: d.id, price: d.price }); }
+      setCursor(zoneOf(p), p); dirty = true; return;
     }
     if (dd) {
       const p = local(e);
@@ -1340,7 +1344,14 @@ function mountThemePanel(chart, host, options) {
       b.setAttribute('aria-pressed', String(p.up === cur.up && p.down === cur.down));
     }
   }
-  function apply(partial) { cur = Object.assign({}, cur, clean(Object.assign({}, cur, partial))); chart.setTheme(cur); store(cur); sync(); changed(); }
+  /* Saves only the fields this change set, on a fresh read, so two charts sharing the key never undo each other. */
+  function apply(partial) {
+    const set = clean(Object.assign({}, cur, partial)), fields = Object.keys(clean(partial || {}));
+    cur = Object.assign({}, cur, set);
+    chart.setTheme(cur);
+    const saved = Object.assign(clean(load()), ...fields.map(k => ({ [k]: cur[k] })));
+    store(saved); sync(); changed();
+  }
   for (const inp of wrap.querySelectorAll('input[type=color]')) inp.addEventListener('input', () => apply({ [inp.dataset.k]: inp.value }));
   for (const inp of wrap.querySelectorAll('input[data-hex]')) inp.addEventListener('input', () => {
     let v = inp.value.trim(); if (v[0] !== '#') v = '#' + v;
@@ -1349,10 +1360,15 @@ function mountThemePanel(chart, host, options) {
   wrap.querySelector('.ce-reset').addEventListener('click', () => apply(defaults));
   const open = v => { panel.hidden = !v; btn.setAttribute('aria-expanded', String(v)); };
   btn.addEventListener('click', () => open(panel.hidden));
-  document.addEventListener('pointerdown', e => { if (!wrap.contains(e.target)) open(false); });
+  const outside = e => { if (!wrap.contains(e.target)) open(false); };
+  document.addEventListener('pointerdown', outside);
   wrap.addEventListener('keydown', e => { if (e.key === 'Escape') { open(false); btn.focus(); } });
   sync(); changed();
-  return { element: wrap, get: () => Object.assign({}, cur), set: apply, close: () => open(false) };
+  return {
+    element: wrap, get: () => Object.assign({}, cur), set: apply, close: () => open(false),
+    /** Remove the panel and its document listener (for a chart that is taken down, such as an embedded pane). */
+    destroy() { document.removeEventListener('pointerdown', outside); wrap.remove(); },
+  };
 }
 
 return {
