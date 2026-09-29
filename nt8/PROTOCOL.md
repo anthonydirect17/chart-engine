@@ -89,8 +89,9 @@ the broker and the prop firm see NinjaTrader orders.
    order events (it starts listening on the first order if it was not yet).
 3. **Size caps on the order and the position.** `maxQty.MNQ = 5` style lines, per instrument root;
    default **1** for any root without a line. No single order may exceed the cap, and the cap limits what
-   the position could become: the current position (including fills NinjaTrader has reported that are
-   not in the position yet), plus every order on the same side that may still fill (working, part filled,
+   the position could become: the current position (read two ways, as NinjaTrader lists it and with fills
+   it has reported that are not in the position yet, taking the worse, since event order differs between
+   connections), plus every order on the same side that may still fill (working, part filled,
    or with a cancel still pending; orders placed in NinjaTrader and bracket legs too; ChartBridge's own
    orders from the moment they are sent; orders that share an OCO id count once, at the largest), plus
    the new order. One order is checked and sent at a time, across all pages. Selling out of a long, or
@@ -113,7 +114,8 @@ the broker and the prop firm see NinjaTrader orders.
 7. **Rate limit.** At most 10 order actions per second per connection; more are refused.
 8. **Strict messages.** Only the keys in the table below; anything else (a misspelt `bracket`, a key with
    a space or a dash) is refused, never ignored. `qty` and bracket ticks must be plain JSON whole numbers
-   (no quotes, no decimals, no exponent, no leading zero, at most 9 digits); `price` a plain decimal. No key may appear twice. No list
+   (no quotes, no decimals, no exponent, no leading zero, at most 9 digits); `price` a plain decimal. A
+   message with any backslash escape is refused. No key may appear twice. No list
    and no nested object except `bracket`, which must be an object (`"bracket": null` is refused).
    A WebSocket message over 64 KB closes the connection.
 
@@ -123,19 +125,21 @@ A refusal never reaches NinjaTrader; it comes back as `reject` with a plain reas
 
 A bracket is `{ "stop": ticks, "target": ticks }`, each a whole number from 0 to 200 (0 means none;
 both 0 means no bracket). It may only go on an order that opens or adds to a position; on an order
-that would reduce the position it is refused.
+that would reduce the position (by both position readings) it is refused.
 
 - **Placed per fill.** Each time the entry fills (all at once, or in parts), that increment gets its
   own stop and target for exactly that many contracts, priced from that increment's fill price, as an
   OCO pair (`oco` = `cb-<tag>-<filled so far>`). Legs are **GTC**. With only a stop or only a target,
-  the lone leg has no OCO id. Legs never cover more than the position holds in the entry's direction
-  beyond what ChartBridge's other legs already cover: contracts of a fill that closed an opposite
-  position (for example a bracketed sell limit that fills after Anthony went long elsewhere), or that
-  are already covered, get no legs, with a `status` `warn`.
+  the lone leg has no OCO id. Legs from an order event are always placed in full, without reading the
+  position at fill time (event order differs between connections, so that reading can be stale, and a
+  withheld stop is the worst outcome). If a fill turns out to have closed an opposite position (for
+  example a bracketed sell limit that fills after Anthony went long elsewhere), the legs check below
+  removes the legs from the wrong side once the position has settled.
 - **Stop level already passed.** If the stop price has already traded when the fill is reported (a
-  fast market, a late event), ChartBridge sends a market exit for that increment instead of a stop
-  through the market (which a broker rejects, and a rejected leg can take its OCO partner with it), and
-  raises a `status` `error`.
+  fast market, a late event), and ChartBridge has a trade price from the last 2 seconds to prove it,
+  ChartBridge sends a market exit for that increment instead of a stop through the market (which a
+  broker rejects, and a rejected leg can take its OCO partner with it), and raises a `status` `error`.
+  A rejected market exit raises a `status` `error` too ("the position may have NO STOP").
 - **Named for recovery.** The entry's order name carries the bracket (`CB#1a2b3c4d s8 t16`), and each
   leg's name carries its fill increment: `CB#1a2b3c4d stop f2 q2 p24990.25` (the pair for the fill that
   brought the entry to 2 filled, 2 contracts, filled at 24990.25); a market exit is
@@ -143,8 +147,13 @@ that would reduce the position it is refused.
   from these names (covered contracts, their prices, and the working pairs), so later fills still get
   legs at their own price and earlier ones do not get a second set.
 - **Nothing missed while stopped.** Any NinjaScript compile reloads the add-on, and an entry that fills
-  meanwhile sends no further update. At start, and in every legs check, every ChartBridge entry with
-  fills is checked, and legs that are missing are placed (never twice).
+  meanwhile sends no further update. Every 2 seconds (and at start) every ChartBridge entry with fills
+  is checked; a fill without legs that has stayed that way for 4 seconds (so an order event still on its
+  way is never raced) gets legs for the contracts the settled position holds in the entry's direction
+  beyond what ChartBridge's other legs cover, with a `status` `warn`. Never twice.
+- **A stop that goes missing is loud.** For a position ChartBridge put a stop on, if the working
+  ChartBridge stops cover fewer contracts than the position holds for 4 seconds (a stop rejected,
+  cancelled by hand, or contracts added without a bracket), the page gets a `status` `error` once.
 - **Partner follows.** When one leg fills in part, its partner is shrunk to what is still open; when
   one fills in full, its partner is cancelled.
 - **Never opens a position.** When the position goes flat (and is still flat when checked, on a
@@ -154,9 +163,9 @@ that would reduce the position it is refused.
   ChartBridge's legs with the position: legs on a flat or opposite position are cancelled, and legs
   covering more contracts than the position are shrunk, newest first. It acts only when the same
   position and legs have held for 4 seconds and the account has been Connected for 30 seconds without a
-  break (a reconnect can show orders before positions; any NinjaTrader connection status event starts
-  the 30 seconds again, so a drop between two samples is not missed), and says so with a `status`
-  `warn`. Orders not named `CB#` are never touched by it.
+  break (a reconnect can show orders before positions; a NinjaTrader connection status change starts
+  the 30 seconds again for the accounts on that connection, so a drop between two samples is not
+  missed, while a price-feed-only status event changes nothing), and says so with a `status` `warn`. Orders not named `CB#` are never touched by it.
 - **A late fill after Flatten is protected.** If an entry fills after `flatten` (its cancel lost the
   race), it still gets its stop and target, and a `status` `error` says a position may be open.
 - **Upkeep never stops.** Bracket upkeep runs even if `trading` is switched off, so a position placed

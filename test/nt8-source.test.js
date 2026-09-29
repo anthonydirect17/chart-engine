@@ -116,9 +116,14 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(legs, /"CB#" \+ br\.Tag \+ " target" \+ mark/);
   assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/);   // a stop through the market becomes a market exit
   const keep = fnBody('KeepBracket');
-  assert.match(keep, /if \(filled <= br\.Covered\) return;/);
-  assert.match(keep, /EffectivePosition\(br\.Account, br\.Instrument\)/);
+  assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
   assert.match(keep, /Bracket rec = Recover\(entry, out pairs\);\s*lock \(Sync\)/);   // Recover reads account orders outside Sync
+  // from an order event the legs are placed in full, never sized from a position read at fill time;
+  // only the scan path (a gap that lasted SettleMs) reads the settled position
+  assert.match(keep, /int qty = inc;\s*if \(fromScan\)/);
+  assert.ok(!/EffectivePosition/.test(keep), 'KeepBracket must not size legs from the fill-time ledger');
+  assert.match(keep, /if \(now - since < SettleMs\) return;/);
+  assert.match(keep, /if \(Settled\.Contains\(entry\)\) return;/);
   assert.match(fnBody('CancelLeftoverLegs'), /IsWorking\(o\.OrderState\) \|\| !IsChartBridgeLeg\(o\)/);
   assert.match(fnBody('CancelLeftoverLegs'), /now - born < YoungMs/);
   assert.match(fnBody('CheckLegs'), /if \(!Steady\(a, now\)\) continue;[\s\S]*IsChartBridgeLeg\(o\)/);
@@ -177,7 +182,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
   // the cap is on the position: current position (with fills not yet in it) plus orders that may fill on that side plus this order
-  assert.match(fnBody('PlaceOrderLocked'), /pos = EffectivePosition\(account, inst\)/);
+  assert.match(fnBody('PlaceOrderLocked'), /pos = isBuyOrder\(top\) \? Math\.Max\(posNow, posEff\) : Math\.Min\(posNow, posEff\)/);   // the worse reading
   assert.match(fnBody('PendingOrders'), /MayFill\(o\.OrderState\)/);
   assert.match(fnBody('PendingOrders'), /foreach \(Order o in Ours\)/);
   assert.match(fnBody('PlaceOrderLocked'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);

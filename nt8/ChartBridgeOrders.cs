@@ -20,7 +20,7 @@
 // Brackets: every fill increment of an entry gets its own OCO stop and target (GTC) for exactly that
 // many contracts. The bracket spec is written into the entry's order name, so it survives a
 // recompile. When a leg fills in part, its partner is resized; when the position goes flat, leftover
-// ChartBridge legs are cancelled; after Flatten, late entry fills get no new legs. Every 2 seconds a
+// ChartBridge legs are cancelled; a late entry fill after Flatten gets legs and an alarm. Every 2 seconds a
 // check compares ChartBridge's legs with the position: legs on a flat or opposite position, or covering
 // more contracts than the position, are cancelled or shrunk once that has held for 4 seconds on a
 // connection that has been up for 30 seconds (a reconnect can show orders before positions). Bracket
@@ -128,6 +128,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, double[]> Last = new Dictionary<string, double[]>();   // root -> { price, time ms }
         public static void NoteLast(string root, double price) { lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() }; }
 
+        // A last price no older than maxAgeMs. The market exit needs a tick this fresh, so a lagging price feed
+        // cannot trigger a false exit.
+        public const double FreshTickMs = 2000;
+
+        private static bool FreshLast(string root, double maxAgeMs, out double p)
+        {
+            double[] v;
+            p = 0;
+            lock (Last) { if (!Last.TryGetValue(root, out v)) return false; }
+            p = v[0];
+            return ChartBridgeTime.NowUtcMs() - v[1] <= maxAgeMs;
+        }
+
         private static string LastPrice(string root, out double p)
         {
             double[] v;
@@ -202,12 +215,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : "other";
         }
 
+        private static bool IsExit(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == "exit"; }
+
         // A ChartBridge stop or target (not an entry, not a market exit).
         private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value != "exit"; }
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); }
             lock (Moves) Moves.Clear();
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -231,6 +246,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string TopLevel(string type, string text, out string bracketBody, out string why)
         {
             bracketBody = null; why = null;
+            if (text.IndexOf('\\') >= 0) { why = "message has an escape sequence; ChartBridge's page never sends one"; return null; }
             Match bm = BracketRx.Match(text);
             string top = text;
             if (bm.Success) { bracketBody = bm.Groups[1].Value; top = text.Remove(bm.Index, bm.Length); }
@@ -463,6 +479,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool IsBuy(Order o) { return o.OrderAction == OrderAction.Buy || o.OrderAction == OrderAction.BuyToCover; }
 
+        private static bool isBuyOrder(string top) { return Str(top, "side") == "buy"; }
+
         private static string PlaceOrder(string top, string bracketBody, string cid)
         {
             lock (PlaceLock) return PlaceOrderLocked(top, bracketBody, cid);   // two pages or tabs cannot both pass the cap check
@@ -481,7 +499,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             int qty;
             if (Int(top, "qty", out qty) != 1 || qty < 1) return "qty must be a whole number of 1 or more";
             bool isBuy = side == "buy";
-            int cap = CapFor(root), pos = EffectivePosition(account, inst), pendBuy, pendSell;
+            // The position two ways: as NinjaTrader lists it, and with fills reported but not yet in it. Event
+            // order differs between connections, so either can be the stale one: the cap takes the worse.
+            int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
+            int cap = CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);
             if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
             PendingOrders(account, inst, out pendBuy, out pendSell);
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
@@ -503,7 +524,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return "bracket needs both stop and target as whole numbers of ticks (0 for none)";
                 if (stopTicks < 0 || targetTicks < 0 || stopTicks > MaxBracketTicks || targetTicks > MaxBracketTicks)
                     return "bracket ticks must be from 0 to " + MaxBracketTicks;
-                bool reduces = (pos > 0 && !isBuy) || (pos < 0 && isBuy);
+                // Refused only when both readings agree the order reduces the position (legs on a reducing order
+                // could open a new position; one stale reading must not block a fresh entry).
+                bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
                 if ((stopTicks > 0 || targetTicks > 0) && reduces) return "a bracket can only go on an order that opens or adds; this order reduces the position";
             }
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -661,6 +684,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception ex) { Alarm(where + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
             bool failed = o.OrderState == OrderState.Rejected || e.Error != ErrorCode.NoError;
+            if (o.OrderState == OrderState.Rejected && IsExit(o))
+                Alarm(where + ": the market EXIT was REJECTED; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);
             if (Enabled && AccountTradable(account.Name) && root != null)
                 ChartBridgeServer.SendToTraders(OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null));
@@ -685,6 +710,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Ours.Remove(o);
                 SeenFilled.Remove(o);
+                GapSince.Remove(o);
                 LegBorn.Remove(o);
                 Bracket br;
                 if (BracketOfEntry.TryGetValue(o, out br) && br.Covered >= o.Filled) { BracketOfEntry.Remove(o); Settled.Add(o); }
@@ -716,6 +742,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (br.StopTicks == 0 && br.TargetTicks == 0) return null;
             List<Order> orders;
             lock (entry.Account.Orders) orders = entry.Account.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == entry.Account && !orders.Contains(o)) orders.Add(o);   // legs just sent, not listed yet
             Dictionary<int, Pair> byFill = new Dictionary<int, Pair>();
             foreach (Order leg in orders)
             {
@@ -742,13 +769,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             return br;
         }
 
-        // Each new fill increment of an entry gets its own OCO stop and target for exactly the contracts
-        // that opened or added in the entry's direction, priced from that increment's fill price.
-        private static void KeepBracket(Order entry)
+        // Each new fill increment of an entry gets its own OCO stop and target for exactly that many
+        // contracts, priced from that increment's fill price. From an order event (the normal path) the
+        // legs are always placed in full, with no reading of the position: event order differs between
+        // connections, so a position read at fill time can be stale either way, and a withheld stop is the
+        // worst outcome. Legs that turn out to exceed the settled position are trimmed by the legs check.
+        // From the scan (fills no event reported: ChartBridge was reloading), a gap is acted on only once
+        // it has lasted SettleMs, so the scan never races an event that is on its way; then the settled
+        // position decides how many contracts still need legs.
+        private static readonly Dictionary<Order, double> GapSince = new Dictionary<Order, double>();
+
+        private static void KeepBracket(Order entry) { KeepBracket(entry, false, 0); }
+
+        private static void KeepBracket(Order entry, bool fromScan, double now)
         {
             Bracket br;
             bool known;
-            lock (Sync) known = BracketOfEntry.TryGetValue(entry, out br);
+            lock (Sync)
+            {
+                if (Settled.Contains(entry)) return;
+                known = BracketOfEntry.TryGetValue(entry, out br);
+            }
             if (!known)
             {
                 List<Pair> pairs;
@@ -773,7 +814,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
             {
                 filled = entry.Filled;
-                if (filled <= br.Covered) return;
+                if (filled <= br.Covered) { GapSince.Remove(entry); return; }
+                if (fromScan)
+                {
+                    double since;
+                    if (!GapSince.TryGetValue(entry, out since)) { GapSince[entry] = now; return; }
+                    if (now - since < SettleMs) return;
+                }
+                GapSince.Remove(entry);
                 inc = filled - br.Covered;
                 double value = entry.AverageFillPrice * filled;
                 incPrice = (value - br.CoveredValue) / inc;
@@ -783,15 +831,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             string where = Where(br.Account, br.Instrument);
             if (br.AfterFlatten)
                 Alarm(where + ": an entry filled AFTER Flatten (" + inc + " contract(s)); a position may be open. It gets its stop and target now; check NinjaTrader");
-            // Legs only for contracts the position holds in the entry's direction that ChartBridge's legs do not
-            // already cover: contracts of this fill that closed an opposite position, or that other legs already
-            // protect, get none (extra legs could open a new position).
-            int along = EffectivePosition(br.Account, br.Instrument) * (br.EntryIsBuy ? 1 : -1);
-            int covered = LegCover(br.Account, br.Instrument, !br.EntryIsBuy);
-            int qty = Math.Min(inc, Math.Max(0, along - covered));
-            if (qty < inc)
-                Warn(where + ": " + (inc - qty) + " of " + inc + " filled contract(s) got no bracket legs (position " + (along * (br.EntryIsBuy ? 1 : -1)) +
-                     ", already covered by legs " + covered + ")");
+            int qty = inc;
+            if (fromScan)
+            {
+                int along = SignedPosition(br.Account, br.Instrument) * (br.EntryIsBuy ? 1 : -1);
+                int covered = LegCover(br.Account, br.Instrument, !br.EntryIsBuy);
+                qty = Math.Min(inc, Math.Max(0, along - covered));
+                Warn(where + ": found " + inc + " filled contract(s) no order update reported (ChartBridge was reloading?); " +
+                     (qty > 0 ? "placing legs for " + qty : "no legs needed") + " (position " + (along * (br.EntryIsBuy ? 1 : -1)) + ", covered by legs " + covered + ")");
+            }
             if (qty > 0) PlaceLegs(br, filled, qty, incPrice, where);
         }
 
@@ -828,7 +876,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // stop would have.
             string root = ChartBridgeServer.RootFor(br.Instrument);
             double last;
-            if (br.StopTicks > 0 && root != null && LastPrice(root, out last) == null && (br.EntryIsBuy ? sp >= last : sp <= last))
+            if (br.StopTicks > 0 && root != null && FreshLast(root, FreshTickMs, out last) && (br.EntryIsBuy ? sp >= last : sp <= last))
             {
                 Order x = br.Account.CreateOrder(br.Instrument, exit, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
                     "CB#" + br.Tag + " exit" + mark, NinjaTrader.Core.Globals.MaxDate, null);
@@ -848,6 +896,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Order> legs = new List<Order>();
             lock (Sync)
             {
+                if (pair.Stop != null) Managed[PosKey(br.Account, br.Instrument)] = new Tuple<Account, Instrument, int>(br.Account, br.Instrument, br.EntryIsBuy ? 1 : -1);
                 foreach (Order leg in new[] { pair.Stop, pair.Target })
                     if (leg != null) { IdFor(leg); PairOfLeg[leg] = pair; LegBorn[leg] = now; Ours.Add(leg); legs.Add(leg); }
             }
@@ -962,9 +1011,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             connEvent = null; connHandler = null;
         }
 
+        // A status change on a connection starts the 30 seconds again for the accounts on that connection. An
+        // event where the connection status did not change (a price feed status change) is ignored. Read by
+        // reflection, so a differently named property falls back to resetting every account (the safe side).
         private static void OnConnectionStatus(object sender, EventArgs e)
         {
-            lock (ConnectedSince) ConnectedSince.Clear();   // any change on any connection: every account waits SteadyMs again
+            object conn = null, status = null, previous = null;
+            try
+            {
+                PropertyInfo pc = e.GetType().GetProperty("Connection"), ps = e.GetType().GetProperty("Status"), pp = e.GetType().GetProperty("PreviousStatus");
+                if (pc != null) conn = pc.GetValue(e, null);
+                if (ps != null) status = ps.GetValue(e, null);
+                if (pp != null) previous = pp.GetValue(e, null);
+            }
+            catch (Exception) { conn = null; }
+            if (status != null && previous != null && status.Equals(previous)) return;
+            lock (ConnectedSince)
+            {
+                if (conn == null) { ConnectedSince.Clear(); return; }
+                foreach (Account a in ConnectedSince.Keys.ToList()) if (a.Connection == null || ReferenceEquals(a.Connection, conn)) ConnectedSince.Remove(a);
+            }
         }
 
         // ---------------------------------------------------------- entries that still need legs
@@ -972,15 +1038,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // a filled order sends no further updates. At start, and in every legs check, each ChartBridge entry
         // with fills is passed through KeepBracket, which places what is missing (from the order names) and
         // nothing twice.
-        public static void Resume() { ScanEntries(false, ChartBridgeTime.NowUtcMs()); }
+        public static void Resume() { ScanEntries(ChartBridgeTime.NowUtcMs()); }
 
-        private static void ScanEntries(bool steadyOnly, double now)
+        // Placing legs only protects, so this needs a connected account, not a steady one.
+        private static void ScanEntries(double now)
         {
             List<Account> accounts = new List<Account>();
             lock (Account.All) foreach (Account a in Account.All) if (!IsNeverTradable(a.Name ?? "")) accounts.Add(a);
             foreach (Account a in accounts)
             {
-                if (steadyOnly ? !Steady(a, now) : StatusOf(a) != "Connected") continue;
+                if (StatusOf(a) != "Connected") continue;
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
@@ -989,7 +1056,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                     bool skip;
                     lock (Sync) skip = Settled.Contains(o);
                     if (skip) continue;
-                    try { KeepBracket(o); if (IsDone(o.OrderState)) Forget(o); }
+                    try
+                    {
+                        KeepBracket(o, true, now);
+                        Bracket br;
+                        bool covered;
+                        lock (Sync) covered = !BracketOfEntry.TryGetValue(o, out br) || br.Covered >= o.Filled;
+                        if (IsDone(o.OrderState) && covered) Forget(o);
+                    }
                     catch (Exception ex) { Alarm(Where(a, o.Instrument) + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
                 }
             }
@@ -1005,9 +1079,52 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void CheckLegs() { CheckLegs(ChartBridgeTime.NowUtcMs()); }
 
+        // ---------------------------------------------------------- the missing-stop alarm
+        // Positions ChartBridge put a stop on (account|contract -> account, contract, direction). If such a
+        // position holds more contracts than ChartBridge's working stops cover, steadily for SettleMs, the
+        // page gets an error (once per situation): a stop was rejected, cancelled by hand, or contracts were
+        // added without a bracket.
+        private static readonly Dictionary<string, Tuple<Account, Instrument, int>> Managed = new Dictionary<string, Tuple<Account, Instrument, int>>();
+        private static readonly Dictionary<string, KeyValuePair<string, double>> Uncovered = new Dictionary<string, KeyValuePair<string, double>>();
+        private static readonly HashSet<string> Alarmed = new HashSet<string>();
+
+        private static void CheckStops(double now)
+        {
+            List<Tuple<Account, Instrument, int>> managed;
+            lock (Sync) managed = Managed.Values.ToList();
+            foreach (Tuple<Account, Instrument, int> m in managed)
+            {
+                Account a = m.Item1;
+                Instrument inst = m.Item2;
+                string key = PosKey(a, inst);
+                if (!Steady(a, now)) continue;
+                int along = SignedPosition(a, inst) * m.Item3;
+                if (along <= 0) { lock (Sync) { Managed.Remove(key); Uncovered.Remove(key); } continue; }
+                List<Order> orders;
+                lock (a.Orders) orders = a.Orders.ToList();
+                int stops = 0;
+                foreach (Order o in orders)
+                {
+                    Match lm = LegNameRx.Match(o.Name ?? "");
+                    if (lm.Success && lm.Groups[2].Value == "stop" && SameInstrument(o.Instrument, inst) && IsWorking(o.OrderState) && IsBuy(o) == (m.Item3 < 0))
+                        stops += Math.Max(0, o.Quantity - o.Filled);
+                }
+                string snap = along + ":" + stops;
+                lock (Sync)
+                {
+                    if (stops >= along) { Uncovered.Remove(key); continue; }
+                    KeyValuePair<string, double> was;
+                    if (!Uncovered.TryGetValue(key, out was) || was.Key != snap) { Uncovered[key] = new KeyValuePair<string, double>(snap, now); continue; }
+                    if (now - was.Value < SettleMs || !Alarmed.Add(key + "|" + snap)) continue;
+                }
+                Alarm(Where(a, inst) + ": the position holds " + along + " contract(s) but ChartBridge's working stops cover " + stops + "; check NinjaTrader and add a stop");
+            }
+        }
+
         public static void CheckLegs(double now)
         {
-            ScanEntries(true, now);
+            ScanEntries(now);
+            try { CheckStops(now); } catch (Exception ex) { ChartBridgeServer.Log("stop check error: " + ex.Message); }
             List<Account> accounts = new List<Account>();
             lock (Account.All) foreach (Account a in Account.All) if (!IsNeverTradable(a.Name ?? "")) accounts.Add(a);
             HashSet<string> seen = new HashSet<string>();
