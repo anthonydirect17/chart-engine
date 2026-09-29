@@ -32,6 +32,7 @@ public static class OrdersHarness
     static string IdOf(Order o) { return (string)typeof(ChartBridgeOrders).GetMethod("IdFor", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { o }); }
     static string Tag(Order entry) { return Regex.Match(entry.Name, "^CB#([0-9a-f]{8}) ").Groups[1].Value; }
     static List<string> After(Account a, int n) { return a.Calls.Skip(n).ToList(); }
+    static string RoleOf(Order o) { return Regex.Match(o.Name ?? "", "^CB#[0-9a-f]{8} (stop|target|exit) ").Groups[1].Value; }
 
     // A connected account that the legs check has seen connected since time 0 (so it counts as steady).
     // Mark every order of an account done (the stand-in's Cancel does not change states).
@@ -710,6 +711,66 @@ public static class OrdersHarness
             ChartBridgeOrders.OnPositionUpdate(m1, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
         }
         Check(ids.Count == idsBefore, "20 finished brackets leave no ids behind (" + (ids.Count - idsBefore) + " left)");
+
+        // ------------------------------------------------------------ the missing-stop alarm names a target lost with its stop (OCO)
+        // Sim101, 2026-09-29: the stop was cancelled by hand and NinjaTrader's OCO cancelled the target too.
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        double tO = 9000000;
+        const string ocoText = "working stops cover 0 contract(s); the target was cancelled too (OCO), so the position has no stop and no target; check NinjaTrader and add a stop";
+        Account o1 = NewAccount("SimO1");
+        Msg("order", Order("SimO1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(o1, o1.Orders[0], 1, 25000);
+        SetPos(o1, mnq, 1);
+        Order o1s = o1.Orders[1], o1t = o1.Orders[2];
+        Check(RoleOf(o1s) == "stop" && RoleOf(o1t) == "target" && o1s.Oco == o1t.Oco && o1s.Oco.Length > 0, "OCO test: a stop and a target in one OCO pair");
+        o1s.OrderState = OrderState.Cancelled; Update(o1, o1s);   // cancelled by hand in NinjaTrader
+        o1t.OrderState = OrderState.Cancelled; Update(o1, o1t);   // NinjaTrader's OCO cancels the target
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO); ChartBridgeOrders.CheckLegs(tO + 4500);
+        List<string> al = sent.Where(m => m.Contains("\"level\":\"error\"") && m.Contains("SimO1") && m.Contains("working stops cover 0")).ToList();
+        Check(al.Count == 1 && al[0].Contains(ocoText), "stop cancelled and its OCO target too: the alarm says so: " + string.Join(" | ", al));
+        Check(al.Count == 1 && al[0].Contains("the position is 1 but ChartBridge's working stops cover 0 contract(s)"), "the alarm keeps its old prefix, so a search for the old text still finds it");
+        ChartBridgeOrders.CheckLegs(tO + 6000);
+        Check(sent.Count(m => m.Contains("SimO1") && m.Contains("working stops cover 0")) == 1, "and says it once");
+        // the other way round: the target's event first, and the stop rejected rather than cancelled
+        Account o2 = NewAccount("SimO2");
+        Msg("order", Order("SimO2", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(o2, o2.Orders[0], 1, 25000);
+        SetPos(o2, mnq, -1);
+        o2.Orders[1].OrderState = OrderState.Rejected; o2.Orders[2].OrderState = OrderState.Cancelled;
+        Update(o2, o2.Orders[2]); Update(o2, o2.Orders[1]);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 10000); ChartBridgeOrders.CheckLegs(tO + 14500);
+        Check(sent.Any(m => m.Contains("SimO2") && m.Contains("position is -1") && m.Contains(ocoText)), "short, stop rejected, target event first: the alarm names the lost target too");
+        // pairs ChartBridge cancels itself (Flatten) are not called lost, even if the position lingers
+        Account o3 = NewAccount("SimO3");
+        Msg("order", Order("SimO3", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(o3, o3.Orders[0], 1, 25000);
+        SetPos(o3, mnq, 1);
+        Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimO3\",\"root\":\"MNQ\"}");
+        Check(o3.Calls.Last() == "flatten MNQ 12-26", "OCO test: flatten sent");
+        o3.Orders[1].OrderState = OrderState.Cancelled; Update(o3, o3.Orders[1]);
+        o3.Orders[2].OrderState = OrderState.Cancelled; Update(o3, o3.Orders[2]);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 20000); ChartBridgeOrders.CheckLegs(tO + 24500);
+        List<string> al3 = sent.Where(m => m.Contains("SimO3") && m.Contains("working stops cover 0")).ToList();
+        Check(al3.Count == 1 && !al3[0].Contains("OCO"), "legs cancelled by Flatten: the alarm (position still open) does not blame an OCO cancel: " + string.Join(" | ", al3));
+        // a stop cancelled while its target still works: the plain alarm, no OCO words
+        SetPos(o1, mnq, 0);
+        ChartBridgeOrders.CheckLegs(tO + 30000);   // flat: the lost target of the last trade is forgotten
+        Msg("order", Order("SimO1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order o1e = o1.Orders[o1.Orders.Count - 1];
+        Fill(o1, o1e, 1, 25000);
+        SetPos(o1, mnq, 1);
+        Order o1s2 = o1.Orders[o1.Orders.Count - 2];
+        Check(RoleOf(o1s2) == "stop", "OCO test: second trade's stop found");
+        o1s2.OrderState = OrderState.Cancelled; Update(o1, o1s2);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 40000); ChartBridgeOrders.CheckLegs(tO + 44500);
+        List<string> al4 = sent.Where(m => m.Contains("SimO1") && m.Contains("working stops cover 0")).ToList();
+        Check(al4.Count == 1 && !al4[0].Contains("OCO") && al4[0].Contains("working stops cover 0 contract(s); check NinjaTrader and add a stop"),
+              "next trade, stop cancelled but target working: plain alarm (the last trade's lost target was forgotten when flat): " + string.Join(" | ", al4));
 
         // ------------------------------------------------------------ gate 7: rate limit
         System.Threading.Thread.Sleep(1100);

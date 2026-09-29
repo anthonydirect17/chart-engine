@@ -287,3 +287,13 @@ test('the read-only WebSocket takes a browser only from ChartBridge\'s own page 
   // trading keeps its stricter rule: an allowOrigins page can never trade
   assert.ok(!/AllowOrigins|WsOriginAllowed/.test(ocode), 'ChartBridgeOrders.cs never looks at allowOrigins');
 });
+
+test('the missing-stop alarm keeps its text and names a target lost with its stop; ChartBridge\'s own cancels do not count', () => {
+  assert.match(ocode, /Alarm\(Where\(a, inst\) \+ ": the position is " \+ pos \+ " but ChartBridge's working stops cover " \+ stops \+ " contract\(s\)" \+ oco \+ "; check NinjaTrader and add a stop"\);/);
+  assert.match(ocode, /"; the target was cancelled too \(OCO\), so the position has no stop and no target"/);
+  for (const f of ['CancelLeftoverLegs', 'Flatten']) {
+    const b = fnBody(f);
+    assert.ok(b.indexOf('NoteWeCancel(') >= 0 && b.indexOf('NoteWeCancel(') < b.search(/account\.(Cancel|Flatten)\(/), f + ': noted before cancelling');
+  }
+  assert.match(fnBody('CheckLegs'), /if \(cancel\.Count > 0\) \{ NoteWeCancel\(cancel\); account\.Cancel\(cancel\.ToArray\(\)\); \}/);
+});

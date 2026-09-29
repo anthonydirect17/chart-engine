@@ -222,7 +222,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -621,6 +621,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
                 foreach (Bracket br in BracketOfEntry.Values)
                     if (br.Account == account && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;   // a late fill raises an alarm
+            List<Order> working;
+            lock (account.Orders) working = account.Orders.Where(o => SameInstrument(o.Instrument, inst) && IsWorking(o.OrderState) && IsChartBridgeLeg(o)).ToList();
+            NoteWeCancel(working);   // the flatten cancels these pairs: not a stop lost with its target
             account.Flatten(new[] { inst });   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
             return null;
@@ -711,6 +714,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (role == "stop" || role == "target") KeepPartner(o, role, where);
             }
             catch (Exception ex) { Alarm(where + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
+            if ((role == "stop" || role == "target") && (o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Rejected))
+            {
+                try { NoteLostPair(account, o); } catch (Exception ex) { ChartBridgeServer.Log("OCO check error: " + ex.Message); }
+            }
             bool failed = o.OrderState == OrderState.Rejected || e.Error != ErrorCode.NoError;
             if ((o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && IsExit(o) && o.Filled < o.Quantity)
                 Alarm(where + ": the market EXIT was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + "; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
@@ -1010,6 +1017,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!young) leftover.Add(o);
             }
             if (leftover.Count == 0) return;
+            NoteWeCancel(leftover);
             account.Cancel(leftover.ToArray());
             Warn("position flat on " + where + ": cancelled " + leftover.Count + " leftover bracket leg(s)");
         }
@@ -1150,6 +1158,56 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Called with Sync held.
         private static void Manage(Account a, Instrument i) { Managed[PosKey(a, i)] = new Tuple<Account, Instrument>(a, i); }
 
+        // A stop and its OCO target gone together. When a ChartBridge stop is cancelled (by hand, or from the
+        // chart) or rejected, NinjaTrader cancels its OCO target too, so the position is left with neither
+        // (Sim101 test, 2026-09-29). The missing-stop alarm says so. Learned from order events while the
+        // position is open, per account|contract, and forgotten when the position is flat; pairs ChartBridge
+        // itself cancels (Flatten, a flat position, the legs check) never count. After a reload only pairs
+        // lost since then are known; the alarm then has its plain text.
+        private static readonly Dictionary<string, List<Order>> LostTargets = new Dictionary<string, List<Order>>();
+        private static readonly Dictionary<string, string> OcoWeCancel = new Dictionary<string, string>();   // OCO id -> account|contract
+
+        private static void NoteWeCancel(IEnumerable<Order> orders)
+        {
+            lock (Sync) foreach (Order o in orders) if (!string.IsNullOrEmpty(o.Oco)) OcoWeCancel[o.Oco] = PosKey(o.Account, o.Instrument);
+        }
+
+        // Called with Sync held, when the position is flat.
+        private static void ForgetLostPairs(string key)
+        {
+            LostTargets.Remove(key);
+            foreach (string oco in OcoWeCancel.Where(kv => kv.Value == key).Select(kv => kv.Key).ToList()) OcoWeCancel.Remove(oco);
+        }
+
+        private static bool Gone(Order o) { return o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Rejected; }
+
+        private static void NoteLostPair(Account account, Order leg)
+        {
+            if (string.IsNullOrEmpty(leg.Oco) || leg.Instrument == null) return;
+            if (SignedPosition(account, leg.Instrument) == 0) return;   // flat: nothing left unprotected
+            List<Order> orders;
+            lock (account.Orders) orders = account.Orders.ToList();
+            lock (Sync) foreach (Order x in Ours) if (x.Account == account && !orders.Contains(x)) orders.Add(x);
+            Order stop = null, target = null;
+            foreach (Order x in orders)
+            {
+                if (x.Oco != leg.Oco || !SameInstrument(x.Instrument, leg.Instrument)) continue;
+                Match m = LegNameRx.Match(x.Name ?? "");
+                if (!m.Success) continue;
+                if (m.Groups[2].Value == "stop") stop = x; else if (m.Groups[2].Value == "target") target = x;
+            }
+            if (stop == null || target == null || !Gone(stop) || !Gone(target) || target.Filled >= target.Quantity) return;
+            string key = PosKey(account, leg.Instrument);
+            lock (Sync)
+            {
+                if (OcoWeCancel.ContainsKey(leg.Oco)) return;
+                Manage(account, leg.Instrument);   // watched by the missing-stop alarm, and forgotten when flat
+                List<Order> lost;
+                if (!LostTargets.TryGetValue(key, out lost)) LostTargets[key] = lost = new List<Order>();
+                if (!lost.Contains(target)) lost.Add(target);
+            }
+        }
+
         private static void CheckStops(double now)
         {
             List<Account> accounts = new List<Account>();
@@ -1173,8 +1231,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int pos = SignedPosition(a, inst);
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
-                bool legsWorking = false;
-                int stops = 0;
+                bool legsWorking = false, lostTarget = false;
+                int stops = 0, targets = 0;
                 foreach (Order o in orders)
                 {
                     if (!SameInstrument(o.Instrument, inst) || !IsWorking(o.OrderState)) continue;
@@ -1182,11 +1240,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (!lm.Success || lm.Groups[2].Value == "exit") continue;
                     legsWorking = true;
                     if (lm.Groups[2].Value == "stop" && pos != 0 && IsBuy(o) == (pos < 0)) stops += Math.Max(0, o.Quantity - o.Filled);
+                    if (lm.Groups[2].Value == "target" && pos != 0 && IsBuy(o) == (pos < 0)) targets += Math.Max(0, o.Quantity - o.Filled);
                 }
                 lock (Sync)
                 {
                     if (pos == 0)
                     {
+                        ForgetLostPairs(key);
                         Uncovered.Remove(key);
                         Alarmed.RemoveWhere(x => x.StartsWith(key + "|", StringComparison.Ordinal));
                         double since;
@@ -1198,12 +1258,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                     FlatSince.Remove(key);
                     int along = Math.Abs(pos);
                     if (stops >= along) { Uncovered.Remove(key); Alarmed.RemoveWhere(x => x.StartsWith(key + "|", StringComparison.Ordinal)); continue; }
-                    string snap = pos + ":" + stops;
+                    List<Order> lost;
+                    lostTarget = targets < along && LostTargets.TryGetValue(key, out lost) && lost.Any(t => IsBuy(t) == (pos < 0));
+                    string snap = pos + ":" + stops + (lostTarget ? ":" + targets + ":oco" : "");
                     KeyValuePair<string, double> was;
                     if (!Uncovered.TryGetValue(key, out was) || was.Key != snap) { Uncovered[key] = new KeyValuePair<string, double>(snap, now); continue; }
                     if (now - was.Value < SettleMs || !Alarmed.Add(key + "|" + snap)) continue;
                 }
-                Alarm(Where(a, inst) + ": the position is " + pos + " but ChartBridge's working stops cover " + stops + " contract(s); check NinjaTrader and add a stop");
+                // The text up to "contract(s)" is unchanged from 0.3.0, so a search for the old alarm still finds it.
+                string oco = !lostTarget ? ""
+                    : stops == 0 && targets == 0 ? "; the target was cancelled too (OCO), so the position has no stop and no target"
+                    : "; the target was cancelled too (OCO), so working targets cover " + targets + " contract(s)";
+                Alarm(Where(a, inst) + ": the position is " + pos + " but ChartBridge's working stops cover " + stops + " contract(s)" + oco + "; check NinjaTrader and add a stop");
             }
         }
 
@@ -1272,7 +1338,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Order o in u.Legs) if (o.Quantity - o.Filled > keep) { o.QuantityChanged = keep + o.Filled; change.Add(o); }
                 excess = 0;
             }
-            if (cancel.Count > 0) account.Cancel(cancel.ToArray());
+            if (cancel.Count > 0) { NoteWeCancel(cancel); account.Cancel(cancel.ToArray()); }
             if (change.Count > 0) account.Change(change.ToArray());
             Warn(inst.FullName + " " + account.Name + ": position is " + pos + "; ChartBridge cancelled " + cancel.Count + " and shrank " + change.Count +
                  " bracket leg(s) so they cannot open or add to a position");
