@@ -9,6 +9,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 const DAY = 86400;
+const TIME_STEP = 0.00001;                               // 10 microseconds, in bar-time seconds
 const tradeDay = (t, s) => s ? Math.floor((t + DAY - s) / DAY) : Math.floor(t / DAY);
 
 /**
@@ -34,7 +35,7 @@ class BarBuilder {
     this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
     this.reset();
   }
-  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; }
+  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.lastT = -Infinity; }
   get last() { return this.bars[this.bars.length - 1]; }
 
   _vwap(t, price, v) {
@@ -62,6 +63,8 @@ class BarBuilder {
   add(t, price, v) {
     v = v || 0;
     const vw = this._vwap(t, price, v);
+    const prevT = this.lastT;
+    this.lastT = Math.max(prevT, t);
     let bar = this.last, isNew = false;
     if (this.mode === 'time') {
       const bt = Math.floor(t / this.seconds) * this.seconds;
@@ -73,11 +76,11 @@ class BarBuilder {
     } else {
       const newSession = !bar || tradeDay(t, this.sessionStart) !== tradeDay(bar.t, this.sessionStart);
       if (!newSession && this.rangeMode === 'nt') {
-        const r = this._ntRange(t, price, v, vw, bar);
+        const r = this._ntRange(t, price, v, vw, bar, prevT);
         if (r) return r;
       } else {
         const span = this.rangeTicks * this.tick + 1e-9;
-        if (newSession || price > bar.l + span || price < bar.h - span) { bar = this._open(t, price, vw); isNew = true; }
+        if (newSession || price > bar.l + span || price < bar.h - span) { bar = this._open(this._times(t, 1, prevT)(0), price, vw); isNew = true; }
       }
     }
     if (price > bar.h) bar.h = price;
@@ -86,17 +89,30 @@ class BarBuilder {
     return { bar, isNew, changed: [bar] };
   }
 
-  _open(t, price, vw) {
-    const prev = this.last;
-    const bt = prev ? Math.max(t, prev.t + 0.001) : t;          // keep times strictly increasing
+  _open(bt, price, vw) {
     const bar = { t: bt, o: price, h: price, l: price, c: price, v: 0, vw };
     this.bars.push(bar);
     return bar;
   }
 
+  /*
+   * Times for n new range bars opened by one trade at t, oldest first; strictly after the last bar and the
+   * previous trade. The trade's own bar (the last) keeps the trade's time, so a fill at that time lands on the bar
+   * that holds its price. Phantom bars before it sit in the gap since the previous trade, at most 1 ms apart.
+   * Only when there is no room (trades in the same instant) do the bars step on by 10 microseconds each, so
+   * times can run ahead of the trades by at most 10 microseconds per bar.
+   */
+  _times(t, n, prevT) {
+    const prev = this.last;
+    if (!prev) return () => t;
+    const lo = Math.max(prev.t, prevT);
+    if (t - lo >= n * TIME_STEP) { const d = Math.min(0.001, (t - lo) / n); return i => (i === n - 1 ? t : t - (n - 1 - i) * d); }
+    return i => lo + (i + 1) * TIME_STEP;
+  }
+
   /* NinjaTrader's Range OnDataPoint, in whole ticks so prices never drift. Returns null when the trade stays in
      the forming bar (the caller then updates it as usual). */
-  _ntRange(t, price, v, vw, bar) {
+  _ntRange(t, price, v, vw, bar, prevT) {
     const tk = this.tick, R = this.rangeTicks;
     const q = p => Math.round(p / tk), px = n => +(n * tk).toFixed(10);
     const P = q(price), lo = q(bar.l), hi = q(bar.h), cl = q(bar.c);
@@ -111,16 +127,22 @@ class BarBuilder {
       bar.c = px(edge);                                  // every bar closes on its high or its low; no volume added
       changed.push(bar);
     }
-    let open = up ? edge + 1 : edge - 1, last = null;
+    const made = [];                                     // [open, close] in ticks for each new bar
+    let open = up ? edge + 1 : edge - 1;
     while (up ? P > edge : P < edge) {
       edge = up ? Math.min(P, open + R) : Math.max(P, open - R);
-      last = this._open(t, px(open), vw);
-      if (up) { last.h = px(edge); } else { last.l = px(edge); }
-      last.c = px(edge);
-      if (edge === P) last.v = v;                        // phantom bars carry no volume; the trade's bar does
-      changed.push(last);
+      made.push([open, edge]);
       open = up ? edge + 1 : edge - 1;
     }
+    const at = this._times(t, made.length, prevT);
+    let last = null;
+    made.forEach(([o, c], i) => {
+      last = this._open(at(i), px(o), vw);
+      if (up) last.h = px(c); else last.l = px(c);
+      last.c = px(c);
+      if (c === P) last.v = v;                           // phantom bars carry no volume; the trade's bar does
+      changed.push(last);
+    });
     return { bar: last, isNew: true, changed };
   }
 

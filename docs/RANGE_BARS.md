@@ -37,8 +37,10 @@ Range R = the range in ticks times the tick size. For each trade at price P:
   bars get volume 0**; the trade's volume goes to the last bar, the one holding P. So yes, NinjaTrader draws bars at
   prices that did not trade.
 - **Past the bottom**: the same, mirrored (low = close = high - R, next bar one tick below).
-- **Time:** every bar made by one trade gets that trade's time. (The chart needs rising times, so the page adds
-  1 ms per extra bar; this only affects the time shown in the legend.)
+- **Time:** every bar made by one trade gets that trade's time, and `UpdateBar(..., time, ...)` restamps the bar
+  with each trade, so a NinjaTrader bar's time is the time of its **last** trade (its close time).
+  The page keys bars by their **open** time (the first trade's), as the chart does for every bar type, so the
+  legend time of a range bar differs from NinjaTrader's Data Box. Prices and volume are the same.
 - **Session boundary:** when `IsResetOnNewTradingDay` (the chart's Break at EOD) is on and the trade is the first of
   a new session, a new bar opens at the trade's price. No phantom bars fill the overnight gap, and the last bar of
   the old session can be short of the range. With Break at EOD off, the bar carries on across the session break,
@@ -51,6 +53,11 @@ Range R = the range in ticks times the tick size. For each trade at price P:
 - Sessions start at 18:00 ET (CME equity index futures), and both modes start a new bar there, as NinjaTrader does
   with Break at EOD on.
 - The same code builds the bars from the tick backfill and from live ticks, so they match (tested tick by tick).
+- Bar times on a jump (1.4.1): the chart needs strictly rising times, so bars made by one trade cannot share it.
+  The trade's own bar keeps the trade's time, and the phantom bars before it sit in the gap since the previous
+  trade, at most 1 ms apart. A fill at the trade's time therefore lands on the bar that holds its price, and times
+  never run ahead of the trades. Only when trades arrive in the same instant (no gap) do the new bars step on by
+  10 microseconds each.
 - Range bars depend on where the build starts. To come out the same after a reload, the page asks ChartBridge for
   ticks back to a session start (this session, or also the previous one while this one is under 8 hours old; at most
   33 hours, below ChartBridge's 48) and builds from that session's first trade. Ticks of a session the backfill only

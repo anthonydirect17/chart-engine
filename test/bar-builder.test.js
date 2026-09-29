@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const BB = require('../live/bar-builder.js');
+const CE = require('../src/chart-engine.js');
 const { BarBuilder } = BB;
 
 const et = (h, m, s) => Date.UTC(2026, 8, 29, h, m, s || 0) / 1000;
@@ -84,7 +85,8 @@ test('NinjaTrader range bars: exact range, phantom bars, next bar one tick on, s
     [110.00, 110.00, 109.00, 109.00, 19],    // new session: opens at the first trade, no bars fill the gap
     [108.75, 108.75, 108.75, 108.75, 11],
   ]);
-  assert.deepEqual(b.bars.map(x => x.t), [et(16, 0, 0), et(16, 0, 3), et(16, 0, 4), et(16, 0, 4) + 0.001, et(16, 0, 6), et(18, 0, 0), et(18, 0, 2)]);
+  // the trade's own bar keeps the trade's time; the phantom bar sits 1 ms before it, after the previous trade
+  assert.deepEqual(b.bars.map(x => x.t), [et(16, 0, 0), et(16, 0, 3), et(16, 0, 4) - 0.001, et(16, 0, 4), et(16, 0, 6), et(18, 0, 0), et(18, 0, 2)]);
   for (const bar of b.bars.slice(0, -1)) {
     assert.equal(bar.h - bar.l, 1, 'finished bar spans exactly the range: ' + row(bar));
     assert.ok(bar.c === bar.h || bar.c === bar.l, 'closes on its high or low');
@@ -189,4 +191,45 @@ test('range backfill reaches a session start: this one, or the one before while 
   assert.equal(BB.rangeTickHours(et(20, 0, 0), S), 27);
   assert.equal(BB.rangeStartIndex([[et(17, 0, 0)], [et(18, 0, 0)], [et(18, 0, 1)]], et(18, 0, 0), S), 1);
   assert.equal(BB.rangeStartIndex([[et(17, 0, 0)], [et(17, 0, 1)]], et(18, 0, 0), S), 0);   // no session start covered
+});
+
+/* The engine puts a fill on the last bar whose time is at or before the fill's time (idxAtTime in
+   src/chart-engine.js); this is the same rule. */
+const barAt = bars => t => { let lo = 0, hi = bars.length - 1; if (t < bars[0].t) return 0; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (bars[m].t <= t) lo = m; else hi = m - 1; } return lo; };
+
+test('a fill on a jump trade lands on the bar that holds its price, not on a phantom bar', () => {
+  for (const mode of ['nt', 'traded']) {
+    const b = build(mode);
+    const fills = [
+      { t: et(16, 0, 4), price: 104.50, side: 'buy', qty: 1 },       // the jump trade, two ranges up
+      { t: et(16, 0, 4) + 0.0005, price: 104.50, side: 'sell', qty: 1 },   // a fill stamped half a ms later
+      { t: et(16, 0, 2), price: 100.25, side: 'buy', qty: 2 },        // an ordinary fill before the jump
+    ];
+    const marks = CE.util.groupFills(fills, barAt(b.bars), 0.25);
+    for (const m of marks) {
+      const bar = b.bars[m.i];
+      assert.ok(m.price >= bar.l && m.price <= bar.h, mode + ': fill at ' + m.price + ' on bar ' + m.i + ' [' + bar.l + ', ' + bar.h + ']');
+    }
+    assert.equal(marks.find(m => m.side === 'buy' && m.price === 104.5).i, mode === 'nt' ? 3 : 2);   // bar D (after phantom C), or C in traded mode
+  }
+});
+
+test('bar times: phantom bars sit between the previous trade and the jump trade; same-instant bursts stay within 10 us a bar', () => {
+  const b = new BarBuilder({ mode: 'range', rangeTicks: 1, tick: 0.25 });
+  const t0 = et(10, 0, 0);
+  b.add(t0, 100, 1);
+  b.add(t0 + 0.4, 100.25, 1);                 // the previous trade
+  const r = b.add(t0 + 0.402, 130, 1);        // 119 ticks up, 2 ms later: about 60 new bars
+  const times = r.changed.filter(x => x !== b.bars[0]).map(x => x.t);
+  assert.equal(times[times.length - 1], t0 + 0.402);
+  assert.ok(times[0] > t0 + 0.4, 'first new bar after the previous trade');
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] > times[i - 1]);
+  // five 120-tick jumps in the same millisecond: strictly increasing, and the last bar at most 10 us per bar ahead
+  const c = new BarBuilder({ mode: 'range', rangeTicks: 1, tick: 0.25 });
+  const t1 = et(11, 0, 0);
+  c.add(t1, 100, 1);
+  let made = 0;
+  for (let k = 1; k <= 5; k++) made += c.add(t1, 100 + (k % 2 ? 30 : 0), 1).changed.length;
+  for (let i = 1; i < c.bars.length; i++) assert.ok(c.bars[i].t > c.bars[i - 1].t, 'strictly increasing at ' + i);
+  assert.ok(c.last.t - t1 <= made * 0.00001 + 1e-9, 'ahead by ' + (c.last.t - t1) + ' s for ' + made + ' bars');
 });
