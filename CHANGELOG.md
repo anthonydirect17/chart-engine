@@ -9,8 +9,9 @@ copies the page and engine files); no NinjaTrader recompile. The Desk's embedded
   the chart), named "IBH" and "IBL", drawn from the 9:30 bar to the right edge (Anthony), in long dashes (12/5, a
   pattern no other level uses) while forming, moving with each new high or low; solid from 10:30:00 for the rest of
   the trading day (until 18:00). Before 9:30 nothing is drawn for today, and only today's IB is ever drawn. The
-  high is the brighter orchid `#F5BDE8`, the low the orchid base `#E58BD2` (Anthony), in the level style (name at
-  the right edge, outlined tag on the price axis). Names that merge ("IBH · ONH") now each keep their own color.
+  high is the brighter orchid `#F7C6EC`, the low the orchid base `#E58BD2` (Anthony), 1.59:1 apart, in the level
+  style (name at the right edge, outlined tag on the price axis; merged names as in 1.5.2, one string in the first
+  level's color).
 - **The data rule:** the IB is always computed from the 1-minute bars the page holds in every view (NinjaTrader's
   1-minute history, then bars built from the live trades), never from the bars on screen. Both edges are whole
   minutes, so no 1-minute bar straddles 9:30 or 10:30, and each 1-minute bar's high and low are exactly those of
@@ -23,8 +24,9 @@ copies the page and engine files); no NinjaTrader recompile. The Desk's embedded
 - **Shown only when it can be exact** (review S2): the 1-minute history must hold a bar from today's session (from
   the 18:00 start) ending at or before 9:30, and every minute from 9:30 up to the one in progress (to 10:29 once
   locked). History that starts after 9:30, yesterday's bars followed by today's from 9:45, a missing minute inside
-  the hour, or data that stopped (a connection lost; the check also runs while offline), all draw nothing, and the
-  status line says why in its quiet grey. Weekends and NYSE full-day holidays (the NYSE's rules, including observed
+  the hour, or data that stopped (a connection lost, also before 9:30; the check also runs while offline), all draw
+  nothing, and the status line says why in its quiet grey (for missing minutes, that a reload fetches the history
+  again). Weekends and NYSE full-day holidays (the NYSE's rules, including observed
   days; Globex trades on most of them, but there is no 9:30 open) draw nothing; a holiday gets a note naming the
   day, a weekend none. What cannot be seen from bars: a minute that has a bar but lost some of its trades.
 - **Its own Indicators entry, IB 1h**, per pane, independent of Levels: on for the main pane (also a main pane saved
@@ -37,16 +39,25 @@ copies the page and engine files); no NinjaTrader recompile. The Desk's embedded
   sides and results, drawings) keeps its hue where it can and moves just enough to read (text 4.5:1, strong text
   7:1, lines 3:1, candle bodies 2.5:1). Saved with the other colors (`live-colors-v1`), one field at a time, per
   storage prefix, so The Desk keeps its own and a second tab never undoes it.
-- **Pairs stay apart on every ground** (review S1): bull and bear, buy and sell, profit and loss, and the IB high and
-  low. On a ground near mid-grey (about `#6A6A6A` to `#8A8A8A`, and mid-luminance colors) nothing keeps its hue at
-  4.5:1, and in 1.5.3's first cut both sides of a pair went white. Now a pair that would merge is first parted by
-  pushing the one farther from the ground further; if that cannot part it, the lighter goes toward white and the
-  darker toward black (buy white, sell black on `#767676`). Each then reads at least 3.5:1 (the floor itself where
-  the ground allows). Checked over all 256 greys and 20,000 random grounds. The other levels can still come out the
+- **Buy and sell keep their green and red on every ground** (review 2, S1): fill markers, trade entries, order lines
+  and labels, the position's side word and the legend's last fill are always drawn in the chosen colors (`#3DDC97`,
+  `#FF7A7A`). Where one does not read on the ground, marks and lines get an outline (3:1) and text a halo (4.5:1) in
+  the house near-black or near-white, whichever stands out more from the ground. On the default ground nothing
+  changes.
+- **Other pairs stay apart on every ground** (review S1): bull and bear, profit and loss, and the IB high and low.
+  On a ground near mid-grey (about `#6A6A6A` to `#8A8A8A`, and mid-luminance colors) nothing keeps its hue at 4.5:1.
+  A pair that would merge is first parted by pushing the one farther from the ground further; if that cannot part
+  it, the lighter goes toward white and the darker toward black. Each then reads at least 3.5:1 (the floor itself
+  where the ground allows). The IB high stays the lighter, at least 1.5:1 apart on every preset (1.55:1 on Light)
+  and 1.25:1 anywhere. Checked over all 256 greys and 20,000 random grounds. The other levels can still come out the
   same color on such a ground; their dash patterns and names tell them apart.
-- **A light ground takes the page light** (Anthony): the toolbar, order bar, menus, Colors panel and status line
-  follow the ground, with the same floors (text 7:1, secondary text and accents 4.5:1 on the darkest surface they sit
-  on; `ChartEngine.util.chromeColors`). On the default and dark grounds they keep the dark house style.
+- **A clearly light ground takes the page light** (Anthony): the toolbar, menus, Colors panel and status line follow
+  the ground, with the same floors (text 7:1, secondary text and accents 4.5:1 on the darkest surface they sit on;
+  `ChartEngine.util.chromeColors`). Clearly light means 9:1 or more against the house near-black `#080B10` (greys
+  from `#B0B0B0` up, the Light preset); mid and dark grounds keep the dark house chrome.
+- **The order bar never changes** (review 2, B1): on every ground, light chrome or not, it looks exactly as in 1.5.2
+  (dark bar, green Buy, red Sell, the amber Armed switch and tint). It keeps the house colors and sits on the house
+  ground. Checked by computed style on the presets and all 256 greys, off and Armed.
 - `legible` (1.5.3): it now moves toward black on a light ground (before it always lightened, which on a light
   ground made text worse), and it checks each step as drawn, in whole RGB steps. On dark grounds the stepping is the
   same as before, but because the rounded color is now what is checked, a few custom colors come out one 5% step
@@ -59,6 +70,7 @@ copies the page and engine files); no NinjaTrader recompile. The Desk's embedded
   `distinct`, `mix`, `chromeColors`, `CHROME_VARS` in `util`; `BACKGROUNDS`, `FLOOR`, `PAIR`, `IB_FORMING_DASH`;
   `getLevels()`; a level may carry `layer` ('ib'), `from` (drawn from that time) and `tone`; `colors()` adds
   `text2`, `legendBg` and `ground`; `getTheme()` returns the colors as chosen; `stats().themeBuilds`.
+- The IB high was `#F5BDE8` in the first cut (1.49:1 from the low); it is `#F7C6EC` now.
 - CI runs `npm test` on Linux and Windows (`windows-latest`); the repo keeps no lock file, so it installs with
   `npm install --no-package-lock`.
 - Tests: `test/ib.test.js` (forming, the lock at exactly 10:30:00 with trades at 10:29:59.999 and 10:30:00.000, four

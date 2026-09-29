@@ -220,6 +220,11 @@ test('coverage (review S2): yesterday plus today from 9:45, or a hole inside the
   const stopped = minuteBars(full.filter(x => x[0] < at(10, 5)));
   assert.equal(U.initialBalance(stopped, { asOf: at(10, 5, 30) }).state, 'forming');
   assert.equal(U.initialBalance(stopped, { asOf: at(10, 20) }).state, 'gap');
+  // data that stopped before 9:30 (offline since 9:20): minutes missing, not "no trades" (review 2)
+  const early = minuteBars(full.filter(x => x[0] < at(9, 20)));
+  assert.equal(U.initialBalance(early, { asOf: at(9, 45) }).state, 'gap');
+  assert.equal(U.initialBalance(early, { asOf: at(10, 45) }).state, 'gap');
+  assert.equal(U.initialBalance(early, { asOf: at(9, 30, 30) }).state, 'forming', 'the first minute may still be waiting for a trade');
   // the minute in progress may still be waiting for its first trade
   assert.equal(U.initialBalance(minuteBars(full.filter(x => x[0] < at(10, 5))), { asOf: at(10, 5, 59) }).state, 'forming');
   // trades have no slots: a list of trades is checked for coverage only

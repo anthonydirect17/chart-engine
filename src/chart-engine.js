@@ -197,37 +197,44 @@ const rgbDist = (a, b) => { const x = parseColor(a), y = parseColor(b); return M
 /* Two colors a trader must tell apart (bull and bear, buy and sell, profit and loss, IB high and low): a visible
    lightness step (1.25:1 between them) or a clear color difference (RGB distance 60; the default buy and sell
    are 219 apart, bull and bear 121). */
-const PAIR = { contrast: 1.25, dist: 60, split: 3.5 };
+const PAIR = { contrast: 1.25, dist: 60, split: 3.5, ordered: 1.5 };
 function distinct(a, b) { return contrast(a, b) >= PAIR.contrast || rgbDist(a, b) >= PAIR.dist; }
 /**
  * A pair of marks on a chosen ground (1.5.3), each reading at `min`, that stay apart when they were apart to begin
  * with. First each on its own (markOnGround). If that brings them together (a mid-grey ground sends both to white),
  * the one that sits further from the ground is pushed further (a higher floor) until they part; if that cannot part
  * them, the lighter one goes toward white and the darker toward black (each still reading at min(min, 4)). With
- * `ordered`, the first must also end up lighter than the second (the IB high is the brighter line).
+ * `ordered`, the first must also end up lighter than the second, by 1.5:1 where the ground allows and 1.25:1 at the
+ * least (the IB high is the brighter line; every preset gets 1.5:1).
  * Returns [a, b] as drawn.
  */
 function pairOnGround(a, b, bg, min, to, ordered) {
+  if (!ordered) return pairTry(a, b, bg, min, to, false, 0).pair;
+  // the IB pair: 1.5:1 apart where the ground allows (every preset does), else the 1.25:1 of the other pairs
+  const strong = pairTry(a, b, bg, min, to, true, PAIR.ordered);
+  return strong.ok ? strong.pair : pairTry(a, b, bg, min, to, true, PAIR.contrast).pair;
+}
+function pairTry(a, b, bg, min, to, ordered, sep) {
   const swap = !ordered && luminance(parseColor(a)) < luminance(parseColor(b));
   const L = swap ? b : a, D = swap ? a : b;                       // L is (meant to be) the lighter one
   const wanted = ordered || distinct(L, D);
-  const ok = (x, y) => (!wanted || distinct(x, y)) && (!ordered || (luminance(parseColor(x)) > luminance(parseColor(y)) && contrast(x, y) >= PAIR.contrast));
-  const out = (x, y) => swap ? [y, x] : [x, y];
+  const ok = (x, y) => (!wanted || distinct(x, y)) && (!ordered || (luminance(parseColor(x)) > luminance(parseColor(y)) && contrast(x, y) >= sep));
+  const out = (x, y, good) => ({ pair: swap ? [y, x] : [x, y], ok: good });
   let l = markOnGround(L, bg, min, to), d = markOnGround(D, bg, min, to);
-  if (ok(l, d)) return out(l, d);
+  if (ok(l, d)) return out(l, d, true);
   l = markOnGround(L, bg, min, to, 0.01); d = markOnGround(D, bg, min, to, 0.01);   // in finer steps, no overshoot
-  if (ok(l, d)) return out(l, d);
+  if (ok(l, d)) return out(l, d, true);
   const g = parseColor(bg), towardWhite = (to || WHITE) === WHITE;
   for (let f = min * 1.04; f <= 21; f *= 1.04) {                   // push the far one (lighter on a dark ground)
     const r = shift(parseColor(towardWhite ? L : D), g, f, to || WHITE, 0.01);
     if (!r.ok) break;
     if (towardWhite) l = r.hex; else d = r.hex;
-    if (ok(l, d)) return out(l, d);
+    if (ok(l, d)) return out(l, d, true);
   }
   const sl = shift(parseColor(L), g, min, WHITE, 0.01).hex, sd = shift(parseColor(D), g, min, BLACK, 0.01).hex;
   const need = Math.min(min, PAIR.split) - 0.02;
-  if (contrast(sl, bg) >= need && contrast(sd, bg) >= need && ok(sl, sd)) return out(sl, sd);
-  return out(markOnGround(L, bg, min, to), markOnGround(D, bg, min, to));
+  if (contrast(sl, bg) >= need && contrast(sd, bg) >= need && ok(sl, sd)) return out(sl, sd, true);
+  return out(markOnGround(L, bg, min, to), markOnGround(D, bg, min, to), false);
 }
 /** Mix of two colors, k = 0 gives `a`, 1 gives `b`, as #RRGGBB. */
 function mix(a, b, k) {
@@ -258,7 +265,7 @@ const PRESETS = [
   { id: 'house', name: 'House green / red', up: '#3DDC97', down: '#FF7A7A' },
 ];
 /* ibHigh / ibLow (1.5.3, Anthony): the IB high a brighter shade of the orchid base, the low the base itself. */
-const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ibHigh: '#F5BDE8', ibLow: '#E58BD2' };
+const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ibHigh: '#F7C6EC', ibLow: '#E58BD2' };
 /* Chart grounds for the Colors panel (1.5.3). The first is the default and keeps the locked look exactly. */
 const BACKGROUNDS = [
   { id: 'dark', name: 'Dark', bg: '#080B10' },
@@ -306,9 +313,18 @@ function buildTheme(partial) {
     if (sameColor(src.tagText, DEFAULT_THEME.tagText)) T.tagText = onGround(ink, T.tagFill, FLOOR.strong, to);
     T.text2 = onGround(mix(T.bg, ink, 0.65), T.bg, FLOOR.text, to);
     [T.up, T.down] = pairOnGround(T.up, T.down, T.bg, FLOOR.candle, to);
-    [T.long, T.short] = pairOnGround(T.long, T.short, T.bg, FLOOR.text, to);
     [T.profit, T.loss] = pairOnGround(T.profit, T.loss, T.bg, FLOOR.text, to);
     T.vwap = markOnGround(T.vwap, T.bg, FLOOR.line, to); T.drawing = markOnGround(T.drawing, T.bg, FLOOR.line, to);
+  }
+  /* Trade sides (buy / long green, sell / short red) keep their color on every ground (review, 1.5.3): where one
+     does not read on the ground, marks get an outline (lines 3:1) and text a halo (4.5:1) in the house near-black
+     or near-white, whichever stands out more from the ground. On the default ground none is needed. */
+  T.sideInk = contrast(T.bg, '#080B10') >= contrast(T.bg, '#F2F6FA') ? '#080B10' : '#F2F6FA';
+  T.ring = {}; T.halo = {};
+  for (const k of ['long', 'short']) {
+    const c = contrast(parseColor(T[k]), parseColor(T.bg));
+    T.ring[k] = c >= FLOOR.line ? null : T.sideInk;
+    T.halo[k] = c >= FLOOR.text ? null : T.sideInk;
   }
   T.upVol = rgba(T.up, T.volumeAlpha); T.downVol = rgba(T.down, T.volumeAlpha);
   T.upOnTag = readableOn(T.up); T.downOnTag = readableOn(T.down);
@@ -324,8 +340,10 @@ function buildTheme(partial) {
  * and dark grounds, where the page keeps its dark house style. Every text color reads at the chart's floors on the
  * darkest surface it sits on (text 7:1, secondary text 4.5:1, accents 4.5:1). Built once per theme change.
  */
+const CHROME_LIGHT = 9;                 // the ground against the house near-black #080B10, for the page chrome to go light
 function chromeColors(T) {
-  if (!T || T.ground !== 'light') return null;
+  // only a clearly light ground (review B1): on mid grounds the page keeps its dark chrome
+  if (!T || T.ground !== 'light' || contrast(parseColor(T.bg), parseColor('#080B10')) < CHROME_LIGHT) return null;
   const bg = T.bg, ink = '#080B10';
   const s2 = mix(bg, ink, 0.05), s3 = mix(bg, ink, 0.10);           // raised surfaces (buttons, hover)
   const tint = mix(bg, '#6D28D9', 0.10), border = mix(bg, '#6D28D9', 0.45);
@@ -529,7 +547,12 @@ function initialBalance(data, opts) {
   const locked = asOf >= end;
   // every finished slot up to now must be there (the slot in progress may not have a trade yet)
   if (w > 0 && count && next < Math.min(end, Math.floor((asOf - start) / w) * w + start)) { res.state = 'gap'; return res; }
-  if (H === -Infinity) { res.state = locked || asOf >= start + Math.max(w, 60) ? 'empty' : 'forming'; return res; }
+  if (H === -Infinity) {
+    // nothing in the hour: if nothing came after 9:30 at all, the data stopped (minutes missing), else no trades
+    const late = asOf >= start + Math.max(w, 60);
+    res.state = !late ? 'forming' : lo >= n ? 'gap' : 'empty';
+    return res;
+  }
   res.state = locked ? 'locked' : 'forming'; res.high = H; res.low = L;
   return res;
 }
@@ -664,6 +687,15 @@ function create(container, options) {
   const xOf = i => plotW - (V.right - i) * V.spacing;
   const yOf = p => (V.hi - p) / (V.hi - V.lo) * plotH;
   const crisp = (v, lw) => { const d = Math.round(v * dpr); return (lw % 2 ? d + 0.5 : d) / dpr; };
+  /* Trade side colors keep their hue on every ground; ringOf / haloOf give the outline (marks, lines) or halo (text)
+     color a side color needs on this ground, or null (always null on the default ground). */
+  const ringOf = col => col === T.long ? T.ring.long : col === T.short ? T.ring.short : null;
+  const haloOf = col => col === T.long ? T.halo.long : col === T.short ? T.halo.short : null;
+  function inkText(text, x, y, col) {
+    const h = haloOf(col);
+    if (h) { ctx.strokeStyle = h; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.setLineDash([]); ctx.strokeText(text, x, y); }
+    ctx.fillStyle = col; ctx.fillText(text, x, y);
+  }
   const followRight = () => last() + o.rightOffset;
   const sessionOf = t => tradeDay(t, o.session.start);
   const isSessionStart = i => i > 0 && o.barSeconds < DAY && sessionOf(bars[i].t) !== sessionOf(bars[i - 1].t);
@@ -842,7 +874,7 @@ function create(container, options) {
     if (border) { ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke(); }
     ctx.fillStyle = fg; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.font = '500 11px ' + T.fontMono;
-    ctx.fillText(text, plotW + 8, top + 9);
+    inkText(text, plotW + 8, top + 9, fg);
     if (sub) { ctx.font = '400 10px ' + T.fontMono; ctx.fillText(sub, plotW + 8, top + 23); }
   }
   function countdown() {
@@ -961,16 +993,9 @@ function create(container, options) {
         ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(plotW, y); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha = 1;
         const g = groups[groups.length - 1];
-        if (g && y - g.y < 12) g.parts.push([L.name, col]); else groups.push({ y, parts: [[L.name, col]] });
+        if (g && y - g.y < 12) g.names.push(L.name); else groups.push({ y, names: [L.name], color: col });
       }
-      // merged names ("VAL · PDL") each in their own level's color, right-aligned at the plot's edge
-      for (const g of groups) {
-        let x = plotW - 8;
-        for (let k = g.parts.length - 1; k >= 0; k--) {
-          const [name, col] = g.parts[k], text = (k ? ' · ' : '') + name;
-          ctx.fillStyle = col; ctx.fillText(text, x, g.y - 3); x -= ctx.measureText(text).width;
-        }
-      }
+      for (const g of groups) { ctx.fillStyle = g.color; ctx.fillText(g.names.join(' · '), plotW - 8, g.y - 3); }
     }
 
     // VWAP, broken at each session start
@@ -1015,8 +1040,10 @@ function create(container, options) {
         ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.lineWidth = 1.25; ctx.setLineDash([3, 3]);
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
         const s = 5.5, d = tr.dir;                                // entry: triangle pointing the trade's way
-        ctx.fillStyle = d > 0 ? T.long : T.short; ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5;
+        const side = d > 0 ? T.long : T.short, ring = ringOf(side);
+        ctx.fillStyle = side; ctx.strokeStyle = ring || T.bg; ctx.lineWidth = ring ? 2 : 1.5;
         ctx.beginPath(); ctx.moveTo(x1, y1 - d * s); ctx.lineTo(x1 - s, y1 + d * s * 0.7); ctx.lineTo(x1 + s, y1 + d * s * 0.7); ctx.closePath(); ctx.stroke(); ctx.fill();
+        ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(x2, y2, 4, 0, Math.PI * 2); ctx.fillStyle = T.exit; ctx.stroke(); ctx.fill();
         if (V.spacing >= 2.5) {
           const txt = tr.label || ((pts > 0 ? '+' : '') + pts.toFixed(o.precision) + (o.unit ? ' ' + o.unit : ''));
@@ -1039,8 +1066,9 @@ function create(container, options) {
       for (const { m, y, ly } of stackFillLabels(inView, yOf, s, 10)) {
         const x = xOf(m.i), buy = m.side === 'buy', dir = buy ? 1 : -1;
         ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - s, y + dir * s * 1.6); ctx.lineTo(x + s, y + dir * s * 1.6); ctx.closePath();
-        ctx.fillStyle = buy ? T.long : T.short; ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5; ctx.stroke(); ctx.fill();
-        if (V.spacing >= 4 && m.qty) { ctx.fillStyle = buy ? T.long : T.short; ctx.textAlign = 'left'; ctx.fillText(String(m.qty), x + s + 3, ly); }
+        const side = buy ? T.long : T.short, ring = ringOf(side);
+        ctx.fillStyle = side; ctx.strokeStyle = ring || T.bg; ctx.lineWidth = ring ? 2 : 1.5; ctx.stroke(); ctx.fill();
+        if (V.spacing >= 4 && m.qty) { ctx.textAlign = 'left'; inkText(String(m.qty), x + s + 3, ly, side); }
       }
     }
 
@@ -1079,7 +1107,11 @@ function create(container, options) {
         boxes.push({ x, top, w }); return { x, top };
       };
       const hline = (y, col, dash, alpha, width) => {
-        const lw = Math.max(1, Math.round(dpr * (width || 1)));
+        const lw = Math.max(1, Math.round(dpr * (width || 1))), ring = ringOf(col);
+        if (ring) {                                              // an outline under a side color that does not read here
+          ctx.strokeStyle = ring; ctx.lineWidth = (lw + 2 * Math.max(1, Math.round(dpr))) / dpr; ctx.setLineDash(dash || []); ctx.globalAlpha = alpha;
+          ctx.beginPath(); ctx.moveTo(0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke();
+        }
         ctx.strokeStyle = col; ctx.lineWidth = lw / dpr; ctx.setLineDash(dash || []); ctx.globalAlpha = alpha;
         ctx.beginPath(); ctx.moveTo(0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha = 1;
@@ -1094,7 +1126,7 @@ function create(container, options) {
           roundRect(x, top, w, LH, 4); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
           ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
           let cx = x + 5; ctx.textAlign = 'left';
-          parts.forEach((pt, k) => { ctx.fillStyle = pt[1]; ctx.fillText(pt[0], cx, top + LH / 2 + 0.5); cx += widths[k] + gap; });
+          parts.forEach((pt, k) => { inkText(pt[0], cx, top + LH / 2 + 0.5, pt[1]); cx += widths[k] + gap; });
           if (closer) {                                             // close handle: a small x in its own cell
             const bx = x + tw;
             ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(bx + 0.5, top + 3); ctx.lineTo(bx + 0.5, top + LH - 3); ctx.stroke();
@@ -1731,7 +1763,7 @@ return {
   VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
-    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
+    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
   },
