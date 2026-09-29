@@ -67,6 +67,20 @@ on up to every 5 s. Before the first connection the chart shows "Waiting for Cha
 Colors panel, and removes the chart's element. Calling it twice is harmless. Mounting again afterwards,
 in the same container or another, works.
 
+## What the chart sends (for a relay)
+
+A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in between only has to pass them on:
+
+| Message | Fields and bounds |
+|---|---|
+| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
+| `ping` | `c` (the page clock). Allowed, but the chart does not send it today. |
+
+A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC
+that has little tick history: Range bars start where the ticks start, and the status line says "Range bars start
+at <time> ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from
+NinjaTrader's." A relay that refuses the subscribe leaves the chart on LOADING (no `history` or `ready` arrives).
+
 ## Read-only guarantee (trading: false)
 
 - The chart never requests `GET /session` and never sends `auth`.

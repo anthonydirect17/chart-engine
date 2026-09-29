@@ -20,6 +20,8 @@ Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also c
   data-mount="page">`), with the ids it always had. Its styles moved to `live/live.css`, scoped under
   `.chart-live`; computed styles and layout of every page element match 1.4.1 at 1440, 900 and 400 px, with
   trading on and off. The Armed border sits on the chart root instead of `body`.
+- `live/EMBED.md` lists what the chart sends for a relay: `subscribe` with `days` 5 and `tickHours` 0, 8 or, for
+  Range bars, 9 to 33 (never over 48); a relay that clamps `tickHours` gets the partial-session note (review S2).
 - **Drawings per pane** (review S1): a pane other than `main` keeps its lines under
   `live-drawings-v1-<paneId>-<ROOT>`, so two panes on one instrument no longer overwrite each other; the main
   pane (and the standalone page) keeps `live-drawings-v1-<ROOT>`.
