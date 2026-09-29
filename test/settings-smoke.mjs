@@ -77,6 +77,37 @@ try {
     check(r.box === '12', 'ES 8 + four ArrowUp = 12 after reload: ' + JSON.stringify(r));
     await ctx.close();
   }
+  // 5. half-typed sizes (review S1): never saved as a stale prefix, never rebuilt while typing
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const p = await newPage(ctx);
+    await pick(p, 'symSeg', 'NQ'); await pick(p, 'tfSeg', 'Range');
+    const storedNQ = () => p.evaluate(() => (JSON.parse(localStorage.getItem('live-range-v2') || '{}') || {}).NQ);
+    // count chart rebuilds (setBars) from here on
+    await p.evaluate(() => { const c = window.liveChart, f = c.setBars; window.__rebuilds = 0; c.setBars = function () { window.__rebuilds++; return f.apply(this, arguments); }; });
+    const rebuilds = () => p.evaluate(() => window.__rebuilds);
+    // a slow "12": no rebuild at 1, none at 12 until Enter
+    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('1'); await p.waitForTimeout(700);
+    check(await rebuilds() === 0 && /Range 20t/.test(await p.textContent('#lgTf')), 'slow "1": no rebuild at 1 tick (' + await rebuilds() + ' rebuilds)');
+    await p.keyboard.type('2'); await p.waitForTimeout(700);
+    check(await rebuilds() === 0, 'typed "12": still no rebuild before Enter');
+    check(await storedNQ() === 12, 'typed "12" is saved for a reload: ' + await storedNQ());
+    await p.keyboard.press('Enter'); await p.waitForTimeout(400);
+    check(await rebuilds() === 1 && /Range 12t/.test(await p.textContent('#lgTf')), 'Enter: one rebuild at 12 (' + await rebuilds() + ')');
+    // "450": the "45" on the way is dropped when the "0" makes it invalid; a reload commits it like Enter (400)
+    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('45'); await p.waitForTimeout(700);
+    check(await storedNQ() === 45, '"45" typed and waiting is saved: ' + await storedNQ());
+    await p.keyboard.type('0'); await p.waitForTimeout(700);
+    check(await storedNQ() === 12, '"450" drops the saved 45, keeps the committed 12: ' + await storedNQ());
+    let r = await rangeAfterReload(p, 'NQ');
+    check(r.box === '400', '"450" then reload: 400, as Enter would give, never 45: ' + JSON.stringify(r));
+    // reload mid-typing: "7" saved after a pause, then "5" and an immediate reload gives 75, not the stale 7
+    await p.click('#rangeTicks', { clickCount: 3 }); await p.keyboard.type('7'); await p.waitForTimeout(700);
+    await p.keyboard.type('5');
+    r = await rangeAfterReload(p, 'NQ');
+    check(r.box === '75' && /Range 75t/.test(r.legend), 'reload mid-typing keeps what was in the box: ' + JSON.stringify(r));
+    await ctx.close();
+  }
   // 4. first run after the update: the indicators and size chosen on 1.3 carry over, so the chart looks the same
   {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });

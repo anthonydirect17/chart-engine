@@ -622,23 +622,35 @@ $('tfSeg').addEventListener('click', e => {
   else rebuild();
 });
 
-/* Range size, per root. Saved as it is typed (a whole number 1 to 400; anything else waits), a moment after the
-   last key; Enter or leaving the box commits at once. A size still waiting is saved if the page is closed or
-   reloaded first. */
-let rangePending = null;
-const saveRange = () => { if (rangePending) { prefs.setRange(rangePending.root, rangePending.n); rangePending = null; } };
-const rangeSettled = LP.debounce(() => { saveRange(); if (S.tf === 'range') rebuild(); }, 350);
-function setRange(n) {
-  if (n === null) return false;
-  if (ranges[S.root] !== n) { ranges[S.root] = n; rangePending = { root: S.root, n }; return true; }
-  return false;
+/* Range size, per root. The chart rebuilds only when the size is committed (Enter, the arrows, or leaving the box),
+   never on a half-typed number (a slow "1" on the way to "12"). While typing, a whole number 1 to 400 is saved a
+   moment after the last key, so a reload keeps it; anything else ("450", empty) drops that and puts the committed
+   size back in storage. A page closed or reloaded mid-typing saves the box with the same rule as Enter
+   (450 becomes 400), never a stale prefix. */
+let rangeTyped = null;                                   // { root, n }: typed, saved, not committed
+const rangeTypedSave = LP.debounce(() => { if (rangeTyped) prefs.setRange(rangeTyped.root, rangeTyped.n); }, 350);
+function rangeTypedDrop() {
+  rangeTypedSave.cancel();
+  if (rangeTyped) { prefs.setRange(rangeTyped.root, ranges[rangeTyped.root]); rangeTyped = null; }
 }
-$('rangeTicks').addEventListener('input', e => { if (setRange(LP.parseRange(e.target.value))) rangeSettled(); });
+function commitRange(root, n) {                          // n from clampRange; null puts the committed size back
+  rangeTypedSave.cancel(); rangeTyped = null;
+  if (n === null) { prefs.setRange(root, ranges[root]); return false; }
+  prefs.setRange(root, n);
+  if (ranges[root] === n) return false;
+  ranges[root] = n;
+  return true;
+}
+$('rangeTicks').addEventListener('input', e => {
+  const n = LP.parseRange(e.target.value);
+  if (n === null) { rangeTypedDrop(); return; }
+  rangeTyped = { root: S.root, n };
+  rangeTypedSave();
+});
 $('rangeTicks').addEventListener('change', e => {
-  setRange(LP.clampRange(e.target.value));
+  const changed = commitRange(S.root, LP.clampRange(e.target.value));
   e.target.value = ranges[S.root];
-  rangeSettled.cancel();
-  if (rangePending) { saveRange(); if (S.tf === 'range') rebuild(); }
+  if (changed && S.tf === 'range') rebuild();
 });
 $('rangeMode').addEventListener('change', e => {
   if (!LP.RANGE_MODES.includes(e.target.value)) return;
@@ -723,7 +735,15 @@ for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
   });
 }
 /* Anything typed but not yet saved is saved when the page is closed, reloaded or hidden. */
-const saveWaiting = () => { saveRange(); bracketSaved.flush(); };      // the chart still redraws when its timer runs
+const saveWaiting = () => {
+  const box = $('rangeTicks');
+  if (document.activeElement === box) {                  // mid-typing: save what Enter would commit
+    const n = LP.clampRange(box.value);
+    rangeTypedSave.cancel(); rangeTyped = null;
+    prefs.setRange(S.root, n === null ? ranges[S.root] : n);
+  }
+  bracketSaved.flush();
+};
 window.addEventListener('pagehide', saveWaiting);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveWaiting(); });
 $('flattenBtn').addEventListener('click', pointerOnly(() => {
