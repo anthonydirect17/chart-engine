@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embed host (test page)</title>
+<!-- A plain host page for test/embed-smoke.mjs: it loads the files live/EMBED.md lists, in that order, and mounts
+     charts with ChartLive.mount. Sample data from the fake bridge only. -->
+<link rel="stylesheet" href="../live/live.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: #1d2430; color: #d9dee6; font: 14px system-ui, sans-serif; display: flex; flex-direction: column; }
+  .host-bar { padding: 10px 16px; display: flex; gap: 16px; align-items: center; }
+  .host-bar b { font-weight: 600; }
+  .panes { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 0 12px 12px; }
+  .pane { flex: 1 1 0; min-width: 0; height: 100%; border-radius: 12px; overflow: hidden; }
+</style>
+</head>
+<body>
+  <div class="host-bar"><b>Host page</b><span>Embedded ChartLive, sample data from the fake bridge</span><span id="hostStatus"></span></div>
+  <div class="panes"><div class="pane" id="paneA"></div><div class="pane" id="paneB"></div></div>
+  <script src="../src/chart-engine.js"></script>
+  <script src="../live/bar-builder.js"></script>
+  <script src="../live/order-ticket.js"></script>
+  <script src="../live/live.js"></script>
+</body>
+</html>
