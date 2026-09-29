@@ -297,7 +297,10 @@ test('the missing-stop alarm keeps its text and names a target lost with its sto
   assert.match(ocode, /", so the position has no stop and no target"/);
   for (const f of ['CancelLeftoverLegs', 'Flatten']) {
     const b = fnBody(f);
-    assert.ok(b.indexOf('NoteWeCancel(') >= 0 && b.indexOf('NoteWeCancel(') < b.search(/account\.(Cancel|Flatten)\(/), f + ': noted before cancelling');
+    assert.ok(b.indexOf('NoteWeCancelSafe(') >= 0 && b.indexOf('NoteWeCancelSafe(') < b.search(/account\.(Cancel|Flatten)\(/), f + ': noted before cancelling');
+    assert.ok(!/NoteWeCancel\(/.test(b), f + ': only the safe (try/catch) note before an order action');
   }
-  assert.match(fnBody('CheckLegs'), /if \(cancel\.Count > 0\) \{ NoteWeCancel\(cancel\); account\.Cancel\(cancel\.ToArray\(\)\); \}/);
+  assert.match(fnBody('CheckLegs'), /if \(cancel\.Count > 0\) \{ NoteWeCancelSafe\(\(\) => cancel, "cancel"\); account\.Cancel\(cancel\.ToArray\(\)\); \}/);
+  const safe = fnBody('NoteWeCancelSafe');
+  assert.match(safe, /try\s*\{[\s\S]*NoteWeCancel\(orders\(\)\);\s*\}\s*catch \(Exception ex\) \{ ChartBridgeServer\.Log\(/);
 });

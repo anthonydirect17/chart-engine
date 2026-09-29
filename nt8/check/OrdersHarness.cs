@@ -782,6 +782,27 @@ public static class OrdersHarness
         ChartBridgeOrders.CheckLegs(tO + 26000); ChartBridgeOrders.CheckLegs(tO + 30500);
         Check(sent.Count(m => m.Contains("SimP5") && m.Contains("working stops cover 0 contract(s); the target was cancelled and the stop was cancelled with it (OCO), so the position has no stop and no target")) == 1,
               "target cancelled first, then its OCO stop: the alarm says the target went first");
+        // the bookkeeping before Flatten and Cancel can never stop them: make it throw
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3, SimP4, SimP5, SimQ");
+        Account q = NewAccount("SimQ");
+        Msg("order", Order("SimQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(q, q.Orders[0], 1, 25000);
+        SetPos(q, mnq, 1);
+        ChartBridgeOrders.BookkeepingFault = () => { throw new InvalidOperationException("test fault"); };
+        lock (NinjaTrader.Code.Output.Lines) NinjaTrader.Code.Output.Lines.Clear();
+        sent.Clear();
+        Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimQ\",\"root\":\"MNQ\"}");
+        bool logged;
+        lock (NinjaTrader.Code.Output.Lines) logged = NinjaTrader.Code.Output.Lines.Any(x => x.Contains("bookkeeping error before a flatten (test fault); the flatten is sent anyway"));
+        Check(q.Calls.Last() == "flatten MNQ 12-26" && !sent.Any(m => m.Contains("\"type\":\"reject\"")) && logged,
+              "a throwing bookkeeping step still sends Flatten (no reject), and logs the error: " + q.Calls.Last());
+        SetPos(q, mnq, 0);
+        Age(q.Orders[1], 5000); Age(q.Orders[2], 5000);
+        int qn = q.Calls.Count;
+        ChartBridgeOrders.OnPositionUpdate(q, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
+        Check(After(q, qn).Count(x => x.StartsWith("cancel CB#")) == 2, "a throwing bookkeeping step still cancels leftover legs when flat: " + string.Join(" | ", After(q, qn)));
+        ChartBridgeOrders.BookkeepingFault = null;
+        Done(q);
         // a stop cancelled while its target still works: the plain alarm, no OCO words
         SetPos(o1, mnq, 0);
         ChartBridgeOrders.CheckLegs(tO + 30000);   // flat: the lost target of the last trade is forgotten

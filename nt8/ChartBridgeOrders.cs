@@ -621,9 +621,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
                 foreach (Bracket br in BracketOfEntry.Values)
                     if (br.Account == account && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;   // a late fill raises an alarm
-            List<Order> working;
-            lock (account.Orders) working = account.Orders.Where(o => SameInstrument(o.Instrument, inst) && IsWorking(o.OrderState) && IsChartBridgeLeg(o)).ToList();
-            NoteWeCancel(working);   // the flatten cancels these pairs: not a stop lost with its target
+            NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
             account.Flatten(new[] { inst });   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
             return null;
@@ -1017,7 +1015,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!young) leftover.Add(o);
             }
             if (leftover.Count == 0) return;
-            NoteWeCancel(leftover);
+            NoteWeCancelSafe(() => leftover, "cancel");
             account.Cancel(leftover.ToArray());
             Warn("position flat on " + where + ": cancelled " + leftover.Count + " leftover bracket leg(s)");
         }
@@ -1174,6 +1172,29 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void NoteWeCancel(IEnumerable<Order> orders)
         {
             lock (Sync) foreach (Order o in orders) if (!string.IsNullOrEmpty(o.Oco)) OcoWeCancel[o.Oco] = PosKey(o.Account, o.Instrument);
+        }
+
+        public static Action BookkeepingFault;   // test hook: runs inside the bookkeeping below (unused in NinjaTrader)
+
+        // The note taken just before a Flatten or a Cancel. It is bookkeeping for the alarm text only, so it may
+        // never stop the order action that follows: any error is logged and the action goes out anyway.
+        private static void NoteWeCancelSafe(Func<IEnumerable<Order>> orders, string action)
+        {
+            try
+            {
+                if (BookkeepingFault != null) BookkeepingFault();
+                NoteWeCancel(orders());
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("bookkeeping error before a " + action + " (" + ex.Message + "); the " + action + " is sent anyway"); }
+        }
+
+        // ChartBridge's working legs on a contract, including legs just sent that NinjaTrader does not list yet.
+        private static List<Order> WorkingLegs(Account account, Instrument inst)
+        {
+            List<Order> orders;
+            lock (account.Orders) orders = account.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == account && !orders.Contains(o)) orders.Add(o);
+            return orders.Where(o => SameInstrument(o.Instrument, inst) && IsWorking(o.OrderState) && IsChartBridgeLeg(o)).ToList();
         }
 
         // Called with Sync held, when the position is flat.
@@ -1360,7 +1381,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Order o in u.Legs) if (o.Quantity - o.Filled > keep) { o.QuantityChanged = keep + o.Filled; change.Add(o); }
                 excess = 0;
             }
-            if (cancel.Count > 0) { NoteWeCancel(cancel); account.Cancel(cancel.ToArray()); }
+            if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, "cancel"); account.Cancel(cancel.ToArray()); }
             if (change.Count > 0) account.Change(change.ToArray());
             Warn(inst.FullName + " " + account.Name + ": position is " + pos + "; ChartBridge cancelled " + cancel.Count + " and shrank " + change.Count +
                  " bracket leg(s) so they cannot open or add to a position");
