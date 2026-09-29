@@ -62,7 +62,7 @@ test('orderEvent: one line per change worth showing', () => {
   assert.match(OT.orderEvent(Object.assign({}, base, { state: 'partFilled', filled: 1, avgFill: 25400 }), base, f).text, /^Part filled BUY 1 of 2 @ 25400.00/);
   assert.equal(OT.orderEvent(Object.assign({}, base, { state: 'filled', filled: 2, avgFill: 25400 }), base, f).text, 'Filled BUY 2 MNQ 12-26 @ 25400.00 · Sim101');
   assert.match(OT.orderEvent(Object.assign({}, base, { state: 'cancelled' }), base, f).text, /^Cancelled BUY LMT 2/);
-  assert.deepEqual(OT.orderEvent(Object.assign({}, base, { state: 'rejected', text: 'Order exceeds max position' }), base, f), { text: 'Rejected by NinjaTrader: Order exceeds max position · Sim101', level: 'error' });
+  assert.deepEqual(OT.orderEvent(Object.assign({}, base, { state: 'rejected', text: 'NinjaTrader rejected it (Order exceeds max position)' }), base, f), { text: 'Rejected: BUY LMT 2 @ 25400.00: NinjaTrader rejected it (Order exceeds max position) · Sim101', level: 'error' });
   assert.match(OT.orderEvent(Object.assign({}, base, { role: 'target', side: 'sell' }), null, f).text, /^Working SELL TGT 2/);
 });
 

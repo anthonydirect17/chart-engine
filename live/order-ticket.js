@@ -71,7 +71,7 @@ function describe(o, fmt) {
 function orderEvent(o, prev, fmt) {
   const f = fmt || (p => String(p));
   const where = ' · ' + o.account;
-  if (o.state === 'rejected') return { text: 'Rejected by NinjaTrader: ' + (o.text || describe(o, f)) + where, level: 'error' };
+  if (o.state === 'rejected') return { text: 'Rejected: ' + describe(o, f) + (o.text ? ': ' + o.text : '') + where, level: 'error' };
   if (o.state === 'filled' && (!prev || prev.state !== 'filled')) return { text: 'Filled ' + (o.side === 'sell' ? 'SELL ' : 'BUY ') + o.qty + ' ' + (o.name || o.root) + ' @ ' + f(o.avgFill) + where, level: 'info' };
   if (o.state === 'partFilled' && (!prev || prev.filled !== o.filled)) return { text: 'Part filled ' + (o.side === 'sell' ? 'SELL ' : 'BUY ') + o.filled + ' of ' + o.qty + ' @ ' + f(o.avgFill) + where, level: 'info' };
   if (o.state === 'cancelled' && (!prev || prev.state !== 'cancelled')) return { text: 'Cancelled ' + describe(o, f) + where, level: 'info' };

@@ -266,7 +266,7 @@ const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
 const served = r => !Object.keys(instruments).length || !!instruments[r];
 /* Clickjacking guard: never trade from inside another page's frame (ChartBridge also sends X-Frame-Options DENY). */
 const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
-const FRAMED_REASON = 'This chart is inside another page (a frame), so it cannot trade. Open it directly from ChartBridge (http://localhost:8765/).';
+const FRAMED_REASON = 'This chart is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own tab.';
 
 /* Sign in: read the session token from GET /session (same origin as this page) and send auth. */
 function signIn() {

@@ -85,7 +85,7 @@ export class OrderDesk {
     conn.authed = true;
     this.send(conn, this.tradingMsg(conn));
     this.send(conn, { type: 'orders', list: [...this.orders.values()].filter(o => isWorking(o) && this.accounts.includes(o.account)).map(o => this.orderMsg(o)) });
-    for (const [k, p] of this.positions) if (p.qty && this.accounts.includes(k.split('|')[0])) { const [account, root] = k.split('|'); this.send(conn, { type: 'position', account, root, qty: p.qty, avgPrice: p.avgPrice }); }
+    for (const [k, p] of this.positions) if (p.qty && this.accounts.includes(k.split('|')[0])) { const [account, root] = k.split('|'); this.send(conn, { type: 'position', account, root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
   }
 
   /* ---------------- page to server: order, change, cancel, flatten */
@@ -218,8 +218,13 @@ export class OrderDesk {
     return o;
   }
   orderMsg(o) {
-    return { type: 'order', id: o.id, cid: o.cid || null, account: o.account, root: o.root, name: o.name, side: o.side, kind: o.kind,
-      qty: o.qty, filled: o.filled, price: o.price, avgFill: o.avgFill, state: o.state, role: o.role, oco: o.oco, text: o.text };
+    // like ChartBridge 0.3: cid only when placed from a page, text only when NinjaTrader gave one
+    const m = { type: 'order', id: o.id };
+    if (o.cid) m.cid = o.cid;
+    Object.assign(m, { account: o.account, root: o.root, name: o.name, side: o.side, kind: o.kind,
+      qty: o.qty, filled: o.filled, price: o.price, avgFill: o.avgFill, state: o.state, role: o.role, oco: o.oco });
+    if (o.text) m.text = o.text;
+    return m;
   }
   broadcast(msg) { for (const c of this.conns()) if (c.authed) this.send(c, msg); }
   emitOrder(o) { if (this.accounts.includes(o.account) && this.instruments[o.root]) this.broadcast(this.orderMsg(o)); }
@@ -271,7 +276,7 @@ export class OrderDesk {
     else if (Math.abs(now) > Math.abs(was)) p.avgPrice = (p.avgPrice * Math.abs(was) + price * qty) / Math.abs(now);
     p.qty = now;
     this.emitOrder(o);
-    if (this.accounts.includes(o.account)) this.broadcast({ type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.avgPrice });
+    if (this.accounts.includes(o.account)) this.broadcast({ type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });   // null when flat
     if (isLeg(o)) this.legFilled(o);
     if (p.qty === 0) this.flatLegs(o.account, o.root);
     else if (o.role === 'entry' && o.bracket) this.bracketsAfterFill(o, qty, price);

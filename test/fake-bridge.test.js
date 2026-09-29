@@ -130,7 +130,7 @@ test('market order fills at the last price: order, exec and position messages', 
   const d = await makeDesk(); d.auth();
   const msgs = d.order({ cid: 'm1', qty: 2 });
   assert.deepEqual(msgs.map(m => m.type), ['order', 'exec', 'order', 'position']);
-  assert.equal(msgs[0].state, 'working'); assert.equal(msgs[0].cid, 'm1'); assert.equal(msgs[0].price, null);
+  assert.equal(msgs[0].state, 'working'); assert.equal(msgs[0].cid, 'm1'); assert.equal(msgs[0].price, null); assert.ok(!('text' in msgs[0]));
   assert.equal(msgs[1].side, 'buy'); assert.equal(msgs[1].qty, 2); assert.equal(msgs[1].p, 25400); assert.equal(msgs[1].name, 'MNQ 12-26');
   assert.equal(msgs[2].state, 'filled'); assert.equal(msgs[2].avgFill, 25400); assert.equal(msgs[2].role, 'entry');
   assert.deepEqual(msgs[3], { type: 'position', account: 'Sim101', root: 'MNQ', qty: 2, avgPrice: 25400 });
@@ -160,14 +160,14 @@ test('bracket: an OCO pair around the fill; target fill cancels the stop', async
   const legs = msgs.filter(m => m.type === 'order' && m.role !== 'entry');
   assert.equal(legs.length, 2);
   const stop = legs.find(m => m.role === 'stop'), target = legs.find(m => m.role === 'target');
-  assert.deepEqual([stop.side, stop.kind, stop.qty, stop.price, stop.cid], ['sell', 'stop', 2, 25390, null]);
+  assert.deepEqual([stop.side, stop.kind, stop.qty, stop.price, 'cid' in stop], ['sell', 'stop', 2, 25390, false]);
   assert.deepEqual([target.side, target.kind, target.qty, target.price], ['sell', 'limit', 2, 25420]);
   assert.ok(stop.oco && stop.oco === target.oco);
   const out = d.tick(25420.25);                                    // target traded through
   const last = new Map(out.filter(m => m.type === 'order').map(m => [m.id, m]));
   assert.equal(last.get(target.id).state, 'filled');
   assert.equal(last.get(stop.id).state, 'cancelled');
-  assert.deepEqual(out.filter(m => m.type === 'position').pop(), { type: 'position', account: 'Sim101', root: 'MNQ', qty: 0, avgPrice: 0 });
+  assert.deepEqual(out.filter(m => m.type === 'position').pop(), { type: 'position', account: 'Sim101', root: 'MNQ', qty: 0, avgPrice: null });
   assert.equal(d.working().length, 0);
 });
 
