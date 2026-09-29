@@ -196,7 +196,7 @@ try {
   layers = await page.evaluate(() => [window.__a.chart.getLayers(), window.__b.chart.getLayers()]);
   check(layers[0].volume && !layers[0].vwap && layers[0].levels && layers[1].volume && layers[1].vwap && !layers[1].levels, 'indicator choices stay per pane: ' + JSON.stringify(layers));
   // pane A (main): the four less VWAP, plus IB 1h on by default (1.5.3); pane B (new): IB 1h off like the rest
-  check(await page.textContent('#paneA .ind-count') === '4/5' && await page.textContent('#paneB .ind-count') === '2/5' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane');
+  check(await page.textContent('#paneA .ind-count') === '4/6' && await page.textContent('#paneB .ind-count') === '2/6' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane');
   // B on ES at 5m, A stays MNQ 1m
   await page.click('#paneB [role="group"][aria-label="Instrument"] >> text="ES"');
   await page.click('#paneB .seg >> text="5m"');

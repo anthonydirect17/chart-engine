@@ -79,7 +79,7 @@ try {
   await page.selectOption('#rangeMode', 'nt'); await page.waitForTimeout(300);
 
   // indicator menu: one control, keyboard and pointer, saved for the pane
-  if (await page.textContent('#indCount') !== '5/5') fail('indicators on at first run (the 1.3 four and IB 1h, 1.5.3): ' + await page.textContent('#indCount'));
+  if (await page.textContent('#indCount') !== '5/6') fail('indicators on at first run (the 1.3 four and IB 1h, 1.5.3; the volume profile off): ' + await page.textContent('#indCount'));
   if (!(await page.isHidden('#indPanel'))) fail('indicator menu open at load');
   await page.focus('#indBtn'); await page.keyboard.press('Enter');
   if (await page.isHidden('#indPanel') || await page.getAttribute('#indBtn', 'aria-expanded') !== 'true') fail('Enter did not open the indicator menu');
@@ -92,7 +92,7 @@ try {
   await page.keyboard.press('Escape');
   if (!(await page.isHidden('#indPanel'))) fail('Escape did not close the indicator menu');
   if (await page.evaluate(() => document.activeElement.id) !== 'indBtn') fail('focus not back on the Indicators button');
-  if (await page.textContent('#indCount') !== '3/5') fail('count after two off: ' + await page.textContent('#indCount'));
+  if (await page.textContent('#indCount') !== '3/6') fail('count after two off: ' + await page.textContent('#indCount'));
   await page.click('#indBtn');
   await page.click('#indPanel input[data-layer="fills"]');
   if ((await page.textContent('#lgFill')).trim() !== '') fail('fills still marked with Fills off');
@@ -108,7 +108,7 @@ try {
   await page.click('#indBtn');
   for (const k of ['volume', 'vwap', 'fills']) await page.click(`#indPanel input[data-layer="${k}"]`);
   await page.keyboard.press('Escape');
-  if (await page.textContent('#indCount') !== '5/5') fail('indicators back on: ' + await page.textContent('#indCount'));
+  if (await page.textContent('#indCount') !== '5/6') fail('indicators back on: ' + await page.textContent('#indCount'));
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();

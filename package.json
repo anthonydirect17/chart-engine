@@ -19,6 +19,7 @@
     "smoke:pin": "node test/pin-smoke.mjs",
     "smoke:perf": "node test/perf-smoke.mjs",
     "smoke:ib": "node test/ib-bg-smoke.mjs",
+    "smoke:vp": "node test/vp-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "bridge": "node test/fake-bridge.mjs",
     "check:nt8": "sh nt8/check/check.sh",

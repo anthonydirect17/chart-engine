@@ -45,13 +45,18 @@ pane.destroy();
 The container needs a height: the chart fills it (`.chart-live` is `height: 100%`) and the chart area keeps a
 minimum of 360 px. Several charts can be mounted in one page, each in its own container.
 
-`mount` returns `{ destroy(), chart, element, paneId }`: `chart` is the chart-engine instance (for reading,
-such as `chart.bars()`), `element` the `.chart-live` element it created in the container.
+`mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`:
+`chart` is the chart-engine instance (for reading, such as `chart.bars()`), `element` the `.chart-live` element it
+created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (unreleased,
+for 1.6.0); today there is one, the volume profile's hours: `pane.setIndicatorOption('vp', 'session', 'rth')` for RTH
+9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default). It returns false for an option or value
+that does not exist. `indicatorOptions('vp')` reads it back (`{ session: 'full' }`). Until the new Indicators menu
+takes it over, the Indicators panel's Volume profile row has a small Session / RTH switch that does the same.
 
 | Option | Default | What it does |
 |---|---|---|
 | `wsUrl` | none, required | ChartBridge's WebSocket URL. A **function** is called again for **every** connect and reconnect, so it can hand out a fresh single-use relay ticket each time (`/api/live/ws?ticket=...`), or choose between `ws://localhost:8765/ws` and the relay. It may return a promise; a thrown error or a rejected promise counts as a failed connect and is retried. The query string is never shown on screen. |
-| `paneId` | `'main'` | Key for this chart's indicator choices (Volume, VWAP, Levels, Fills, IB 1h) and drawings. `'main'` starts with all five on, any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
+| `paneId` | `'main'` | Key for this chart's indicator choices (Volume, VWAP, Levels, Fills, IB 1h, and the unreleased Volume profile) and drawings. `'main'` starts with the first five on (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
@@ -123,7 +128,8 @@ Every storage key the chart uses is `storagePrefix + <the standalone page's key>
 |---|---|---|
 | `live-settings-v2` | instrument, bars, glide, range mode | all charts with this prefix |
 | `live-range-v2` | range size per instrument | all charts with this prefix |
-| `live-indicators-v1` | `{ <paneId>: { volume, vwap, levels, fills, ib } }` | one entry per `paneId` |
+| `live-indicators-v1` | `{ <paneId>: { volume, vwap, levels, fills, ib, vp } }` | one entry per `paneId` |
+| `live-indicator-options-v1` | `{ <paneId>: { vp: { session: 'full' \| 'rth' } } }` (unreleased) | one entry per `paneId` |
 | `live-bracket-v1` | bracket ticks per instrument (trading only) | all charts with this prefix |
 | `live-fill-account-v1` | whose fills are marked | all charts with this prefix |
 | `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |

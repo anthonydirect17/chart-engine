@@ -124,7 +124,7 @@ try {
     check(layers.volume === false && layers.vwap === true && layers.levels === false, '1.3 indicator choices carried over: ' + JSON.stringify(layers));
     check(await p.inputValue('#rangeTicks') === '40' && /Range 40t/.test(await p.textContent('#lgTf')), '1.3 NQ range 40 carried over');
     // 1.3 had no IB: the main pane gets IB 1h's default (on, 1.5.3), so 2 of the 1.3 four plus IB
-    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '3/5' && layers.ib === true, 'indicator count 3/5 (IB 1h on by default)');
+    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '3/6' && layers.ib === true, 'indicator count 3/6 (IB 1h on by default, the volume profile off)');
     await ctx.close();
   }
 } finally {

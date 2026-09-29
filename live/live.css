@@ -51,6 +51,11 @@
 .chart-live .ind-row input { margin: 0; width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 .chart-live .ind-row .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--line-strong); }
 .chart-live .ind-row:has(input:checked) .sw { background: var(--sw); }
+/* a row with its own option (the volume profile's Session / RTH, a temporary control until the new Indicators menu) */
+.chart-live .ind-row-opt { cursor: default; gap: 12px; }
+.chart-live .ind-lbl { display: flex; align-items: center; gap: 9px; flex: 1; cursor: pointer; white-space: nowrap; }
+.chart-live .ind-opt { padding: 1px; flex: none; flex-wrap: nowrap; }
+.chart-live .ind-opt button { font-size: 11px; min-height: 24px; padding: 2px 7px; }
 .chart-live .range-mode { max-width: 160px; }
 .chart-live .btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
 .chart-live .btn:hover { background: var(--s3); }
@@ -80,6 +85,7 @@
 .chart-live .lg2 .up { color: var(--up-text); }
 .chart-live .lg2 .down { color: var(--down-text); }
 .chart-live .lg3 .vw { color: var(--vwap-sw); }
+.chart-live .lg3 .vpc { color: var(--vp-poc); }
 .chart-live .lg3 .buy { color: var(--lg-buy); text-shadow: var(--lg-buy-halo, none); }
 .chart-live .lg3 .sell { color: var(--lg-sell); text-shadow: var(--lg-sell-halo, none); }
 .chart-live .notice { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: min(460px, calc(100% - 40px)); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }

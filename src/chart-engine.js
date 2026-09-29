@@ -256,6 +256,8 @@ const DEFAULT_THEME = {
   profit: '#3DDC97', loss: '#FF7A7A',    // trade result
   exit: '#F2F6FA', live: '#F2F6FA',
   drawing: '#D8CCFF',                    // trend lines and horizontal lines
+  // volume profile (unreleased): rows a tint of the ground, value area a step stronger, POC in the value-level gold
+  vpRow: '#141C26', vpValue: '#212C3B', vpPoc: '#E0B45A',
   fontMono: '"IBM Plex Mono", ui-monospace, Consolas, monospace',
   fontCond: '"IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif',
 };
@@ -288,6 +290,7 @@ const NEUTRAL_MIX = [
   ['rth', 0.025, 0], ['grid', 0.06, FLOOR.grid], ['axisLine', 0.09, 0], ['divider', 0.2, FLOOR.divider],
   ['cross', 0.4, FLOOR.cross], ['axisText', 0.57, FLOOR.text], ['axisTextStrong', 0.95, FLOOR.strong],
   ['tagFill', 0.07, 0], ['tagBorder', 0.2, FLOOR.divider], ['exit', 1, FLOOR.text], ['live', 1, FLOOR.text],
+  ['vpRow', 0.07, 0], ['vpValue', 0.14, 0],
 ];
 
 /**
@@ -315,6 +318,7 @@ function buildTheme(partial) {
     [T.up, T.down] = pairOnGround(T.up, T.down, T.bg, FLOOR.candle, to);
     [T.profit, T.loss] = pairOnGround(T.profit, T.loss, T.bg, FLOOR.text, to);
     T.vwap = markOnGround(T.vwap, T.bg, FLOOR.line, to); T.drawing = markOnGround(T.drawing, T.bg, FLOOR.line, to);
+    T.vpPoc = markOnGround(T.vpPoc, T.vpValue, FLOOR.line, to);   // the POC row sits among the value-area rows
   }
   /* Trade sides (buy / long green, sell / short red) keep their color on every ground (review, 1.5.3): where one
      does not read on the ground, marks get an outline (lines 3:1) and text a halo (4.5:1) in the house near-black
@@ -330,6 +334,7 @@ function buildTheme(partial) {
   T.upOnTag = readableOn(T.up); T.downOnTag = readableOn(T.down);
   T.upText = legible(T.up, T.bg, 4.5, to); T.downText = legible(T.down, T.bg, 4.5, to);
   T.vwapText = legible(T.vwap, T.bg, 4.5, to);
+  T.vpPocText = legible(T.vpPoc, T.bg, 4.5, to);
   T.to = to || '#FFFFFF';
   return T;
 }
@@ -572,6 +577,45 @@ function ibLines(ib) {
   ];
 }
 
+/* ---------------------------------------------------------------- volume profile geometry (unreleased) */
+/* The volume profile's width (Anthony's ruling 2026-09-29 leaves the size to us): the largest row (the POC) reaches
+   this share of the plot width, measured from the plot's right edge; every other row is scaled to it. */
+const VP_WIDTH = 0.25;
+/**
+ * The rectangles of a volume profile, in device pixels: horizontal bars anchored to the right edge of the plot.
+ * `c` is VolumeProfile.columns(); `v` is the view { lo, hi (prices at the bottom and top of the plot), plotW, plotH
+ * (CSS px), dpr, width (share of plotW, default VP_WIDTH) }. Calls emit(kind, x, y, w, h) once per bar, top to
+ * bottom, kind 0 for a row outside the value area, 1 inside it, 2 for the POC. Only rows in view are visited.
+ * A row is the height of its price span (a 1-tick row covers price - tick/2 to price + tick/2, like the axis), rounded
+ * to whole device pixels; a gap of one pixel separates rows 4 px or taller. Rows thinner than a pixel share it: the
+ * bar there is as long as the largest of them and takes the strongest kind (POC, then value area), so the POC always
+ * shows. Rows of volume 0 draw nothing. Returns the number of bars.
+ */
+function profileRects(c, v, emit) {
+  if (!c || !(c.max > 0) || !(v.hi > v.lo) || !(v.plotH > 0)) return 0;
+  const n = c.volumes.length, dpr = v.dpr || 1, k = v.plotH * dpr / (v.hi - v.lo);
+  const right = Math.round(v.plotW * dpr), maxW = v.plotW * dpr * (v.width === undefined ? VP_WIDTH : v.width);
+  const base = c.low - c.tick / 2;                                  // the bottom edge of row 0
+  const i0 = Math.max(0, Math.floor((v.lo - base) / c.step) - 1), i1 = Math.min(n - 1, Math.ceil((v.hi - base) / c.step));
+  let count = 0, py = 0, ph = 0, pv = 0, pk = 0, open = false;
+  const flush = () => {
+    if (!open || !(pv > 0)) return;
+    const w = Math.max(1, Math.round(pv / c.max * maxW));
+    emit(pk, right - w, py, w, ph >= 4 ? ph - 1 : ph); count++;
+  };
+  for (let i = i1; i >= i0; i--) {
+    let top = Math.round((v.hi - (base + (i + 1) * c.step)) * k), bot = Math.round((v.hi - (base + i * c.step)) * k);
+    const vol = c.volumes[i], kind = i === c.poc ? 2 : i >= c.vaLow && i <= c.vaHigh ? 1 : 0;
+    if (open && bot <= py + ph) { if (vol > pv) pv = vol; if (kind > pk) pk = kind; continue; }   // inside the pixel row above
+    if (open && top < py + ph) top = py + ph;
+    if (bot <= top) bot = top + 1;
+    flush();
+    py = top; ph = bot - top; pv = vol; pk = kind; open = true;
+  }
+  flush();
+  return count;
+}
+
 /* ---------------------------------------------------------------- DOM styles */
 const CSS = `
 .ce-host{position:relative;overflow:hidden;outline:none}
@@ -626,7 +670,7 @@ function create(container, options) {
     axisWidth: opt.axisWidth || 78,
     timeAxisHeight: opt.timeAxisHeight || 26,
     session: Object.assign({ start: 18 * 3600, rthStart: 34200, rthEnd: 57600 }, opt.session || {}),
-    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true }, opt.layers || {}),
+    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true, vp: false }, opt.layers || {}),
     motion: Object.assign({ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }, opt.motion || {}),
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
@@ -651,6 +695,10 @@ function create(container, options) {
   let themeSrc = Object.assign({}, DEFAULT_THEME, opt.theme || {});   // the colors as chosen; T is what draws
   let T = buildTheme(themeSrc), themeBuilds = 1;
   let bars = [], levels = [], trades = [], markers = [], paused = false, countdownFn = null;
+  /* The volume profile (unreleased): a VolumeProfile the page keeps feeding; drawn while the 'vp' layer is on. The
+     bars are built by profileRects once per change of the profile, the view or the size, and kept as three lists of
+     rectangles (rest, value area, POC) that each frame fills with fillRect. */
+  let profile = null, vpBars = null, vpBuilds = 0;
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
      the rest with 'levels'. */
@@ -857,6 +905,7 @@ function create(container, options) {
     }
     if (flash && now - flash < 400) moving = true;
     if (now - pulseT0 < 500) moving = true;
+    if (profile && o.layers.vp && (!vpBars || vpBars.ver !== profile.version)) dirty = true;   // new trades, a new session
     const sec = Math.floor(o.clock());
     if (sec !== lastSec) { lastSec = sec; dirty = true; }
     return moving;
@@ -924,6 +973,32 @@ function create(container, options) {
     return labels;
   }
 
+  function drawProfile() {
+    const ver = profile.version;
+    let c = vpBars;
+    if (!c || c.ver !== ver || c.lo !== V.lo || c.hi !== V.hi || c.w !== plotW || c.h !== plotH || c.dpr !== dpr) {
+      // bars as [x, y, w, h] runs in device pixels, one Int32Array per kind, reused between builds (no garbage)
+      const r = vpBars ? vpBars.r : [new Int32Array(1024), new Int32Array(1024), new Int32Array(1024)];
+      c = vpBars = { ver, lo: V.lo, hi: V.hi, w: plotW, h: plotH, dpr, r, n: [0, 0, 0] };
+      profileRects(profile.columns(), { lo: V.lo, hi: V.hi, plotW, plotH, dpr }, (kind, x, y, w, h) => {
+        let k = c.n[kind] * 4;
+        if (k + 4 > c.r[kind].length) { const g = new Int32Array(c.r[kind].length * 2); g.set(c.r[kind]); c.r[kind] = g; }
+        const a = c.r[kind]; a[k++] = x; a[k++] = y; a[k++] = w; a[k] = h; c.n[kind]++;
+      });
+      vpBuilds++;
+    }
+    if (!(c.n[0] + c.n[1] + c.n[2])) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const cols = [T.vpRow, T.vpValue, T.vpPoc];
+    for (let kind = 0; kind < 3; kind++) {
+      const a = c.r[kind], m = c.n[kind] * 4;
+      if (!m) continue;
+      ctx.fillStyle = cols[kind];
+      for (let k = 0; k < m; k += 4) ctx.fillRect(a[k], a[k + 1], a[k + 2], a[k + 3]);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
   function draw(now) {
     const n = last();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -959,6 +1034,9 @@ function create(container, options) {
     ctx.beginPath(); ctx.strokeStyle = T.divider; ctx.setLineDash([2, 4]);
     for (const l of labels) if (l.strong) { const x = crisp(l.x - V.spacing / 2, 1); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); }
     ctx.stroke(); ctx.setLineDash([]);
+
+    // volume profile: in front of the grid, behind volume, levels and candles
+    if (profile && o.layers.vp) drawProfile();
 
     // volume + candles in device pixels, one path per color
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1581,6 +1659,13 @@ function create(container, options) {
     setTrades(list) { trades = list || []; dirty = true; },
     setLayers(partial) { Object.assign(o.layers, partial || {}); dirty = true; },
     getLayers() { return Object.assign({}, o.layers); },
+    /**
+     * The volume profile to draw (a ChartEngine.VolumeProfile, or null): shown while the 'vp' layer is on, as bars
+     * from the right edge of the plot (the POC row VP_WIDTH of the plot width), behind the candles. The chart redraws
+     * when profile.version changes, so the caller only adds trades to it.
+     */
+    setProfile(vp) { profile = vp && typeof vp.columns === 'function' ? vp : null; if (vpBars) vpBars.ver = -1; dirty = true; },
+    getProfile() { return profile; },
     /** Change colors, e.g. { up, down, vwap, bg }. The theme is built here, once per change. */
     setTheme(partial) { themeSrc = Object.assign({}, themeSrc, partial || {}); T = buildTheme(themeSrc); themeBuilds++; shadeLevels(); legendKey = ''; dirty = true; },
     /** The colors as chosen (not as moved to read on the ground; colors() has those). */
@@ -1639,7 +1724,7 @@ function create(container, options) {
     on(ev, fn) { if (listeners[ev]) listeners[ev].push(fn); return () => { const a = listeners[ev]; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; },
     stats() {
       const now = performance.now();
-      return { idle: now - lastDraw > 250 || streak < 3, fps: Math.round(1000 / emaInt), drawMs: emaDraw, themeBuilds };
+      return { idle: now - lastDraw > 250 || streak < 3, fps: Math.round(1000 / emaInt), drawMs: emaDraw, themeBuilds, profileBuilds: vpBuilds };
     },
     resize,
     destroy() {
@@ -1759,9 +1844,10 @@ function mountThemePanel(chart, host, options) {
   };
 }
 
-/* ---------------------------------------------------------------- volume profile (compute core, unreleased) */
+/* ---------------------------------------------------------------- volume profile (unreleased, for 1.6.0) */
 /*
- * VolumeProfile: the session volume profile from trades, with no drawing. Anthony picks the look and controls.
+ * VolumeProfile: the session volume profile from trades. The chart draws one with setProfile() and the 'vp' layer
+ * (drawProfile below); this class only counts.
  *
  * Input: trades (t, price, v), with t in exchange wall-clock seconds stored as if UTC like every time here.
  * The trades carry no aggressor side (ChartBridge sends [t, p, v] for the backfill and {t, p, v} live, from
@@ -1779,6 +1865,14 @@ function mountThemePanel(chart, host, options) {
  * Session: the profile holds one trading session, the engine's tradeDay(t, sessionStart), the same 18:00 ET
  * boundary as the range bars and the session VWAP. The first trade of a later session (or advance(t)) empties
  * it; a trade from an earlier session than the one held is left out and counted in `skipped`.
+ *
+ * RTH (option `rth: true`, Anthony's ruling 2026-09-29): only trades inside the regular session of the trading day
+ * count, from rthStart (9:30:00.000 ET) up to, not including, rthEnd (16:00:00.000 ET), the same window as the
+ * chart's RTH shading and sessionLevels. A trade at 9:29:59.999 or at 16:00:00.000 is out. Times are New York wall
+ * clock already (ChartBridge converts them), so DST needs nothing here. On a day with no stock market session (a
+ * weekend, an NYSE holiday: rthDay, the IB's rule) nothing counts. The session still moves at 18:00 as above, so
+ * the RTH profile empties at 18:00 and stays empty until 9:30. Trades outside the window change nothing but the
+ * `outside` count (not `skipped`, which is for bad input), and do not change `version`.
  *
  * Cost: add() is amortised O(1): most trades only add to a row, and a row outside the array grows it to twice
  * the span needed, so the copies add up to O(1) per trade (one add can copy the whole span; a new session
@@ -1798,7 +1892,7 @@ function mountThemePanel(chart, host, options) {
  *   4. Repeat 2 and 3 until the value area holds at least that share of the volume.
  * VAH is the top tick of the highest row in the value area and VAL the bottom tick of the lowest.
  *
- * History, then live (how it is meant to be wired; the page has no profile code yet): the page keeps every trade
+ * History, then live (how live/live.js wires it, vpBuild and onTick there): the page keeps every trade
  * in its TickStore (live/bar-builder.js). Until ChartBridge sends `ready`, trades come only as the backfill
  * (onTick drops live ticks before then, and ChartBridge holds them back until after `ready`); after it, only as
  * `tick` messages, each pushed to the store once. So, like the range bars: at `ready`, feed the store into a new
@@ -1828,6 +1922,9 @@ class VolumeProfile {
     this.rowTicks = o.rowTicks === undefined ? 1 : o.rowTicks;
     this.valueAreaShare = o.valueArea === undefined ? 0.7 : o.valueArea;
     this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
+    this.rth = !!o.rth;
+    this.rthStart = o.rthStart === undefined ? 34200 : o.rthStart;
+    this.rthEnd = o.rthEnd === undefined ? 57600 : o.rthEnd;
     if (!(this.tick > 0 && isFinite(this.tick))) throw new RangeError('VolumeProfile: tick must be a positive number');
     if (!(Number.isInteger(this.rowTicks) && this.rowTicks >= 1)) throw new RangeError('VolumeProfile: rowTicks must be a whole number of ticks, 1 or more');
     VolumeProfile._share(this.valueAreaShare);
@@ -1839,16 +1936,27 @@ class VolumeProfile {
     return p;
   }
   /** Empty the profile (it takes the session of the next trade). */
-  reset() { this._clear(); this.day = null; this.skipped = 0; }
+  reset() { this._clear(); this.day = null; this.skipped = 0; this.outside = 0; }
   _clear() {
     if (this._lo <= this._hi) this._vol.fill(0, this._lo - this._base, this._hi - this._base + 1);
     this._lo = Infinity; this._hi = -Infinity;           // rows used; lo > hi when empty
     this.total = 0; this.trades = 0; this._ver = (this._ver || 0) + 1;
-    this._poc = null; this._va = null;                  // caches, each valid while its .ver equals _ver
+    this._poc = null; this._va = null; this._cols = null;   // caches, each valid while its .ver equals _ver
   }
   /** Changes with every trade taken, every reset and every move to a new session (not on a trade left out). */
   get version() { return this._ver; }
   get empty() { return this.trades === 0; }
+  /** Whether trade time t is inside the RTH window (9:30:00.000 up to 16:00:00.000 ET on a day with a session). */
+  inRth(t) { const s = tod(t); return s >= this.rthStart && s < this.rthEnd && rthDay(t); }
+  /**
+   * The time from which this profile needs every trade, for the trading day holding t: that session's start
+   * (18:00 ET the evening before), or with `rth` that day's 9:30. For coverage notes (was the history long enough).
+   */
+  startOf(t) {
+    const d = tradeDay(t, this.sessionStart);
+    if (this.rth) return d * DAY + this.rthStart;
+    return this.sessionStart ? (d - 1) * DAY + this.sessionStart : d * DAY;
+  }
   _px(n) { return +(n * this.tick).toFixed(10); }
   _row(price) { return Math.floor(Math.round(price / this.tick) / this.rowTicks); }
 
@@ -1870,7 +1978,8 @@ class VolumeProfile {
    * first). Left out and counted in `skipped`, changing nothing else: a time, price or volume that is not of type
    * number or not finite (null, strings such as '5', booleans, undefined, NaN, Infinity), a volume of 0 or less,
    * a trade from an earlier session than the one held, and a trade that would stretch the profile past
-   * VP_MAX_ROWS rows.
+   * VP_MAX_ROWS rows. With `rth`, a trade outside the RTH window is counted in `outside` and changes nothing else
+   * (it can still start a new session, which empties the profile).
    */
   add(t, price, v) {
     if (typeof t !== 'number' || typeof price !== 'number' || typeof v !== 'number' ||
@@ -1881,6 +1990,7 @@ class VolumeProfile {
       if (this.day !== null && d < this.day) { this.skipped++; return false; }
       this._clear(); this.day = d; fresh = true;
     }
+    if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
     const r = this._row(price);
     if ((r < this._base || r >= this._base + this._vol.length) && !this._grow(r)) { this.skipped++; return fresh; }
     this._vol[r - this._base] += v;
@@ -1971,15 +2081,34 @@ class VolumeProfile {
     this._va = { ver: this._ver, share: s, out };
     return out;
   }
+  /**
+   * Everything the chart draws, in one object cached by version (the rows are walked once per change, never per
+   * frame): { version, low (bottom tick of the lowest row), step (price per row), tick, volumes (a Float64Array copy,
+   * lowest row first), max (the largest row volume), poc, vaLow, vaHigh (row indexes into volumes, the value area for
+   * the profile's own share) }, or null when empty. Read only: the same object is handed out until the next change.
+   */
+  columns() {
+    if (!this.trades) return null;
+    if (this._cols && this._cols.version === this._ver) return this._cols;
+    const L = this._lo, n = this._hi - L + 1, volumes = this._vol.slice(L - this._base, L - this._base + n);
+    let max = 0;
+    for (let i = 0; i < n; i++) if (volumes[i] > max) max = volumes[i];
+    const va = this.valueArea();
+    this._cols = {
+      version: this._ver, low: this._px(L * this.rowTicks), step: this.tick * this.rowTicks, tick: this.tick, volumes, max,
+      poc: this._pocRow() - L, vaLow: this._row(va.val) - L, vaHigh: this._row(va.vah) - L,
+    };
+    return this._cols;
+  }
 }
 
 return {
-  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH,
+  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH, VP_WIDTH,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays,
-    orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
+    orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
   },
   VolumeProfile,
 };

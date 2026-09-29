@@ -15,7 +15,7 @@ test('defaults with empty storage: what the page showed before', () => {
   assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true });
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false });
 });
 
 test('range size is per root, and one write never undoes another tab', () => {
@@ -54,7 +54,7 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true });   // IB (1.5.3): the main pane default
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true, vp: false });   // IB (1.5.3): the main pane default
   // later changes to the old keys (an older page in another tab) are not read again
   s.setItem('live-range-v1', JSON.stringify({ NQ: 12 }));
   s.setItem('live-settings-v1', JSON.stringify({ root: 'ES' }));
@@ -67,13 +67,13 @@ test('1.3 keys are read once and carry over', () => {
 test('indicators are saved per pane; a new pane starts with none on, the main pane with the 1.3 set', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
-  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true });
-  assert.deepEqual(p.indicators('pane-2'), { volume: false, vwap: false, levels: false, fills: false, ib: false });
-  assert.deepEqual(LP.create(mem()).indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true });
+  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false });
+  assert.deepEqual(p.indicators('pane-2'), { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false });
+  assert.deepEqual(LP.create(mem()).indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false });
   assert.equal(p.setIndicator('pane-2', 'vwap', true), true);
   assert.equal(p.setIndicator('pane-2', 'bogus', true), false);
-  assert.deepEqual(LP.create(s).indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false, ib: false });
-  assert.deepEqual(LP.create(s).indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true });
+  assert.deepEqual(LP.create(s).indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false, ib: false, vp: false });
+  assert.deepEqual(LP.create(s).indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false });
 });
 
 test('IB 1h (1.5.3): its own indicator, on for the main pane (also one saved before 1.5.3), off for a new pane, saved per pane', () => {
@@ -90,8 +90,8 @@ test('IB 1h (1.5.3): its own indicator, on for the main pane (also one saved bef
   a.setIndicator('main', 'ib', false);
   b.setIndicator('pane-2', 'ib', true);
   const fresh = LP.create(s);
-  assert.deepEqual(fresh.indicators('main'), { volume: true, vwap: false, levels: true, fills: true, ib: false });
-  assert.deepEqual(fresh.indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false, ib: true });
+  assert.deepEqual(fresh.indicators('main'), { volume: true, vwap: false, levels: true, fills: true, ib: false, vp: false });
+  assert.deepEqual(fresh.indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false, ib: true, vp: false });
 });
 
 test('storage that throws or holds junk never breaks the page', () => {
@@ -181,4 +181,32 @@ test('setBracketField: whole ticks 0 to 200 for stop or target on a known root o
   assert.equal(p.setBracketField('MNQ', 'stop', 40), true);
   for (const [r, k, v] of [['XX', 'stop', 4], ['MNQ', 'size', 4], ['MNQ', 'stop', 201], ['MNQ', 'stop', -1], ['MNQ', 'stop', 4.5], ['MNQ', 'stop', '4']]) assert.equal(p.setBracketField(r, k, v), false, [r, k, v].join(' '));
   assert.deepEqual(p.bracket('MNQ'), { stop: 40 });
+});
+
+test('volume profile (unreleased): the vp indicator, off on every pane; its Session / RTH option saved per pane', () => {
+  assert.ok(LP.INDICATORS.some(x => x.id === 'vp' && x.name === 'Volume profile'));
+  assert.equal(LP.DEFAULT_INDICATORS.vp, false);
+  assert.equal(LP.NEW_PANE_INDICATORS.vp, false);
+  assert.deepEqual(LP.INDICATOR_OPTIONS.vp.session, ['full', 'rth']);
+  const s = mem();
+  const a = LP.create(s), b = LP.create(s);
+  assert.deepEqual(a.indicatorOptions('main', 'vp'), { session: 'full' }, 'the full session by default');
+  assert.deepEqual(a.indicatorOptions('main', 'nope'), {});
+  assert.equal(a.setIndicatorOption('main', 'vp', 'session', 'rth'), true);
+  assert.equal(b.setIndicatorOption('pane-2', 'vp', 'session', 'full'), true);   // another tab, another pane: both kept
+  assert.equal(a.setIndicatorOption('main', 'vp', 'session', 'eth'), false, 'an unknown value is refused');
+  assert.equal(a.setIndicatorOption('main', 'vp', 'rows', 4), false, 'an unknown option is refused');
+  assert.equal(a.setIndicatorOption('main', 'ib', 'session', 'rth'), false, 'an indicator without options');
+  assert.equal(a.setIndicatorOption('', 'vp', 'session', 'rth'), false);
+  const fresh = LP.create(s);
+  assert.deepEqual(fresh.indicatorOptions('main', 'vp'), { session: 'rth' });
+  assert.deepEqual(fresh.indicatorOptions('pane-2', 'vp'), { session: 'full' });
+  assert.deepEqual(s.dump('live-indicator-options-v1'), { main: { vp: { session: 'rth' } }, 'pane-2': { vp: { session: 'full' } } });
+  // junk in storage falls back to the default
+  const junk = mem({ 'live-indicator-options-v1': { main: { vp: { session: 'overnight' } }, x: 5 } });
+  assert.deepEqual(LP.create(junk).indicatorOptions('main', 'vp'), { session: 'full' });
+  assert.equal(LP.create(junk).setIndicatorOption('x', 'vp', 'session', 'rth'), true);
+  a.setIndicator('main', 'vp', true);
+  assert.equal(LP.create(s).indicators('main').vp, true);
+  assert.equal(LP.create(s).indicators('pane-2').vp, false);
 });

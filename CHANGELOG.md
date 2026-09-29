@@ -2,9 +2,63 @@
 
 ## Unreleased
 
-- **Volume profile, compute core only** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`). Nothing draws it and
-  the live page does not use it yet: no page code, no menu, no version bump. Anthony picks the look and controls.
-  A session volume profile from trades (t, price, size): rows at the tick (NQ 0.25) with optional grouping of N ticks
+To ship with 1.6.0 together with the new Indicators menu; the version stays 1.5.3. Page and engine only (nt8/ and
+ChartBridge unchanged).
+- **The volume profile, drawn** (Anthony's ruling 2026-09-29): the session's volume per price on the right edge of
+  the plot, behind the candles (in front of the grid, behind volume, levels, VWAP and candles), 1-tick rows, the POC
+  and the 70% value area highlighted. The POC row is 25% of the plot width (`VP_WIDTH`), every other row in
+  proportion. Colors are theme values (`vpRow` `#141C26`, `vpValue` `#212C3B`, `vpPoc` the value-level gold
+  `#E0B45A`); on another ground the rows are mixed from the ground (7% and 14% toward the ink) and the POC moves
+  until it reads at 3:1 on the value-area rows, built once per theme change like the rest. On the default ground bear
+  candles keep about 2:1 over the value-area rows (2.77:1 on the bare ground), bull candles 4.7:1. Rows thinner than a
+  device pixel share it (the longest bar there, the POC always shown). The bars are laid out by `util.profileRects`
+  once per change of the profile, the view or the size, kept as rectangle lists and filled with `fillRect` each
+  frame; the profile's own rows are read once per version (`VolumeProfile.columns()`, cached), never per frame.
+- **Off by default, on from the Indicators menu** as the indicator `vp` ("Volume profile"), registered like the
+  others (`INDICATORS`, the main and new pane defaults, one checkbox row), so the new menu picks it up. The count
+  reads out of 6.
+- **Session or RTH** (Anthony): the full session from 18:00 ET, or RTH, 9:30:00.000 up to (not including)
+  16:00:00.000 ET of the trading day (`VolumeProfile` option `rth`; the same window as the chart's RTH shading and
+  sessionLevels; none on weekends and NYSE holidays, the IB's rule; the RTH profile empties at 18:00 and stays empty
+  until 9:30). There was no option mechanism for indicators, so there is one now: `LivePrefs.INDICATOR_OPTIONS`
+  (`{ vp: { session: ['full', 'rth'] } }`), saved per pane in `live-indicator-options-v1`, set with
+  `setIndicatorOption('vp', 'session', 'rth')` on the handle `ChartLive.mount` returns (and read with
+  `indicatorOptions('vp')`; live/EMBED.md), and for now a small Session / RTH switch in the Volume profile row of the
+  existing Indicators panel, a temporary control until the new menu.
+- **Legend:** "POC 26,150.50 · VA 26,101.50 to 26,289.50" (the POC price in the gold) while the profile is on and has
+  trades.
+- **Data:** built from the page's TickStore at `ready` (when on), when switched on and when Session / RTH changes,
+  then each live tick is added right after the store's push, so it holds what the store holds; it moves to the new
+  session at 18:00 ET on the clock (before the first trade). It does not depend on the bars, so changing the view
+  keeps it. 1m and longer views that loaded no tick history (the page subscribed on one: tickHours 0) have only the
+  live trades: the profile starts at the first live trade after the page went live, and the status line says so in
+  its quiet grey ("Volume profile from 13:00 ET: this view loads no tick history, ..."). It also says when the tick
+  history does not reach back to 18:00 (9:30 for RTH), for example the 8 hours of the 15s and 30s views late in the
+  day, and "Volume profile (RTH) starts at 9:30 ET." before the open. ChartBridge is unchanged.
+- Engine API: `setProfile(profile | null)`, `getProfile()`, layer `vp` (default false), `stats().profileBuilds`,
+  `VP_WIDTH`, `util.profileRects`; `VolumeProfile`: option `rth` (with `rthStart`, `rthEnd`), `inRth(t)`,
+  `startOf(t)`, `outside` (trades outside the RTH window, not counted in `skipped`), `columns()`; theme keys `vpRow`,
+  `vpValue`, `vpPoc` and the derived `vpPocText`.
+- Tests: `test/vp-draw.test.js` (RTH edges at 9:30:00.000 and 16:00:00.000, the overnight, four DST dates through
+  `zoneSeconds`, a weekend, Labor Day, an early close, RTH from the TickStore against a hand filter; `columns()` and
+  its cache; the geometry: right edge, POC width, row heights and gaps, sub-pixel rows, rows in view only, volume 0;
+  the colors on the presets and odd grounds; on a stand-in canvas: only with the layer, drawn after the grid and
+  before the volume bars and candles, rebuilt once per change and not per frame); `test/prefs.test.js` (the `vp`
+  indicator and its option, per pane, refused values); `npm run smoke:vp` (NQ Range 40 on sample data at 13:00 ET:
+  off by default, on from the menu, the POC row's pixels from the right edge at about 25% width, value-area and
+  other rows at the edge, nothing in the left half; the profile equal to every trade the page received, for the
+  session and for RTH, also after 2.5 s of live trades; Session and RTH differ in totals, legend and pixels; both
+  choices after a reload; 5m keeps it; a mounted pane's `setIndicatorOption` under `desk:`; a 1m first load with its
+  note). `npm run smoke:perf` now runs with the profile on (`PERF_SMOKE_VP=0` for off, `=rth` for RTH): 0 frames
+  over 50 ms in all loads, as without it. The live, embed, settings and IB smokes count six indicators.
+- **Open for Anthony:** (1) the profile holds the trading day of the clock, so over a weekend and in RTH mode from
+  18:00 to the next 9:30 it is empty (like the IB): should it keep the last session (or the day's RTH) up instead?
+  (2) RTH counts nothing on NYSE holidays (Globex trades to an early halt) and counts as usual on early-close days;
+  right? (3) Minute views loaded without tick history start the profile at the first live trade: should the page ask
+  ChartBridge for ticks back to 18:00 whenever the profile is on (a slower load), or keep the note? The 15s and 30s
+  views ask for 8 hours, so late in the day they start partway too. (4) The 25% width and the colors are my picks.
+  (5) The legend line does not say Session or RTH (its tooltip does): add a tag?
+- **Volume profile, the compute core** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`). A session volume profile from trades (t, price, size): rows at the tick (NQ 0.25) with optional grouping of N ticks
   per row, all in whole ticks; total volume; POC (ties go to the row closest to the middle of the profile, then the
   lower); value area high and low for a set share (default 70%) by the CBOT method (from the POC, add the larger of
   the next two rows above or the next two below, both when equal). One profile per trading session, emptied at the
@@ -13,8 +67,8 @@
   and counted). Measured with Node 22 on 500,000 trades: 7 to 70 ms to build (the first build in a process is the
   slowest), 0.02 to 1.1 ms for the first POC and value area after it (about 7 ms on one cold run elsewhere), and
   about 10 nanoseconds once cached.
-- Meant to be built from the page's TickStore at `ready` and then from each live tick, so it holds exactly what the
-  store holds. **Not settled:** a trade at the moment ChartBridge starts the tick backfill can come both in the
+- Built from the page's TickStore at `ready` and then from each live tick, so it holds exactly what the store holds.
+  **Not settled:** a trade at the moment ChartBridge starts the tick backfill can come both in the
   backfill and as a held live tick, and would then be counted twice (in the range bars too). That is being handled in
   ChartBridge; see the note in the code.
 - No buy/sell split: ChartBridge's ticks carry no aggressor side. Open questions for Anthony are listed in the code

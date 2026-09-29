@@ -141,6 +141,17 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     an IB. Not detectable from bars: a minute that has a bar but lost some trades.
   - Its own Indicators entry, **IB 1h**, per pane: on for the main pane (also for a main pane saved before
     1.5.3), off for a new pane. It is independent of Levels.
+- **Volume profile (unreleased, for 1.6.0; Anthony's ruling 2026-09-29):** the session's traded volume per price,
+  1-tick rows, as horizontal bars from the right edge of the plot, in front of the grid and behind the volume bars,
+  levels, VWAP and candles. The largest row (the POC) is 25% of the plot width (`VP_WIDTH`), the rest in proportion.
+  Opaque fills: rows outside the value area `#141C26`, the 70% value area a step stronger `#212C3B`, the POC row in
+  the value-level gold `#E0B45A`. On another ground the two row colors are mixed from the ground toward the ink
+  (7% and 14%) and the POC moves until it reads at 3:1 on the value-area rows. Each row is its price span tall
+  (price minus half a tick to plus half a tick) in whole device pixels, with a 1 px gap once rows are 4 px or taller;
+  rows thinner than a pixel share it, the bar as long as the largest of them and the POC winning, so it always
+  shows. Off by default; the Indicators menu turns it on per pane, with a Session (from 18:00 ET) or RTH (9:30:00 up
+  to 16:00:00 ET, none on weekends and NYSE holidays) choice. The legend adds "POC 26,150.50 · VA 26,101.50 to
+  26,289.50", the POC price in the gold.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
@@ -197,6 +208,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
   the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane. The main pane
   starts with today's set (all five on, or the 1.3 choices plus IB 1h); a new pane starts with none on (Anthony, 2026-09-29).
+  The Volume profile row (unreleased) is off on every pane and carries a small Session / RTH switch (the toolbar's
+  segmented style at 11 px), a temporary control until the new Indicators menu.
 - PIN pad (live page, 1.5.2, ChartBridge 0.3.2; `live/pin.css`): a centered card on `#0B1016` with a `#2A3645`
   border, radius 12 and the Colors panel's shadow, over the `#080B10` ground (at 90% with a light blur over the
   chart for Change PIN). The logo and wordmark as in the toolbar, a 600 18px title, four 14 px dots (filled
