@@ -97,7 +97,15 @@ Anthony out of a trade:
   may stay open; no recompile). The page then asks for a new PIN the next time it opens or reconnects. Only
   someone at this PC can do this. Pages that were open keep their current connection, but once they
   reconnect they ask for the new PIN like any other page.
-- **What is stored.** `pin.txt` holds a salted PBKDF2-SHA256 hash of the PIN (600,000 iterations), never
+- **First run.** On a fresh PC, whoever opens the page first sets the PIN: open it and set the PIN right
+  after installing.
+- **Revoking.** Deleting `pin.txt` also revokes every open page: each asks for the new PIN on its next
+  reconnect.
+- **A damaged or locked pin.txt** (a backup or antivirus holding it, a power cut mid-write) never counts as
+  "no PIN": open pages keep working from the copy ChartBridge read earlier, nobody is offered "Set a PIN",
+  and the page recovers by itself once the file reads again. If ChartBridge starts with it damaged, the page
+  keeps its unlock and waits, with a note saying why; delete `pin.txt` if it stays that way.
+- **What is stored.** `pin.txt` holds a salted PBKDF2-SHA256 hash of the PIN (50,000 iterations), never
   the PIN, plus a random key that lets ChartBridge recognise pages it has unlocked. ChartBridge never logs
   the PIN or any token; `/diag` shows only whether a PIN is set.
 - **What it does not touch.** The Desk's Live tab (listed in `allowOrigins`, with its own PIN) and local
