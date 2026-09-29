@@ -35,7 +35,7 @@ class BarBuilder {
     this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
     this.reset();
   }
-  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.lastT = -Infinity; }
+  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.lastT = -Infinity; this._dayBar = null; this._barDay = null; this._fast = null; }
   get last() { return this.bars[this.bars.length - 1]; }
 
   _vwap(t, price, v) {
@@ -61,32 +61,72 @@ class BarBuilder {
    * touched, oldest first (a finished range bar set to its full range, phantom bars, then the trade's bar).
    */
   add(t, price, v) {
+    const r = this._step(t, price, v);
+    if (typeof r === 'object') return r;
+    const bar = this.last;
+    return { bar, isNew: r === 1, changed: [bar] };
+  }
+
+  /** The same as add, returning nothing: for building from many ticks at once (TickStore.feed), with no garbage. */
+  addQuiet(t, price, v) { this._step(t, price, v); }
+
+  /* One trade. Returns 0 when it landed in the newest bar, 1 when it opened one new bar (the newest), or add()'s
+     result when a NinjaTrader-style range bar finished (that is rare, so only then is anything allocated). */
+  _step(t, price, v) {
     v = v || 0;
+    // Fast path (NinjaTrader-style range bars, most trades): the trade is inside the newest bar's range and well
+    // inside that bar's session, so it only moves the bar. Same arithmetic as the full path below.
+    const f = this._fast;
+    if (f !== null && t > f.from && t < f.to) {
+      const P = Math.round(price / this.tick);
+      if (P <= f.lo + this.rangeTicks && P >= f.hi - this.rangeTicks) {
+        this.pv += price * v; this.vol += v;
+        const vw = this.vol > 0 ? this.pv / this.vol : price, bar = f.bar;
+        if (t > this.lastT) this.lastT = t;
+        if (price > bar.h) { bar.h = price; f.hi = P; }
+        if (price < bar.l) { bar.l = price; f.lo = P; }
+        bar.c = price; bar.v += v; bar.vw = vw;
+        return 0;
+      }
+    }
+    this._fast = null;
+    const r = this._slow(t, price, v);
+    const bar = this.bars[this.bars.length - 1];
+    if (this.mode === 'range' && this.rangeMode === 'nt' && bar && tradeDay(bar.t, this.sessionStart) === this.day) {
+      // the fast path holds while trades stay in this bar's session (the builder's day too), 1 ms clear of its edges
+      const from = sessionStartOf(bar.t, this.sessionStart);
+      this._fast = { bar, lo: Math.round(bar.l / this.tick), hi: Math.round(bar.h / this.tick), from: from + 0.001, to: from + DAY - 0.001 };
+    }
+    return r;
+  }
+
+  _slow(t, price, v) {
     const vw = this._vwap(t, price, v);
     const prevT = this.lastT;
-    this.lastT = Math.max(prevT, t);
-    let bar = this.last, isNew = false;
+    if (t > prevT) this.lastT = t;
+    let bar = this.bars[this.bars.length - 1], isNew = 0;
     if (this.mode === 'time') {
       const bt = Math.floor(t / this.seconds) * this.seconds;
       if (!bar || bt > bar.t) {
         bar = { t: bt, o: price, h: price, l: price, c: price, v: 0, vw };
-        this.bars.push(bar); isNew = true;
+        this.bars.push(bar); isNew = 1;
       }
       // a late tick for an older bucket folds into the newest bar rather than rewriting history
     } else {
-      const newSession = !bar || tradeDay(t, this.sessionStart) !== tradeDay(bar.t, this.sessionStart);
+      if (bar && bar !== this._dayBar) { this._dayBar = bar; this._barDay = tradeDay(bar.t, this.sessionStart); }
+      const newSession = !bar || this.day !== this._barDay;       // this.day: the trade's day, set by _vwap
       if (!newSession && this.rangeMode === 'nt') {
         const r = this._ntRange(t, price, v, vw, bar, prevT);
         if (r) return r;
       } else {
         const span = this.rangeTicks * this.tick + 1e-9;
-        if (newSession || price > bar.l + span || price < bar.h - span) { bar = this._open(this._times(t, 1, prevT)(0), price, vw); isNew = true; }
+        if (newSession || price > bar.l + span || price < bar.h - span) { bar = this._open(this._times(t, 1, prevT)(0), price, vw); isNew = 1; }
       }
     }
     if (price > bar.h) bar.h = price;
     if (price < bar.l) bar.l = price;
     bar.c = price; bar.v += v; bar.vw = vw;
-    return { bar, isNew, changed: [bar] };
+    return isNew;
   }
 
   _open(bt, price, vw) {
@@ -114,12 +154,12 @@ class BarBuilder {
      the forming bar (the caller then updates it as usual). */
   _ntRange(t, price, v, vw, bar, prevT) {
     const tk = this.tick, R = this.rangeTicks;
-    const q = p => Math.round(p / tk), px = n => +(n * tk).toFixed(10);
-    const P = q(price), lo = q(bar.l), hi = q(bar.h), cl = q(bar.c);
+    const P = Math.round(price / tk), lo = Math.round(bar.l / tk), hi = Math.round(bar.h / tk);
     let up;
     if (P > lo + R) up = true;
     else if (P < hi - R) up = false;
-    else return null;
+    else return null;                                    // most trades: checked before anything is allocated
+    const px = n => +(n * tk).toFixed(10), cl = Math.round(bar.c / tk);
     const changed = [];
     let edge = up ? lo + R : hi - R;                     // the finished bar ends exactly one range from its far side
     if (up ? edge > cl : edge < cl) {
@@ -154,6 +194,59 @@ class BarBuilder {
   }
 }
 
+/*
+ * TickStore: the page's trades [t, p, v] kept in columns of 64-bit floats, in blocks of 65,536, instead of one small
+ * array per trade. The range view holds up to 33 hours of ticks (about 2 million on a busy NQ day): as arrays that
+ * was about 2 million objects (some 150 MB of JavaScript heap) for the garbage collector to walk and move, and the
+ * page's frames waited on it. Blocks live outside that heap, are never copied as the store grows, and the oldest
+ * are dropped whole when the page trims its history.
+ */
+const BLOCK = 65536, SHIFT = 16, MASK = BLOCK - 1;
+class TickStore {
+  constructor() { this.clear(); }
+  clear() { this.blocks = []; this.start = 0; this.length = 0; }
+  /** Add one trade at the end. */
+  push(t, p, v) {
+    const j = this.start + this.length;
+    let b = this.blocks[j >>> SHIFT];
+    if (!b) { b = new Float64Array(BLOCK * 3); this.blocks.push(b); }
+    const k = (j & MASK) * 3;
+    b[k] = t; b[k + 1] = p; b[k + 2] = v || 0;
+    this.length++;
+  }
+  /** Add trades as ChartBridge sends them, [[t, p, v], ...]. */
+  pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2]); } }
+  _get(i, f) { const j = i + this.start; return this.blocks[j >>> SHIFT][(j & MASK) * 3 + f]; }
+  time(i) { return this._get(i, 0); }
+  price(i) { return this._get(i, 1); }
+  volume(i) { return this._get(i, 2); }
+  /** The trade at i as [t, p, v] (a new array; for tests and rare use, not in loops). */
+  at(i) { return i >= 0 && i < this.length ? [this._get(i, 0), this._get(i, 1), this._get(i, 2)] : undefined; }
+  /** Drop the oldest n trades. */
+  dropFirst(n) {
+    n = Math.max(0, Math.min(this.length, n));
+    this.start += n; this.length -= n;
+    const whole = this.start >>> SHIFT;
+    if (whole) { this.blocks.splice(0, whole); this.start &= MASK; }
+    if (!this.length) this.clear();
+  }
+  /** Feed trades from index `from` (with t >= minT, when given) to builder.add(t, p, v), oldest first. */
+  feed(builder, from, minT) {
+    const min = minT === undefined ? -Infinity : minT;
+    const quiet = typeof builder.addQuiet === 'function';
+    for (let i = Math.max(0, from || 0); i < this.length;) {
+      const j = i + this.start, b = this.blocks[j >>> SHIFT];
+      const end = Math.min(this.length, i + BLOCK - (j & MASK));
+      for (let k = (j & MASK) * 3; i < end; i++, k += 3) {
+        if (b[k] < min) continue;
+        if (quiet) builder.addQuiet(b[k], b[k + 1], b[k + 2]); else builder.add(b[k], b[k + 1], b[k + 2]);
+      }
+    }
+  }
+}
+/* the time of trade i, in a TickStore or a plain [[t, p, v], ...] list */
+const timeAt = (ticks, i) => typeof ticks.time === 'function' ? ticks.time(i) : ticks[i][0];
+
 /** Exchange time (bar-time seconds) at which the session holding t started. */
 const sessionStartOf = (t, s) => s ? (tradeDay(t, s) - 1) * DAY + s : tradeDay(t, s) * DAY;
 
@@ -172,7 +265,7 @@ function rangeHistoryFrom(now, s) {
 }
 function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 1); }
 function rangeStartIndex(ticks, from, s) {
-  for (let i = 0; i < ticks.length; i++) if (sessionStartOf(ticks[i][0], s) >= from) return i;
+  for (let i = 0; i < ticks.length; i++) if (sessionStartOf(timeAt(ticks, i), s) >= from) return i;
   return 0;
 }
 
@@ -190,10 +283,10 @@ function rangeNeedsReload(tickFrom, now, s, trimmed) {
  * built from mid-session and can differ from NinjaTrader's until the next session starts.
  */
 function partialStart(ticks, from, s, slack) {
-  const k = ticks[from];
-  if (!k) return null;
-  return k[0] - sessionStartOf(k[0], s) > (slack === undefined ? 600 : slack) ? k[0] : null;
+  if (!(from >= 0 && from < ticks.length)) return null;
+  const t = timeAt(ticks, from);
+  return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+return { BarBuilder, TickStore, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
 });
