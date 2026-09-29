@@ -56,6 +56,7 @@ page side; then reviewed on its own (four fixes below, marked "review").
   retry (refused or empty), minute charts, the minute boundary and a lagging rebuild, a stale load and a
   resubscribe mid-send, `sub` (and leading zeros), a short whole-second backfill, trades held after the answer
   at both resolutions, empty answers and `/diag`. Each review's new cases failed on the commit before its fix.
+
 ## 1.5.3 (2026-09-29): the 1-hour Initial Balance, and a chart background of any color
 
 Page and engine only; nt8/ is unchanged and ChartBridge stays 0.3.2. Run `nt8\install.ps1` again after pulling (it
