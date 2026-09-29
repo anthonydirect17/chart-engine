@@ -1094,9 +1094,13 @@ function create(container, options) {
       dirty = true; return;
     }
     if (od) {
-      const d = od; od = null;
-      if (!cancelled && d.moved && d.price !== d.price0 && orderEditing) { pendingMoves.set(d.id, d.price); emit('orderMove', { id: d.id, price: d.price }); }
-      setCursor(zoneOf(local(e)), local(e)); dirty = true; return;
+      // A move is sent only for a release inside the plot at a price on screen. Released anywhere else (the
+      // toolbar, the axes, off the chart), the drag is cancelled: the line goes back and nothing is sent.
+      const d = od, p = local(e); od = null;
+      const inPlot = p.x >= 0 && p.x < plotW && p.y >= 0 && p.y < plotH;
+      const shown = d.price >= Math.min(V.lo, V.hi) && d.price <= Math.max(V.lo, V.hi);
+      if (!cancelled && inPlot && shown && d.moved && d.price !== d.price0 && orderEditing) { pendingMoves.set(d.id, d.price); emit('orderMove', { id: d.id, price: d.price }); }
+      setCursor(zoneOf(p), p); dirty = true; return;
     }
     if (dd) {
       const p = local(e);

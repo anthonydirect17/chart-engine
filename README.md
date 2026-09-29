@@ -119,7 +119,7 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   and says how many it kept. Cancel those one by one with their x, or use Flatten.
 - Working orders show as lines with a label and a price tag (green buy, red sell; stops dashed, limits and
   targets solid). While Armed, drag a label (or its price tag) to move the order, press Escape during the
-  drag to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
+  drag (or let go outside the chart's plot) to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
   shows as a light line at the average price with open P&L in points and dollars.
 - Confirmations and refusals show in the status line; a refusal is in red with ChartBridge's reason. An
   error from ChartBridge (for example a bracket leg NinjaTrader rejected) stays on screen until dismissed.

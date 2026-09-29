@@ -27,6 +27,9 @@ Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also c
 - **Drawings per pane** (review S1): a pane other than `main` keeps its lines under
   `live-drawings-v1-<paneId>-<ROOT>`, so two panes on one instrument no longer overwrite each other; the main
   pane (and the standalone page) keeps `live-drawings-v1-<ROOT>`.
+- **Order drag safety** (review N4, also on 1.4.2): an order drag let go outside the plot (over the toolbar, an
+  axis, off the chart) or at a price not on screen is cancelled; the line goes back and nothing is sent. Before,
+  it sent a move to an extrapolated price Anthony never saw. Engine unit test and an orders smoke case.
 - Engine: `mountThemePanel` returns `destroy()` (removes the Colors panel and its document listener), and saves
   only the colors a change sets, on a fresh read, so two charts sharing the key no longer undo each other.
 - Tests: `npm run smoke:embed` (a plain host page with one and two panes against the fake bridge); the fake
