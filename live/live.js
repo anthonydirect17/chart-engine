@@ -234,7 +234,8 @@ function markup(p, o) {
         <button type="button" data-v="range">Range</button>
       </div>
       <span class="range-box" id="${p}rangeBox" hidden><label class="range-box" for="${p}rangeTicks"><input id="${p}rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="${p}rangeUnit">ticks</span></label>
-        <select class="acct-sel range-mode" id="${p}rangeMode" aria-label="How range bars are built" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
+        <label class="glabel" for="${p}rangeMode">Range style</label>
+        <select class="acct-sel range-mode" id="${p}rangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
           <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
     </div>
 
@@ -279,7 +280,7 @@ ${obar}
   <main class="stage">
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
-      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
+      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgFill"></span></div>
     </div>
@@ -566,7 +567,7 @@ function start(container, opt, PAGE) {
       case 'hello':
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
-        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version || '');
+        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version || '') + ' · chart ' + CE.VERSION;
         syncAccounts(m.accounts || []);
         subscribe(S.root);
         if (m.trading && TRADING) { applyTrading(m.trading); signIn(); }   // protocol v2; ChartBridge 0.2 has no trading field
