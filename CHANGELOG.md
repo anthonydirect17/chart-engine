@@ -2,16 +2,23 @@
 
 ## Unreleased
 
-- **Volume profile, compute core only** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`; nothing drawn, no menu,
-  no version bump yet: Anthony picks the look and controls). A session volume profile from trades (t, price, size):
-  rows at the tick (NQ 0.25) with optional grouping of N ticks per row, all in whole ticks; total volume; POC (ties go
-  to the row closest to the middle of the profile, then the lower); value area high and low for a set share (default
-  70%) by the CBOT method (from the POC, add the larger of the next two rows above or the next two below, both when
-  equal). One profile per trading session, emptied at the same 18:00 ET boundary as the range bars and VWAP (the
-  engine's `tradeDay`). `add` is O(1); on 500,000 trades building takes about 10 to 20 ms and POC plus value area
-  under 1 ms (Node 22). Built from the page's TickStore at `ready` and then from each live tick, so nothing is
-  counted twice. No buy/sell split: ChartBridge's ticks carry no aggressor side. Tests in
-  `test/volume-profile.test.js`.
+- **Volume profile, compute core only** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`). Nothing draws it and
+  the live page does not use it yet: no page code, no menu, no version bump. Anthony picks the look and controls.
+  A session volume profile from trades (t, price, size): rows at the tick (NQ 0.25) with optional grouping of N ticks
+  per row, all in whole ticks; total volume; POC (ties go to the row closest to the middle of the profile, then the
+  lower); value area high and low for a set share (default 70%) by the CBOT method (from the POC, add the larger of
+  the next two rows above or the next two below, both when equal). One profile per trading session, emptied at the
+  same 18:00 ET boundary as the range bars and VWAP (the engine's `tradeDay`). `add` is amortised O(1); POC and value
+  area are cached until the profile changes. Only finite numbers are taken (null, strings and booleans are left out
+  and counted). Measured with Node 22 on 500,000 trades: 7 to 70 ms to build (the first build in a process is the
+  slowest), 0.02 to 1.1 ms for the first POC and value area after it (about 7 ms on one cold run elsewhere), and
+  about 10 nanoseconds once cached.
+- Meant to be built from the page's TickStore at `ready` and then from each live tick, so it holds exactly what the
+  store holds. **Not settled:** a trade at the moment ChartBridge starts the tick backfill can come both in the
+  backfill and as a held live tick, and would then be counted twice (in the range bars too). That is being handled in
+  ChartBridge; see the note in the code.
+- No buy/sell split: ChartBridge's ticks carry no aggressor side. Open questions for Anthony are listed in the code
+  comment. Tests in `test/volume-profile.test.js`.
 
 ## 1.5.2 (2026-09-29): ChartBridge 0.3.2, a PIN on ChartBridge's own page
 

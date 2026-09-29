@@ -1,6 +1,7 @@
 'use strict';
 // VolumeProfile (compute core, unreleased): rows in whole ticks, row grouping, POC tie-break, the CBOT value area,
-// the 18:00 ET session reset (also on DST dates), history then live with nothing counted twice, and the cost.
+// input checks, versions and caches, the 18:00 ET session reset (also on DST dates), backfill-then-live parity
+// through the TickStore, and the cost. The ChartBridge backfill seam is not tested here (see the code comment).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
@@ -109,7 +110,7 @@ test('bad options are refused, not quietly replaced', () => {
   assert.throws(() => profileOf([[1, 1]]).valueArea(70), RangeError);   // a share, not a percent
 });
 
-test('bad trades are left out and counted', () => {
+test('bad numbers are left out and counted', () => {
   const vp = new VolumeProfile();
   vp.add(T0, NaN, 1); vp.add(T0, 100, 0); vp.add(T0, 100, -2); vp.add(NaN, 100, 1); vp.add(T0, 100, Infinity);
   vp.add(T0, 100, 2);
@@ -120,6 +121,66 @@ test('bad trades are left out and counted', () => {
   vp.add(T0, 100, 0); vp.add(T0, 100, 2);
   assert.equal(vp.skipped, 1);
   assert.deepEqual(table(vp), [[100, 2]]);
+});
+
+test('only numbers are taken: null, strings, booleans and undefined are left out and counted', () => {
+  const vp = new VolumeProfile();
+  vp.add(T0, 21440, 2);
+  const v0 = vp.version;
+  const bad = [
+    [T0, null, 1], [T0, '21440', 1], [T0, true, 1], [T0, undefined, 1],             // price
+    [T0, 21440, null], [T0, 21440, '5'], [T0, 21440, true], [T0, 21440, undefined],  // volume
+    [null, 21440, 1], ['1790000000', 21440, 1], [true, 21440, 1], [undefined, 21440, 1],   // time
+  ];
+  for (const [t, p, v] of bad) assert.equal(vp.add(t, p, v), false, JSON.stringify([t, p, v]));
+  assert.equal(vp.skipped, bad.length);
+  assert.deepEqual(table(vp), [[21440, 2]]);                                          // null was never taken as price 0
+  assert.deepEqual([vp.total, vp.trades, vp.low, vp.high], [2, 1, 21440, 21440]);
+  assert.equal(typeof vp.total, 'number');
+  assert.equal(vp.version, v0);                                                      // nothing left out changes the version
+  vp.addAll([[T0, null, 1], [T0, 21440.25, '3']]);                                   // the same through addAll
+  assert.equal(vp.skipped, bad.length + 2);
+  assert.equal(vp.total, 2);
+});
+
+test('version changes on every change: a trade taken, a new session, advance, reset', () => {
+  const vp = new VolumeProfile(), seen = [vp.version];
+  const step = (what, fn, changes) => {
+    const before = vp.version; fn();
+    if (changes) { assert.notEqual(vp.version, before, what); assert.ok(!seen.includes(vp.version), what + ': a version never seen before'); }
+    else assert.equal(vp.version, before, what);
+    seen.push(vp.version);
+  };
+  step('first trade', () => vp.add(T0, 21440, 1), true);
+  step('second trade, same row', () => vp.add(T0 + 1, 21440, 1), true);
+  step('trade in a new row', () => vp.add(T0 + 2, 21500, 1), true);                 // grows the array
+  step('trade left out', () => vp.add(T0 + 3, NaN, 1), false);
+  step('late trade of an earlier session left out', () => vp.add(T0 - 86400, 21440, 1), false);
+  step('advance within the session', () => vp.advance(T0 + 60), false);
+  step('advance to the next session', () => vp.advance(et(2026, 9, 29, 18, 0)), true);
+  step('first trade of that session', () => vp.add(et(2026, 9, 29, 18, 0, 1), 21440, 1), true);
+  step('trade opening the session after', () => vp.add(et(2026, 9, 30, 18, 0, 1), 21440, 1), true);
+  step('reset', () => vp.reset(), true);
+  step('reset when already empty', () => vp.reset(), true);
+});
+
+test('poc() and valueArea() are cached by version: the same object until the profile changes', () => {
+  const vp = profileOf([[100, 5], [100.25, 10], [100.5, 20], [100.75, 40], [101, 15], [101.25, 5], [101.5, 5]]);
+  const poc = vp.poc(), va = vp.valueArea();
+  assert.equal(vp.poc(), poc);
+  assert.equal(vp.valueArea(), va);
+  assert.equal(va.poc, poc);
+  assert.ok(Object.isFrozen(poc) && Object.isFrozen(va));
+  vp.add(T0, NaN, 1);                                  // left out: no change, so still cached
+  assert.equal(vp.poc(), poc);
+  assert.equal(vp.valueArea(), va);
+  vp.add(T0, 101.5, 1);                                // a change: new objects, new numbers
+  assert.notEqual(vp.poc(), poc);
+  assert.notEqual(vp.valueArea(), va);
+  assert.deepEqual(vp.poc(), poc);                     // the POC row did not move
+  vp.add(T0, 100, 50);                                 // now it does: 100.00 holds 55
+  assert.equal(vp.poc().price, 100);
+  assert.equal(vp.valueArea().poc.price, 100);
 });
 
 test('POC tie-break: the tied row closest to the middle of the profile', () => {
@@ -133,6 +194,27 @@ test('POC tie-break: the tied row closest to the middle of the profile', () => {
   assert.equal(profileOf([[200, 4], [200.25, 4]]).poc().price, 200);
   // no tie: the most volume wins wherever it is
   assert.equal(profileOf([[100, 11], [100.25, 5], [100.5, 10], [100.75, 5], [101, 10]]).poc().price, 100);
+});
+
+test('value area, hand-worked: POC on the top row', () => {
+  // rows 100.00:10 100.25:20 100.50:30 100.75:50, total 110, 70% = 77
+  // POC 100.75 (50), the top row. Up has no rows: down pair 100.50 + 100.25 = 50 -> 100. VAL 100.25, VAH 100.75.
+  const vp = profileOf([[100, 10], [100.25, 20], [100.5, 30], [100.75, 50]]);
+  assert.equal(vp.poc().price, 100.75);
+  assert.equal(vp.poc().price, vp.high);
+  const va = vp.valueArea();
+  assert.deepEqual([va.poc.price, va.val, va.vah, va.volume], [100.75, 100.25, 100.75, 100]);
+});
+
+test('value area, hand-worked: POC on the bottom row', () => {
+  // rows 100.00:50 100.25:5 100.50:5 100.75:40, total 100, 70% = 70
+  // POC 100.00 (50), the bottom row. Down has no rows: up pair 5 + 5 -> 60; up has one row left, 40 -> 100.
+  // VAL 100.00, VAH 100.75.
+  const vp = profileOf([[100, 50], [100.25, 5], [100.5, 5], [100.75, 40]]);
+  assert.equal(vp.poc().price, 100);
+  assert.equal(vp.poc().price, vp.low);
+  const va = vp.valueArea();
+  assert.deepEqual([va.poc.price, va.val, va.vah, va.volume], [100, 100, 100.75, 100]);
 });
 
 test('value area, hand-worked: exactly 70 of 100 is enough', () => {
@@ -211,7 +293,7 @@ test('session: the profile empties exactly at 18:00 ET', () => {
   assert.equal(vp.skipped, 1);
 });
 
-test('session: the 18:00 ET boundary holds on both 2026 DST dates (times made the page\'s way, by zoneSeconds)', () => {
+test('session: 18:00 ET on both 2026 DST dates, with ET times made from UTC through zoneSeconds', () => {
   const Z = unixMs => U.zoneSeconds(unixMs / 1000);                           // ChartBridge sends ET wall clock
   // DST ends Sunday 1 Nov 2026: 18:00 EST is 23:00 UTC
   const nov = new VolumeProfile();
@@ -267,7 +349,7 @@ function reference(trades) {
   return rows;
 }
 
-test('history then live, the page\'s way: nothing counted twice or missed', () => {
+test('backfill-then-live parity through the TickStore: store feed plus live adds equals one build', () => {
   const all = sampleTrades(20000);
   const expected = reference(all);
   const split = 12000;                                   // the backfill ends mid-session; live ticks follow
@@ -294,7 +376,7 @@ test('history then live, the page\'s way: nothing counted twice or missed', () =
   assert.deepEqual(table(new VolumeProfile().addAll(all)), expected);
 });
 
-test('cost: 500,000 trades add in O(1) each; POC and value area stay cheap (generous bounds)', () => {
+test('cost: 500,000 trades build quickly (amortised O(1) adds); POC and value area stay cheap (generous bounds)', () => {
   const n = 500000, trades = sampleTrades(n);
   const oneSession = trades.map(([, p, v], i) => [T0 + i * 0.007, p, v]);   // one session: 10:00 to about 10:58 ET
   const vp = new VolumeProfile();
@@ -303,7 +385,7 @@ test('cost: 500,000 trades add in O(1) each; POC and value area stay cheap (gene
   const addMs = performance.now() - t;
   assert.equal(vp.trades, n);
   t = performance.now();
-  vp._cache = null; const va = vp.valueArea(); const poc = vp.poc();
+  const va = vp.valueArea(), poc = vp.poc();         // the first ask after the build: nothing cached yet
   const vaMs = performance.now() - t;
   assert.ok(va.volume >= 0.7 * vp.total && poc.volume > 0);
   assert.ok(addMs < 2000, '500k adds took ' + addMs.toFixed(1) + ' ms');
