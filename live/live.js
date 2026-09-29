@@ -567,7 +567,7 @@ function start(container, opt, PAGE) {
       case 'hello':
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
-        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version || '') + ' · chart ' + CE.VERSION;
+        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
         syncAccounts(m.accounts || []);
         subscribe(S.root);
         if (m.trading && TRADING) { applyTrading(m.trading); signIn(); }   // protocol v2; ChartBridge 0.2 has no trading field
@@ -819,6 +819,12 @@ function start(container, opt, PAGE) {
     $('lgVw').textContent = b.vw !== undefined ? fmt(U.roundTo(b.vw, D.tick)) : '-';
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
+  /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
+  const DRAW_ERR = 'Chart drawing error: ';
+  chart.on('error', e => {
+    if (e) setStatus(DRAW_ERR + e.message + '. The chart keeps running; reload the page if this stays.', 'error');
+    else if ($('statusMsg').textContent.startsWith(DRAW_ERR)) setStatus('', '');
+  });
   chart.on('tool', t => { $('toolTrend').setAttribute('aria-pressed', String(t === 'trend')); $('toolHline').setAttribute('aria-pressed', String(t === 'hline')); });
 
   const themePanel = CE.mountThemePanel(chart, $('colorsHost'), {
