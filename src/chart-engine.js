@@ -1349,10 +1349,15 @@ function mountThemePanel(chart, host, options) {
   wrap.querySelector('.ce-reset').addEventListener('click', () => apply(defaults));
   const open = v => { panel.hidden = !v; btn.setAttribute('aria-expanded', String(v)); };
   btn.addEventListener('click', () => open(panel.hidden));
-  document.addEventListener('pointerdown', e => { if (!wrap.contains(e.target)) open(false); });
+  const outside = e => { if (!wrap.contains(e.target)) open(false); };
+  document.addEventListener('pointerdown', outside);
   wrap.addEventListener('keydown', e => { if (e.key === 'Escape') { open(false); btn.focus(); } });
   sync(); changed();
-  return { element: wrap, get: () => Object.assign({}, cur), set: apply, close: () => open(false) };
+  return {
+    element: wrap, get: () => Object.assign({}, cur), set: apply, close: () => open(false),
+    /** Remove the panel and its document listener (for a chart that is taken down, such as an embedded pane). */
+    destroy() { document.removeEventListener('pointerdown', outside); wrap.remove(); },
+  };
 }
 
 return {
