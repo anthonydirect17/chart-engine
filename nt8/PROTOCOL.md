@@ -57,7 +57,7 @@ JSON: `version`; `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 onc
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`); and `accounts`: one row per watched account with `name`, `connection` (status),
+`lastError`, `setAside`, `rejectedByDesk`); and `accounts`: one row per watched account with `name`, `connection` (status),
 `executions`, `orders`, `positions` (counts NinjaTrader holds) and `fillEvents`, `orderEvents`,
 `positionEvents` (events seen). Account names are in this local page; never copy them into reports.
 
@@ -66,6 +66,7 @@ session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`,
 With `postFills = true` in `config.txt`, every fill is also sent to The Desk's `POST /api/fills`
 (`deskUrl`, default `http://localhost:8800`) in The Desk's fill shape, with `source` `nt8`. Fills
 wait in `pending_fills.jsonl` next to `config.txt` until The Desk accepts them, so a restart or The
-Desk being closed loses nothing; The Desk ignores duplicates. Fills from every watched account are
+Desk being closed loses nothing; The Desk ignores duplicates. A request gives up after 10 seconds; a fill
+The Desk refuses as malformed is set aside in `rejected_fills.jsonl` so it never blocks the queue. Fills from every watched account are
 sent: The Desk's Accounts menu decides which accounts count. ChartBridge sends no commission (NinjaTrader's
 figure is its own commission template, not what was charged).

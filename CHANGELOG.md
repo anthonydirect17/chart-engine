@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.2 (2026-09-29): ChartBridge 0.2.1
+
+From an overnight code review of 0.2.0. Checked by running the real queue code under Mono against a
+running The Desk, a malformed fill, a server that never answers, and a closed port.
+- Sending fills to The Desk: a request now gives up after 10 seconds (before, one hung request stopped
+  all posting with no error). A batch The Desk calls malformed is retried one fill at a time and the
+  bad fill is set aside in `rejected_fills.jsonl`, so nothing blocks the queue. Fills The Desk could not
+  store are logged. The queue file is replaced atomically, reloads cleanly (no duplicates, skips a line
+  cut short by a crash), and never holds the same fill twice.
+- A failed start disposes its timers and account subscriptions.
+- Clock: logging happens outside the clock lock, and only for steps over 250 ms.
+- `/diag` desk block adds `setAside` and `rejectedByDesk`.
+
 ## 1.2.1 (2026-09-29)
 
 - Level tags on the price axis no longer hide under the last-price tag: levels at or above the last

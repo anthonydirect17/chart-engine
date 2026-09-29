@@ -1,4 +1,4 @@
-// ChartBridge 0.2.0 for NinjaTrader 8
+// ChartBridge 0.2.1 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only).
 // READ ONLY: this add-on never places, changes or cancels an order.
@@ -162,24 +162,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 2026-09-29: the PC was 0.57 s off until Windows time sync was turned on) is picked up.
         public static double NowUtcMs()
         {
+            double now, stepped = 0;
             lock (ClockSync)
             {
                 double elapsed = Clock.Elapsed.TotalMilliseconds;
-                double now = anchorMs + elapsed;
+                now = anchorMs + elapsed;
                 if (elapsed - lastCheckMs >= RecheckEveryMs)
                 {
                     lastCheckMs = elapsed;
                     double wall = UtcMs(DateTime.UtcNow);
                     double off = wall - now;
-                    if (Math.Abs(off) > StepIfOffByMs)
-                    {
-                        anchorMs += off;
-                        now = wall;
-                        ChartBridgeServer.Log("PC clock changed by " + Math.Round(off).ToString(CultureInfo.InvariantCulture) + " ms; ChartBridge follows it.");
-                    }
+                    if (Math.Abs(off) > StepIfOffByMs) { anchorMs += off; now = wall; stepped = off; }
                 }
-                return now;
             }
+            // Log outside the lock; small steps (stopwatch drift) are not worth a line.
+            if (Math.Abs(stepped) > 250) ChartBridgeServer.Log("PC clock changed by " + Math.Round(stepped).ToString(CultureInfo.InvariantCulture) + " ms; ChartBridge follows it.");
+            return now;
         }
 
         public static DateTime NowEastern() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Eastern); }
@@ -288,40 +286,94 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ fills to The Desk
     // Fills wait in a queue (mirrored to pending_fills.jsonl so a restart loses nothing) until
     // The Desk accepts them. The Desk ignores duplicates by exec_id, so resending is safe.
+    // The file is replaced atomically; a request gets 10 seconds; a batch The Desk calls malformed
+    // is retried one fill at a time and a single bad fill is set aside in rejected_fills.jsonl, so
+    // nothing blocks the queue for good.
     public static class ChartBridgeDesk
     {
         private static readonly object Sync = new object();
         private static readonly List<string> PendingList = new List<string>();
-        private static int sending;
+        private static readonly HashSet<string> PendingSet = new HashSet<string>();
+        private static readonly Regex RejectedRx = new Regex("\"rejected\"\\s*:\\s*\\[(.*?)\\]\\s*[,}]", RegexOptions.Singleline);
+        private static readonly Regex ReasonRx = new Regex("\"reason\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        private const int TimeoutMs = 10000, FullBatch = 500;
+        private static int sending, batchSize = FullBatch;
         private static bool lastFailed;
+        private static string lastError = "";
+        private static long setAside, rejectedByDesk;
         private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_fills.jsonl"); } }
+        private static string SetAsideFile { get { return Path.Combine(ChartBridgeConfig.Folder, "rejected_fills.jsonl"); } }
+
+        private static bool LooksWhole(string line) { return line.StartsWith("{") && line.EndsWith("}") && line.Contains("\"exec_id\":"); }
 
         public static void Load()
         {
             lock (Sync)
             {
-                try { if (File.Exists(File_)) foreach (string line in File.ReadAllLines(File_)) if (line.Trim().Length > 0) PendingList.Add(line.Trim()); }
+                PendingList.Clear(); PendingSet.Clear();
+                int bad = 0;
+                try
+                {
+                    if (File.Exists(File_))
+                        foreach (string raw in File.ReadAllLines(File_))
+                        {
+                            string line = raw.Trim();
+                            if (line.Length == 0) continue;
+                            if (!LooksWhole(line)) { bad++; continue; }   // a line cut short by a crash mid-write
+                            if (PendingSet.Add(line)) PendingList.Add(line);
+                        }
+                }
                 catch (Exception ex) { ChartBridgeServer.Log("could not read pending fills: " + ex.Message); }
+                if (bad > 0) ChartBridgeServer.Log("skipped " + bad + " unreadable line(s) in pending_fills.jsonl");
             }
         }
 
+        // Write the whole queue to a temp file, then swap it in, so a crash never leaves half a file.
         private static void Save()
         {
-            try { File.WriteAllLines(File_, PendingList.ToArray()); }
+            try
+            {
+                string tmp = File_ + ".tmp";
+                File.WriteAllLines(tmp, PendingList.ToArray());
+                if (File.Exists(File_)) File.Replace(tmp, File_, null); else File.Move(tmp, File_);
+            }
             catch (Exception ex) { ChartBridgeServer.Log("could not save pending fills: " + ex.Message); }
         }
 
-        public static void Queue(string fillJson) { lock (Sync) { PendingList.Add(fillJson); Save(); } }
+        public static void Queue(string fillJson) { lock (Sync) { if (PendingSet.Add(fillJson)) { PendingList.Add(fillJson); Save(); } } }
 
-        public static void QueueMany(List<string> fills) { if (fills.Count == 0) return; lock (Sync) { PendingList.AddRange(fills); Save(); } }
-
-        private static string lastError = "";
+        public static void QueueMany(List<string> fills)
+        {
+            lock (Sync)
+            {
+                bool changed = false;
+                foreach (string f in fills) if (PendingSet.Add(f)) { PendingList.Add(f); changed = true; }
+                if (changed) Save();
+            }
+        }
 
         public static string DiagJson()
         {
             int n; lock (Sync) n = PendingList.Count;
             return "{\"postFills\":" + (ChartBridgeConfig.PostFills ? "true" : "false") + ",\"deskUrl\":" + CbJson.Str(ChartBridgeConfig.DeskUrl) +
-                ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) + "}";
+                ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) +
+                ",\"setAside\":" + Interlocked.Read(ref setAside) + ",\"rejectedByDesk\":" + Interlocked.Read(ref rejectedByDesk) + "}";
+        }
+
+        private static void Remove(string[] batch)
+        {
+            lock (Sync)
+            {
+                PendingList.RemoveRange(0, Math.Min(batch.Length, PendingList.Count));   // the queue only grows at the end
+                foreach (string f in batch) PendingSet.Remove(f);
+                Save();
+            }
+        }
+
+        private static async Task<WebResponse> Post(HttpWebRequest req, byte[] bytes)
+        {
+            using (Stream s = await req.GetRequestStreamAsync()) await s.WriteAsync(bytes, 0, bytes.Length);
+            return await req.GetResponseAsync();
         }
 
         public static void Flush()
@@ -329,43 +381,84 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!ChartBridgeConfig.PostFills) return;
             if (Interlocked.CompareExchange(ref sending, 1, 0) != 0) return;
             string[] batch;
-            lock (Sync) batch = PendingList.Take(500).ToArray();
+            lock (Sync) batch = PendingList.Take(batchSize).ToArray();
             if (batch.Length == 0) { Interlocked.Exchange(ref sending, 0); return; }
             Task.Run(async () =>
             {
+                bool more = false;
                 try
                 {
-                    string body = "[" + string.Join(",", batch) + "]";
+                    byte[] bytes = Encoding.UTF8.GetBytes("[" + string.Join(",", batch) + "]");
                     HttpWebRequest req = (HttpWebRequest)WebRequest.Create(ChartBridgeConfig.DeskUrl + "/api/fills");
                     req.Method = "POST";
                     req.ContentType = "application/json";
-                    req.Timeout = 5000;
-                    byte[] bytes = Encoding.UTF8.GetBytes(body);
-                    using (Stream s = await req.GetRequestStreamAsync()) await s.WriteAsync(bytes, 0, bytes.Length);
-                    using (HttpWebResponse res = (HttpWebResponse)await req.GetResponseAsync())
+                    Task<WebResponse> call = Post(req, bytes);
+                    Task first = await Task.WhenAny(call, Task.Delay(TimeoutMs));
+                    if (first != call)
                     {
-                        if ((int)res.StatusCode >= 200 && (int)res.StatusCode < 300)
-                        {
-                            lock (Sync) { PendingList.RemoveRange(0, Math.Min(batch.Length, PendingList.Count)); Save(); }
-                            if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
-                        }
+                        try { req.Abort(); } catch (Exception) { }
+                        Task observed = call.ContinueWith(t => { Exception ignored = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        throw new TimeoutException("The Desk did not answer within " + (TimeoutMs / 1000) + " seconds");
                     }
+                    string text;
+                    using (HttpWebResponse res = (HttpWebResponse)await call)
+                    using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
+                    Remove(batch);
+                    if (batch.Length > 1) batchSize = FullBatch;   // while hunting a bad fill, stay at one per request
+                    NoteRejected(text);
+                    lock (Sync) more = PendingList.Count > 0;
+                    if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
                 }
-                catch (Exception ex)
+                catch (WebException wex)
                 {
-                    lastError = ex.Message;
-                    if (!lastFailed) ChartBridgeServer.Log("The Desk did not take fills (" + ex.Message + "); they are saved and will be retried every 10 seconds.");
-                    lastFailed = true;
+                    HttpWebResponse res = wex.Response as HttpWebResponse;
+                    int code = res != null ? (int)res.StatusCode : 0;
+                    if (code == 400 || code == 422)
+                    {
+                        // The Desk called the batch malformed: find the bad fill by sending one at a time.
+                        if (batch.Length > 1) batchSize = 1;
+                        else
+                        {
+                            try { File.AppendAllLines(SetAsideFile, batch); } catch (Exception) { }
+                            Remove(batch);
+                            batchSize = FullBatch;
+                            Interlocked.Increment(ref setAside);
+                            ChartBridgeServer.Log("The Desk refused a fill (" + code + "); it was set aside in rejected_fills.jsonl");
+                        }
+                        more = true;
+                    }
+                    else Failed(wex.Message);
                 }
+                catch (Exception ex) { Failed(ex.Message); }
                 finally { Interlocked.Exchange(ref sending, 0); }
+                if (more) Flush();   // keep draining without waiting for the 10 second timer
             });
+        }
+
+        private static void Failed(string message)
+        {
+            lastError = message;
+            if (!lastFailed) ChartBridgeServer.Log("The Desk did not take fills (" + message + "); they are saved and will be retried every 10 seconds.");
+            lastFailed = true;
+        }
+
+        // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer.
+        private static void NoteRejected(string text)
+        {
+            Match m = RejectedRx.Match(text ?? "");
+            if (!m.Success || m.Groups[1].Value.Trim().Length == 0) return;
+            int n = Regex.Matches(m.Groups[1].Value, "\"index\"").Count;
+            if (n == 0) return;
+            Interlocked.Add(ref rejectedByDesk, n);
+            Match why = ReasonRx.Match(m.Groups[1].Value);
+            ChartBridgeServer.Log("The Desk could not store " + n + " fill(s)" + (why.Success ? ", for example: " + why.Groups[1].Value : ""));
         }
     }
 
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.2.0";
+        public const string Version = "0.2.1";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -410,6 +503,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception ex)
                 {
                     Log("could not start: " + ex.Message);
+                    try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
+                    try { if (pollTimer != null) pollTimer.Dispose(); } catch (Exception) { }
+                    accountTimer = null; pollTimer = null;
+                    Unwatch();
                     return false;
                 }
             }

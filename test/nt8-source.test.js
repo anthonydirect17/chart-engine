@@ -62,3 +62,19 @@ test('fills go to The Desk only when postFills is on', () => {
   assert.match(deliver, /if \(!ChartBridgeConfig\.PostFills\) return;[\s\S]*ChartBridgeDesk\.Queue\(desk\)/);
   assert.match(code, /public static bool PostFills = false;/);
 });
+
+test('The Desk queue: 10 s timeout, atomic file, clean reload, no duplicates, bad fills set aside', () => {
+  const desk = code.slice(code.indexOf('public static class ChartBridgeDesk'), code.indexOf('public static class ChartBridgeServer'));
+  assert.match(desk, /await Task\.WhenAny\(call, Task\.Delay\(TimeoutMs\)\)/);
+  assert.match(desk, /req\.Abort\(\)/);
+  assert.match(desk, /File\.Replace\(tmp, File_, null\)/);
+  assert.match(desk, /PendingList\.Clear\(\); PendingSet\.Clear\(\);/);
+  assert.match(desk, /if \(PendingSet\.Add\(fillJson\)\)/);
+  assert.match(desk, /rejected_fills\.jsonl/);
+  assert.ok(!/QueueToday/.test(code));
+});
+
+test('a failed start does not leave timers or account subscriptions behind', () => {
+  const start = code.slice(code.indexOf('public static bool Start()'), code.indexOf('public static void Stop()'));
+  assert.match(start, /catch \(Exception ex\)[\s\S]*pollTimer\.Dispose\(\)[\s\S]*Unwatch\(\);/);
+});
