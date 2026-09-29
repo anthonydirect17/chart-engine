@@ -13,7 +13,8 @@ It has no dependencies, draws only when something changes, and runs at 60 fps in
 millisecond a frame. It is the chart for the trading app and the standard for every chart in every
 project (see [CHART_STYLE.md](CHART_STYLE.md)).
 
-**Demo:** open `index.html` in a browser (sample MNQ data and a simulated feed; not market data).
+**Live demo:** https://anthonydirect17.github.io/chart-engine/ (sample MNQ data and a simulated feed;
+not market data). It updates on every push to `main`. To run it offline, open `index.html` in a browser.
 
 ## Use it
 
