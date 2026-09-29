@@ -230,7 +230,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   older way. See `docs/RANGE_BARS.md`.
   The select that picks between them has a visible **Range style** label (the toolbar's `.glabel` style, like
   "Bars"), 1.5.1.
-- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.2 · chart 1.6.0" (1.5.1).
+- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.3 · chart 1.6.0" (1.5.1).
 
 ## Honesty rules
 

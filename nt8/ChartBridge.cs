@@ -1,4 +1,4 @@
-// ChartBridge 0.3.2 for NinjaTrader 8
+// ChartBridge 0.3.3 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
@@ -409,6 +409,211 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             return r;
         }
+
+        // Bars i0 (inclusive) to i1 (exclusive) as a new RawBars.
+        public RawBars Slice(int i0, int i1)
+        {
+            i0 = Math.Max(0, i0); i1 = Math.Min(Count, i1);
+            int n = Math.Max(0, i1 - i0);
+            RawBars r = new RawBars();
+            r.Count = n;
+            r.Time = new DateTime[n]; Array.Copy(Time, i0, r.Time, 0, n);
+            r.Close = new double[n]; Array.Copy(Close, i0, r.Close, 0, n);
+            r.Volume = new long[n]; Array.Copy(Volume, i0, r.Volume, 0, n);
+            if (Open != null)
+            {
+                r.Open = new double[n]; Array.Copy(Open, i0, r.Open, 0, n);
+                r.High = new double[n]; Array.Copy(High, i0, r.High, 0, n);
+                r.Low = new double[n]; Array.Copy(Low, i0, r.Low, 0, n);
+            }
+            return r;
+        }
+    }
+
+    // ------------------------------------------------------------------ the seam between backfill and live (0.3.3)
+    // A live trade held while the backfill loads, with NinjaTrader's own time for it (e.Time, in NinjaTrader's
+    // time zone, the same basis as the backfill's bar times; never the PC clock).
+    public struct SeamTick
+    {
+        public DateTime Time;
+        public double Price;
+        public long Volume;
+        public string Json;     // the "tick" message as it goes to the page
+    }
+
+    // What one subscribe's seam did, for /diag.
+    public class SeamResult
+    {
+        public List<SeamTick> Release = new List<SeamTick>();   // held trades to send after "ready", in the order they came
+        public int Held, DroppedOlder, DroppedSameTime;
+        public int HeldAtAnswer;             // held when NinjaTrader answered the tick request; only these can match at T
+        public int DroppedAfterAnswer;       // held after the answer that matched at T (dropped at ms resolution, kept at whole seconds)
+        public int OlderAfterAnswer;         // held after the answer but older than T (dropped): NinjaTrader delivered it late
+        public int BackfillTicks;
+        public bool HasBackfillEnd;
+        public DateTime BackfillEnd;         // the last backfill trade's time (NinjaTrader time zone)
+        public long ResolutionTicks;         // the time step both sides were compared at (DateTime ticks: 10000 = 1 ms)
+        public int Dropped { get { return DroppedOlder + DroppedSameTime; } }
+    }
+
+    // One rule decides the seam. The backfill is everything NinjaTrader had when it answered the tick request (made
+    // after the hold began), and the held live trades are everything that arrived after the hold began. They overlap;
+    // this removes the overlap from the held side. Let T be the time of the last backfill trade:
+    //   - a held trade before T is in the backfill already: dropped;
+    //   - at exactly T, as many held trades are dropped as the backfill has at T with the same price and volume (a
+    //     multiset match: trades carry no id, and two real trades can share price, size and time). At whole-second
+    //     resolution only trades held by the time NinjaTrader answered (heldAtAnswer, counted under the Pending lock
+    //     in the answer's callback, after the copy) may match: "at T" is then a whole second, and a trade held after
+    //     the answer, later in that second, is a real trade the backfill cannot have. At millisecond resolution every
+    //     held trade may match (exact whatever order NinjaTrader delivers in); droppedAfterAnswer counts the ones
+    //     held after the answer that matched, olderAfterAnswer the ones held after the answer but older than T.
+    //   - the rest are released in the order they arrived.
+    // Times are compared at the coarser resolution of the two sides. NinjaTrader 8 keeps millisecond times on tick
+    // data from most connections. A side counts as whole seconds when its trades near the seam (the backfill's last
+    // 64, the first 64 held) all sit on whole seconds and there are at least 20 of them; a backfill shorter than
+    // that counts when every trade in it does (the whole backfill was read). Then "at T" is that whole second.
+    public static class ChartBridgeSeam
+    {
+        public const long Ms = TimeSpan.TicksPerMillisecond, Second = TimeSpan.TicksPerSecond;
+        public const int ResolutionSample = 64;   // trades read near the seam to judge a side's resolution
+        public const int MinForSeconds = 20;      // fewer than this can land on whole seconds by chance
+
+        // Coarsest step every time in times[from..to) sits on: 1 s (only with at least minForSeconds times), 1 ms,
+        // or 1 (DateTime's 100 ns). Empty: 1.
+        public static long Resolution(IList<DateTime> times, int from, int to) { return Resolution(times, from, to, MinForSeconds); }
+
+        public static long Resolution(IList<DateTime> times, int from, int to, int minForSeconds)
+        {
+            bool seconds = true, ms = true;
+            int n = 0;
+            for (int i = Math.Max(0, from); i < to; i++)
+            {
+                long t = times[i].Ticks;
+                n++;
+                if (t % Second != 0) seconds = false;
+                if (t % Ms != 0) { ms = false; break; }
+            }
+            if (n == 0 || !ms) return 1;
+            return seconds && n >= Math.Max(1, minForSeconds) ? Second : Ms;
+        }
+
+        private static long Key(DateTime t, long unit) { long k = t.Ticks; return k - k % unit; }
+        private static string TradeKey(double p, long v)   // price exact for any tick size down to 0.000001
+        {
+            return ((long)Math.Round(p * 1e6)).ToString(CultureInfo.InvariantCulture) + "|" + v.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // Every held trade counts as held before the answer (the pure cases and a caller with no count).
+        public static SeamResult Dedupe(DateTime[] backTime, double[] backPrice, long[] backVolume, int backCount, IList<SeamTick> held)
+        {
+            return Dedupe(backTime, backPrice, backVolume, backCount, held, held != null ? held.Count : 0);
+        }
+
+        // backTime/backPrice/backVolume: the tick backfill (first backCount entries, oldest first).
+        // held: the live trades held since the hold began, in arrival order; the first heldAtAnswer of them were held
+        // when NinjaTrader answered the tick request. Pure: changes neither input.
+        public static SeamResult Dedupe(DateTime[] backTime, double[] backPrice, long[] backVolume, int backCount, IList<SeamTick> held, int heldAtAnswer)
+        {
+            SeamResult r = new SeamResult();
+            int nHeld = held != null ? held.Count : 0;
+            heldAtAnswer = Math.Max(0, Math.Min(nHeld, heldAtAnswer));
+            r.Held = nHeld;
+            r.HeldAtAnswer = heldAtAnswer;
+            r.BackfillTicks = Math.Max(0, backCount);
+            if (backCount <= 0 || backTime == null)
+            {
+                for (int i = 0; i < nHeld; i++) r.Release.Add(held[i]);
+                r.ResolutionTicks = 1;
+                return r;
+            }
+            r.HasBackfillEnd = true;
+            r.BackfillEnd = backTime[backCount - 1];
+            int sample = Math.Min(nHeld, ResolutionSample);
+            DateTime[] heldTimes = new DateTime[sample];
+            for (int i = 0; i < sample; i++) heldTimes[i] = held[i].Time;
+            // A short backfill is read whole, so it may count as whole seconds with fewer than 20 trades (review N2).
+            long unit = Math.Max(Resolution(backTime, backCount - ResolutionSample, backCount, Math.Min(MinForSeconds, backCount)), Resolution(heldTimes, 0, sample));
+            r.ResolutionTicks = unit;
+            if (nHeld == 0) return r;
+            long end = Key(backTime[backCount - 1], unit);
+            // The backfill's trades at T, counted by (price, volume).
+            Dictionary<string, int> atEnd = new Dictionary<string, int>();
+            for (int i = backCount - 1; i >= 0 && Key(backTime[i], unit) == end; i--)
+            {
+                string k = TradeKey(backPrice[i], backVolume[i]);
+                int c; atEnd.TryGetValue(k, out c); atEnd[k] = c + 1;
+            }
+            for (int i = 0; i < nHeld; i++)
+            {
+                SeamTick h = held[i];
+                long k = Key(h.Time, unit);
+                if (k < end)
+                {
+                    r.DroppedOlder++;
+                    if (i >= heldAtAnswer) r.OlderAfterAnswer++;   // arrived after the answer yet older than T: NinjaTrader delivered late
+                    continue;
+                }
+                if (k == end)
+                {
+                    string pk = TradeKey(h.Price, h.Volume);
+                    int c;
+                    if (atEnd.TryGetValue(pk, out c) && c > 0)
+                    {
+                        atEnd[pk] = c - 1;
+                        if (i >= heldAtAnswer) r.DroppedAfterAnswer++;   // held after the answer, matching at T
+                        if (i < heldAtAnswer || unit < Second) { r.DroppedSameTime++; continue; }
+                        // whole seconds and held after the answer: a real trade later in T's second, kept
+                    }
+                }
+                r.Release.Add(h);
+            }
+            return r;
+        }
+
+        // The minute history's last bar was still forming when NinjaTrader answered, so it holds some trades that
+        // may also be held live, and misses the ones after. So it is rebuilt (with any minute after it) from the
+        // tick backfill, which the held trades are then matched against: minute bars and ticks meet at one seam.
+        // tailClose: the last minute bar's time. NinjaTrader stamps time bars at their close, so a trade at exactly
+        // hh:mm:00.000 belongs to the bar that ends then (the one before the tail); the rebuild takes trades strictly
+        // after the tail's start, and a trade exactly on a later boundary goes to the bar ending there. (Believed to be
+        // NinjaTrader's rule; a live check, see PROTOCOL.md.)
+        // Returns the bars that replace that last bar (stamped at their close, like NinjaTrader's), or null when the
+        // ticks cannot stand in for it: they start after the bar's start (NinjaTrader sent less tick history),
+        // or have no trade after it. The caller also keeps NinjaTrader's bar when the rebuilt one has less volume.
+        public static RawBars TailFromTicks(DateTime tailClose, DateTime[] tickTime, double[] tickPrice, long[] tickVolume, int tickCount)
+        {
+            if (tickTime == null || tickCount <= 0) return null;
+            long minute = TimeSpan.TicksPerMinute;
+            long tailStart = tailClose.Ticks - minute;
+            if (tickTime[0].Ticks > tailStart) return null;
+            int first = tickCount;
+            for (int i = tickCount - 1; i >= 0 && tickTime[i].Ticks > tailStart; i--) first = i;
+            if (first >= tickCount) return null;
+            List<DateTime> t = new List<DateTime>(); List<double> o = new List<double>(), h = new List<double>(), l = new List<double>(), c = new List<double>();
+            List<long> v = new List<long>();
+            long cur = long.MinValue;
+            for (int i = first; i < tickCount; i++)
+            {
+                long k = tickTime[i].Ticks, rem = k % minute, b = rem == 0 ? k - minute : k - rem;   // b: the start of the bar holding k
+                double p = tickPrice[i];
+                if (b != cur)
+                {
+                    cur = b;
+                    t.Add(new DateTime(b + minute, tickTime[i].Kind)); o.Add(p); h.Add(p); l.Add(p); c.Add(p); v.Add(tickVolume[i]);
+                }
+                else
+                {
+                    int j = t.Count - 1;
+                    if (p > h[j]) h[j] = p;
+                    if (p < l[j]) l[j] = p;
+                    c[j] = p; v[j] += tickVolume[i];
+                }
+            }
+            RawBars r = new RawBars();
+            r.Count = t.Count;
+            r.Time = t.ToArray(); r.Open = o.ToArray(); r.High = h.ToArray(); r.Low = l.ToArray(); r.Close = c.ToArray(); r.Volume = v.ToArray();
+            return r;
+        }
     }
 
     // ------------------------------------------------------------------ one connected page
@@ -421,7 +626,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public string Origin;                   // the WebSocket's Origin header (orders only from ChartBridge's own page)
         public volatile bool Trader;            // signed in for orders (ChartBridgeOrders.Auth)
         public readonly Queue<double> Actions = new Queue<double>();   // recent order actions, for the rate limit
-        public readonly List<string> Pending = new List<string>();   // live ticks held during backfill
+        public readonly List<SeamTick> Pending = new List<SeamTick>();   // live ticks held during backfill (lock it to read or write)
+        public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
         private readonly BlockingCollection<string> outbox = new BlockingCollection<string>(new ConcurrentQueue<string>(), 5000);
         private readonly CancellationTokenSource cts = new CancellationTokenSource();
 
@@ -638,7 +844,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.2";
+        public const string Version = "0.3.3";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -653,6 +859,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Regex DaysRx = new Regex("\"days\"\\s*:\\s*(\\d+)");
         private static readonly Regex TickHoursRx = new Regex("\"tickHours\"\\s*:\\s*(\\d+)");
         private static readonly Regex PingRx = new Regex("\"c\"\\s*:\\s*([0-9.]+)");
+        private static readonly Regex SubRx = new Regex("\"sub\"\\s*:\\s*(\\d{1,15})(?!\\d)");   // the page's subscribe id (0.3.3), echoed back
 
         public static void Log(string text)
         {
@@ -944,7 +1151,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Match dm = DaysRx.Match(text), hm = TickHoursRx.Match(text);
                 int days = dm.Success ? Math.Max(1, Math.Min(60, int.Parse(dm.Groups[1].Value))) : ChartBridgeConfig.DefaultDays;
                 int tickHours = hm.Success ? Math.Max(0, Math.Min(48, int.Parse(hm.Groups[1].Value))) : ChartBridgeConfig.DefaultTickHours;
-                Subscribe(client, root, days, tickHours);
+                Match sm = SubRx.Match(text);
+                StartLoad(client, root, days, tickHours, sm.Success ? long.Parse(sm.Groups[1].Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture) : null);   // canonical digits: "007" is not JSON
             }
             else if (type == "auth" || type == "order" || type == "change" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
@@ -1063,14 +1271,61 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (c.Root != root) continue;
                     if (c.Ready) c.Send(json);
-                    else lock (c.Pending) { if (!c.Ready) c.Pending.Add(json); else c.Send(json); }
+                    else lock (c.Pending)
+                    {
+                        if (c.Ready) c.Send(json);
+                        else c.Pending.Add(new SeamTick { Time = e.Time, Price = e.Price, Volume = e.Volume, Json = json });   // NinjaTrader's time, as the backfill's
+                    }
                 }
             }
             catch (Exception ex) { Log("tick error: " + ex.Message); }
         }
 
         // ---------------------------------------------------------- history backfill
-        private static void Subscribe(ChartBridgeClient client, string root, int days, int tickHours)
+        // The tick request asks past "now" (0.3.3). NinjaTrader's help says a BarsRequest's from and to are turned into
+        // whole trading days (12:00 AM), so the time of day should not cut the ticks; the margin makes sure that, if a
+        // connection does cut there, the backfill still runs past the moment the live trades began to be held, even with
+        // the PC clock behind the data's clock. No trade exists in the future, so it can only add. Should a request
+        // ending in the future ever be refused, it is asked once more ending now (0.3.2's request).
+        public const int TickToMarginMinutes = 60;
+        // With no tick backfill (minute and hour charts), the last trades up to now (BarsRequest by count) stand in for
+        // the forming minute, so that minute and the held live trades meet at one seam too. Only ChartBridge uses them.
+        public const int SeamTicksBack = 20000;
+
+        // One subscribe's load: minute history, tick backfill, then "ready" and the held live trades.
+        private class Load
+        {
+            public ChartBridgeClient Client;
+            public string Root, Name;
+            public int Seq, TickHours;
+            public Instrument Inst;
+            public DateTime NowNt;
+            public double StartedMs;
+            public RawBars MinuteTail;               // the minute history's last (forming) bar, sent after the ticks
+            public Task HeadSent = Task.FromResult(true);
+            public bool TickToMargin, Retried;
+            public int TailRebuilt = -1;             // minute bars rebuilt from ticks; -1 when there was no tail
+            public long NtTailVolume = -1, RebuiltTailVolume = -1;   // that minute's volume, NinjaTrader's and rebuilt
+            public int HeldAtAnswer = -1;            // trades held when NinjaTrader answered the tick request
+            public string Sub;                       // the subscribe id on history, ticks and ready: the page's, or Seq
+            public string SubJson { get { return ",\"sub\":" + Sub; } }
+        }
+
+        // Still the page's latest subscribe? A load for an older one (the page resubscribed, say for more tick hours)
+        // sends nothing more: its history and ticks would be taken as the new load's and counted twice.
+        private static bool Current(Load L) { return L.Client.Root == L.Root && Volatile.Read(ref L.Client.SubscribeSeq) == L.Seq; }
+
+        private static DateTime NowNt()
+        {
+            DateTime now = DateTime.Now;   // BarsRequest takes times in NinjaTrader's time zone setting
+            try { now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo); } catch (Exception) { }
+            return now;
+        }
+
+        private static void Subscribe(ChartBridgeClient client, string root, int days, int tickHours) { StartLoad(client, root, days, tickHours, null); }
+
+        // sub: the page's subscribe id (digits), or null to number the loads here.
+        private static void StartLoad(ChartBridgeClient client, string root, int days, int tickHours, string sub)
         {
             Instrument inst;
             if (!Instruments.TryGetValue(root, out inst))
@@ -1078,42 +1333,54 @@ namespace NinjaTrader.NinjaScript.AddOns
                 client.Send("{\"type\":\"status\",\"level\":\"error\",\"text\":" + CbJson.Str("No instrument for " + root + ". Check the NinjaScript Output window.") + "}");
                 return;
             }
-            client.Ready = false;
-            lock (client.Pending) client.Pending.Clear();
-            client.Root = root;
+            Load L = new Load { Client = client, Root = root, Name = inst.FullName, TickHours = tickHours, Inst = inst };
+            lock (client.Pending)   // from here every live trade for this root is held until MarkReady
+            {
+                L.Seq = ++client.SubscribeSeq;
+                L.Sub = sub ?? L.Seq.ToString(CultureInfo.InvariantCulture);
+                client.Ready = false;
+                client.Pending.Clear();
+                client.Root = root;
+            }
+            L.NowNt = NowNt();
+            L.StartedMs = ChartBridgeTime.NowUtcMs();
 
-            DateTime nowNt = DateTime.Now;   // BarsRequest takes times in NinjaTrader's time zone setting
-            try { nowNt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo); } catch (Exception) { }
-            string fullName = inst.FullName;
-
-            BarsRequest minutes = new BarsRequest(inst, nowNt.AddDays(-days - (days >= 5 ? 3 : 1)), nowNt);
+            BarsRequest minutes = new BarsRequest(inst, L.NowNt.AddDays(-days - (days >= 5 ? 3 : 1)), L.NowNt);
             minutes.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1 };
             minutes.TradingHours = inst.MasterInstrument.TradingHours;
             minutes.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
-                Task barsSent;
                 try
                 {
                     if (code != ErrorCode.NoError)
                     {
-                        client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Minute history failed: " + code + " " + message) + "}");
-                        barsSent = Task.FromResult(true);
+                        if (Current(L)) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Minute history failed: " + code + " " + message) + "}");
                     }
-                    else
+                    else if (Current(L))
                     {
                         RawBars raw = RawBars.Copy(req.Bars, false);     // quick copy on NinjaTrader's thread
-                        barsSent = Task.Run(() => SendBars(client, root, fullName, raw, 60));   // format off-thread
+                        if (raw.Count > 0)
+                        {
+                            // The last bar was still forming: it goes out after the ticks, rebuilt from them when it can be.
+                            L.MinuteTail = raw.Slice(raw.Count - 1, raw.Count);
+                            raw = raw.Slice(0, raw.Count - 1);
+                        }
+                        RawBars head = raw;
+                        bool final = L.MinuteTail == null;
+                        L.HeadSent = Task.Run(() => SendBars(L, head, final));   // format off-thread; stops if the page resubscribes
                     }
                 }
-                catch (Exception ex) { Log("history error: " + ex.Message); barsSent = Task.FromResult(true); }
+                catch (Exception ex) { Log("history error: " + ex.Message); }
                 finally { try { req.Dispose(); } catch (Exception) { } }
-                RequestTicks(client, root, inst, nowNt, tickHours, barsSent);
+                RequestTicks(L);
             }));
         }
 
-        private static void SendBars(ChartBridgeClient client, string root, string name, RawBars bars, int barSeconds)
+        // final: this is the last "history" message (done true on its last chunk; an empty one still says done).
+        // Checked before every chunk: once the page has subscribed again, nothing more of this load goes out.
+        private static void SendBars(Load L, RawBars bars, bool final)
         {
-            const int chunk = 4000;
+            const int chunk = 4000, barSeconds = 60;
             int n = bars.Count;
             StringBuilder b = null;
             int inChunk = 0;
@@ -1122,8 +1389,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (b == null)
                 {
                     b = new StringBuilder(chunk * 48);
-                    b.Append("{\"type\":\"history\",\"root\":").Append(CbJson.Str(root)).Append(",\"name\":").Append(CbJson.Str(name))
-                     .Append(",\"barSeconds\":").Append(barSeconds).Append(",\"bars\":[");
+                    b.Append("{\"type\":\"history\",\"root\":").Append(CbJson.Str(L.Root)).Append(",\"name\":").Append(CbJson.Str(L.Name))
+                     .Append(",\"barSeconds\":").Append(barSeconds).Append(L.SubJson).Append(",\"bars\":[");
                     inChunk = 0;
                 }
                 // NinjaTrader stamps bars at their close; the chart wants the start.
@@ -1135,54 +1402,126 @@ namespace NinjaTrader.NinjaScript.AddOns
                 inChunk++;
                 if (inChunk == chunk || i == n - 1)
                 {
-                    b.Append("],\"done\":").Append(i == n - 1 ? "true" : "false").Append('}');
-                    client.Send(b.ToString());
+                    b.Append("],\"done\":").Append(final && i == n - 1 ? "true" : "false").Append('}');
+                    if (!Current(L)) return;
+                    L.Client.Send(b.ToString());
                     b = null;
                 }
             }
-            if (n == 0) client.Send("{\"type\":\"history\",\"root\":" + CbJson.Str(root) + ",\"name\":" + CbJson.Str(name) + ",\"barSeconds\":" + barSeconds + ",\"bars\":[],\"done\":true}");
+            if (n == 0 && final && Current(L))
+                L.Client.Send("{\"type\":\"history\",\"root\":" + CbJson.Str(L.Root) + ",\"name\":" + CbJson.Str(L.Name) + ",\"barSeconds\":" + barSeconds + L.SubJson + ",\"bars\":[],\"done\":true}");
         }
 
-        private static void RequestTicks(ChartBridgeClient client, string root, Instrument inst, DateTime nowNt, int tickHours, Task barsSent)
+        // In NinjaTrader's answer to a tick request, right after the copy: how many live trades were held by then. Only
+        // those can be in the backfill it handed over (counting after the copy errs toward "held at the answer", the
+        // side that cannot count a trade twice). At whole seconds a trade held after this never matches at T.
+        private static void NoteAnswer(Load L)
         {
-            if (tickHours <= 0 || client.Root != root)
-            {
-                barsSent.ContinueWith(delegate { MarkReady(client, root); });
-                return;
-            }
-            BarsRequest ticks = new BarsRequest(inst, nowNt.AddHours(-tickHours), nowNt);
+            lock (L.Client.Pending) { if (Current(L)) L.HeldAtAnswer = L.Client.Pending.Count; }
+        }
+
+        private static void RequestTicks(Load L)
+        {
+            if (!Current(L)) return;   // a newer subscribe owns the client now
+            if (L.TickHours > 0) { RequestTickHistory(L, true); return; }
+            if (L.MinuteTail == null) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }); return; }
+            // Minute and hour charts: only the last trades, for the forming minute (not sent to the page).
+            BarsRequest ticks = new BarsRequest(L.Inst, SeamTicksBack);
             ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
-            ticks.TradingHours = inst.MasterInstrument.TradingHours;
+            ticks.TradingHours = L.Inst.MasterInstrument.TradingHours;
             ticks.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
                 RawBars raw = null;
                 try
                 {
-                    if (code != ErrorCode.NoError)
-                        client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Tick history failed: " + code + " " + message + ". Seconds and range bars start from now.") + "}");
-                    else if (client.Root == root) raw = RawBars.Copy(req.Bars, true);
+                    if (code != ErrorCode.NoError) Log("last trades for the forming minute not loaded (" + code + " " + message + "); the minute stays as NinjaTrader sent it");
+                    else if (Current(L)) { raw = RawBars.Copy(req.Bars, true); NoteAnswer(L); }
                 }
-                catch (Exception ex) { Log("tick history error: " + ex.Message); }
+                catch (Exception ex) { Log("last trades error: " + ex.Message); }
                 finally { try { req.Dispose(); } catch (Exception) { } }
                 RawBars copy = raw;
-                // Order on the wire: minute history, then ticks, then "ready" and the live ticks held meanwhile.
-                barsSent.ContinueWith(delegate
-                {
-                    try { if (copy != null && client.Root == root) SendTicks(client, root, copy); }
-                    catch (Exception ex) { Log("tick send error: " + ex.Message); }
-                    finally { MarkReady(client, root); }
-                });
+                L.HeadSent.ContinueWith(delegate { Finish(L, copy); });
             }));
         }
 
-        private static void SendTicks(ChartBridgeClient client, string root, RawBars bars)
+        private static void RequestTickHistory(Load L, bool margin)
+        {
+            ChartBridgeClient client = L.Client;
+            L.TickToMargin = margin;
+            DateTime to = margin ? L.NowNt.AddMinutes(TickToMarginMinutes) : NowNt();
+            BarsRequest ticks = new BarsRequest(L.Inst, L.NowNt.AddHours(-L.TickHours), to);
+            ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
+            ticks.TradingHours = L.Inst.MasterInstrument.TradingHours;
+            ticks.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
+            {
+                RawBars raw = null;
+                bool again = false;
+                try
+                {
+                    if (code != ErrorCode.NoError)
+                    {
+                        if (Current(L) && margin) again = true;
+                        else if (Current(L)) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Tick history failed: " + code + " " + message + ". Seconds and range bars start from now.") + "}");
+                    }
+                    else if (Current(L))
+                    {
+                        raw = RawBars.Copy(req.Bars, true);
+                        NoteAnswer(L);
+                        if (margin && raw.Count == 0) { again = true; raw = null; }   // nothing at all from a request ending in the future: as refused
+                    }
+                }
+                catch (Exception ex) { Log("tick history error: " + ex.Message); }
+                finally { try { req.Dispose(); } catch (Exception) { } }
+                if (again)
+                {
+                    Log("tick history ending " + TickToMarginMinutes + " minutes ahead " + (code != ErrorCode.NoError ? "was refused (" + code + " " + message + ")" : "came back empty") + "; asking again, ending now");
+                    L.Retried = true;
+                    RequestTickHistory(L, false);
+                    return;
+                }
+                RawBars copy = raw;
+                L.HeadSent.ContinueWith(delegate { Finish(L, copy); });
+            }));
+        }
+
+        // Order on the wire: minute history, its last bar (rebuilt from the ticks when it can be), the tick backfill
+        // (tick charts only), then "ready" and the held live trades not already in the backfill.
+        private static void Finish(Load L, RawBars ticks)
+        {
+            RawBars seam = L.TickHours > 0 ? ticks : null;   // what the held trades are matched against
+            try
+            {
+                if (!Current(L)) return;
+                if (L.MinuteTail != null)
+                {
+                    RawBars tail = ticks != null ? ChartBridgeSeam.TailFromTicks(L.MinuteTail.Time[0], ticks.Time, ticks.Close, ticks.Volume, ticks.Count) : null;
+                    L.NtTailVolume = L.MinuteTail.Volume[0];
+                    if (tail != null)
+                    {
+                        L.RebuiltTailVolume = 0;
+                        for (int i = 0; i < tail.Count; i++) if (tail.Time[i] == L.MinuteTail.Time[0]) L.RebuiltTailVolume = tail.Volume[i];
+                        // The ticks were answered after the minutes, so they should hold at least as much of that minute.
+                        // Less means the tick data lags: keep NinjaTrader's bar (and, on minute charts, release every held trade).
+                        if (L.RebuiltTailVolume < L.NtTailVolume) tail = null;
+                    }
+                    L.TailRebuilt = tail != null ? tail.Count : 0;
+                    if (tail != null) seam = ticks;   // minute charts: only when the forming minute came from these same ticks
+                    SendBars(L, tail ?? L.MinuteTail, true);
+                }
+                if (ticks != null && L.TickHours > 0) SendTicks(L, ticks);
+            }
+            catch (Exception ex) { Log("tick send error: " + ex.Message); }
+            finally { MarkReady(L, seam); }
+        }
+
+        private static void SendTicks(Load L, RawBars bars)
         {
             const int chunk = 20000;
             int n = bars.Count;
             StringBuilder b = null; int inChunk = 0;
             for (int i = 0; i < n; i++)
             {
-                if (b == null) { b = new StringBuilder(chunk * 28); b.Append("{\"type\":\"ticks\",\"root\":").Append(CbJson.Str(root)).Append(",\"ticks\":["); inChunk = 0; }
+                if (b == null) { b = new StringBuilder(chunk * 28); b.Append("{\"type\":\"ticks\",\"root\":").Append(CbJson.Str(L.Root)).Append(L.SubJson).Append(",\"ticks\":["); inChunk = 0; }
                 double t = ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(bars.Time[i]));
                 if (inChunk > 0) b.Append(',');
                 b.Append('[').Append(CbJson.Num3(t)).Append(',').Append(CbJson.Num(bars.Close[i])).Append(',')
@@ -1191,22 +1530,89 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (inChunk == chunk || i == n - 1)
                 {
                     b.Append("],\"done\":").Append(i == n - 1 ? "true" : "false").Append('}');
-                    client.Send(b.ToString()); b = null;
+                    if (!Current(L)) return;   // the page subscribed again: stop mid-backfill
+                    L.Client.Send(b.ToString()); b = null;
                 }
             }
-            if (n == 0) client.Send("{\"type\":\"ticks\",\"root\":" + CbJson.Str(root) + ",\"ticks\":[],\"done\":true}");
+            if (n == 0 && Current(L)) L.Client.Send("{\"type\":\"ticks\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + ",\"ticks\":[],\"done\":true}");
         }
 
-        private static void MarkReady(ChartBridgeClient client, string root)
+        // "ready", then the held live trades that are not in the backfill (ChartBridgeSeam.Dedupe), in the order they came.
+        // Under the Pending lock, so no live trade can slip between the held ones and the ones that follow.
+        private static void MarkReady(Load L, RawBars seam)
         {
-            if (client.Root != root) return;
+            ChartBridgeClient client = L.Client;
             lock (client.Pending)
             {
-                client.Send("{\"type\":\"ready\",\"root\":" + CbJson.Str(root) + "}");
-                foreach (string json in client.Pending) client.Send(json);
+                if (!Current(L)) return;
+                SeamResult r = seam != null
+                    ? ChartBridgeSeam.Dedupe(seam.Time, seam.Close, seam.Volume, seam.Count, client.Pending, L.HeldAtAnswer)
+                    : ChartBridgeSeam.Dedupe(null, null, null, 0, client.Pending);
+                client.Send("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
+                foreach (SeamTick h in r.Release) client.Send(h.Json);
+                DateTime? firstHeld = client.Pending.Count > 0 ? client.Pending[0].Time : (DateTime?)null;
                 client.Pending.Clear();
                 client.Ready = true;
+                NoteSeam(L, r, seam != null, firstHeld);
             }
+        }
+
+        // ---------------------------------------------------------- the seam in /diag (last 20 subscribes)
+        private const int SeamsKept = 20;
+        private static readonly List<string> Seams = new List<string>();
+
+        private static string EtText(DateTime nt)
+        {
+            try { return TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nt), ChartBridgeTime.Eastern).ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture); }
+            catch (Exception) { return nt.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) + " (NT)"; }
+        }
+
+        private static string EtOrNull(DateTime? nt) { return nt.HasValue ? CbJson.Str(EtText(nt.Value)) : "null"; }
+
+        private static void NoteSeam(Load L, SeamResult r, bool matched, DateTime? firstHeld)
+        {
+            DateTime? end = r.HasBackfillEnd ? r.BackfillEnd : (DateTime?)null;
+            DateTime? firstOut = r.Release.Count > 0 ? r.Release[0].Time : (DateTime?)null;
+            StringBuilder b = new StringBuilder("{");
+            b.Append("\"client\":").Append(L.Client.Id);
+            b.Append(",\"root\":").Append(CbJson.Str(L.Root));
+            b.Append(",\"sub\":").Append(L.Sub);
+            b.Append(",\"tickHours\":").Append(L.TickHours);
+            b.Append(",\"atUtcMs\":").Append(CbJson.Num3(ChartBridgeTime.NowUtcMs()));
+            b.Append(",\"loadMs\":").Append(CbJson.Num3(ChartBridgeTime.NowUtcMs() - L.StartedMs));
+            b.Append(",\"matched\":").Append(matched ? "true" : "false");   // false: nothing to match against, every held trade released
+            b.Append(",\"backfillTicks\":").Append(r.BackfillTicks);
+            b.Append(",\"lastBackfillTick\":").Append(EtOrNull(end));
+            b.Append(",\"firstHeldTick\":").Append(EtOrNull(firstHeld));
+            b.Append(",\"firstReleasedTick\":").Append(EtOrNull(firstOut));
+            // lastBackfillTick minus firstHeldTick: 0 or more means the two streams overlapped (no gap possible);
+            // below 0, no held trade was at or before the backfill's end: a quiet moment, or a gap of up to that long.
+            b.Append(",\"overlapMs\":").Append(end.HasValue && firstHeld.HasValue ? CbJson.Num3((end.Value - firstHeld.Value).TotalMilliseconds) : "null");
+            b.Append(",\"held\":").Append(r.Held);
+            b.Append(",\"heldAtAnswer\":").Append(matched ? r.HeldAtAnswer.ToString(CultureInfo.InvariantCulture) : "null");
+            b.Append(",\"droppedAsDuplicate\":").Append(r.Dropped);
+            b.Append(",\"droppedOlder\":").Append(r.DroppedOlder);
+            b.Append(",\"droppedSameTime\":").Append(r.DroppedSameTime);
+            b.Append(",\"droppedAfterAnswer\":").Append(r.DroppedAfterAnswer);   // held after the answer, matched at T
+            b.Append(",\"olderAfterAnswer\":").Append(r.OlderAfterAnswer);       // held after the answer, older than T
+            b.Append(",\"released\":").Append(r.Release.Count);
+            b.Append(",\"resolutionMs\":").Append(CbJson.Num((double)r.ResolutionTicks / ChartBridgeSeam.Ms));
+            b.Append(",\"tickToAheadMin\":").Append(L.TickHours > 0 ? (L.TickToMargin ? TickToMarginMinutes : 0).ToString(CultureInfo.InvariantCulture) : "null");
+            b.Append(",\"tickRetriedEndingNow\":").Append(L.Retried ? "true" : "false");
+            b.Append(",\"minuteTailRebuilt\":").Append(L.TailRebuilt);
+            b.Append(",\"ntTailVolume\":").Append(L.NtTailVolume >= 0 ? L.NtTailVolume.ToString(CultureInfo.InvariantCulture) : "null");
+            b.Append(",\"rebuiltTailVolume\":").Append(L.RebuiltTailVolume >= 0 ? L.RebuiltTailVolume.ToString(CultureInfo.InvariantCulture) : "null");
+            b.Append('}');
+            lock (Seams)
+            {
+                Seams.Add(b.ToString());
+                if (Seams.Count > SeamsKept) Seams.RemoveAt(0);
+            }
+        }
+
+        private static string SeamsJson()
+        {
+            lock (Seams) return "[" + string.Join(",", Seams) + "]";
         }
 
         // ---------------------------------------------------------- fills (read only)
@@ -1362,6 +1768,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"network\":").Append(ChartBridgeAccess.DiagJson());
             b.Append(",\"pin\":").Append(ChartBridgePin.DiagJson());   // whether a PIN is set, nothing else
             b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());
+            b.Append(",\"seams\":").Append(SeamsJson());   // 0.3.3: where each load's backfill met the live trades
             b.Append(",\"accounts\":[");
             List<Account> accounts;
             lock (Watched) accounts = Watched.ToList();

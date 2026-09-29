@@ -2,8 +2,8 @@
 
 ## 1.6.0 (2026-09-29): the Indicators menu "E2" and a chip strip per pane
 
-Page only; the engine draws exactly as in 1.5.3 (only its version changes), nt8/ is unchanged and ChartBridge stays
-0.3.2. Run `nt8\install.ps1` again after pulling. The Desk gets it with the new `live/live.js`, `live/live.css` and
+Page only; the engine draws exactly as in 1.5.3 (only its version changes), nt8/ is unchanged (works with ChartBridge
+0.3.2 and 0.3.3). Run `nt8\install.ps1` again after pulling. The Desk gets it with the new `live/live.js`, `live/live.css` and
 `src/chart-engine.js`.
 - **The menu Anthony approved in the design canvas (E2)**, one per chart pane, from the same Indicators button (its
   count now reads shown/on this chart, "4/5"): a search box, focused on open, that matches names and short names
@@ -41,6 +41,63 @@ Page only; the engine draws exactly as in 1.5.3 (only its version changes), nt8/
   one-letter chips at 400 px), `npm run smoke:embed` (a new pane empty, search and group adds, "/" opens the pane
   under the mouse only, a 351 px pane with one-letter chips on one line and the menu inside it, a 1.5.3 embed's
   indicators carried over under its prefix), `smoke:settings` and `smoke:ib` updated.
+
+## ChartBridge 0.3.3 (2026-09-29): the backfill and live trades meet at one seam
+
+ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to
+work with it. **Needs a recompile:** run `nt8\install.ps1` again (only `ChartBridge.cs` changed), then compile in
+NinjaTrader (F5). From the review of the volume profile core (S1, the seam), which proved the double count on the
+page side; then reviewed on its own (four fixes below, marked "review").
+- **The seam, one rule** (`ChartBridgeSeam.Dedupe`). Live trades are held from the subscribe until the backfill
+  is sent; the backfill is what NinjaTrader has when it answers, so the two overlapped and a trade in the
+  overlap reached the page twice (range bars, the forming minute, VWAP and volume; trades have no id, so the page
+  cannot tell). Now, before `ready`, ChartBridge drops every held trade earlier than the last backfill trade (T).
+  At exactly T it drops as many as the backfill has there with the same price and volume. Both sides are compared
+  on NinjaTrader's own trade times, never the PC clock, at the coarser resolution of the two (millisecond, or whole
+  seconds when at least 20 trades near the seam are all on whole seconds, or a shorter backfill has every trade on
+  a whole second).
+- **Review: at whole seconds, trades held after the answer are never matched at T.** At whole-second
+  resolution, a load that finished inside the backfill's last second dropped a real trade in about one busy
+  load in five (the review's simulation, rerun with a sound random generator). ChartBridge now counts the trades
+  held when NinjaTrader answered (`heldAtAnswer`, right after copying the answer) and at whole seconds only those
+  can match. Keeping every held trade at T instead would double count 20 to 80 trades a busy load, so that was
+  not done. At millisecond resolution every held trade may still match (re-review: exact whatever order
+  NinjaTrader delivers in). One held trade on a whole second no longer makes the comparison whole-second.
+- **No gap from the PC clock.** The tick request ends 60 minutes past now. NinjaTrader's help says BarsRequest
+  dates are turned into whole trading days, so the time should not cut the backfill anyway; the margin covers a
+  connection that does, even with the PC clock behind the data. A request ending in the future that is refused,
+  or (review) answered with no trades at all, is asked once more ending now (as 0.3.2).
+- **The forming minute meets at the same seam.** The history is now split: the minute history's last bar is sent
+  last, in its own `history` message, rebuilt from the same trades the held ones are matched against. Review: a
+  trade at exactly hh:mm:00.000 stays in the bar that ends then (time bars are stamped at their close; believed
+  to be NinjaTrader's rule, a live check), and when the rebuilt minute has less volume than NinjaTrader's (the
+  trades lag), NinjaTrader's bar is kept. Minute and hour charts (no tick backfill) ask for the last 20,000
+  trades for this only; they are not sent to the page. `ready` waits for that answer: ChartBridge's own work on it
+  is about 1 ms; NinjaTrader's time to answer shows in `/diag` `loadMs`. When those trades do not cover the
+  minute, NinjaTrader's bar is kept and every held trade is released, as before.
+- **A newer subscribe wins** (review: checked before every chunk). Once the page subscribes again (say, for more
+  tick hours), no further `history` or `ticks` chunk or `ready` of the older load is sent. Chunks already queued
+  can still arrive, so `history`, `ticks` and `ready` now carry `sub` (the page's subscribe id if it sends one,
+  else ChartBridge's count, as plain digits: `007` comes back as `7`); the live page does not use it yet
+  (follow-up).
+- **`/diag` `seams`:** the last 20 subscribes with the last backfill trade time, the first held and first
+  released trade times, `overlapMs`, held, held at the answer, dropped as duplicate (older, same time),
+  `droppedAfterAnswer`, `olderAfterAnswer` (a late delivery by NinjaTrader), released, the resolution, load time, NinjaTrader's and the rebuilt volume of the forming
+  minute and whether it was rebuilt, so a live PC can confirm the seam.
+- **Still open** (in `nt8/PROTOCOL.md`, Backfill and live): a gap if NinjaTrader's history lags its live data;
+  the whole-second case where the callback lags NinjaTrader's snapshot inside the trade's second; the minute
+  boundary rule (a recipe in PROTOCOL.md) and the order of NinjaTrader's answer against its live events
+  (`olderAfterAnswer`), both to check on a live PC; stale chunks until the page uses `sub`; the page's own
+  start-inclusive minute bars (page side, since 0.3.2); the pre-existing 5,000-message outbox per page.
+- **Unchanged:** orders, the PIN, network rules and fills.
+- Tests: the Mono harness (`check/SeamHarness.cs`, run by `npm run check:orders`) checks the rule as a pure
+  function (overlap, no overlap, a multiset at the last time, all held older, none older, empty backfill, empty
+  hold, whole-second against millisecond times, float noise in prices, trades held after the answer) and the whole
+  load through ChartBridge's own Subscribe and live-trade handler with the stand-in BarsRequest answered by hand:
+  the review's example now adds up to the true volume 10, the order on the wire, the tick request past now and the
+  retry (refused or empty), minute charts, the minute boundary and a lagging rebuild, a stale load and a
+  resubscribe mid-send, `sub` (and leading zeros), a short whole-second backfill, trades held after the answer
+  at both resolutions, empty answers and `/diag`. Each review's new cases failed on the commit before its fix.
 
 ## 1.5.3 (2026-09-29): the 1-hour Initial Balance, and a chart background of any color
 

@@ -156,23 +156,35 @@ namespace NinjaTrader.Data
     public enum BarsPeriodType { Tick, Volume, Range, Second, Minute, Day, Week, Month, Year }
     public class TradingHours { }
     public class BarsPeriod { public BarsPeriodType BarsPeriodType { get; set; } public int Value { get; set; } }
+    // Holds rows the harness puts in (a real Bars is filled by NinjaTrader).
     public class Bars
     {
-        public int Count { get { return 0; } }
-        public DateTime GetTime(int i) { return DateTime.Now; }
-        public double GetOpen(int i) { return 0; }
-        public double GetHigh(int i) { return 0; }
-        public double GetLow(int i) { return 0; }
-        public double GetClose(int i) { return 0; }
-        public long GetVolume(int i) { return 0; }
+        public readonly List<DateTime> Times = new List<DateTime>();
+        public readonly List<double[]> Ohlc = new List<double[]>();
+        public readonly List<long> Volumes = new List<long>();
+        public void Add(DateTime t, double o, double h, double l, double c, long v) { Times.Add(t); Ohlc.Add(new double[] { o, h, l, c }); Volumes.Add(v); }
+        public int Count { get { return Times.Count; } }
+        public DateTime GetTime(int i) { return Times[i]; }
+        public double GetOpen(int i) { return Ohlc[i][0]; }
+        public double GetHigh(int i) { return Ohlc[i][1]; }
+        public double GetLow(int i) { return Ohlc[i][2]; }
+        public double GetClose(int i) { return Ohlc[i][3]; }
+        public long GetVolume(int i) { return Volumes[i]; }
     }
+    // Every request is kept in Made so the harness can answer it (Answer) the way NinjaTrader would call back.
     public class BarsRequest : IDisposable
     {
-        public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { }
+        public static readonly List<BarsRequest> Made = new List<BarsRequest>();
+        public DateTime From, To;
+        public int BarsBack = -1;
+        public Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> Callback;
+        public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { From = from; To = to; lock (Made) Made.Add(this); }
+        public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { BarsBack = barsBack; lock (Made) Made.Add(this); }
         public BarsPeriod BarsPeriod { get; set; }
         public TradingHours TradingHours { get; set; }
         public Bars Bars { get; set; }
-        public void Request(Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> callback) { }
+        public void Request(Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> callback) { Callback = callback; }
+        public void Answer(Bars bars, NinjaTrader.Cbi.ErrorCode code) { Bars = bars; Callback(this, code, code == NinjaTrader.Cbi.ErrorCode.NoError ? "" : "stub error"); }
         public void Dispose() { }
     }
     public class MarketDataEventArgs : EventArgs
