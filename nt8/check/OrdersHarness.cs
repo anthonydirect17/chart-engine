@@ -903,6 +903,11 @@ public static class OrdersHarness
         File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "# test", "allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800" });
         ChartBridgeConfig.Load();
         Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800", "config.txt: allowOrigins is read");
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "allowOrigins = https://desk.golivepage.com", "allowOrigins = http://localhost:8800" });
+        ChartBridgeConfig.Load();
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "http://localhost:8800", "config.txt: with two allowOrigins lines, the last one wins");
+        Check(string.Join(" ", ChartBridgeAccess.ParseOrigins("https://b\u00fccher.example, https://xn--bcher-kva.example")) == "https://xn--bcher-kva.example",
+              "allowOrigins: a non-ASCII host is skipped, its punycode form is taken");
         File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "port = 8765" });
         ChartBridgeConfig.Load();
         Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),

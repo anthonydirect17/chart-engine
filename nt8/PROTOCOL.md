@@ -29,7 +29,11 @@ allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800
 
 Each entry is an exact `scheme://host[:port]` (http or https), compared lower-cased; a default port (`:80`,
 `:443`) and a trailing slash are dropped, because a browser's `Origin` has neither. No wildcards; an entry with
-a path, a `*` or `null` is skipped with a line in the Output window. Any other origin, `Origin: null` (sandboxed
+a path, a `*` or `null` is skipped with a line in the Output window. A host name with non-ASCII letters must be
+written in punycode (`xn--...`), as the browser sends it; otherwise it is skipped. Put every origin on one line: if
+`config.txt` has several `allowOrigins` lines, **the last one wins**. The line above covers The Desk as it runs
+now; if The Desk is ever opened at `http://localhost:8800` or `http://127.0.0.1:8800`, add that origin too, or its
+Live trading page is refused (403) and cannot read from ChartBridge. Any other origin, `Origin: null` (sandboxed
 frames, `file://` pages) and an empty `Origin` get **403** before the WebSocket opens. A connection with **no**
 `Origin` header is not a browser (a local program such as The Desk's server relay) and is allowed: the address
 check already limits it to this PC. Without this, any web site open in the browser could connect to

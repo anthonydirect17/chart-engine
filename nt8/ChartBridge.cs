@@ -105,7 +105,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   allowOrigins = https://desk.example.com, http://100.88.192.33:8800
         //                                 (web pages besides ChartBridge's own that may open the read-only
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
-        //                                  they can never trade. Requests still have to come from this PC.)
+        //                                  they can never trade. Requests still have to come from this PC.
+        //                                  One line: the last allowOrigins line wins. Non-ASCII hosts in punycode.)
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
