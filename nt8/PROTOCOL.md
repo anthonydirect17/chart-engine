@@ -22,7 +22,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `ready` | `root` | history and tick backfill complete; live ticks follow |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v` | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
-| `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live |
+| `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page |
 
 ## Page to server
@@ -39,3 +39,33 @@ For each live tick the page shows two numbers:
 - **feed**: `rx - u`, how long the tick took from the exchange timestamp to NinjaTrader (includes
   Tradovate and the PC clock offset from the exchange);
 - **local**: page receive time minus `rx`, the add-on to chart hop on this PC.
+
+## Fills (0.2.0)
+
+ChartBridge learns about a fill two ways: the account's `ExecutionUpdate` event, and a poll of every
+watched account's `Executions` every 2 seconds. Each execution is sent once, keyed by account and
+execution id, whichever way sees it first. (Added after the HOME test on 2026-09-29, where no fill
+reached ChartBridge; the poll is the fallback, and `/diag` shows which way fills arrive.) A page can
+still receive the same `id` twice after a reconnect (in `execs` and later in `exec`); key fills by
+`account` and `id`.
+
+Order and position events are counted for `/diag` only. ChartBridge never acts on them.
+
+## Diagnostics: `GET /diag` (this PC only)
+
+JSON: `version`; `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 once the clock has
+re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
+than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
+session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
+`lastError`); and `accounts`: one row per watched account with `name`, `connection` (status),
+`executions`, `orders`, `positions` (counts NinjaTrader holds) and `fillEvents`, `orderEvents`,
+`positionEvents` (events seen). Account names are in this local page; never copy them into reports.
+
+## Fills to The Desk (0.2.0, off by default)
+
+With `postFills = true` in `config.txt`, every fill is also sent to The Desk's `POST /api/fills`
+(`deskUrl`, default `http://localhost:8800`) in The Desk's fill shape, with `source` `nt8`. Fills
+wait in `pending_fills.jsonl` next to `config.txt` until The Desk accepts them, so a restart or The
+Desk being closed loses nothing; The Desk ignores duplicates. Fills from every watched account are
+sent: The Desk's Accounts menu decides which accounts count. ChartBridge sends no commission (NinjaTrader's
+figure is its own commission template, not what was charged).

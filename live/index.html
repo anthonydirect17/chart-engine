@@ -46,6 +46,8 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 .chip[aria-pressed="true"] .sw { background: var(--sw); }
 .btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
 .btn:hover { background: var(--s3); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.acct-sel { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 8px; min-height: 30px; max-width: 220px; cursor: pointer; }
 .btn[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-text); border-color: var(--accent-border); }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .range-box { display: inline-flex; align-items: center; gap: 6px; }
@@ -129,6 +131,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-text
       <button type="button" class="chip" data-layer="vwap" style="--sw: var(--vwap-sw)"><span class="sw"></span>VWAP</button>
       <button type="button" class="chip" data-layer="levels" style="--sw: var(--info)"><span class="sw"></span>Levels</button>
       <button type="button" class="chip" data-layer="fills" style="--sw: var(--profit)"><span class="sw"></span>Fills</button>
+      <label class="visually-hidden" for="fillAcct">Show fills from</label>
+      <select class="acct-sel" id="fillAcct" title="Which account's fills to show"><option value="">All accounts</option></select>
     </div>
 
     <div class="group" role="group" aria-label="Drawing tools">

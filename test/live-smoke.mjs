@@ -27,6 +27,23 @@ try {
   if (!/Last fill (BUY|SELL)/.test(legend)) fail('legend missing last fill: ' + legend);
   await page.screenshot({ path: path.join(out, 'live-1m.png') });
 
+  // account dropdown: accounts with fills first, then the rest; picking one filters the fill marks and is remembered
+  const opts = await page.$$eval('#fillAcct option', os => os.map(o => o.value + '=' + o.textContent));
+  if (JSON.stringify(opts) !== JSON.stringify(['=All accounts', 'DEMO-EVAL=DEMO-EVAL', 'Sim101=Sim101', 'DEMO-EMPTY=DEMO-EMPTY (no fills yet)'])) fail('account options: ' + JSON.stringify(opts));
+  await page.selectOption('#fillAcct', 'DEMO-EVAL'); await page.waitForTimeout(300);
+  let fillText = await page.textContent('#lgFill');
+  if (!/DEMO-EVAL/.test(fillText)) fail('last fill not from the chosen account: ' + fillText);
+  await page.selectOption('#fillAcct', 'DEMO-EMPTY'); await page.waitForTimeout(300);
+  fillText = await page.textContent('#lgFill');
+  if (fillText.trim() !== '') fail('fills shown for an account with none: ' + fillText);
+  await page.reload();
+  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForTimeout(500);
+  if (await page.inputValue('#fillAcct') !== 'DEMO-EMPTY') fail('account choice not remembered');
+  await page.selectOption('#fillAcct', ''); await page.waitForTimeout(300);
+  const diag = await page.evaluate(async () => (await fetch('/diag')).json());
+  if (!Array.isArray(diag.accounts) || diag.accounts.length !== 3 || typeof diag.clockOffsetMs !== 'number') fail('diag shape: ' + JSON.stringify(diag).slice(0, 200));
+
   for (const tf of ['15s', '30s', '5m', '1h', 'Range']) {
     await page.click(`#tfSeg >> text="${tf}"`);
     await page.waitForTimeout(400);

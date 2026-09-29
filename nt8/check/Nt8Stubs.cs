@@ -65,12 +65,23 @@ namespace NinjaTrader.Cbi
         public string ExecutionId { get; set; }
         public string OrderId { get; set; }
     }
+    public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnected, Disconnecting }
+    public class Connection { public ConnectionStatus Status { get; set; } }
+    public class Order { }
+    public class Position { }
+    public class OrderEventArgs : EventArgs { public Order Order { get; set; } }
+    public class PositionEventArgs : EventArgs { public Position Position { get; set; } }
     public class Account
     {
         public static List<Account> All = new List<Account>();
         public string Name { get; set; }
+        public Connection Connection { get; set; }
         public List<Execution> Executions = new List<Execution>();
+        public List<Order> Orders = new List<Order>();
+        public List<Position> Positions = new List<Position>();
         public event EventHandler<ExecutionEventArgs> ExecutionUpdate;
+        public event EventHandler<OrderEventArgs> OrderUpdate;
+        public event EventHandler<PositionEventArgs> PositionUpdate;
         public void Fire(ExecutionEventArgs e) { if (ExecutionUpdate != null) ExecutionUpdate(this, e); }
     }
 }

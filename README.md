@@ -27,7 +27,24 @@ It is **read only**: you watch and read the market here and place orders in Ninj
 3. Open `http://localhost:8765/` in Chrome or Edge.
 
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
-data). Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at
+data).
+
+On the page, the **account dropdown** next to Fills picks whose fills are marked on the chart (All
+accounts, or one; remembered in the browser). `http://localhost:8765/diag` shows what ChartBridge
+sees (accounts, fill counts, clock, The Desk queue); see `nt8/PROTOCOL.md`.
+
+Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
+line; recompile or restart NinjaTrader after a change):
+
+| Key | Default | What it does |
+|---|---|---|
+| `port` | `8765` | Web port (this PC only). |
+| `roots` | `MNQ, NQ, MES, ES` | Instruments offered. |
+| `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
+| `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
+| `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, LFE*` (`*` matches a prefix). |
+| `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
+| `deskUrl` | `http://localhost:8800` | Where The Desk runs. | Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at
 `http://localhost:8765/live/`.
 
 ## Use it

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0 (2026-09-29): ChartBridge 0.2.0
+
+From the second HOME run (H2b), where the chart ran LIVE but no fill reached ChartBridge.
+- Fills now arrive two ways: the account's fill event, and a poll of every watched account every
+  2 seconds. Each fill is delivered once. `GET /diag` shows the counts per account and which way fills
+  came in, so the next test says exactly where fills stop if they still do.
+- Fills to The Desk (`postFills = true`, off by default): every fill is sent to The Desk's
+  `POST /api/fills`, queued on disk until The Desk accepts it. The Desk's Accounts menu decides which
+  accounts count.
+- The clock follows the PC clock: it is rechecked every 5 seconds and re-anchored when off by more than
+  50 ms. (H2b: the PC was 0.57 s off; after Windows time sync the bridge kept the old offset until a
+  restart.)
+- Live page: an account dropdown next to Fills picks whose fills are marked (remembered per browser).
+- New source guards for all of the above. The chart engine itself is unchanged (still 1.1.0 inside).
+
 ## 1.1.1 (2026-09-29): ChartBridge 0.1.1
 
 First real run on the HOME PC (NinjaTrader 8, Tradovate): LIVE on MNQ, NQ, MES and ES, 1 ms local delay.

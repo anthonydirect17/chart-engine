@@ -124,7 +124,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         private static TimeZoneInfo et;
         private static readonly Stopwatch Clock = Stopwatch.StartNew();
-        private static readonly DateTime ClockAnchor = DateTime.UtcNow;
+        private static readonly object ClockSync = new object();
+        private static double anchorMs = (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+        private static double lastCheckMs;
+        private const double RecheckEveryMs = 5000, StepIfOffByMs = 50;
 
         public static TimeZoneInfo Eastern
         {
@@ -153,8 +156,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (DateTime.SpecifyKind(e, DateTimeKind.Utc) - Epoch).TotalSeconds;
         }
 
-        // Millisecond-resolution "now" (DateTime.UtcNow alone can be coarse on .NET Framework).
-        public static double NowUtcMs() { return UtcMs(ClockAnchor) + Clock.Elapsed.TotalMilliseconds; }
+        // Millisecond-resolution "now" (DateTime.UtcNow alone can be coarse on .NET Framework): the PC
+        // clock read once, plus a stopwatch. Every 5 seconds it is compared with the PC clock again and
+        // re-anchored if they differ by more than 50 ms, so a clock fix while NinjaTrader runs (HOME,
+        // 2026-09-29: the PC was 0.57 s off until Windows time sync was turned on) is picked up.
+        public static double NowUtcMs()
+        {
+            lock (ClockSync)
+            {
+                double elapsed = Clock.Elapsed.TotalMilliseconds;
+                double now = anchorMs + elapsed;
+                if (elapsed - lastCheckMs >= RecheckEveryMs)
+                {
+                    lastCheckMs = elapsed;
+                    double wall = UtcMs(DateTime.UtcNow);
+                    double off = wall - now;
+                    if (Math.Abs(off) > StepIfOffByMs)
+                    {
+                        anchorMs += off;
+                        now = wall;
+                        ChartBridgeServer.Log("PC clock changed by " + Math.Round(off).ToString(CultureInfo.InvariantCulture) + " ms; ChartBridge follows it.");
+                    }
+                }
+                return now;
+            }
+        }
 
         public static DateTime NowEastern() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Eastern); }
     }
@@ -287,7 +313,16 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Queue(string fillJson) { lock (Sync) { PendingList.Add(fillJson); Save(); } }
 
-        public static void QueueToday(List<string> fills) { lock (Sync) { PendingList.AddRange(fills); Save(); } }
+        public static void QueueMany(List<string> fills) { if (fills.Count == 0) return; lock (Sync) { PendingList.AddRange(fills); Save(); } }
+
+        private static string lastError = "";
+
+        public static string DiagJson()
+        {
+            int n; lock (Sync) n = PendingList.Count;
+            return "{\"postFills\":" + (ChartBridgeConfig.PostFills ? "true" : "false") + ",\"deskUrl\":" + CbJson.Str(ChartBridgeConfig.DeskUrl) +
+                ",\"waiting\":" + n + ",\"lastSendFailed\":" + (lastFailed ? "true" : "false") + ",\"lastError\":" + CbJson.Str(lastError) + "}";
+        }
 
         public static void Flush()
         {
@@ -318,6 +353,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 catch (Exception ex)
                 {
+                    lastError = ex.Message;
                     if (!lastFailed) ChartBridgeServer.Log("The Desk did not take fills (" + ex.Message + "); they are saved and will be retried every 10 seconds.");
                     lastFailed = true;
                 }
@@ -338,7 +374,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, Instrument> Instruments = new Dictionary<string, Instrument>();
         private static readonly List<MarketData> Feeds = new List<MarketData>();
         private static readonly HashSet<Account> Watched = new HashSet<Account>();
-        private static System.Threading.Timer accountTimer;
+        private static System.Threading.Timer accountTimer, pollTimer;
         private static readonly Regex TypeRx = new Regex("\"type\"\\s*:\\s*\"(\\w+)\"");
         private static readonly Regex RootRx = new Regex("\"root\"\\s*:\\s*\"(\\w+)\"");
         private static readonly Regex DaysRx = new Regex("\"days\"\\s*:\\s*(\\d+)");
@@ -362,9 +398,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     cts = new CancellationTokenSource();
                     ResolveInstruments();
                     SubscribeMarketData();
+                    if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
                     WatchAccounts();
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } }, null, 10000, 10000);
-                    if (ChartBridgeConfig.PostFills) { ChartBridgeDesk.Load(); ChartBridgeDesk.QueueToday(TodaysExecutions()); ChartBridgeDesk.Flush(); }
+                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } }, null, 2000, 2000);
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
@@ -385,15 +422,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { if (cts != null) cts.Cancel(); } catch (Exception) { }
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
                 accountTimer = null;
+                try { if (pollTimer != null) pollTimer.Dispose(); } catch (Exception) { }
+                pollTimer = null;
                 foreach (ChartBridgeClient c in Clients.Values) c.Close();
                 Clients.Clear();
                 foreach (MarketData md in Feeds) { try { md.Update -= OnMarketData; } catch (Exception) { } }
                 Feeds.Clear();
-                lock (Watched)
-                {
-                    foreach (Account a in Watched) { try { a.ExecutionUpdate -= OnExecutionUpdate; } catch (Exception) { } }
-                    Watched.Clear();
-                }
+                Unwatch();
                 try { if (listener != null) { listener.Stop(); listener.Close(); } } catch (Exception) { }
                 listener = null;
                 Instruments.Clear();
@@ -459,6 +494,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     await RunClient(wsc.WebSocket, token);
                     return;
                 }
+                if (path == "/diag") { ServeText(ctx, DiagJson(), "application/json"); return; }
                 ServeFile(ctx, path);
             }
             catch (Exception ex)
@@ -466,6 +502,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Log("request failed: " + ex.Message);
                 try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch (Exception) { }
             }
+        }
+
+        private static void ServeText(HttpListenerContext ctx, string text, string type)
+        {
+            byte[] body = Encoding.UTF8.GetBytes(text);
+            HttpListenerResponse res = ctx.Response;
+            res.ContentType = type + "; charset=utf-8";
+            res.AddHeader("Cache-Control", "no-store");
+            res.ContentLength64 = body.Length;
+            res.OutputStream.Write(body, 0, body.Length);
+            res.Close();
         }
 
         private static void ServeFile(HttpListenerContext ctx, string path)
@@ -791,6 +838,78 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- fills (read only)
+        // Two ways in, so a fill is never missed: the account's ExecutionUpdate event, and a poll of
+        // each account's Executions every 2 seconds. Each execution is delivered once (keyed by
+        // account and execution id). Order and position events are only counted, for /diag.
+        private static readonly HashSet<string> Seen = new HashSet<string>();
+        private static readonly Dictionary<string, long[]> EventCounts = new Dictionary<string, long[]>();  // account -> exec, order, position events
+        private static long polledNew, eventNew, lastPollMs;
+
+        private static void Count(string account, int kind)
+        {
+            lock (EventCounts)
+            {
+                long[] c;
+                if (!EventCounts.TryGetValue(account ?? "", out c)) { c = new long[3]; EventCounts[account ?? ""] = c; }
+                c[kind]++;
+            }
+        }
+
+        private static string ExecKey(string account, string id, DateTime time, double price, int qty, string orderId)
+        {
+            if (!string.IsNullOrEmpty(id)) return account + "|" + id;
+            return account + "|" + time.Ticks.ToString(CultureInfo.InvariantCulture) + "|" + CbJson.Num(price) + "|" + qty + "|" + orderId;
+        }
+
+        private static bool FirstTime(string key) { lock (Seen) return Seen.Add(key); }
+
+        // To the open pages now; to The Desk's queue (in `deskBatch` when given, saved once by the caller).
+        private static void Deliver(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId,
+                                    List<string> deskBatch)
+        {
+            string json = ExecJson(account, inst, side, qty, price, time, id, orderId, true);
+            foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
+            if (!ChartBridgeConfig.PostFills) return;
+            string desk = DeskFillJson(account, inst, side, qty, price, time, id, orderId);
+            if (deskBatch != null) deskBatch.Add(desk); else ChartBridgeDesk.Queue(desk);
+        }
+
+        // Deliver every execution of this account not delivered yet. Returns how many were new.
+        private static int CatchUp(Account a)
+        {
+            int n = 0;
+            List<string> batch = new List<string>();
+            try
+            {
+                List<Execution> list;
+                lock (a.Executions) list = a.Executions.ToList();
+                foreach (Execution x in list)
+                {
+                    if (!FirstTime(ExecKey(a.Name, x.ExecutionId, x.Time, x.Price, x.Quantity, x.OrderId))) continue;
+                    Deliver(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId, batch);
+                    n++;
+                }
+            }
+            catch (Exception ex) { Log("could not read executions for " + a.Name + ": " + ex.Message); }
+            ChartBridgeDesk.QueueMany(batch);
+            return n;
+        }
+
+        private static void PollExecutions()
+        {
+            List<Account> accounts;
+            lock (Watched) accounts = Watched.ToList();
+            int n = 0;
+            foreach (Account a in accounts) n += CatchUp(a);
+            lastPollMs = (long)ChartBridgeTime.NowUtcMs();
+            if (n > 0)
+            {
+                Interlocked.Add(ref polledNew, n);
+                if (Interlocked.Read(ref eventNew) == 0) Log("found " + n + " new fill(s) by polling; the fill event has not fired yet in this session");
+                ChartBridgeDesk.Flush();
+            }
+        }
+
         private static void WatchAccounts()
         {
             List<Account> fresh = new List<Account>();
@@ -798,16 +917,86 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 foreach (Account a in Account.All) fresh.Add(a);
             }
+            List<Account> added = new List<Account>();
             lock (Watched)
             {
                 foreach (Account a in fresh)
                 {
                     if (Watched.Contains(a) || !ChartBridgeConfig.AccountAllowed(a.Name)) continue;
                     a.ExecutionUpdate += OnExecutionUpdate;
+                    a.OrderUpdate += OnOrderUpdate;
+                    a.PositionUpdate += OnPositionUpdate;
                     Watched.Add(a);
+                    added.Add(a);
                     Log("watching fills on account " + a.Name);
                 }
             }
+            // Fills that happened before this account was watched (earlier this session) go to The Desk too;
+            // The Desk ignores ones it already has.
+            int n = 0;
+            foreach (Account a in added) n += CatchUp(a);
+            if (n > 0) ChartBridgeDesk.Flush();
+        }
+
+        private static void Unwatch()
+        {
+            lock (Watched)
+            {
+                foreach (Account a in Watched)
+                {
+                    try { a.ExecutionUpdate -= OnExecutionUpdate; } catch (Exception) { }
+                    try { a.OrderUpdate -= OnOrderUpdate; } catch (Exception) { }
+                    try { a.PositionUpdate -= OnPositionUpdate; } catch (Exception) { }
+                }
+                Watched.Clear();
+            }
+            lock (Seen) Seen.Clear();
+        }
+
+        private static void OnOrderUpdate(object sender, OrderEventArgs e) { Account a = sender as Account; Count(a != null ? a.Name : "", 1); }
+
+        private static void OnPositionUpdate(object sender, PositionEventArgs e) { Account a = sender as Account; Count(a != null ? a.Name : "", 2); }
+
+        // GET /diag: what ChartBridge sees, for checking why fills do or do not arrive. This PC only.
+        private static string DiagJson()
+        {
+            StringBuilder b = new StringBuilder("{");
+            b.Append("\"version\":").Append(CbJson.Str(Version));
+            b.Append(",\"clockOffsetMs\":").Append(CbJson.Num3(ChartBridgeTime.UtcMs(DateTime.UtcNow) - ChartBridgeTime.NowUtcMs()));
+            b.Append(",\"fillEventsDelivered\":").Append(Interlocked.Read(ref eventNew));
+            b.Append(",\"fillsFoundByPolling\":").Append(Interlocked.Read(ref polledNew));
+            b.Append(",\"lastPollUtcMs\":").Append(lastPollMs);
+            b.Append(",\"clients\":").Append(Clients.Count);
+            b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());
+            b.Append(",\"accounts\":[");
+            List<Account> accounts;
+            lock (Watched) accounts = Watched.ToList();
+            bool first = true;
+            foreach (Account a in accounts.OrderBy(x => x.Name))
+            {
+                if (!first) b.Append(','); first = false;
+                long[] c;
+                lock (EventCounts) { if (!EventCounts.TryGetValue(a.Name, out c)) c = new long[3]; c = (long[])c.Clone(); }
+                b.Append("{\"name\":").Append(CbJson.Str(a.Name));
+                b.Append(",\"connection\":").Append(CbJson.Str(ConnectionText(a)));
+                b.Append(",\"executions\":").Append(SafeCount(delegate { lock (a.Executions) return a.Executions.Count; }));
+                b.Append(",\"orders\":").Append(SafeCount(delegate { lock (a.Orders) return a.Orders.Count; }));
+                b.Append(",\"positions\":").Append(SafeCount(delegate { lock (a.Positions) return a.Positions.Count; }));
+                b.Append(",\"fillEvents\":").Append(c[0]).Append(",\"orderEvents\":").Append(c[1]).Append(",\"positionEvents\":").Append(c[2]);
+                b.Append('}');
+            }
+            b.Append("]}");
+            return b.ToString();
+        }
+
+        private static string SafeCount(Func<int> f)
+        {
+            try { return f().ToString(CultureInfo.InvariantCulture); } catch (Exception ex) { return CbJson.Str("error: " + ex.Message); }
+        }
+
+        private static string ConnectionText(Account a)
+        {
+            try { return a.Connection == null ? "none" : a.Connection.Status.ToString(); } catch (Exception ex) { return "error: " + ex.Message; }
         }
 
         private static string ExecJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId, bool withType)
@@ -844,24 +1033,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"order_id\":" + CbJson.Str(orderId) + "}";
         }
 
-        private static List<string> TodaysExecutions()
-        {
-            List<string> list = new List<string>();
-            List<Account> accounts;
-            lock (Watched) accounts = Watched.ToList();
-            foreach (Account a in accounts)
-            {
-                try
-                {
-                    lock (a.Executions)
-                        foreach (Execution x in a.Executions)
-                            list.Add(DeskFillJson(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId));
-                }
-                catch (Exception ex) { Log("could not read executions for " + a.Name + ": " + ex.Message); }
-            }
-            return list;
-        }
-
         private static string ExecsJson()
         {
             StringBuilder b = new StringBuilder("{\"type\":\"execs\",\"list\":[");
@@ -892,14 +1063,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Account a = sender as Account;
+                string name = a != null ? a.Name : "";
+                Count(name, 0);
                 Instrument inst = e.Execution != null ? e.Execution.Instrument : null;   // ExecutionEventArgs has no Instrument of its own
-                string json = ExecJson(a != null ? a.Name : "", inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, true);
-                foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
-                if (ChartBridgeConfig.PostFills)
-                {
-                    ChartBridgeDesk.Queue(DeskFillJson(a != null ? a.Name : "", inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId));
-                    ChartBridgeDesk.Flush();
-                }
+                if (!FirstTime(ExecKey(name, e.ExecutionId, e.Time, e.Price, e.Quantity, e.OrderId))) return;
+                Interlocked.Increment(ref eventNew);
+                Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null);
+                ChartBridgeDesk.Flush();
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }
         }
