@@ -355,6 +355,8 @@ function start(container, opt, PAGE) {
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   const saveSetting = k => prefs.setSetting(k, S[k]);
+  /* Drawings are kept per pane and instrument; the main pane keeps the key the standalone page always used. */
+  const drawingsKey = root => 'live-drawings-v1-' + (PANE === LP.MAIN_PANE ? '' : PANE + '-') + root;
   const store = {                                  // single-value keys (fill account, drawings), try/catch inside
     get(k, d) { const v = prefs.raw.get(k); return v === null ? d : v; },
     set(k, v) { prefs.raw.set(k, v); },
@@ -395,7 +397,7 @@ function start(container, opt, PAGE) {
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
     chart.setBars([], { barSeconds: TF[S.tf].sec });
     chart.setLevels([]);
-    chart.setDrawings(store.get('live-drawings-v1-' + root, []));
+    chart.setDrawings(store.get(drawingsKey(root), []));
     applyMarkers();
     renderTrading();
     legendKey = '';
@@ -814,7 +816,7 @@ function start(container, opt, PAGE) {
     $('lgVwWrap').hidden = !S.layers.vwap;
     $('lgVw').textContent = b.vw !== undefined ? fmt(U.roundTo(b.vw, D.tick)) : '-';
   });
-  chart.on('drawings', list => store.set('live-drawings-v1-' + D.root, list));
+  chart.on('drawings', list => store.set(drawingsKey(D.root), list));
   chart.on('tool', t => { $('toolTrend').setAttribute('aria-pressed', String(t === 'trend')); $('toolHline').setAttribute('aria-pressed', String(t === 'hline')); });
 
   const themePanel = CE.mountThemePanel(chart, $('colorsHost'), {

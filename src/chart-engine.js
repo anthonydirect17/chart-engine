@@ -1340,7 +1340,14 @@ function mountThemePanel(chart, host, options) {
       b.setAttribute('aria-pressed', String(p.up === cur.up && p.down === cur.down));
     }
   }
-  function apply(partial) { cur = Object.assign({}, cur, clean(Object.assign({}, cur, partial))); chart.setTheme(cur); store(cur); sync(); changed(); }
+  /* Saves only the fields this change set, on a fresh read, so two charts sharing the key never undo each other. */
+  function apply(partial) {
+    const set = clean(Object.assign({}, cur, partial)), fields = Object.keys(clean(partial || {}));
+    cur = Object.assign({}, cur, set);
+    chart.setTheme(cur);
+    const saved = Object.assign(clean(load()), ...fields.map(k => ({ [k]: cur[k] })));
+    store(saved); sync(); changed();
+  }
   for (const inp of wrap.querySelectorAll('input[type=color]')) inp.addEventListener('input', () => apply({ [inp.dataset.k]: inp.value }));
   for (const inp of wrap.querySelectorAll('input[data-hex]')) inp.addEventListener('input', () => {
     let v = inp.value.trim(); if (v[0] !== '#') v = '#' + v;

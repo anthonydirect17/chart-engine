@@ -91,8 +91,9 @@ Every storage key the chart uses is `storagePrefix + <the standalone page's key>
 | `live-indicators-v1` | `{ <paneId>: { volume, vwap, levels, fills } }` | one entry per `paneId` |
 | `live-bracket-v1` | bracket ticks per instrument (trading only) | all charts with this prefix |
 | `live-fill-account-v1` | whose fills are marked | all charts with this prefix |
-| `live-drawings-v1-<ROOT>` | drawings per instrument | all charts with this prefix |
-| `live-colors-v1` | candle and VWAP colors (Colors panel) | all charts with this prefix |
+| `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |
+| `live-drawings-v1-<paneId>-<ROOT>` | drawings per instrument on any other pane | that pane |
+| `live-colors-v1` | candle and VWAP colors (Colors panel), saved one color at a time | all charts with this prefix |
 
 So with `storagePrefix: 'desk:'` The Desk's chart keeps `desk:live-settings-v2` and so on, and never reads or
 writes the standalone page's keys even when both run on the same origin. With no `storagePrefix` a mounted
@@ -101,4 +102,5 @@ settings. The 1.3 keys (`live-settings-v1`, `live-range-v1`) are only carried ov
 
 Choices shared by all charts with one prefix (instrument, bars and the rest in the table) are each read when a
 chart mounts and written one field at a time when changed, so two panes never undo each other while they run;
-after a reload both start from the last change either made. Only indicators are kept per pane today.
+after a reload both start from the last change either made. Indicators and drawings are kept per pane, so two
+panes on one instrument each keep their own lines.

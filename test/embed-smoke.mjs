@@ -215,6 +215,44 @@ try {
   await until(async () => await paneLive('paneA') && await paneLive('paneB'), 'both panes live after mounting again');
   layers = await page.evaluate(() => [window.__a.chart.getLayers(), window.__b.chart.getLayers()]);
   check(layers[0].volume && !layers[0].vwap && layers[0].levels && layers[1].volume && layers[1].vwap && !layers[1].levels, 'per-pane indicators come back after mounting again: ' + JSON.stringify(layers));
+  // two panes on one instrument each keep their own drawings (and colors are saved one field at a time)
+  for (const pane of ['paneA', 'paneB']) {
+    if (await page.getAttribute('#' + pane + ' [aria-label="Instrument"] >> text="MNQ"', 'aria-pressed') !== 'true') {
+      await page.click('#' + pane + ' [aria-label="Instrument"] >> text="MNQ"');
+      await until(() => paneLive(pane), pane + ' live on MNQ');
+    }
+  }
+  await page.waitForTimeout(600);
+  for (const [pane, y] of [['paneA', 0.3], ['paneB', 0.6]]) {
+    await page.click('#' + pane + ' [id$="-toolHline"]');
+    const b = await page.locator('#' + pane + ' canvas').boundingBox();
+    await page.mouse.click(b.x + b.width * 0.4, b.y + b.height * y);
+  }
+  await page.waitForTimeout(300);
+  const drawn = await page.evaluate(() => ({ a: window.__a.chart.getDrawings().length, b: window.__b.chart.getDrawings().length,
+    main: JSON.parse(localStorage.getItem('desk:live-drawings-v1-MNQ') || '[]').length, pane2: JSON.parse(localStorage.getItem('desk:live-drawings-v1-pane-2-MNQ') || '[]').length }));
+  check(drawn.a === 1 && drawn.b === 1 && drawn.main === 1 && drawn.pane2 === 1, 'two panes on MNQ: one price line each, saved per pane: ' + JSON.stringify(drawn));
+  await page.click('#paneA .ce-theme-btn'); await page.click('#paneA .ce-preset[data-id="mint"]'); await page.keyboard.press('Escape');
+  await page.click('#paneB .ce-theme-btn'); await page.fill('#paneB .ce-theme-panel input[data-hex="vwap"]', '#ABCDEF'); await page.keyboard.press('Escape');
+  const colorsA = await page.evaluate(() => window.__a.chart.getTheme());
+  const colorsSaved = await page.evaluate(() => JSON.parse(localStorage.getItem('desk:live-colors-v1')));
+  check(colorsSaved.vwap === '#ABCDEF' && colorsSaved.up === colorsA.up.toUpperCase() && colorsSaved.down === colorsA.down.toUpperCase(), 'colors: pane A\'s preset and pane B\'s VWAP both saved: ' + JSON.stringify(colorsSaved));
+  const linesBefore = await page.evaluate(() => [window.__a.chart.getDrawings()[0].price, window.__b.chart.getDrawings()[0].price]);
+  await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
+  await page.reload();
+  await page.evaluate(() => {
+    window.__calls = { A: 0, B: 0 };
+    window.__urlA = () => { window.__calls.A++; return 'ws://' + location.host + '/ws?ticket=RA' + window.__calls.A + '-' + Math.random().toString(36).slice(2); };
+    window.__urlB = () => { window.__calls.B++; return 'ws://' + location.host + '/ws?ticket=RB' + window.__calls.B + '-' + Math.random().toString(36).slice(2); };
+    window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, paneId: 'main', storagePrefix: 'desk:' });
+    window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: window.__urlB, paneId: 'pane-2', storagePrefix: 'desk:' });
+  });
+  await until(async () => await paneLive('paneA') && await paneLive('paneB'), 'both panes live after a reload');
+  const linesAfter = await page.evaluate(() => [window.__a.chart.getDrawings().map(d => d.price), window.__b.chart.getDrawings().map(d => d.price)]);
+  check(linesAfter[0].length === 1 && linesAfter[1].length === 1 && linesAfter[0][0] === linesBefore[0] && linesAfter[1][0] === linesBefore[1] && linesBefore[0] !== linesBefore[1],
+    'each pane\'s line survives a reload and remount: ' + JSON.stringify(linesAfter));
+  const vwapAfter = await page.evaluate(() => [window.__a.chart.getTheme().vwap, window.__b.chart.getTheme().up]);
+  check(vwapAfter[0].toUpperCase() === '#ABCDEF' && vwapAfter[1].toUpperCase() === colorsA.up.toUpperCase(), 'colors from both panes come back: ' + JSON.stringify(vwapAfter));
   const sentTypes2 = await page.evaluate(() => [...new Set(window.__spy.sockets.flatMap(s => s.sent.map(d => JSON.parse(d).type)))]);
   rec = await control(PORT, 'received');
   check(sentTypes2.every(t => t === 'subscribe' || t === 'ping') && Object.keys(rec.types).every(t => t === 'subscribe' || t === 'ping') && rec.sessionRequests === 0, 'two panes: still only subscribe and ping, no /session: ' + JSON.stringify(rec.types));
