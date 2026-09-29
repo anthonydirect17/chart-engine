@@ -71,6 +71,7 @@ test('The Desk queue: 10 s timeout, atomic file, clean reload, no duplicates, ba
   assert.match(desk, /PendingList\.Clear\(\); PendingSet\.Clear\(\);/);
   assert.match(desk, /if \(PendingSet\.Add\(fillJson\)\)/);
   assert.match(desk, /rejected_fills\.jsonl/);
+  assert.match(desk, /lastFailed = false; \}\s*lastError = "";/, '/diag: lastError cleared after a successful send');
   assert.ok(!/QueueToday/.test(code));
 });
 

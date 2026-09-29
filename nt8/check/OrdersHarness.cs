@@ -845,6 +845,7 @@ public static class OrdersHarness
         Check(Rejected("trading is off") && sim.Calls.Count == n, "after config reset: refused");
 
         NetworkChecks();
+        DeskQueueChecks();
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
@@ -967,6 +968,66 @@ public static class OrdersHarness
             }
         }
         finally { ChartBridgeConfig.Port = portWas; try { l.Stop(); l.Close(); } catch (Exception) { } }
+    }
+
+    // ------------------------------------------------------------ fills to The Desk: queued while it is down, drained once, /diag clean after
+    // (the trading PC's outage test, 2026-09-29: after the drain /diag still showed the old lastError)
+    static string DeskDiag() { return ChartBridgeDesk.DiagJson(); }
+    static bool WaitFor(Func<bool> ok, int ms) { DateTime end = DateTime.UtcNow.AddMilliseconds(ms); while (DateTime.UtcNow < end) { if (ok()) return true; Thread.Sleep(50); } return ok(); }
+
+    static void DeskQueueChecks()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "cb-desk-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "ChartBridge"));
+        string dirWas = NinjaTrader.Core.Globals.UserDataDir, urlWas = ChartBridgeConfig.DeskUrl;
+        bool postWas = ChartBridgeConfig.PostFills;
+        NinjaTrader.Core.Globals.UserDataDir = dir;
+        int deskPort = 20000 + new Random().Next(9000);
+        ChartBridgeConfig.PostFills = true;
+        ChartBridgeConfig.DeskUrl = "http://127.0.0.1:" + deskPort;          // nothing listens there yet: The Desk is down
+        HttpListener desk = null;
+        try
+        {
+            ChartBridgeDesk.Load();
+            ChartBridgeDesk.Queue("{\"source\":\"nt8\",\"exec_id\":\"harness-1\"}");
+            ChartBridgeDesk.Queue("{\"source\":\"nt8\",\"exec_id\":\"harness-2\"}");
+            ChartBridgeDesk.Flush();
+            bool failed = WaitFor(() => DeskDiag().Contains("\"lastSendFailed\":true") && !DeskDiag().Contains("\"lastError\":\"\""), 15000);
+            Check(failed && DeskDiag().Contains("\"waiting\":2"), "Desk down: 2 fills wait, /diag shows the failure and its error: " + DeskDiag());
+            Check(File.ReadAllLines(Path.Combine(dir, "ChartBridge", "pending_fills.jsonl")).Length == 2, "Desk down: the 2 fills are in pending_fills.jsonl");
+
+            List<string> got = new List<string>();
+            desk = new HttpListener();
+            desk.Prefixes.Add("http://127.0.0.1:" + deskPort + "/");
+            desk.Start();
+            HttpListener l = desk;
+            Task.Run(() =>
+            {
+                while (l.IsListening)
+                {
+                    HttpListenerContext ctx;
+                    try { ctx = l.GetContext(); } catch (Exception) { break; }
+                    string body; using (StreamReader r = new StreamReader(ctx.Request.InputStream)) body = r.ReadToEnd();
+                    lock (got) got.Add(body);
+                    byte[] ok = System.Text.Encoding.UTF8.GetBytes("{\"stored\":2,\"rejected\":[]}");
+                    ctx.Response.StatusCode = 200; ctx.Response.OutputStream.Write(ok, 0, ok.Length); ctx.Response.Close();
+                }
+            });
+            ChartBridgeDesk.Flush();
+            bool drained = WaitFor(() => DeskDiag().Contains("\"waiting\":0") && DeskDiag().Contains("\"lastSendFailed\":false"), 15000);
+            int sent1, sent2;
+            lock (got) { sent1 = got.Sum(b => Regex.Matches(b, "harness-1").Count); sent2 = got.Sum(b => Regex.Matches(b, "harness-2").Count); }
+            Check(drained && sent1 == 1 && sent2 == 1, "Desk back: the queue drains, each fill sent exactly once (" + sent1 + ", " + sent2 + ")");
+            Check(DeskDiag().Contains("\"lastError\":\"\""), "Desk back: /diag clears lastError after a successful send: " + DeskDiag());
+            Check(File.ReadAllLines(Path.Combine(dir, "ChartBridge", "pending_fills.jsonl")).Length == 0, "Desk back: pending_fills.jsonl is empty");
+        }
+        finally
+        {
+            try { if (desk != null) { desk.Stop(); desk.Close(); } } catch (Exception) { }
+            ChartBridgeConfig.PostFills = postWas;
+            ChartBridgeConfig.DeskUrl = urlWas;
+            NinjaTrader.Core.Globals.UserDataDir = dirWas;
+        }
     }
 
     // GET with a forged "Host: localhost:<port>", straight to the address (no proxy).

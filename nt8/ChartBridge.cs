@@ -585,6 +585,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
+                    lastError = "";   // /diag: no stale error once a send has gone through
                 }
                 catch (WebException wex)
                 {
