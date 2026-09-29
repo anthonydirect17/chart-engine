@@ -10,9 +10,9 @@
  * copies a fixed list of page files.
  *
  * Every read and write is wrapped: storage can be missing or throw (private windows, blocked site data).
- * Every write changes one field and reads the key fresh first, so two chart tabs never undo each other's
- * choices (before 1.4.0 each tab wrote its whole in-memory copy back, which put NQ's range back to 20 when
- * another tab saved).
+ * Every write changes one field (one setting, one root's range, one indicator on one pane, one bracket stop or
+ * target) and reads the key fresh first, so two chart tabs never undo each other's choices (before 1.4.0 each
+ * tab wrote its whole in-memory copy back, which put NQ's range back to 20 when another tab saved).
  *
  * Keys (versioned):
  *   live-settings-v2    { root, tf, glide, rangeMode }
@@ -117,9 +117,23 @@ function create(storage) {
       const all = obj(KEYS.indicators);
       return cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
     },
-    setIndicators(paneId, set) { return patch(KEYS.indicators, paneId, cleanIndicators(set, paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS)); },
+    /** Turn one indicator on or off on one pane; the pane's other indicators are read fresh, not overwritten. */
+    setIndicator(paneId, id, on) {
+      if (!INDICATORS.some(x => x.id === id) || typeof paneId !== 'string' || !paneId) return false;
+      const all = obj(KEYS.indicators);
+      const cur = cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
+      cur[id] = !!on; all[paneId] = cur;
+      return raw.set(KEYS.indicators, all);
+    },
     bracket(root) { return obj(KEYS.bracket)[root]; },
-    setBracket(root, b) { return patch(KEYS.bracket, root, b); },
+    /** Set one bracket field ('stop' or 'target', whole ticks 0 to 200) for one root; the other field is kept. */
+    setBracketField(root, field, ticks) {
+      if (!ROOTS.includes(root) || (field !== 'stop' && field !== 'target') || !Number.isInteger(ticks) || ticks < 0 || ticks > 200) return false;
+      const all = obj(KEYS.bracket);
+      const cur = all[root] && typeof all[root] === 'object' && !Array.isArray(all[root]) ? all[root] : {};
+      cur[field] = ticks; all[root] = cur;
+      return raw.set(KEYS.bracket, all);
+    },
   };
 }
 
@@ -672,7 +686,7 @@ function setIndicator(k, v) {
   if (!(k in S.layers)) return;
   S.layers[k] = !!v;
   if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: S.layers[k] });
-  legendKey = ''; prefs.setIndicators(PANE, S.layers); syncIndicators();
+  legendKey = ''; prefs.setIndicator(PANE, k, S.layers[k]); syncIndicators();
 }
 {
   const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel');
@@ -718,20 +732,20 @@ $('buyMkt').addEventListener('click', pointerOnly(() => sendOrder('buy', 'market
 $('sellMkt').addEventListener('click', pointerOnly(() => sendOrder('sell', 'market', null)));
 $('sideSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; TR.side = b.dataset.v; renderTrading(); chart.setOrderPreview(previewAt); });
 /* Bracket ticks per root: saved as typed (whole numbers 0 to 200; anything else waits), and at once on Enter or
-   leaving the box. Each save writes only this root's bracket. */
-const bracketSaved = LP.debounce(root => prefs.setBracket(root, brackets[root]), 350);
+   leaving the box. Each save writes only this one field (stop or target) for this root. */
+const bracketSaved = LP.debounce((root, k) => prefs.setBracketField(root, k, brackets[root][k]), 350);
 for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
   $(id).addEventListener('input', e => {
     const v = e.target.value.trim();
     if (!/^\d+$/.test(v) || +v > OT.MAX_BRACKET_TICKS) return;
     brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: v }));
-    bracketSaved(D.root);
+    bracketSaved(D.root, k);
   });
   $(id).addEventListener('change', e => {
     brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: e.target.value }));
     e.target.value = brackets[D.root][k];
     bracketSaved.cancel();
-    prefs.setBracket(D.root, brackets[D.root]);
+    prefs.setBracketField(D.root, k, brackets[D.root][k]);
   });
 }
 /* Anything typed but not yet saved is saved when the page is closed, reloaded or hidden. */

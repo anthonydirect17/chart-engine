@@ -69,8 +69,9 @@ test('indicators are saved per pane; a new pane starts from the clean set', () =
   const p = LP.create(s);
   assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true });
   assert.deepEqual(p.indicators('pane-2'), LP.NEW_PANE_INDICATORS);
-  p.setIndicators('pane-2', { volume: false, vwap: 'yes', bogus: true });
-  assert.deepEqual(LP.create(s).indicators('pane-2'), { volume: false, vwap: true, levels: true, fills: true });
+  assert.equal(p.setIndicator('pane-2', 'vwap', true), true);
+  assert.equal(p.setIndicator('pane-2', 'bogus', true), false);
+  assert.deepEqual(LP.create(s).indicators('pane-2'), Object.assign({}, LP.NEW_PANE_INDICATORS, { vwap: true }));
   assert.deepEqual(LP.create(s).indicators('main'), { volume: false, vwap: true, levels: false, fills: true });
 });
 
@@ -115,4 +116,42 @@ test('every script the live page loads is copied by nt8/install.ps1', () => {
     const file = (src.startsWith('../') ? src.slice(3) : 'live/' + src).split('/').join('\\');   // live\\live.js
     assert.ok(install.includes("'" + file + "'"), src + ' is not in install.ps1');
   }
+});
+
+/* A chart tab as the page holds it: choices read once at load, then changed one at a time. Before 1.4.1 the page
+   wrote the whole pane set (setIndicators) or the whole bracket (setBracket); the fallbacks below do exactly that,
+   so these tests show the old failure when run against 1.4.0 (review S2). */
+function pageTab(s) {
+  const p = LP.create(s);
+  const layers = p.indicators('main'), bracket = Object.assign({ stop: 0, target: 0 }, p.bracket('MNQ'));
+  return {
+    toggle(id, on) { layers[id] = on; if (p.setIndicator) p.setIndicator('main', id, on); else p.setIndicators('main', layers); },
+    setBracket(k, v) { bracket[k] = v; if (p.setBracketField) p.setBracketField('MNQ', k, v); else p.setBracket('MNQ', bracket); },
+  };
+}
+
+test('two tabs: turning different indicators off in each keeps both (review S2)', () => {
+  const s = mem();
+  const a = pageTab(s), b = pageTab(s);          // both loaded before either change
+  a.toggle('vwap', false);                        // tab A turns VWAP off
+  b.toggle('volume', false);                      // tab B, still holding VWAP on, turns Volume off
+  const after = LP.create(s).indicators('main');
+  assert.equal(after.volume, false);
+  assert.equal(after.vwap, false, "tab A's VWAP off must survive tab B's save");
+  assert.equal(after.levels, true);
+});
+
+test('two tabs: a stop set in one and a target in the other both stick (review S2, brackets)', () => {
+  const s = mem({ 'live-bracket-v1': { MNQ: { stop: 40, target: 20 } } });
+  const a = pageTab(s), b = pageTab(s);
+  a.setBracket('target', 80);                     // tab A: target 20 -> 80
+  b.setBracket('stop', 30);                       // tab B, still holding target 20, changes the stop
+  assert.deepEqual(LP.create(s).bracket('MNQ'), { stop: 30, target: 80 });
+});
+
+test('setBracketField: whole ticks 0 to 200 for stop or target on a known root only', () => {
+  const s = mem(), p = LP.create(s);
+  assert.equal(p.setBracketField('MNQ', 'stop', 40), true);
+  for (const [r, k, v] of [['XX', 'stop', 4], ['MNQ', 'size', 4], ['MNQ', 'stop', 201], ['MNQ', 'stop', -1], ['MNQ', 'stop', 4.5], ['MNQ', 'stop', '4']]) assert.equal(p.setBracketField(r, k, v), false, [r, k, v].join(' '));
+  assert.deepEqual(p.bracket('MNQ'), { stop: 40 });
 });
