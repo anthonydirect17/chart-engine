@@ -63,6 +63,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
+        public static List<string> AccountAllow = new List<string>();   // empty = every account except Backtest / Playback
+
+        public static bool AccountAllowed(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (name.StartsWith("Backtest", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Playback", StringComparison.OrdinalIgnoreCase)) return false;
+            if (AccountAllow.Count == 0) return true;
+            foreach (string pat in AccountAllow)
+            {
+                if (pat.EndsWith("*") ? name.StartsWith(pat.TrimEnd('*'), StringComparison.OrdinalIgnoreCase) : name.Equals(pat, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
 
         public static string Folder
         {
@@ -78,6 +91,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
         //   deskUrl = http://localhost:8800
+        //   accounts = Sim101, LFE*        (only these accounts' fills; * matches a prefix; default all,
+        //                                   Backtest and Playback accounts are always skipped)
         public static void Load()
         {
             string file = Path.Combine(Folder, "config.txt");
@@ -98,6 +113,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
+                else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
             }
         }
     }
@@ -483,7 +499,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int id = Interlocked.Increment(ref nextId);
             ChartBridgeClient client = new ChartBridgeClient(ws, id);
             Clients[id] = client;
-            Task sending = client.SendLoop();
+            Task sending = Task.Run(() => client.SendLoop());   // SendLoop blocks on its queue; never run it inline (0.1.0 deadlock)
             client.Send(HelloJson());
             client.Send(ExecsJson());
             byte[] buf = new byte[16384];
@@ -786,7 +802,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 foreach (Account a in fresh)
                 {
-                    if (Watched.Contains(a)) continue;
+                    if (Watched.Contains(a) || !ChartBridgeConfig.AccountAllowed(a.Name)) continue;
                     a.ExecutionUpdate += OnExecutionUpdate;
                     Watched.Add(a);
                     Log("watching fills on account " + a.Name);
@@ -876,11 +892,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Account a = sender as Account;
-                string json = ExecJson(a != null ? a.Name : "", e.Instrument, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, true);
+                Instrument inst = e.Execution != null ? e.Execution.Instrument : null;   // ExecutionEventArgs has no Instrument of its own
+                string json = ExecJson(a != null ? a.Name : "", inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, true);
                 foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
                 if (ChartBridgeConfig.PostFills)
                 {
-                    ChartBridgeDesk.Queue(DeskFillJson(a != null ? a.Name : "", e.Instrument, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId));
+                    ChartBridgeDesk.Queue(DeskFillJson(a != null ? a.Name : "", inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId));
                     ChartBridgeDesk.Flush();
                 }
             }
