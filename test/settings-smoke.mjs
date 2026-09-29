@@ -77,6 +77,22 @@ try {
     check(r.box === '12', 'ES 8 + four ArrowUp = 12 after reload: ' + JSON.stringify(r));
     await ctx.close();
   }
+  // 4. first run after the update: the indicators and size chosen on 1.3 carry over, so the chart looks the same
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+    const p = await newPage(ctx);
+    await p.evaluate(() => {
+      localStorage.clear();
+      localStorage.setItem('live-settings-v1', JSON.stringify({ root: 'NQ', tf: 'range', glide: 'smooth', layers: { volume: false, vwap: true, levels: false, fills: true } }));
+      localStorage.setItem('live-range-v1', JSON.stringify({ MNQ: 20, NQ: 40, MES: 8, ES: 8 }));
+    });
+    await p.reload(); await live(p); await p.waitForTimeout(400);
+    const layers = await p.evaluate(() => window.liveChart.getLayers());
+    check(layers.volume === false && layers.vwap === true && layers.levels === false, '1.3 indicator choices carried over: ' + JSON.stringify(layers));
+    check(await p.inputValue('#rangeTicks') === '40' && /Range 40t/.test(await p.textContent('#lgTf')), '1.3 NQ range 40 carried over');
+    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '2/4', 'indicator count 2/4');
+    await ctx.close();
+  }
 } finally {
   await browser.close();
   bridge.kill();

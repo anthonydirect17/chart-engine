@@ -123,6 +123,13 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
   Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
+- Live page (1.4.0): Volume, VWAP, Levels and Fills are turned on and off in one **Indicators** menu per chart
+  pane (a `.btn` with the count on, opening a panel on `#0B1016` with a `#2A3645` border, radius 12, the Colors
+  panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
+  the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane.
+- Range bars (live page, 1.4.0) are built like NinjaTrader's by default: every finished bar is exactly the range,
+  the next opens one tick on, and a jump is filled with phantom bars (no volume). "Traded prices only" keeps the
+  older way. See `docs/RANGE_BARS.md`.
 
 ## Honesty rules
 
