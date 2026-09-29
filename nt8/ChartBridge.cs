@@ -152,8 +152,9 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeAccess
     {
         public const double RefusalLogEveryMs = 3600000;   // one Output line per address (or origin) per hour
-        private const int MaxRemembered = 1000;
-        private static readonly Dictionary<string, double> LastLogged = new Dictionary<string, double>();
+        public const int MaxRemembered = 1000;                 // per budget: addresses and origins are counted apart
+        public const int LogSkip = 0, LogLine = 1, LogBudgetFull = 2;
+        private static readonly RefusalBudget AddressLog = new RefusalBudget(), OriginLog = new RefusalBudget();
         private static readonly Regex OriginRx = new Regex("^https?://(\\[[0-9a-f:.]+\\]|[a-z0-9]([a-z0-9.-]*[a-z0-9])?)(:[0-9]{1,5})?\\z");
         private static long refusedAddress, refusedOrigin;
 
@@ -209,38 +210,60 @@ namespace NinjaTrader.NinjaScript.AddOns
             return list;
         }
 
-        // Log a refusal at most once an hour per key (a remote address or an origin), so a scan cannot flood
-        // the Output window. Remembers at most MaxRemembered keys an hour; past that, nothing more is logged.
-        public static bool ShouldLog(string key, double nowMs)
+        // Log a refusal at most once an hour per key (a remote address, or an origin), so a scan cannot flood the
+        // Output window. Each budget remembers at most MaxRemembered keys an hour; when it is full, one line says
+        // further refusals are not logged this hour (they are still refused and counted in /diag). Addresses and
+        // origins have separate budgets, so a web page making up origins cannot silence the address log.
+        private class RefusalBudget
         {
-            lock (LastLogged)
+            private readonly Dictionary<string, double> last = new Dictionary<string, double>();
+            private double fullNotedMs = double.NegativeInfinity;
+
+            public int Decide(string key, double nowMs)
             {
-                double last;
-                if (LastLogged.TryGetValue(key, out last) && nowMs - last < RefusalLogEveryMs) return false;
-                if (!LastLogged.ContainsKey(key) && LastLogged.Count >= MaxRemembered)
+                lock (last)
                 {
-                    foreach (string k in LastLogged.Where(kv => nowMs - kv.Value >= RefusalLogEveryMs).Select(kv => kv.Key).ToList()) LastLogged.Remove(k);
-                    if (LastLogged.Count >= MaxRemembered) return false;
+                    double was;
+                    if (last.TryGetValue(key, out was) && nowMs - was < RefusalLogEveryMs) return LogSkip;
+                    if (!last.ContainsKey(key) && last.Count >= MaxRemembered)
+                    {
+                        foreach (string k in last.Where(kv => nowMs - kv.Value >= RefusalLogEveryMs).Select(kv => kv.Key).ToList()) last.Remove(k);
+                        if (last.Count >= MaxRemembered)
+                        {
+                            if (nowMs - fullNotedMs < RefusalLogEveryMs) return LogSkip;
+                            fullNotedMs = nowMs;
+                            return LogBudgetFull;
+                        }
+                    }
+                    last[key] = nowMs;
+                    return LogLine;
                 }
-                LastLogged[key] = nowMs;
-                return true;
             }
         }
+
+        public static int AddressLogDecision(string address, double nowMs) { return AddressLog.Decide(address, nowMs); }
+        public static int OriginLogDecision(string origin, double nowMs) { return OriginLog.Decide(origin, nowMs); }
 
         public static void NoteRefusedAddress(IPEndPoint remote, string path)
         {
             Interlocked.Increment(ref refusedAddress);
             string who = remote != null && remote.Address != null ? remote.Address.ToString() : "(unknown address)";
-            if (ShouldLog("addr|" + who, ChartBridgeTime.NowUtcMs()))
+            int d = AddressLogDecision(who, ChartBridgeTime.NowUtcMs());
+            if (d == LogLine)
                 ChartBridgeServer.Log("refused a request from " + Clean(who) + " for " + Clean(path) + ": only this PC may connect (403; logged once an hour per address)");
+            else if (d == LogBudgetFull)
+                ChartBridgeServer.Log("refused requests from over " + MaxRemembered + " addresses this hour; further refusals from new addresses are not logged this hour (still refused; counted in /diag)");
         }
 
         public static void NoteRefusedOrigin(string origin)
         {
             Interlocked.Increment(ref refusedOrigin);
             string o = origin ?? "";
-            if (ShouldLog("origin|" + o, ChartBridgeTime.NowUtcMs()))
+            int d = OriginLogDecision(o, ChartBridgeTime.NowUtcMs());
+            if (d == LogLine)
                 ChartBridgeServer.Log("refused a WebSocket from the web page " + Clean(o) + ": not ChartBridge's page and not in allowOrigins in config.txt (403; logged once an hour per origin)");
+            else if (d == LogBudgetFull)
+                ChartBridgeServer.Log("refused WebSockets from over " + MaxRemembered + " web page origins this hour; further refusals from new origins are not logged this hour (still refused; counted in /diag)");
         }
 
         // For the Output window: printable characters only, and not too long.

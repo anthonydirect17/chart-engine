@@ -833,12 +833,21 @@ public static class OrdersHarness
         Check(!ChartBridgeOrders.OriginAllowed("https://desk.golivepage.com") && ChartBridgeOrders.OriginAllowed("http://localhost:8765"), "a listed origin still cannot trade: orders only from ChartBridge's own page");
 
         // refusals are logged once an hour per address
-        Check(ChartBridgeAccess.ShouldLog("t|a", 0) && !ChartBridgeAccess.ShouldLog("t|a", 1000) && ChartBridgeAccess.ShouldLog("t|b", 1000)
-              && !ChartBridgeAccess.ShouldLog("t|a", 3599999) && ChartBridgeAccess.ShouldLog("t|a", 3600000), "refusal log: once an hour per key");
-        int logged = 0;
-        for (int i = 0; i < 1500; i++) if (ChartBridgeAccess.ShouldLog("flood|" + i, 5000)) logged++;
-        Check(logged < 1000 && logged > 900, "refusal log: a scan from many addresses cannot flood the Output window (" + logged + " lines for 1500 addresses)");
-        Check(ChartBridgeAccess.ShouldLog("flood|late", 5000 + ChartBridgeAccess.RefusalLogEveryMs), "refusal log: an hour later, logging works again");
+        const int L = ChartBridgeAccess.LogLine, S = ChartBridgeAccess.LogSkip, F = ChartBridgeAccess.LogBudgetFull;
+        Check(ChartBridgeAccess.AddressLogDecision("t-a", 0) == L && ChartBridgeAccess.AddressLogDecision("t-a", 1000) == S && ChartBridgeAccess.AddressLogDecision("t-b", 1000) == L
+              && ChartBridgeAccess.AddressLogDecision("t-a", 3599999) == S && ChartBridgeAccess.AddressLogDecision("t-a", 3600000) == L, "refusal log: once an hour per address");
+        // fill the address budget: 1000 keys a budget (two used above), then one "not logged this hour" line, then silence
+        List<int> ds = new List<int>();
+        for (int i = 0; i < 1500; i++) ds.Add(ChartBridgeAccess.AddressLogDecision("flood-" + i, 5000));
+        Check(ds.Count(d => d == L) == ChartBridgeAccess.MaxRemembered - 2 && ds.Count(d => d == F) == 1 && ds.IndexOf(F) == ChartBridgeAccess.MaxRemembered - 2,
+              "refusal log: 1500 addresses make " + ds.Count(d => d == L) + " lines, then one line saying further refusals are not logged this hour (" + ds.Count(d => d == F) + "), then none");
+        Check(ChartBridgeAccess.AddressLogDecision("flood-late", 6000) == S, "refusal log: the budget-full line comes once an hour, not per refusal");
+        Check(ChartBridgeAccess.OriginLogDecision("https://made-up-1.example", 6000) == L, "refusal log: a full address budget does not silence the origin log");
+        int ol = 0, of = 0;
+        for (int i = 0; i < 1200; i++) { int d = ChartBridgeAccess.OriginLogDecision("https://made-up-" + i + ".example", 7000); if (d == L) ol++; if (d == F) of++; }
+        Check(ol == ChartBridgeAccess.MaxRemembered - 1 && of == 1, "refusal log: origins have their own budget and their own budget-full line (" + ol + " lines, " + of + " full)");
+        Check(ChartBridgeAccess.AddressLogDecision("flood-late", 7000) == S && ChartBridgeAccess.AddressLogDecision("t-a", 3600000 + 1000) == S, "refusal log: a full origin budget changes nothing for addresses");
+        Check(ChartBridgeAccess.AddressLogDecision("flood-late", 5000 + ChartBridgeAccess.RefusalLogEveryMs) == L, "refusal log: an hour later, logging works again");
 
         // config.txt: the allowOrigins line
         string dir = Path.Combine(Path.GetTempPath(), "cb-harness-" + Guid.NewGuid().ToString("N"));

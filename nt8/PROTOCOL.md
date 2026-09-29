@@ -14,7 +14,9 @@ out: on the trading PC (2026-09-29) a request to the Wi-Fi or Tailscale address 
 every path (page files, `/diag`, `/session`, `/ws`), before any routing: the source address must be loopback
 (`127.0.0.0/8`, `::1`, or IPv4 loopback mapped into IPv6, `::ffff:127.0.0.1`). Anything else, including a
 request whose address cannot be read, gets **403** with no body. A refusal is logged in the Output window once
-an hour per address (at most 1000 addresses an hour, so a scan cannot flood it). ChartBridge does not change
+an hour per address, and a refused WebSocket origin once an hour per origin. Addresses and origins each have
+a budget of 1000 an hour, so a scan cannot flood the window; when one fills, a single line says further
+refusals are not logged this hour (they are still refused and counted in `/diag`). ChartBridge does not change
 HTTP.sys's system-wide listen list (other programs use it).
 
 **Which web pages may read.** A browser always sends an `Origin` header with a WebSocket. The WebSocket at

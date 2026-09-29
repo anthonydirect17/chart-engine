@@ -269,7 +269,9 @@ test('every request is refused unless it comes from this PC, checked first, befo
   assert.match(bodyOf(code, 'private static void Refuse('), /ctx\.Response\.StatusCode = 403;/);
   // a refusal is logged at most once an hour per address
   assert.match(code, /RefusalLogEveryMs = 3600000;/);
-  assert.match(bodyOf(code, 'public static void NoteRefusedAddress('), /if \(ShouldLog\("addr\|" \+ who, ChartBridgeTime\.NowUtcMs\(\)\)\)/);
+  assert.match(bodyOf(code, 'public static void NoteRefusedAddress('), /int d = AddressLogDecision\(who, ChartBridgeTime\.NowUtcMs\(\)\);/);
+  assert.match(bodyOf(code, 'public static void NoteRefusedOrigin('), /int d = OriginLogDecision\(o, ChartBridgeTime\.NowUtcMs\(\)\);/);
+  assert.match(code, /AddressLog = new RefusalBudget\(\), OriginLog = new RefusalBudget\(\);/);   // separate budgets
 });
 
 test('the read-only WebSocket takes a browser only from ChartBridge\'s own page or allowOrigins', () => {
