@@ -344,10 +344,12 @@ function workingHere() { return [...TR.orders.values()].filter(o => o.account ==
 /* Cancel all: one cancel per order (a bracket leg takes its pair), at most 8 a second (ChartBridge allows 10). */
 function cancelAll() {
   if (!ready()) return;
-  const ids = OT.cancelAllIds([...TR.orders.values()], TR.account, D.root);
-  if (!ids.length) { flash('No working orders on ' + TR.account + ' ' + D.root + '.', ''); return; }
+  const pos = TR.positions.get(TR.account + '|' + D.root);
+  const ids = OT.cancelAllIds([...TR.orders.values()], TR.account, D.root, pos ? pos.qty : 0);
+  const keptNote = ids.kept ? ' Kept ' + ids.kept + ' order' + (ids.kept > 1 ? 's' : '') + ' protecting the open position (cancel those one by one, or Flatten).' : '';
+  if (!ids.length) { flash('Nothing to cancel on ' + TR.account + ' ' + D.root + '.' + keptNote, ''); return; }
   ids.forEach((id, i) => setTimeout(() => { if (TR.armed) send({ type: 'cancel', id }); }, Math.floor(i / 8) * 1100));
-  flash('Cancelling ' + ids.length + ' order' + (ids.length > 1 ? 's' : '') + ' on ' + TR.account + ' ' + D.root, '');
+  flash('Cancelling ' + ids.length + ' order' + (ids.length > 1 ? 's' : '') + ' on ' + TR.account + ' ' + D.root + '.' + keptNote, '');
 }
 
 function setArmed(on) {
@@ -522,8 +524,11 @@ $('oQty').addEventListener('change', () => {
   const q = $('oQty'), v = Math.round(+q.value);
   if (isFinite(v) && v >= 1) q.value = String(v);
 });
-$('buyMkt').addEventListener('click', () => sendOrder('buy', 'market', null));
-$('sellMkt').addEventListener('click', () => sendOrder('sell', 'market', null));
+/* Order buttons act on a real mouse or touch click only: a key press (Enter or Space on a focused button,
+   e.detail 0) never sends an order, and the button gives up focus after a click. */
+const pointerOnly = fn => e => { e.currentTarget.blur(); if (e.detail === 0) { flash('Order buttons work by click only, not by keyboard.', 'warn'); return; } fn(e); };
+$('buyMkt').addEventListener('click', pointerOnly(() => sendOrder('buy', 'market', null)));
+$('sellMkt').addEventListener('click', pointerOnly(() => sendOrder('sell', 'market', null)));
 $('sideSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; TR.side = b.dataset.v; renderTrading(); chart.setOrderPreview(previewAt); });
 for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
   $(id).addEventListener('change', e => {
@@ -532,13 +537,13 @@ for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
     store.set('live-bracket-v1', brackets);
   });
 }
-$('flattenBtn').addEventListener('click', () => {
+$('flattenBtn').addEventListener('click', pointerOnly(() => {
   if (!ready()) return;
   if (!sameAction('flatten', performance.now())) return;
   send({ type: 'flatten', account: TR.account, root: D.root });
   flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
-});
-$('cancelAllBtn').addEventListener('click', cancelAll);
+}));
+$('cancelAllBtn').addEventListener('click', pointerOnly(cancelAll));
 
 /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
 const previewAt = price => {

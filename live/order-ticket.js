@@ -49,13 +49,19 @@ function defaultAccount(accounts, current) {
 }
 
 /** Cancel all for an account and root: one cancel per order, and one per OCO pair (the partner goes with it). */
-function cancelAllIds(orders, account, root) {
+/* Cancel all while a position is open keeps every order on the closing side (sells while long, buys while
+   short): those are the position's stop and target, from the chart or from NinjaTrader. Returns the ids
+   to cancel and how many were kept. */
+function cancelAllIds(orders, account, root, posQty) {
   const seen = new Set(), ids = [];
+  let kept = 0;
   for (const o of orders) {
     if (!isWorking(o) || o.account !== account || o.root !== root) continue;
+    if ((posQty > 0 && o.side === 'sell') || (posQty < 0 && o.side === 'buy')) { kept++; continue; }
     if (o.oco) { if (seen.has(o.oco)) continue; seen.add(o.oco); }
     ids.push(o.id);
   }
+  ids.kept = kept;
   return ids;
 }
 

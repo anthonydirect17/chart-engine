@@ -67,7 +67,13 @@ namespace NinjaTrader.Cbi
         public string OrderId { get; set; }
     }
     public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnected, Disconnecting }
-    public class Connection { public ConnectionStatus Status { get; set; } }
+    public class ConnectionStatusEventArgs : EventArgs { public Connection Connection { get; set; } public ConnectionStatus Status { get; set; } }
+    public class Connection
+    {
+        public ConnectionStatus Status { get; set; }
+        public static event EventHandler<ConnectionStatusEventArgs> ConnectionStatusUpdate;
+        public static void FireStatus(Connection c) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status }); }
+    }
     public enum OrderAction { Buy, BuyToCover, Sell, SellShort }
     public enum OrderType { Limit, Market, MIT, StopMarket, StopLimit }
     public enum OrderEntry { Automated, Manual }

@@ -29,6 +29,16 @@ public static class OrdersHarness
     static List<string> After(Account a, int n) { return a.Calls.Skip(n).ToList(); }
 
     // A connected account that the legs check has seen connected since time 0 (so it counts as steady).
+    // Mark every order of an account done (the stand-in's Cancel does not change states).
+    static void Done(Account a) { foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled; }
+
+    // Pretend a leg was submitted ms milliseconds ago.
+    static void Age(Order leg, double ms)
+    {
+        FieldInfo f = typeof(ChartBridgeOrders).GetField("LegBorn", BindingFlags.NonPublic | BindingFlags.Static);
+        ((Dictionary<Order, double>)f.GetValue(null))[leg] = ChartBridgeTime.NowUtcMs() - ms;
+    }
+
     static Account NewAccount(string name)
     {
         Account a = new Account { Name = name, Connection = new Connection { Status = ConnectionStatus.Connected } };
@@ -75,7 +85,7 @@ public static class OrdersHarness
         Check(Rejected("trading is off") && sim.Calls.Count == 0, "trading off: order refused, nothing sent to NinjaTrader");
 
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH, Playback101, EVAL*");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH, SimP, SimR, SimX, Playback101, EVAL*");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
         Check(!ChartBridgeOrders.TradeAccounts.Contains("Playback101") && !ChartBridgeOrders.TradeAccounts.Any(a => a.Contains("*")) && ChartBridgeOrders.TradeAccounts.Contains("Sim101"),
               "tradeAccounts drops Playback and wildcards");
@@ -178,6 +188,23 @@ public static class OrdersHarness
         Check(Rejected("kind must be"), "unsupported kind: refused");
         Check(sim.Calls.Count == 0, "nothing reached NinjaTrader for any refused order");
 
+        // ------------------------------------------------------------ strict messages: any quoted key counts
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":8"));
+        Check(Rejected("bracket must be an object"), "\"bracket\":8 refused, never a naked order");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"stop-loss\":8"));
+        Check(Rejected("unknown key \\\"stop-loss\\\""), "a key with a dash is still a key: refused");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty \":1"));
+        Check(Rejected("unknown key \\\"qty \\\""), "\"qty \" (with a space) refused");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":01"));
+        Check(Rejected("whole number"), "qty with a leading zero refused");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990.00,\"bracket\":{\"stop\":08,\"target\":16}"));
+        Check(Rejected("needs both stop and target"), "bracket ticks with a leading zero refused");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":25001"));
+        Check(Rejected("buy limit above the last price"), "buy limit above the market (would fill at once): refused");
+        Msg("order", Order("Sim101", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":24999"));
+        Check(Rejected("sell limit below the last price"), "sell limit below the market: refused");
+        Check(sim.Calls.Count == 0, "still nothing reached NinjaTrader");
+
         // ------------------------------------------------------------ gate 3: the cap is on the position
         Account b = NewAccount("SimB");
         SetPos(b, mnq, 3);
@@ -185,24 +212,45 @@ public static class OrdersHarness
         Check(Rejected("position 4 contracts") && b.Calls.Count == 0, "long 3, cap 3: buying 1 more refused");
         Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":7"));
         Check(Rejected("over the MNQ cap of 3") && b.Calls.Count == 0, "cap 3, long 3: selling 7 in one order refused");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "4");
-        Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
-        Check(b.Calls.Count == 1, "cap 4, long 3: selling 4 (to short 1) allowed");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "9");
-        Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":9"));
-        Check(Rejected("position 10 contracts") && b.Calls.Count == 1, "cap 9, long 3, a sell 4 still working: selling 9 more could make short 10: refused");
-        b.Calls.Clear(); b.Orders.Clear();
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
         Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
         Check(Rejected("opens or adds") && b.Calls.Count == 0, "bracket on an order that reduces the position: refused");
         Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":3"));
         Check(b.Calls.Count == 1 && b.Calls[0].Contains("Sell Market 3"), "long 3: selling 3 to exit is allowed");
+        Done(b);
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "4");
+        Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
+        Check(b.Calls.Count == 2, "cap 4, long 3: selling 4 (to short 1) allowed");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "9");
+        Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":9"));
+        Check(Rejected("position 10 contracts") && b.Calls.Count == 2, "cap 9, long 3, a sell 4 still working: selling 9 more could make short 10: refused");
+        Done(b);
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
         Account cc = NewAccount("SimC");
         Msg("order", Order("SimC", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990"));
         Msg("order", Order("SimC", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24980"));
         Check(cc.Calls.Count == 1 && Rejected("working 2"), "flat with a working buy 2: another buy 2 refused (cap 3)");
-        Account d = NewAccount("SimD");
+        cc.Orders[0].OrderState = OrderState.CancelPending;
+        Msg("order", Order("SimC", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24980"));
+        Check(cc.Calls.Count == 1 && Rejected("working 2"), "a cancel still pending can fill: it still counts");
+        Done(cc);
+        cc.Orders.Clear();
+        Msg("order", Order("SimC", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990"));
+        cc.Orders.Clear();   // NinjaTrader has not listed it yet
+        Msg("order", Order("SimC", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24980"));
+        Check(cc.Calls.Count == 2 && Rejected("working 3"), "an order ChartBridge just sent counts before NinjaTrader lists it");
+        Account pp = NewAccount("SimP");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "1");
+        Msg("order", Order("SimP", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Fill(pp, pp.Orders[0], 1, 25000);   // filled; the position update has not landed yet
+        Msg("order", Order("SimP", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(pp.Calls.Count == 1 && Rejected("the cap is 1"), "cap 1: a fill reported before its position update still counts");
+        ChartBridgeOrders.OnPositionUpdate(pp, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        SetPos(pp, mnq, 1);
+        Msg("order", Order("SimP", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(pp.Calls.Count == 1 && Rejected("the cap is 1"), "after the position update it is counted once, not twice (still refused at 2)");
+        Msg("order", Order("SimP", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1"));
+        Check(pp.Calls.Count == 2, "and the exit is allowed (counted once)");
+        Account d = NewAccount("SimD");
         SetPos(d, mnq, 1);
         Manual(d, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24990, "atm1", "Stop1");
         Manual(d, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "atm1", "Target1");
@@ -221,12 +269,12 @@ public static class OrdersHarness
         string tag = Tag(entry);
         Fill(sim, entry, 2, 24990);
         List<string> legs = After(sim, 1);
-        Check(legs.Count == 2 && legs[0] == "submit CB#" + tag + " stop Sell StopMarket 2 L0 S24988 oco:cb-" + tag + "-2" && legs[1] == "submit CB#" + tag + " target Sell Limit 2 L24994 S0 oco:cb-" + tag + "-2",
-              "fill of 2 at 24990: OCO stop 24988 and target 24994 for 2: " + string.Join(" | ", legs));
+        Check(legs.Count == 2 && legs[0] == "submit CB#" + tag + " stop f2 q2 p24990 Sell StopMarket 2 L0 S24988 oco:cb-" + tag + "-2" && legs[1] == "submit CB#" + tag + " target f2 q2 p24990 Sell Limit 2 L24994 S0 oco:cb-" + tag + "-2",
+              "fill of 2 at 24990: OCO stop 24988 and target 24994 for 2, the increment in the names: " + string.Join(" | ", legs));
         Check(sent.Any(m => m.Contains("\"type\":\"order\"") && m.Contains("\"cid\":\"c13\"") && m.Contains("\"state\":\"partFilled\"") && m.Contains("\"role\":\"entry\"")), "order update sent to the page with cid, role and state");
         Fill(sim, entry, 3, (24990 * 2 + 24991) / 3.0);
         legs = After(sim, 3);
-        Check(legs.Count == 2 && legs[0] == "submit CB#" + tag + " stop Sell StopMarket 1 L0 S24989 oco:cb-" + tag + "-3" && legs[1] == "submit CB#" + tag + " target Sell Limit 1 L24995 S0 oco:cb-" + tag + "-3",
+        Check(legs.Count == 2 && legs[0] == "submit CB#" + tag + " stop f3 q1 p24991 Sell StopMarket 1 L0 S24989 oco:cb-" + tag + "-3" && legs[1] == "submit CB#" + tag + " target f3 q1 p24991 Sell Limit 1 L24995 S0 oco:cb-" + tag + "-3",
               "next fill of 1 at 24991: its own pair, priced from that fill: " + string.Join(" | ", legs));
         Check(!sim.Calls.Any(x => x.StartsWith("change")), "earlier legs are not resized (no change calls)");
         Update(sim, entry);
@@ -237,23 +285,25 @@ public static class OrdersHarness
 
         // a leg fills in part: its partner shrinks; fills in full: its partner is cancelled
         targetA.Filled = 1; targetA.OrderState = OrderState.PartFilled; Update(sim, targetA);
-        Check(sim.Calls.Last() == "change CB#" + tag + " stop L0 S0 Q1", "target A filled 1 of 2: stop A shrunk to 1: " + sim.Calls.Last());
+        Check(sim.Calls.Last() == "change " + stopA.Name + " L0 S0 Q1", "target A filled 1 of 2: stop A shrunk to 1: " + sim.Calls.Last());
         stopA.Quantity = 1;
         targetA.Filled = 2; targetA.OrderState = OrderState.Filled; Update(sim, targetA);
-        Check(sim.Calls.Last() == "cancel CB#" + tag + " stop", "target A filled: stop A cancelled");
+        Check(sim.Calls.Last() == "cancel " + stopA.Name, "target A filled: stop A cancelled");
         stopA.OrderState = OrderState.Cancelled; Update(sim, stopA);
 
         // a rejected leg raises an error on the page
         sent.Clear();
         stopB.OrderState = OrderState.Rejected;
         ChartBridgeOrders.OnOrderUpdate(sim, new OrderEventArgs { Order = stopB, Error = ErrorCode.OrderRejected });
-        Check(sent.Any(m => m.Contains("\"type\":\"status\"") && m.Contains("\"level\":\"error\"") && m.Contains("NO STOP")), "rejected stop leg: error status on the page");
+        Check(sent.Any(m => m.Contains("\"type\":\"status\"") && m.Contains("\"level\":\"error\"") && m.Contains("NO STOP") && m.Contains("OCO partner")), "rejected stop leg: error status on the page, naming the partner risk");
         Check(sent.Any(m => m.Contains("\"state\":\"rejected\"") && m.Contains("\"text\":\"NinjaTrader: OrderRejected\"")), "rejected leg: NinjaTrader's error sent with the order");
 
         // change and cancel by our id
         string idB = IdOf(targetB);
         Msg("change", "{\"type\":\"change\",\"id\":\"" + idB + "\",\"price\":25002}");
-        Check(sim.Calls.Last() == "change CB#" + tag + " target L25002 S0 Q0", "target leg moved to 25002 (" + idB + "): " + sim.Calls.Last());
+        Check(sim.Calls.Last() == "change " + targetB.Name + " L25002 S0 Q0", "target leg moved to 25002 (" + idB + "): " + sim.Calls.Last());
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + idB + "\",\"price\":24998}");
+        Check(Rejected("sell limit below the last price"), "target moved through the market: refused");
         Order stopLeg = Manual(sim, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24990, "", "my stop");
         Update(sim, stopLeg);
         string idS = IdOf(stopLeg);
@@ -278,14 +328,16 @@ public static class OrdersHarness
         Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(esOrder) + "\",\"price\":4999}");
         Check(Rejected("not served") && sim.Calls.Count == beforeEs, "change on a contract ChartBridge does not serve: refused");
 
-        // ------------------------------------------------------------ flatten: late fills get no legs
+        // ------------------------------------------------------------ flatten: a late fill still gets legs, and an alarm
         Account e = NewAccount("SimE");
         Msg("order", Order("SimE", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":0}"));
         Order late = e.Orders[0];
         Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimE\",\"root\":\"MNQ\"}");
         Check(e.Calls.Last() == "flatten MNQ 12-26", "flatten sent for MNQ 12-26");
+        sent.Clear();
         Fill(e, late, 1, 24990);
-        Check(e.Calls.Count == 2, "entry that fills after Flatten gets no bracket legs");
+        Check(e.Calls.Count == 3 && e.Calls[2].StartsWith("submit CB#" + Tag(late) + " stop f1 q1 p24990 Sell StopMarket 1"), "entry that fills after Flatten still gets its stop");
+        Check(sent.Any(m => m.Contains("\"level\":\"error\"") && m.Contains("AFTER Flatten")), "and the page gets an alarm");
         Msg("flatten", "{\"type\":\"flatten\",\"account\":\"OTHER-ACC\",\"root\":\"MNQ\"}");
         Check(Rejected("may not trade") && other.Calls.Count == 0, "flatten on a non-trading account: refused");
         Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimE\",\"root\":\"MNQ\",\"all\":true}");
@@ -295,40 +347,66 @@ public static class OrdersHarness
         Account g = NewAccount("SimG");
         Msg("order", Order("SimG", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":12,\"target\":0}"));
         Fill(g, g.Orders[0], 1, 25000);
-        Check(g.Calls.Count == 2 && g.Calls[1] == "submit CB#" + Tag(g.Orders[0]) + " stop Buy StopMarket 1 L0 S25003 oco:", "short with stop only: one buy stop 12 ticks above, no OCO: " + g.Calls.Last());
+        Check(g.Calls.Count == 2 && g.Calls[1] == "submit CB#" + Tag(g.Orders[0]) + " stop f1 q1 p25000 Buy StopMarket 1 L0 S25003 oco:", "short with stop only: one buy stop 12 ticks above, no OCO: " + g.Calls.Last());
 
-        // ------------------------------------------------------------ flat: leftover legs cancelled, unless a newer fill reopened
+        // the stop level has already traded when the fill is reported: exit at market, with an alarm
+        Account sx = NewAccount("SimX");
+        Msg("order", Order("SimX", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":16}"));
+        ChartBridgeOrders.NoteLast("MNQ", 24987);   // price fell through 24988 before the fill was reported
+        sent.Clear();
+        Fill(sx, sx.Orders[0], 1, 24990);
+        Check(sx.Calls.Count == 2 && sx.Calls[1] == "submit CB#" + Tag(sx.Orders[0]) + " exit f1 q1 p24990 Sell Market 1 L0 S0 oco:", "stop level already passed: a market exit, no stop through the market: " + sx.Calls.Last());
+        Check(sent.Any(m => m.Contains("\"level\":\"error\"") && m.Contains("already passed the stop level")), "and an alarm says so");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+
+        // a fill that closes an opposite position gets no legs
+        Account rr = NewAccount("SimR");
+        Msg("order", Order("SimR", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25010,\"bracket\":{\"stop\":8,\"target\":16}"));
+        SetPos(rr, mnq, 2);   // Anthony went long 2 elsewhere while the sell limit waited
+        sent.Clear();
+        Fill(rr, rr.Orders[0], 1, 25010);
+        Check(rr.Calls.Count == 1, "a bracket sell that fills against a long places no buy legs");
+        Check(sent.Any(m => m.Contains("\"level\":\"warn\"") && m.Contains("got no bracket legs (position 1")), "and says why");
+
+        // ------------------------------------------------------------ flat: old legs cancelled, young ones left to the legs check
         Account ff = NewAccount("SimF");
         Msg("order", Order("SimF", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
         Fill(ff, ff.Orders[0], 1, 25000);
-        SetPos(ff, mnq, 1);
         Check(ff.Calls.Count == 3, "market with bracket: entry and two legs");
         SetPos(ff, mnq, 1);   // a newer fill already reopened: the position is long again when the flat event lands
         ChartBridgeOrders.OnPositionUpdate(ff, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
         Check(ff.Calls.Count == 3, "stale flat event while the position is open again: legs kept");
         SetPos(ff, mnq, 0);
         ChartBridgeOrders.OnPositionUpdate(ff, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
-        Check(ff.Calls.Count == 5 && ff.Calls[3].EndsWith(" stop") && ff.Calls[4].EndsWith(" target"), "flat: leftover stop and target cancelled");
+        Check(ff.Calls.Count == 3, "flat event right after the legs were placed (a new entry's legs may be racing it): legs left to the legs check");
+        Age(ff.Orders[1], 5000); Age(ff.Orders[2], 5000);
+        sent.Clear();
+        ChartBridgeOrders.OnPositionUpdate(ff, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
+        Check(ff.Calls.Count == 5 && ff.Calls[3].StartsWith("cancel CB#") && ff.Calls[3].Contains(" stop ") && ff.Calls[4].Contains(" target "), "flat with legs older than 3 seconds: leftover stop and target cancelled");
+        Check(sent.Any(m => m.Contains("\"level\":\"warn\"") && m.Contains("leftover bracket leg")), "and the page is told");
 
-        // ------------------------------------------------------------ recompile: the bracket comes back from the order name
+        // ------------------------------------------------------------ recompile: the bracket comes back from the order names
         Account r = NewAccount("DEMO-EVAL2");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH, DEMO-EVAL2");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH, SimP, SimR, SimX, DEMO-EVAL2");
         Order rEntry = Manual(r, mnq, OrderAction.Buy, OrderType.Limit, 3, 24990, 0, "", "CB#0badcafe s8 t16");
-        rEntry.Filled = 2; rEntry.AverageFillPrice = 24990; rEntry.OrderState = OrderState.PartFilled;
-        Manual(r, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-0badcafe-2", "CB#0badcafe stop");     // shrunk after its target filled 1
-        Order rTarget = Manual(r, mnq, OrderAction.Sell, OrderType.Limit, 2, 24994, 0, "cb-0badcafe-2", "CB#0badcafe target");
+        rEntry.Filled = 3; rEntry.AverageFillPrice = (24990 * 2 + 24992) / 3.0; rEntry.OrderState = OrderState.Filled;   // the third contract filled while ChartBridge was reloading
+        Order rStop = Manual(r, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-0badcafe-2", "CB#0badcafe stop f2 q2 p24990");   // shrunk after its target filled 1
+        Order rTarget = Manual(r, mnq, OrderAction.Sell, OrderType.Limit, 2, 24994, 0, "cb-0badcafe-2", "CB#0badcafe target f2 q2 p24990");
         rTarget.Filled = 1; rTarget.OrderState = OrderState.PartFilled;
+        SetPos(r, mnq, 2);
         ChartBridgeOrders.Clear();
         ChartBridgeOrders.NoteLast("MNQ", 25000);
-        Update(r, rEntry);
-        Check(r.Calls.Count == 0, "after a recompile: a pair that was shrunk still counts at its larger leg (no extra legs)");
-        rEntry.Filled = 3; rEntry.AverageFillPrice = (24990 * 2 + 24992) / 3.0; rEntry.OrderState = OrderState.Filled;
-        Update(r, rEntry);
-        Check(r.Calls.Count == 2 && r.Calls[0] == "submit CB#0badcafe stop Sell StopMarket 1 L0 S24990 oco:cb-0badcafe-3", "after a recompile: the next fill gets its own pair: " + string.Join(" | ", r.Calls));
+        ChartBridgeOrders.Resume();
+        Check(r.Calls.Count == 2 && r.Calls[0] == "submit CB#0badcafe stop f3 q1 p24992 Sell StopMarket 1 L0 S24990 oco:cb-0badcafe-3",
+              "after a reload, the fill that came in meanwhile gets its own pair at its own price (24992, not the average): " + string.Join(" | ", r.Calls));
+        ChartBridgeOrders.Resume();
+        Check(r.Calls.Count == 2, "a second start places nothing more (the shrunk pair still counts its 2 from the name)");
+        rTarget.Filled = 2; rTarget.OrderState = OrderState.Filled; Update(r, rTarget);
+        Check(r.Calls.Count == 3 && r.Calls[2] == "cancel CB#0badcafe stop f2 q2 p24990", "pairs are re-linked after a reload: the target filling cancels its stop");
         Order plain = Manual(r, mnq, OrderAction.Buy, OrderType.Market, 1, 0, 0, "", "CB#0badf00d s0 t0");
         plain.Filled = 1; plain.OrderState = OrderState.Filled;
         Update(r, plain);
-        Check(r.Calls.Count == 2, "entry named with no bracket: no legs");
+        Check(r.Calls.Count == 3, "entry named with no bracket: no legs");
 
         // ------------------------------------------------------------ bracket upkeep runs with trading switched off
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH");
@@ -337,17 +415,18 @@ public static class OrdersHarness
         sent.Clear();
         offEntry.Filled = 1; offEntry.AverageFillPrice = 24990; offEntry.OrderState = OrderState.Filled;
         Update(eval, offEntry);
-        Check(eval.Calls.Count == 2 && eval.Calls[0].Contains("CB#00c0ffee stop"), "trading switched off mid-trade: the fill still gets its stop and target");
+        Check(eval.Calls.Count == 2 && eval.Calls[0].Contains("CB#00c0ffee stop f1 q1"), "trading switched off mid-trade: the fill still gets its stop and target");
         Check(!sent.Any(m => m.Contains("\"type\":\"order\"")), "trading off: nothing sent to the page");
         ChartBridgeOrders.ReadConfig("trading", "true");
 
         // ------------------------------------------------------------ the legs check
+        foreach (Account a in Account.All) if (a.Name != "SimK") foreach (Order o in a.Orders) o.OrderState = OrderState.Cancelled;   // only SimK's legs from here
         Account k = NewAccount("SimK");
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK");
-        Order k1s = Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-11111111-1", "CB#11111111 stop");
-        Order k1t = Manual(k, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "cb-11111111-1", "CB#11111111 target");
-        Order k2s = Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-11111111-2", "CB#11111111 stop");
-        Order k2t = Manual(k, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "cb-11111111-2", "CB#11111111 target");
+        Order k1s = Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-11111111-1", "CB#11111111 stop f1 q1 p24990");
+        Order k1t = Manual(k, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "cb-11111111-1", "CB#11111111 target f1 q1 p24990");
+        Order k2s = Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-11111111-2", "CB#11111111 stop f2 q1 p24990");
+        Order k2t = Manual(k, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "cb-11111111-2", "CB#11111111 target f2 q1 p24990");
         SetPos(k, mnq, 2);
         double t0 = 1000000;
         ChartBridgeOrders.CheckLegs(t0); ChartBridgeOrders.CheckLegs(t0 + 10000);
@@ -358,7 +437,7 @@ public static class OrdersHarness
         ChartBridgeOrders.CheckLegs(t0 + 22000);
         Check(k.Calls.Count == 0, "legs cover 2 on a long 1: nothing done before it has held 4 seconds");
         ChartBridgeOrders.CheckLegs(t0 + 24500);
-        Check(k.Calls.Count == 2 && k.Calls.All(x => x.StartsWith("cancel CB#11111111")) && k.Calls.Count(x => x.EndsWith("stop")) == 1,
+        Check(k.Calls.Count == 2 && k.Calls.All(y => y.StartsWith("cancel CB#11111111")) && k.Calls.All(y => y.Contains(" f2 ")),
               "legs cover 2 on a long 1: the newest pair is cancelled: " + string.Join(" | ", k.Calls));
         Check(sent.Any(m => m.Contains("\"level\":\"warn\"") && m.Contains("cannot open or add")), "legs check: a warning on the page");
         k2s.OrderState = OrderState.Cancelled; k2t.OrderState = OrderState.Cancelled;
@@ -369,22 +448,22 @@ public static class OrdersHarness
         ChartBridgeOrders.CheckLegs(t0 + 35000);
         Check(k.Calls.Count == 2, "a change in the position restarts the 4 seconds");
         ChartBridgeOrders.CheckLegs(t0 + 36500);
-        Check(k.Calls.Count == 4 && k.Calls[2] == "change CB#11111111 stop L0 S0 Q2" && k.Calls[3] == "change CB#11111111 target L0 S0 Q2",
+        Check(k.Calls.Count == 4 && k.Calls[2] == "change " + k1s.Name + " L0 S0 Q2" && k.Calls[3] == "change " + k1t.Name + " L0 S0 Q2",
               "one pair of 3 on a long 2: both legs shrunk to 2: " + string.Join(" | ", k.Calls.Skip(2)));
         k1s.Quantity = 2; k1t.Quantity = 2;
         SetPos(k, mnq, -1);
         ChartBridgeOrders.CheckLegs(t0 + 40000); ChartBridgeOrders.CheckLegs(t0 + 45000);
         Check(k.Calls.Count == 6 && k.Calls[4].StartsWith("cancel") && k.Calls[5].StartsWith("cancel"), "sell legs on a short position: cancelled");
         k1s.OrderState = OrderState.Cancelled; k1t.OrderState = OrderState.Cancelled;
-        Manual(k, mnq, OrderAction.Buy, OrderType.StopMarket, 1, 0, 25010, "", "CB#22222222 stop");
+        Order lone = Manual(k, mnq, OrderAction.Buy, OrderType.StopMarket, 1, 0, 25010, "", "CB#22222222 stop f1 q1 p25000");
         SetPos(k, mnq, 0);
         ChartBridgeOrders.CheckLegs(t0 + 50000); ChartBridgeOrders.CheckLegs(t0 + 55000);
-        Check(k.Calls.Count == 7 && k.Calls[6] == "cancel CB#22222222 stop", "lone leg on a flat position: cancelled");
-        k.Orders.Last().OrderState = OrderState.Cancelled;
-        Order manualStop = Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24980, "", "Stop1");
+        Check(k.Calls.Count == 7 && k.Calls[6] == "cancel " + lone.Name, "lone leg on a flat position: cancelled");
+        lone.OrderState = OrderState.Cancelled;
+        Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24980, "", "Stop1");
         ChartBridgeOrders.CheckLegs(t0 + 60000); ChartBridgeOrders.CheckLegs(t0 + 65000);
         Check(k.Calls.Count == 7, "orders not placed by ChartBridge are never touched by the legs check");
-        Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "", "CB#33333333 stop");   // a live stop whose position has not loaded yet
+        Manual(k, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "", "CB#33333333 stop f1 q1 p24990");   // a live stop whose position has not loaded yet
         k.Connection.Status = ConnectionStatus.ConnectionLost;
         ChartBridgeOrders.CheckLegs(t0 + 70000);
         k.Connection.Status = ConnectionStatus.Connected;   // reconnecting: orders are back, positions not yet
@@ -393,13 +472,61 @@ public static class OrdersHarness
         SetPos(k, mnq, 1);   // positions loaded
         ChartBridgeOrders.CheckLegs(t0 + 105000); ChartBridgeOrders.CheckLegs(t0 + 110000);
         Check(k.Calls.Count == 7, "after the reconnect settles with the position back: the stop is kept");
-        SetPos(k, mnq, 0);
+        // a drop shorter than the 2 second sample: the connection event restarts the clock
+        ChartBridgeOrders.WatchConnections();
+        SetPos(k, mnq, 0);   // what NinjaTrader might show for a moment after a quick reconnect
+        Connection.FireStatus(k.Connection);   // lost and back between two samples
+        ChartBridgeOrders.CheckLegs(t0 + 112000); ChartBridgeOrders.CheckLegs(t0 + 118000);
+        Check(k.Calls.Count == 7, "a connection event between samples: nothing is cancelled for 30 seconds");
+        ChartBridgeOrders.UnwatchConnections();
+        SetPos(k, mnq, 1);
+
+        // ------------------------------------------------------------ an entry that filled while ChartBridge was stopped
+        Account w = NewAccount("SimW");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW");
+        Order wEntry = Manual(w, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#0000beef s8 t16");
+        wEntry.Filled = 1; wEntry.AverageFillPrice = 24990; wEntry.OrderState = OrderState.Filled;   // no update will ever come for it
+        SetPos(w, mnq, 1);
+        ChartBridgeOrders.Resume();
+        Check(w.Calls.Count == 2 && w.Calls[0].StartsWith("submit CB#0000beef stop f1 q1 p24990"), "on start, a filled entry with no legs gets them: " + string.Join(" | ", w.Calls));
+        Order wEntry2 = Manual(w, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#0000cafe s8 t0");
+        wEntry2.Filled = 1; wEntry2.AverageFillPrice = 24990; wEntry2.OrderState = OrderState.Filled;
+        SetPos(w, mnq, 2);
+        ChartBridgeOrders.CheckLegs(t0 + 200000);
+        Check(w.Calls.Count == 3 && w.Calls[2].StartsWith("submit CB#0000cafe stop f1 q1"), "the legs check also finds a filled entry with no legs");
+        ChartBridgeOrders.CheckLegs(t0 + 202000); ChartBridgeOrders.Resume();
+        Check(w.Calls.Count == 3, "and never places them twice");
+        Order wOld = Manual(w, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#0000dead s8 t16");
+        wOld.Filled = 1; wOld.AverageFillPrice = 24990; wOld.OrderState = OrderState.Filled;   // an old entry whose legs NinjaTrader no longer lists
+        ChartBridgeOrders.Resume();
+        Check(w.Calls.Count == 3, "an entry whose contracts are already covered by other legs gets none (long 2, legs cover 2)");
+
+        // ------------------------------------------------------------ nothing is kept for finished brackets
+        FieldInfo idf = typeof(ChartBridgeOrders).GetField("IdOf", BindingFlags.NonPublic | BindingFlags.Static);
+        System.Collections.IDictionary ids = (System.Collections.IDictionary)idf.GetValue(null);
+        Account m1 = NewAccount("SimM");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM");
+        int idsBefore = ids.Count;
+        for (int i = 0; i < 20; i++)
+        {
+            Msg("order", Order("SimM", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+            Order en = m1.Orders[m1.Orders.Count - 1];
+            Fill(m1, en, 1, 25000);
+            Order st = m1.Orders[m1.Orders.Count - 2], tg = m1.Orders[m1.Orders.Count - 1];
+            tg.Filled = 1; tg.OrderState = OrderState.Filled; Update(m1, tg);
+            st.OrderState = OrderState.Cancelled; Update(m1, st);
+            SetPos(m1, mnq, 0);
+            ChartBridgeOrders.OnPositionUpdate(m1, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
+        }
+        Check(ids.Count == idsBefore, "20 finished brackets leave no ids behind (" + (ids.Count - idsBefore) + " left)");
 
         // ------------------------------------------------------------ gate 7: rate limit
         System.Threading.Thread.Sleep(1100);
         lock (c.Actions) c.Actions.Clear();
         int before = sim.Calls.Count;
-        idB = IdOf(targetB);   // the recompile above (Clear) forgot the old ids
+        targetB.OrderState = OrderState.Working;
+        Update(sim, targetB);
+        idB = IdOf(targetB);
         for (int i = 0; i < 12; i++) ChartBridgeOrders.OnMessage(c, "cancel", "{\"type\":\"cancel\",\"id\":\"" + idB + "\"}");
         Check(sim.Calls.Count - before == 10 && Rejected("too many order actions"), "rate limit: 10 in a second, the rest refused (" + (sim.Calls.Count - before) + ")");
 

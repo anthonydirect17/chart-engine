@@ -89,14 +89,19 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 - **Bracket**: stop and target in ticks from each fill, remembered per instrument in this browser (0 means
   none). The bracket goes on orders that open or add to a position, never on one that reduces it.
 - **Flatten** cancels every working order on the chosen account and instrument, then closes the position at
-  market. **Cancel all** cancels those orders and leaves the position.
+  market. **Cancel all** cancels the working orders and leaves the position; while a position is open it
+  keeps every order on the closing side (the position's stop and target, from the chart or NinjaTrader)
+  and says how many it kept. Cancel those one by one with their x, or use Flatten.
 - Working orders show as lines with a label and a price tag (green buy, red sell; stops dashed, limits and
   targets solid). While Armed, drag a label (or its price tag) to move the order, press Escape during the
   drag to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
   shows as a light line at the average price with open P&L in points and dollars.
 - Confirmations and refusals show in the status line; a refusal is in red with ChartBridge's reason. An
   error from ChartBridge (for example a bracket leg NinjaTrader rejected) stays on screen until dismissed.
-- No keyboard shortcuts place or change orders (only Escape, which cancels a drag in progress).
+- No keyboard shortcuts place or change orders (only Escape, which cancels a drag in progress), and the
+  order buttons act on a mouse or touch click only: Enter or Space on a focused button sends nothing.
+- A limit on the wrong side of the market (a buy limit above the last price) is refused, since it would
+  fill at once; a Shift+click above the market while buying places a stop, below it a limit.
 
 **Safety gates** (all enforced in ChartBridge; the page only adds its own checks on top):
 

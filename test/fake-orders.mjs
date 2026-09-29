@@ -144,6 +144,8 @@ export class OrderDesk {
     if (away > MAX_TICKS_AWAY) return fmt(price) + ' is ' + away + ' ticks from the last price ' + fmt(last) + '; the limit is ' + MAX_TICKS_AWAY + '.';
     if (kind === 'stop' && side === 'buy' && !(price > last)) return 'A buy stop must be above the last price (' + fmt(last) + ').';
     if (kind === 'stop' && side === 'sell' && !(price < last)) return 'A sell stop must be below the last price (' + fmt(last) + ').';
+    if (kind === 'limit' && side === 'buy' && price > last) return 'A buy limit above the last price (' + fmt(last) + ') would fill at once; use a buy stop or a market order.';
+    if (kind === 'limit' && side === 'sell' && price < last) return 'A sell limit below the last price (' + fmt(last) + ') would fill at once; use a sell stop or a market order.';
     return null;
   }
   check_order(m) {
@@ -219,7 +221,7 @@ export class OrderDesk {
   }
   do_cancel(m) { this.cancel(this.orders.get(m.id)); }
   do_flatten(m) {
-    for (const o of this.orders.values()) if (o.account === m.account && o.root === m.root && o.role === 'entry') o.bracket = null;   // late fills get no legs
+    for (const o of this.orders.values()) if (o.account === m.account && o.root === m.root && o.role === 'entry') o.afterFlatten = true;   // a late fill still gets legs, and an alarm
     for (const o of [...this.orders.values()]) if (isWorking(o) && o.account === m.account && o.root === m.root) this.cancelOne(o);
     const p = this.pos(m.account, m.root);
     if (p.qty) {                        // close at market; no cap check, closing must always work
@@ -314,6 +316,15 @@ export class OrderDesk {
   bracketsAfterFill(entry, qty, price) {
     const tick = this.instruments[entry.root].tick, dir = entry.side === 'buy' ? 1 : -1, exit = entry.side === 'buy' ? 'sell' : 'buy';
     const b = entry.bracket, both = b.stop > 0 && b.target > 0, oco = both ? 'OCO-' + entry.id + '-' + (++this.ocoSeq) : null;
+    const where = entry.root + ' ' + entry.account;
+    if (entry.afterFlatten) this.broadcast({ type: 'status', level: 'error', text: where + ': an entry filled AFTER Flatten (' + qty + ' contract(s)); a position may be open. It gets its stop and target now; check NinjaTrader' });
+    const stopPx = price - dir * b.stop * tick, last = this.last[entry.root];
+    if (b.stop > 0 && (dir > 0 ? stopPx >= last : stopPx <= last)) {   // the stop level has already traded: exit now, as the stop would have
+      const x = this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'market', qty, price: null, role: 'other', parent: entry.id });
+      this.broadcast({ type: 'status', level: 'error', text: where + ': price had already passed the stop level ' + fmt(stopPx) + ' (last ' + fmt(last) + '); exited ' + qty + ' at market' });
+      this.emitOrder(x); this.matchOne(x, last, true);
+      return;
+    }
     const made = [];
     if (b.stop > 0) made.push(this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'stop', qty,
       price: price - dir * b.stop * tick, role: 'stop', oco, parent: entry.id }));

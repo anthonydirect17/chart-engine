@@ -98,23 +98,29 @@ const fnBodies = name => {
 const fnBody = name => fnBodies(name).join('\n');
 
 test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
-  const fromPage = ['PlaceOrder', 'ChangeOrder', 'CancelOrder', 'Flatten'];
-  const upkeep = ['KeepBracket', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs'];
+  const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten'];
+  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs'];
   let rest = ocode;
   for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
-  // only PlaceOrder and KeepBracket create orders; the rest of the upkeep only cancels or shrinks
-  for (const f of ['ChangeOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs'])
+  // only PlaceOrderLocked and PlaceLegs create orders; the rest of the upkeep only cancels or shrinks
+  for (const f of ['ChangeOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries'])
     assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
-  // legs are GTC and named for their bracket; the upkeep touches ChartBridge's own legs only
+  assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) return PlaceOrderLocked\(/);
+  // legs are GTC and named for their bracket and fill increment; the upkeep touches ChartBridge's own legs only
+  const legs = fnBody('PlaceLegs');
+  assert.equal((legs.match(/TimeInForce\.Gtc/g) || []).length, 2);
+  assert.match(legs, /"CB#" \+ br\.Tag \+ " stop" \+ mark/);
+  assert.match(legs, /"CB#" \+ br\.Tag \+ " target" \+ mark/);
+  assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/);   // a stop through the market becomes a market exit
   const keep = fnBody('KeepBracket');
-  assert.equal((keep.match(/TimeInForce\.Gtc/g) || []).length, 2);
-  assert.match(keep, /"CB#" \+ br\.Tag \+ " stop"/);
-  assert.match(keep, /"CB#" \+ br\.Tag \+ " target"/);
-  assert.match(keep, /if \(br\.Dead \|\| filled <= br\.Covered\) return;/);
-  assert.match(fnBody('CancelLeftoverLegs'), /IsWorking\(o\.OrderState\) && IsChartBridgeLeg\(o\)/);
+  assert.match(keep, /if \(filled <= br\.Covered\) return;/);
+  assert.match(keep, /EffectivePosition\(br\.Account, br\.Instrument\)/);
+  assert.match(keep, /Bracket rec = Recover\(entry, out pairs\);\s*lock \(Sync\)/);   // Recover reads account orders outside Sync
+  assert.match(fnBody('CancelLeftoverLegs'), /IsWorking\(o\.OrderState\) \|\| !IsChartBridgeLeg\(o\)/);
+  assert.match(fnBody('CancelLeftoverLegs'), /now - born < YoungMs/);
   assert.match(fnBody('CheckLegs'), /if \(!Steady\(a, now\)\) continue;[\s\S]*IsChartBridgeLeg\(o\)/);
   assert.match(fnBody('CheckLegs'), /if \(now - was\.Value < SettleMs\) return;/);
   assert.match(ocode, /SettleMs = 4000;/);
@@ -161,7 +167,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.match(fnBody('AccountTradable'), /if \(!Enabled \|\| string\.IsNullOrEmpty\(name\) \|\| IsNeverTradable\(name\)\) return false;/);
   assert.match(fnBody('ReadConfig'), /name\.Contains\("\*"\)\) continue;/);
   assert.match(ocode, /DefaultMaxQty = 1\b/);
-  for (const f of ['PlaceOrder', 'Flatten']) assert.match(fnBody(f), /Account account = FindAccount\(accountName, out why\);\s*if \(account == null\) return why;/);
+  for (const f of ['PlaceOrderLocked', 'Flatten']) assert.match(fnBody(f), /Account account = FindAccount\(accountName, out why\);\s*if \(account == null\) return why;/);
   const find = fnBody('FindAccount');
   assert.match(find, /if \(!AccountTradable\(name\)\)/);
   assert.match(find, /if \(status != "Connected"\)/);
@@ -170,17 +176,22 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
     assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
-  // the cap is on the position: current position plus working orders on that side plus this order
-  assert.match(fnBody('PlaceOrder'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);
-  assert.match(fnBody('PlaceOrder'), /if \(\(stopTicks > 0 \|\| targetTicks > 0\) && reduces\) return/);
+  // the cap is on the position: current position (with fills not yet in it) plus orders that may fill on that side plus this order
+  assert.match(fnBody('PlaceOrderLocked'), /pos = EffectivePosition\(account, inst\)/);
+  assert.match(fnBody('PendingOrders'), /MayFill\(o\.OrderState\)/);
+  assert.match(fnBody('PendingOrders'), /foreach \(Order o in Ours\)/);
+  assert.match(fnBody('PlaceOrderLocked'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);
+  assert.match(fnBody('PlaceOrderLocked'), /if \(\(stopTicks > 0 \|\| targetTicks > 0\) && reduces\) return/);
   assert.match(fnBody('ChangeOrder'), /OrderType\.StopLimit\) return/);
-  assert.match(fnBody('PlaceOrder'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
+  assert.match(fnBody('PlaceOrderLocked'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
   assert.match(fnBody('ChangeOrder'), /PriceProblem\(/);
 });
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
-  assert.match(code, /if \(path == "\/session"\) \{ ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\); return; \}/);
+  assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
+  assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
+  assert.match(code, /ChartBridgeOrders\.UnwatchConnections\(\);/);
   assert.ok(!/Access-Control-Allow-Origin/.test(code + ocode), 'no CORS headers anywhere');
   const install = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install.ps1'), 'utf8');
   assert.match(install, /ChartBridgeOrders\.cs/);

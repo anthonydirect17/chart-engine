@@ -50,7 +50,23 @@ test('cancelAllIds: working orders for the account and root, one per OCO pair', 
     { id: 'f', state: 'working', account: 'DEMO-EVAL', root: 'MNQ', oco: null },
     { id: 'g', state: 'working', account: 'Sim101', root: 'ES', oco: null },
   ];
-  assert.deepEqual(OT.cancelAllIds(orders, 'Sim101', 'MNQ'), ['a', 'b', 'd']);
+  assert.deepEqual([...OT.cancelAllIds(orders, 'Sim101', 'MNQ', 0)], ['a', 'b', 'd']);
+});
+
+test('cancelAllIds: with a position open, orders on the closing side are kept (the stop and target)', () => {
+  const orders = [
+    { id: 'entry', state: 'working', account: 'Sim101', root: 'MNQ', side: 'buy', oco: null },
+    { id: 'stop', state: 'working', account: 'Sim101', root: 'MNQ', side: 'sell', role: 'stop', oco: 'O1' },
+    { id: 'target', state: 'working', account: 'Sim101', root: 'MNQ', side: 'sell', role: 'target', oco: 'O1' },
+    { id: 'ntStop', state: 'working', account: 'Sim101', root: 'MNQ', side: 'sell', role: 'other', oco: null },
+  ];
+  const long = OT.cancelAllIds(orders, 'Sim101', 'MNQ', 2);
+  assert.deepEqual([...long], ['entry']);
+  assert.equal(long.kept, 3);
+  const short = OT.cancelAllIds(orders, 'Sim101', 'MNQ', -1);
+  assert.deepEqual([...short], ['stop', 'ntStop']);
+  assert.equal(short.kept, 1);
+  assert.deepEqual([...OT.cancelAllIds(orders, 'Sim101', 'MNQ', 0)], ['entry', 'stop', 'ntStop']);
 });
 
 test('orderEvent: one line per change worth showing', () => {

@@ -227,19 +227,42 @@ test('an OCO partner shrinks with a partial fill of its leg', async () => {
   assert.equal(stop.state, 'filled'); assert.equal(target.state, 'cancelled'); assert.equal(d.pos().qty, 0);
 });
 
-test('flat position cancels leftover legs; after Flatten a late entry fill gets no legs', async () => {
+test('flat position cancels leftover legs; after Flatten a late entry fill still gets its legs, with an alarm', async () => {
   const d = await makeDesk(); d.auth();
   d.order({ qty: 1, bracket: { stop: 8, target: 8 } });
   d.order({ side: 'sell', qty: 1 });                               // closed by hand: the legs are left over, then cancelled
   assert.equal(d.pos().qty, 0);
   assert.equal(d.working().length, 0);
-  d.order({ kind: 'limit', price: 25390, qty: 2, bracket: { stop: 8, target: 8 } });
+  d.order({ kind: 'limit', price: 25390, qty: 2, bracket: { stop: 8, target: 80 } });   // target above the market (25400), so it rests
   const entry = d.working()[0];
   d.act({ type: 'flatten', account: 'Sim101', root: 'MNQ' });
   entry.state = 'working';                                         // a fill that raced the cancel
+  d.take();
   d.desk.fill(entry, 1, 25390);
+  const out = d.take();
   assert.equal(d.pos().qty, 1);
-  assert.equal(d.working().filter(o => o.role !== 'entry').length, 0, 'no legs after flatten');
+  assert.deepEqual(d.working().filter(o => o.role !== 'entry').map(o => o.role).sort(), ['stop', 'target'], 'the open position is protected');
+  assert.ok(out.some(m => m.type === 'status' && m.level === 'error' && /AFTER Flatten/.test(m.text)), 'and the page is alarmed');
+});
+
+test('a stop level already passed when the fill lands becomes a market exit, with an alarm', async () => {
+  const d = await makeDesk(); d.auth();
+  d.order({ kind: 'limit', price: 25390, qty: 1, bracket: { stop: 8, target: 16 } });
+  const entry = d.working()[0];
+  d.desk.last.MNQ = 25387;                                          // price fell through the stop level (25388) first
+  d.take();
+  d.desk.fill(entry, 1, 25390);
+  const out = d.take();
+  assert.equal(d.working().filter(o => o.role === 'stop').length, 0, 'no stop placed through the market');
+  assert.equal(d.pos().qty, 0, 'the market exit closed it');
+  assert.ok(out.some(m => m.type === 'status' && m.level === 'error' && /already passed the stop level/.test(m.text)));
+});
+
+test('gate 5: a limit through the market is refused (it would fill at once)', async () => {
+  const d = await makeDesk(); d.auth();
+  assert.match(reasonOf(d.order({ kind: 'limit', price: 25401 })), /buy limit above the last price/);
+  assert.match(reasonOf(d.order({ side: 'sell', kind: 'limit', price: 25399 })), /sell limit below the last price/);
+  assert.equal(d.desk.orders.size, 0);
 });
 
 test('brackets: JSON whole numbers only, and only on an order that opens or adds', async () => {

@@ -87,26 +87,33 @@ the broker and the prop firm see NinjaTrader orders.
    other account is refused. Backtest and Playback accounts are never allowed. There is no wildcard.
    The account must also be **Connected** in NinjaTrader, and ChartBridge must be listening to its
    order events (it starts listening on the first order if it was not yet).
-3. **Size caps on the position.** `maxQty.MNQ = 5` style lines, per instrument root; default **1** for
-   any root without a line. The cap limits what the position could become: the current position, plus
-   every working order on the same side (orders placed in NinjaTrader and bracket legs too; orders that
-   share an OCO id count once, at the largest), plus the new order. Selling out of a long, or buying
-   back a short, is always within the cap.
+3. **Size caps on the order and the position.** `maxQty.MNQ = 5` style lines, per instrument root;
+   default **1** for any root without a line. No single order may exceed the cap, and the cap limits what
+   the position could become: the current position (including fills NinjaTrader has reported that are
+   not in the position yet), plus every order on the same side that may still fill (working, part filled,
+   or with a cancel still pending; orders placed in NinjaTrader and bracket legs too; ChartBridge's own
+   orders from the moment they are sent; orders that share an OCO id count once, at the largest), plus
+   the new order. One order is checked and sent at a time, across all pages. Selling out of a long, or
+   buying back a short, is always within the cap.
 4. **This page only.** Order messages are accepted only on a WebSocket whose `Origin` header is
    ChartBridge's own page (`http://localhost:<port>`), and only after the page sends the session
    token it read from `GET /session` (served same-origin, no CORS headers, a new random token each
-   time ChartBridge starts). Other web pages in the browser, and The Desk, stay read only. Every page
+   time ChartBridge starts; `/session` answers only when asked for as `localhost:<port>`). Other web pages
+   in the browser, and The Desk, stay read only. Every page
    ChartBridge serves carries `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
    'none'`, so no other site can show it in a frame and trick a click.
 5. **Price and tick checks.** Limit and stop prices must be on the instrument's tick grid and within
    200 ticks of the last price, and that last price must be under 300 seconds old; stop orders must be
-   on the right side of the market (a buy stop above, a sell stop below). Refused otherwise.
+   on the right side of the market (a buy stop above, a sell stop below), and so must limits (a buy
+   limit at or below the last price, a sell limit at or above: a limit through the market would fill at
+   once, which is a market order in disguise). The same checks apply when an order is moved. Refused
+   otherwise.
 6. **Instruments.** Only the roots ChartBridge serves (`roots`), on the contract it resolved. An order
    on any other contract is never sent to the page and cannot be moved or cancelled from it.
 7. **Rate limit.** At most 10 order actions per second per connection; more are refused.
-8. **Strict messages.** Only the keys in the table below; anything else (a misspelt `bracket`, say) is
-   refused, never ignored. `qty` and bracket ticks must be plain JSON whole numbers (no quotes, no
-   decimals, no exponent, at most 9 digits); `price` a plain decimal. No key may appear twice. No list
+8. **Strict messages.** Only the keys in the table below; anything else (a misspelt `bracket`, a key with
+   a space or a dash) is refused, never ignored. `qty` and bracket ticks must be plain JSON whole numbers
+   (no quotes, no decimals, no exponent, no leading zero, at most 9 digits); `price` a plain decimal. No key may appear twice. No list
    and no nested object except `bracket`, which must be an object (`"bracket": null` is refused).
    A WebSocket message over 64 KB closes the connection.
 
@@ -121,21 +128,37 @@ that would reduce the position it is refused.
 - **Placed per fill.** Each time the entry fills (all at once, or in parts), that increment gets its
   own stop and target for exactly that many contracts, priced from that increment's fill price, as an
   OCO pair (`oco` = `cb-<tag>-<filled so far>`). Legs are **GTC**. With only a stop or only a target,
-  the lone leg has no OCO id.
-- **Named for recovery.** The entry's order name carries the bracket (`CB#1a2b3c4d s8 t16`), and legs
-  are named `CB#1a2b3c4d stop` and `CB#1a2b3c4d target`. After a recompile or restart of ChartBridge
-  the bracket is rebuilt from these names, so later fills still get legs and earlier ones do not get
-  a second set.
+  the lone leg has no OCO id. Legs never cover more than the position holds in the entry's direction
+  beyond what ChartBridge's other legs already cover: contracts of a fill that closed an opposite
+  position (for example a bracketed sell limit that fills after Anthony went long elsewhere), or that
+  are already covered, get no legs, with a `status` `warn`.
+- **Stop level already passed.** If the stop price has already traded when the fill is reported (a
+  fast market, a late event), ChartBridge sends a market exit for that increment instead of a stop
+  through the market (which a broker rejects, and a rejected leg can take its OCO partner with it), and
+  raises a `status` `error`.
+- **Named for recovery.** The entry's order name carries the bracket (`CB#1a2b3c4d s8 t16`), and each
+  leg's name carries its fill increment: `CB#1a2b3c4d stop f2 q2 p24990.25` (the pair for the fill that
+  brought the entry to 2 filled, 2 contracts, filled at 24990.25); a market exit is
+  `CB#1a2b3c4d exit f2 q2 p24990.25`. After a recompile or restart of ChartBridge the bracket is rebuilt
+  from these names (covered contracts, their prices, and the working pairs), so later fills still get
+  legs at their own price and earlier ones do not get a second set.
+- **Nothing missed while stopped.** Any NinjaScript compile reloads the add-on, and an entry that fills
+  meanwhile sends no further update. At start, and in every legs check, every ChartBridge entry with
+  fills is checked, and legs that are missing are placed (never twice).
 - **Partner follows.** When one leg fills in part, its partner is shrunk to what is still open; when
   one fills in full, its partner is cancelled.
 - **Never opens a position.** When the position goes flat (and is still flat when checked, on a
-  connection that has been up for 30 seconds), ChartBridge's working legs on that contract are
-  cancelled. Every 2 seconds a check compares ChartBridge's legs with the position: legs on a flat or
-  opposite position are cancelled, and legs covering more contracts than the position are shrunk,
-  newest first. It acts only when the same position and legs have held for 4 seconds and the account
-  has been Connected for 30 seconds (a reconnect can show orders before positions), and says so with a
-  `status` `warn`. Orders not named `CB#` are never touched by it.
-- **Flatten wins.** After `flatten`, an entry that still fills late gets no new legs.
+  connection that has been up for 30 seconds), ChartBridge's working legs on that contract that are more
+  than 3 seconds old are cancelled, with a `status` `warn` (younger legs may belong to a new entry whose
+  position change has not landed yet; the legs check handles them). Every 2 seconds a check compares
+  ChartBridge's legs with the position: legs on a flat or opposite position are cancelled, and legs
+  covering more contracts than the position are shrunk, newest first. It acts only when the same
+  position and legs have held for 4 seconds and the account has been Connected for 30 seconds without a
+  break (a reconnect can show orders before positions; any NinjaTrader connection status event starts
+  the 30 seconds again, so a drop between two samples is not missed), and says so with a `status`
+  `warn`. Orders not named `CB#` are never touched by it.
+- **A late fill after Flatten is protected.** If an entry fills after `flatten` (its cancel lost the
+  race), it still gets its stop and target, and a `status` `error` says a position may be open.
 - **Upkeep never stops.** Bracket upkeep runs even if `trading` is switched off, so a position placed
   from the chart keeps its legs.
 - **Problems are loud.** A leg that NinjaTrader rejects raises a `status` `error` ("the position may have

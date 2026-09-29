@@ -511,6 +511,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     SubscribeMarketData();
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
                     WatchAccounts();
+                    ChartBridgeOrders.WatchConnections();
+                    try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } }, null, 10000, 10000);
                     pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } }, null, 2000, 2000);
                     listener = new HttpListener();
@@ -544,6 +546,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (MarketData md in Feeds) { try { md.Update -= OnMarketData; } catch (Exception) { } }
                 Feeds.Clear();
                 Unwatch();
+                ChartBridgeOrders.UnwatchConnections();
                 try { if (listener != null) { listener.Stop(); listener.Close(); } } catch (Exception) { }
                 listener = null;
                 Instruments.Clear();
@@ -612,7 +615,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return;
                 }
                 if (path == "/diag") { ServeText(ctx, DiagJson(), "application/json"); return; }
-                if (path == "/session") { ServeText(ctx, ChartBridgeOrders.SessionJson(), "application/json"); return; }   // same origin only: no CORS headers
+                if (path == "/session")   // same origin only: no CORS headers; and only when asked for by the localhost name (a second guard against DNS rebinding)
+                {
+                    if (ctx.Request.Headers["Host"] != "localhost:" + ChartBridgeConfig.Port) { ctx.Response.StatusCode = 403; ctx.Response.Close(); return; }
+                    ServeText(ctx, ChartBridgeOrders.SessionJson(), "application/json");
+                    return;
+                }
                 ServeFile(ctx, path);
             }
             catch (Exception ex)
