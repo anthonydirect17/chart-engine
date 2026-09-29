@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.5.3 (2026-09-29): the 1-hour Initial Balance, and a chart background of any color
+
+Page and engine only; nt8/ is unchanged and ChartBridge stays 0.3.2. Run `nt8\install.ps1` again after pulling (it
+copies the page and engine files); no NinjaTrader recompile. The Desk's embedded chart gets both with the new
+`src/chart-engine.js`, `live/live.js` and `live/live.css`.
+- **IB 1h** (Anthony): today's high and low from 9:30:00 up to 10:30:00 New York time (DST-aware, like the rest of
+  the chart). While forming, dashed lines "IBH (forming)" and "IBL (forming)" that move with each new high or low;
+  at 10:30:00 they lock, solid, "IBH" and "IBL", for the rest of the trading day (until 18:00). Before 9:30 nothing
+  is drawn for today, and only today's IB is ever drawn. Orchid `#E58BD2`, in the level style (full width, name at
+  the right edge, outlined tag on the price axis).
+- **The data rule:** the IB is always computed from the 1-minute bars the page holds in every view (NinjaTrader's
+  1-minute history, then bars built from the live trades), never from the bars on screen. Both edges are whole
+  minutes, so no 1-minute bar straddles 9:30 or 10:30, and each 1-minute bar's high and low are exactly those of
+  its trades: a trade at 10:29:59.999 counts, one at 10:30:00.000 does not, and the IB is the same on 1m, 15s,
+  30s, 5m, 15m, 1h and Range bars, from the backfill or live, after a reload, and in `ChartLive.mount`. A 15-minute,
+  1-hour or Range bar can run past 10:30, so bars as drawn would leak later prices; the engine's `initialBalance`
+  refuses bars that straddle an edge. Ticks are not used even when a view has them loaded: they give the same
+  numbers at whole-minute edges when NinjaTrader's minute and tick histories agree, and using them only in the tick
+  views would let the IB differ by a tick between Range and 1m when they do not.
+- **Nothing wrong is ever drawn:** with 1-minute history that starts after 9:30, no trades in the hour, a weekend or
+  an NYSE full-day holiday (the NYSE's rules, including observed days; Globex trades on most of them, but there is
+  no 9:30 open), no IB is drawn. The status line says why in its quiet grey ("IB 1h not shown: the history starts
+  after 9:30 ET, ...", or "no stock market session today (NYSE holiday)"); a weekend gets no note.
+- **Its own Indicators entry, IB 1h**, per pane, independent of Levels: on for the main pane (also a main pane saved
+  by an earlier version), off for a new pane (Anthony's rule). The count now reads out of 5.
+- **Background** in the Colors panel: presets Dark (the current `#080B10`, still the default), Black, Blue-grey
+  `#1B2433` and Light `#F5F7FA`, and a picker (and hex box) for any color. On the default ground every color is the
+  locked palette, key for key. On any other ground the engine builds the theme once per change (never per frame):
+  grid, axes, text and tags are mixed from the ground toward a light or dark ink, and every colored mark (candles,
+  VWAP, levels and their names, trade sides and results, drawings) keeps its hue and moves just enough to read
+  (text 4.5:1, strong text 7:1, lines 3:1, candle bodies 2.5:1). The live page's legend and the chart's frame follow
+  the ground; the toolbar stays dark. Saved with the other colors (`live-colors-v1`), one field at a time, per
+  storage prefix, so The Desk keeps its own and a second tab never undoes it.
+- `legible` now darkens on a light ground (it only ever lightened) and checks the color as drawn (whole RGB steps),
+  so text never lands a hair under 4.5:1. On dark grounds its results are unchanged except where the old rounding
+  fell just short (none of the presets or the defaults).
+- The Colors panel opens left-aligned when right-aligned would run off the page (the Colors button wraps to the
+  start of the toolbar's second row at 1440 px wide).
+- Engine API: `initialBalance`, `ibLines`, `rthDay`, `nyseHolidays`, `onGround`, `mix` in `util`;
+  `BACKGROUNDS` and `FLOOR`; `getLevels()`; the `ib` layer (a level with `layer: 'ib'`); `colors()` adds `text2`,
+  `legendBg` and `ground`; `getTheme()` returns the colors as chosen; `stats().themeBuilds`.
+- Tests: `test/ib.test.js` (forming, the lock at exactly 10:30:00 with trades at 10:29:59.999 and 10:30:00.000, four
+  DST dates, straddling 1-hour, 40-minute and Range bars, backfill against live at every load minute, missing
+  coverage, weekends, the 2026 NYSE holidays and early closes, the 2022, 2026 and 2027 calendars);
+  `test/theme.test.js` (the default is the 1.5.2 palette key for key, every role on the presets, white, mid-greys,
+  black and saturated grounds and 2,000 random ones, the IB layer on the canvas, the theme built once per change);
+  `npm run smoke:ib` (the page and a mounted chart on a chosen New York time: forming at 10:00 on every view and
+  after a reload, locked at 11:15, nothing at 9:00, on a Saturday or on Labor Day, the note with history from 9:45;
+  the four presets and picked white, mid-grey and red drawn and saved, a reload, a second tab, the embedded chart's
+  own key, Reset). The live, embed and settings smokes count five indicators.
+
 ## 1.5.2 (2026-09-29): ChartBridge 0.3.2, a PIN on ChartBridge's own page
 
 ChartBridge (nt8/), the standalone page and the engine file (`src/chart-engine.js`, its version, shown in the

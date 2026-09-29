@@ -8,8 +8,8 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.4.1 (same drawing code as 1.3.1; 1.4.0 and 1.4.1 changed the live page only: the
-  Indicators menu, NinjaTrader-style range bars and the leg summary).
+- **Engine version:** 1.5.3 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
+  default ground every color below is unchanged).
 
 ## Colors
 
@@ -39,10 +39,30 @@ pickers, saved per browser). Defaults:
 | Prior-day high/low | `#9AA8B8` |
 | Prior close | `#8392A5` |
 | Value area high/low | `#E0B45A` |
+| Initial Balance high/low (1.5.3) | `#E58BD2` orchid (the one level hue not used by anything else on the chart) |
 
 Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the Chart lab v0 look),
 House green / red (`#3DDC97` / `#FF7A7A`). Text drawn in a candle color is lightened until it reads
 at 4.5:1 on the ground; the last-price tag picks dark or white text for its fill.
+
+**Background (1.5.3, Anthony's request).** The Colors panel has a Background section: presets Dark `#080B10`
+(the default, the look above), Black `#000000`, Blue-grey `#1B2433` and Light `#F5F7FA`, and a picker for any
+color. On the default ground nothing changes. On any other ground the theme is rebuilt once per change (never per
+frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
+- Neutrals are mixed from the ground toward an ink (`#F2F6FA` on a dark ground, `#080B10` on a light one, picked
+  by `readableOn`): RTH ground 2.5%, grid 6%, axis borders 9%, divider and tag borders 20%, crosshair 40%, axis
+  text 57%, day labels 95%, crosshair tag fill 7%, tag text, exit dot and live dot the ink.
+- Each is then pushed further toward white or black until it reaches its floor: text 4.5:1, day labels and tag
+  text 7:1, crosshair and lines (VWAP, drawings) 3:1, candle bodies 2.5:1 (the default bear purple reads 2.77:1 on
+  the default ground), divider 1.4:1, grid 1.12:1. Colored marks (candles, VWAP, levels and their names, trade
+  sides, results) keep their hue and move only as far as needed; the colors as chosen are kept, so going back to
+  the default ground gives them back unchanged.
+- On a ground where even white or black cannot reach a floor (mid-grey, about `#777777`), the better of the two is
+  used: text then reads about 4.5:1 and the level colors all come out near white or black.
+- The live page's legend sits on the chart and follows it (`legendBg` is the ground at 78%, names in the tag text
+  color, secondary text `text2`). The toolbar, order bar and status line stay in the dark house style.
+- Saved per browser with the other colors (`live-colors-v1`, one field at a time, per storage prefix, so The
+  Desk's embedded chart keeps its own).
 
 ## Type
 
@@ -74,6 +94,26 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Each level gets an outlined tag on the price axis; tags push apart and grid labels hide under them.
   Tags never sit under the last-price tag: levels at or above the last price stack upward from it, the
   rest stack downward (since 1.2.1).
+- **Initial Balance (1.5.3):** today's high and low of the first hour of regular trading, 9:30:00 up to (not
+  including) 10:30:00 New York time, in the level style above (full width, 70%, name at the right edge, outlined
+  tag). While forming, dashed 6/4, named "IBH (forming)" and "IBL (forming)", moving with each new high or low. From
+  10:30:00 (by the clock, within half a second, trade or no trade) solid and named "IBH" and "IBL" for the rest of
+  the trading day, until the 18:00 session start. Before 9:30 nothing is drawn for today.
+  - **Data rule:** always the 1-minute bars (the live page's `D.m1`), whatever the view. Every view holds them
+    (NinjaTrader's 1-minute history, then bars built from the live trades), both window edges are whole minutes so
+    a 1-minute bar never straddles 9:30 or 10:30, and a 1-minute bar's high and low are exactly those of the trades
+    inside it. So a trade at 10:29:59.999 counts and one at 10:30:00.000 does not, and the values are the same on
+    1m, 15s, 30s, 5m, 15m, 1h and Range bars, live or after a reload, and in `ChartLive.mount`. The bars on screen
+    are never used: a 15-minute, 1-hour or Range bar can straddle 10:30 and carry later prices. The engine's
+    `initialBalance` also takes trades, and refuses ('inexact') any bars that straddle an edge.
+  - **Shown only when exact:** the 1-minute history must reach back before 9:30 (a bar ending at or before 9:30).
+    If it starts later, nothing is drawn and the status line says, in the quiet grey, "IB 1h not shown: the
+    history starts after 9:30 ET". No trades in the hour: nothing, with a note. Weekends and NYSE full-day holidays
+    (New Year's, MLK, Presidents', Good Friday, Memorial, Juneteenth, Independence, Labor, Thanksgiving,
+    Christmas, with the NYSE's observed-day rules) have no regular session: nothing, even though Globex trades;
+    a holiday gets a note, a weekend none. Early-close days have an IB.
+  - Its own Indicators entry, **IB 1h**, per pane: on for the main pane (also for a main pane saved before
+    1.5.3), off for a new pane. It is independent of Levels.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
@@ -125,11 +165,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
   Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
-- Live page (1.4.0): Volume, VWAP, Levels and Fills are turned on and off in one **Indicators** menu per chart
+- Live page (1.4.0): Volume, VWAP, Levels, Fills and IB 1h (1.5.3) are turned on and off in one **Indicators** menu per chart
   pane (a `.btn` with the count on, opening a panel on `#0B1016` with a `#2A3645` border, radius 12, the Colors
   panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
   the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane. The main pane
-  starts with today's set (all four on, or the 1.3 choices); a new pane starts with none on (Anthony, 2026-09-29).
+  starts with today's set (all five on, or the 1.3 choices plus IB 1h); a new pane starts with none on (Anthony, 2026-09-29).
 - PIN pad (live page, 1.5.2, ChartBridge 0.3.2; `live/pin.css`): a centered card on `#0B1016` with a `#2A3645`
   border, radius 12 and the Colors panel's shadow, over the `#080B10` ground (at 90% with a light blur over the
   chart for Change PIN). The logo and wordmark as in the toolbar, a 600 18px title, four 14 px dots (filled
@@ -141,9 +181,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   older way. See `docs/RANGE_BARS.md`.
   The select that picks between them has a visible **Range style** label (the toolbar's `.glabel` style, like
   "Bars"), 1.5.1.
-- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.2 · chart 1.5.2" (1.5.1).
+- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.2 · chart 1.5.3" (1.5.1).
 
 ## Honesty rules
 
 - Anything not real is labelled on the chart (legend "sample data", SIM pill).
-- Levels, VWAP and trade marks are computed from bars, never typed in.
+- Levels, VWAP, the Initial Balance and trade marks are computed from bars, never typed in. A level that cannot be
+  computed exactly is not drawn (the IB says why on the status line).
