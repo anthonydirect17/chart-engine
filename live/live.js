@@ -3,6 +3,8 @@
  * Protocol: nt8/PROTOCOL.md. With ChartBridge 0.2 (protocol v1) the page is read only. With protocol v2 it
  * can trade, but only after ChartBridge enables it (trading = true in config.txt, this page signed in with
  * the session token) and only while the Armed switch is on. Armed is off after every page load.
+ * ChartBridge 0.3.2 locks this page with a 4-digit PIN (live/pin.js): the page boot waits for the unlock, and only
+ * the page (never ChartLive.mount) passes the unlock on its WebSocket URL and GET /session.
  */
 /*
  * Saved choices (LivePrefs), in this browser's localStorage. This block also loads in Node, for tests with a
@@ -269,7 +271,8 @@ function markup(p, o) {
     </div>
 
     <span id="${p}colorsHost"></span>
-    <button type="button" class="btn" id="${p}resetBtn">Reset view</button>
+    <button type="button" class="btn" id="${p}resetBtn">Reset view</button>${o.pin ? `
+    <button type="button" class="btn" id="${p}pinBtn" title="Change this PC's ChartBridge PIN" hidden>PIN</button>` : ''}
   </header>
 ${obar}
   <div class="alert" id="${p}alertBar" role="alert" hidden>
@@ -333,13 +336,14 @@ function start(container, opt, PAGE) {
   const PANE = typeof opt.paneId === 'string' && opt.paneId ? opt.paneId : LP.MAIN_PANE;
   const PREFIX = typeof opt.storagePrefix === 'string' ? opt.storagePrefix : PAGE ? '' : EMBED_PREFIX;
   const onStatus = typeof opt.onStatus === 'function' ? opt.onStatus : null;
-  const WS_URL = opt.wsUrl || pageWsUrl();
+  const PIN = PAGE ? window.ChartBridgePin || null : null;   // the page's PIN lock (live/pin.js); never on a mounted chart
+  const WS_URL = opt.wsUrl || (PIN ? () => PIN.wsUrl(pageWsUrl()) : pageWsUrl());
   const p = PAGE ? '' : 'chart-live-' + (++mountCount) + '-';
 
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
   rootEl.className = 'chart-live';
-  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE });
+  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN });
   container.appendChild(rootEl);
   const els = {};
   for (const el of rootEl.querySelectorAll('[id]')) if (el.id.startsWith(p)) els[el.id.slice(p.length)] = el;
@@ -627,7 +631,7 @@ function start(container, opt, PAGE) {
     TR.signInStarted = true;
     if (FRAMED) { applyTrading({ enabled: false, reason: FRAMED_REASON }); return; }
     const sock = ws;
-    fetch('/session', { cache: 'no-store' })
+    fetch('/session', { cache: 'no-store', headers: PIN ? PIN.headers() : {} })
       .then(r => r.ok ? r.text() : Promise.reject(new Error('GET /session answered ' + r.status)))
       .then(body => {
         let token = null;
@@ -637,7 +641,18 @@ function start(container, opt, PAGE) {
       })
       .catch(e => {
         if (sock !== ws) return;
-        applyTrading({ enabled: false, reason: 'Could not sign in to ChartBridge (' + e.message + '). Open the chart from ChartBridge itself to trade.' });
+        if (!PIN) { applyTrading({ enabled: false, reason: 'Could not sign in to ChartBridge (' + e.message + '). Open the chart from ChartBridge itself to trade.' }); return; }
+        /* With the PIN (0.3.2): ask ChartBridge again in 2 s. Still unlocked: sign in again. The unlock is gone: drop
+           the connection, and the reconnect shows the PIN pad. */
+        applyTrading({ enabled: false, reason: 'Signing in to ChartBridge for orders again (' + e.message + ')' });
+        later(() => {
+          if (destroyed || sock !== ws) return;
+          PIN.check().then(st => {
+            if (destroyed || sock !== ws) return;
+            if (st === 'none' || st === 'set') { try { sock.close(); } catch (err) { /* already closed */ } }
+            else signIn();
+          });
+        }, 2000);
       });
   }
   function applyTrading(t) {
@@ -930,6 +945,7 @@ function start(container, opt, PAGE) {
   $('toolHline').addEventListener('click', () => chart.setTool(chart.getTool() === 'hline' ? null : 'hline'));
   $('clearDraw').addEventListener('click', () => chart.clearDrawings());
   $('resetBtn').addEventListener('click', () => chart.reset());
+  if (PIN) { $('pinBtn').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => PIN.openChange()); }
   syncButtons();
 
   /* order bar and order actions on the chart: only on a trading chart (a read-only one has no order bar at all) */
@@ -1049,5 +1065,9 @@ function start(container, opt, PAGE) {
 }
 
 window.ChartLive = { mount, EMBED_PREFIX };
-if (SCRIPT && SCRIPT.getAttribute('data-mount') === 'page') start(document.body, {}, true);
+/* The standalone page: behind ChartBridge's PIN (live/pin.js) when ChartBridge has one, nothing started until unlocked. */
+if (SCRIPT && SCRIPT.getAttribute('data-mount') === 'page') {
+  if (window.ChartBridgePin) window.ChartBridgePin.gate().then(() => start(document.body, {}, true));
+  else start(document.body, {}, true);
+}
 })();

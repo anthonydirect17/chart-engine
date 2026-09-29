@@ -80,6 +80,11 @@ Otherwise ChartBridge answers 403, the chart stays on CONNECTING and "Waiting fo
 reports `offline` after every try. A relay that connects from a server program sends no `Origin` header and
 needs no entry. Listed origins can read, never trade (see nt8/PROTOCOL.md, Network access).
 
+ChartBridge 0.3.2 locks its own page with a PIN (nt8/PROTOCOL.md, PIN). That lock is for ChartBridge's own
+origin only: a host listed in `allowOrigins` and a relay with no `Origin` connect exactly as before, and a
+mounted chart never loads `pin.js`, never shows the PIN pad and never asks `/pin/` anything. Do not vendor
+`live/pin.js` or `live/pin.css`; they belong to the standalone page.
+
 ## What the chart sends (for a relay)
 
 A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in between only has to pass them on:

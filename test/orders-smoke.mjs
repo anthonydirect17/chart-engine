@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -45,6 +46,7 @@ async function open(browser, port, width, height) {
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await page.goto(`http://localhost:${port}/live/`);
+  await unlockIfAsked(page);                                   // ChartBridge 0.3.2: the page's PIN (made-up test PIN)
   await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(600);
   return page;
@@ -56,7 +58,7 @@ const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePa
 try {
   /* ---------------- trading on: Sim101 and DEMO-EVAL, MNQ cap 5 */
   const PORT = BASE;
-  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--test-controls']);
+  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--test-controls', '--test-pin=' + TEST_PIN]);
   const page = await open(browser, PORT, 1440);
   const L = Math.round((await control(PORT, 'hold', { root: 'MNQ' })).last);    // hold the sample walk at a round price
   await control(PORT, 'price', { root: 'MNQ', p: L });
@@ -270,8 +272,9 @@ try {
   await page.click('#alertClose');
   check(await page.isHidden('#alertBar'), 'alert dismissed');
 
-  // reload: Armed is off again
+  // reload: Armed is off again (and the PIN is asked again: the unlock lives in memory only)
   await page.reload();
+  check(await unlockIfAsked(page), 'reload asks for the PIN again');
   await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
   await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading after reload');
   check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after reload');
@@ -294,7 +297,7 @@ try {
   await page.close();
 
   /* ---------------- trading off in config.txt: the bar says why, every control disabled */
-  await startBridge(PORT + 1, []);
+  await startBridge(PORT + 1, ['--test-pin=' + TEST_PIN]);
   const off = await open(browser, PORT + 1, 1440);
   await until(() => off.evaluate(() => !document.getElementById('obar').hidden), 'disabled bar visible');
   check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent('#oOff')), 'reason shown: ' + await off.textContent('#oOff'));
@@ -314,8 +317,10 @@ try {
   await host.waitForTimeout(2500);
   const blocked = host.frames().find(f => f !== host.mainFrame());
   check(!blocked || !(await blocked.evaluate(() => !!document.getElementById('connPill')).catch(() => false)), 'ChartBridge page loaded inside a frame');
-  await startBridge(PORT + 3, ['--trading', '--trade-accounts=Sim101', '--allow-frames']);
+  await startBridge(PORT + 3, ['--trading', '--trade-accounts=Sim101', '--allow-frames', '--test-pin=' + TEST_PIN]);
   await host.setContent(`<iframe id="f" src="http://localhost:${PORT + 3}/live/" style="width:1260px;height:860px;border:0"></iframe>`);
+  const pinFrame = await until(async () => host.frames().find(x => x !== host.mainFrame() && /\/live\/$/.test(x.url())), 'framed page', 15000);
+  if (pinFrame) await unlockIfAsked(pinFrame).catch(e => fail('framed page PIN: ' + e.message));
   const fr = await until(async () => { const f = host.frames().find(x => x !== host.mainFrame()); return f && await f.evaluate(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE').catch(() => false) ? f : null; }, 'framed page loads with --allow-frames', 15000);
   if (fr) {
     await fr.waitForTimeout(800);

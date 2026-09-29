@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import http from 'node:http';
+import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -74,7 +75,8 @@ function spies() {
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
   /* ChartBridge offers trading here (protocol v2, trading on), and the WebSocket needs single-use tickets. */
-  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--tickets']);
+  // ChartBridge 0.3.2: a PIN is set on this bridge; the embedded chart must never ask for it or need it
+  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--tickets', '--test-pin=' + TEST_PIN]);
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
   await page.addInitScript(spies);
@@ -109,6 +111,8 @@ try {
   check(await page.evaluate(() => { const el = document.querySelector('#paneA .chart-live'); return !!el && [...el.querySelectorAll('[id]')].every(e => e.id.startsWith('chart-live-') || e.closest('.ce-theme')); }), 'every element id is prefixed per mount');
   check(await page.evaluate(() => window.__spy.listeners.size > 0 && [...window.__spy.listeners].every(k => /^(document|window) /.test(k))), 'listener spy sees the chart\'s own listeners: ' + await page.evaluate(() => [...window.__spy.listeners].map(k => k.split(' ').slice(0, 2).join(' ')).join(', ')));
   check(await page.evaluate(() => !document.getElementById('connPill') && !document.getElementById('chart')), 'none of the standalone page ids exist in the host');
+  check(await page.evaluate(() => !document.querySelector('.cb-pin') && typeof window.ChartBridgePin === 'undefined') && !requests.some(u => /\/pin\//.test(u)),
+    'PIN set on ChartBridge: the embedded chart shows no PIN pad, loads no pin.js, asks nothing of /pin/');
   check(await page.evaluate(() => document.body.getAttribute('style') === null && document.documentElement.getAttribute('style') === null && document.body.className === '' && document.documentElement.className === ''), 'no style or class put on html or body');
   check(await page.evaluate(() => !document.querySelector('#paneA .obar, #paneA .arm, #paneA [role="switch"], #paneA .pill.armed, #paneA .side-seg')), 'mounted with trading: true, still no order bar, no Armed switch, no ARMED pill');
   // Shift+click and a drag on the chart: nothing is sent, no order lines
@@ -268,6 +272,7 @@ try {
     sa.on('pageerror', e => fail('standalone pageerror: ' + e.message));
     await sa.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await sa.goto(`http://localhost:${PORT}/live/`);             // no ticket: the standalone page is refused by --tickets,
+    await unlockIfAsked(sa);                                     // (after its PIN, ChartBridge 0.3.2)
     await sa.waitForTimeout(300);                                // but its controls and storage work the same offline
     await sa.click('#symSeg >> text="NQ"'); await sa.click('#tfSeg >> text="Range"');
     await sa.fill('#rangeTicks', '40'); await sa.press('#rangeTicks', 'Enter');
@@ -284,7 +289,7 @@ try {
     await page.click('#paneA [aria-label="Instrument"] >> text="MES"');
     await page.click('#paneA .ce-theme-btn'); await page.click('#paneA .ce-preset[data-id="mint"]'); await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
-    await sa.reload(); await sa.waitForTimeout(500);
+    await sa.reload(); await unlockIfAsked(sa); await sa.waitForTimeout(500);
     const st = await sa.evaluate(() => ({ root: document.querySelector('#symSeg [aria-pressed="true"]').dataset.v, tf: document.querySelector('#tfSeg [aria-pressed="true"]').dataset.v, range: document.getElementById('rangeTicks').value, levels: window.liveChart.getLayers().levels, colors: localStorage.getItem('live-colors-v1') }));
     check(st.root === 'NQ' && st.tf === 'range' && st.range === '40' && st.levels === false && st.colors === null, 'standalone settings untouched by the embedded chart: ' + JSON.stringify(st));
     const keys = await page.evaluate(() => Object.keys(localStorage).sort());
@@ -333,10 +338,12 @@ try {
     });
     await new Promise(r => host.listen(HOST_PORT, '127.0.0.1', r));
     const origin = 'http://localhost:' + HOST_PORT;
-    await startBridge(PORT + 2, ['--allow-origins=' + origin]);           // lists the host
-    await startBridge(PORT + 3, ['--allow-origins=http://localhost:1']);  // lists someone else
+    await startBridge(PORT + 2, ['--allow-origins=' + origin, '--test-pin=' + TEST_PIN]);           // lists the host (and has a PIN)
+    await startBridge(PORT + 3, ['--allow-origins=http://localhost:1', '--test-pin=' + TEST_PIN]);  // lists someone else
     try {
       const p3 = await ctx.newPage();
+      const p3req = [];
+      p3.on('request', r => p3req.push(r.url()));
       p3.on('pageerror', e => fail('cross-origin pageerror: ' + e.message));
       await p3.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
       await p3.goto(origin + '/test/embed-host.html');
@@ -356,6 +363,7 @@ try {
       await until(() => p3.evaluate(() => window.__st.includes('live')), 'listed in allowOrigins: connects', 10000);
       const diag2 = await (await fetch(`http://127.0.0.1:${PORT + 2}/diag`)).json();
       check(await p3.evaluate(() => window.__a.chart.bars().length > 100) && diag2.network.refusedOrigin === 0, 'host origin in allowOrigins: live with bars, no refusals');
+      check(diag2.pin.set === true && !(await p3.$('.cb-pin')) && !p3req.some(u => /\/pin\//.test(u)), 'ChartBridge has a PIN set: the allowOrigins host is live with no PIN pad and no /pin/ request');
       await p3.evaluate(() => window.__a.destroy());
       await p3.close();
     } finally { host.close(); host.closeAllConnections(); }

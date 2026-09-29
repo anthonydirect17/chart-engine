@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.5.1
+ * chart-engine 1.5.2
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.5.1';
+const VERSION = '1.5.2';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */

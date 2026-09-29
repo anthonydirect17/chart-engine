@@ -1,13 +1,15 @@
-// ChartBridge 0.3.1 for NinjaTrader 8
+// ChartBridge 0.3.2 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
+// ChartBridge's own page is locked with a 4-digit PIN (ChartBridgePin.cs): nothing streams to it and it cannot
+// sign in for orders until it is unlocked.
 // READ ONLY by default. Order entry from the chart (Step 2) lives only in ChartBridgeOrders.cs and stays
 // off unless config.txt has "trading = true" and names the accounts in "tradeAccounts"; this file never
 // places, changes or cancels an order itself.
 // Protocol: nt8/PROTOCOL.md in https://github.com/anthonydirect17/chart-engine (MIT).
 //
-// Install: copy this file and ChartBridgeOrders.cs to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
+// Install: copy this file, ChartBridgeOrders.cs and ChartBridgePin.cs to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
 // Documents\NinjaTrader 8\ChartBridge\www\ (nt8\install.ps1 does both), then compile in the
 // NinjaScript Editor. Output from the add-on appears in the Output window (New > NinjaScript Output).
 //
@@ -585,6 +587,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     NoteRejected(text);
                     lock (Sync) more = PendingList.Count > 0;
                     if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
+                    lastError = "";   // /diag: no stale error once a send has gone through
                 }
                 catch (WebException wex)
                 {
@@ -635,7 +638,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.1";
+        public const string Version = "0.3.2";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -671,6 +674,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(ChartBridgeOrders.Enabled
                         ? "order entry is ON for " + ChartBridgeOrders.TradeAccounts.Count + " account(s): " + string.Join(", ", ChartBridgeOrders.TradeAccounts)
                         : "order entry is off (read only)");
+                    Log(ChartBridgePin.IsSet ? "ChartBridge's page is locked with a PIN (pin.txt)" : "no PIN is set yet: ChartBridge's page asks for one before it shows anything");
                     SubscribeMarketData();
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
                     WatchAccounts();
@@ -777,6 +781,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     string origin = ctx.Request.Headers["Origin"];
                     if (!ChartBridgeAccess.WsOriginAllowed(origin)) { ChartBridgeAccess.NoteRefusedOrigin(origin); Refuse(ctx); return; }
+                    if (!ChartBridgePin.WsUnlocked(origin, ctx.Request.QueryString["unlock"])) { Refuse(ctx); return; }   // own page: locked until the PIN (not logged: a locked page retries)
                     HttpListenerWebSocketContext wsc = await ctx.AcceptWebSocketAsync(null);
                     await RunClient(wsc.WebSocket, token, origin);
                     return;
@@ -785,9 +790,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (path == "/session")   // same origin only: no CORS headers; and only when asked for by the localhost name (a second guard against DNS rebinding)
                 {
                     if (ctx.Request.Headers["Host"] != "localhost:" + ChartBridgeConfig.Port) { ctx.Response.StatusCode = 403; ctx.Response.Close(); return; }
+                    if (!ChartBridgePin.TokenValid(ctx.Request.Headers[ChartBridgePin.Header])) { Refuse(ctx); return; }   // the order sign-in token only for an unlocked page
                     ServeText(ctx, ChartBridgeOrders.SessionJson(), "application/json");
                     return;
                 }
+                if (path.StartsWith("/pin/")) { ChartBridgePin.Serve(ctx, path); return; }   // POST only, own page only (ChartBridgePin.cs)
                 ServeFile(ctx, path);
             }
             catch (Exception ex)
@@ -820,10 +827,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { try { ctx.Response.Abort(); } catch (Exception) { } }
         }
 
-        private static void ServeText(HttpListenerContext ctx, string text, string type)
+        private static void ServeText(HttpListenerContext ctx, string text, string type) { ServeText(ctx, 200, text, type); }
+
+        public static void ServeText(HttpListenerContext ctx, int status, string text, string type)
         {
             byte[] body = Encoding.UTF8.GetBytes(text);
             HttpListenerResponse res = ctx.Response;
+            res.StatusCode = status;
             res.ContentType = type + "; charset=utf-8";
             res.AddHeader("Cache-Control", "no-store");
             NoFraming(res);
@@ -1350,6 +1360,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"lastPollUtcMs\":").Append(lastPollMs);
             b.Append(",\"clients\":").Append(Clients.Count);
             b.Append(",\"network\":").Append(ChartBridgeAccess.DiagJson());
+            b.Append(",\"pin\":").Append(ChartBridgePin.DiagJson());   // whether a PIN is set, nothing else
             b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());
             b.Append(",\"accounts\":[");
             List<Account> accounts;

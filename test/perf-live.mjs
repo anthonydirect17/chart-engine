@@ -16,11 +16,16 @@
 // chart's own frame callback (step and draw), long tasks, each live tick message (JSON, onTick, the bar builders,
 // chart update), GC pauses and layout from a Chromium trace, and heap growth. --profile adds a CPU profile (top
 // functions by self time); it slows the page, so its numbers are only for finding where the time goes.
+// ChartBridge 0.3.2's PIN: the fake bridge starts with a made-up test PIN, typed on the standalone page's pad before
+// the measurement (a page from an older --root has no pad and goes straight on). --embed connects with single-use
+// tickets, like The Desk's relay, which needs no ChartBridge PIN. A --root older than the PIN (no live/pin.js) gets a
+// bridge with --pin-off.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
+import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, d) => { const a = process.argv.slice(2).find(x => x === '--' + name || x.startsWith('--' + name + '=')); return a === undefined ? d : a.includes('=') ? a.slice(a.indexOf('=') + 1) : true; };
@@ -38,7 +43,7 @@ const HEADED = !!arg('headed', false), EMBED = !!arg('embed', false);   // a rea
 const SECOND = !!arg('second-tab', false), PROFILE = !!arg('profile', false), WARM = +arg('warm', 5);
 
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
-  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET], { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
 
 const settings = { root: 'NQ', tf: VIEW === 'm1' ? 'm1' : 'range', glide: 'smooth' };
@@ -98,8 +103,8 @@ try {
     const t0 = Date.now();
     if (EMBED) {
       await page.goto(`http://localhost:${PORT}/test/embed-host.html`);
-      await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: url, storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
-    } else await page.goto(`http://localhost:${PORT}/live/`);
+      await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: () => url + '?ticket=' + Math.random().toString(36).slice(2), storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
+    } else { await page.goto(`http://localhost:${PORT}/live/`); await unlockIfAsked(page, TEST_PIN, 120000); }
     await page.waitForFunction(() => { const el = document.querySelector('[id$="connPill"]'); return el && el.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
     return { page, loadMs: Date.now() - t0 };
   };

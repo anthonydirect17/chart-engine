@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.5.2 (2026-09-29): ChartBridge 0.3.2, a PIN on ChartBridge's own page
+
+ChartBridge (nt8/), the standalone page and the engine file (`src/chart-engine.js`, its version, shown in the
+legend). **This release needs a recompile:** run `nt8\install.ps1` again (it now also copies `ChartBridgePin.cs`,
+`live/pin.js` and `live/pin.css`, and the page and engine files), then compile in NinjaTrader (F5). A chart mounted
+with `ChartLive.mount` (The Desk) behaves as in 1.5.1. The first time the page opens
+on each PC, it asks for a PIN to be set; nothing streams to it until then.
+- **A 4-digit PIN on `http://localhost:8765/`** (Anthony's design, a kid lock): "Set a PIN" once per PC, then the
+  pad each time the page opens or reloads (mouse, touch or keyboard; the chart's look). Nothing streams and no
+  order bar shows until it is unlocked: ChartBridge refuses the page's WebSocket (403, before the upgrade) and
+  `GET /session` without the unlock token. The **PIN** button in the toolbar changes it (current PIN first).
+- **No lockout, ever.** A wrong PIN is refused and that is all: nothing is counted, delayed or blocked, so the
+  right PIN always works at once.
+- **Never thrown back to the PIN mid-trade.** Once unlocked, a page stays unlocked while open, also across a
+  ChartBridge restart (F5): the page holds an unlock token in memory (never in storage), an HMAC-SHA256 keyed
+  by a random secret in `pin.txt`, which a restarted ChartBridge checks from the file. The page asks for the
+  PIN again only when ChartBridge answers that the token no longer holds, never because ChartBridge is down.
+  Changing the PIN keeps open pages unlocked. Armed is still off after a reload or a drop.
+- **Stored:** only a salted PBKDF2-SHA256 hash (50,000 iterations, `Rfc2898DeriveBytes`; about 0.2 s per unlock
+  on Mono) and the secret, in `Documents\NinjaTrader 8\ChartBridge\pin.txt`, flushed to disk before it is
+  swapped in. **Forgotten PIN:** delete that file (NinjaTrader may stay open); the page asks for a new PIN on its
+  next open or reconnect, and old tokens stop working (this also revokes every open page). On a fresh PC,
+  whoever opens the page first sets the PIN.
+- **A damaged or locked pin.txt is never "no PIN"** (review B1): three states (missing, ok, broken). While it
+  cannot be read, open pages keep working from the last good copy, "Set a PIN" is never offered and the file is
+  never written over; with no good copy the PIN answers 503 and the page keeps its unlock and recovers by itself.
+  A page shown the pad again keeps its token and closes the pad by itself if the unlock holds again. A refused
+  `GET /session` is retried after a status check. A page that first met an older ChartBridge checks again on
+  every reconnect.
+- **Unchanged:** The Desk's Live tab (`allowOrigins`) and local programs with no Origin (The Desk's relay)
+  need no ChartBridge PIN; every order gate is as before. PIN endpoints (`POST /pin/status`, `set`, `unlock`,
+  `change`) take the own page only (the exact Origin check orders use), `Host` localhost, JSON of at most 256
+  bytes with only the named keys. The PIN and tokens are never logged; `/diag` shows only `pin.set`.
+- **/diag after a Desk outage** (from the trading PC's fill-queue test): `desk.lastError` is cleared once a
+  send to The Desk goes through, instead of showing the old error next to `lastSendFailed: false`.
+- Tests: the Mono harness runs ChartBridge's real server for the PIN (hashing checked against PBKDF2 directly,
+  set, change, 200 wrong PINs then the right one within a time bound, torn, empty and share-locked pin files, a stop and start keeping the page's token, the strict
+  endpoints, `/session` and the WebSocket gate, the forgotten-PIN recovery, nothing in the Output window), and
+  The Desk queue down and back up; source guards pin the PIN check before the upgrade and before `/session`,
+  no counters or delays, and no PIN or token in any log call. The fake bridge has the same PIN
+  (`test/fake-pin.mjs`; `--test-pin`, `--pin-file`), every smoke goes through it, and `npm run smoke:pin`
+  covers set, unlock, reload, a restart mid-session with a position open, change, a phone with touch, a 500 from
+  `/pin/status`, a refused `/session`, a torn pin file (also at a restart) and the forgotten PIN. `smoke:embed` checks the mounted chart shows no pad and asks nothing of `/pin/` with a PIN set.
 ## 1.5.1 (2026-09-29): Range bars smooth again
 
 Page and engine only; nt8/ is unchanged. Run `nt8\install.ps1` again after pulling (no NinjaTrader recompile).
