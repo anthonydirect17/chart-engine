@@ -78,3 +78,65 @@ test('a failed start does not leave timers or account subscriptions behind', () 
   const start = code.slice(code.indexOf('public static bool Start()'), code.indexOf('public static void Stop()'));
   assert.match(start, /catch \(Exception ex\)[\s\S]*pollTimer\.Dispose\(\)[\s\S]*Unwatch\(\);/);
 });
+
+// ---- Step 2: every order path lives in ChartBridgeOrders.cs, behind its gates
+const osrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeOrders.cs'), 'utf8');
+const ocode = osrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+const fnBody = name => {
+  const start = ocode.search(new RegExp('\\bstatic [\\w<>, ]+ ' + name + '\\('));
+  assert.ok(start >= 0, name + ' not found');
+  let i = ocode.indexOf('{', start), depth = 0;
+  for (let j = i; j < ocode.length; j++) { if (ocode[j] === '{') depth++; else if (ocode[j] === '}' && --depth === 0) return ocode.slice(start, j + 1); }
+  return ocode.slice(start);
+};
+
+test('order calls appear only in the five gated functions of ChartBridgeOrders.cs', () => {
+  const allowed = ['PlaceOrder', 'ChangeOrder', 'CancelOrder', 'Flatten', 'KeepBracket'];
+  let rest = ocode;
+  for (const f of allowed) rest = rest.replace(fnBody(f), '');
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
+    assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
+  assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
+});
+
+test('every order message passes the gate first; auth checks origin and token', () => {
+  const on = fnBody('OnMessage');
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*if \(why != null\) \{ Reject/);
+  const gate = fnBody('Gate');
+  assert.match(gate, /if \(!Enabled\) return/);
+  assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
+  assert.match(gate, /MaxActionsPerSecond/);
+  const auth = fnBody('Auth');
+  assert.match(auth, /OriginAllowed\(client\.Origin\)/);
+  assert.match(auth, /SlowEquals\(given, token\)/);
+  assert.match(fnBody('OriginAllowed'), /"http:\/\/localhost:" \+ ChartBridgeConfig\.Port/);
+});
+
+test('accounts: off by default, exact names only, never Backtest or Playback', () => {
+  assert.match(ocode, /public static bool Enabled;/);
+  assert.match(fnBody('ResetConfig'), /Enabled = false; TradeAccounts\.Clear\(\); MaxQty\.Clear\(\);/);
+  assert.match(fnBody('AccountTradable'), /if \(!Enabled \|\| string\.IsNullOrEmpty\(name\) \|\| IsNeverTradable\(name\)\) return false;/);
+  assert.match(fnBody('ReadConfig'), /name\.Contains\("\*"\)\) continue;/);
+  assert.match(ocode, /DefaultMaxQty = 1\b/);
+  for (const f of ['PlaceOrder', 'Flatten']) assert.match(fnBody(f), /Account account = FindAccount\(accountName\);\s*if \(account == null\) return/);
+  for (const f of ['ChangeOrder', 'CancelOrder']) assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
+  assert.match(fnBody('PlaceOrder'), /if \(qty > cap\) return/);
+  assert.match(fnBody('PlaceOrder'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
+  assert.match(fnBody('ChangeOrder'), /PriceProblem\(/);
+});
+
+test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
+  assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
+  assert.match(code, /if \(path == "\/session"\) \{ ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\); return; \}/);
+  assert.ok(!/Access-Control-Allow-Origin/.test(code + ocode), 'no CORS headers anywhere');
+  const install = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install.ps1'), 'utf8');
+  assert.match(install, /ChartBridgeOrders\.cs/);
+  const check = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'check.sh'), 'utf8');
+  assert.match(check, /ChartBridgeOrders\.cs/);
+});
+
+test('ChartBridgeOrders.cs is C# 5 too', () => {
+  assert.ok(!/\$"/.test(ocode), 'string interpolation');
+  assert.ok(!/\?\.\w/.test(ocode), 'null-conditional ?.');
+  assert.ok(!/\bnameof\(/.test(ocode), 'nameof');
+});

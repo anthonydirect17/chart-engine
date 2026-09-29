@@ -13,12 +13,13 @@ $www = Join-Path $nt 'ChartBridge\www'
 New-Item -ItemType Directory -Force -Path $addons, $www, (Join-Path $www 'src') | Out-Null
 
 Copy-Item (Join-Path $repo 'nt8\ChartBridge.cs') (Join-Path $addons 'ChartBridge.cs') -Force
+Copy-Item (Join-Path $repo 'nt8\ChartBridgeOrders.cs') (Join-Path $addons 'ChartBridgeOrders.cs') -Force   # order entry (off unless config.txt turns it on)
 Copy-Item (Join-Path $repo 'live\index.html') (Join-Path $www 'index.html') -Force
 Copy-Item (Join-Path $repo 'live\live.js') (Join-Path $www 'live.js') -Force
 Copy-Item (Join-Path $repo 'live\bar-builder.js') (Join-Path $www 'bar-builder.js') -Force
 Copy-Item (Join-Path $repo 'src\chart-engine.js') (Join-Path $www 'src\chart-engine.js') -Force
 
-Write-Host "ChartBridge.cs  -> $addons"
+Write-Host "ChartBridge.cs, ChartBridgeOrders.cs -> $addons"
 Write-Host "live page       -> $www"
 Write-Host ""
 Write-Host "Next: NinjaTrader > New > NinjaScript Editor > compile (F5)."

@@ -14,7 +14,8 @@
     "smoke": "node test/smoke.mjs",
     "smoke:live": "node test/live-smoke.mjs",
     "bridge": "node test/fake-bridge.mjs",
-    "check:nt8": "sh nt8/check/check.sh"
+    "check:nt8": "sh nt8/check/check.sh",
+    "check:orders": "sh nt8/check/orders.sh"
   },
   "devDependencies": {
     "playwright": "^1.56.1"
