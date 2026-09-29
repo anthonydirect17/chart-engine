@@ -35,6 +35,16 @@ test('background presets: the current dark (default), pure black, dark blue-grey
   assert.equal(U.buildTheme({ bg: '#F5F7FA' }).ground, 'light');
 });
 
+/* Pairs a trader must tell apart stay apart (review S1): bull and bear, buy and sell, profit and loss when they were
+   apart to begin with, and the IB high always the brighter of its pair, by a visible step. */
+function apart(bg, T, extra, ib) {
+  const src = Object.assign({}, CE.DEFAULT_THEME, extra || {});
+  for (const [a, b] of [['up', 'down'], ['long', 'short'], ['profit', 'loss']]) {
+    if (!U.distinct(src[a], src[b])) continue;
+    assert.ok(U.distinct(T[a], T[b]), bg + ' ' + a + ' ' + T[a] + ' and ' + b + ' ' + T[b] + ' merge (contrast ' + U.contrast(T[a], T[b]).toFixed(2) + ')');
+  }
+  assert.ok(U.luminance(ib[0]) > U.luminance(ib[1]) && U.contrast(ib[0], ib[1]) >= CE.PAIR.contrast - 0.01, bg + ' IB high ' + ib[0] + ' not brighter than low ' + ib[1]);
+}
 /* A color with alpha as it shows over the ground. */
 function over(color, bg) {
   const c = U.parseColor(color), g = U.parseColor(bg);
@@ -45,11 +55,16 @@ function over(color, bg) {
 function readable(bg, extra) {
   const T = U.buildTheme(Object.assign({ bg }, extra || {}));
   const pole = U.readableOn(bg) === '#FFFFFF' ? '#FFFFFF' : '#000000';
-  const best = U.contrast(pole, bg);
-  const need = (color, on, floor, what) => {
-    const c = U.contrast(over(color, on), on), want = Math.min(floor, best) - 0.02;
+  const best = U.contrast(pole, bg);                                    // neutrals and text move toward this end
+  const cw = U.contrast('#FFFFFF', bg), cb = U.contrast('#000000', bg), bestAny = Math.max(cw, cb);
+  const need = (color, on, floor, what, cap) => {
+    const c = U.contrast(over(color, on), on), want = Math.min(floor, cap === undefined ? best : cap) - 0.02;
     assert.ok(c >= want, bg + ' ' + what + ' ' + color + ' reads ' + c.toFixed(2) + ' < ' + want.toFixed(2));
   };
+  // a colored mark moves whichever way reads sooner; a pair (buy and sell, bull and bear, IB high and low) that
+  // would merge on a mid-grey ground splits toward white and black, each then reading at least min(floor, 3.5)
+  const mark = floor => Math.min(floor, bestAny);
+  const pair = floor => Math.min(cw, cb) >= floor ? floor : Math.min(floor, CE.PAIR.split, bestAny);
   need(T.axisText, bg, F.text, 'axis text');
   need(T.axisTextStrong, bg, F.strong, 'day labels');
   need(T.text2, bg, F.text, 'legend text');
@@ -59,12 +74,16 @@ function readable(bg, extra) {
   need(T.tagBorder, bg, F.divider, 'tag border');
   if (T.ground !== 'default') need(T.grid, bg, F.grid, 'grid');      // the default grid is the locked hairline
   else assert.ok(U.contrast(over(T.grid, bg), bg) > 1.05);
-  need(T.up, bg, F.candle, 'bull candle'); need(T.down, bg, F.candle, 'bear candle');
+  need(T.up, bg, F.candle, 'bull candle', pair(F.candle)); need(T.down, bg, F.candle, 'bear candle', pair(F.candle));
   need(T.upText, bg, F.text, 'bull text'); need(T.downText, bg, F.text, 'bear text');
-  need(T.vwap, bg, F.line, 'VWAP line'); need(T.vwapText, bg, F.text, 'VWAP text');
-  need(T.drawing, bg, F.line, 'drawings');
-  for (const k of ['long', 'short', 'profit', 'loss', 'exit', 'live']) need(T[k], bg, F.text, k);
-  for (const k in CE.LEVEL_COLORS) need(U.onGround(CE.LEVEL_COLORS[k], bg, F.text, T.to), bg, F.text, 'level ' + k);
+  need(T.vwap, bg, F.line, 'VWAP line', mark(F.line)); need(T.vwapText, bg, F.text, 'VWAP text');
+  need(T.drawing, bg, F.line, 'drawings', mark(F.line));
+  for (const k of ['long', 'short', 'profit', 'loss']) need(T[k], bg, F.text, k, pair(F.text));
+  for (const k of ['exit', 'live']) need(T[k], bg, F.text, k);
+  for (const k of ['prior', 'overnight', 'value', 'close']) need(U.markOnGround(CE.LEVEL_COLORS[k], bg, F.text, T.to), bg, F.text, 'level ' + k, mark(F.text));
+  const ib = T.ground === 'default' ? [CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow] : U.pairOnGround(CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow, bg, F.text, T.to, true);
+  need(ib[0], bg, F.text, 'IB high', pair(F.text)); need(ib[1], bg, F.text, 'IB low', pair(F.text));
+  apart(bg, T, extra, ib);
   // the last price tag: dark or white text on the candle color
   assert.ok(U.contrast(T.upOnTag, T.up) >= 3 && U.contrast(T.downOnTag, T.down) >= 3, bg + ' last price tag text');
   // the grid and the regular-hours ground stay subtle (a hairline, not a bar)
@@ -83,6 +102,13 @@ test('extremes: white, mid-greys, pure black and saturated colors', () => {
   // a ground the same color as the candles: the candles move off it
   const T = U.buildTheme({ bg: '#4B9CD3', up: '#4B9CD3' });
   assert.ok(U.contrast(T.up, '#4B9CD3') >= F.candle);
+});
+
+test('all 256 greys: every role readable, and buy/sell, bull/bear and the IB pair stay apart (review S1)', () => {
+  for (let v = 0; v < 256; v++) { const h = v.toString(16).padStart(2, '0').toUpperCase(); readable('#' + h + h + h); }
+  // the smoke's own mid-grey: buy and sell are now told apart by lightness
+  const T = U.buildTheme({ bg: '#767676' });
+  assert.ok(U.distinct(T.long, T.short) && U.distinct(T.up, T.down), JSON.stringify([T.long, T.short, T.up, T.down]));
 });
 
 test('a sweep of 2,000 random grounds (seeded): every role readable', () => {
@@ -112,12 +138,13 @@ test('buildTheme leaves its input alone, and chosen colors stay chosen (getTheme
 
 /* ---- the chart itself, on a stand-in canvas (as test/perf.test.js) */
 function stubChart(opts) {
-  const texts = [];
+  const texts = [], moves = [];
   const ctx = new Proxy({}, {
     get(t, k) {
       if (k in t) return t[k];
       if (k === 'measureText') return s => ({ width: String(s).length * 7 });
       if (k === 'fillText') return (s, x, y) => texts.push({ s: String(s), color: t.fillStyle, font: t.font });
+      if (k === 'moveTo') return (x, y) => moves.push({ x, y, color: t.strokeStyle });
       return () => {};
     },
     set(t, k, v) { t[k] = v; return true; },
@@ -143,7 +170,7 @@ function stubChart(opts) {
   const chart = E.create(element(), Object.assign({ clock: () => bars[bars.length - 1].t + 30 }, opts || {}));
   chart.setBars(bars);
   let ts = 1000;
-  return { E, chart, texts, frame() { texts.length = 0; const f = frameFn; frameFn = null; f(ts += 16); } };
+  return { E, chart, texts, moves, bars, frame() { texts.length = 0; moves.length = 0; const f = frameFn; frameFn = null; f(ts += 16); } };
 }
 
 test('chart: IB lines show with their own layer, not with Levels, and are shaded on a light ground', () => {
@@ -152,20 +179,24 @@ test('chart: IB lines show with their own layer, not with Levels, and are shaded
   const ib = E.util.ibLines({ state: 'forming', high: 102, low: 98 });
   chart.setLevels(lv.concat(ib));
   frame();
-  const names = () => texts.map(x => x.s).filter(s => /PDH|IB/.test(s));
-  assert.deepEqual(names().sort(), ['IBH (forming)', 'IBL (forming)', 'PDH']);
+  const names = () => texts.map(x => x.s.replace(/^ · /, '')).filter(s => /PDH|IB/.test(s));
+  assert.deepEqual(names().sort(), ['IBH', 'IBL', 'PDH']);
   chart.setLayers({ levels: false }); frame();
-  assert.deepEqual(names().sort(), ['IBH (forming)', 'IBL (forming)'], 'Levels off keeps the IB');
+  assert.deepEqual(names().sort(), ['IBH', 'IBL'], 'Levels off keeps the IB');
   chart.setLayers({ levels: true, ib: false }); frame();
   assert.deepEqual(names(), ['PDH'], 'IB off keeps the levels');
   chart.setLayers({ ib: true });
-  const ibColor = () => texts.find(x => x.s === 'IBH (forming)').color;
+  const color = name => texts.find(x => x.s.replace(/^ · /, '') === name).color;
   frame();
-  assert.equal(ibColor(), E.LEVEL_COLORS.ib, 'default ground: the level color as is');
-  chart.setTheme({ bg: '#FFFFFF' }); frame();
-  assert.ok(E.util.contrast(ibColor(), '#FFFFFF') >= 4.5, 'light ground: the IB name reads: ' + ibColor());
-  assert.equal(chart.getLevels().find(l => l.name === 'IBH (forming)').color, E.LEVEL_COLORS.ib, 'the level itself keeps its color');
-  assert.equal(chart.getTheme().bg, '#FFFFFF');
+  assert.equal(color('IBH'), E.LEVEL_COLORS.ibHigh, 'default ground: the IB high in the brighter orchid');
+  assert.equal(color('IBL'), E.LEVEL_COLORS.ibLow, 'default ground: the IB low in the base orchid');
+  for (const bg of ['#FFFFFF', '#F5F7FA', '#777777', '#1B2433']) {
+    chart.setTheme({ bg }); frame();
+    assert.ok(E.util.contrast(color('IBH'), bg) >= 3.48 && E.util.contrast(color('IBL'), bg) >= 3.48, bg + ': IB names read');
+    assert.ok(E.util.luminance(color('IBH')) > E.util.luminance(color('IBL')), bg + ': IBH brighter than IBL');
+  }
+  assert.equal(chart.getLevels().find(l => l.name === 'IBH').color, E.LEVEL_COLORS.ibHigh, 'the level itself keeps its color');
+  assert.equal(chart.getTheme().bg, '#1B2433');
 });
 
 test('chart: the theme is built once per change, never per frame', () => {
@@ -189,6 +220,46 @@ test('chart: every text drawn on a light ground reads on it (axis labels, level 
     const last = chart.bars()[chart.bars().length - 1];
     const drawnOnGround = texts.filter(x => x.s !== U.fmtPrice(last.c, 2) && !/^\d+:\d\d$/.test(x.s));   // not the last price tag and its countdown
     assert.ok(drawnOnGround.length > 10, 'texts drawn on ' + bg);
-    for (const x of drawnOnGround) assert.ok(U.contrast(x.color, bg) >= Math.min(4.5, best) - 0.02, bg + ': "' + x.s + '" in ' + x.color + ' reads ' + U.contrast(x.color, bg).toFixed(2));
+    const cap = Math.min(U.contrast('#FFFFFF', bg), U.contrast('#000000', bg)) >= 4.5 ? best : Math.min(CE.PAIR.split, best);   // a split pair (IB) on a mid ground
+    for (const x of drawnOnGround) assert.ok(U.contrast(x.color, bg) >= Math.min(4.5, cap) - 0.02, bg + ': "' + x.s + '" in ' + x.color + ' reads ' + U.contrast(x.color, bg).toFixed(2));
+  }
+});
+
+test('chart: the IB lines start at 9:30 (Anthony), the other levels run across the whole plot', () => {
+  const { E, chart, moves, bars, frame } = stubChart();
+  const t930 = bars[200].t;                                   // a bar well inside the view stands for 9:30
+  chart.setLevels([{ name: 'PDH', price: 104, color: E.LEVEL_COLORS.prior, dash: [6, 4] }].concat(E.util.ibLines({ state: 'locked', high: 102, low: 98, start: t930 })));
+  frame();                                                    // one frame: the next draws only if something changed
+  const cols = [E.LEVEL_COLORS.prior, E.LEVEL_COLORS.ibHigh, E.LEVEL_COLORS.ibLow];
+  const lineAt = price => moves.filter(m => cols.includes(m.color) && Math.abs(m.y - chart.priceToY(price)) < 1.5).sort((a, b) => a.x - b.x)[0];
+  assert.equal(lineAt(104).x, 0, 'PDH from the left edge');
+  const ibh = lineAt(102), ibl = lineAt(98);
+  assert.ok(ibh.x > 100 && Math.abs(ibh.x - ibl.x) < 0.01, 'IBH and IBL start at the 9:30 bar: ' + ibh.x);
+  // the 9:30 bar's left edge: the next bar's line starts one bar spacing later
+  chart.setLevels(E.util.ibLines({ state: 'locked', high: 102, low: 98, start: bars[201].t })); frame();
+  assert.ok(lineAt(102).x > ibh.x, 'a later start moves right');
+});
+
+test('light ground: the toolbar, menus and status line go light, text at the chart floors (Anthony)', () => {
+  assert.equal(U.chromeColors(U.buildTheme()), null, 'default ground: the page keeps its dark style');
+  for (const bg of ['#000000', '#1B2433', '#333333']) assert.equal(U.chromeColors(U.buildTheme({ bg })), null, bg + ' is dark: no change');
+  let s = 99;
+  const rnd = () => (s = (s * 48271) % 2147483647) / 2147483647;
+  const grounds = ['#F5F7FA', '#FFFFFF', '#E8E0C8', '#CFE3FF', '#B0B0B0', '#FFFF00', '#00FF00'];
+  while (grounds.length < 300) { const h = '#' + [0, 0, 0].map(() => Math.floor(160 + rnd() * 96).toString(16).padStart(2, '0')).join(''); if (U.buildTheme({ bg: h }).ground === 'light') grounds.push(h); }
+  for (const bg of grounds) {
+    const T = U.buildTheme({ bg }), v = U.chromeColors(T);
+    assert.ok(v, bg + ' light');
+    assert.equal(v['--bg'], T.bg);
+    for (const k of U.CHROME_VARS) assert.ok(k in v, k);
+    const on = (k, floor, surface) => { const c = U.contrast(v[k], surface); assert.ok(c >= floor - 0.02, bg + ' ' + k + ' ' + v[k] + ' on ' + surface + ' reads ' + c.toFixed(2)); };
+    for (const surface of [v['--bg'], v['--s2'], v['--s3']]) {
+      on('--text', F.strong, surface); on('--head', F.strong, surface);
+      on('--text2', F.text, surface); on('--text3', F.text, surface);
+      for (const k of ['--info', '--warn', '--loss', '--profit']) on(k, F.text, surface);
+    }
+    on('--crimson-word', F.text, v['--bg']);
+    on('--accent-text', F.text, v['--accent-tint']); on('--ce-tint-text', F.text, v['--ce-tint']);
+    on('--warn', F.text, v['--bg']);                            // the Armed switch: ground-colored text on warn
   }
 });

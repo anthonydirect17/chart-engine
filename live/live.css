@@ -5,15 +5,17 @@
  * The standalone page adds only its html and body basics (live/index.html).
  */
 .chart-live {
-  color-scheme: dark;
+  color-scheme: var(--scheme, dark);
   --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
   --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
   --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
   --crimson: #9F1239; --crimson-word: #E0445E;
   --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
-  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #E58BD2;
+  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8;
   /* The chart's ground and the legend on it follow the Colors panel's Background (1.5.3; set from the engine's
-     theme). These are the defaults: exactly the look before. The toolbar and status line stay dark. */
+     theme). These are the defaults: exactly the look before. On a light ground the page also sets the variables
+     above (and --panel, --scheme, --ce-*) from ChartEngine.util.chromeColors, so the toolbar, menus and status line
+     go light too (Anthony); on the dark grounds they stay in the house style. */
   --chart-bg: #080B10; --lg-bg: rgba(8, 11, 16, 0.78); --lg-head: #F2F6FA; --lg-text2: #9AA8B8; --lg-dim: #8392A5;
   --lg-buy: #3DDC97; --lg-sell: #FF7A7A;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -42,7 +44,7 @@
 .chart-live .ind-count { font: 500 11px var(--mono); color: var(--text3); }
 .chart-live .ind-caret { width: 6px; height: 6px; border-right: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3); transform: translateY(-2px) rotate(45deg); }
 .chart-live .ind-btn[aria-expanded="true"] { background: var(--s3); border-color: var(--accent-border); }
-.chart-live .ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; max-width: calc(100vw - 32px); box-sizing: border-box; background: #0B1016; border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.chart-live .ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; max-width: calc(100vw - 32px); box-sizing: border-box; background: var(--panel, #0B1016); border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; display: grid; gap: 2px; box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
 .chart-live .ind-row { display: flex; align-items: center; gap: 9px; font: 500 12px var(--sans); color: var(--text2); padding: 6px 8px; min-height: 32px; box-sizing: border-box; border-radius: 8px; cursor: pointer; }
 .chart-live .ind-row:hover { background: var(--s2); color: var(--text); }
 .chart-live .ind-row:has(input:checked) { color: var(--text); }

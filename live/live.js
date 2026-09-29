@@ -454,12 +454,13 @@ function start(container, opt, PAGE) {
   }
 
   /*
-   * The 1-hour Initial Balance (1.5.3): today's high and low from 9:30:00 up to 10:30:00 ET, dashed and "(forming)"
-   * until 10:30:00, then solid. Always from the 1-minute bars (D.m1), whatever the chart shows: every view holds
-   * them (history, then built from the live trades), a 1-minute bar never straddles 9:30 or 10:30, and its high and
-   * low are exactly those of the trades inside it, so the IB is the same on 1m, seconds, 15m, 1h and Range bars,
-   * live or after a reload, here and in a mounted chart. Nothing is drawn when it cannot be exact (the history
-   * starts after 9:30) or there is no regular session (weekend, NYSE holiday); the status line says which.
+   * The 1-hour Initial Balance (1.5.3): today's high and low from 9:30:00 up to 10:30:00 ET, "IBH" and "IBL" drawn
+   * from 9:30, long dashes until 10:30:00, then solid. Always from the 1-minute bars (D.m1), whatever the chart
+   * shows: every view holds them (history, then built from the live trades), a 1-minute bar never straddles 9:30 or
+   * 10:30, and its high and low are exactly those of the trades inside it, so the IB is the same on 1m, seconds,
+   * 15m, 1h and Range bars, live or after a reload, here and in a mounted chart. Nothing is drawn when it cannot be
+   * exact (no bar of today's session before 9:30, or a minute of the hour missing) or there is no regular session
+   * (weekend, NYSE holiday); the status line says which.
    * Run from updateLevels, on a trade inside the hour that makes a new high or low, and twice a second (the clock
    * crossing 9:30, 10:30 or 18:00). Levels are handed to the chart only when something changed.
    */
@@ -474,16 +475,19 @@ function start(container, opt, PAGE) {
     ibNote(ib);
   }
   const IB_NOTES = {
-    uncovered: 'IB 1h not shown: the history starts after 9:30 ET, so the first hour is incomplete.',
+    uncovered: 'IB 1h not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
+    gap: 'IB 1h not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong.',
     inexact: 'IB 1h not shown: the bars do not line up with 9:30 and 10:30 ET.',
-    empty: 'IB 1h not shown: no trades between 9:30 and 10:30 ET today.',
-    closed: 'IB 1h: no stock market session today (NYSE holiday).',
+    empty: 'IB 1h not shown: no trades yet between 9:30 and 10:30 ET.',
   };
   /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
   function ibNote(ib) {
     const el = $('ibNote'); if (!el) return;
     let text = ib && S.layers.ib ? IB_NOTES[ib.state] || '' : '';
-    if (ib && ib.state === 'closed') { const wd = new Date(ib.start * 1000).getUTCDay(); if (wd === 0 || wd === 6) text = ''; }   // a weekend needs no note
+    if (ib && S.layers.ib && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
+      const wd = new Date(ib.start * 1000).getUTCDay();
+      text = wd === 0 || wd === 6 ? '' : 'IB 1h: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
+    }
     el.textContent = text; el.hidden = !text;
   }
 
@@ -893,6 +897,10 @@ function start(container, opt, PAGE) {
       st.setProperty('--chart-bg', T.bg); st.setProperty('--lg-bg', T.legendBg); st.setProperty('--lg-head', T.tagText);
       st.setProperty('--lg-text2', T.text2); st.setProperty('--lg-dim', T.axisText); st.setProperty('--lg-buy', T.long); st.setProperty('--lg-sell', T.short);
       rootEl.dataset.ground = T.ground;
+      // a light ground takes the toolbar, menus and status line light too (Anthony, 1.5.3); dark grounds keep the house style
+      const chrome = U.chromeColors(T);
+      for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
+      st.setProperty('--ib-sw', chrome ? U.markOnGround(CE.LEVEL_COLORS.ibHigh, T.bg, CE.FLOOR.text, T.to) : CE.LEVEL_COLORS.ibHigh);
       legendKey = '';
     },
   });
@@ -1084,7 +1092,9 @@ function start(container, opt, PAGE) {
     $('fps').textContent = s.idle ? 'idle' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms/frame';
     $('ticksSeen').textContent = ticksSeen.toLocaleString() + ' live ticks';
     renderPositionInfo();
-    if (D.ready) updateIB(false);                  // the clock crossing 9:30, 10:30 or 18:00, with or without trades
+    // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
+    // since the drop hide the IB (a 'gap') rather than leave a stale one up
+    if (D.m1) updateIB(false);
   }, 500);
 
   if (document.fonts && document.fonts.load) {

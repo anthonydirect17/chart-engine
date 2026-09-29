@@ -39,7 +39,8 @@ pickers, saved per browser). Defaults:
 | Prior-day high/low | `#9AA8B8` |
 | Prior close | `#8392A5` |
 | Value area high/low | `#E0B45A` |
-| Initial Balance high/low (1.5.3) | `#E58BD2` orchid (the one level hue not used by anything else on the chart) |
+| Initial Balance high (1.5.3) | `#F5BDE8` bright orchid (Anthony: the high brighter than the low) |
+| Initial Balance low (1.5.3) | `#E58BD2` orchid, the base (the one level hue nothing else on the chart uses) |
 
 Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the Chart lab v0 look),
 House green / red (`#3DDC97` / `#FF7A7A`). Text drawn in a candle color is lightened until it reads
@@ -57,10 +58,23 @@ frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
   the default ground), divider 1.4:1, grid 1.12:1. Colored marks (candles, VWAP, levels and their names, trade
   sides, results) keep their hue and move only as far as needed; the colors as chosen are kept, so going back to
   the default ground gives them back unchanged.
-- On a ground where even white or black cannot reach a floor (mid-grey, about `#777777`), the better of the two is
-  used: text then reads about 4.5:1 and the level colors all come out near white or black.
+- A colored mark moves toward white or black, whichever reaches its floor with the smaller change, so it keeps as
+  much hue as it can (`markOnGround`).
+- Pairs a trader must tell apart stay apart on every ground (`pairOnGround`): bull and bear, buy and sell, profit and
+  loss, and the IB high and low (the high always the brighter, by at least 1.25:1). Apart means 1.25:1 between them
+  or an RGB distance of 60 (the defaults: buy and sell 219, bull and bear 121). If moving each on its own would bring
+  them together, the one farther from the ground is pushed further; if that cannot part them (a ground near
+  mid-grey, where nothing keeps its hue at 4.5:1), the lighter goes toward white and the darker toward black, each
+  reading at least 3.5:1 (the floor itself where the ground allows). On `#767676`: buy white, sell black, bull light
+  blue, bear dark purple.
+- On such a ground the other levels can come out the same color; their dash patterns and names tell them apart.
 - The live page's legend sits on the chart and follows it (`legendBg` is the ground at 78%, names in the tag text
-  color, secondary text `text2`). The toolbar, order bar and status line stay in the dark house style.
+  color, secondary text `text2`).
+- **A light ground takes the page light** (Anthony): the toolbar, order bar, Indicators menu, Colors button and panel,
+  and status line take their colors from `chromeColors(theme)`: the ground, raised surfaces 5% and 10% toward the
+  house near-black, borders 12% and 24%, text at 7:1 and secondary text, accents (deep purple `#6D28D9` on a light
+  purple tint), warn, info, buy and sell at 4.5:1, each on the darkest surface it sits on. On the default and dark
+  grounds the page keeps the dark house style.
 - Saved per browser with the other colors (`live-colors-v1`, one field at a time, per storage prefix, so The
   Desk's embedded chart keeps its own).
 
@@ -90,15 +104,17 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Times show in exchange time. Regular hours (9:30 to 16:00) get the lighter ground on bars under
   1 hour. 24/7 markets set the session start to midnight and switch the shading off.
 - **Levels:** full-width lines at 70% opacity (prior-day and overnight dashed 6/4, value area 3/4,
-  prior close dotted 2/3). Name at the right edge of the plot; names within 12 px merge ("VAL · PDL").
+  prior close dotted 2/3). Name at the right edge of the plot; names within 12 px merge ("VAL · PDL"), each name in
+  its own level's color (1.5.3).
   Each level gets an outlined tag on the price axis; tags push apart and grid labels hide under them.
   Tags never sit under the last-price tag: levels at or above the last price stack upward from it, the
   rest stack downward (since 1.2.1).
 - **Initial Balance (1.5.3):** today's high and low of the first hour of regular trading, 9:30:00 up to (not
-  including) 10:30:00 New York time, in the level style above (full width, 70%, name at the right edge, outlined
-  tag). While forming, dashed 6/4, named "IBH (forming)" and "IBL (forming)", moving with each new high or low. From
-  10:30:00 (by the clock, within half a second, trade or no trade) solid and named "IBH" and "IBL" for the rest of
-  the trading day, until the 18:00 session start. Before 9:30 nothing is drawn for today.
+  including) 10:30:00 New York time, named "IBH" and "IBL", in the level style above (70%, name at the right edge,
+  outlined tag) but drawn from the 9:30 bar to the right edge, not across the whole plot (Anthony). The high in the
+  brighter orchid. While forming, long dashes 12/5 (no other level uses them), moving with each new high or low.
+  From 10:30:00 (by the clock, within half a second, trade or no trade) solid for the rest of the trading day,
+  until the 18:00 session start. Before 9:30 nothing is drawn for today.
   - **Data rule:** always the 1-minute bars (the live page's `D.m1`), whatever the view. Every view holds them
     (NinjaTrader's 1-minute history, then bars built from the live trades), both window edges are whole minutes so
     a 1-minute bar never straddles 9:30 or 10:30, and a 1-minute bar's high and low are exactly those of the trades
@@ -106,12 +122,15 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     1m, 15s, 30s, 5m, 15m, 1h and Range bars, live or after a reload, and in `ChartLive.mount`. The bars on screen
     are never used: a 15-minute, 1-hour or Range bar can straddle 10:30 and carry later prices. The engine's
     `initialBalance` also takes trades, and refuses ('inexact') any bars that straddle an edge.
-  - **Shown only when exact:** the 1-minute history must reach back before 9:30 (a bar ending at or before 9:30).
-    If it starts later, nothing is drawn and the status line says, in the quiet grey, "IB 1h not shown: the
-    history starts after 9:30 ET". No trades in the hour: nothing, with a note. Weekends and NYSE full-day holidays
-    (New Year's, MLK, Presidents', Good Friday, Memorial, Juneteenth, Independence, Labor, Thanksgiving,
-    Christmas, with the NYSE's observed-day rules) have no regular session: nothing, even though Globex trades;
-    a holiday gets a note, a weekend none. Early-close days have an IB.
+  - **Shown only when exact:** the 1-minute bars must hold a bar from today's session (from 18:00) ending at or
+    before 9:30, and every minute from 9:30 to the one in progress (to 10:29 once locked). Otherwise nothing is
+    drawn and the status line says why in the quiet grey (the history does not reach back before 9:30, or minutes
+    are missing). This also covers data that stopped: while ChartBridge is unreachable the minutes since the drop
+    are missing, so the IB goes until the reconnect reloads the history. No trades in the hour: nothing, with a
+    note. Weekends and NYSE full-day holidays (New Year's, MLK, Presidents', Good Friday, Memorial, Juneteenth,
+    Independence, Labor, Thanksgiving, Christmas, with the NYSE's observed-day rules) have no regular session:
+    nothing, even though Globex trades; a holiday gets a note naming the day, a weekend none. Early-close days have
+    an IB. Not detectable from bars: a minute that has a bar but lost some trades.
   - Its own Indicators entry, **IB 1h**, per pane: on for the main pane (also for a main pane saved before
     1.5.3), off for a new pane. It is independent of Levels.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.

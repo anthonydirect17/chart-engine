@@ -161,16 +161,74 @@ function readableOn(fill) { return contrast(fill, '#080B10') >= contrast(fill, '
  * When even white or black cannot reach `min` (a mid-grey ground), it gives that end.
  */
 function legible(color, bg, min, toward) {
-  const target = min || 4.5; const c = parseColor(color), g = parseColor(bg); if (!c || !g) return color;
-  const to = (toward ? parseColor(toward).r > 127 : readableOn(g) === '#FFFFFF') ? 255 : 0;
-  for (let k = 0; k <= 1.0001; k += 0.05) {
-    const m = parseColor(toHex({ r: c.r + (to - c.r) * k, g: c.g + (to - c.g) * k, b: c.b + (to - c.b) * k }));   // as it will be drawn
-    if (contrast(m, g) >= target) return toHex(m);
+  const c = parseColor(color), g = parseColor(bg); if (!c || !g) return color;
+  const to = toward ? (parseColor(toward).r > 127 ? WHITE : BLACK) : readableOn(g) === '#FFFFFF' ? WHITE : BLACK;
+  return shift(c, g, min || 4.5, to).hex;
+}
+const WHITE = '#FFFFFF', BLACK = '#000000';
+/* `color` moved toward white or black in 5% steps until it reads at `min` on `bg`, checked as drawn (whole RGB
+   steps): { hex, k (how far it went), ok (whether it got there; else it is white or black) }. */
+function shift(color, bg, min, to, step) {
+  const c = typeof color === 'string' ? parseColor(color) : color, g = typeof bg === 'string' ? parseColor(bg) : bg;
+  const t = to === WHITE ? 255 : 0, dk = step || 0.05;
+  for (let k = 0; k <= 1.0001; k += dk) {
+    const m = parseColor(toHex({ r: c.r + (t - c.r) * k, g: c.g + (t - c.g) * k, b: c.b + (t - c.b) * k }));
+    if (contrast(m, g) >= min) return { hex: toHex(m), k, ok: true };
   }
-  return to ? '#FFFFFF' : '#000000';
+  return { hex: to, k: 1, ok: false };
 }
 /** `color` itself when it already reads at `min` on `bg`, else legible(color, bg, min). */
 function onGround(color, bg, min, toward) { const c = parseColor(color); return c && contrast(c, parseColor(bg)) >= min ? color : legible(color, bg, min, toward); }
+/**
+ * A colored mark on a chosen ground (1.5.3): the color itself when it reads at `min`, else moved toward white or
+ * black, whichever gets there with the smaller change (so it keeps as much of its hue as it can); when neither
+ * gets there, whichever end reads better.
+ */
+function markOnGround(color, bg, min, to, step) {
+  const c = parseColor(color), g = parseColor(bg);
+  if (!c || !g) return color;
+  if (contrast(c, g) >= min) return color;
+  const a = shift(c, g, min, to || WHITE, step), b = shift(c, g, min, (to || WHITE) === WHITE ? BLACK : WHITE, step);
+  if (a.ok && b.ok) return b.k < a.k ? b.hex : a.hex;
+  if (a.ok || b.ok) return a.ok ? a.hex : b.hex;
+  return contrast(parseColor(b.hex), g) > contrast(parseColor(a.hex), g) ? b.hex : a.hex;
+}
+const rgbDist = (a, b) => { const x = parseColor(a), y = parseColor(b); return Math.hypot(x.r - y.r, x.g - y.g, x.b - y.b); };
+/* Two colors a trader must tell apart (bull and bear, buy and sell, profit and loss, IB high and low): a visible
+   lightness step (1.25:1 between them) or a clear color difference (RGB distance 60; the default buy and sell
+   are 219 apart, bull and bear 121). */
+const PAIR = { contrast: 1.25, dist: 60, split: 3.5 };
+function distinct(a, b) { return contrast(a, b) >= PAIR.contrast || rgbDist(a, b) >= PAIR.dist; }
+/**
+ * A pair of marks on a chosen ground (1.5.3), each reading at `min`, that stay apart when they were apart to begin
+ * with. First each on its own (markOnGround). If that brings them together (a mid-grey ground sends both to white),
+ * the one that sits further from the ground is pushed further (a higher floor) until they part; if that cannot part
+ * them, the lighter one goes toward white and the darker toward black (each still reading at min(min, 4)). With
+ * `ordered`, the first must also end up lighter than the second (the IB high is the brighter line).
+ * Returns [a, b] as drawn.
+ */
+function pairOnGround(a, b, bg, min, to, ordered) {
+  const swap = !ordered && luminance(parseColor(a)) < luminance(parseColor(b));
+  const L = swap ? b : a, D = swap ? a : b;                       // L is (meant to be) the lighter one
+  const wanted = ordered || distinct(L, D);
+  const ok = (x, y) => (!wanted || distinct(x, y)) && (!ordered || (luminance(parseColor(x)) > luminance(parseColor(y)) && contrast(x, y) >= PAIR.contrast));
+  const out = (x, y) => swap ? [y, x] : [x, y];
+  let l = markOnGround(L, bg, min, to), d = markOnGround(D, bg, min, to);
+  if (ok(l, d)) return out(l, d);
+  l = markOnGround(L, bg, min, to, 0.01); d = markOnGround(D, bg, min, to, 0.01);   // in finer steps, no overshoot
+  if (ok(l, d)) return out(l, d);
+  const g = parseColor(bg), towardWhite = (to || WHITE) === WHITE;
+  for (let f = min * 1.04; f <= 21; f *= 1.04) {                   // push the far one (lighter on a dark ground)
+    const r = shift(parseColor(towardWhite ? L : D), g, f, to || WHITE, 0.01);
+    if (!r.ok) break;
+    if (towardWhite) l = r.hex; else d = r.hex;
+    if (ok(l, d)) return out(l, d);
+  }
+  const sl = shift(parseColor(L), g, min, WHITE, 0.01).hex, sd = shift(parseColor(D), g, min, BLACK, 0.01).hex;
+  const need = Math.min(min, PAIR.split) - 0.02;
+  if (contrast(sl, bg) >= need && contrast(sd, bg) >= need && ok(sl, sd)) return out(sl, sd);
+  return out(markOnGround(L, bg, min, to), markOnGround(D, bg, min, to));
+}
 /** Mix of two colors, k = 0 gives `a`, 1 gives `b`, as #RRGGBB. */
 function mix(a, b, k) {
   const x = parseColor(a), y = parseColor(b);
@@ -199,7 +257,8 @@ const PRESETS = [
   { id: 'mint', name: 'Mint / coral', up: '#4FD1A5', down: '#F0717A' },
   { id: 'house', name: 'House green / red', up: '#3DDC97', down: '#FF7A7A' },
 ];
-const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ib: '#E58BD2' };
+/* ibHigh / ibLow (1.5.3, Anthony): the IB high a brighter shade of the orchid base, the low the base itself. */
+const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ibHigh: '#F5BDE8', ibLow: '#E58BD2' };
 /* Chart grounds for the Colors panel (1.5.3). The first is the default and keeps the locked look exactly. */
 const BACKGROUNDS = [
   { id: 'dark', name: 'Dark', bg: '#080B10' },
@@ -246,9 +305,10 @@ function buildTheme(partial) {
     }
     if (sameColor(src.tagText, DEFAULT_THEME.tagText)) T.tagText = onGround(ink, T.tagFill, FLOOR.strong, to);
     T.text2 = onGround(mix(T.bg, ink, 0.65), T.bg, FLOOR.text, to);
-    T.up = onGround(T.up, T.bg, FLOOR.candle, to); T.down = onGround(T.down, T.bg, FLOOR.candle, to);
-    T.vwap = onGround(T.vwap, T.bg, FLOOR.line, to); T.drawing = onGround(T.drawing, T.bg, FLOOR.line, to);
-    for (const k of ['long', 'short', 'profit', 'loss']) T[k] = onGround(T[k], T.bg, FLOOR.text, to);
+    [T.up, T.down] = pairOnGround(T.up, T.down, T.bg, FLOOR.candle, to);
+    [T.long, T.short] = pairOnGround(T.long, T.short, T.bg, FLOOR.text, to);
+    [T.profit, T.loss] = pairOnGround(T.profit, T.loss, T.bg, FLOOR.text, to);
+    T.vwap = markOnGround(T.vwap, T.bg, FLOOR.line, to); T.drawing = markOnGround(T.drawing, T.bg, FLOOR.line, to);
   }
   T.upVol = rgba(T.up, T.volumeAlpha); T.downVol = rgba(T.down, T.volumeAlpha);
   T.upOnTag = readableOn(T.up); T.downOnTag = readableOn(T.down);
@@ -257,6 +317,40 @@ function buildTheme(partial) {
   T.to = to || '#FFFFFF';
   return T;
 }
+
+/**
+ * CSS colors for a page's own chrome (toolbar, menus, status line) on a light ground (1.5.3, Anthony: with a light
+ * chart the toolbar and status line go light too), keyed by the live page's CSS variable names; null on the default
+ * and dark grounds, where the page keeps its dark house style. Every text color reads at the chart's floors on the
+ * darkest surface it sits on (text 7:1, secondary text 4.5:1, accents 4.5:1). Built once per theme change.
+ */
+function chromeColors(T) {
+  if (!T || T.ground !== 'light') return null;
+  const bg = T.bg, ink = '#080B10';
+  const s2 = mix(bg, ink, 0.05), s3 = mix(bg, ink, 0.10);           // raised surfaces (buttons, hover)
+  const tint = mix(bg, '#6D28D9', 0.10), border = mix(bg, '#6D28D9', 0.45);
+  const on = (c, min, surface) => legible(c, surface || s3, min, BLACK);
+  const v = {
+    '--bg': bg, '--s2': s2, '--s3': s3, '--line': mix(bg, ink, 0.12), '--line-strong': mix(bg, ink, 0.24),
+    '--text': on(T.axisTextStrong, FLOOR.strong), '--head': on(T.tagText, FLOOR.strong),
+    '--text2': on(T.text2, FLOOR.text), '--text3': on(T.axisText, FLOOR.text),
+    '--accent-tint': tint, '--accent-border': border,
+    '--accent-text': on('#6D28D9', FLOOR.text, tint), '--accent-soft': on('#6D28D9', FLOOR.text, tint),
+    '--crimson-word': on('#E0445E', FLOOR.text, bg), '--info': on('#7FB2FF', FLOOR.text), '--warn': on('#E0B45A', FLOOR.text),
+    '--loss': on(T.loss, FLOOR.text), '--profit': on(T.profit, FLOOR.text), '--panel': bg,
+    '--scheme': 'light',
+  };
+  // the Colors button and panel (mountThemePanel reads these, falling back to the dark house colors)
+  Object.assign(v, {
+    '--ce-text': v['--text'], '--ce-text2': v['--text2'], '--ce-muted': v['--text3'], '--ce-s2': s2, '--ce-s3': s3,
+    '--ce-line': v['--line-strong'], '--ce-line-soft': v['--line'], '--ce-panel': bg, '--ce-accent': v['--accent-text'],
+    '--ce-tint': tint, '--ce-tint-border': border, '--ce-tint-text': on('#6D28D9', FLOOR.text, tint), '--ce-bad': v['--loss'],
+    '--ce-shadow': '0 12px 32px rgba(8,11,16,.18)', '--ce-scheme': 'light',
+  });
+  return v;
+}
+/** Every CSS variable chromeColors() can set, so a page can clear them when the ground goes dark again. */
+const CHROME_VARS = Object.keys(chromeColors({ ground: 'light', bg: '#F5F7FA', axisTextStrong: '#333333', tagText: '#111111', text2: '#555555', axisText: '#666666', loss: '#AA0000', profit: '#006600' }));
 
 /* ---------------------------------------------------------------- data helpers */
 /** Roll bars up into `barSeconds` buckets (bars must be sorted, finer than the target). */
@@ -388,13 +482,16 @@ function rthDay(t) {
  * minutes), and give exactly what the trades inside them give. Range bars have no fixed length: pass the 1-minute
  * bars or the trades instead.
  *
- * The data must reach back before 9:30 (a bar ending at or before 9:30, or a trade before it), or `opts.from`, the
- * time from which the data is known complete, must be at or before 9:30; otherwise the answer is 'uncovered'.
+ * Coverage (1.5.3 review): the data must reach back before 9:30 within today's session (a bar from the 18:00 start
+ * on that ends at or before 9:30, or a trade from today's session before 9:30), or `opts.from`, the time from which
+ * the data is known complete, must be at or before 9:30; otherwise 'uncovered'. Yesterday's bars do not count. With
+ * bars, every slot of the hour up to the one in progress must be there (9:30, 9:31, ... for 1-minute bars): one
+ * missing means trades may be missing, so the answer is 'gap'. (A hole in a list of trades cannot be seen.)
  *
  * Returns { state, high, low, start, end }: state 'closed' (a weekend or an NYSE holiday: no regular session),
  * 'before' (earlier than 9:30), 'forming' (9:30 to 10:30; high and low so far, null before the first trade),
- * 'locked' (from 10:30:00), 'empty' (locked with no trades in the hour), 'uncovered' or 'inexact'. high and low are
- * null in every state but 'forming' and 'locked'.
+ * 'locked' (from 10:30:00), 'empty' (no trades in the hour), 'uncovered', 'gap' or 'inexact'. high and low are null
+ * in every state but 'forming' and 'locked'.
  */
 function initialBalance(data, opts) {
   const o = Object.assign({ sessionStart: 18 * 3600, start: 34200, end: 37800, barSeconds: 60, from: undefined }, opts || {});
@@ -414,29 +511,41 @@ function initialBalance(data, opts) {
   let lo = 0, hi = n;
   while (lo < hi) { const mid = (lo + hi) >> 1; if (after(mid)) hi = mid; else lo = mid + 1; }
   if (lo < n && tAt(lo) < start) { res.state = 'inexact'; return res; }          // a bar across 9:30
-  const covered = o.from !== undefined ? o.from <= start : lo > 0;
+  const sessionFrom = o.sessionStart ? (day - 1) * DAY + o.sessionStart : day * DAY;
+  const covered = o.from !== undefined ? o.from <= start : lo > 0 && tAt(lo - 1) >= sessionFrom;
   if (!covered) { res.state = 'uncovered'; return res; }
-  let H = -Infinity, L = Infinity;
+  let H = -Infinity, L = Infinity, next = start, count = 0;
   for (let i = lo; i < n; i++) {
     const t = tAt(i);
-    if (t >= end) break;
+    if (t >= end || t > asOf) break;                                            // nothing after the hour, or after asOf
     if (t < start || t + w > end) { res.state = 'inexact'; return res; }
+    if (w > 0 && t > next) { res.state = 'gap'; return res; }                   // a missing bar inside the hour
+    if (w > 0) next = t + w;
     const h = tick ? list[i][1] : list[i].h, l = tick ? list[i][1] : list[i].l;
     if (h > H) H = h;
     if (l < L) L = l;
+    count++;
   }
   const locked = asOf >= end;
-  if (H === -Infinity) { res.state = locked ? 'empty' : 'forming'; return res; }
+  // every finished slot up to now must be there (the slot in progress may not have a trade yet)
+  if (w > 0 && count && next < Math.min(end, Math.floor((asOf - start) / w) * w + start)) { res.state = 'gap'; return res; }
+  if (H === -Infinity) { res.state = locked || asOf >= start + Math.max(w, 60) ? 'empty' : 'forming'; return res; }
   res.state = locked ? 'locked' : 'forming'; res.high = H; res.low = L;
   return res;
 }
-/** initialBalance() result -> level lines: dashed "IBH (forming)" / "IBL (forming)" while forming, solid once locked. */
+/* The forming IB's dash: long dashes, unlike the prior-day and overnight 6/4, value area 3/4 and prior close 2/3. */
+const IB_FORMING_DASH = [12, 5];
+/**
+ * initialBalance() result -> level lines "IBH" and "IBL", drawn from 9:30 (`from`) to the right edge: long dashes
+ * while forming, solid once locked. The high is the brighter orchid (Anthony, 1.5.3); `tone` keeps it the brighter
+ * one on any ground.
+ */
 function ibLines(ib) {
   if (!ib || ib.high === null || ib.low === null || (ib.state !== 'forming' && ib.state !== 'locked')) return [];
-  const forming = ib.state === 'forming', dash = forming ? [6, 4] : [], tail = forming ? ' (forming)' : '';
+  const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [];
   return [
-    { name: 'IBH' + tail, price: ib.high, color: LEVEL_COLORS.ib, dash, layer: 'ib' },
-    { name: 'IBL' + tail, price: ib.low, color: LEVEL_COLORS.ib, dash, layer: 'ib' },
+    { name: 'IBH', price: ib.high, color: LEVEL_COLORS.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
+    { name: 'IBL', price: ib.low, color: LEVEL_COLORS.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
   ];
 }
 
@@ -449,27 +558,28 @@ const CSS = `
 .ce-live:hover{color:#fff}
 .ce-live:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
 .ce-theme{position:relative;display:inline-block}
-.ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:#E6EDF5;background:#0F151D;border:1px solid #2A3645;border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
-.ce-theme-btn:hover{background:#141C26}
-.ce-theme-btn:focus-visible,.ce-theme-panel button:focus-visible,.ce-theme-panel input:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
+.ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5);background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.ce-theme-btn:hover{background:var(--ce-s3,#141C26)}
+.ce-theme-btn:focus-visible,.ce-theme-panel button:focus-visible,.ce-theme-panel input:focus-visible{outline:2px solid var(--ce-accent,#B69CFF);outline-offset:2px}
 .ce-sw2{display:inline-flex;gap:2px}.ce-sw2 i{width:8px;height:14px;border-radius:2px;display:block}
-.ce-theme-panel{position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);box-sizing:border-box;background:#0B1016;border:1px solid #2A3645;border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);font:13px "IBM Plex Sans",system-ui,sans-serif;color:#E6EDF5}
+.ce-theme-panel{color-scheme:var(--ce-scheme,dark);position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--ce-panel,#0B1016);border:1px solid var(--ce-line,#2A3645);border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:var(--ce-shadow,0 12px 32px rgba(0,0,0,.45));font:13px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5)}
 .ce-theme-panel[hidden]{display:none}
 .ce-theme-panel.ce-left{right:auto;left:0}
-.ce-lbl{font:600 10px "IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#8392A5}
+.ce-lbl{font:600 10px "IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--ce-muted,#8392A5)}
 .ce-presets{display:grid;gap:6px}
-.ce-preset{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:#0F151D;border:1px solid #18212C;border-radius:8px;padding:6px 8px;color:#E6EDF5;font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px}
-.ce-preset[aria-pressed="true"]{border-color:#3B2A6B;background:#1A1230;color:#D8CCFF}
+.ce-preset{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line-soft,#18212C);border-radius:8px;padding:6px 8px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px}
+.ce-preset[aria-pressed="true"]{border-color:var(--ce-tint-border,#3B2A6B);background:var(--ce-tint,#1A1230);color:var(--ce-tint-text,#D8CCFF)}
 .ce-row{display:grid;grid-template-columns:64px 36px minmax(0,1fr);gap:8px;align-items:center}
-.ce-row input[type=color]{width:36px;height:28px;padding:0;border:1px solid #2A3645;border-radius:6px;background:#0F151D;cursor:pointer}
-.ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:#0F151D;border:1px solid #2A3645;border-radius:6px;color:#E6EDF5;font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
-.ce-reset{justify-self:start;background:transparent;border:1px solid #2A3645;border-radius:8px;color:#9AA8B8;font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
-.ce-note{font-size:11px;color:#8392A5;line-height:1.4}
+.ce-row input[type=color]{width:36px;height:28px;padding:0;border:1px solid var(--ce-line,#2A3645);border-radius:6px;background:var(--ce-s2,#0F151D);cursor:pointer}
+.ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:6px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
+.ce-reset{justify-self:start;background:transparent;border:1px solid var(--ce-line,#2A3645);border-radius:8px;color:var(--ce-text2,#9AA8B8);font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
+.ce-note{font-size:11px;color:var(--ce-muted,#8392A5);line-height:1.4}
 .ce-grounds{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-.ce-ground{display:flex;align-items:center;gap:8px;background:#0F151D;border:1px solid #18212C;border-radius:8px;padding:5px 8px;color:#E6EDF5;font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
-.ce-ground[aria-pressed="true"]{border-color:#3B2A6B;background:#1A1230;color:#D8CCFF}
-.ce-ground:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
+.ce-ground{display:flex;align-items:center;gap:8px;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line-soft,#18212C);border-radius:8px;padding:5px 8px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
+.ce-ground[aria-pressed="true"]{border-color:var(--ce-tint-border,#3B2A6B);background:var(--ce-tint,#1A1230);color:var(--ce-tint-text,#D8CCFF)}
+.ce-ground:focus-visible{outline:2px solid var(--ce-accent,#B69CFF);outline-offset:2px}
 .ce-ground i{width:16px;height:16px;border-radius:4px;flex:none;box-shadow:inset 0 0 0 1px rgba(154,168,184,.45)}
+.ce-row input[type=text][aria-invalid="true"]{border-color:var(--ce-bad,#FF7A7A);box-shadow:inset 0 0 0 1px var(--ce-bad,#FF7A7A)}
 `;
 function injectStyle() {
   if (typeof document === 'undefined' || document.getElementById('ce-style')) return;
@@ -523,7 +633,11 @@ function create(container, options) {
      the rest with 'levels'. */
   let levelsShown = [];
   function shadeLevels() {
-    levelsShown = levels.map(L => Object.assign({}, L, { color: T.ground === 'default' ? L.color : onGround(L.color || T.axisText, T.bg, FLOOR.text, T.to) }));
+    levelsShown = levels.map(L => Object.assign({}, L, { color: T.ground === 'default' ? L.color : markOnGround(L.color || T.axisText, T.bg, FLOOR.text, T.to) }));
+    if (T.ground === 'default') return;
+    // the IB high stays the brighter of the pair on every ground
+    const hi = levelsShown.find(L => L.tone === 'high'), lo = levelsShown.find(L => L.tone === 'low');
+    if (hi && lo) [hi.color, lo.color] = pairOnGround(levels[levelsShown.indexOf(hi)].color, levels[levelsShown.indexOf(lo)].color, T.bg, FLOOR.text, T.to, true);
   }
   const levelOn = L => !!o.layers[L.layer || 'levels'];
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
@@ -840,13 +954,23 @@ function create(container, options) {
       const groups = [];
       for (const L of vis) {
         const y = crisp(yOf(L.price), lw), col = L.color || T.axisText;
+        // a level with `from` (the IB: 9:30) starts at that bar; the rest run across the whole plot
+        const x0 = L.from !== undefined && L.from !== null ? Math.max(0, xOf(idxOfTime(L.from)) - V.spacing / 2) : 0;
+        if (x0 >= plotW - 1) continue;
         ctx.strokeStyle = col; ctx.globalAlpha = 0.7; ctx.lineWidth = lw / dpr; ctx.setLineDash(L.dash || [6, 4]);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(plotW, y); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha = 1;
         const g = groups[groups.length - 1];
-        if (g && y - g.y < 12) g.names.push(L.name); else groups.push({ y, names: [L.name], color: col });
+        if (g && y - g.y < 12) g.parts.push([L.name, col]); else groups.push({ y, parts: [[L.name, col]] });
       }
-      for (const g of groups) { ctx.fillStyle = g.color; ctx.fillText(g.names.join(' · '), plotW - 8, g.y - 3); }
+      // merged names ("VAL · PDL") each in their own level's color, right-aligned at the plot's edge
+      for (const g of groups) {
+        let x = plotW - 8;
+        for (let k = g.parts.length - 1; k >= 0; k--) {
+          const [name, col] = g.parts[k], text = (k ? ' · ' : '') + name;
+          ctx.fillStyle = col; ctx.fillText(text, x, g.y - 3); x -= ctx.measureText(text).width;
+        }
+      }
     }
 
     // VWAP, broken at each session start
@@ -1569,10 +1693,21 @@ function mountThemePanel(chart, host, options) {
     store(saved); sync(); changed();
   }
   for (const inp of wrap.querySelectorAll('input[type=color]')) inp.addEventListener('input', () => apply({ [inp.dataset.k]: inp.value }));
-  for (const inp of wrap.querySelectorAll('input[data-hex]')) inp.addEventListener('input', () => {
-    let v = inp.value.trim(); if (v[0] !== '#') v = '#' + v;
-    if (/^#[0-9a-f]{6}$/i.test(v)) apply({ [inp.dataset.hex]: v });
-  });
+  /* Hex boxes: #RRGGBB, or the #RGB shorthand (1.5.3); the # may be left out. Anything else is marked invalid
+     (red border, aria-invalid) and not applied; leaving the box puts the current color back. */
+  const hexOf = text => {
+    let v = text.trim(); if (v[0] !== '#') v = '#' + v;
+    if (/^#[0-9a-f]{3}$/i.test(v)) v = '#' + v[1] + v[1] + v[2] + v[2] + v[3] + v[3];
+    return /^#[0-9a-f]{6}$/i.test(v) ? v.toUpperCase() : null;
+  };
+  for (const inp of wrap.querySelectorAll('input[data-hex]')) {
+    inp.addEventListener('input', () => {
+      const v = hexOf(inp.value);
+      if (v) { inp.removeAttribute('aria-invalid'); apply({ [inp.dataset.hex]: v }); }
+      else inp.setAttribute('aria-invalid', 'true');
+    });
+    inp.addEventListener('change', () => { inp.removeAttribute('aria-invalid'); inp.value = cur[inp.dataset.hex]; });
+  }
   wrap.querySelector('.ce-reset').addEventListener('click', () => apply(defaults));
   /* The panel opens under the button, right-aligned; when that would run off the left edge (the button wrapped to the
      start of a toolbar row), it is left-aligned instead (1.5.3). */
@@ -1593,10 +1728,10 @@ function mountThemePanel(chart, host, options) {
 }
 
 return {
-  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR,
+  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
-    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, mix, buildTheme,
+    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
   },

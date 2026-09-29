@@ -267,8 +267,10 @@ automatically so it stays readable.
 **Background (1.5.3):** the panel's Background presets (Dark, the default; Black; Blue-grey; Light) and a picker
 for any color set `theme.bg`. On the default ground every color is the locked palette. On any other ground
 `buildTheme` derives the grid, axes, text and tags from it and moves every colored mark (candles, VWAP, levels,
-trade and order colors) just enough to read, once per change, never per frame. `getTheme()` returns the colors as
-chosen; `colors()` the colors as drawn, including `text2`, `legendBg` and `ground` for a page's own legend.
+trade and order colors) just enough to read, once per change, never per frame, keeping bull and bear, buy and sell,
+and the IB high and low apart on every ground. `getTheme()` returns the colors as chosen; `colors()` the colors as
+drawn, including `text2`, `legendBg` and `ground` for a page's own legend; `util.chromeColors(colors())` gives the CSS
+colors for a page's toolbar on a light ground (null on dark ones), which the live page and the demo apply.
 
 ## Develop
 

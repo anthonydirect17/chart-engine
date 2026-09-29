@@ -33,18 +33,25 @@ function truth(list, day) {
 }
 const hl = ib => ({ high: ib.high, low: ib.low });
 
-test('forming: between 9:30 and 10:30 the IB follows the trades so far, dashed and "(forming)"', () => {
+test('forming: between 9:30 and 10:30 the IB follows the trades so far, in long dashes from 9:30', () => {
   const ticks = trades(at(8, 0), at(10, 0), 1.5, 11);
   const ib = U.initialBalance(minuteBars(ticks), { asOf: at(10, 0) });
   assert.equal(ib.state, 'forming');
   assert.deepEqual(hl(ib), truth(ticks));
   assert.equal(ib.start, at(9, 30)); assert.equal(ib.end, at(10, 30));
   const lines = U.ibLines(ib);
-  assert.deepEqual(lines.map(l => l.name), ['IBH (forming)', 'IBL (forming)']);
+  assert.deepEqual(lines.map(l => l.name), ['IBH', 'IBL'], 'no "(forming)" suffix: the dash says it (review)');
   assert.deepEqual(lines.map(l => l.price), [ib.high, ib.low]);
-  for (const l of lines) { assert.deepEqual(l.dash, [6, 4]); assert.equal(l.layer, 'ib'); assert.equal(l.color, CE.LEVEL_COLORS.ib); }
+  for (const l of lines) {
+    assert.deepEqual(l.dash, CE.IB_FORMING_DASH); assert.equal(l.layer, 'ib'); assert.equal(l.from, at(9, 30), 'drawn from 9:30 (Anthony)');
+    // a dash of its own: not the prior-day / overnight 6/4, the value area 3/4 or the prior close 2/3
+    for (const other of U.levelLines({ pdh: 1, onh: 1, vah: 1, pc: 1 })) assert.notDeepEqual(l.dash, other.dash);
+  }
+  assert.deepEqual(lines.map(l => l.color), [CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow]);
+  assert.ok(U.luminance(CE.LEVEL_COLORS.ibHigh) > U.luminance(CE.LEVEL_COLORS.ibLow), 'the IB high is the brighter shade (Anthony)');
+  assert.equal(CE.LEVEL_COLORS.ibLow, '#E58BD2', 'orchid stays the base');
   // a new high at 10:05 moves the forming line up
-  const more = ticks.concat([[at(10, 5), ib.high + 5, 1]]);
+  const more = ticks.concat(trades(at(10, 0), at(10, 5), 1.5, 12, ib.low + 1).map(x => [x[0], Math.max(ib.low, Math.min(x[1], ib.high)), x[2]]), [[at(10, 5), ib.high + 5, 1]]);
   const ib2 = U.initialBalance(minuteBars(more), { asOf: at(10, 5, 1) });
   assert.equal(ib2.high, ib.high + 5);
   assert.equal(ib2.low, ib.low);
@@ -100,7 +107,10 @@ test('DST: the window is 9:30 to 10:30 New York time on both sides of each chang
       [utc(9, 29, 59), 100], [utc(9, 30, 0), 50], [utc(10, 0, 0), 60], [utc(10, 29, 59.5), 70], [utc(10, 30, 0), 999],
       // 9:30 UTC-4 is 8:30 EST: a fixed offset would take this trade in during winter
       [Date.UTC(y, mo - 1, d, 13, 45) / 1000, off === 5 ? 1 : 55],
-    ].map(([u, p]) => [U.zoneSeconds(u), p, 1]).sort((a, b) => a[0] - b[0]);
+    ];
+    for (let u = utc(8, 0); u < utc(11, 0); u += 20) list.push([u + 7, 60]);    // a trade every 20 s: no missing minute
+    list.forEach(x => { x[0] = U.zoneSeconds(x[0]); x[2] = 1; });
+    list.sort((a, b) => a[0] - b[0]);
     const asOf = U.zoneSeconds(utc(11, 0));
     const ib = U.initialBalance(list, { asOf, barSeconds: 0 });
     assert.equal(ib.state, 'locked', y + '-' + mo + '-' + d);
@@ -130,12 +140,17 @@ test('a bar that straddles 9:30 or 10:30 never leaks prices from outside the hou
   assert.equal(U.initialBalance(b40, { asOf: at(11, 0), barSeconds: 2400 }).state, 'inexact');
   assert.equal(U.initialBalance(b40.slice(0, 2), { asOf: at(10, 5), barSeconds: 2400 }).state, 'forming');
   // a range bar opened at 10:25 and still open at 10:30:05 holds 110: bars as drawn would say IBH 110
-  const rt = [[at(9, 0), 60, 1], [at(10, 25), 95, 1], [at(10, 29), 100, 1], [at(10, 30, 5), 110, 1], [at(10, 31), 100, 1]];
+  const rt = [];
+  for (let m = 0; m < 85; m++) rt.push([at(9, 0) + m * 60, 60, 1]);                // 9:00 to 10:24 at 60, every minute
+  rt.push([at(10, 25), 95, 1]);                                                     // a new range bar opens at 10:25
+  for (let m = 26; m < 45; m++) rt.push([at(10, m, 20), 97, 1]);
+  rt.push([at(10, 29), 100, 1], [at(10, 30, 5), 110, 1]);
+  rt.sort((a, b) => a[0] - b[0]);
   const range = new BB.BarBuilder({ mode: 'range', rangeTicks: 80, rangeMode: 'traded', tick: 0.25, sessionStart: S });
   for (const [t, p, v] of rt) range.add(t, p, v);
   const drawn = range.bars.filter(b => b.t >= at(9, 30) && b.t < at(10, 30));
   assert.equal(drawn.length, 1); assert.equal(drawn[0].h, 110, 'the range bar from 10:25 straddles 10:30');
-  assert.deepEqual(hl(U.initialBalance(minuteBars(rt), { asOf: at(11, 0) })), { high: 100, low: 95 }, 'the 1-minute bars give the hour only');
+  assert.deepEqual(hl(U.initialBalance(minuteBars(rt), { asOf: at(11, 0) })), { high: 100, low: 60 }, 'the 1-minute bars give the hour only');
   // seconds bars (15 s and 30 s, built from ticks like the page does) agree too
   for (const sec of [15, 30]) {
     const b = new BB.BarBuilder({ mode: 'time', seconds: sec, sessionStart: S }); for (const [t, p, v] of list) b.add(t, p, v);
@@ -180,6 +195,35 @@ test('missing coverage: history starting after 9:30 shows nothing rather than a 
   // covered, but nothing traded in the hour
   const quiet = trades(at(8, 0), at(9, 20), 5, 2).concat(trades(at(10, 45), at(11, 0), 5, 2));
   assert.equal(U.initialBalance(minuteBars(quiet), { asOf: at(11, 0) }).state, 'empty');
+});
+
+test('coverage (review S2): yesterday plus today from 9:45, or a hole inside the hour, shows nothing, never a wrong IB', () => {
+  const y = et(2026, 9, 28, 0, 0), yesterday = trades(y + 9 * 3600, y + 16 * 3600, 5, 3);
+  // yesterday until 16:00, then today only from 9:45: yesterday's bars do not prove today's 9:30 is there
+  const late = minuteBars(yesterday.concat(trades(at(9, 45), at(11, 0), 5, 4)));
+  const a = U.initialBalance(late, { asOf: at(11, 0) });
+  assert.equal(a.state, 'uncovered'); assert.deepEqual(U.ibLines(a), []);
+  // today's overnight session covers 9:30: fine
+  assert.equal(U.initialBalance(minuteBars(yesterday.concat(trades(at(0, 30), at(11, 0), 5, 4))), { asOf: at(11, 0) }).state, 'locked');
+  // a hole from 9:40 to 10:10 inside the hour: 'gap', nothing drawn (the true IB could be anywhere in it)
+  const full = trades(at(8, 0), at(11, 0), 5, 6);
+  const holed = minuteBars(full.filter(x => x[0] < at(9, 40) || x[0] >= at(10, 10)));
+  for (const asOf of [at(10, 15), at(11, 0)]) {
+    const g = U.initialBalance(holed, { asOf });
+    assert.equal(g.state, 'gap', U.fmtHM(asOf)); assert.equal(g.high, null); assert.deepEqual(U.ibLines(g), []);
+  }
+  // before the hole the forming IB is fine; one missing minute at 9:30 itself is a gap too
+  assert.equal(U.initialBalance(holed, { asOf: at(9, 40) }).state, 'forming');
+  assert.equal(U.initialBalance(minuteBars(full.filter(x => x[0] < at(9, 30) || x[0] >= at(9, 31))), { asOf: at(10, 0) }).state, 'gap');
+  // the newest finished minutes must be there too: data that stops at 10:05 while the clock says 10:20 (a feed
+  // that went quiet or a page that lost its connection) is not a forming IB
+  const stopped = minuteBars(full.filter(x => x[0] < at(10, 5)));
+  assert.equal(U.initialBalance(stopped, { asOf: at(10, 5, 30) }).state, 'forming');
+  assert.equal(U.initialBalance(stopped, { asOf: at(10, 20) }).state, 'gap');
+  // the minute in progress may still be waiting for its first trade
+  assert.equal(U.initialBalance(minuteBars(full.filter(x => x[0] < at(10, 5))), { asOf: at(10, 5, 59) }).state, 'forming');
+  // trades have no slots: a list of trades is checked for coverage only
+  assert.equal(U.initialBalance(full.filter(x => x[0] < at(9, 40) || x[0] >= at(10, 10)), { asOf: at(11, 0), barSeconds: 0 }).state, 'locked');
 });
 
 test('weekends and NYSE holidays have no regular session, so no IB, even with Globex trades in the hour', () => {
