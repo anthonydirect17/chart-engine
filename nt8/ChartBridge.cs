@@ -1,4 +1,4 @@
-// ChartBridge 0.1.0 for NinjaTrader 8
+// ChartBridge 0.2.0 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only).
 // READ ONLY: this add-on never places, changes or cancels an order.
@@ -61,6 +61,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int DefaultDays = 5;
         public static int DefaultTickHours = 8;
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
+        public static bool PostFills = false;                       // send fills to The Desk
+        public static string DeskUrl = "http://localhost:8800";
 
         public static string Folder
         {
@@ -74,6 +76,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   days = 5
         //   tickHours = 8
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
+        //   postFills = true              (send every fill to The Desk; off by default)
+        //   deskUrl = http://localhost:8800
         public static void Load()
         {
             string file = Path.Combine(Folder, "config.txt");
@@ -92,6 +96,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "tickHours" && int.TryParse(val, out n)) DefaultTickHours = Math.Max(0, Math.Min(48, n));
                 else if (key == "roots") Roots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
+                else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
+                else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
             }
         }
     }
@@ -237,10 +243,77 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
     }
 
+    // ------------------------------------------------------------------ fills to The Desk
+    // Fills wait in a queue (mirrored to pending_fills.jsonl so a restart loses nothing) until
+    // The Desk accepts them. The Desk ignores duplicates by exec_id, so resending is safe.
+    public static class ChartBridgeDesk
+    {
+        private static readonly object Sync = new object();
+        private static readonly List<string> PendingList = new List<string>();
+        private static int sending;
+        private static bool lastFailed;
+        private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_fills.jsonl"); } }
+
+        public static void Load()
+        {
+            lock (Sync)
+            {
+                try { if (File.Exists(File_)) foreach (string line in File.ReadAllLines(File_)) if (line.Trim().Length > 0) PendingList.Add(line.Trim()); }
+                catch (Exception ex) { ChartBridgeServer.Log("could not read pending fills: " + ex.Message); }
+            }
+        }
+
+        private static void Save()
+        {
+            try { File.WriteAllLines(File_, PendingList.ToArray()); }
+            catch (Exception ex) { ChartBridgeServer.Log("could not save pending fills: " + ex.Message); }
+        }
+
+        public static void Queue(string fillJson) { lock (Sync) { PendingList.Add(fillJson); Save(); } }
+
+        public static void QueueToday(List<string> fills) { lock (Sync) { PendingList.AddRange(fills); Save(); } }
+
+        public static void Flush()
+        {
+            if (!ChartBridgeConfig.PostFills) return;
+            if (Interlocked.CompareExchange(ref sending, 1, 0) != 0) return;
+            string[] batch;
+            lock (Sync) batch = PendingList.Take(500).ToArray();
+            if (batch.Length == 0) { Interlocked.Exchange(ref sending, 0); return; }
+            Task.Run(async () =>
+            {
+                try
+                {
+                    string body = "[" + string.Join(",", batch) + "]";
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(ChartBridgeConfig.DeskUrl + "/api/fills");
+                    req.Method = "POST";
+                    req.ContentType = "application/json";
+                    req.Timeout = 5000;
+                    byte[] bytes = Encoding.UTF8.GetBytes(body);
+                    using (Stream s = await req.GetRequestStreamAsync()) await s.WriteAsync(bytes, 0, bytes.Length);
+                    using (HttpWebResponse res = (HttpWebResponse)await req.GetResponseAsync())
+                    {
+                        if ((int)res.StatusCode >= 200 && (int)res.StatusCode < 300)
+                        {
+                            lock (Sync) { PendingList.RemoveRange(0, Math.Min(batch.Length, PendingList.Count)); Save(); }
+                            if (lastFailed) { ChartBridgeServer.Log("The Desk is taking fills again."); lastFailed = false; }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (!lastFailed) ChartBridgeServer.Log("The Desk did not take fills (" + ex.Message + "); they are saved and will be retried every 10 seconds.");
+                    lastFailed = true;
+                }
+                finally { Interlocked.Exchange(ref sending, 0); }
+            });
+        }
+    }
+
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -274,7 +347,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ResolveInstruments();
                     SubscribeMarketData();
                     WatchAccounts();
-                    accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } }, null, 10000, 10000);
+                    accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } }, null, 10000, 10000);
+                    if (ChartBridgeConfig.PostFills) { ChartBridgeDesk.Load(); ChartBridgeDesk.QueueToday(TodaysExecutions()); ChartBridgeDesk.Flush(); }
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
@@ -739,6 +813,39 @@ namespace NinjaTrader.NinjaScript.AddOns
             return b.ToString();
         }
 
+        // One fill in The Desk's POST /api/fills shape.
+        private static string DeskFillJson(string account, Instrument inst, MarketPosition side, int qty, double price, DateTime time, string id, string orderId)
+        {
+            DateTime utc = ChartBridgeTime.ToUtc(time);
+            return "{\"source\":\"nt8\",\"account\":" + CbJson.Str(account) +
+                ",\"instrument\":" + CbJson.Str(inst != null ? inst.FullName : "") +
+                ",\"root\":" + CbJson.Str(inst != null ? inst.MasterInstrument.Name : "") +
+                ",\"side\":" + CbJson.Str(side == MarketPosition.Long ? "buy" : "sell") +
+                ",\"qty\":" + qty.ToString(CultureInfo.InvariantCulture) +
+                ",\"price\":" + CbJson.Num(price) +
+                ",\"time_utc_ms\":" + Math.Round(ChartBridgeTime.UtcMs(utc)).ToString(CultureInfo.InvariantCulture) +
+                ",\"exec_id\":" + CbJson.Str(id) +
+                ",\"order_id\":" + CbJson.Str(orderId) + "}";
+        }
+
+        private static List<string> TodaysExecutions()
+        {
+            List<string> list = new List<string>();
+            List<Account> accounts;
+            lock (Watched) accounts = Watched.ToList();
+            foreach (Account a in accounts)
+            {
+                try
+                {
+                    lock (a.Executions)
+                        foreach (Execution x in a.Executions)
+                            list.Add(DeskFillJson(a.Name, x.Instrument, x.MarketPosition, x.Quantity, x.Price, x.Time, x.ExecutionId, x.OrderId));
+                }
+                catch (Exception ex) { Log("could not read executions for " + a.Name + ": " + ex.Message); }
+            }
+            return list;
+        }
+
         private static string ExecsJson()
         {
             StringBuilder b = new StringBuilder("{\"type\":\"execs\",\"list\":[");
@@ -771,6 +878,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Account a = sender as Account;
                 string json = ExecJson(a != null ? a.Name : "", e.Instrument, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, true);
                 foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
+                if (ChartBridgeConfig.PostFills)
+                {
+                    ChartBridgeDesk.Queue(DeskFillJson(a != null ? a.Name : "", e.Instrument, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId));
+                    ChartBridgeDesk.Flush();
+                }
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }
         }
