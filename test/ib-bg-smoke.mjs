@@ -42,10 +42,10 @@ const saturday = bt => new Date(bt * 1000).getUTCDay() === 6;
 const holiday = bt => { const d = new Date(bt * 1000); return d.getUTCDay() > 0 && d.getUTCDay() < 6 && !U.rthDay(bt); };
 
 let port = BASE_PORT;
-async function startBridge(offset) {
+async function startBridge(offset, extra) {
   for (let tries = 0; tries < 6; tries++, port++) {
     const p = port;
-    const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--pin-off', '--test-controls', '--clock-offset=' + offset], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--pin-off', '--test-controls', '--clock-offset=' + offset].concat(extra || []), { stdio: ['ignore', 'pipe', 'pipe'] });
     let errText = '';
     b.stderr.on('data', d => { errText += d; });
     const ok = await new Promise(res => { b.stdout.once('data', () => res(true)); b.once('exit', () => res(false)); });
@@ -200,7 +200,7 @@ try {
   /* ---------------- background */
   {
     const off = offsetTo(11, 15, weekday);
-    const br = await startBridge(off);
+    const br = await startBridge(off, ['--trading', '--trade-accounts=Sim101']);   // trading on: the order bar and Armed
     const ctx = await context(off);
     const a = await openPage(ctx, `http://localhost:${br.port}/live/`);
     const b = await openPage(ctx, `http://localhost:${br.port}/live/`);      // a second tab, open before A changes anything
@@ -217,6 +217,58 @@ try {
     const base = await look(a);
     check(base.theme === '#080B10' && base.canvas === '#080B10' && base.legend === 'rgba(8, 11, 16, 0.78)', 'default ground unchanged: ' + JSON.stringify(base));
     await a.screenshot({ path: path.join(SHOTS, 'bg-dark-default.png') });
+    /* ---- the order bar looks exactly as in 1.5.2 on every ground, off and Armed (review 2, B1), and the page chrome
+       goes light only on clearly light grounds (9:1 against #080B10 or more) */
+    await a.waitForFunction(() => !document.getElementById('armBtn').disabled, null, { timeout: 15000 });
+    const sweep = await a.evaluate(({ grounds }) => {
+      const props = ['color', 'backgroundColor', 'borderTopColor', 'borderBottomColor', 'boxShadow', 'opacity', 'colorScheme', 'outlineColor'];
+      const els = () => [document.querySelector('.obar-ground'), ...document.querySelectorAll('#obar, #obar *')];
+      const snap = () => JSON.stringify(els().map(el => { const cs = getComputedStyle(el); return props.map(k => cs[k]); }));
+      const hex = document.querySelector('.ce-theme-panel input[data-hex="bg"]');
+      const setBg = v => { hex.value = v; hex.dispatchEvent(new Event('input', { bubbles: true })); };
+      const out = { off: [], armed: [], chrome: [], n: 0, lit: [] };
+      setBg('#080B10');
+      for (const armed of [false, true]) {
+        if (armed) document.getElementById('armBtn').click();
+        setBg('#080B10');
+        const base = snap();
+        if (armed) out.baseArmed = base; else out.baseOff = base;
+        for (const [g, light] of grounds) {
+          setBg(g); out.n++;
+          if (snap() !== base) out[armed ? 'armed' : 'off'].push(g);
+          const root = getComputedStyle(document.querySelector('.chart-live')).backgroundColor;
+          const isLight = root !== 'rgb(8, 11, 16)';
+          if (isLight !== light) out.chrome.push(g + (light ? ' should be light' : ' should stay dark'));
+          if (isLight) out.lit.push(g);
+        }
+      }
+      document.getElementById('armBtn').click();                                      // Armed off again
+      setBg('#080B10');
+      const buy = getComputedStyle(document.getElementById('buyMkt')), sell = getComputedStyle(document.getElementById('sellMkt')), bar = getComputedStyle(document.getElementById('obar'));
+      out.literal = { buy: buy.color, sell: sell.color, bar: bar.backgroundColor, ground: getComputedStyle(document.querySelector('.obar-ground')).backgroundColor };
+      return out;
+    }, { grounds: CE.BACKGROUNDS.map(g => g.bg).concat([...Array(256).keys()].map(v => { const h = v.toString(16).padStart(2, '0').toUpperCase(); return '#' + h + h + h; }))
+        .map(g => [g, !!U.chromeColors(U.buildTheme({ bg: g }))]) });
+    check(sweep.off.length === 0 && sweep.armed.length === 0, 'order bar computed styles identical to the default ground on the 4 presets and 256 greys, off and Armed (' + sweep.n + ' grounds): ' + JSON.stringify([sweep.off.slice(0, 5), sweep.armed.slice(0, 5)]));
+    check(sweep.literal.buy === 'rgb(61, 220, 151)' && sweep.literal.sell === 'rgb(255, 122, 122)' && sweep.literal.bar === 'rgb(15, 21, 29)' && sweep.literal.ground === 'rgb(8, 11, 16)',
+      'order bar in the 1.5.2 colors: Buy #3DDC97, Sell #FF7A7A, bar #0F151D: ' + JSON.stringify(sweep.literal));
+    check(sweep.chrome.length === 0 && !sweep.lit.includes('#888888') && sweep.lit.includes('#F5F7FA'), 'the page chrome goes light only at 9:1 or more against #080B10 (' + (sweep.lit.length / 2) + ' of the grounds): ' + sweep.chrome.slice(0, 5).join(', '));
+    // screenshots: the order bar Armed on #888888 and on Light; the fill markers on #888888
+    await a.click('#armBtn');
+    for (const [g, name] of [['#888888', '888888'], ['#F5F7FA', 'light']]) {
+      await a.evaluate(v => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = v; h.dispatchEvent(new Event('input', { bubbles: true })); }, g);
+      await a.mouse.move(700, 500); await a.waitForTimeout(250);
+      await a.screenshot({ path: path.join(SHOTS, 'obar-armed-' + name + '.png') });
+    }
+    await a.click('#armBtn');
+    await a.evaluate(() => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = '#888888'; h.dispatchEvent(new Event('input', { bubbles: true })); });
+    await a.waitForTimeout(250);
+    const marks = await a.evaluate(() => { const T = window.liveChart.colors(); return { long: T.long, short: T.short, ring: T.ring, halo: T.halo }; });
+    check(marks.long === '#3DDC97' && marks.short === '#FF7A7A' && marks.ring.long && U.contrast(marks.ring.long, '#888888') >= 3, 'fill markers on #888888 keep green and red, outlined in ' + marks.ring.long);
+    await a.screenshot({ path: path.join(SHOTS, 'fills-888888.png'), clip: { x: 1100, y: 250, width: 340, height: 300 } });
+    await a.evaluate(() => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = '#080B10'; h.dispatchEvent(new Event('input', { bubbles: true })); });
+    await a.waitForTimeout(200);
+    await a.screenshot({ path: path.join(SHOTS, 'merged-labels-default-dark.png'), clip: { x: 1100, y: 250, width: 340, height: 460 } });
     await a.click('.ce-theme-btn');
     check(await a.isVisible('.ce-grounds') && (await a.$$('.ce-ground')).length === 4, 'Colors panel: four background presets');
     await a.screenshot({ path: path.join(SHOTS, 'colors-panel-open.png') });
@@ -249,7 +301,7 @@ try {
     // mid-grey: buy and sell, bull and bear stay apart
     await a.fill('.ce-theme-panel input[data-hex="bg"]', '#767676'); await a.waitForTimeout(200);
     const grey = await a.evaluate(() => window.liveChart.colors());
-    check(U.distinct(grey.long, grey.short) && U.distinct(grey.up, grey.down), '#767676: buy ' + grey.long + ' / sell ' + grey.short + ', bull ' + grey.up + ' / bear ' + grey.down + ' stay apart');
+    check(grey.long === '#3DDC97' && grey.short === '#FF7A7A' && U.distinct(grey.up, grey.down), '#767676: buy and sell keep green and red (outline ' + grey.ring.long + '), bull ' + grey.up + ' / bear ' + grey.down + ' stay apart');
     await a.click('.ce-ground[data-bg="light"]'); await a.keyboard.press('Escape'); await a.waitForTimeout(200);
     // a light ground takes the toolbar, menus and status line light too, text at the floors
     const chrome = await a.evaluate(() => {
@@ -260,6 +312,7 @@ try {
     });
     const hexOf = rgbText => { const m = rgbText.match(/\d+/g).map(Number); return '#' + m.slice(0, 3).map(v => v.toString(16).padStart(2, '0')).join(''); };
     check(chrome.root === 'rgb(245, 247, 250)' && chrome.scheme === 'light', 'light ground: the page around the chart goes light: ' + chrome.root);
+    // but the IB forming screenshot's merged names stay one color, as in 1.5.2, checked in the unit tests
     check(U.contrast(hexOf(chrome.btnFg), hexOf(chrome.btnBg)) >= 7 && U.contrast(hexOf(chrome.colorsFg), hexOf(chrome.colorsBtn)) >= 7 && U.contrast(hexOf(chrome.tfFg), hexOf(chrome.tfBg)) >= 4.5 && U.contrast(hexOf(chrome.status), '#F5F7FA') >= 4.5,
       'light toolbar and status line read at the floors: ' + JSON.stringify(chrome));
     // tab B still shows its own (dark) ground and changes the bull color: A's light ground must survive

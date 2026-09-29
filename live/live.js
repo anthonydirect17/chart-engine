@@ -195,7 +195,7 @@ function markup(p, o) {
     </div>
 `;
   const obar = !o.trading ? '' : `
-  <section class="obar" id="${p}obar" aria-label="Order entry" hidden>
+  <div class="obar-ground"><section class="obar" id="${p}obar" aria-label="Order entry" hidden>
     <button type="button" class="arm" id="${p}armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every page load."><span class="knob" aria-hidden="true"></span><span id="${p}armText">Armed off</span></button>
     <label class="ofield"><span class="glabel">Account</span><select class="acct-sel" id="${p}oAcct" aria-label="Trade account"></select></label>
     <label class="ofield"><span class="glabel">Qty</span><input class="oin" id="${p}oQty" type="number" min="1" max="1" step="1" value="1" inputmode="numeric" aria-label="Order quantity"></label>
@@ -214,7 +214,7 @@ function markup(p, o) {
       <button type="button" class="btn" id="${p}cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
     <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim" id="${p}oOther"></span><span class="ooff" id="${p}oOff"></span></span>
-  </section>
+  </section></div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
   return `
@@ -476,7 +476,7 @@ function start(container, opt, PAGE) {
   }
   const IB_NOTES = {
     uncovered: 'IB 1h not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
-    gap: 'IB 1h not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong.',
+    gap: 'IB 1h not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong. A reload fetches the history again.',
     inexact: 'IB 1h not shown: the bars do not line up with 9:30 and 10:30 ET.',
     empty: 'IB 1h not shown: no trades yet between 9:30 and 10:30 ET.',
   };
@@ -896,6 +896,9 @@ function start(container, opt, PAGE) {
       // the legend sits on the chart, so it follows the chart's ground (1.5.3); the toolbar and status line stay dark
       st.setProperty('--chart-bg', T.bg); st.setProperty('--lg-bg', T.legendBg); st.setProperty('--lg-head', T.tagText);
       st.setProperty('--lg-text2', T.text2); st.setProperty('--lg-dim', T.axisText); st.setProperty('--lg-buy', T.long); st.setProperty('--lg-sell', T.short);
+      // buy and sell keep their green and red; where they do not read on the ground, a halo in the house ink (1.5.3)
+      const halo = ink => ink ? '0 0 2px ' + ink + ', 0 0 1px ' + ink + ', 0 0 1px ' + ink : 'none';
+      st.setProperty('--lg-buy-halo', halo(T.halo.long)); st.setProperty('--lg-sell-halo', halo(T.halo.short));
       rootEl.dataset.ground = T.ground;
       // a light ground takes the toolbar, menus and status line light too (Anthony, 1.5.3); dark grounds keep the house style
       const chrome = U.chromeColors(T);
