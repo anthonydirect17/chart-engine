@@ -19,7 +19,7 @@
  * Keys (versioned):
  *   live-settings-v2    { root, tf, glide, rangeMode }
  *   live-range-v2       { NQ: 40, ... } range bar size in ticks, per instrument root; only roots set by hand
- *   live-indicators-v1  { <paneId>: { volume, vwap, levels, fills } } indicators on each chart pane
+ *   live-indicators-v1  { <paneId>: { volume, vwap, levels, fills, ib } } indicators on each chart pane (ib: 1.5.3)
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
  * The 1.3 keys live-settings-v1 and live-range-v1 are read once, when the new keys do not exist yet, and left
  * in place.
@@ -41,11 +41,13 @@ const INDICATORS = [
   { id: 'vwap', name: 'VWAP' },
   { id: 'levels', name: 'Levels' },
   { id: 'fills', name: 'Fills' },
+  { id: 'ib', name: 'IB 1h' },
 ];
-/* What the page showed before any choice was made (1.3); the main pane starts here. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true };
+/* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
+   starts here. A main pane saved before 1.5.3 has no ib choice yet and gets this default too. */
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true };
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false };
 const MAIN_PANE = 'main';
 
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v1', bracket: 'live-bracket-v1' };
@@ -193,7 +195,7 @@ function markup(p, o) {
     </div>
 `;
   const obar = !o.trading ? '' : `
-  <section class="obar" id="${p}obar" aria-label="Order entry" hidden>
+  <div class="obar-ground"><section class="obar" id="${p}obar" aria-label="Order entry" hidden>
     <button type="button" class="arm" id="${p}armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every page load."><span class="knob" aria-hidden="true"></span><span id="${p}armText">Armed off</span></button>
     <label class="ofield"><span class="glabel">Account</span><select class="acct-sel" id="${p}oAcct" aria-label="Trade account"></select></label>
     <label class="ofield"><span class="glabel">Qty</span><input class="oin" id="${p}oQty" type="number" min="1" max="1" step="1" value="1" inputmode="numeric" aria-label="Order quantity"></label>
@@ -212,7 +214,7 @@ function markup(p, o) {
       <button type="button" class="btn" id="${p}cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
     <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim" id="${p}oOther"></span><span class="ooff" id="${p}oOff"></span></span>
-  </section>
+  </section></div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
   return `
@@ -249,6 +251,7 @@ function markup(p, o) {
           <label class="ind-row"><input type="checkbox" data-layer="vwap"><span class="sw" style="--sw: var(--vwap-sw)"></span>VWAP</label>
           <label class="ind-row"><input type="checkbox" data-layer="levels"><span class="sw" style="--sw: var(--info)"></span>Levels</label>
           <label class="ind-row"><input type="checkbox" data-layer="fills"><span class="sw" style="--sw: var(--profit)"></span>Fills</label>
+          <label class="ind-row"><input type="checkbox" data-layer="ib"><span class="sw" style="--sw: var(--ib-sw)"></span>IB 1h</label>
         </div>
       </div>
       <label class="visually-hidden" for="${p}fillAcct">Show fills from</label>
@@ -298,6 +301,7 @@ ${obar}
     <span>local <b id="${p}dLocal">-</b></span><span class="sep">·</span>
     <span id="${p}fps">-</span><span class="sep">·</span>
     <span id="${p}ticksSeen">0 ticks</span>
+    <span class="ibnote" id="${p}ibNote" hidden></span>
     <span class="msg" id="${p}statusMsg"></span>
     <span class="ro" id="${p}statusRo">Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.</span>
   </footer>
@@ -377,14 +381,15 @@ function start(container, opt, PAGE) {
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, trades: false },
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, trades: false },
     motion: GLIDE[S.glide], clock: etNow,
   });
 
   if (PAGE) window.liveChart = chart;  // for tests and the console; order actions still go through the checks below
 
   /* ---------------- per-instrument data */
-  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false };
+  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
+    lv: [], ib: null, ibKey: '' };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
@@ -398,6 +403,7 @@ function start(container, opt, PAGE) {
 
   function resetData(root) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
+    D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -442,8 +448,47 @@ function start(container, opt, PAGE) {
   function updateLevels() {
     if (!D.m1 || !D.m1.bars.length) return;
     const lv = U.sessionLevels(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, tick: D.tick });
-    chart.setLevels(U.levelLines(lv));
+    D.lv = U.levelLines(lv);
     D.day = U.tradeDay(etNow(), SESSION);
+    updateIB(true);
+  }
+
+  /*
+   * The 1-hour Initial Balance (1.5.3): today's high and low from 9:30:00 up to 10:30:00 ET, "IBH" and "IBL" drawn
+   * from 9:30, long dashes until 10:30:00, then solid. Always from the 1-minute bars (D.m1), whatever the chart
+   * shows: every view holds them (history, then built from the live trades), a 1-minute bar never straddles 9:30 or
+   * 10:30, and its high and low are exactly those of the trades inside it, so the IB is the same on 1m, seconds,
+   * 15m, 1h and Range bars, live or after a reload, here and in a mounted chart. Nothing is drawn when it cannot be
+   * exact (no bar of today's session before 9:30, or a minute of the hour missing) or there is no regular session
+   * (weekend, NYSE holiday); the status line says which.
+   * Run from updateLevels, on a trade inside the hour that makes a new high or low, and twice a second (the clock
+   * crossing 9:30, 10:30 or 18:00). Levels are handed to the chart only when something changed.
+   */
+  function updateIB(force) {
+    if (!D.m1) return;
+    const ib = U.initialBalance(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, barSeconds: 60 });
+    const key = ib.state + '|' + ib.high + '|' + ib.low + '|' + ib.start;
+    D.ib = ib;
+    if (!force && key === D.ibKey) return;
+    D.ibKey = key;
+    chart.setLevels(D.lv.concat(U.ibLines(ib)));
+    ibNote(ib);
+  }
+  const IB_NOTES = {
+    uncovered: 'IB 1h not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
+    gap: 'IB 1h not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong. A reload fetches the history again.',
+    inexact: 'IB 1h not shown: the bars do not line up with 9:30 and 10:30 ET.',
+    empty: 'IB 1h not shown: no trades yet between 9:30 and 10:30 ET.',
+  };
+  /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
+  function ibNote(ib) {
+    const el = $('ibNote'); if (!el) return;
+    let text = ib && S.layers.ib ? IB_NOTES[ib.state] || '' : '';
+    if (ib && S.layers.ib && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
+      const wd = new Date(ib.start * 1000).getUTCDay();
+      text = wd === 0 || wd === 6 ? '' : 'IB 1h: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
+    }
+    el.textContent = text; el.hidden = !text;
   }
 
   function onReady() {
@@ -479,6 +524,7 @@ function start(container, opt, PAGE) {
     pushDelay(delays.feed, m.rx - m.u);
     pushDelay(delays.local, now - m.rx);
     if (r1.isNew && U.tradeDay(t, SESSION) !== D.day) updateLevels();
+    else if (D.ib && t >= D.ib.start && t < D.ib.end && (D.ib.high === null || p > D.ib.high || p < D.ib.low)) updateIB(false);
   }
 
   function pushDelay(arr, v) { if (isFinite(v)) { arr.push(v); if (arr.length > 300) arr.shift(); } }
@@ -847,6 +893,17 @@ function start(container, opt, PAGE) {
     onChange: () => {
       const T = chart.colors(), st = rootEl.style;
       st.setProperty('--vwap-sw', T.vwapText); st.setProperty('--up-text', T.upText); st.setProperty('--down-text', T.downText);
+      // the legend sits on the chart, so it follows the chart's ground (1.5.3); the toolbar and status line stay dark
+      st.setProperty('--chart-bg', T.bg); st.setProperty('--lg-bg', T.legendBg); st.setProperty('--lg-head', T.tagText);
+      st.setProperty('--lg-text2', T.text2); st.setProperty('--lg-dim', T.axisText); st.setProperty('--lg-buy', T.long); st.setProperty('--lg-sell', T.short);
+      // buy and sell keep their green and red; where they do not read on the ground, a halo in the house ink (1.5.3)
+      const halo = ink => ink ? '0 0 2px ' + ink + ', 0 0 1px ' + ink + ', 0 0 1px ' + ink : 'none';
+      st.setProperty('--lg-buy-halo', halo(T.halo.long)); st.setProperty('--lg-sell-halo', halo(T.halo.short));
+      rootEl.dataset.ground = T.ground;
+      // a light ground takes the toolbar, menus and status line light too (Anthony, 1.5.3); dark grounds keep the house style
+      const chrome = U.chromeColors(T);
+      for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
+      st.setProperty('--ib-sw', chrome ? U.markOnGround(CE.LEVEL_COLORS.ibHigh, T.bg, CE.FLOOR.text, T.to) : CE.LEVEL_COLORS.ibHigh);
       legendKey = '';
     },
   });
@@ -924,6 +981,7 @@ function start(container, opt, PAGE) {
     if (!(k in S.layers)) return;
     S.layers[k] = !!v;
     if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: S.layers[k] });
+    if (k === 'ib') ibNote(D.ib);
     legendKey = ''; prefs.setIndicator(PANE, k, S.layers[k]); syncIndicators();
   }
   {
@@ -1037,6 +1095,9 @@ function start(container, opt, PAGE) {
     $('fps').textContent = s.idle ? 'idle' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms/frame';
     $('ticksSeen').textContent = ticksSeen.toLocaleString() + ' live ticks';
     renderPositionInfo();
+    // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
+    // since the drop hide the IB (a 'gap') rather than leave a stale one up
+    if (D.m1) updateIB(false);
   }, 500);
 
   if (document.fonts && document.fonts.load) {

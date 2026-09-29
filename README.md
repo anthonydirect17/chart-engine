@@ -31,7 +31,8 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
-On the page, the **Indicators** menu turns Volume, VWAP, Levels and Fills on and off, and the **account
+On the page, the **Indicators** menu turns Volume, VWAP, Levels, Fills and **IB 1h** (today's 1-hour Initial
+Balance, 1.5.3) on and off, and the **account
 dropdown** next to it picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
 built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_BARS.md`), or from traded
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
@@ -221,7 +222,7 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 | `barSeconds` | `60` | Bar length. Intraday and daily (`86400`) both work. |
 | `precision`, `tick` | `2`, `0.25` | Price decimals and the minimum price step. |
 | `session` | `{ start: 64800, rthStart: 34200, rthEnd: 57600 }` | Session start (18:00, the evening before) and regular hours for shading. Use `start: 0, rthStart: null` for 24/7 markets. |
-| `layers` | all on | `{ volume, vwap, levels, trades }` |
+| `layers` | all on | `{ volume, vwap, levels, trades, ib }`; a level with `layer: 'ib'` shows with `ib`, the rest with `levels` |
 | `theme` | Carolina blue / deep purple | Any key of `ChartEngine.DEFAULT_THEME`. |
 | `clock` | New York now | Returns the current time in bar-time seconds (drives the countdown). |
 | `rightOffset`, `barSpacing` | `8`, `7` | Empty bars past the last bar; starting bar width in px. |
@@ -231,7 +232,7 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 
 ### Methods
 
-`setBars(bars, { barSeconds })` · `update(bar)` · `setLevels(list)` · `setTrades(list)` ·
+`setBars(bars, { barSeconds })` · `update(bar)` · `setLevels(list)` · `getLevels()` · `setTrades(list)` ·
 `setLayers(partial)` · `setTheme(partial)` · `getTheme()` · `colors()` · `setPaused(bool)` ·
 `setBarSeconds(sec)` · `goLive()` · `reset()` · `isLive()` · `bars()` · `stats()` · `resize()` ·
 `destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)`
@@ -251,7 +252,10 @@ each message is reported at most once per 5 s), and with `null` at the next clea
 `aggregate(bars, seconds)` rolls fine bars up; `foldLast(bars, seconds)` rebuilds just the newest one
 for live updates; `addSessionVwap(bars, sessionStart)`; `sessionLevels(bars, opts)` gives prior-day
 high/low/close, overnight high/low and the prior session's 70% value area; `levelLines(levels)` turns
-those into styled lines; plus formatting and color helpers.
+those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-hour Initial Balance (9:30 to
+10:30 ET) from 1-minute bars or trades, with its state (`before`, `forming`, `locked`, or why there is none), and
+`ibLines(ib)` turns it into lines; `rthDay(t)` and `nyseHolidays(year)` say which days have a regular session; plus
+formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`).
 
 ## Colors
 
@@ -260,6 +264,14 @@ Defaults: bull `#4B9CD3` (Carolina blue), bear `#6D28D9` (deep purple), VWAP `#B
 that browser. Trade marks use the house trade colors on purpose: entries are green (long) or red
 (short), results are green (profit) or red (loss). Text drawn in a candle color is lightened
 automatically so it stays readable.
+
+**Background (1.5.3):** the panel's Background presets (Dark, the default; Black; Blue-grey; Light) and a picker
+for any color set `theme.bg`. On the default ground every color is the locked palette. On any other ground
+`buildTheme` derives the grid, axes, text and tags from it and moves every colored mark (candles, VWAP, levels,
+trade and order colors) just enough to read, once per change, never per frame, keeping bull and bear, buy and sell,
+and the IB high and low apart on every ground (buy and sell keep their green and red, outlined where needed). `getTheme()` returns the colors as chosen; `colors()` the colors as
+drawn, including `text2`, `legendBg` and `ground` for a page's own legend; `util.chromeColors(colors())` gives the CSS
+colors for a page's toolbar on a light ground (null on dark ones), which the live page and the demo apply.
 
 ## Develop
 
@@ -272,6 +284,7 @@ npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
+npm run smoke:ib         # IB 1h forming, locked, on every view and mounted; the Background presets, saved per prefix
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 ```
 

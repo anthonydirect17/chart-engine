@@ -15,7 +15,7 @@ test('defaults with empty storage: what the page showed before', () => {
   assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true });
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true });
 });
 
 test('range size is per root, and one write never undoes another tab', () => {
@@ -54,7 +54,7 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false });
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true });   // IB (1.5.3): the main pane default
   // later changes to the old keys (an older page in another tab) are not read again
   s.setItem('live-range-v1', JSON.stringify({ NQ: 12 }));
   s.setItem('live-settings-v1', JSON.stringify({ root: 'ES' }));
@@ -67,13 +67,31 @@ test('1.3 keys are read once and carry over', () => {
 test('indicators are saved per pane; a new pane starts with none on, the main pane with the 1.3 set', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
-  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true });
-  assert.deepEqual(p.indicators('pane-2'), { volume: false, vwap: false, levels: false, fills: false });
-  assert.deepEqual(LP.create(mem()).indicators('main'), { volume: true, vwap: true, levels: true, fills: true });
+  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true });
+  assert.deepEqual(p.indicators('pane-2'), { volume: false, vwap: false, levels: false, fills: false, ib: false });
+  assert.deepEqual(LP.create(mem()).indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true });
   assert.equal(p.setIndicator('pane-2', 'vwap', true), true);
   assert.equal(p.setIndicator('pane-2', 'bogus', true), false);
-  assert.deepEqual(LP.create(s).indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false });
-  assert.deepEqual(LP.create(s).indicators('main'), { volume: false, vwap: true, levels: false, fills: true });
+  assert.deepEqual(LP.create(s).indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false, ib: false });
+  assert.deepEqual(LP.create(s).indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true });
+});
+
+test('IB 1h (1.5.3): its own indicator, on for the main pane (also one saved before 1.5.3), off for a new pane, saved per pane', () => {
+  assert.ok(LP.INDICATORS.some(x => x.id === 'ib' && x.name === 'IB 1h'));
+  // a main pane saved by 1.4 or 1.5.2 (no ib key) gets the default; its other choices are kept
+  const s = mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { volume: true, vwap: false, levels: true, fills: true }, 'pane-2': { vwap: true } } });
+  const p = LP.create(s);
+  assert.equal(p.indicators('main').ib, true);
+  assert.equal(p.indicators('main').vwap, false);
+  assert.equal(p.indicators('pane-2').ib, false);
+  assert.equal(p.indicators('pane-9').ib, false);
+  // turning IB off on the main pane in one tab and on for pane-2 in another: both stick, nothing else moves
+  const a = LP.create(s), b = LP.create(s);
+  a.setIndicator('main', 'ib', false);
+  b.setIndicator('pane-2', 'ib', true);
+  const fresh = LP.create(s);
+  assert.deepEqual(fresh.indicators('main'), { volume: true, vwap: false, levels: true, fills: true, ib: false });
+  assert.deepEqual(fresh.indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false, ib: true });
 });
 
 test('storage that throws or holds junk never breaks the page', () => {
