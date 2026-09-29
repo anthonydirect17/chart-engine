@@ -8,16 +8,18 @@ import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.SETTINGS_SMOKE_PORT || 8793);
 const errors = [];
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
 const check = (ok, m) => { if (!ok) fail(m); else console.log('  ok   ' + m); };
-const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT)], { stdio: ['ignore', 'pipe', 'inherit'] });
+const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-const live = p => p.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 });
+// ChartBridge 0.3.2: after a load or reload the page asks for its PIN (made-up test PIN) before the chart starts
+const live = async p => { await unlockIfAsked(p); await p.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 }); };
 const URL = `http://localhost:${PORT}/live/`;
 
 async function newPage(ctx) {

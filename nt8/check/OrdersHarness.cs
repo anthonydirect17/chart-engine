@@ -846,6 +846,7 @@ public static class OrdersHarness
 
         NetworkChecks();
         DeskQueueChecks();
+        PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
@@ -951,13 +952,19 @@ public static class OrdersHarness
         {
             int s1; string b1 = Get(IPAddress.Loopback, port, "/diag", out s1);
             Check(s1 == 200 && b1.Contains("\"network\":{\"loopbackOnly\":true"), "listener: /diag from this PC is served (" + s1 + ")");
+            // 0.3.2: /session also needs the page unlocked with the PIN (made-up PIN; the PIN itself: check/PinHarness.cs)
             int s2; Get(IPAddress.Loopback, port, "/session", out s2);
-            Check(s2 == 200, "listener: /session from this PC with Host localhost is served (" + s2 + ")");
+            Check(s2 == 403, "listener: /session from this PC with Host localhost but not unlocked is refused (" + s2 + ")");
+            ChartBridgePin.NewHashIterations = 1000;
+            string unlock = ChartBridgePin.Set("4096").Token;
+            ChartBridgePin.NewHashIterations = ChartBridgePin.DefaultIterations;
+            int s3; Get(IPAddress.Loopback, port, "/session", out s3, unlock);
+            Check(s3 == 200, "listener: /session from this PC with Host localhost, unlocked, is served (" + s3 + ")");
             if (outside == null) Console.WriteLine("skip listener: no non-loopback IPv4 address on this machine");
             else
             {
                 lock (NinjaTrader.Code.Output.Lines) NinjaTrader.Code.Output.Lines.Clear();
-                string[] paths = { "/diag", "/session", "/", "/index.html", "/ws", "/nothing" };
+                string[] paths = { "/diag", "/session", "/", "/index.html", "/ws", "/nothing", "/pin/status", "/pin/unlock" };
                 List<string> codes = new List<string>();
                 foreach (string p in paths) { int sc; string body = Get(outside, port, p, out sc); codes.Add(p + "=" + sc + (body.Length > 0 ? "+body" : "")); }
                 Check(codes.All(x => x.EndsWith("=403")), "listener, plain GET only (no WebSocket upgrade on Mono): from another address with a forged Host localhost, every path is 403 with no body: " + string.Join(" ", codes));
@@ -1031,10 +1038,13 @@ public static class OrdersHarness
     }
 
     // GET with a forged "Host: localhost:<port>", straight to the address (no proxy).
-    static string Get(IPAddress to, int port, string path, out int status)
+    static string Get(IPAddress to, int port, string path, out int status) { return Get(to, port, path, out status, null); }
+
+    static string Get(IPAddress to, int port, string path, out int status, string unlock)
     {
         HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://" + to + ":" + port + path);
         req.Proxy = null;
+        if (unlock != null) req.Headers[ChartBridgePin.Header] = unlock;
         req.Host = "localhost:" + port;
         req.Timeout = 5000;
         try

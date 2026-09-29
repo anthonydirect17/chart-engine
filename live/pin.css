@@ -1,0 +1,70 @@
+/*
+ * ChartBridge's PIN pad (live/pin.js), on the standalone page only. The chart's look (CHART_STYLE.md, house style):
+ * the #080B10 ground, #0B1016 panel with a #2A3645 border and radius 12, purple accent, crimson only in the logo
+ * and wordmark, IBM Plex Mono digits. Amber (the warn color) for a refused PIN; green and red stay for trades.
+ */
+.cb-pin {
+  color-scheme: dark;
+  --bg: #080B10; --panel: #0B1016; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
+  --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
+  --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B;
+  --crimson: #9F1239; --crimson-word: #E0445E; --warn: #E0B45A;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  position: fixed; inset: 0; z-index: 1000; box-sizing: border-box; overflow-y: auto;
+  display: grid; place-items: center; padding: 24px 16px;
+  background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px;
+}
+.cb-pin.cb-pin-over { background: rgba(8, 11, 16, 0.9); backdrop-filter: blur(3px); }   /* Change PIN over the chart */
+.cb-pin [hidden] { display: none !important; }
+.cb-pin *, .cb-pin *::before, .cb-pin *::after { box-sizing: border-box; }
+.cb-pin-card {
+  width: min(340px, 100%); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+  padding: 22px 22px 18px; display: grid; justify-items: center; gap: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  outline: none;
+}
+.cb-pin-brand { display: flex; align-items: center; gap: 10px; justify-self: start; margin-bottom: 6px; }
+.cb-pin-logo { width: 28px; height: 28px; border-radius: 8px; background: var(--crimson); display: grid; place-items: center; flex: none; }
+.cb-pin-brandtext { display: grid; line-height: 1.15; }
+.cb-pin-word { font: 700 11px var(--cond); letter-spacing: .14em; color: var(--crimson-word); text-transform: uppercase; }
+.cb-pin-page { font-weight: 600; font-size: 14px; color: var(--head); }
+.cb-pin-title { margin: 4px 0 0; font: 600 18px var(--sans); color: var(--head); text-align: center; }
+.cb-pin-sub { margin: 0; min-height: 18px; font-size: 12px; color: var(--text2); text-align: center; line-height: 1.45; max-width: 280px; }
+.cb-pin-dots { display: flex; gap: 14px; margin: 10px 0 2px; }
+.cb-pin-dots span { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line-strong); background: transparent; transition: background-color 80ms, border-color 80ms; }
+.cb-pin-dots span.on { background: var(--accent-text); border-color: var(--accent-text); }
+.cb-pin-msg { margin: 0; min-height: 18px; font-size: 12px; color: var(--text2); text-align: center; }
+.cb-pin-msg.bad { color: var(--warn); }
+.cb-pin-msg.note { color: var(--accent-text); }
+.cb-pin-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 100%; margin-top: 4px; }
+.cb-pin-key {
+  font: 500 20px var(--mono); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 10px;
+  min-height: 56px; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  display: grid; place-items: center; user-select: none;
+}
+.cb-pin-key:hover { background: var(--s3); }
+.cb-pin-key:active { background: var(--accent-tint); border-color: var(--accent-border); color: var(--accent-text); }
+.cb-pin-key.cb-pin-fn { font: 600 11px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--text3); }
+.cb-pin-key:disabled { opacity: .45; cursor: default; }
+.cb-pin-key:focus-visible, .cb-pin-link:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.cb-pin-foot { min-height: 18px; margin-top: 6px; font-size: 11px; color: var(--text3); text-align: center; line-height: 1.5; max-width: 290px; }
+.cb-pin-link { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 14px; min-height: 30px; cursor: pointer; }
+.cb-pin-link:hover { background: var(--s3); }
+.cb-pin-busy .cb-pin-dots span.on { animation: cb-pin-pulse 900ms ease-in-out infinite; }
+.cb-pin-shake { animation: cb-pin-shake 300ms ease-in-out; }
+@keyframes cb-pin-shake { 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(3px); } }
+@keyframes cb-pin-pulse { 50% { opacity: .45; } }
+.cb-pin-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 1001; max-width: calc(100vw - 32px);
+  background: #0B1016; border: 1px solid #3B2A6B; color: #D8CCFF; border-radius: 8px; padding: 8px 14px;
+  font: 500 12px "IBM Plex Sans", system-ui, sans-serif; box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cb-pin-shake, .cb-pin-busy .cb-pin-dots span.on { animation: none; }
+  .cb-pin-dots span { transition: none; }
+}
+@media (max-height: 560px) {
+  .cb-pin-card { padding: 14px 18px 12px; gap: 6px; }
+  .cb-pin-key { min-height: 44px; }
+}

@@ -16,7 +16,14 @@
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
-//                                   (a missing or reused one is refused), so every reconnect needs a fresh URL
+//                                   (a missing or reused one is refused), so every reconnect needs a fresh URL.
+//                                   A ticketed connection stands for the relay, which reaches ChartBridge with no
+//                                   Origin, so ChartBridge's PIN does not apply to it (the relay has its own gate)
+//   --pin-file=path                 where the PIN hash lives (ChartBridge 0.3.2 keeps pin.txt in its folder), so a
+//                                   restarted fake keeps the PIN and an open page's unlock; default: memory only
+//   --test-pin=2468                 start with this made-up PIN set (tests only), unless the pin file has one
+// ChartBridge 0.3.2's PIN (test/fake-pin.mjs): the page's WebSocket needs ?unlock=<token> and GET /session the
+// X-ChartBridge-Unlock header; POST /pin/status, /pin/set, /pin/unlock, /pin/change. --v1 has no PIN.
 // With --test-controls, also: /test/drop closes every WebSocket (a dropped connection); /test/received lists
 // what the pages sent (message types, GET /session count, WebSocket URLs, ticketsRefused).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
@@ -27,6 +34,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { OrderDesk } from './fake-orders.mjs';
+import { PinLock, HEADER as PIN_HEADER } from './fake-pin.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
@@ -48,6 +56,9 @@ const config = {
   allowOrigins: flagValue('allow-origins').split(',').map(x => x.trim().toLowerCase().replace(/\/$/, '')).filter(Boolean),
 };
 const ACCOUNTS = ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
+const pin = new PinLock({ file: flagValue('pin-file') || null });
+const pinReady = flagValue('test-pin') && !pin.isSet() ? pin.set(flagValue('test-pin')) : Promise.resolve();
+const OWN = 'http://localhost:' + PORT;
 
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000);
 const INSTR = {
@@ -132,7 +143,7 @@ function wsOriginAllowed(origin) {
 const refused = { notThisPc: 0, origin: 0 };
 
 const clients = new Set();
-const received = { types: {}, sessionRequests: 0, urls: [], ticketsRefused: 0 };   // for /test/received
+const received = { types: {}, sessionRequests: 0, urls: [], ticketsRefused: 0, pinRefused: 0 };   // for /test/received (no PIN or token ever in it)
 const ticketsUsed = new Set();
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
@@ -202,9 +213,11 @@ const server = http.createServer((req, res) => {
   if (p === '/session' && !V1) {
     // same-origin only: no CORS headers, and (like HttpListener's localhost prefix) only Host localhost:<port>
     if (req.headers.host !== 'localhost:' + PORT) { res.writeHead(400); return res.end('bad host'); }
+    if (!pin.tokenValid(req.headers[PIN_HEADER])) { res.writeHead(403); return res.end(); }   // 0.3.2: only for a page unlocked with the PIN
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ token: desk.token }));
   }
+  if (p.startsWith('/pin/') && !V1) return pin.handle(req, res, PORT);
   if (p.startsWith('/test/') && TEST_CONTROLS && req.method === 'POST') {
     const q = new URL(req.url, 'http://x').searchParams, r = q.get('root') || 'MNQ';
     if (p === '/test/price') { held[r] = true; trade(r, rq(+q.get('p'), INSTR[r].tick)); }
@@ -225,7 +238,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
       desk: { postFills: false, deskUrl: 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
-      ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin } }),
+      ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
+        pin: { set: pin.isSet() } }),
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })) }));
   }
   if (p.endsWith('/')) p += 'index.html';
@@ -243,12 +257,14 @@ server.on('upgrade', (req, sock) => {
     if (!ticket || ticketsUsed.has(ticket)) { received.ticketsRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
     ticketsUsed.add(ticket);
   }
-  received.urls.push(req.url);
+  const unlock = new URL(req.url, 'http://x').searchParams.get('unlock');
+  if (!V1 && !TICKETS && !pin.wsUnlocked(req.headers.origin, unlock, OWN)) { received.pinRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  received.urls.push(req.url.replace(/([?&]unlock=)[^&]*/, '$1(hidden)'));
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.1', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ACCOUNTS };
+  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.2', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
   send(c, hello);
   send(c, { type: 'execs', list: fillsSample() });
@@ -259,5 +275,5 @@ server.on('upgrade', (req, sock) => {
   sock.on('close', () => clients.delete(c));
   sock.on('error', () => clients.delete(c));
 });
-server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
-  (V1 ? ' (v1, read only)' : config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)')));
+pinReady.then(() => server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
+  (V1 ? ' (v1, read only)' : (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)')))));

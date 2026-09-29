@@ -198,14 +198,18 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
-  assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
+  // /session: the Host check, then (0.3.2) the PIN unlock, then the order sign-in token
+  assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*if \(!ChartBridgePin\.TokenValid\(ctx\.Request\.Headers\[ChartBridgePin\.Header\]\)\) \{ Refuse\(ctx\); return; \}[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
   assert.match(code, /ChartBridgeOrders\.UnwatchConnections\(\);/);
   assert.ok(!/Access-Control-Allow-Origin/.test(code + ocode), 'no CORS headers anywhere');
   const install = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install.ps1'), 'utf8');
   assert.match(install, /ChartBridgeOrders\.cs/);
+  assert.match(install, /'nt8\\ChartBridgePin\.cs'/);
   const check = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'check.sh'), 'utf8');
-  assert.match(check, /ChartBridgeOrders\.cs/);
+  assert.match(check, /ChartBridgeOrders\.cs ChartBridgePin\.cs/);
+  const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
+  assert.match(orders, /ChartBridgePin\.cs[\s\S]*check\/PinHarness\.cs/);
 });
 
 test('the page cannot be framed, messages are capped, and the legs check runs', () => {
@@ -304,4 +308,110 @@ test('the missing-stop alarm keeps its text and names a target lost with its sto
   assert.match(fnBody('CheckLegs'), /if \(cancel\.Count > 0\) \{ NoteWeCancelSafe\(\(\) => cancel, "cancel"\); account\.Cancel\(cancel\.ToArray\(\)\); \}/);
   const safe = fnBody('NoteWeCancelSafe');
   assert.match(safe, /try\s*\{[\s\S]*NoteWeCancel\(orders\(\)\);\s*\}\s*catch \(Exception ex\) \{ ChartBridgeServer\.Log\(/);
+});
+
+// ---- 0.3.2: the PIN on ChartBridge's own page (ChartBridgePin.cs). A kid lock with no lockout; it gates the own page's
+// WebSocket and /session, before anything streams or signs in; nothing logs a PIN or a token.
+const psrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgePin.cs'), 'utf8');
+const pcode = psrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+
+test('PIN: checked before the stream (before the WebSocket upgrade) and before /session', () => {
+  const handle = bodyOf(code, 'private static async Task Handle(HttpListenerContext ctx, CancellationToken token)');
+  const addr = handle.indexOf('if (!ChartBridgeAccess.IsLoopback(remote))');
+  const origin = handle.indexOf('if (!ChartBridgeAccess.WsOriginAllowed(origin))');
+  const pin = handle.indexOf('if (!ChartBridgePin.WsUnlocked(origin, ctx.Request.QueryString["unlock"])) { Refuse(ctx); return; }');
+  const upgrade = handle.indexOf('await ctx.AcceptWebSocketAsync(null)');
+  const run = handle.indexOf('await RunClient(');
+  assert.ok(addr > 0 && addr < origin && origin < pin && pin < upgrade && upgrade < run, 'address, origin, PIN, then the upgrade and the stream');
+  const sess = handle.indexOf('if (path == "/session")');
+  const sessPin = handle.indexOf('if (!ChartBridgePin.TokenValid(ctx.Request.Headers[ChartBridgePin.Header])) { Refuse(ctx); return; }');
+  assert.ok(sess > addr && sessPin > sess && sessPin < handle.indexOf('ChartBridgeOrders.SessionJson()'), '/session: the PIN before the order token');
+  // the PIN endpoints come after the address check, and before the page files
+  const route = handle.indexOf('if (path.StartsWith("/pin/")) { ChartBridgePin.Serve(ctx, path); return; }');
+  assert.ok(route > addr && route < handle.indexOf('ServeFile(ctx, path)'), '/pin/ routed after the address check');
+  // hello, execs and every stream message are only sent from RunClient, which runs only after the upgrade
+  assert.equal((code.match(/client\.Send\(HelloJson\(\)\)/g) || []).length, 1);
+  assert.ok(bodyOf(code, 'private static async Task RunClient(').includes('client.Send(HelloJson());'));
+  // only the own page needs it; the comparison matches the WebSocket origin rule (trimmed, lower-cased)
+  assert.match(bodyOf(pcode, 'public static bool IsOwnOrigin(string origin)'), /return origin != null && origin\.Trim\(\)\.ToLowerInvariant\(\) == ChartBridgeAccess\.OwnOrigin;/);
+  assert.match(bodyOf(pcode, 'public static bool WsUnlocked(string origin, string unlock)'), /if \(!IsOwnOrigin\(origin\)\) return true;\s*return TokenValid\(unlock\);/);
+});
+
+test('PIN: salted PBKDF2-SHA256 at a high count, only the hash and a secret stored, tokens checked in constant time', () => {
+  assert.match(pcode, /public const int DefaultIterations = 600000;/);
+  assert.match(pcode, /new Rfc2898DeriveBytes\(Encoding\.ASCII\.GetBytes\(pin\), salt, iterations, HashAlgorithmName\.SHA256\)/);
+  assert.match(pcode, /SaltBytes = 16, HashBytes = 32, SecretBytes = 32/);
+  assert.match(pcode, /new HMACSHA256\(secret\)/);
+  assert.match(pcode, /RNGCryptoServiceProvider/);
+  assert.ok(!/new Random\(/.test(pcode), 'no System.Random');
+  const write = bodyOf(pcode, 'private static void Write(Stored s)');
+  assert.match(write, /ToHex\(s\.Salt\) \+ " " \+ ToHex\(s\.Hash\) \+ " " \+ ToHex\(s\.Secret\)/);
+  assert.ok(!/\bpin\b|Token/i.test(write.replace(/"[^"]*"/g, '').replace(/PinFile/g, '')), 'Write stores the hash record only');
+  assert.match(bodyOf(pcode, 'public static bool TokenValid(string token)'), /SlowEquals\(Mac\(s\.Secret, parts\[1\]\), FromHex\(parts\[2\]\)\)/);
+  assert.match(bodyOf(pcode, 'private static bool Matches('), /SlowEquals\(Derive\(pin, s\.Salt, s\.Iterations\), s\.Hash\)/);
+  // a PIN is exactly four ASCII digits (char.IsDigit would take other scripts' digits)
+  assert.ok(!/IsDigit|\\d/.test(pcode), 'no char.IsDigit or \\d');
+  // the file is read fresh on every check, so deleting it takes effect at once
+  assert.ok(!/static Stored \w+\s*[;=]/.test(pcode), 'no copy of the stored record in memory');
+});
+
+test('PIN: no lockout, ever: a wrong PIN is refused and nothing is counted, delayed or blocked', () => {
+  const unlock = bodyOf(pcode, 'public static Result Unlock(string pin)');
+  assert.match(unlock, /if \(!Matches\(s, pin\)\) return Fail\(403, "wrong PIN"\);/);
+  assert.ok(!/Sleep|Delay|Interlocked|\+\+|--|\+=|\block\s*\(/.test(unlock), 'Unlock counts, waits or locks nothing');
+  assert.ok(!/Thread\.Sleep|Task\.Delay|Interlocked|SemaphoreSlim|attempt|lockout|throttle|\bban/i.test(pcode.replace(/NO lockout/g, '')), 'no counters, delays or bans anywhere in ChartBridgePin.cs');
+  // the only static state: constants, the regexes, the file lock and the iteration count for new hashes
+  const statics = pcode.split('\n').filter(l => /^\s*(public|private|internal)?\s*static\s+(?!readonly\b|class\b)/.test(l) && !l.includes('(')).map(l => l.trim());
+  assert.deepEqual(statics.map(x => x.trim()), ['public static int NewHashIterations = DefaultIterations;']);
+});
+
+test('PIN endpoints: POST only, own page only (the exact orders Origin check), localhost, JSON, small bodies, strict keys', () => {
+  const serve = bodyOf(pcode, 'public static void Serve(HttpListenerContext ctx, string path)');
+  const order = ['if (req.HttpMethod != "POST")', 'if (req.Headers["Host"] != "localhost:" + ChartBridgeConfig.Port)', 'if (!ChartBridgeOrders.OriginAllowed(req.Headers["Origin"]))',
+    'if (type != "application/json" && !type.StartsWith("application/json;"))', 'string body = ReadBody(req);', 'if (path == "/pin/status")'].map(x => serve.indexOf(x));
+  assert.ok(order.every(i => i > 0) && order.every((v, i) => i === 0 || v > order[i - 1]), 'checks in order before any PIN work: ' + order.join(','));
+  assert.match(pcode, /public const int MaxBodyBytes = 256;/);
+  assert.match(bodyOf(pcode, 'private static string ReadBody('), /if \(req\.ContentLength64 > MaxBodyBytes\) return null;/);
+  assert.match(serve, /ParseFlat\(body, new string\[\] \{ "pin" \}\)/);
+  assert.match(serve, /ParseFlat\(body, new string\[\] \{ "pin", "newPin" \}\)/);
+  assert.match(bodyOf(pcode, 'public static bool ValidPin(string pin)'), /if \(ch < '0' \|\| ch > '9'\) return false;/);
+  assert.ok(!/Access-Control/.test(pcode), 'no CORS');
+  // answers go through ServeText (no-store, no framing)
+  assert.match(bodyOf(pcode, 'private static void Reply('), /ChartBridgeServer\.ServeText\(ctx, status, json, "application\/json"\);/);
+  assert.match(bodyOf(code, 'public static void ServeText(HttpListenerContext ctx, int status, string text, string type)'), /NoFraming\(res\);/);
+});
+
+test('PIN: nothing logs a PIN, a hash, the secret or a token; /diag says only whether a PIN is set', () => {
+  // every Log(...) argument in the three files, string literals dropped: no PIN, token or key material in it
+  const logArgs = text => {
+    const out = [], re = /\bLog\(/g;
+    let m;
+    while ((m = re.exec(text))) {
+      let depth = 0, j = m.index + 3;
+      for (; j < text.length; j++) { if (text[j] === '(') depth++; else if (text[j] === ')' && --depth === 0) break; }
+      out.push(text.slice(m.index + 4, j));
+    }
+    return out;
+  };
+  const all = logArgs(code).concat(logArgs(ocode), logArgs(pcode));
+  assert.ok(all.length > 30);
+  const secretish = /\b(pin|newPin|pins|token|given|unlock|secret|salt|hash|body|Token|Secret|Salt|Hash|Stored|Read|MakeToken|Derive|Mac|SessionJson|QueryString|Headers)\b/;
+  for (const a of all) {
+    const bare = a.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    assert.ok(!secretish.test(bare), 'a Log call may carry a secret: Log(' + a + ')');
+  }
+  assert.ok(!/Console\.|Debug\.|Trace\./.test(pcode), 'no other output in ChartBridgePin.cs');
+  // SessionJson is the only place the order token is written, and the unlock token only goes back in a PIN answer
+  assert.match(pcode, /public static string DiagJson\(\) \{ return "\{\\"set\\":" \+ \(IsSet \? "true" : "false"\) \+ "\}"; \}/);
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"pin\\":"\)\.Append\(ChartBridgePin\.DiagJson\(\)\);/);
+  // the WebSocket path the page connects with is never logged (the refusal log takes AbsolutePath, no query)
+  assert.match(bodyOf(code, 'private static string SafePath('), /return ctx\.Request\.Url\.AbsolutePath;/);
+});
+
+test('ChartBridgePin.cs is C# 5 too', () => {
+  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(pcode), 'string interpolation');
+  assert.ok(!/\?\.\w/.test(pcode), 'null-conditional ?.');
+  assert.ok(!/\bnameof\(/.test(pcode), 'nameof');
+  assert.ok(!/\{ get; \} =/.test(pcode), 'auto-property initializers');
+  assert.ok(!/\) => [^{]*;$/m.test(pcode.split('\n').filter(l => /^\s*(public|private)/.test(l)).join('\n')), 'expression-bodied members');
 });

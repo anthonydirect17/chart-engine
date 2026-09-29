@@ -345,9 +345,9 @@ test('a second page signing in gets the working orders and open positions', asyn
 });
 
 /* ---------------- through the real fake server: GET /session and the WebSocket Origin check */
-function wsConnect(port, origin) {
+function wsConnect(port, origin, unlock) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: '/ws', headers: Object.assign({
+    const req = http.request({ host: '127.0.0.1', port, path: '/ws' + (unlock ? '?unlock=' + encodeURIComponent(unlock) : ''), headers: Object.assign({
       Host: 'localhost:' + port, Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13',
       'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64') }, origin ? { Origin: origin } : {}) });
     req.on('upgrade', (res, sock, head) => {
@@ -383,17 +383,37 @@ function wsConnect(port, origin) {
       };
       resolve({ send, next, close: () => sock.destroy() });
     });
+    req.on('response', res => { res.resume(); reject(new Error('WebSocket refused: ' + res.statusCode)); });
     req.on('error', reject);
     req.end();
   });
 }
-function get(port, p, host) {
+function get(port, p, host, unlock) {
   return new Promise((resolve, reject) => {
-    http.get({ host: '127.0.0.1', port, path: p, headers: { Host: host || 'localhost:' + port } }, res => {
+    http.get({ host: '127.0.0.1', port, path: p, headers: Object.assign({ Host: host || 'localhost:' + port }, unlock ? { 'X-ChartBridge-Unlock': unlock } : {}) }, res => {
       let body = ''; res.on('data', d => body += d); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
     }).on('error', reject);
   });
 }
+// POST to a PIN endpoint the way ChartBridge's page does (own Origin, JSON); o overrides method, headers or the raw body
+function pinPost(port, p, body, o) {
+  o = o || {};
+  return new Promise((resolve, reject) => {
+    const data = o.raw !== undefined ? o.raw : JSON.stringify(body || {});
+    const headers = Object.assign({ Host: 'localhost:' + port, Origin: 'http://localhost:' + port, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }, o.headers || {});
+    for (const k of Object.keys(headers)) if (headers[k] === null) delete headers[k];
+    const req = http.request({ host: '127.0.0.1', port, path: p, method: o.method || 'POST', agent: false, headers }, res => {
+      let text = ''; res.on('data', d => text += d);
+      res.on('end', () => { let json = null; try { json = JSON.parse(text); } catch (e) { /* not JSON */ } resolve({ status: res.statusCode, headers: res.headers, json }); });
+    });
+    req.on('error', reject);
+    if (o.method !== 'GET') req.write(data);
+    req.end();
+  });
+}
+const TEST_PIN = '5820';                                  // made-up PINs, tests only
+const unlockFor = async (port, pin) => (await pinPost(port, '/pin/unlock', { pin: pin || TEST_PIN })).json.token;
+
 async function startBridge(port, flags) {
   const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port)].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => child.stdout.once('data', r));
@@ -402,21 +422,25 @@ async function startBridge(port, flags) {
 
 test('server: /session is same-origin only, the token is checked, and only ChartBridge\'s own page may trade', async () => {
   const port = 18700 + Math.floor(Math.random() * 200);
-  const child = await startBridge(port, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--allow-origins=https://desk.example']);
+  const child = await startBridge(port, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN]);
   try {
     const pg = await get(port, '/live/');
     assert.equal(pg.headers['x-frame-options'], 'DENY');
     assert.equal(pg.headers['content-security-policy'], "frame-ancestors 'none'");
-    const s = await get(port, '/session');
+    assert.equal((await get(port, '/session')).status, 403, '0.3.2: no order sign-in token for a page not unlocked with the PIN');
+    const unlock = await unlockFor(port);
+    const s = await get(port, '/session', null, unlock);
     assert.equal(s.status, 200);
     assert.equal(s.headers['access-control-allow-origin'], undefined, 'no CORS headers');
     assert.equal(s.headers['cache-control'], 'no-store');
     const token = JSON.parse(s.body).token;
     assert.ok(token.length >= 24);
     assert.equal((await get(port, '/session', 'evil.example')).status, 400, 'a rebound host name gets no token');
+    assert.equal((await get(port, '/session', 'evil.example', unlock)).status, 400, 'a rebound host name gets no token, even unlocked');
 
     const own = 'http://localhost:' + port;
-    const a = await wsConnect(port, own);
+    await assert.rejects(wsConnect(port, own), /refused: 403/, 'the own page\'s WebSocket needs the unlock');
+    const a = await wsConnect(port, own, unlock);
     const hello = await a.next('hello');
     assert.equal(hello.trading.enabled, false);
     a.send({ type: 'auth', token: 'wrong' });
@@ -448,9 +472,9 @@ test('server: /session is same-origin only, the token is checked, and only Chart
 });
 
 // the WebSocket upgrade status for an Origin (undefined: no header)
-function wsStatus(port, origin) {
+function wsStatus(port, origin, unlock) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, agent: false, path: '/ws', headers: Object.assign({
+    const req = http.request({ host: '127.0.0.1', port, agent: false, path: '/ws' + (unlock ? '?unlock=' + encodeURIComponent(unlock) : ''), headers: Object.assign({
       Host: 'localhost:' + port, Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13',
       'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64') }, origin !== undefined ? { Origin: origin } : {}) });
     req.on('upgrade', (res, sock) => { sock.destroy(); resolve(101); });
@@ -462,9 +486,12 @@ function wsStatus(port, origin) {
 
 test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge\'s own page or allowOrigins', async () => {
   const port = 18600 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, ['--allow-origins=https://desk.example,http://100.88.192.33:8800']);
+  const child = await startBridge(port, ['--allow-origins=https://desk.example,http://100.88.192.33:8800', '--test-pin=' + TEST_PIN]);
   try {
-    const want = [['http://localhost:' + port, 101], ['https://desk.example', 101], ['http://100.88.192.33:8800', 101], [undefined, 101],
+    const unlock = await unlockFor(port);
+    assert.equal(await wsStatus(port, 'http://localhost:' + port), 403, '0.3.2: the own page without the unlock');
+    assert.equal(await wsStatus(port, 'http://localhost:' + port, unlock), 101, '0.3.2: the own page with the unlock');
+    const want = [['https://desk.example', 101], ['http://100.88.192.33:8800', 101], [undefined, 101],
       ['http://evil.example', 403], ['http://127.0.0.1:' + port, 403], ['https://desk.example.evil.example', 403], ['http://desk.example', 403],
       ['null', 403], ['', 403]];
     for (const [origin, status] of want) assert.equal(await wsStatus(port, origin), status, 'Origin ' + JSON.stringify(origin));
@@ -477,9 +504,9 @@ test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge
 
 test('server: trading off by default; --v1 behaves like ChartBridge 0.2 (no trading field, no /session)', async () => {
   const port = 18900 + Math.floor(Math.random() * 90);
-  let child = await startBridge(port, []);
+  let child = await startBridge(port, ['--test-pin=' + TEST_PIN]);
   try {
-    const a = await wsConnect(port, 'http://localhost:' + port);
+    const a = await wsConnect(port, 'http://localhost:' + port, await unlockFor(port));
     const hello = await a.next('hello');
     assert.equal(hello.trading.enabled, false); assert.match(hello.trading.reason, /Trading is off/);
     a.close();
@@ -488,6 +515,7 @@ test('server: trading off by default; --v1 behaves like ChartBridge 0.2 (no trad
   child = await startBridge(port + 1, ['--v1', '--trading']);
   try {
     assert.equal((await get(port + 1, '/session')).status, 404);
+    assert.equal((await pinPost(port + 1, '/pin/status', {})).status, 404, 'ChartBridge 0.2 has no PIN: the page goes on without one');
     const a = await wsConnect(port + 1, 'http://localhost:' + (port + 1));
     const hello = await a.next('hello');
     assert.equal(hello.trading, undefined);
@@ -495,4 +523,117 @@ test('server: trading off by default; --v1 behaves like ChartBridge 0.2 (no trad
     assert.equal(await a.next('trading', 500), null);
     a.close();
   } finally { child.kill(); }
+});
+
+/* ---------------- ChartBridge 0.3.2: the PIN on ChartBridge's own page (test/fake-pin.mjs, the rules of nt8/ChartBridgePin.cs) */
+test('PIN parse: one flat object, the named keys once, 4 ASCII digit strings; anything else refused', async () => {
+  const { parseFlat, validPin } = await import('./fake-pin.mjs');
+  assert.deepEqual(parseFlat('{"pin":"5820"}', ['pin']), { pin: '5820' });
+  assert.deepEqual(parseFlat(' { "newPin" : "1" , "pin":"2" } ', ['pin', 'newPin']), { pin: '2', newPin: '1' });
+  assert.deepEqual(parseFlat('{}', []), {});
+  for (const bad of ['', '{', '{"pin":5820}', '{"pin":"5820","pin":"5820"}', '{"pin":"5820","x":"1"}', '{"pin":null}', '{"pin":{"a":"1"}}',
+    '{"pin":"58\\u0032"}', '{"pin":"5820"} x', '{"pin":"5820",}', '["5820"]', "{'pin':'5820'}", '{"pin":"123456789"}', '{"PIN":"5820"}'])
+    assert.equal(parseFlat(bad, ['pin']), null, bad);
+  assert.equal(parseFlat('{"pin":"5820"}', ['pin', 'newPin']), null, 'a missing key');
+  for (const ok of ['0000', '5820']) assert.ok(validPin(ok));
+  for (const no of ['582', '58201', '58a0', ' 582', '٨٥٣١', '', null, 5820]) assert.ok(!validPin(no), String(no));
+});
+
+test('server (0.3.2 PIN): set once, unlock, 20 wrong PINs never block the right one, change needs the current PIN', async () => {
+  const port = 19100 + Math.floor(Math.random() * 90);
+  const child = await startBridge(port, []);
+  try {
+    assert.deepEqual((await pinPost(port, '/pin/status', {})).json, { set: false, unlocked: false });
+    assert.deepEqual(JSON.parse((await get(port, '/diag')).body).pin, { set: false });
+    // strict: POST only, own page only (exact), localhost only, JSON only, small bodies, the named keys
+    assert.equal((await pinPost(port, '/pin/status', null, { method: 'GET' })).status, 405);
+    for (const origin of ['https://desk.example', 'http://LOCALHOST:' + port, 'http://127.0.0.1:' + port, '', null])
+      assert.equal((await pinPost(port, '/pin/set', { pin: '5820' }, { headers: { Origin: origin } })).status, 403, 'Origin ' + origin);
+    assert.equal((await pinPost(port, '/pin/set', { pin: '5820' }, { headers: { Host: 'evil.example' } })).status, 403);
+    assert.equal((await pinPost(port, '/pin/set', { pin: '5820' }, { headers: { 'Content-Type': 'text/plain' } })).status, 415);
+    assert.equal((await pinPost(port, '/pin/set', null, { raw: '{"pin":"5820"' + ' '.repeat(300) + '}' })).status, 413);
+    for (const raw of ['{"pin":5820}', '{"pin":"5820","x":"1"}', '{"pin":"58201"}', '{"pin":"٨٥٣١"}'])
+      assert.equal((await pinPost(port, '/pin/set', null, { raw })).status, 400, raw);
+    assert.equal((await pinPost(port, '/pin/unlock', { pin: '5820' })).status, 409, 'no PIN set yet');
+    assert.equal(JSON.parse((await get(port, '/diag')).body).pin.set, false, 'nothing above set a PIN');
+
+    const set = await pinPost(port, '/pin/set', { pin: '5820' });
+    assert.equal(set.status, 200); assert.match(set.json.token, /^v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/);
+    assert.equal(set.headers['cache-control'], 'no-store'); assert.equal(set.headers['access-control-allow-origin'], undefined);
+    assert.equal((await pinPost(port, '/pin/set', { pin: '1397' })).status, 409, 'set once');
+    assert.deepEqual((await pinPost(port, '/pin/status', {})).json, { set: true, unlocked: false });
+    assert.deepEqual((await pinPost(port, '/pin/status', {}, { headers: { 'X-ChartBridge-Unlock': set.json.token } })).json, { set: true, unlocked: true });
+
+    for (let i = 0; i < 20; i++) {
+      const w = await pinPost(port, '/pin/unlock', { pin: i % 2 ? '1397' : '0000' });
+      assert.equal(w.status, 403); assert.equal(w.json.reason, 'wrong PIN'); assert.equal(w.json.token, undefined);
+    }
+    const right = await pinPost(port, '/pin/unlock', { pin: '5820' });
+    assert.equal(right.status, 200, 'the right PIN straight after 20 wrong ones');
+
+    assert.equal((await pinPost(port, '/pin/change', { pin: '1397', newPin: '4061' })).status, 403, 'change with a wrong current PIN');
+    assert.equal((await pinPost(port, '/pin/change', null, { raw: '{"newPin":"4061"}' })).status, 400, 'change without the current PIN');
+    assert.equal((await pinPost(port, '/pin/change', { pin: '5820', newPin: '4061' })).status, 200);
+    assert.equal((await pinPost(port, '/pin/unlock', { pin: '5820' })).status, 403, 'the old PIN no longer opens');
+    assert.equal((await pinPost(port, '/pin/unlock', { pin: '4061' })).status, 200, 'the new PIN opens');
+    assert.equal((await get(port, '/session', null, set.json.token)).status, 200, 'a page unlocked before the change stays unlocked');
+    const diag = JSON.parse((await get(port, '/diag')).body);
+    assert.deepEqual(diag.pin, { set: true }, '/diag: only whether a PIN is set');
+  } finally { child.kill(); }
+});
+
+test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an open page unlocked; deleting the file ends it', async () => {
+  const fs = require('node:fs'), os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-pin-')), file = path.join(dir, 'pin.txt');
+  const port = 19200 + Math.floor(Math.random() * 90);
+  let child = await startBridge(port, ['--pin-file=' + file, '--test-pin=' + TEST_PIN, '--trading', '--trade-accounts=Sim101']);
+  let token;
+  try {
+    token = await unlockFor(port);
+    const text = fs.readFileSync(file, 'utf8');
+    assert.match(text, /^v1 pbkdf2-sha256 600000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m, 'the same pin file format as ChartBridge');
+    assert.ok(!text.replace(/[0-9a-f]{32,}/g, '').includes(TEST_PIN), 'the pin file never holds the PIN');
+    const before = JSON.parse((await get(port, '/session', null, token)).body).token;
+    child.kill();
+    await new Promise(r => setTimeout(r, 300));
+    child = await startBridge(port, ['--pin-file=' + file, '--trading', '--trade-accounts=Sim101']);   // the restart: same folder, new process
+    const s = await get(port, '/session', null, token);
+    assert.equal(s.status, 200, 'the token from before the restart signs in');
+    assert.notEqual(JSON.parse(s.body).token, before, 'a new order sign-in token after the restart');
+    const a = await wsConnect(port, 'http://localhost:' + port, token);
+    assert.ok(await a.next('hello'), 'the WebSocket takes the token from before the restart');
+    a.close();
+    fs.unlinkSync(file);                                                          // the forgotten-PIN recovery
+    assert.deepEqual((await pinPost(port, '/pin/status', {}, { headers: { 'X-ChartBridge-Unlock': token } })).json, { set: false, unlocked: false });
+    assert.equal((await get(port, '/session', null, token)).status, 403);
+    await assert.rejects(wsConnect(port, 'http://localhost:' + port, token), /403/);
+    const again = await pinPost(port, '/pin/set', { pin: '7302' });
+    assert.equal(again.status, 200, 'a new PIN can be set');
+    assert.equal((await get(port, '/session', null, token)).status, 403, 'the old token stays dead (a new secret)');
+    assert.equal((await get(port, '/session', null, again.json.token)).status, 200);
+  } finally { child.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('server (0.3.2 PIN): allowOrigins pages, local programs and relay tickets keep 0.3.1 rules; no token in /test/received', async () => {
+  const port = 19300 + Math.floor(Math.random() * 90);
+  const child = await startBridge(port, ['--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN, '--test-controls']);
+  try {
+    assert.equal(await wsStatus(port, 'https://desk.example'), 101, 'The Desk (allowOrigins), no PIN');
+    assert.equal(await wsStatus(port, undefined), 101, 'a local program (no Origin), no PIN');
+    const token = await unlockFor(port);
+    assert.equal(await wsStatus(port, 'http://localhost:' + port, token), 101);
+    const rec = await (await fetch(`http://127.0.0.1:${port}/test/received`, { method: 'POST' })).json();
+    assert.ok(!JSON.stringify(rec).includes(token) && rec.urls.some(u => u.includes('unlock=(hidden)')), 'the unlock token is never kept: ' + JSON.stringify(rec.urls));
+  } finally { child.kill(); }
+  const port2 = port + 100;
+  const relay = await startBridge(port2, ['--tickets', '--test-pin=' + TEST_PIN]);
+  try {
+    const req = (p, origin) => new Promise((resolve, reject) => {
+      const r = http.request({ host: '127.0.0.1', port: port2, agent: false, path: p, headers: { Host: 'localhost:' + port2, Connection: 'Upgrade', Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64'), Origin: origin } });
+      r.on('upgrade', (res, sock) => { sock.destroy(); resolve(101); }); r.on('response', res => { res.resume(); resolve(res.statusCode); }); r.on('error', reject); r.end();
+    });
+    assert.equal(await req('/ws?ticket=t1', 'http://localhost:' + port2), 101, 'a relay ticket stands for the relay (no Origin at ChartBridge): no PIN');
+    assert.equal(await req('/ws', 'http://localhost:' + port2), 403, 'no ticket: still refused');
+  } finally { relay.kill(); }
 });

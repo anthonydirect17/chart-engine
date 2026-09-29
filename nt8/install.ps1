@@ -14,17 +14,21 @@ New-Item -ItemType Directory -Force -Path $addons, $www, (Join-Path $www 'src') 
 
 Copy-Item (Join-Path $repo 'nt8\ChartBridge.cs') (Join-Path $addons 'ChartBridge.cs') -Force
 Copy-Item (Join-Path $repo 'nt8\ChartBridgeOrders.cs') (Join-Path $addons 'ChartBridgeOrders.cs') -Force   # order entry (off unless config.txt turns it on)
+Copy-Item (Join-Path $repo 'nt8\ChartBridgePin.cs') (Join-Path $addons 'ChartBridgePin.cs') -Force       # the PIN on ChartBridge's own page (0.3.2)
 Copy-Item (Join-Path $repo 'live\index.html') (Join-Path $www 'index.html') -Force
 Copy-Item (Join-Path $repo 'live\live.js') (Join-Path $www 'live.js') -Force
 Copy-Item (Join-Path $repo 'live\live.css') (Join-Path $www 'live.css') -Force
 Copy-Item (Join-Path $repo 'live\bar-builder.js') (Join-Path $www 'bar-builder.js') -Force
 Copy-Item (Join-Path $repo 'live\order-ticket.js') (Join-Path $www 'order-ticket.js') -Force
+Copy-Item (Join-Path $repo 'live\pin.js') (Join-Path $www 'pin.js') -Force
+Copy-Item (Join-Path $repo 'live\pin.css') (Join-Path $www 'pin.css') -Force
 Copy-Item (Join-Path $repo 'src\chart-engine.js') (Join-Path $www 'src\chart-engine.js') -Force
 
-Write-Host "ChartBridge.cs, ChartBridgeOrders.cs -> $addons"
+Write-Host "ChartBridge.cs, ChartBridgeOrders.cs, ChartBridgePin.cs -> $addons"
 Write-Host "live page       -> $www"
 Write-Host ""
 Write-Host "Next: NinjaTrader > New > NinjaScript Editor > compile (F5)."
-Write-Host "Then open http://localhost:8765/ in Chrome or Edge. Messages appear in New > NinjaScript Output."
+Write-Host "Then open http://localhost:8765/ in Chrome or Edge and set this PC's 4-digit PIN. Messages appear in New > NinjaScript Output."
+Write-Host "Forgot the PIN? Delete ChartBridge\pin.txt in the NinjaTrader 8 folder (NinjaTrader may stay open); the page asks for a new one."
 Write-Host "ChartBridge answers this PC only. Other pages that may read the stream (The Desk) go in allowOrigins in config.txt;"
 Write-Host "keep inbound port 8765 blocked in the Windows firewall as a second layer (see nt8\PROTOCOL.md, Network access)."
