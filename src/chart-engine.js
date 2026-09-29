@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -719,7 +719,20 @@ function create(container, options) {
 
     const tagSrc = (o.layers.levels ? levels : []).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })));
     const tags = tagSrc.filter(L => L.price >= V.lo && L.price <= V.hi).map(L => ({ L, y: yOf(L.price) })).sort((a, b) => a.y - b.y);
-    { let prev = -1e9; for (const t of tags) { t.y = Math.max(t.y, prev + 19); prev = t.y; } }
+    if (n >= 0) {
+      // Keep level tags clear of the last price tag (32 px tall): tags priced at or above the last price
+      // stack upward from it, the rest stack downward, 19 px apart, so both stay readable.
+      const pTop = clamp(ly - 9, 0, Math.max(0, plotH - 32)), pBot = pTop + 32;
+      const above = tags.filter(t => t.L.price >= disp.c).reverse(), below = tags.filter(t => t.L.price < disp.c);
+      let lim = pTop - 10; for (const t of above) { t.y = Math.min(t.y, lim); lim = t.y - 19; }
+      lim = 9; for (let k = above.length - 1; k >= 0; k--) { above[k].y = Math.max(above[k].y, lim); lim = above[k].y + 19; }   // fit under the top edge
+      lim = pBot + 10; for (const t of below) { t.y = Math.max(t.y, lim); lim = t.y + 19; }
+      lim = plotH - 9; for (let k = below.length - 1; k >= 0; k--) { below[k].y = Math.min(below[k].y, lim); lim = below[k].y - 19; }   // fit above the bottom edge
+      tags.sort((a, b) => a.y - b.y);
+    } else {
+      let prev = -1e9; for (const t of tags) { t.y = Math.max(t.y, prev + 19); prev = t.y; }
+      let lim = plotH - 9; for (let k = tags.length - 1; k >= 0; k--) { tags[k].y = Math.min(tags[k].y, lim); lim = tags[k].y - 19; }
+    }
     ctx.font = '400 11px ' + T.fontMono; ctx.fillStyle = T.axisText; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (let k = k0; k <= k1 && k - k0 < 400; k++) {
       const y = yOf(k * pStep); if (y < 8 || y > plotH - 8) continue;

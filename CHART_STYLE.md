@@ -67,6 +67,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Levels:** full-width lines at 70% opacity (prior-day and overnight dashed 6/4, value area 3/4,
   prior close dotted 2/3). Name at the right edge of the plot; names within 12 px merge ("VAL · PDL").
   Each level gets an outlined tag on the price axis; tags push apart and grid labels hide under them.
+  Tags never sit under the last-price tag: levels at or above the last price stack upward from it, the
+  rest stack downward (since 1.2.1).
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.

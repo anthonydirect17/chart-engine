@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1 (2026-09-29)
+
+- Level tags on the price axis no longer hide under the last-price tag: levels at or above the last
+  price stack upward from it, the rest stack downward. Seen on The Desk's Today chart, where the VAH
+  tag sat under the live price. Engine version is now 1.2.1 (it had stayed at 1.1.0 through 1.2.0).
+
 ## 1.2.0 (2026-09-29): ChartBridge 0.2.0
 
 From the second HOME run (H2b), where the chart ran LIVE but no fill reached ChartBridge.
