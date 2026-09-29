@@ -466,6 +466,9 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   assert.match(bodyOf(code, 'private static void NoteAnswer('), /lock \(L\.Client\.Pending\) \{ if \(Current\(L\)\) L\.HeldAtAnswer = L\.Client\.Pending\.Count; \}/);
   assert.equal((bodyOf(code, 'private static void RequestTickHistory(').match(/NoteAnswer\(L\);/g) || []).length, 1);
   assert.equal((bodyOf(code, 'private static void RequestTicks(').match(/NoteAnswer\(L\);/g) || []).length, 1);
+  // re-review: the heldAtAnswer gate only at whole seconds; sub echoed as canonical digits
+  assert.match(code, /if \(i < heldAtAnswer \|\| unit < Second\) \{ r\.DroppedSameTime\+\+; continue; \}/);
+  assert.match(code, /long\.Parse\(sm\.Groups\[1\]\.Value, CultureInfo\.InvariantCulture\)\.ToString\(CultureInfo\.InvariantCulture\)/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(']) {
     const body = bodyOf(code, f);
     assert.equal((body.match(/L\.Client\.Send\(/g) || []).length, (body.match(/Current\(L\)/g) || []).length, f + ': a Current check for every send');

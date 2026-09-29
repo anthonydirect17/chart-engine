@@ -199,7 +199,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields |
 |---|---|
-| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...) |
+| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...) |
 | `ping` | `c` (page clock, echoed back in a `pong` with the server clock `s`) |
 
 ## Backfill and live: one seam (0.3.3)
@@ -213,24 +213,36 @@ now decides the seam by one rule before it sends `ready`:
 - **T** is the time of the last backfill trade. Both sides are compared on NinjaTrader's own times for the
   trades (the backfill's bar times and each live trade's time, in NinjaTrader's time zone), never the PC clock.
 - A held trade **before T** is in the backfill already: it is not sent.
-- **At exactly T**, only trades that were already held when NinjaTrader answered the tick request can be in
-  the backfill (ChartBridge counts them, under the same lock the live trades are held with, in the answer's
-  callback: `heldAtAnswer`). Of those, as many are not sent as the backfill has at T with the same price and
-  volume (a multiset match: two real trades can share price, size and time). A trade held after the answer is
-  always sent: the backfill was already built.
+- **At exactly T**, as many held trades are not sent as the backfill has at T with the same price and volume
+  (a multiset match: two real trades can share price, size and time).
+  - At **whole-second** resolution only trades already held when NinjaTrader answered the tick request may match
+    (ChartBridge counts them in the answer's callback, right after copying the answer, under the same lock the
+    live trades are held with: `heldAtAnswer`). There "at T" is a whole second, and a trade held after the
+    answer, later in that second, is a real trade the backfill cannot have: it is always sent.
+  - At **millisecond** resolution every held trade may match. That is exact whatever order NinjaTrader delivers
+    in: a real trade that nobody held in the same millisecond as T is negligible.
 - The rest go out after `ready`, in the order they arrived; then live trades go straight out.
 
-This assumes NinjaTrader hands a live trade to ChartBridge before, not after, it is in a tick request answered
-later. `droppedAfterAnswer` in `/diag` counts trades held after the answer that matched a backfill trade at T
-(they are sent; 0.3.3 before the review dropped them). A value that is often above 0 at millisecond resolution
-would mean the assumption does not hold on that connection.
+The whole-second gate assumes NinjaTrader hands a live trade to ChartBridge before, not after, it is in a tick
+answer. Two `/diag` counters show whether that holds:
+
+- `olderAfterAnswer`: trades held after the answer whose time is before T. When the order holds this cannot
+  happen (short of out-of-order time stamps), at either resolution: any value above 0 means NinjaTrader delivers
+  some live trades after they are already in its answer.
+- `droppedAfterAnswer`: trades held after the answer that matched a backfill trade at T. At millisecond
+  resolution (where they are dropped) it should be 0 on nearly every load if the order holds. At whole seconds
+  (where they are sent) it is normal: real trades later in T's second often share price and size.
 
 **Time resolution.** Times are compared at the coarser step of the two sides: millisecond when both carry
-milliseconds (NinjaTrader 8 keeps them on tick data from most connections), whole seconds when a side has at
-least 20 trades near the seam (the backfill's last 64, the first 64 held) all on whole seconds. In whole seconds
-"at T" is the whole second: a trade held before the answer, later in that second, with the same price and size
-as a backfill trade in it, is taken for a duplicate. That needs the answer to come inside the same second as the
-trade, so it is rare. `/diag` shows the resolution in force (`resolutionMs`).
+milliseconds (NinjaTrader 8 keeps them on tick data from most connections), whole seconds when a side's trades
+near the seam (the backfill's last 64, the first 64 held) all sit on whole seconds and there are at least 20 of
+them. A backfill shorter than 20 trades counts as whole seconds when every trade in it does (it was read whole;
+a millisecond backfill of a few trades all landing on .000 by chance is the accepted risk). Fewer than 20 held
+trades never make it whole seconds. In whole seconds "at T" is the whole second: a trade held before the answer
+but after NinjaTrader took its snapshot, later in that second, with the same price and size as a backfill trade
+in it, is taken for a duplicate. That needs the callback to lag the snapshot inside the trade's second, so it is
+rare (the review's simulation: about 1% of fast loads, 0.01 trades a load). `/diag` shows the resolution in force
+(`resolutionMs`).
 
 **The tick request asks past now.** NinjaTrader's help for BarsRequest says: "When using the DateTime fromLocal
 and toLocal parameters, the dates are converted to local daily timestamps (12:00 AM) and return a BarsRequest
@@ -245,13 +257,36 @@ future is refused, or comes back with no trades at all, it is asked once more en
 trades that are also held live, and misses later ones. ChartBridge sends it last, rebuilt from the same trades
 the held ones are matched against, so minute bars and trades meet at the same seam. Time bars are stamped at
 their close, so a trade at exactly hh:mm:00.000 belongs to the bar that ends then: the rebuild takes trades
-strictly after the forming minute's start (believed to be NinjaTrader's rule; a live check). With a tick
+strictly after the forming minute's start (believed to be NinjaTrader's rule; a live check, recipe below). With a tick
 backfill (seconds and range charts) those are the backfill's trades. Without one (`tickHours` 0: minute and hour
 charts) ChartBridge asks NinjaTrader for the last 20,000 trades (`SeamTicksBack`, a BarsRequest by count), uses
 them only for this, and does not send them to the page. NinjaTrader's bar is kept, and on minute charts every
 held trade is released as in 0.3.2, when the trades do not reach back to the minute's start, when none fall in
 it, or when the rebuilt minute has less volume than NinjaTrader's (the trades lag the minute data).
-`/diag` shows both volumes (`ntTailVolume`, `rebuiltTailVolume`).
+`/diag` shows both volumes (`ntTailVolume`, `rebuiltTailVolume`). They cannot settle the boundary rule on their
+own: the rebuilt minute also has the trades after NinjaTrader's answer, so it is usually larger either way.
+
+**Live check of the minute boundary (a recipe).** On the trading PC, in a busy session:
+
+1. Pick a closed minute M (start S, end E = S + 60 s) with a trade stamped exactly at S (hh:mm:00.000) or at E.
+   To see the trades with their sub-second times, export the contract's Tick data for today (Tools > Historical
+   Data, Export; NinjaTrader 8 writes tick times with a 7-digit fraction of a second) and find the lines at S and E.
+2. Add up the trade volumes in (S, E], that is after S up to and including E, and in [S, E), that is from S up
+   to but not including E.
+3. Compare with NinjaTrader's volume on the 1-minute bar stamped E (bars are stamped at their close).
+   - It equals the (S, E] sum: end-inclusive, the rule ChartBridge follows. Nothing to change.
+   - It equals the [S, E) sum: start-inclusive. Then `ChartBridgeSeam.TailFromTicks` must take trades at or
+     after the start (`>=` in place of `>`, and floor in place of the end-inclusive bucket), and the two harness
+     tests that pin the boundary change with it.
+   - Neither: the minute and tick data disagree; write down both sums and NinjaTrader's volume.
+4. Repeat for two or three minutes; one trade exactly on the boundary is enough to tell, when its volume differs
+   from the sums' other trades.
+
+**The page builds minute bars start-inclusive** (`live/bar-builder.js` floors the time, and the page feeds ticks at
+or after the current minute's start). If NinjaTrader is end-inclusive, the page (on seconds and range charts,
+where it rebuilds the forming minute itself) counts a trade at exactly that start in NinjaTrader's previous bar and
+again in its own. This is unchanged since 0.3.2, only on that exact millisecond, and a page-side follow-up (feed
+ticks strictly after the cutoff and bucket end-inclusive), not in ChartBridge.
 
 **Minute charts wait for that request.** `ready` now comes after the 20,000-trade answer. ChartBridge's own work
 on it (copy, rebuild, match against 3,000 held trades) takes about 1 ms in the Mono harness; the time NinjaTrader
@@ -269,7 +304,8 @@ another id. The live page does not send it yet (a follow-up in `live/`).
 - A gap is still possible if NinjaTrader's history lags its live data (the provider's history server a few
   seconds behind): trades after the backfill's end that arrived before the hold began are in neither stream.
   The rule cannot recover them; `/diag` shows whether the streams overlapped (`overlapMs`).
-- The whole-second case above, and the order assumption behind `heldAtAnswer`.
+- The whole-second case above, and the order assumption behind `heldAtAnswer` (whole seconds only; watch
+  `olderAfterAnswer`).
 - The minute boundary rule is believed, not yet checked on a live PC.
 - Until the page uses `sub`, a stale chunk already queued when the page resubscribed can still mix in.
 - Pre-existing: each page has an outbox of 5,000 messages; a page that does not keep up is closed. The held
@@ -309,7 +345,9 @@ time, `yyyy-MM-dd HH:mm:ss.fff`, or null), `overlapMs` (`lastBackfillTick` minus
 streams overlapped, so nothing fell between them; below 0, no held trade was at or before the backfill's end: a quiet
 moment, or a gap of up to that long), `held`, `heldAtAnswer` (held when NinjaTrader answered the tick request; null when
 nothing was matched), `droppedAsDuplicate` (= `droppedOlder` + `droppedSameTime`), `droppedAfterAnswer` (held after the
-answer, matching at T, sent anyway), `released`,
+answer, matching at T: dropped at millisecond resolution, sent at whole seconds), `olderAfterAnswer` (held after the
+answer yet older than T, dropped: above 0 means NinjaTrader delivers some live trades after its answer has them),
+`released`,
 `resolutionMs` (the time step both sides were compared at: 1, 1000, or 0.0001 for NinjaTrader's 100 ns), `tickToAheadMin`
 (60, 0 after a retry, null with no tick backfill), `tickRetriedEndingNow`, `minuteTailRebuilt` (minute bars rebuilt from
 trades; 0 when NinjaTrader's was kept, -1 when there was none), `ntTailVolume` and `rebuiltTailVolume` (that minute's volume,

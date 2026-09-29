@@ -447,7 +447,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public List<SeamTick> Release = new List<SeamTick>();   // held trades to send after "ready", in the order they came
         public int Held, DroppedOlder, DroppedSameTime;
         public int HeldAtAnswer;             // held when NinjaTrader answered the tick request; only these can match at T
-        public int DroppedAfterAnswer;       // held after the answer that the 0.3.3 rule would have dropped at T (released now)
+        public int DroppedAfterAnswer;       // held after the answer that matched at T (dropped at ms resolution, kept at whole seconds)
+        public int OlderAfterAnswer;         // held after the answer but older than T (dropped): NinjaTrader delivered it late
         public int BackfillTicks;
         public bool HasBackfillEnd;
         public DateTime BackfillEnd;         // the last backfill trade's time (NinjaTrader time zone)
@@ -459,26 +460,29 @@ namespace NinjaTrader.NinjaScript.AddOns
     // after the hold began), and the held live trades are everything that arrived after the hold began. They overlap;
     // this removes the overlap from the held side. Let T be the time of the last backfill trade:
     //   - a held trade before T is in the backfill already: dropped;
-    //   - at exactly T, only trades held by the time NinjaTrader answered (heldAtAnswer, counted under the Pending
-    //     lock in the answer's callback) can be in the backfill: as many of those are dropped as the backfill has at
-    //     T with the same price and volume (a multiset match: trades carry no id, and two real trades can share
-    //     price, size and time). A trade held after the answer was not in a backfill already built: kept.
+    //   - at exactly T, as many held trades are dropped as the backfill has at T with the same price and volume (a
+    //     multiset match: trades carry no id, and two real trades can share price, size and time). At whole-second
+    //     resolution only trades held by the time NinjaTrader answered (heldAtAnswer, counted under the Pending lock
+    //     in the answer's callback, after the copy) may match: "at T" is then a whole second, and a trade held after
+    //     the answer, later in that second, is a real trade the backfill cannot have. At millisecond resolution every
+    //     held trade may match (exact whatever order NinjaTrader delivers in); droppedAfterAnswer counts the ones
+    //     held after the answer that matched, olderAfterAnswer the ones held after the answer but older than T.
     //   - the rest are released in the order they arrived.
     // Times are compared at the coarser resolution of the two sides. NinjaTrader 8 keeps millisecond times on tick
-    // data from most connections; a side counts as whole seconds only when at least 20 of its trades near the seam
-    // (the backfill's last 64, the first 64 held) all sit on whole seconds. Then "at T" is that whole second, and
-    // a trade held before the answer, later in that second, with the same price and size as a backfill trade in it
-    // is taken for a duplicate (it can only be wrong when NinjaTrader's answer and its live events are not in the
-    // order this assumes; /diag shows the resolution and droppedAfterAnswer).
+    // data from most connections. A side counts as whole seconds when its trades near the seam (the backfill's last
+    // 64, the first 64 held) all sit on whole seconds and there are at least 20 of them; a backfill shorter than
+    // that counts when every trade in it does (the whole backfill was read). Then "at T" is that whole second.
     public static class ChartBridgeSeam
     {
         public const long Ms = TimeSpan.TicksPerMillisecond, Second = TimeSpan.TicksPerSecond;
         public const int ResolutionSample = 64;   // trades read near the seam to judge a side's resolution
         public const int MinForSeconds = 20;      // fewer than this can land on whole seconds by chance
 
-        // Coarsest step every time in times[from..to) sits on: 1 s (only with at least MinForSeconds times), 1 ms,
+        // Coarsest step every time in times[from..to) sits on: 1 s (only with at least minForSeconds times), 1 ms,
         // or 1 (DateTime's 100 ns). Empty: 1.
-        public static long Resolution(IList<DateTime> times, int from, int to)
+        public static long Resolution(IList<DateTime> times, int from, int to) { return Resolution(times, from, to, MinForSeconds); }
+
+        public static long Resolution(IList<DateTime> times, int from, int to, int minForSeconds)
         {
             bool seconds = true, ms = true;
             int n = 0;
@@ -490,7 +494,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (t % Ms != 0) { ms = false; break; }
             }
             if (n == 0 || !ms) return 1;
-            return seconds && n >= MinForSeconds ? Second : Ms;
+            return seconds && n >= Math.Max(1, minForSeconds) ? Second : Ms;
         }
 
         private static long Key(DateTime t, long unit) { long k = t.Ticks; return k - k % unit; }
@@ -527,7 +531,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             int sample = Math.Min(nHeld, ResolutionSample);
             DateTime[] heldTimes = new DateTime[sample];
             for (int i = 0; i < sample; i++) heldTimes[i] = held[i].Time;
-            long unit = Math.Max(Resolution(backTime, backCount - ResolutionSample, backCount), Resolution(heldTimes, 0, sample));
+            // A short backfill is read whole, so it may count as whole seconds with fewer than 20 trades (review N2).
+            long unit = Math.Max(Resolution(backTime, backCount - ResolutionSample, backCount, Math.Min(MinForSeconds, backCount)), Resolution(heldTimes, 0, sample));
             r.ResolutionTicks = unit;
             if (nHeld == 0) return r;
             long end = Key(backTime[backCount - 1], unit);
@@ -542,7 +547,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 SeamTick h = held[i];
                 long k = Key(h.Time, unit);
-                if (k < end) { r.DroppedOlder++; continue; }
+                if (k < end)
+                {
+                    r.DroppedOlder++;
+                    if (i >= heldAtAnswer) r.OlderAfterAnswer++;   // arrived after the answer yet older than T: NinjaTrader delivered late
+                    continue;
+                }
                 if (k == end)
                 {
                     string pk = TradeKey(h.Price, h.Volume);
@@ -550,8 +560,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (atEnd.TryGetValue(pk, out c) && c > 0)
                     {
                         atEnd[pk] = c - 1;
-                        if (i < heldAtAnswer) { r.DroppedSameTime++; continue; }
-                        r.DroppedAfterAnswer++;   // the 0.3.3 rule would have dropped it; it came after the answer: kept
+                        if (i >= heldAtAnswer) r.DroppedAfterAnswer++;   // held after the answer, matching at T
+                        if (i < heldAtAnswer || unit < Second) { r.DroppedSameTime++; continue; }
+                        // whole seconds and held after the answer: a real trade later in T's second, kept
                     }
                 }
                 r.Release.Add(h);
@@ -1141,7 +1152,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int days = dm.Success ? Math.Max(1, Math.Min(60, int.Parse(dm.Groups[1].Value))) : ChartBridgeConfig.DefaultDays;
                 int tickHours = hm.Success ? Math.Max(0, Math.Min(48, int.Parse(hm.Groups[1].Value))) : ChartBridgeConfig.DefaultTickHours;
                 Match sm = SubRx.Match(text);
-                StartLoad(client, root, days, tickHours, sm.Success ? sm.Groups[1].Value : null);
+                StartLoad(client, root, days, tickHours, sm.Success ? long.Parse(sm.Groups[1].Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture) : null);   // canonical digits: "007" is not JSON
             }
             else if (type == "auth" || type == "order" || type == "change" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
@@ -1401,8 +1412,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 L.Client.Send("{\"type\":\"history\",\"root\":" + CbJson.Str(L.Root) + ",\"name\":" + CbJson.Str(L.Name) + ",\"barSeconds\":" + barSeconds + L.SubJson + ",\"bars\":[],\"done\":true}");
         }
 
-        // In NinjaTrader's answer to a tick request: how many live trades were held by then. Only those can be in the
-        // backfill it hands over; a trade held after this never matches at T (ChartBridgeSeam.Dedupe).
+        // In NinjaTrader's answer to a tick request, right after the copy: how many live trades were held by then. Only
+        // those can be in the backfill it handed over (counting after the copy errs toward "held at the answer", the
+        // side that cannot count a trade twice). At whole seconds a trade held after this never matches at T.
         private static void NoteAnswer(Load L)
         {
             lock (L.Client.Pending) { if (Current(L)) L.HeldAtAnswer = L.Client.Pending.Count; }
@@ -1420,11 +1432,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             ticks.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
                 RawBars raw = null;
-                NoteAnswer(L);
                 try
                 {
                     if (code != ErrorCode.NoError) Log("last trades for the forming minute not loaded (" + code + " " + message + "); the minute stays as NinjaTrader sent it");
-                    else if (Current(L)) raw = RawBars.Copy(req.Bars, true);
+                    else if (Current(L)) { raw = RawBars.Copy(req.Bars, true); NoteAnswer(L); }
                 }
                 catch (Exception ex) { Log("last trades error: " + ex.Message); }
                 finally { try { req.Dispose(); } catch (Exception) { } }
@@ -1445,7 +1456,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 RawBars raw = null;
                 bool again = false;
-                NoteAnswer(L);
                 try
                 {
                     if (code != ErrorCode.NoError)
@@ -1456,6 +1466,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else if (Current(L))
                     {
                         raw = RawBars.Copy(req.Bars, true);
+                        NoteAnswer(L);
                         if (margin && raw.Count == 0) { again = true; raw = null; }   // nothing at all from a request ending in the future: as refused
                     }
                 }
@@ -1582,7 +1593,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"droppedAsDuplicate\":").Append(r.Dropped);
             b.Append(",\"droppedOlder\":").Append(r.DroppedOlder);
             b.Append(",\"droppedSameTime\":").Append(r.DroppedSameTime);
-            b.Append(",\"droppedAfterAnswer\":").Append(r.DroppedAfterAnswer);   // kept; the 0.3.3 rule would have dropped them
+            b.Append(",\"droppedAfterAnswer\":").Append(r.DroppedAfterAnswer);   // held after the answer, matched at T
+            b.Append(",\"olderAfterAnswer\":").Append(r.OlderAfterAnswer);       // held after the answer, older than T
             b.Append(",\"released\":").Append(r.Release.Count);
             b.Append(",\"resolutionMs\":").Append(CbJson.Num((double)r.ResolutionTicks / ChartBridgeSeam.Ms));
             b.Append(",\"tickToAheadMin\":").Append(L.TickHours > 0 ? (L.TickToMargin ? TickToMarginMinutes : 0).ToString(CultureInfo.InvariantCulture) : "null");

@@ -155,7 +155,7 @@ public static class SeamHarness
         client = new ChartBridgeClient(null, 77);
         client.Tap = s => { lock (sent) sent.Add(s); };
         clients[77] = client;
-        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); }
+        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); }
         finally
         {
             ChartBridgeClient gone; clients.TryRemove(77, out gone);
@@ -433,5 +433,70 @@ public static class SeamHarness
         Check(again != null && again.To <= DateTime.Now.AddSeconds(1) && again.To >= DateTime.Now.AddMinutes(-1), "S4: zero trades from the future-dated request: asked again ending now");
         if (again != null) again.Answer(new Bars(), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Reqs() == r0 + 3, "S4: an empty answer ending now is final (one retry only)");
+    }
+
+    // ------------------------------------------------------------ the re-review (review_seam2.md R1, N1, N2)
+    static void ReReview()
+    {
+        // R1 at milliseconds: X is the backfill's last trade and NinjaTrader hands it over live only after its answer.
+        // Every held trade may match at millisecond resolution, so X is not sent twice (the review's P6).
+        double[][] ms = { new double[] { 10.1, 100, 1 }, new double[] { 10.25, 100.25, 2 } };
+        SeamResult r = D2(ms, 0, H(10.25, 100.25, 2), H(10.4, 100.5, 1));
+        Check(Out(r) == "10.4|100.5|1" && r.DroppedSameTime == 1 && r.DroppedAfterAnswer == 1 && r.ResolutionTicks == ChartBridgeSeam.Ms,
+            "R1: milliseconds: a trade held after the answer still matches at T, and is counted in droppedAfterAnswer (" + Out(r) + ")");
+        // R1 at whole seconds: the gate stays (c after the answer, same price and size, is a real trade).
+        double[][] secs = WholeSeconds(20, -11).Concat(new[] { new double[] { 10, 100, 1 }, new double[] { 10, 100, 1 } }).ToArray();
+        r = D2(secs, 1, H(10.3, 100, 1), H(10.8, 100, 1));
+        Check(Out(r) == "10.8|100|1" && r.DroppedSameTime == 1 && r.DroppedAfterAnswer == 1 && r.ResolutionTicks == ChartBridgeSeam.Second,
+            "R1: whole seconds: only trades held before the answer match at T (" + Out(r) + ")");
+        // olderAfterAnswer: held after the answer yet older than T, at either resolution (the review's P10).
+        r = D2(ms, 0, H(10.1, 100, 1), H(10.4, 100.5, 1));
+        Check(r.OlderAfterAnswer == 1 && r.DroppedOlder == 1 && Out(r) == "10.4|100.5|1", "R1: olderAfterAnswer counts a late trade older than T (milliseconds)");
+        r = D2(secs, 0, H(9.5, 94.75, 1), H(10.8, 100, 1));
+        Check(r.OlderAfterAnswer == 1 && r.DroppedOlder == 1, "R1: olderAfterAnswer at whole seconds too");
+        r = D2(ms, 2, H(10.1, 100, 1), H(10.25, 100.25, 2));
+        Check(r.OlderAfterAnswer == 0 && r.DroppedAfterAnswer == 0 && r.Release.Count == 0, "R1: trades held before the answer count in neither");
+
+        // R1 through the load: millisecond backfill, the last trade delivered live after the answer.
+        lock (sent) sent.Clear();
+        int r0 = Reqs();
+        Priv("Subscribe", client, "MNQ", 5, 8);
+        Req(r0).Answer(Minutes(new double[] { 0, 1, 1, 1, 1, 1 }, new double[] { 60, 100, 100.25, 100, 100.25, 3 }), ErrorCode.NoError);
+        lock (client.Pending)
+        {
+            Req(r0 + 1).Answer(Ticks(new double[] { -1.5, 99, 1 }, new double[] { 10.1, 100, 1 }, new double[] { 10.25, 100.25, 2 }), ErrorCode.NoError);
+            Live(10.25, 100.25, 2);   // in the backfill, handed over after the answer
+            Live(10.4, 100.5, 1);
+        }
+        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "R1: ready is sent");
+        Thread.Sleep(30);
+        List<string> l = Sent();
+        List<string> after = l.Skip(Index(l, "\"type\":\"ready\"") + 1).ToList();
+        Check(after.Count == 1 && after[0].Contains("\"p\":100.5") && Seams().Contains("\"heldAtAnswer\":0") && Seams().Contains("\"droppedAfterAnswer\":1") && Seams().Contains("\"olderAfterAnswer\":0"),
+            "R1: load: at milliseconds the late copy of the backfill's last trade is not sent twice; /diag shows it");
+
+        // N1: a subscribe id with leading zeros is echoed as canonical digits (007 is not JSON).
+        lock (sent) sent.Clear();
+        r0 = Reqs();
+        Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"tickHours\":8,\"sub\":007}");
+        Req(r0).Answer(Minutes(new double[] { 60, 2, 2, 2, 2, 2 }), ErrorCode.NoError);
+        Req(r0 + 1).Answer(Ticks(new double[] { -5, 3, 1 }, new double[] { 1, 3, 1 }), ErrorCode.NoError);
+        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "N1: ready is sent");
+        Thread.Sleep(30);
+        l = Sent();
+        Check(l.Any(x => x.Contains("\"type\":\"ready\"") && x.Contains("\"sub\":7}")) && !l.Any(x => x.Contains("\"sub\":0")) && !Seams().Contains("\"sub\":007"),
+            "N1: \"sub\":007 is echoed as 7 on the wire and in /diag");
+
+        // N2: a whole-second backfill of fewer than 20 trades, every one on a whole second, counts as whole seconds
+        // (the review's P8: X, true 10.3 stamped 10, held before the answer, is not sent twice).
+        double[][] few = { new double[] { 6, 99, 1 }, new double[] { 7, 99, 1 }, new double[] { 8, 99, 1 }, new double[] { 9, 99, 1 }, new double[] { 10, 100, 1 } };
+        r = D2(few, 1, H(10.3, 100, 1));
+        Check(r.ResolutionTicks == ChartBridgeSeam.Second && r.Release.Count == 0, "N2: a 5-trade whole-second backfill is judged whole seconds; its last trade is not sent twice");
+        r = D2(new double[][] { new double[] { 9.5, 99, 1 }, new double[] { 10, 100, 1 } }, 1, H(10.3, 100, 1));
+        Check(r.ResolutionTicks == ChartBridgeSeam.Ms && r.Release.Count == 1, "N2: a short backfill with one trade off the whole second stays millisecond");
+        r = D2(WholeSeconds(30, 0).Concat(Enumerable.Range(0, 10).Select(i => new double[] { 40 + i, 90, 1 })).ToArray(), 0);
+        Check(r.ResolutionTicks == ChartBridgeSeam.Second, "N2: a long whole-second backfill still needs 20 near the seam (it has 40)");
+        r = ChartBridgeSeam.Dedupe(new[] { At(1.5), At(2.5) }, new[] { 1.0, 1.0 }, new long[] { 1, 1 }, 2, Enumerable.Range(0, 5).Select(i => H(3 + i, 1, 1)).ToList(), 5);
+        Check(r.ResolutionTicks == ChartBridgeSeam.Ms, "N2: fewer than 20 held on whole seconds do not make it whole seconds");
     }
 }
