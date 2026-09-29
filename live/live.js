@@ -4,37 +4,163 @@
  * can trade, but only after ChartBridge enables it (trading = true in config.txt, this page signed in with
  * the session token) and only while the Armed switch is on. Armed is off after every page load.
  */
-(() => {
+/*
+ * Saved choices (LivePrefs), in this browser's localStorage. This block also loads in Node, for tests with a
+ * stand-in storage; the page code below runs only in a browser. It lives in live.js because nt8/install.ps1
+ * copies a fixed list of page files.
+ *
+ * Every read and write is wrapped: storage can be missing or throw (private windows, blocked site data).
+ * Every write changes one field and reads the key fresh first, so two chart tabs never undo each other's
+ * choices (before 1.4.0 each tab wrote its whole in-memory copy back, which put NQ's range back to 20 when
+ * another tab saved).
+ *
+ * Keys (versioned):
+ *   live-settings-v2    { root, tf, glide, rangeMode }
+ *   live-range-v2       { NQ: 40, ... } range bar size in ticks, per instrument root; only roots set by hand
+ *   live-indicators-v1  { <paneId>: { volume, vwap, levels, fills } } indicators on each chart pane
+ *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
+ * The 1.3 keys live-settings-v1 and live-range-v1 are read once, when the new keys do not exist yet, and left
+ * in place.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = { LivePrefs: factory() };
+  else root.LivePrefs = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
-const CE = window.ChartEngine, U = CE.util, BarBuilder = window.BarBuilder.BarBuilder, OT = window.OrderTicket;
+
+const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
+const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range'];
+const GLIDES = ['smooth', 'fast', 'off'];
+const RANGE_MODES = ['nt', 'traded'];
+const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };
+const RANGE_MIN = 1, RANGE_MAX = 400;
+const INDICATORS = [
+  { id: 'volume', name: 'Volume' },
+  { id: 'vwap', name: 'VWAP' },
+  { id: 'levels', name: 'Levels' },
+  { id: 'fills', name: 'Fills' },
+];
+/* What the page showed before any choice was made (1.3); the main pane starts here. */
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true };
+/* A new pane (the grid, next step) starts from this clean set, never from another pane's choices. */
+const NEW_PANE_INDICATORS = DEFAULT_INDICATORS;
+const MAIN_PANE = 'main';
+
+const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v1', bracket: 'live-bracket-v1' };
+const OLD = { settings: 'live-settings-v1', range: 'live-range-v1' };
+
+/** A whole number of ticks from 1 to 400, or null when the text is not one (half typed, empty, 0, 4.5). */
+function parseRange(v) {
+  if (typeof v === 'string') { v = v.trim(); if (!/^\d+$/.test(v)) return null; }
+  const n = +v;
+  return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null;
+}
+/** For a committed entry (Enter or leaving the box): clamp into 1 to 400; null when it is not a number at all. */
+function clampRange(v) {
+  const n = Math.round(+v);
+  if (v === '' || v === null || v === undefined || !isFinite(n)) return null;
+  return Math.max(RANGE_MIN, Math.min(RANGE_MAX, n));
+}
+
+function cleanIndicators(v, base) {
+  const out = Object.assign({}, base || NEW_PANE_INDICATORS);
+  if (v && typeof v === 'object') for (const k of Object.keys(out)) if (typeof v[k] === 'boolean') out[k] = v[k];
+  return out;
+}
+
+function create(storage) {
+  const raw = {
+    get(k) { try { const s = storage && storage.getItem(k); return s === null || s === undefined ? null : JSON.parse(s); } catch (e) { return null; } },
+    set(k, v) { try { if (storage) storage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+    has(k) { try { return !!storage && storage.getItem(k) !== null; } catch (e) { return false; } },
+  };
+  const obj = k => { const v = raw.get(k); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
+  /* read fresh, change one field, write back */
+  const patch = (k, field, value) => { const cur = obj(k); cur[field] = value; return raw.set(k, cur); };
+
+  /* one-time carry-over from the 1.3 keys */
+  function migrate() {
+    if (!raw.has(KEYS.settings)) {
+      const s = obj(OLD.settings), next = {};
+      if (ROOTS.includes(s.root)) next.root = s.root;
+      if (TFS.includes(s.tf)) next.tf = s.tf;
+      if (GLIDES.includes(s.glide)) next.glide = s.glide;
+      raw.set(KEYS.settings, next);
+      if (!raw.has(KEYS.indicators) && s.layers) raw.set(KEYS.indicators, { [MAIN_PANE]: cleanIndicators(s.layers, DEFAULT_INDICATORS) });
+    }
+    if (!raw.has(KEYS.range)) {
+      const r = obj(OLD.range), next = {};
+      for (const root of ROOTS) { const n = parseRange(r[root]); if (n !== null) next[root] = n; }
+      raw.set(KEYS.range, next);
+    }
+  }
+  migrate();
+
+  return {
+    raw,
+    /** { root, tf, glide, rangeMode } with defaults for anything missing or unknown. */
+    settings() {
+      const s = obj(KEYS.settings);
+      return {
+        root: ROOTS.includes(s.root) ? s.root : 'MNQ',
+        tf: TFS.includes(s.tf) ? s.tf : 'm1',
+        glide: GLIDES.includes(s.glide) ? s.glide : 'smooth',
+        rangeMode: RANGE_MODES.includes(s.rangeMode) ? s.rangeMode : 'nt',
+      };
+    },
+    setSetting(field, value) { return patch(KEYS.settings, field, value); },
+    /** Range bar size in ticks for a root: the saved one, else the default. */
+    range(root) { const n = parseRange(obj(KEYS.range)[root]); return n !== null ? n : (DEFAULT_RANGE[root] || 20); },
+    setRange(root, ticks) { const n = parseRange(ticks); if (n === null || !ROOTS.includes(root)) return false; return patch(KEYS.range, root, n); },
+    /** Indicators on a pane: the saved set, the 1.3 set for the main pane, else the clean set for a new pane. */
+    indicators(paneId) {
+      const all = obj(KEYS.indicators);
+      return cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
+    },
+    setIndicators(paneId, set) { return patch(KEYS.indicators, paneId, cleanIndicators(set, paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS)); },
+    bracket(root) { return obj(KEYS.bracket)[root]; },
+    setBracket(root, b) { return patch(KEYS.bracket, root, b); },
+  };
+}
+
+/** Runs fn after `ms` of quiet; flush() runs a waiting call now (on commit, or when the page is closing). */
+function debounce(fn, ms) {
+  let timer = null, args = null;
+  const run = () => { timer = null; const a = args; args = null; if (a) fn.apply(null, a); };
+  const d = function () { args = arguments; if (timer) clearTimeout(timer); timer = setTimeout(run, ms); };
+  d.flush = () => { if (timer) { clearTimeout(timer); run(); } };
+  d.cancel = () => { if (timer) clearTimeout(timer); timer = null; args = null; };
+  return d;
+}
+
+return { create, debounce, parseRange, clampRange, cleanIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, DEFAULT_RANGE, INDICATORS, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+});
+
+if (typeof document !== 'undefined') (() => {
+'use strict';
+const CE = window.ChartEngine, U = CE.util, BB = window.BarBuilder, BarBuilder = BB.BarBuilder, OT = window.OrderTicket, LP = window.LivePrefs;
 const $ = id => document.getElementById(id);
 const SESSION = 18 * 3600;
-const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
+const ROOTS = LP.ROOTS;
 const TF = {
   s15: { mode: 'time', sec: 15, label: '15s' }, s30: { mode: 'time', sec: 30, label: '30s' },
   m1: { mode: 'time', sec: 60, label: '1m' }, m5: { mode: 'time', sec: 300, label: '5m' },
   m15: { mode: 'time', sec: 900, label: '15m' }, h1: { mode: 'time', sec: 3600, label: '1h' },
   range: { mode: 'range', sec: 30, label: 'Range' },
 };
-const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };      // ticks; change per instrument in the toolbar
 const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 20, fit: 60, follow: 60 }, off: { candle: 0, fit: 0, follow: 0 } };
 
-const store = {
-  get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v === null || v === undefined ? d : v; } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage blocked */ } },
+/* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
+const prefs = LP.create((() => { try { return window.localStorage; } catch (e) { return null; } })());
+const PANE = LP.MAIN_PANE;                       // one pane today; the grid (next step) adds more pane ids
+const S = Object.assign(prefs.settings(), { layers: prefs.indicators(PANE) });
+const ranges = {};
+for (const r of ROOTS) ranges[r] = prefs.range(r);
+const saveSetting = k => prefs.setSetting(k, S[k]);
+const store = {                                  // single-value keys (fill account, drawings), try/catch inside
+  get(k, d) { const v = prefs.raw.get(k); return v === null ? d : v; },
+  set(k, v) { prefs.raw.set(k, v); },
 };
-const S = { root: 'MNQ', tf: 'm1', glide: 'smooth', layers: { volume: true, vwap: true, levels: true, fills: true } };
-{
-  const s = store.get('live-settings-v1', null);
-  if (s) {
-    if (ROOTS.includes(s.root)) S.root = s.root;
-    if (TF[s.tf]) S.tf = s.tf;
-    if (GLIDE[s.glide]) S.glide = s.glide;
-    if (s.layers) for (const k in S.layers) if (typeof s.layers[k] === 'boolean') S.layers[k] = s.layers[k];
-  }
-}
-const ranges = Object.assign({}, DEFAULT_RANGE, store.get('live-range-v1', {}));
-const saveSettings = () => store.set('live-settings-v1', S);
 
 /* exchange clock: New York wall time as bar-time seconds; the offset is refreshed every minute */
 let etOffset = U.zoneSeconds(Date.now() / 1000) - Date.now() / 1000;
@@ -52,9 +178,11 @@ const chart = CE.create($('chart'), {
 window.liveChart = chart;            // for tests and the console; order actions still go through the checks below
 
 /* ---------------- per-instrument data */
-const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null, tickHours: 0 };
-/* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load). */
-const needsTicks = () => TF[S.tf].mode === 'range' || TF[S.tf].sec < 60;
+const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity };
+/* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
+   Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
+const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
+const ticksMissing = () => TF[S.tf].mode === 'range' ? D.tickFrom > BB.rangeHistoryFrom(etNow(), SESSION) : TF[S.tf].sec < 60 && D.tickHours === 0;
 let instruments = {};
 const fills = new Map();            // id -> fill, all instruments
 let fillAccount = store.get('live-fill-account-v1', '');   // '' = all accounts
@@ -89,9 +217,10 @@ function rebuild() {
     chart.setCountdown(null);
   } else {
     D.cur = tf.mode === 'range'
-      ? new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root] || DEFAULT_RANGE[D.root] || 20, tick: D.tick, sessionStart: SESSION })
+      ? new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION })
       : new BarBuilder({ mode: 'time', seconds: tf.sec, tick: D.tick, sessionStart: SESSION });
-    for (const k of D.ticks) D.cur.add(k[0], k[1], k[2]);
+    const from = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
+    for (let i = from; i < D.ticks.length; i++) { const k = D.ticks[i]; D.cur.add(k[0], k[1], k[2]); }
     chart.setBars(D.cur.bars, { barSeconds: tf.sec });
     if (tf.mode === 'range') chart.setCountdown(() => { const r = D.cur && D.cur.rangeLeft(); return r ? '▲' + r.up + ' ▼' + r.down : ''; });
     else chart.setCountdown(null);
@@ -132,12 +261,12 @@ function onTick(m) {
   if (m.root !== D.root || !D.ready) return;
   const t = m.t, p = m.p, v = m.v || 0;
   D.ticks.push([t, p, v]);
-  if (D.ticks.length > 2500000) D.ticks.splice(0, 500000);
+  if (D.ticks.length > 2500000) { D.ticks.splice(0, 500000); D.tickFrom = D.ticks[0][0] + 0.001; }   // the first session left is partial now
   ticksSeen++;
   const r1 = D.m1.add(t, p, v);
   const tf = TF[S.tf];
   if (tf.mode === 'time' && tf.sec >= 60) chart.update(tf.sec === 60 ? r1.bar : U.foldLast(D.m1.bars, tf.sec));
-  else if (D.cur) chart.update(D.cur.add(t, p, v).bar);
+  else if (D.cur) { const ch = D.cur.add(t, p, v).changed; for (let i = 0; i < ch.length; i++) chart.update(ch[i]); }   // a finished range bar, phantom bars, the new bar
   const now = nowMs();
   pushDelay(delays.feed, m.rx - m.u);
   pushDelay(delays.local, now - m.rx);
@@ -207,7 +336,8 @@ function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj))
 function subscribe(root) {
   resetData(root);
   setConn('loading');
-  D.tickHours = needsTicks() ? 8 : 0;
+  D.tickHours = ticksWanted();
+  D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
   send({ type: 'subscribe', root, days: 5, tickHours: D.tickHours });
 }
 
@@ -258,7 +388,7 @@ const TR = {
   positions: new Map(),                // 'account|root' -> { qty, avgPrice }
 };
 const brackets = {};
-{ const b = store.get('live-bracket-v1', {}); for (const r of ROOTS) brackets[r] = OT.cleanBracket(b && b[r]); }
+for (const r of ROOTS) brackets[r] = OT.cleanBracket(prefs.bracket(r));
 const sameAction = OT.repeatGuard(400);
 let cidSeq = 0;
 const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
@@ -442,7 +572,7 @@ chart.on('legend', e => {
   legendKey = key;
   const dp = precisionOf(), fmt = p => U.fmtPrice(p, dp);
   const chg = prev ? b.c - prev.c : 0, pct = prev ? chg / prev.c * 100 : 0;
-  $('lgTf').textContent = S.tf === 'range' ? 'Range ' + (ranges[D.root] || '') + 't' : TF[S.tf].label;
+  $('lgTf').textContent = S.tf === 'range' ? 'Range ' + (ranges[D.root] || '') + 't' + (S.rangeMode === 'traded' ? ' traded' : '') : TF[S.tf].label;
   $('lgTime').textContent = U.fmtFull(b.t) + (forming ? ' · forming' : '');
   $('lgO').textContent = fmt(b.o); $('lgH').textContent = fmt(b.h); $('lgL').textContent = fmt(b.l); $('lgC').textContent = fmt(b.c);
   const chgEl = $('lgChg');
@@ -468,37 +598,77 @@ function syncButtons() {
   for (const b of $('symSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.root));
   for (const b of $('tfSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.tf));
   for (const b of $('glideSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.glide));
-  for (const b of $('layerChips').children) b.setAttribute('aria-pressed', String(!!S.layers[b.dataset.layer]));
+  syncIndicators();
   $('rangeBox').hidden = S.tf !== 'range';
-  $('rangeTicks').value = ranges[S.root] || DEFAULT_RANGE[S.root] || 20;
+  if (document.activeElement !== $('rangeTicks')) $('rangeTicks').value = ranges[S.root];
   $('rangeTicks').setAttribute('aria-label', 'Range bar size for ' + S.root + ' in ticks');
+  $('rangeMode').value = S.rangeMode;
 }
 $('symSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === S.root) return;
-  S.root = b.dataset.v; saveSettings(); syncButtons();
+  S.root = b.dataset.v; saveSetting('root'); syncButtons();
   if (TR.armed) { setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
   subscribe(S.root);
 });
 $('tfSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === S.tf) return;
-  S.tf = b.dataset.v; saveSettings(); syncButtons();
-  if (needsTicks() && D.tickHours === 0) subscribe(S.root);      // first tick-based view: fetch the session's ticks
+  S.tf = b.dataset.v; saveSetting('tf'); syncButtons();
+  if (ticksMissing()) subscribe(S.root);      // the tick backfill does not reach back far enough for this view: fetch it
   else rebuild();
 });
+
+/* Range size, per root. Saved as it is typed (a whole number 1 to 400; anything else waits), a moment after the
+   last key; Enter or leaving the box commits at once. A size still waiting is saved if the page is closed or
+   reloaded first. */
+let rangePending = null;
+const saveRange = () => { if (rangePending) { prefs.setRange(rangePending.root, rangePending.n); rangePending = null; } };
+const rangeSettled = LP.debounce(() => { saveRange(); if (S.tf === 'range') rebuild(); }, 350);
+function setRange(n) {
+  if (n === null) return false;
+  if (ranges[S.root] !== n) { ranges[S.root] = n; rangePending = { root: S.root, n }; return true; }
+  return false;
+}
+$('rangeTicks').addEventListener('input', e => { if (setRange(LP.parseRange(e.target.value))) rangeSettled(); });
 $('rangeTicks').addEventListener('change', e => {
-  const n = Math.max(1, Math.min(400, Math.round(+e.target.value || 0)));
-  ranges[S.root] = n; store.set('live-range-v1', ranges); syncButtons(); if (S.tf === 'range') rebuild();
+  setRange(LP.clampRange(e.target.value));
+  e.target.value = ranges[S.root];
+  rangeSettled.cancel();
+  if (rangePending) { saveRange(); if (S.tf === 'range') rebuild(); }
+});
+$('rangeMode').addEventListener('change', e => {
+  if (!LP.RANGE_MODES.includes(e.target.value)) return;
+  S.rangeMode = e.target.value; saveSetting('rangeMode');
+  if (S.tf === 'range') rebuild();
 });
 $('glideSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSettings(); syncButtons();
+  S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSetting('glide'); syncButtons();
 });
-$('layerChips').addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
-  const k = b.dataset.layer; S.layers[k] = !S.layers[k];
+
+/* Indicators: one menu per chart pane (one pane today), saved per pane id. */
+function syncIndicators() {
+  let on = 0;
+  for (const c of $('indPanel').querySelectorAll('input[data-layer]')) { c.checked = !!S.layers[c.dataset.layer]; if (c.checked) on++; }
+  $('indCount').textContent = on + '/' + LP.INDICATORS.length;
+}
+function setIndicator(k, v) {
+  if (!(k in S.layers)) return;
+  S.layers[k] = !!v;
   if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: S.layers[k] });
-  legendKey = ''; saveSettings(); syncButtons();
-});
+  legendKey = ''; prefs.setIndicators(PANE, S.layers); syncIndicators();
+}
+{
+  const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel');
+  const open = v => {
+    panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
+    if (v) { const first = panel.querySelector('input'); if (first) first.focus(); }
+  };
+  btn.addEventListener('click', () => open(panel.hidden));
+  panel.addEventListener('change', e => { const c = e.target.closest('input[data-layer]'); if (c) setIndicator(c.dataset.layer, c.checked); });
+  document.addEventListener('pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) open(false); });
+  wrap.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hidden) { e.preventDefault(); open(false); btn.focus(); } });
+  wrap.addEventListener('focusout', e => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) open(false); });
+}
 $('fillAcct').addEventListener('change', e => {
   fillAccount = e.target.value; store.set('live-fill-account-v1', fillAccount); applyMarkers();
 });
@@ -530,13 +700,27 @@ const pointerOnly = fn => e => { e.currentTarget.blur(); if (e.detail === 0) { f
 $('buyMkt').addEventListener('click', pointerOnly(() => sendOrder('buy', 'market', null)));
 $('sellMkt').addEventListener('click', pointerOnly(() => sendOrder('sell', 'market', null)));
 $('sideSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; TR.side = b.dataset.v; renderTrading(); chart.setOrderPreview(previewAt); });
+/* Bracket ticks per root: saved as typed (whole numbers 0 to 200; anything else waits), and at once on Enter or
+   leaving the box. Each save writes only this root's bracket. */
+const bracketSaved = LP.debounce(root => prefs.setBracket(root, brackets[root]), 350);
 for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
+  $(id).addEventListener('input', e => {
+    const v = e.target.value.trim();
+    if (!/^\d+$/.test(v) || +v > OT.MAX_BRACKET_TICKS) return;
+    brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: v }));
+    bracketSaved(D.root);
+  });
   $(id).addEventListener('change', e => {
     brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: e.target.value }));
     e.target.value = brackets[D.root][k];
-    store.set('live-bracket-v1', brackets);
+    bracketSaved.cancel();
+    prefs.setBracket(D.root, brackets[D.root]);
   });
 }
+/* Anything typed but not yet saved is saved when the page is closed, reloaded or hidden. */
+const saveWaiting = () => { saveRange(); bracketSaved.flush(); };      // the chart still redraws when its timer runs
+window.addEventListener('pagehide', saveWaiting);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveWaiting(); });
 $('flattenBtn').addEventListener('click', pointerOnly(() => {
   if (!ready()) return;
   if (!sameAction('flatten', performance.now())) return;

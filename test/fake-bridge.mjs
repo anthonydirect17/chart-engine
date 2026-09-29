@@ -9,6 +9,8 @@
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
 //                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
+//   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
+//                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -26,7 +28,7 @@ const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
-const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames');
+const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
 const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
@@ -56,6 +58,9 @@ function makeData(rootSym) {
 }
 function ticksFrom(bars, hours) {
   const out = [], from = bars[bars.length - 1].t - hours * 3600;
+  let seed = 7;
+  const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+  const stepTicks = () => { if (!TICK_GAPS) return 1; const r = rnd(); return r < 0.8 ? 1 : r < 0.97 ? 2 + Math.floor(rnd() * 2) : 8 + Math.floor(rnd() * 9); };
   for (const b of bars) {
     if (b.t < from) continue;
     // walk open -> low -> high -> close (or the other way) one tick at a time, like real trades
@@ -63,8 +68,8 @@ function ticksFrom(bars, hours) {
     const prices = [way[0]];
     for (let s = 1; s < way.length; s++) {
       let p = prices[prices.length - 1];
-      const step = way[s] > p ? 0.25 : -0.25;
-      while (Math.abs(way[s] - p) > 1e-9) { p = rq(p + step, 0.25); prices.push(p); }
+      const dir = way[s] > p ? 1 : -1;
+      while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
     const v = Math.max(1, Math.round(b.v / prices.length));
     prices.forEach((p, i) => out.push([+(b.t + i * 59.9 / prices.length).toFixed(3), p, v]));
