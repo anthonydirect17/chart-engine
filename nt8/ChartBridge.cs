@@ -44,7 +44,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (State == State.SetDefaults)
             {
                 Name = "ChartBridge";
-                Description = "Streams live data and fills to the chart-engine live page at http://localhost:8765/ (read only unless order entry is turned on in config.txt).";
+                Description = "Streams live data and fills to the chart-engine live page at http://localhost:8765/ (this PC only; read only unless order entry is turned on in config.txt).";
             }
             else if (State == State.Configure || State == State.Active)
             {

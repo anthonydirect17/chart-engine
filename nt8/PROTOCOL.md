@@ -5,6 +5,46 @@ talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on 
 **Read only by default.** Nothing in v1 can place, change or cancel an order. Order entry (v2, ChartBridge
 0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
 
+## Network access (0.3.1)
+
+**This PC only.** Windows' web server under HttpListener (HTTP.sys) listens on every network interface and
+matches only the `Host` header, so the prefix `http://localhost:8765/` does not by itself keep other devices
+out: on the trading PC (2026-09-29) a request to the Wi-Fi or Tailscale address with a forged
+`Host: localhost:8765` was answered, including `/diag`. So ChartBridge checks every request first, on
+every path (page files, `/diag`, `/session`, `/ws`), before any routing: the source address must be loopback
+(`127.0.0.0/8`, `::1`, or IPv4 loopback mapped into IPv6, `::ffff:127.0.0.1`). Anything else, including a
+request whose address cannot be read, gets **403** with no body. A refusal is logged in the Output window once
+an hour per address (at most 1000 addresses an hour, so a scan cannot flood it). ChartBridge does not change
+HTTP.sys's system-wide listen list (other programs use it).
+
+**Which web pages may read.** A browser always sends an `Origin` header with a WebSocket. The WebSocket at
+`/ws` takes a browser only from ChartBridge's own page (`http://localhost:<port>`) or from an origin listed
+in `config.txt`:
+
+```
+allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800
+```
+
+Each entry is an exact `scheme://host[:port]` (http or https), compared lower-cased; a default port (`:80`,
+`:443`) and a trailing slash are dropped, because a browser's `Origin` has neither. No wildcards; an entry with
+a path, a `*` or `null` is skipped with a line in the Output window. Any other origin, `Origin: null` (sandboxed
+frames, `file://` pages) and an empty `Origin` get **403** before the WebSocket opens. A connection with **no**
+`Origin` header is not a browser (a local program such as The Desk's server relay) and is allowed: the address
+check already limits it to this PC. Without this, any web site open in the browser could connect to
+`ws://localhost:8765/ws` and read account names, fills and CME ticks.
+
+**Trading stays stricter.** An `allowOrigins` page can read the stream but can never sign in or trade: orders
+need ChartBridge's own page (gate 4 below, unchanged).
+
+**Second layer.** A Windows firewall rule blocking inbound TCP 8765 is still recommended (admin PowerShell:
+`New-NetFirewallRule -DisplayName "ChartBridge 8765 block inbound" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Block`).
+The firewall does not filter traffic within the PC. Safety does not rest on it.
+
+`/diag` shows the rules in force under `network`: `loopbackOnly` (true), `allowOrigins` (ChartBridge's own page
+first, then the listed ones; not secret), `refusedNotThisPc` and `refusedOrigin` (refusals since the start).
+
+## Messages
+
 All messages are JSON text. Times:
 
 - `t`: exchange wall-clock seconds stored as if UTC (New York time for CME), fractional for ticks.
@@ -54,7 +94,7 @@ Order and position events are counted for `/diag` only. ChartBridge never acts o
 
 ## Diagnostics: `GET /diag` (this PC only)
 
-JSON: `version`; `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 once the clock has
+JSON: `version`; `network` (0.3.1: see Network access); `clockOffsetMs` (PC clock minus ChartBridge's clock, near 0 once the clock has
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
@@ -99,8 +139,8 @@ the broker and the prop firm see NinjaTrader orders.
 4. **This page only.** Order messages are accepted only on a WebSocket whose `Origin` header is
    ChartBridge's own page (`http://localhost:<port>`), and only after the page sends the session
    token it read from `GET /session` (served same-origin, no CORS headers, a new random token each
-   time ChartBridge starts; `/session` answers only when asked for as `localhost:<port>`). Other web pages
-   in the browser, and The Desk, stay read only. Every page
+   time ChartBridge starts; `/session` answers only when asked for as `localhost:<port>`, and like every
+   path only to this PC). Other web pages, including those in `allowOrigins`, and The Desk, stay read only. Every page
    ChartBridge serves carries `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors
    'none'`, so no other site can show it in a frame and trick a click.
 5. **Price and tick checks.** Limit and stop prices must be on the instrument's tick grid and within
@@ -156,6 +196,11 @@ that would reduce the position (by both position readings) it is refused.
   stops on the closing side cover fewer contracts than the position holds for 4 seconds (a stop rejected
   or cancelled by hand, contracts added without a bracket, or a leg that filled and left a position of
   its own), the page gets a `status` `error`, once per situation and again if it happens on a later trade.
+  When the stop was cancelled or rejected and NinjaTrader's OCO cancelled its target too (0.3.1, from the
+  Sim101 test), the text says so: "... working stops cover 0 contract(s); the target was cancelled too (OCO),
+  so the position has no stop and no target; check NinjaTrader and add a stop". The start of the text is
+  unchanged. Pairs ChartBridge cancels itself (Flatten, a flat position, the legs check) are not called lost;
+  after a reload only pairs lost since then are known.
   A market exit that is rejected or cancelled raises an error too.
 - **Reconnects.** The scan never decides "no legs needed" while the account's connection is not steady
   (a reconnect can list orders before positions); it places what the listed position shows and looks
