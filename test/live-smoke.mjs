@@ -65,6 +65,9 @@ try {
     return { n: b.length, bad };
   });
   if (spans.n < 20 || spans.bad.length) fail('NinjaTrader range bars not exact: ' + JSON.stringify(spans).slice(0, 300));
+  const lateMain = await page.evaluate(() => { const b = window.liveChart.bars()[0], s = 18 * 3600, start = (Math.floor((b.t + 86400 - s) / 86400) - 1) * 86400 + s; return b.t - start > 600; });
+  if (lateMain !== /less tick history than asked/.test(await page.textContent('#statusMsg'))) fail('partial history note wrong with the full backfill: ' + lateMain + ' "' + await page.textContent('#statusMsg') + '"');
+  console.log('full history: first range bar mid-session ' + lateMain);
   await page.screenshot({ path: path.join(out, 'live-range.png') });
   await page.selectOption('#rangeMode', 'traded'); await page.waitForTimeout(400);
   if (!/Range 12t traded/.test(await page.textContent('#lgTf'))) fail('traded mode label: ' + await page.textContent('#lgTf'));
@@ -133,6 +136,27 @@ try {
   for (const g of ['Fast', 'Off', 'Smooth']) await page.click(`#glideSeg >> text="${g}"`);
   await page.screenshot({ path: path.join(out, 'live-es.png') });
   console.log('status:', status.slice(0, 160));
+
+  // less tick history than asked (review N5): a quiet note says range bars start mid-session, exactly when they do
+  {
+    const short = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT + 1), '--v1', '--tick-hours-max=2'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    await new Promise(r => short.stdout.once('data', r));
+    try {
+      const p2 = await browser.newPage({ viewport: { width: 1440, height: 860 } });
+      p2.on('pageerror', e => fail('short history pageerror: ' + e.message));
+      await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+      await p2.goto(`http://localhost:${PORT + 1}/live/`);
+      await p2.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+      if (await p2.getAttribute('#tfSeg >> text="Range"', 'aria-pressed') !== 'true') { await p2.click('#tfSeg >> text="Range"'); await p2.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 }); }
+      await p2.waitForTimeout(500);
+      const late = await p2.evaluate(() => { const b = window.liveChart.bars()[0]; if (!b) return null; const s = 18 * 3600, start = (Math.floor((b.t + 86400 - s) / 86400) - 1) * 86400 + s; return b.t - start > 600; });
+      const msg = await p2.textContent('#statusMsg');
+      if (late === null) fail('short history: no range bars');
+      else if (late !== /less tick history than asked/.test(msg)) fail('short history note (' + (late ? 'expected' : 'not expected') + '): "' + msg + '"');
+      else console.log('short history: first bar mid-session ' + late + ', note: ' + (msg || '(none)'));
+      await p2.close();
+    } finally { short.kill(); }
+  }
 
   const phone = await browser.newPage({ viewport: { width: 400, height: 820 }, deviceScaleFactor: 2 });
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));

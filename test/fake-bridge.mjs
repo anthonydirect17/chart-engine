@@ -9,6 +9,8 @@
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
 //                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
+//   --tick-hours-max=3              serve at most this many hours of tick history, whatever the page asks
+//                                   (like a PC with little local tick data)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
@@ -29,6 +31,7 @@ const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + nam
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps');
+const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
@@ -132,7 +135,7 @@ function subscribe(c, m) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
     send(c, { type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length });
   }
-  const ticks = ticksFrom(bars, m.tickHours === undefined ? 8 : m.tickHours);
+  const ticks = ticksFrom(bars, Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours));
   for (let i = 0; i < ticks.length || i === 0; i += 20000) {
     send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
     if (!ticks.length) break;

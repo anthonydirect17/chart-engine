@@ -62,6 +62,13 @@ Range R = the range in ticks times the tick size. For each trade at price P:
   ticks back to a session start (this session, or also the previous one while this one is under 8 hours old; at most
   33 hours, below ChartBridge's 48) and builds from that session's first trade. Ticks of a session the backfill only
   partly covers are skipped. Seconds bars still load 8 hours.
+- If NinjaTrader sends less tick history than asked (little local tick data), the first range tick can fall
+  mid-session. The page then builds from there and says so in the status line ("Range bars start at 10:13 ET:
+  NinjaTrader sent less tick history than asked ..."), whenever the first tick used is more than 10 minutes after
+  its session's 18:00 start. Those bars can differ from NinjaTrader's until the next session starts.
+- On a very long session the page drops its oldest 500,000 ticks once it holds 2.5 million. Switching to Range
+  after that reloads the backfill only if the ticks left no longer reach this session's start; otherwise it
+  rebuilds from this session's first trade and leaves out the older, now partial, session.
 
 ## Confirmed by Anthony
 

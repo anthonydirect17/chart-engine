@@ -233,3 +233,21 @@ test('bar times: phantom bars sit between the previous trade and the jump trade;
   for (let i = 1; i < c.bars.length; i++) assert.ok(c.bars[i].t > c.bars[i - 1].t, 'strictly increasing at ' + i);
   assert.ok(c.last.t - t1 <= made * 0.00001 + 1e-9, 'ahead by ' + (c.last.t - t1) + ' s for ' + made + ' bars');
 });
+
+test('after the tick cap trims, Range reloads only when this session start is no longer covered (review N4)', () => {
+  const S = 18 * 3600, now = et(20, 0, 0);                        // this session is 2 h old: normally the day before too
+  assert.equal(BB.rangeNeedsReload(et(17, 0, 0) - 86400, now, S, false), false);
+  assert.equal(BB.rangeNeedsReload(et(12, 0, 0), now, S, false), true);    // 8 h of seconds-bar ticks: not enough
+  assert.equal(BB.rangeNeedsReload(et(12, 0, 0), now, S, true), false);    // trimmed, still reaches 18:00 today
+  assert.equal(BB.rangeNeedsReload(et(18, 30, 0), now, S, true), true);    // trimmed past this session's start
+});
+
+test('partialStart: the first range tick more than 10 minutes into its session (review N5)', () => {
+  const S = 18 * 3600;
+  assert.equal(BB.partialStart([[et(18, 0, 3)], [et(18, 1, 0)]], 0, S), null);
+  assert.equal(BB.partialStart([[et(17, 0, 0)], [et(18, 0, 3)]], 1, S), null);
+  assert.equal(BB.partialStart([[et(2, 14, 0)]], 0, S), et(2, 14, 0));
+  assert.equal(BB.partialStart([[et(18, 9, 0)]], 0, S), null);
+  assert.equal(BB.partialStart([[et(18, 11, 0)]], 0, S), et(18, 11, 0));
+  assert.equal(BB.partialStart([], 0, S), null);
+});

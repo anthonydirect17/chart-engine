@@ -176,5 +176,24 @@ function rangeStartIndex(ticks, from, s) {
   return 0;
 }
 
-return { BarBuilder, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex };
+/*
+ * rangeNeedsReload: whether switching to Range needs a new tick backfill. Normally the ticks must reach back to
+ * rangeHistoryFrom. After the page trimmed its oldest ticks (trimmed = true, on a very long session), it is
+ * enough that they still reach this session's start: the partial older session is skipped, not reloaded.
+ */
+function rangeNeedsReload(tickFrom, now, s, trimmed) {
+  return tickFrom > (trimmed ? sessionStartOf(now, s) : rangeHistoryFrom(now, s));
+}
+/*
+ * partialStart: when the first tick used for range bars comes more than `slack` seconds after its session's start
+ * (NinjaTrader returned less tick history than asked), its time; else null. Bars of that first session are then
+ * built from mid-session and can differ from NinjaTrader's until the next session starts.
+ */
+function partialStart(ticks, from, s, slack) {
+  const k = ticks[from];
+  if (!k) return null;
+  return k[0] - sessionStartOf(k[0], s) > (slack === undefined ? 600 : slack) ? k[0] : null;
+}
+
+return { BarBuilder, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
 });
