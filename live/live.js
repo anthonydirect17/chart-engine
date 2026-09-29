@@ -48,7 +48,9 @@ const chart = CE.create($('chart'), {
 });
 
 /* ---------------- per-instrument data */
-const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null };
+const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null, tickHours: 0 };
+/* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load). */
+const needsTicks = () => TF[S.tf].mode === 'range' || TF[S.tf].sec < 60;
 let instruments = {};
 const fills = new Map();            // id -> fill, all instruments
 let ticksSeen = 0;
@@ -101,15 +103,18 @@ function updateLevels() {
 }
 
 function onReady() {
-  // 1m history up to the start of the current minute; the forming minute is rebuilt from ticks
-  const cutoff = Math.floor(etNow() / 60) * 60;
+  // With ticks: 1m history up to the start of the current minute, and the forming minute rebuilt from
+  // ticks. Without ticks: keep NinjaTrader's forming minute and let live ticks continue it.
+  const cutoff = D.tickHours > 0 ? Math.floor(etNow() / 60) * 60 : Infinity;
   const seen = new Map();
   for (const b of D.hist) if (b.t < cutoff) seen.set(b.t, b);
   const hist = [...seen.values()].sort((a, b) => a.t - b.t);
   D.m1 = new BarBuilder({ mode: 'time', seconds: 60, tick: D.tick, sessionStart: SESSION });
   D.m1.seed(hist);
-  const lastHist = hist.length ? hist[hist.length - 1].t + 60 : -Infinity;
-  for (const k of D.ticks) if (k[0] >= Math.max(cutoff, lastHist)) D.m1.add(k[0], k[1], k[2]);
+  if (D.tickHours > 0) {
+    const lastHist = hist.length ? hist[hist.length - 1].t + 60 : -Infinity;
+    for (const k of D.ticks) if (k[0] >= Math.max(cutoff, lastHist)) D.m1.add(k[0], k[1], k[2]);
+  }
   D.ready = true;
   rebuild();
   setConn('live');
@@ -184,7 +189,8 @@ function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj))
 function subscribe(root) {
   resetData(root);
   setConn('loading');
-  send({ type: 'subscribe', root, days: 5, tickHours: 8 });
+  D.tickHours = needsTicks() ? 8 : 0;
+  send({ type: 'subscribe', root, days: 5, tickHours: D.tickHours });
 }
 
 function handle(m) {
@@ -273,7 +279,9 @@ $('symSeg').addEventListener('click', e => {
 });
 $('tfSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.v === S.tf) return;
-  S.tf = b.dataset.v; saveSettings(); syncButtons(); rebuild();
+  S.tf = b.dataset.v; saveSettings(); syncButtons();
+  if (needsTicks() && D.tickHours === 0) subscribe(S.root);      // first tick-based view: fetch the session's ticks
+  else rebuild();
 });
 $('rangeTicks').addEventListener('change', e => {
   const n = Math.max(1, Math.min(400, Math.round(+e.target.value || 0)));

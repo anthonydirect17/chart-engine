@@ -54,10 +54,10 @@ namespace NinjaTrader.Cbi
         public string ExecutionId { get; set; }
         public string OrderId { get; set; }
     }
+    // NinjaTrader's ExecutionEventArgs has NO Instrument property (confirmed by the NT8 compiler, 2026-09-29).
     public class ExecutionEventArgs : EventArgs
     {
         public Execution Execution { get; set; }
-        public Instrument Instrument { get; set; }
         public MarketPosition MarketPosition { get; set; }
         public int Quantity { get; set; }
         public double Price { get; set; }

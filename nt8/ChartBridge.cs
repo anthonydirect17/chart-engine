@@ -1,4 +1,4 @@
-// ChartBridge 0.1.0 for NinjaTrader 8
+// ChartBridge 0.1.1 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only).
 // READ ONLY: this add-on never places, changes or cancels an order.
@@ -61,6 +61,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int DefaultDays = 5;
         public static int DefaultTickHours = 8;
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
+        public static List<string> AccountAllow = new List<string>();   // empty = every account except Backtest / Playback
+
+        public static bool AccountAllowed(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (name.StartsWith("Backtest", StringComparison.OrdinalIgnoreCase) || name.StartsWith("Playback", StringComparison.OrdinalIgnoreCase)) return false;
+            if (AccountAllow.Count == 0) return true;
+            foreach (string pat in AccountAllow)
+            {
+                if (pat.EndsWith("*") ? name.StartsWith(pat.TrimEnd('*'), StringComparison.OrdinalIgnoreCase) : name.Equals(pat, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
 
         public static string Folder
         {
@@ -74,6 +87,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   days = 5
         //   tickHours = 8
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
+        //   accounts = Sim101, LFE*        (only these accounts' fills; * matches a prefix; default all,
+        //                                   Backtest and Playback accounts are always skipped)
         public static void Load()
         {
             string file = Path.Combine(Folder, "config.txt");
@@ -92,6 +107,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "tickHours" && int.TryParse(val, out n)) DefaultTickHours = Math.Max(0, Math.Min(48, n));
                 else if (key == "roots") Roots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
+                else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
             }
         }
     }
@@ -240,7 +256,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.1.0";
+        public const string Version = "0.1.1";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -409,7 +425,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int id = Interlocked.Increment(ref nextId);
             ChartBridgeClient client = new ChartBridgeClient(ws, id);
             Clients[id] = client;
-            Task sending = client.SendLoop();
+            Task sending = Task.Run(() => client.SendLoop());   // SendLoop blocks on its queue; never run it inline (0.1.0 deadlock)
             client.Send(HelloJson());
             client.Send(ExecsJson());
             byte[] buf = new byte[16384];
@@ -712,7 +728,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 foreach (Account a in fresh)
                 {
-                    if (Watched.Contains(a)) continue;
+                    if (Watched.Contains(a) || !ChartBridgeConfig.AccountAllowed(a.Name)) continue;
                     a.ExecutionUpdate += OnExecutionUpdate;
                     Watched.Add(a);
                     Log("watching fills on account " + a.Name);
@@ -769,7 +785,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 Account a = sender as Account;
-                string json = ExecJson(a != null ? a.Name : "", e.Instrument, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, true);
+                Instrument inst = e.Execution != null ? e.Execution.Instrument : null;   // ExecutionEventArgs has no Instrument of its own
+                string json = ExecJson(a != null ? a.Name : "", inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, true);
                 foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }

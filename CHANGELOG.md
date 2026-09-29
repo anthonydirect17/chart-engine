@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.1 (2026-09-29): ChartBridge 0.1.1
+
+First real run on the HOME PC (NinjaTrader 8, Tradovate): LIVE on MNQ, NQ, MES and ES, 1 ms local delay.
+Fixes from that run:
+- ChartBridge did not compile: fill events read the instrument from `e.Execution.Instrument`
+  (`ExecutionEventArgs` has no `Instrument`). The compile-check stand-ins now match the real API.
+- ChartBridge deadlocked each connection: the send loop ran inline and blocked on its empty queue before
+  the first message. It now runs on its own task.
+- `accounts =` allow-list in `config.txt`; Backtest and Playback accounts are always skipped.
+- The live page fetches ticks only for 15s, 30s and range bars, so minute and hour charts load from the
+  1-minute history alone (the first run pulled about 1.7 million ticks and took 19.5 s).
+- New source guards (`test/nt8-source.test.js`): read only (no order calls), no inline send loop,
+  localhost-only server, C# 5 syntax.
+
 ## 1.1.0 (2026-09-29)
 
 Live trading chart, step 1 (watch only), fed by NinjaTrader 8.
