@@ -127,7 +127,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Live page (1.4.0): Volume, VWAP, Levels and Fills are turned on and off in one **Indicators** menu per chart
   pane (a `.btn` with the count on, opening a panel on `#0B1016` with a `#2A3645` border, radius 12, the Colors
   panel's shadow; a checkbox, the indicator's swatch and its name per row). Enter or click opens it with focus on
-  the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane.
+  the first box, Space toggles, Escape or a click outside closes it. Choices are saved per pane. The main pane
+  starts with today's set (all four on, or the 1.3 choices); a new pane starts with none on (Anthony, 2026-09-29).
 - Range bars (live page, 1.4.0) are built like NinjaTrader's by default: every finished bar is exactly the range,
   the next opens one tick on, and a jump is filled with phantom bars (no volume). "Traded prices only" keeps the
   older way. See `docs/RANGE_BARS.md`.

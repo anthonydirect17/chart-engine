@@ -64,14 +64,15 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(s.dump('live-range-v1'), { NQ: 12 });   // left in place
 });
 
-test('indicators are saved per pane; a new pane starts from the clean set', () => {
+test('indicators are saved per pane; a new pane starts with none on, the main pane with the 1.3 set', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
   assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true });
-  assert.deepEqual(p.indicators('pane-2'), LP.NEW_PANE_INDICATORS);
+  assert.deepEqual(p.indicators('pane-2'), { volume: false, vwap: false, levels: false, fills: false });
+  assert.deepEqual(LP.create(mem()).indicators('main'), { volume: true, vwap: true, levels: true, fills: true });
   assert.equal(p.setIndicator('pane-2', 'vwap', true), true);
   assert.equal(p.setIndicator('pane-2', 'bogus', true), false);
-  assert.deepEqual(LP.create(s).indicators('pane-2'), Object.assign({}, LP.NEW_PANE_INDICATORS, { vwap: true }));
+  assert.deepEqual(LP.create(s).indicators('pane-2'), { volume: false, vwap: true, levels: false, fills: false });
   assert.deepEqual(LP.create(s).indicators('main'), { volume: false, vwap: true, levels: false, fills: true });
 });
 

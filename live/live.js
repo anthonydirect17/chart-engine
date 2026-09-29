@@ -42,8 +42,8 @@ const INDICATORS = [
 ];
 /* What the page showed before any choice was made (1.3); the main pane starts here. */
 const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true };
-/* A new pane (the grid, next step) starts from this clean set, never from another pane's choices. */
-const NEW_PANE_INDICATORS = DEFAULT_INDICATORS;
+/* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false };
 const MAIN_PANE = 'main';
 
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v1', bracket: 'live-bracket-v1' };
