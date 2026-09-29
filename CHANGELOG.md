@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.2 (2026-09-29): ChartBridge 0.3.1, network hardening
+
+ChartBridge (nt8/) only; the page and the engine are unchanged apart from the version. Run `nt8\install.ps1`
+and recompile in NinjaTrader.
+- **This PC only.** A read-only check on the trading PC found that HTTP.sys listens on every interface and
+  matches only the `Host` header: a request to the Wi-Fi or Tailscale address with a forged `Host: localhost`
+  was answered. Every request, on every path (page files, `/diag`, `/session`, `/ws`), is now checked first,
+  before any routing: it must come from a loopback address (`127.x`, `::1`, `::ffff:127.x`), or it gets 403.
+  Refusals are logged once an hour per address. A firewall rule blocking inbound 8765 is still recommended as
+  a second layer (README, PROTOCOL.md "Network access").
+- **WebSocket origin allow-list.** A browser may open the read-only WebSocket only from ChartBridge's own page
+  or an origin in the new `config.txt` line `allowOrigins` (exact `scheme://host[:port]`, lower-cased, no
+  wildcard; The Desk's Live trading page goes there). No `Origin` header (a local program) is allowed;
+  `null` is refused. Trading still needs ChartBridge's own page. `/diag` shows the rules under `network`.
+- **Missing-stop alarm** (from the Sim101 test): when the stop's OCO target was cancelled too, the alarm says
+  "... the target was cancelled too (OCO), so the position has no stop and no target" (or, when the target went
+  first, "the target was rejected and the stop was cancelled with it (OCO)"). The start of the text is unchanged.
+- Tests: the Mono harness unit-tests the address check (IPv4, IPv6, mapped IPv4, LAN, Tailscale, none) and
+  the origin check (own page, listed, unlisted, null, missing), runs the real request handler behind a
+  listener on every interface with plain GETs (a forged `Host: localhost` from another address is 403 on every
+  path), and covers the OCO alarm. Mono's HttpListener has no server WebSocket, so the upgrade itself is not run
+  there: a source guard pins the address check (and the Origin check) before the upgrade, and a one-time curl on
+  the trading PC checks it for real (PROTOCOL.md, Network access). The fake bridge follows the same origin rule
+  (`--allow-origins`).
+
 ## 1.4.1 (2026-09-29): fixes from the review of 1.4.0
 
 Page only again; nt8/ unchanged. Run `nt8\install.ps1` to copy the page files.

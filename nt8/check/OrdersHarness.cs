@@ -4,8 +4,13 @@
 // states and fills are set here by hand, the way NinjaTrader would report them.
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Text.RegularExpressions;
 using NinjaTrader.Cbi;
 using NinjaTrader.NinjaScript.AddOns;
@@ -27,6 +32,7 @@ public static class OrdersHarness
     static string IdOf(Order o) { return (string)typeof(ChartBridgeOrders).GetMethod("IdFor", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { o }); }
     static string Tag(Order entry) { return Regex.Match(entry.Name, "^CB#([0-9a-f]{8}) ").Groups[1].Value; }
     static List<string> After(Account a, int n) { return a.Calls.Skip(n).ToList(); }
+    static string RoleOf(Order o) { return Regex.Match(o.Name ?? "", "^CB#[0-9a-f]{8} (stop|target|exit) ").Groups[1].Value; }
 
     // A connected account that the legs check has seen connected since time 0 (so it counts as steady).
     // Mark every order of an account done (the stand-in's Cancel does not change states).
@@ -706,6 +712,113 @@ public static class OrdersHarness
         }
         Check(ids.Count == idsBefore, "20 finished brackets leave no ids behind (" + (ids.Count - idsBefore) + " left)");
 
+        // ------------------------------------------------------------ the missing-stop alarm names a target lost with its stop (OCO)
+        // Sim101, 2026-09-29: the stop was cancelled by hand and NinjaTrader's OCO cancelled the target too.
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        double tO = 9000000;
+        const string ocoText = "working stops cover 0 contract(s); the target was cancelled too (OCO), so the position has no stop and no target; check NinjaTrader and add a stop";
+        Account o1 = NewAccount("SimO1");
+        Msg("order", Order("SimO1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(o1, o1.Orders[0], 1, 25000);
+        SetPos(o1, mnq, 1);
+        Order o1s = o1.Orders[1], o1t = o1.Orders[2];
+        Check(RoleOf(o1s) == "stop" && RoleOf(o1t) == "target" && o1s.Oco == o1t.Oco && o1s.Oco.Length > 0, "OCO test: a stop and a target in one OCO pair");
+        o1s.OrderState = OrderState.Cancelled; Update(o1, o1s);   // cancelled by hand in NinjaTrader
+        o1t.OrderState = OrderState.Cancelled; Update(o1, o1t);   // NinjaTrader's OCO cancels the target
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO); ChartBridgeOrders.CheckLegs(tO + 4500);
+        List<string> al = sent.Where(m => m.Contains("\"level\":\"error\"") && m.Contains("SimO1") && m.Contains("working stops cover 0")).ToList();
+        Check(al.Count == 1 && al[0].Contains(ocoText), "stop cancelled and its OCO target too: the alarm says so: " + string.Join(" | ", al));
+        Check(al.Count == 1 && al[0].Contains("the position is 1 but ChartBridge's working stops cover 0 contract(s)"), "the alarm keeps its old prefix, so a search for the old text still finds it");
+        ChartBridgeOrders.CheckLegs(tO + 6000);
+        Check(sent.Count(m => m.Contains("SimO1") && m.Contains("working stops cover 0")) == 1, "and says it once");
+        // the other way round: the target's event first, and the stop rejected rather than cancelled
+        Account o2 = NewAccount("SimO2");
+        Msg("order", Order("SimO2", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(o2, o2.Orders[0], 1, 25000);
+        SetPos(o2, mnq, -1);
+        o2.Orders[1].OrderState = OrderState.Rejected; o2.Orders[2].OrderState = OrderState.Cancelled;
+        Update(o2, o2.Orders[2]); Update(o2, o2.Orders[1]);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 10000); ChartBridgeOrders.CheckLegs(tO + 14500);
+        Check(sent.Any(m => m.Contains("SimO2") && m.Contains("position is -1") && m.Contains(ocoText)), "short, stop rejected, target event first: the alarm names the lost target too");
+        // pairs ChartBridge cancels itself (Flatten) are not called lost, even if the position lingers
+        Account o3 = NewAccount("SimO3");
+        Msg("order", Order("SimO3", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(o3, o3.Orders[0], 1, 25000);
+        SetPos(o3, mnq, 1);
+        Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimO3\",\"root\":\"MNQ\"}");
+        Check(o3.Calls.Last() == "flatten MNQ 12-26", "OCO test: flatten sent");
+        o3.Orders[1].OrderState = OrderState.Cancelled; Update(o3, o3.Orders[1]);
+        o3.Orders[2].OrderState = OrderState.Cancelled; Update(o3, o3.Orders[2]);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 20000); ChartBridgeOrders.CheckLegs(tO + 24500);
+        List<string> al3 = sent.Where(m => m.Contains("SimO3") && m.Contains("working stops cover 0")).ToList();
+        Check(al3.Count == 1 && !al3[0].Contains("OCO"), "legs cancelled by Flatten: the alarm (position still open) does not blame an OCO cancel: " + string.Join(" | ", al3));
+        // the reviewer's P4: the TARGET is rejected first and the OCO cancels the stop; the alarm says which went first
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3, SimP4");
+        Account p4 = NewAccount("SimP4");
+        Msg("order", Order("SimP4", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(p4, p4.Orders[0], 1, 25000);
+        SetPos(p4, mnq, 1);
+        Order p4s = p4.Orders[1], p4t = p4.Orders[2];
+        p4t.OrderState = OrderState.Rejected; Update(p4, p4t);   // the target is rejected
+        p4s.OrderState = OrderState.Cancelled; Update(p4, p4s);  // and NinjaTrader's OCO cancels the stop
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 26000); ChartBridgeOrders.CheckLegs(tO + 30500);
+        List<string> al5 = sent.Where(m => m.Contains("SimP4") && m.Contains("working stops cover 0")).ToList();
+        Check(al5.Count == 1 && al5[0].Contains("working stops cover 0 contract(s); the target was rejected and the stop was cancelled with it (OCO), so the position has no stop and no target; check NinjaTrader and add a stop")
+              && !al5[0].Contains("cancelled too"), "target rejected first, the stop cancelled by its OCO: the alarm says the target went first: " + string.Join(" | ", al5));
+        // both cancelled, the target first (cancelled by hand, the OCO took the stop): event order decides
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3, SimP4, SimP5");
+        Account p5 = NewAccount("SimP5");
+        Msg("order", Order("SimP5", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(p5, p5.Orders[0], 1, 25000);
+        SetPos(p5, mnq, 1);
+        p5.Orders[2].OrderState = OrderState.Cancelled; Update(p5, p5.Orders[2]);   // target cancelled while the stop still works
+        p5.Orders[1].OrderState = OrderState.Cancelled; Update(p5, p5.Orders[1]);   // then the OCO cancels the stop
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 26000); ChartBridgeOrders.CheckLegs(tO + 30500);
+        Check(sent.Count(m => m.Contains("SimP5") && m.Contains("working stops cover 0 contract(s); the target was cancelled and the stop was cancelled with it (OCO), so the position has no stop and no target")) == 1,
+              "target cancelled first, then its OCO stop: the alarm says the target went first");
+        // the bookkeeping before Flatten and Cancel can never stop them: make it throw
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimM, SimO1, SimO2, SimO3, SimP4, SimP5, SimQ");
+        Account q = NewAccount("SimQ");
+        Msg("order", Order("SimQ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(q, q.Orders[0], 1, 25000);
+        SetPos(q, mnq, 1);
+        ChartBridgeOrders.BookkeepingFault = () => { throw new InvalidOperationException("test fault"); };
+        lock (NinjaTrader.Code.Output.Lines) NinjaTrader.Code.Output.Lines.Clear();
+        sent.Clear();
+        Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimQ\",\"root\":\"MNQ\"}");
+        bool logged;
+        lock (NinjaTrader.Code.Output.Lines) logged = NinjaTrader.Code.Output.Lines.Any(x => x.Contains("bookkeeping error before a flatten (test fault); the flatten is sent anyway"));
+        Check(q.Calls.Last() == "flatten MNQ 12-26" && !sent.Any(m => m.Contains("\"type\":\"reject\"")) && logged,
+              "a throwing bookkeeping step still sends Flatten (no reject), and logs the error: " + q.Calls.Last());
+        SetPos(q, mnq, 0);
+        Age(q.Orders[1], 5000); Age(q.Orders[2], 5000);
+        int qn = q.Calls.Count;
+        ChartBridgeOrders.OnPositionUpdate(q, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });
+        Check(After(q, qn).Count(x => x.StartsWith("cancel CB#")) == 2, "a throwing bookkeeping step still cancels leftover legs when flat: " + string.Join(" | ", After(q, qn)));
+        ChartBridgeOrders.BookkeepingFault = null;
+        Done(q);
+        // a stop cancelled while its target still works: the plain alarm, no OCO words
+        SetPos(o1, mnq, 0);
+        ChartBridgeOrders.CheckLegs(tO + 30000);   // flat: the lost target of the last trade is forgotten
+        Msg("order", Order("SimO1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order o1e = o1.Orders[o1.Orders.Count - 1];
+        Fill(o1, o1e, 1, 25000);
+        SetPos(o1, mnq, 1);
+        Order o1s2 = o1.Orders[o1.Orders.Count - 2];
+        Check(RoleOf(o1s2) == "stop", "OCO test: second trade's stop found");
+        o1s2.OrderState = OrderState.Cancelled; Update(o1, o1s2);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tO + 40000); ChartBridgeOrders.CheckLegs(tO + 44500);
+        List<string> al4 = sent.Where(m => m.Contains("SimO1") && m.Contains("working stops cover 0")).ToList();
+        Check(al4.Count == 1 && !al4[0].Contains("OCO") && al4[0].Contains("working stops cover 0 contract(s); check NinjaTrader and add a stop"),
+              "next trade, stop cancelled but target working: plain alarm (the last trade's lost target was forgotten when flat): " + string.Join(" | ", al4));
+
         // ------------------------------------------------------------ gate 7: rate limit
         System.Threading.Thread.Sleep(1100);
         lock (c.Actions) c.Actions.Clear();
@@ -731,7 +844,149 @@ public static class OrdersHarness
         Msg("flatten", "{\"type\":\"flatten\",\"account\":\"Sim101\",\"root\":\"MNQ\"}");
         Check(Rejected("trading is off") && sim.Calls.Count == n, "after config reset: refused");
 
+        NetworkChecks();
+
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
+    }
+    // ------------------------------------------------------------ who may connect (ChartBridge.cs, ChartBridgeAccess)
+    // Example addresses only: a LAN-style address from the documentation range, a Tailscale-style 100.x address.
+    static bool Loop(string ip) { return ChartBridgeAccess.IsLoopback(new IPEndPoint(IPAddress.Parse(ip), 50000)); }
+
+    static void NetworkChecks()
+    {
+        Check(Loop("127.0.0.1") && Loop("127.0.0.2"), "address check: IPv4 loopback allowed");
+        Check(Loop("::1"), "address check: IPv6 loopback ::1 allowed");
+        Check(Loop("::ffff:127.0.0.1"), "address check: IPv4 loopback mapped into IPv6 (::ffff:127.0.0.1) allowed");
+        Check(!Loop("192.0.2.10"), "address check: a LAN address refused");
+        Check(!Loop("100.88.192.33"), "address check: a Tailscale 100.x address refused");
+        Check(!Loop("::ffff:192.0.2.10") && !Loop("::ffff:100.88.192.33"), "address check: LAN and Tailscale addresses mapped into IPv6 refused");
+        Check(!Loop("2001:db8::1") && !Loop("fe80::1") && !Loop("::") && !Loop("0.0.0.0") && !Loop("::2"), "address check: other IPv6, link-local, unspecified refused");
+        Check(!ChartBridgeAccess.IsLoopback((IPEndPoint)null) && !ChartBridgeAccess.IsLoopback((IPAddress)null), "address check: no address (null) refused");
+
+        // origin allow-list for the read-only WebSocket
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://Desk.GoLivePage.com/, https://desk.golivepage.com:443, *, https://*.golivepage.com, null, http://x.example/path, http://100.88.192.33:8800, ftp://x.example");
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800",
+              "allowOrigins: lower-cased, default port and trailing slash dropped, wildcards, null, paths and other schemes skipped: " + string.Join(" ", ChartBridgeConfig.AllowOrigins));
+        Check(ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"), "origin: ChartBridge's own page allowed");
+        Check(ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://100.88.192.33:8800"), "origin: listed origins allowed");
+        Check(ChartBridgeAccess.WsOriginAllowed("HTTPS://DESK.GOLIVEPAGE.COM"), "origin: compared lower-cased");
+        Check(!ChartBridgeAccess.WsOriginAllowed("https://evil.example") && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com.evil.example")
+              && !ChartBridgeAccess.WsOriginAllowed("http://desk.golivepage.com") && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com:8443")
+              && !ChartBridgeAccess.WsOriginAllowed("http://localhost:8766") && !ChartBridgeAccess.WsOriginAllowed("http://127.0.0.1:8765"), "origin: unlisted origins refused (exact scheme, host and port)");
+        Check(!ChartBridgeAccess.WsOriginAllowed("null") && !ChartBridgeAccess.WsOriginAllowed("NULL"), "origin: \"null\" refused");
+        Check(!ChartBridgeAccess.WsOriginAllowed("") && !ChartBridgeAccess.WsOriginAllowed(" "), "origin: an empty Origin header refused");
+        Check(ChartBridgeAccess.WsOriginAllowed(null), "origin: no Origin header (a local program, not a browser) allowed");
+        Check(!ChartBridgeOrders.OriginAllowed("https://desk.golivepage.com") && ChartBridgeOrders.OriginAllowed("http://localhost:8765"), "a listed origin still cannot trade: orders only from ChartBridge's own page");
+
+        // refusals are logged once an hour per address
+        const int L = ChartBridgeAccess.LogLine, S = ChartBridgeAccess.LogSkip, F = ChartBridgeAccess.LogBudgetFull;
+        Check(ChartBridgeAccess.AddressLogDecision("t-a", 0) == L && ChartBridgeAccess.AddressLogDecision("t-a", 1000) == S && ChartBridgeAccess.AddressLogDecision("t-b", 1000) == L
+              && ChartBridgeAccess.AddressLogDecision("t-a", 3599999) == S && ChartBridgeAccess.AddressLogDecision("t-a", 3600000) == L, "refusal log: once an hour per address");
+        // fill the address budget: 1000 keys a budget (two used above), then one "not logged this hour" line, then silence
+        List<int> ds = new List<int>();
+        for (int i = 0; i < 1500; i++) ds.Add(ChartBridgeAccess.AddressLogDecision("flood-" + i, 5000));
+        Check(ds.Count(d => d == L) == ChartBridgeAccess.MaxRemembered - 2 && ds.Count(d => d == F) == 1 && ds.IndexOf(F) == ChartBridgeAccess.MaxRemembered - 2,
+              "refusal log: 1500 addresses make " + ds.Count(d => d == L) + " lines, then one line saying further refusals are not logged this hour (" + ds.Count(d => d == F) + "), then none");
+        Check(ChartBridgeAccess.AddressLogDecision("flood-late", 6000) == S, "refusal log: the budget-full line comes once an hour, not per refusal");
+        Check(ChartBridgeAccess.OriginLogDecision("https://made-up-1.example", 6000) == L, "refusal log: a full address budget does not silence the origin log");
+        int ol = 0, of = 0;
+        for (int i = 0; i < 1200; i++) { int d = ChartBridgeAccess.OriginLogDecision("https://made-up-" + i + ".example", 7000); if (d == L) ol++; if (d == F) of++; }
+        Check(ol == ChartBridgeAccess.MaxRemembered - 1 && of == 1, "refusal log: origins have their own budget and their own budget-full line (" + ol + " lines, " + of + " full)");
+        Check(ChartBridgeAccess.AddressLogDecision("flood-late", 7000) == S && ChartBridgeAccess.AddressLogDecision("t-a", 3600000 + 1000) == S, "refusal log: a full origin budget changes nothing for addresses");
+        Check(ChartBridgeAccess.AddressLogDecision("flood-late", 5000 + ChartBridgeAccess.RefusalLogEveryMs) == L, "refusal log: an hour later, logging works again");
+
+        // config.txt: the allowOrigins line
+        string dir = Path.Combine(Path.GetTempPath(), "cb-harness-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "ChartBridge"));
+        NinjaTrader.Core.Globals.UserDataDir = dir;
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "# test", "allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800" });
+        ChartBridgeConfig.Load();
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800", "config.txt: allowOrigins is read");
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "allowOrigins = https://desk.golivepage.com", "allowOrigins = http://localhost:8800" });
+        ChartBridgeConfig.Load();
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "http://localhost:8800", "config.txt: with two allowOrigins lines, the last one wins");
+        Check(string.Join(" ", ChartBridgeAccess.ParseOrigins("https://b\u00fccher.example, https://xn--bcher-kva.example")) == "https://xn--bcher-kva.example",
+              "allowOrigins: a non-ASCII host is skipped, its punycode form is taken");
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "port = 8765" });
+        ChartBridgeConfig.Load();
+        Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),
+              "config.txt without allowOrigins: only ChartBridge's own page");
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.golivepage.com");
+        string diag = ChartBridgeAccess.DiagJson();
+        Check(diag.Contains("\"allowOrigins\":[\"http://localhost:8765\",\"https://desk.golivepage.com\"]") && diag.Contains("\"loopbackOnly\":true"), "/diag lists the allowed origins: " + diag);
+
+        // The real request handler behind a listener on every interface (what HTTP.sys does on Windows):
+        // a plain GET from another address that says "Host: localhost" is refused on every path; from this PC it is served.
+        // Plain GETs only: Mono's HttpListener has no server WebSocket (IsWebSocketRequest is always false), so the
+        // upgrade branch never runs here. That the address check comes before the upgrade is pinned by the source
+        // guard in test/nt8-source.test.js, and checked once on Windows with curl (nt8/PROTOCOL.md, Network access).
+        IPAddress outside = null;
+        try
+        {
+            foreach (System.Net.NetworkInformation.NetworkInterface ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                foreach (System.Net.NetworkInformation.UnicastIPAddressInformation ua in ni.GetIPProperties().UnicastAddresses)
+                    if (outside == null && ua.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ua.Address)) outside = ua.Address;
+        }
+        catch (Exception) { outside = null; }
+        int port = 20000 + new Random().Next(9000);
+        HttpListener l = new HttpListener();
+        l.Prefixes.Add("http://*:" + port + "/");
+        l.Start();
+        MethodInfo handle = typeof(ChartBridgeServer).GetMethod("Handle", BindingFlags.NonPublic | BindingFlags.Static);
+        Task serving = Task.Run(() =>
+        {
+            while (l.IsListening)
+            {
+                HttpListenerContext ctx;
+                try { ctx = l.GetContext(); } catch (Exception) { break; }
+                try { ((Task)handle.Invoke(null, new object[] { ctx, CancellationToken.None })).Wait(); } catch (Exception ex) { Console.WriteLine("handler threw: " + ex.Message); }
+            }
+        });
+        int portWas = ChartBridgeConfig.Port;
+        ChartBridgeConfig.Port = port;   // so "Host: localhost:<port>" is the name /session wants
+        ChartBridgeOrders.NewToken();
+        try
+        {
+            int s1; string b1 = Get(IPAddress.Loopback, port, "/diag", out s1);
+            Check(s1 == 200 && b1.Contains("\"network\":{\"loopbackOnly\":true"), "listener: /diag from this PC is served (" + s1 + ")");
+            int s2; Get(IPAddress.Loopback, port, "/session", out s2);
+            Check(s2 == 200, "listener: /session from this PC with Host localhost is served (" + s2 + ")");
+            if (outside == null) Console.WriteLine("skip listener: no non-loopback IPv4 address on this machine");
+            else
+            {
+                lock (NinjaTrader.Code.Output.Lines) NinjaTrader.Code.Output.Lines.Clear();
+                string[] paths = { "/diag", "/session", "/", "/index.html", "/ws", "/nothing" };
+                List<string> codes = new List<string>();
+                foreach (string p in paths) { int sc; string body = Get(outside, port, p, out sc); codes.Add(p + "=" + sc + (body.Length > 0 ? "+body" : "")); }
+                Check(codes.All(x => x.EndsWith("=403")), "listener, plain GET only (no WebSocket upgrade on Mono): from another address with a forged Host localhost, every path is 403 with no body: " + string.Join(" ", codes));
+                int logs;
+                lock (NinjaTrader.Code.Output.Lines) logs = NinjaTrader.Code.Output.Lines.Count(x => x.Contains("refused a request from " + outside));
+                Check(logs == 1, "listener: " + paths.Length + " refused requests from one address make one Output line (" + logs + ")");
+                Check(ChartBridgeAccess.DiagJson().Contains("\"refusedNotThisPc\":" + paths.Length), "/diag counts the refusals: " + ChartBridgeAccess.DiagJson());
+            }
+        }
+        finally { ChartBridgeConfig.Port = portWas; try { l.Stop(); l.Close(); } catch (Exception) { } }
+    }
+
+    // GET with a forged "Host: localhost:<port>", straight to the address (no proxy).
+    static string Get(IPAddress to, int port, string path, out int status)
+    {
+        HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://" + to + ":" + port + path);
+        req.Proxy = null;
+        req.Host = "localhost:" + port;
+        req.Timeout = 5000;
+        try
+        {
+            using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
+            using (StreamReader r = new StreamReader(res.GetResponseStream())) { status = (int)res.StatusCode; return r.ReadToEnd(); }
+        }
+        catch (WebException ex)
+        {
+            HttpWebResponse res = ex.Response as HttpWebResponse;
+            status = res != null ? (int)res.StatusCode : -1;
+            if (res == null) return ex.Message;
+            using (StreamReader r = new StreamReader(res.GetResponseStream())) return r.ReadToEnd();
+        }
     }
 }

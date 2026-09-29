@@ -1,6 +1,7 @@
-// ChartBridge 0.3.0 for NinjaTrader 8
+// ChartBridge 0.3.1 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
-// Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only).
+// Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
+// every request must come from a loopback address, and a browser WebSocket from an allowed origin).
 // READ ONLY by default. Order entry from the chart (Step 2) lives only in ChartBridgeOrders.cs and stays
 // off unless config.txt has "trading = true" and names the accounts in "tradeAccounts"; this file never
 // places, changes or cancels an order itself.
@@ -21,6 +22,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -42,7 +44,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (State == State.SetDefaults)
             {
                 Name = "ChartBridge";
-                Description = "Streams live data and fills to the chart-engine live page at http://localhost:8765/ (read only unless order entry is turned on in config.txt).";
+                Description = "Streams live data and fills to the chart-engine live page at http://localhost:8765/ (this PC only; read only unless order entry is turned on in config.txt).";
             }
             else if (State == State.Configure || State == State.Active)
             {
@@ -66,6 +68,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
         public static List<string> AccountAllow = new List<string>();   // empty = every account except Backtest / Playback
+        public static List<string> AllowOrigins = new List<string>();   // web pages besides ChartBridge's own that may open the read-only WebSocket
 
         public static bool AccountAllowed(string name)
         {
@@ -99,9 +102,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
         //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
+        //   allowOrigins = https://desk.example.com, http://100.88.192.33:8800
+        //                                 (web pages besides ChartBridge's own that may open the read-only
+        //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
+        //                                  they can never trade. Requests still have to come from this PC.
+        //                                  One line: the last allowOrigins line wins. Non-ASCII hosts in punycode.)
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
+            AllowOrigins = new List<string>();
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -121,8 +130,162 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
                 else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ who may connect
+    // HTTP.sys (the Windows web server under HttpListener) listens on every network interface and matches
+    // only the Host header, so the prefix http://localhost:8765/ alone does not keep other devices out: on
+    // the trading PC (2026-09-29) a request to the Wi-Fi or Tailscale address with "Host: localhost:8765"
+    // was answered. So every request, on every path, is checked first, before any routing: it must come
+    // from this PC (a loopback source address), or it gets 403. A Windows firewall rule blocking inbound
+    // 8765 is still recommended as a second layer; safety does not rest on it.
+    // A browser WebSocket must also come from ChartBridge's own page or an origin listed in allowOrigins,
+    // so another web site open in the browser cannot read accounts, fills and ticks. A connection with no
+    // Origin header is not a browser (a local program such as The Desk's relay) and is allowed: the
+    // address check already limits it to this PC. Placing orders needs more (ChartBridgeOrders.cs, gate 4).
+    // Neither rule guards against software on this PC (it can connect from 127.0.0.1 and send any Origin), and
+    // a proxy, tunnel or port forward pointed at this port (cloudflared, tailscale serve or funnel, netsh
+    // portproxy, ssh -R) makes its remote clients arrive as 127.0.0.1: never point one at ChartBridge.
+    public static class ChartBridgeAccess
+    {
+        public const double RefusalLogEveryMs = 3600000;   // one Output line per address (or origin) per hour
+        public const int MaxRemembered = 1000;                 // per budget: addresses and origins are counted apart
+        public const int LogSkip = 0, LogLine = 1, LogBudgetFull = 2;
+        private static readonly RefusalBudget AddressLog = new RefusalBudget(), OriginLog = new RefusalBudget();
+        private static readonly Regex OriginRx = new Regex("^https?://(\\[[0-9a-f:.]+\\]|[a-z0-9]([a-z0-9.-]*[a-z0-9])?)(:[0-9]{1,5})?\\z");
+        private static long refusedAddress, refusedOrigin;
+
+        public static string OwnOrigin { get { return "http://localhost:" + ChartBridgeConfig.Port.ToString(CultureInfo.InvariantCulture); } }
+
+        // True only for a loopback source: 127.0.0.0/8, ::1, or 127.x mapped into IPv6 (::ffff:127.0.0.1).
+        // Anything missing or unreadable is not loopback.
+        public static bool IsLoopback(IPEndPoint remote) { return remote != null && IsLoopback(remote.Address); }
+
+        public static bool IsLoopback(IPAddress a)
+        {
+            if (a == null) return false;
+            try
+            {
+                if (a.AddressFamily == AddressFamily.InterNetworkV6 && a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+                if (a.AddressFamily == AddressFamily.InterNetwork) return IPAddress.IsLoopback(a);
+                if (a.AddressFamily != AddressFamily.InterNetworkV6) return false;
+                byte[] b = a.GetAddressBytes();   // ::1 whatever its scope id
+                if (b.Length != 16 || b[15] != 1) return false;
+                for (int i = 0; i < 15; i++) if (b[i] != 0) return false;
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        // The read-only WebSocket. origin is the Origin header, null when there is none.
+        public static bool WsOriginAllowed(string origin)
+        {
+            if (origin == null) return true;                  // not a browser; the address check still applies
+            string o = origin.Trim().ToLowerInvariant();
+            if (o.Length == 0 || o == "null") return false;   // sandboxed frames, file:// pages and the like
+            if (o == OwnOrigin) return true;
+            List<string> list = ChartBridgeConfig.AllowOrigins;
+            return list != null && list.Contains(o);
+        }
+
+        // allowOrigins = a, b, c: each an exact scheme://host[:port] (http or https), lower-cased; a default
+        // port (:80 for http, :443 for https) and one trailing slash are dropped, as a browser's Origin has
+        // neither. Anything else (a path, a wildcard, "null") is skipped with a line in the Output window.
+        public static List<string> ParseOrigins(string val)
+        {
+            List<string> list = new List<string>();
+            foreach (string raw in (val ?? "").Split(','))
+            {
+                string o = raw.Trim().ToLowerInvariant();
+                if (o.Length == 0) continue;
+                if (o.EndsWith("/")) o = o.Substring(0, o.Length - 1);
+                if (o.StartsWith("http://") && o.EndsWith(":80")) o = o.Substring(0, o.Length - 3);
+                else if (o.StartsWith("https://") && o.EndsWith(":443")) o = o.Substring(0, o.Length - 4);
+                if (!OriginRx.IsMatch(o)) { ChartBridgeServer.Log("allowOrigins: skipped " + Clean(raw.Trim()) + " (must be scheme://host[:port], no path, no wildcard)"); continue; }
+                if (!list.Contains(o)) list.Add(o);
+            }
+            return list;
+        }
+
+        // Log a refusal at most once an hour per key (a remote address, or an origin), so a scan cannot flood the
+        // Output window. Each budget remembers at most MaxRemembered keys an hour; when it is full, one line says
+        // further refusals are not logged this hour (they are still refused and counted in /diag). Addresses and
+        // origins have separate budgets, so a web page making up origins cannot silence the address log.
+        private class RefusalBudget
+        {
+            private readonly Dictionary<string, double> last = new Dictionary<string, double>();
+            private double fullNotedMs = double.NegativeInfinity;
+
+            public int Decide(string key, double nowMs)
+            {
+                lock (last)
+                {
+                    double was;
+                    if (last.TryGetValue(key, out was) && nowMs - was < RefusalLogEveryMs) return LogSkip;
+                    if (!last.ContainsKey(key) && last.Count >= MaxRemembered)
+                    {
+                        foreach (string k in last.Where(kv => nowMs - kv.Value >= RefusalLogEveryMs).Select(kv => kv.Key).ToList()) last.Remove(k);
+                        if (last.Count >= MaxRemembered)
+                        {
+                            if (nowMs - fullNotedMs < RefusalLogEveryMs) return LogSkip;
+                            fullNotedMs = nowMs;
+                            return LogBudgetFull;
+                        }
+                    }
+                    last[key] = nowMs;
+                    return LogLine;
+                }
+            }
+        }
+
+        public static int AddressLogDecision(string address, double nowMs) { return AddressLog.Decide(address, nowMs); }
+        public static int OriginLogDecision(string origin, double nowMs) { return OriginLog.Decide(origin, nowMs); }
+
+        public static void NoteRefusedAddress(IPEndPoint remote, string path)
+        {
+            Interlocked.Increment(ref refusedAddress);
+            string who = remote != null && remote.Address != null ? remote.Address.ToString() : "(unknown address)";
+            int d = AddressLogDecision(who, ChartBridgeTime.NowUtcMs());
+            if (d == LogLine)
+                ChartBridgeServer.Log("refused a request from " + Clean(who) + " for " + Clean(path) + ": only this PC may connect (403; logged once an hour per address)");
+            else if (d == LogBudgetFull)
+                ChartBridgeServer.Log("refused requests from over " + MaxRemembered + " addresses this hour; further refusals from new addresses are not logged this hour (still refused; counted in /diag)");
+        }
+
+        public static void NoteRefusedOrigin(string origin)
+        {
+            Interlocked.Increment(ref refusedOrigin);
+            string o = origin ?? "";
+            int d = OriginLogDecision(o, ChartBridgeTime.NowUtcMs());
+            if (d == LogLine)
+                ChartBridgeServer.Log("refused a WebSocket from the web page " + Clean(o) + ": not ChartBridge's page and not in allowOrigins in config.txt (403; logged once an hour per origin)");
+            else if (d == LogBudgetFull)
+                ChartBridgeServer.Log("refused WebSockets from over " + MaxRemembered + " web page origins this hour; further refusals from new origins are not logged this hour (still refused; counted in /diag)");
+        }
+
+        // For the Output window: printable characters only, and not too long.
+        private static string Clean(string s)
+        {
+            if (s == null) return "";
+            StringBuilder b = new StringBuilder();
+            foreach (char ch in s) { if (b.Length >= 120) { b.Append("..."); break; } b.Append(ch < 0x20 || ch == 0x7f ? '?' : ch); }
+            return b.ToString();
+        }
+
+        // For /diag (not secret): who may connect, and how many were refused since the start.
+        public static string DiagJson()
+        {
+            StringBuilder b = new StringBuilder("{\"loopbackOnly\":true,\"allowOrigins\":[");
+            b.Append(CbJson.Str(OwnOrigin));
+            List<string> list = ChartBridgeConfig.AllowOrigins ?? new List<string>();
+            foreach (string o in list) b.Append(',').Append(CbJson.Str(o));
+            b.Append("],\"refusedNotThisPc\":").Append(Interlocked.Read(ref refusedAddress));
+            b.Append(",\"refusedOrigin\":").Append(Interlocked.Read(ref refusedOrigin)).Append('}');
+            return b.ToString();
         }
     }
 
@@ -472,7 +635,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.0";
+        public const string Version = "0.3.1";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -606,10 +769,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             try
             {
+                // First, before any routing, on every path: only this PC (see ChartBridgeAccess).
+                IPEndPoint remote = RemoteOf(ctx);
+                if (!ChartBridgeAccess.IsLoopback(remote)) { ChartBridgeAccess.NoteRefusedAddress(remote, SafePath(ctx)); Refuse(ctx); return; }
                 string path = ctx.Request.Url.AbsolutePath;
                 if (path == "/ws" && ctx.Request.IsWebSocketRequest)
                 {
                     string origin = ctx.Request.Headers["Origin"];
+                    if (!ChartBridgeAccess.WsOriginAllowed(origin)) { ChartBridgeAccess.NoteRefusedOrigin(origin); Refuse(ctx); return; }
                     HttpListenerWebSocketContext wsc = await ctx.AcceptWebSocketAsync(null);
                     await RunClient(wsc.WebSocket, token, origin);
                     return;
@@ -628,6 +795,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Log("request failed: " + ex.Message);
                 try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch (Exception) { }
             }
+        }
+
+        // The request's source address, or null if HttpListener cannot say (then it is refused).
+        private static IPEndPoint RemoteOf(HttpListenerContext ctx)
+        {
+            try { return ctx.Request.RemoteEndPoint; } catch (Exception) { return null; }
+        }
+
+        private static string SafePath(HttpListenerContext ctx)
+        {
+            try { return ctx.Request.Url.AbsolutePath; } catch (Exception) { return "?"; }
+        }
+
+        private static void Refuse(HttpListenerContext ctx)
+        {
+            try
+            {
+                ctx.Response.StatusCode = 403;
+                NoFraming(ctx.Response);
+                ctx.Response.ContentLength64 = 0;
+                ctx.Response.Close();
+            }
+            catch (Exception) { try { ctx.Response.Abort(); } catch (Exception) { } }
         }
 
         private static void ServeText(HttpListenerContext ctx, string text, string type)
@@ -1159,6 +1349,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"fillsFoundByPolling\":").Append(Interlocked.Read(ref polledNew));
             b.Append(",\"lastPollUtcMs\":").Append(lastPollMs);
             b.Append(",\"clients\":").Append(Clients.Count);
+            b.Append(",\"network\":").Append(ChartBridgeAccess.DiagJson());
             b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());
             b.Append(",\"accounts\":[");
             List<Account> accounts;
