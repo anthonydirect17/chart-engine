@@ -53,6 +53,27 @@ line; recompile or restart NinjaTrader after a change):
 | `trading` | `false` | `true` turns on order entry from the chart (see below). |
 | `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
+| `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
+
+**This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
+matches only the `Host` header, so the `localhost` address alone does not keep other devices out. ChartBridge
+therefore refuses (403) every request that does not come from this PC, on every path, before anything else,
+and takes a browser WebSocket only from its own page or an `allowOrigins` entry. A local program that sends no
+`Origin` header (such as The Desk's server relay) is allowed. As a second layer, keep inbound port 8765 blocked
+in the Windows firewall; in an admin PowerShell:
+
+```
+New-NetFirewallRule -DisplayName "ChartBridge 8765 block inbound" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Block
+```
+
+The firewall does not filter traffic within the PC, so the chart and The Desk on this PC keep working. After
+installing 0.3.1, check once that a plain request and a WebSocket upgrade to the PC's Tailscale or LAN address
+get 403 (the two `curl` lines are in "Network access" in `nt8/PROTOCOL.md`).
+
+**Never forward anything to 8765**: no cloudflared ingress, `tailscale serve` or `funnel`, `netsh interface
+portproxy`, `ssh -R` or local reverse proxy pointing at it. A forwarded client arrives as 127.0.0.1 and passes the
+this-PC rule. The rules keep out other devices and web pages, not software running on this PC: any local program
+can connect from 127.0.0.1 and send any `Origin`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
@@ -113,7 +134,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 2. Only the accounts in `tradeAccounts`; never Backtest or Playback; no wildcard.
 3. `maxQty.<ROOT>` caps the position (default 1): the position plus working orders on the same side plus
    the new order may not exceed it. Orders that reduce the position are always allowed.
-4. Only ChartBridge's own page: the WebSocket Origin must be `http://localhost:<port>`, and the page must
+4. Only ChartBridge's own page: the WebSocket Origin must be `http://localhost:<port>` (pages listed in
+   `allowOrigins` can read, never trade), and the page must
    sign in with the token from `GET /session` (a new one each start). The page may not sit in another
    page's frame; it also refuses to arm or trade inside one.
 5. Limit and stop prices on the tick grid, within 200 ticks of the last price, stops on the right side of

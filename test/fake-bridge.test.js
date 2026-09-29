@@ -402,7 +402,7 @@ async function startBridge(port, flags) {
 
 test('server: /session is same-origin only, the token is checked, and only ChartBridge\'s own page may trade', async () => {
   const port = 18700 + Math.floor(Math.random() * 200);
-  const child = await startBridge(port, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5']);
+  const child = await startBridge(port, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--allow-origins=https://desk.example']);
   try {
     const pg = await get(port, '/live/');
     assert.equal(pg.headers['x-frame-options'], 'DENY');
@@ -432,7 +432,8 @@ test('server: /session is same-origin only, the token is checked, and only Chart
     assert.equal(filled.account, 'Sim101');
     a.close();
 
-    for (const origin of ['http://evil.example', 'http://127.0.0.1:' + port, null]) {
+    // a listed origin (The Desk) and a local program with no Origin header may read, never trade
+    for (const origin of ['https://desk.example', 'HTTPS://DESK.EXAMPLE', null]) {
       const b = await wsConnect(port, origin);
       await b.next('hello');
       b.send({ type: 'auth', token });                       // even with the right token
@@ -443,6 +444,34 @@ test('server: /session is same-origin only, the token is checked, and only Chart
       assert.match((await b.next('reject')).reason, /own page/);
       b.close();
     }
+  } finally { child.kill(); }
+});
+
+// the WebSocket upgrade status for an Origin (undefined: no header)
+function wsStatus(port, origin) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, agent: false, path: '/ws', headers: Object.assign({
+      Host: 'localhost:' + port, Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64') }, origin !== undefined ? { Origin: origin } : {}) });
+    req.on('upgrade', (res, sock) => { sock.destroy(); resolve(101); });
+    req.on('response', res => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge\'s own page or allowOrigins', async () => {
+  const port = 18600 + Math.floor(Math.random() * 90);
+  const child = await startBridge(port, ['--allow-origins=https://desk.example,http://100.88.192.33:8800']);
+  try {
+    const want = [['http://localhost:' + port, 101], ['https://desk.example', 101], ['http://100.88.192.33:8800', 101], [undefined, 101],
+      ['http://evil.example', 403], ['http://127.0.0.1:' + port, 403], ['https://desk.example.evil.example', 403], ['http://desk.example', 403],
+      ['null', 403], ['', 403]];
+    for (const [origin, status] of want) assert.equal(await wsStatus(port, origin), status, 'Origin ' + JSON.stringify(origin));
+    const diag = JSON.parse((await get(port, '/diag')).body);
+    assert.deepEqual(diag.network.allowOrigins, ['http://localhost:' + port, 'https://desk.example', 'http://100.88.192.33:8800']);
+    assert.equal(diag.network.loopbackOnly, true);
+    assert.equal(diag.network.refusedOrigin, 6);
   } finally { child.kill(); }
 });
 
