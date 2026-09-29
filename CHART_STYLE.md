@@ -133,6 +133,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Range bars (live page, 1.4.0) are built like NinjaTrader's by default: every finished bar is exactly the range,
   the next opens one tick on, and a jump is filled with phantom bars (no volume). "Traded prices only" keeps the
   older way. See `docs/RANGE_BARS.md`.
+  The select that picks between them has a visible **Range style** label (the toolbar's `.glabel` style, like
+  "Bars"), 1.5.1.
+- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.1 · chart 1.5.1" (1.5.1).
 
 ## Honesty rules
 

@@ -3,11 +3,14 @@
 // Sample data only, never market data. Not part of `npm test`: it takes about a minute per run.
 //
 //   node test/perf-live.mjs [--view=range|m1] [--secs=30] [--root=DIR] [--label=main] [--port=8830]
-//                           [--tick-rate=15] [--live-rate=100] [--range=40] [--second-tab] [--profile] [--json=FILE]
+//                           [--tick-rate=15] [--live-rate=100] [--range=40] [--et=HH:MM] [--second-tab] [--embed]
+//                           [--headed] [--profile] [--json=FILE]
 //
 // --root serves the page from another checkout (the bridge is always this one), so an older version can be measured
 // on the same feed. It sets the saved settings (NQ, the view, Range 40, NinjaTrader style) in both the 1.3 and the
-// 1.4 keys before the page loads. CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser.
+// 1.4 keys before the page loads. --et runs the page and bridge clocks at that New York time (01:30 loads the most
+// Range history, 33 hours). --embed measures ChartLive.mount in test/embed-host.html (1.5.0 and later) instead of the
+// standalone page. CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser.
 //
 // Measures, over the window after a warm-up: requestAnimationFrame intervals (frames over 16.7 ms and 33 ms), the
 // chart's own frame callback (step and draw), long tasks, each live tick message (JSON, onTick, the bar builders,
@@ -31,7 +34,7 @@ const OFFSET = (() => {
   const cur = p.hour * 3600 + p.minute * 60 + p.second;
   return -(((cur - (h * 3600 + m * 60)) % 86400 + 86400) % 86400);
 })();
-const HEADED = !!arg('headed', false);   // a real window (run under xvfb-run on a server)
+const HEADED = !!arg('headed', false), EMBED = !!arg('embed', false);   // a real window (run under xvfb-run on a server)
 const SECOND = !!arg('second-tab', false), PROFILE = !!arg('profile', false), WARM = +arg('warm', 5);
 
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
@@ -83,7 +86,7 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.addInitScript(init);
   // cross-origin isolated, so performance.now() has 5 microsecond resolution instead of 100
-  await ctx.route(/\/live\/(index\.html)?$/, async r => {
+  await ctx.route(/\/live\/(index\.html)?$|\/test\/embed-host\.html$/, async r => {
     const resp = await r.fetch();
     await r.fulfill({ response: resp, headers: Object.assign({}, resp.headers(), { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' }) });
   });
@@ -93,8 +96,11 @@ try {
     const page = await ctx.newPage();
     page.on('pageerror', e => errors.push(e.message));
     const t0 = Date.now();
-    await page.goto(`http://localhost:${PORT}/live/`);
-    await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 120000, polling: 200 });
+    if (EMBED) {
+      await page.goto(`http://localhost:${PORT}/test/embed-host.html`);
+      await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: url, storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
+    } else await page.goto(`http://localhost:${PORT}/live/`);
+    await page.waitForFunction(() => { const el = document.querySelector('[id$="connPill"]'); return el && el.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
     return { page, loadMs: Date.now() - t0 };
   };
   const other = SECOND ? await open() : null;
@@ -139,10 +145,10 @@ try {
   const heap0 = P.heap.length ? P.heap[0][1] : 0, heap1 = P.heap.length ? P.heap[P.heap.length - 1][1] : 0;
 
   result = {
-    label: LABEL, version: before.version, view: VIEW === 'm1' ? '1m' : 'Range ' + RANGE, secs: SECS, secondTab: SECOND, crossOriginIsolated: before.iso,
+    label: LABEL + (EMBED ? ' (embedded)' : ''), version: before.version, embed: EMBED, view: VIEW === 'm1' ? '1m' : 'Range ' + RANGE, secs: SECS, secondTab: SECOND, crossOriginIsolated: before.iso,
     et: ET || 'now', headed: HEADED, rafLagMaxMs: r2(P.lagMax), rafLagWindowP99: r2(q(P.lag, 0.99)), rafLagWindowMax: r2(Math.max(0, ...P.lag)), frameLoopAlive: P.rafCb.length > 0, tickHours: P.tickHours, backfillTicks: P.backfill, loadMs, bars: P.bars, liveTicks: P.tick.length, ticksPerSec: r2(P.tick.length / SECS),
     frames: iv.length, fps: r2(iv.length / SECS), frameP50: r2(q(iv, 0.5)), frameP99: r2(q(iv, 0.99)), frameMax: r2(Math.max(0, ...iv)),
-    over16: iv.filter(d => d > FRAME * 1.25).length, over33: iv.filter(d => d > 33.4).length, droppedFrames: dropped,
+    over16: iv.filter(d => d > FRAME * 1.25).length, over33: iv.filter(d => d > 33.4).length, over50: iv.filter(d => d > 50).length, droppedFrames: dropped,
     chartFrameMeanMs: r3(mean(P.rafCb)), chartFrameP95: r3(q(P.rafCb, 0.95)), chartFrameP99: r3(q(P.rafCb, 0.99)), chartFrameMax: r2(Math.max(0, ...P.rafCb)),
     longTasks: P.long.length, longTaskMs: r2(P.long.reduce((s, x) => s + x[1], 0)), longTaskMax: r2(Math.max(0, ...P.long.map(x => x[1]))),
     tickMeanUs: r2(mean(P.tick) * 1000), tickP99Us: r2(q(P.tick, 0.99) * 1000), tickMaxMs: r2(Math.max(0, ...P.tick)),
