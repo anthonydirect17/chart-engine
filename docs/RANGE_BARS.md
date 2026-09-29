@@ -51,7 +51,7 @@ Range R = the range in ticks times the tick size. For each trade at price P:
 - `live/bar-builder.js`, `rangeMode: 'nt'` (default) follows the source above step by step, in whole ticks.
   `rangeMode: 'traded'` is the page's behaviour up to 1.3.1: the breakout trade opens the next bar at its own price.
 - Sessions start at 18:00 ET (CME equity index futures), and both modes start a new bar there, as NinjaTrader does
-  with Break at EOD on.
+  with Break at EOD on (Anthony's setting, confirmed).
 - The same code builds the bars from the tick backfill and from live ticks, so they match (tested tick by tick).
 - Bar times on a jump (1.4.1): the chart needs strictly rising times, so bars made by one trade cannot share it.
   The trade's own bar keeps the trade's time, and the phantom bars before it sit in the gap since the previous
@@ -63,12 +63,16 @@ Range R = the range in ticks times the tick size. For each trade at price P:
   33 hours, below ChartBridge's 48) and builds from that session's first trade. Ticks of a session the backfill only
   partly covers are skipped. Seconds bars still load 8 hours.
 
+## Confirmed by Anthony
+
+- **Break at EOD is ON** in Anthony's NinjaTrader Range charts (Anthony, 2026-09-29). So NinjaTrader starts a fresh
+  bar at the first trade of the 18:00 ET session open with no phantom fill over the overnight gap, and so does the
+  page.
+
 ## Not confirmed
 
-- **Break at EOD default and Anthony's setting.** The help pages do not say whether Break at EOD is on by default,
-  and I could not see Anthony's chart. Forum advice ("uncheck Break at EOD, then save a preset") suggests it is on
-  by default. The page assumes on. If Anthony's NinjaTrader chart has it off, NinjaTrader would carry the last bar
-  over the session break and fill the gap with phantom bars; the page does not do that.
+- **Break at EOD default.** The help pages do not say whether it is on by default (forum advice, "uncheck Break at
+  EOD, then save a preset", suggests on). This no longer matters for Anthony's charts: see Confirmed below.
 - **The session template.** The page uses one boundary at 18:00 ET. NinjaTrader uses the instrument's trading hours
   template, which can differ on holidays and early closes.
 - **NinjaTrader staff forum posts.** The old forum.ninjatrader.com threads on phantom bars and range gaps now
