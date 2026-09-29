@@ -193,6 +193,21 @@ try {
   check(!(await page.getAttribute('#oLegs', 'class') || '').includes('uncovered'), 'covered: not in the error color');
   await page.waitForTimeout(300);
   await shot(page, 'orders-1440-legs.png');
+  // close 1 by hand: long 1 with two pairs working, more than the position: the warning color and why
+  await page.fill('#oQty', '1');
+  await page.click('#sellMkt');
+  await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1'), 'long 1 after selling 1');
+  const overText = await until(async () => { const t = await page.textContent('#oLegs'); return /^stops cover 2 of 1, targets cover 2 of 1 · .*over the position/.test(t) ? t : null; }, 'leg summary over the position');
+  check(!!overText, 'over the position: ' + await page.textContent('#oLegs'));
+  check((await page.getAttribute('#oLegs', 'class') || '').includes('over'), 'over: warning class');
+  check(await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color) === 'rgb(224, 180, 90)', 'over: warning color');
+  await shot(page, 'orders-1440-legs-over.png');
+  // buy 1 back with no bracket (0 / 0), then cancel one pair: stops 1 of 2, the error color
+  await page.fill('#bStop', '0'); await page.press('#bStop', 'Tab');
+  await page.fill('#bTarget', '0'); await page.press('#bTarget', 'Tab');
+  await page.click('#buyMkt');
+  await until(async () => (await page.textContent('#oLegs')) === 'stops cover 2 of 2, targets cover 2 of 2', 'long 2 again, two pairs');
+  s = await state();
   const stopLegs = s.orders.filter(o => o.role === 'stop');
   box = await cbox();
   h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLegs[0].id);
@@ -203,6 +218,8 @@ try {
   const col = await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color);
   check(col === 'rgb(255, 122, 122)', 'stops short: error color, got ' + col);
   await shot(page, 'orders-1440-legs-short.png');
+  await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
+  await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');
   await page.click('#flattenBtn');
   await until(async () => (await page.textContent('#oPos')) === 'Flat', 'flat after the pieces test');
   check((await page.textContent('#oLegs')) === '', 'no leg summary when flat');

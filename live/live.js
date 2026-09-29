@@ -554,8 +554,10 @@ function renderPositionInfo() {
   /* stop and target coverage, from the working orders already here (a filled-in-pieces entry has one pair per fill) */
   const legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, root, pos.qty) : null;
   legsEl.textContent = legs ? legs.text : '';
-  legsEl.classList.toggle('uncovered', !!(legs && legs.stopsShort));
-  legsEl.title = legs ? legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working' + (legs.stopsShort ? '. Stops cover less than the position.' : '') : '';
+  legsEl.classList.toggle('uncovered', !!legs && legs.level === 'error');
+  legsEl.classList.toggle('over', !!legs && legs.level === 'warn');
+  legsEl.title = legs ? legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working' +
+    (legs.stopsShort ? '. Stops cover less than the position.' : legs.level === 'warn' ? '. More than the position: if it all fills, the position reverses.' : '') : '';
   let n = 0, p = 0;
   for (const o of TR.orders.values()) if (o.root === root && o.account !== TR.account && OT.isWorking(o)) n++;
   for (const [k, v] of TR.positions) if (v.qty && k.endsWith('|' + root) && !k.startsWith(TR.account + '|')) p++;
