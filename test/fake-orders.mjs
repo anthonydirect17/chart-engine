@@ -21,6 +21,25 @@ const WORKING = new Set(['working', 'partFilled']);
 const isWorking = o => WORKING.has(o.state);
 const isLeg = o => o.role === 'stop' || o.role === 'target';
 
+// Gate 8, as ChartBridge 0.3 checks it: only the protocol's keys (a misspelt "bracket" is refused, never
+// ignored), and a bracket must be an object with exactly stop and target.
+export const KEYS = {
+  order: ['type', 'cid', 'account', 'root', 'side', 'kind', 'qty', 'price', 'bracket'],
+  change: ['type', 'cid', 'id', 'price'],
+  cancel: ['type', 'cid', 'id'],
+  flatten: ['type', 'cid', 'account', 'root'],
+};
+function checkKeys(m) {
+  const allowed = KEYS[m.type];
+  if (!allowed) return 'Unknown message type ' + m.type + '.';
+  for (const k of Object.keys(m)) if (!allowed.includes(k)) return 'Unknown key "' + k + '" in ' + m.type + '.';
+  for (const [k, v] of Object.entries(m)) if (k !== 'bracket' && v !== null && typeof v === 'object') return 'The message has an unexpected nested object or list.';
+  if (m.bracket !== undefined && m.bracket !== null && typeof m.bracket === 'object' && !Array.isArray(m.bracket))
+    for (const k of Object.keys(m.bracket)) if (k !== 'stop' && k !== 'target') return 'Unknown key "' + k + '" in bracket.';
+  if (m.cid !== undefined && typeof m.cid !== 'string') return 'cid must be a string.';
+  return null;
+}
+
 /** Accounts orders may use: named in tradeAccounts, known to NinjaTrader, never Backtest or Playback, no wildcards. */
 export function allowedAccounts(tradeAccounts, known) {
   return (tradeAccounts || []).map(a => String(a).trim())
@@ -90,8 +109,10 @@ export class OrderDesk {
 
   /* ---------------- page to server: order, change, cancel, flatten */
   handle(conn, m) {
-    const ref = m.type === 'order' ? { cid: m.cid } : m.type === 'flatten' ? {} : { id: m.id };
-    const why = this.checkAction(conn) || this['check_' + m.type](m);
+    const ref = {};
+    if (typeof m.cid === 'string') ref.cid = m.cid;
+    if (typeof m.id === 'string') ref.id = m.id;
+    const why = this.checkAction(conn) || checkKeys(m) || this['check_' + m.type](m);
     if (why) { this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); return false; }
     this['do_' + m.type](m);
     return true;
@@ -126,7 +147,6 @@ export class OrderDesk {
     return null;
   }
   check_order(m) {
-    if (typeof m.cid !== 'string' || !m.cid) return 'The order has no cid.';
     const ar = this.checkAccountRoot(m.account, m.root); if (ar) return ar;
     if (m.side !== 'buy' && m.side !== 'sell') return 'Side must be buy or sell.';
     if (!['market', 'limit', 'stop'].includes(m.kind)) return 'Kind must be market, limit or stop.';
@@ -169,12 +189,18 @@ export class OrderDesk {
     return null;
   }
 
-  /** Contracts a side could reach with `extra` more: the position plus working non-bracket orders on that side. */
+  /** Contracts a side could reach with `extra` more: the position plus every working order on that side
+   *  (bracket legs and orders placed elsewhere too; orders sharing an OCO id count once, at the largest). */
   exposure(account, root, side, extra) {
-    const pos = this.pos(account, root).qty;
+    const pos = this.pos(account, root).qty, groups = new Map();
     let working = 0;
-    for (const o of this.orders.values()) if (isWorking(o) && !isLeg(o) && o.account === account && o.root === root && o.side === side) working += o.qty - o.filled;
-    return Math.max(0, (side === 'buy' ? pos : -pos) + working + (extra || 0));
+    for (const o of this.orders.values()) {
+      if (!isWorking(o) || o.account !== account || o.root !== root || o.side !== side) continue;
+      const left = o.qty - o.filled;
+      if (o.oco) groups.set(o.oco, Math.max(groups.get(o.oco) || 0, left)); else working += left;
+    }
+    for (const v of groups.values()) working += v;
+    return (side === 'buy' ? pos : -pos) + working + (extra || 0);
   }
 
   do_order(m) {

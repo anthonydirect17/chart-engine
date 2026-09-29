@@ -154,6 +154,31 @@ test('limit and stop fill when price crosses; a touch fills one contract', async
   assert.deepEqual(d.pos(), { qty: 2, avgPrice: 25390 });
 });
 
+test('gate 3: bracket legs and orders placed elsewhere count toward the cap; an OCO pair counts once', async () => {
+  const d = await makeDesk({ maxQty: { MNQ: 2 } }); d.auth();
+  assert.equal(reasonOf(d.order({ qty: 2, bracket: { stop: 40, target: 80 } })), null);    // long 2, one OCO pair of 2 (sells)
+  assert.equal(reasonOf(d.order({ side: 'sell', qty: 2 })), null);                          // exit: -2 + 2 (pair once) + 2 = 2
+  const e = await makeDesk({ maxQty: { MNQ: 2 } }); e.auth();
+  assert.equal(reasonOf(e.order({ qty: 2, bracket: { stop: 40, target: 0 } })), null);     // long 2 with a lone sell stop 2
+  assert.equal(reasonOf(e.order({ side: 'sell', qty: 1, kind: 'limit', price: 25410 })), null);   // -2 + 2 + 1 = 1
+  assert.match(reasonOf(e.order({ side: 'sell', qty: 2, kind: 'limit', price: 25420 })), /to 3/);   // -2 + 3 + 2 = 3
+});
+
+test('gate 8: only the protocol keys; a misspelt or null bracket is refused, never sent naked', async () => {
+  const d = await makeDesk(); d.auth();
+  assert.match(reasonOf(d.order({ brakcet: { stop: 8, target: 16 } })), /Unknown key "brakcet" in order/);
+  assert.match(reasonOf(d.order({ bracket: null })), /bracket must be/);
+  assert.match(reasonOf(d.order({ bracket: { stop: 8 } })), /Bracket target must be a whole number/);
+  assert.match(reasonOf(d.order({ bracket: { stop: 8, target: 16, trail: 4 } })), /Unknown key "trail" in bracket/);
+  assert.match(reasonOf(d.order({ qty: [1] })), /nested object or list/);
+  assert.match(reasonOf(d.act({ type: 'flatten', account: 'Sim101', root: 'MNQ', all: true })), /Unknown key "all" in flatten/);
+  assert.equal(d.desk.orders.size, 0);
+  const noCid = d.act({ type: 'order', account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 });
+  assert.equal(reasonOf(noCid), null);                                   // cid is optional, as in ChartBridge
+  const r = d.act({ type: 'cancel', cid: 'k1', id: 'nope' });
+  assert.deepEqual([r[0].type, r[0].cid, r[0].id], ['reject', 'k1', 'nope']);   // a reject carries whatever the message had
+});
+
 test('bracket: an OCO pair around the fill; target fill cancels the stop', async () => {
   const d = await makeDesk(); d.auth();
   const msgs = d.order({ qty: 2, bracket: { stop: 40, target: 80 } });

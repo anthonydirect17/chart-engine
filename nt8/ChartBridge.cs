@@ -94,7 +94,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
         //   deskUrl = http://localhost:8800
-        //   accounts = Sim101, LFE*        (only these accounts' fills; * matches a prefix; default all,
+        //   accounts = Sim101, EVAL*       (only these accounts' fills; * matches a prefix; default all,
         //                                   Backtest and Playback accounts are always skipped)
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)

@@ -75,7 +75,7 @@ public static class OrdersHarness
         Check(Rejected("trading is off") && sim.Calls.Count == 0, "trading off: order refused, nothing sent to NinjaTrader");
 
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH, Playback101, LFE*");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimB, SimC, SimD, SimE, SimF, SimG, SimH, Playback101, EVAL*");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
         Check(!ChartBridgeOrders.TradeAccounts.Contains("Playback101") && !ChartBridgeOrders.TradeAccounts.Any(a => a.Contains("*")) && ChartBridgeOrders.TradeAccounts.Contains("Sim101"),
               "tradeAccounts drops Playback and wildcards");
@@ -84,6 +84,9 @@ public static class OrdersHarness
         ChartBridgeClient evil = new ChartBridgeClient(null, 2); evil.Tap = s => sent.Add(s); evil.Origin = "https://evil.example";
         ChartBridgeOrders.OnMessage(evil, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
         Check(LastSent().Contains("\"enabled\":false") && LastSent().Contains("own page"), "other origin: auth refused even with the right token");
+        ChartBridgeClient upper = new ChartBridgeClient(null, 3); upper.Tap = s => sent.Add(s); upper.Origin = "http://LOCALHOST:8765";
+        ChartBridgeOrders.OnMessage(upper, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+        Check(LastSent().Contains("own page"), "Origin must match exactly (no case folding)");
         ChartBridgeOrders.OnMessage(evil, "order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(Rejected("may not trade") && sim.Calls.Count == 0, "other origin: order refused");
         Msg("auth", "{\"type\":\"auth\",\"token\":\"wrong\"}");
@@ -137,13 +140,17 @@ public static class OrdersHarness
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":[1]"));
         Check(Rejected("nested object or list"), "list value: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":-1,\"target\":8}"));
-        Check(Rejected("whole numbers of ticks") || Rejected("bracket ticks"), "negative bracket ticks: refused");
+        Check(Rejected("from 0 to 200"), "negative bracket ticks: refused");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8}"));
+        Check(Rejected("needs both stop and target"), "bracket missing its target: refused");
+        Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":4"));
+        Check(Rejected("over the MNQ cap of 3"), "one order over the cap: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":201,\"target\":8}"));
         Check(Rejected("from 0 to 200"), "bracket over 200 ticks: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":\"8\",\"target\":16}"));
-        Check(Rejected("whole numbers of ticks"), "bracket ticks as a string: refused");
+        Check(Rejected("needs both stop and target"), "bracket ticks as a string: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8.5,\"target\":16}"));
-        Check(Rejected("whole numbers of ticks"), "fractional bracket ticks: refused");
+        Check(Rejected("needs both stop and target"), "fractional bracket ticks: refused");
 
         // gate 5: prices
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":25000"));
@@ -177,7 +184,15 @@ public static class OrdersHarness
         Msg("order", Order("SimB", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(Rejected("position 4 contracts") && b.Calls.Count == 0, "long 3, cap 3: buying 1 more refused");
         Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":7"));
-        Check(Rejected("position 4 contracts") && b.Calls.Count == 0, "long 3: selling 7 (short 4) refused");
+        Check(Rejected("over the MNQ cap of 3") && b.Calls.Count == 0, "cap 3, long 3: selling 7 in one order refused");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "4");
+        Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":4"));
+        Check(b.Calls.Count == 1, "cap 4, long 3: selling 4 (to short 1) allowed");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "9");
+        Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":9"));
+        Check(Rejected("position 10 contracts") && b.Calls.Count == 1, "cap 9, long 3, a sell 4 still working: selling 9 more could make short 10: refused");
+        b.Calls.Clear(); b.Orders.Clear();
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
         Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
         Check(Rejected("opens or adds") && b.Calls.Count == 0, "bracket on an order that reduces the position: refused");
         Msg("order", Order("SimB", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":3"));

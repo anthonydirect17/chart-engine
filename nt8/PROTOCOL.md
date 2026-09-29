@@ -1,8 +1,9 @@
-# ChartBridge protocol v1
+# ChartBridge protocol (v1 market data and fills, v2 orders)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
-**Read only:** nothing in this protocol can place, change or cancel an order.
+**Read only by default.** Nothing in v1 can place, change or cancel an order. Order entry (v2, ChartBridge
+0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
 
 All messages are JSON text. Times:
 
@@ -16,7 +17,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]` | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked |
 | `ticks` | `root`, `ticks`: `[[t,p,v], ...]`, `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root` | history and tick backfill complete; live ticks follow |
@@ -141,6 +142,15 @@ that would reduce the position it is refused.
   NO STOP") and is logged in NinjaTrader's Output window.
 
 Stop-limit orders are shown but can only be moved in NinjaTrader.
+
+### Signing in
+
+1. `GET /session` (same origin, no CORS headers) answers `{"token": "<48 hex characters>", "trading": true|false}`.
+   The token is new each time ChartBridge starts.
+2. After `hello`, the page sends `{"type":"auth","token":"..."}` on the WebSocket and gets a `trading`
+   message back; when `enabled` is true, `orders` and one `position` per open position follow.
+3. A page that is shown inside a frame should not sign in (ChartBridge's headers already stop other
+   sites from framing it).
 
 ### Page to server
 

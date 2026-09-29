@@ -6,8 +6,8 @@
 //   1. off unless config.txt has "trading = true";
 //   2. only accounts named in "tradeAccounts = ..." (exact names, no wildcard; never Backtest/Playback),
 //      only while the account is Connected, and only once ChartBridge is listening to its order events;
-//   3. size cap per root, "maxQty.MNQ = 5" (default 1), on the POSITION: the current position plus
-//      working entries on the same side plus the new order may not exceed it;
+//   3. size cap per root, "maxQty.MNQ = 5" (default 1), on the order and on the POSITION: the current
+//      position plus working orders on the same side plus the new order may not exceed it;
 //   4. only ChartBridge's own page: WebSocket Origin must be http://localhost:<port>, and the page must
 //      send the token it read from GET /session (new random token each start, no CORS headers);
 //   5. prices on the tick grid, within 200 ticks of a last price no older than 300 seconds, stops on
@@ -106,7 +106,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static bool OriginAllowed(string origin)
         {
-            return origin != null && origin.Equals("http://localhost:" + ChartBridgeConfig.Port, StringComparison.OrdinalIgnoreCase);
+            return origin != null && origin.Equals("http://localhost:" + ChartBridgeConfig.Port, StringComparison.Ordinal);
         }
 
         public static string TradingJson(bool authed, string reason)
@@ -413,6 +413,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Int(top, "qty", out qty) != 1 || qty < 1) return "qty must be a whole number of 1 or more";
             bool isBuy = side == "buy";
             int cap = CapFor(root), pos = SignedPosition(account, inst), pendBuy, pendSell;
+            if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
             PendingOrders(account, inst, out pendBuy, out pendSell);
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
             if (worst > cap)
@@ -429,8 +430,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             int stopTicks = 0, targetTicks = 0;
             if (bracketBody != null)
             {
-                if (Int("{" + bracketBody + "}", "stop", out stopTicks) == -1 || Int("{" + bracketBody + "}", "target", out targetTicks) == -1)
-                    return "bracket stop and target must be whole numbers of ticks";
+                if (Int("{" + bracketBody + "}", "stop", out stopTicks) != 1 || Int("{" + bracketBody + "}", "target", out targetTicks) != 1)
+                    return "bracket needs both stop and target as whole numbers of ticks (0 for none)";
                 if (stopTicks < 0 || targetTicks < 0 || stopTicks > MaxBracketTicks || targetTicks > MaxBracketTicks)
                     return "bracket ticks must be from 0 to " + MaxBracketTicks;
                 bool reduces = (pos > 0 && !isBuy) || (pos < 0 && isBuy);
