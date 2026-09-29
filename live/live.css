@@ -5,13 +5,19 @@
  * The standalone page adds only its html and body basics (live/index.html).
  */
 .chart-live {
-  color-scheme: dark;
+  color-scheme: var(--scheme, dark);
   --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
   --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
   --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
   --crimson: #9F1239; --crimson-word: #E0445E;
   --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
-  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3;
+  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8;
+  /* The chart's ground and the legend on it follow the Colors panel's Background (1.5.3; set from the engine's
+     theme). These are the defaults: exactly the look before. On a light ground the page also sets the variables
+     above (and --panel, --scheme, --ce-*) from ChartEngine.util.chromeColors, so the toolbar, menus and status line
+     go light too (Anthony); on the dark grounds they stay in the house style. */
+  --chart-bg: #080B10; --lg-bg: rgba(8, 11, 16, 0.78); --lg-head: #F2F6FA; --lg-text2: #9AA8B8; --lg-dim: #8392A5;
+  --lg-buy: #3DDC97; --lg-sell: #FF7A7A;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -38,7 +44,7 @@
 .chart-live .ind-count { font: 500 11px var(--mono); color: var(--text3); }
 .chart-live .ind-caret { width: 6px; height: 6px; border-right: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3); transform: translateY(-2px) rotate(45deg); }
 .chart-live .ind-btn[aria-expanded="true"] { background: var(--s3); border-color: var(--accent-border); }
-.chart-live .ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; max-width: calc(100vw - 32px); box-sizing: border-box; background: #0B1016; border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.chart-live .ind-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; min-width: 180px; max-width: calc(100vw - 32px); box-sizing: border-box; background: var(--panel, #0B1016); border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; display: grid; gap: 2px; box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
 .chart-live .ind-row { display: flex; align-items: center; gap: 9px; font: 500 12px var(--sans); color: var(--text2); padding: 6px 8px; min-height: 32px; box-sizing: border-box; border-radius: 8px; cursor: pointer; }
 .chart-live .ind-row:hover { background: var(--s2); color: var(--text); }
 .chart-live .ind-row:has(input:checked) { color: var(--text); }
@@ -56,25 +62,26 @@
 .chart-live .range-box input { width: 54px; background: var(--s2); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); font: 500 12px var(--mono); padding: 4px 6px; min-height: 28px; box-sizing: border-box; }
 .chart-live .range-box span { font: 500 11px var(--mono); color: var(--text3); }
 
-.chart-live .stage { position: relative; flex: 1; min-height: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.chart-live .stage { position: relative; flex: 1; min-height: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--chart-bg); }
 .chart-live .chart-box { position: absolute; inset: 0; }
-.chart-live .legend { position: absolute; left: 10px; top: 10px; z-index: 3; pointer-events: none; display: grid; gap: 3px; padding: 7px 10px; border-radius: 8px; background: rgba(8, 11, 16, 0.78); font-size: 12px; max-width: calc(100% - 110px); }
+.chart-live .legend { position: absolute; left: 10px; top: 10px; z-index: 3; pointer-events: none; display: grid; gap: 3px; padding: 7px 10px; border-radius: 8px; background: var(--lg-bg); font-size: 12px; max-width: calc(100% - 110px); }
 .chart-live .lg1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.chart-live .lg1 b { color: var(--head); font-weight: 600; }
-.chart-live .tfbadge { font: 500 11px var(--mono); color: var(--text2); }
+.chart-live .lg1 b { color: var(--lg-head); font-weight: 600; }
+.chart-live .tfbadge { font: 500 11px var(--mono); color: var(--lg-text2); }
 .chart-live .dim { color: var(--text3); }
+.chart-live .legend .dim { color: var(--lg-dim); }
 .chart-live .pill { font: 600 10px/1.6 var(--mono); letter-spacing: .06em; padding: 0 7px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); color: var(--text2); background: var(--s3); }
 .chart-live .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .chart-live .pill.live { color: var(--accent-soft); background: var(--accent-tint); border-color: var(--accent-border); }
 .chart-live .pill.warn { color: var(--warn); background: rgba(224, 180, 90, 0.10); border-color: rgba(224, 180, 90, 0.40); }
 .chart-live .pill.bad { color: var(--loss); background: rgba(255, 122, 122, 0.10); border-color: rgba(255, 122, 122, 0.40); }
-.chart-live .lg2, .chart-live .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--text3); display: flex; flex-wrap: wrap; gap: 2px 10px; }
-.chart-live .lg2 span span, .chart-live .lg3 span span { color: var(--head); }
+.chart-live .lg2, .chart-live .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--lg-dim); display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.chart-live .lg2 span span, .chart-live .lg3 span span { color: var(--lg-head); }
 .chart-live .lg2 .up { color: var(--up-text); }
 .chart-live .lg2 .down { color: var(--down-text); }
 .chart-live .lg3 .vw { color: var(--vwap-sw); }
-.chart-live .lg3 .buy { color: var(--profit); }
-.chart-live .lg3 .sell { color: var(--loss); }
+.chart-live .lg3 .buy { color: var(--lg-buy); text-shadow: var(--lg-buy-halo, none); }
+.chart-live .lg3 .sell { color: var(--lg-sell); text-shadow: var(--lg-sell-halo, none); }
 .chart-live .notice { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: min(460px, calc(100% - 40px)); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
 .chart-live .notice h2 { margin: 0; font-size: 15px; color: var(--head); }
 .chart-live .notice p { margin: 0; color: var(--text2); line-height: 1.5; }
@@ -84,10 +91,24 @@
 .chart-live .status b { color: var(--text2); font-weight: 500; }
 .chart-live .status .sep { color: var(--line-strong); }
 .chart-live .status .msg.warn { color: var(--warn); }
+.chart-live .status .ibnote { color: var(--text3); font-family: var(--sans); }
 .chart-live .status .msg.error { color: var(--loss); }
 .chart-live .status .ro { margin-left: auto; font-family: var(--sans); }
 
 /* order bar (protocol v2): hidden with an older ChartBridge, disabled with the reason when trading is off */
+/* The order bar looks exactly as in 1.5.2 on every chart ground (review 2, B1): trading controls never lose their
+   green Buy, red Sell or amber Armed. It keeps the house colors whatever the page chrome does, and sits on the
+   house ground (the wrapper), so the Armed tint over it is the 1.5.2 tint. */
+.chart-live .obar-ground { border-radius: 12px; background: #080B10; color: #E6EDF5; color-scheme: dark; }
+.chart-live .obar-ground:has(> .obar[hidden]) { display: none; }
+.chart-live .obar {
+  color-scheme: dark;
+  --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
+  --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
+  --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
+  --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
+  color: var(--text);
+}
 .chart-live .obar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--s2); }
 .chart-live .obar .glabel { margin-right: 2px; }
 .chart-live .ofield { display: inline-flex; align-items: center; gap: 6px; }

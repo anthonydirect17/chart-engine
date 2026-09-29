@@ -4,10 +4,18 @@ on:
   pull_request:
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    # Linux and Windows (Anthony trades on Windows; the merge rule wants both green)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The repo keeps no package-lock.json (by rule), so `npm ci` cannot run; install the one dev dependency
+      # without writing a lock file. No browsers are downloaded: `npm test` needs none.
+      - run: npm install --no-package-lock --no-audit --no-fund
       - run: npm test

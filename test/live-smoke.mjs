@@ -23,7 +23,7 @@ try {
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await page.goto(`http://localhost:${PORT}/live/`);
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(1500);
   if (!(await page.isHidden('#obar'))) fail('order bar shown with a read-only ChartBridge');
   const legend = (await page.textContent('#legend')).replace(/\s+/g, ' ');
@@ -41,7 +41,7 @@ try {
   fillText = await page.textContent('#lgFill');
   if (fillText.trim() !== '') fail('fills shown for an account with none: ' + fillText);
   await page.reload();
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(500);
   if (await page.inputValue('#fillAcct') !== 'DEMO-EMPTY') fail('account choice not remembered');
   await page.selectOption('#fillAcct', ''); await page.waitForTimeout(300);
@@ -73,13 +73,13 @@ try {
   if (!/Range 12t traded/.test(await page.textContent('#lgTf'))) fail('traded mode label: ' + await page.textContent('#lgTf'));
   await page.screenshot({ path: path.join(out, 'live-range-traded.png') });
   await page.reload();
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(400);
   if (await page.inputValue('#rangeMode') !== 'traded' || await page.inputValue('#rangeTicks') !== '12') fail('range mode or size not remembered: ' + await page.inputValue('#rangeMode') + ' ' + await page.inputValue('#rangeTicks'));
   await page.selectOption('#rangeMode', 'nt'); await page.waitForTimeout(300);
 
   // indicator menu: one control, keyboard and pointer, saved for the pane
-  if (await page.textContent('#indCount') !== '4/4') fail('indicators on at first run: ' + await page.textContent('#indCount'));
+  if (await page.textContent('#indCount') !== '5/5') fail('indicators on at first run (the 1.3 four and IB 1h, 1.5.3): ' + await page.textContent('#indCount'));
   if (!(await page.isHidden('#indPanel'))) fail('indicator menu open at load');
   await page.focus('#indBtn'); await page.keyboard.press('Enter');
   if (await page.isHidden('#indPanel') || await page.getAttribute('#indBtn', 'aria-expanded') !== 'true') fail('Enter did not open the indicator menu');
@@ -92,14 +92,14 @@ try {
   await page.keyboard.press('Escape');
   if (!(await page.isHidden('#indPanel'))) fail('Escape did not close the indicator menu');
   if (await page.evaluate(() => document.activeElement.id) !== 'indBtn') fail('focus not back on the Indicators button');
-  if (await page.textContent('#indCount') !== '2/4') fail('count after two off: ' + await page.textContent('#indCount'));
+  if (await page.textContent('#indCount') !== '3/5') fail('count after two off: ' + await page.textContent('#indCount'));
   await page.click('#indBtn');
   await page.click('#indPanel input[data-layer="fills"]');
   if ((await page.textContent('#lgFill')).trim() !== '') fail('fills still marked with Fills off');
   await page.mouse.click(700, 600);                                                     // outside: closes
   if (!(await page.isHidden('#indPanel'))) fail('outside click did not close the indicator menu');
   await page.reload();
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(400);
   const layers = await page.evaluate(() => window.liveChart.getLayers());
   if (layers.volume !== false || layers.vwap !== false || layers.levels !== true) fail('indicators not remembered: ' + JSON.stringify(layers));
@@ -108,7 +108,7 @@ try {
   await page.click('#indBtn');
   for (const k of ['volume', 'vwap', 'fills']) await page.click(`#indPanel input[data-layer="${k}"]`);
   await page.keyboard.press('Escape');
-  if (await page.textContent('#indCount') !== '4/4') fail('indicators back on: ' + await page.textContent('#indCount'));
+  if (await page.textContent('#indCount') !== '5/5') fail('indicators back on: ' + await page.textContent('#indCount'));
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();
@@ -122,12 +122,12 @@ try {
   if (saved.length !== 2) fail('expected 2 saved drawings, got ' + saved.length);
   await page.screenshot({ path: path.join(out, 'live-drawings.png') });
   await page.reload();
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   saved = await page.evaluate(() => JSON.parse(localStorage.getItem('live-drawings-v1-MNQ') || '[]'));
   if (saved.length !== 2) fail('drawings lost on reload: ' + saved.length);
 
   await page.click('#symSeg >> text="ES"');
-  await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(1200);
   const esName = await page.textContent('#lgName');
   if (!/ES 12-26/.test(esName)) fail('ES name: ' + esName);
@@ -146,8 +146,8 @@ try {
       p2.on('pageerror', e => fail('short history pageerror: ' + e.message));
       await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
       await p2.goto(`http://localhost:${PORT + 1}/live/`);
-      await p2.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
-      if (await p2.getAttribute('#tfSeg >> text="Range"', 'aria-pressed') !== 'true') { await p2.click('#tfSeg >> text="Range"'); await p2.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 }); }
+      await p2.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
+      if (await p2.getAttribute('#tfSeg >> text="Range"', 'aria-pressed') !== 'true') { await p2.click('#tfSeg >> text="Range"'); await p2.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 }); }
       await p2.waitForTimeout(500);
       const late = await p2.evaluate(() => { const b = window.liveChart.bars()[0]; if (!b) return null; const s = 18 * 3600, start = (Math.floor((b.t + 86400 - s) / 86400) - 1) * 86400 + s; return b.t - start > 600; });
       const msg = await p2.textContent('#statusMsg');
@@ -162,7 +162,7 @@ try {
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));
   await phone.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await phone.goto(`http://localhost:${PORT}/live/`);
-  await phone.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await phone.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways');
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
   await phone.click('#indBtn');
