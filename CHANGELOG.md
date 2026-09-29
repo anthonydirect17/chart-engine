@@ -19,8 +19,11 @@ and recompile in NinjaTrader.
   is unchanged.
 - Tests: the Mono harness unit-tests the address check (IPv4, IPv6, mapped IPv4, LAN, Tailscale, none) and
   the origin check (own page, listed, unlisted, null, missing), runs the real request handler behind a
-  listener on every interface (a forged `Host: localhost` from another address is 403 on every path), and
-  covers the OCO alarm; new source guards; the fake bridge follows the same origin rule (`--allow-origins`).
+  listener on every interface with plain GETs (a forged `Host: localhost` from another address is 403 on every
+  path), and covers the OCO alarm. Mono's HttpListener has no server WebSocket, so the upgrade itself is not run
+  there: a source guard pins the address check (and the Origin check) before the upgrade, and a one-time curl on
+  the trading PC checks it for real (PROTOCOL.md, Network access). The fake bridge follows the same origin rule
+  (`--allow-origins`).
 
 ## 1.4.1 (2026-09-29): fixes from the review of 1.4.0
 

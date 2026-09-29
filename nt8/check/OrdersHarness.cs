@@ -856,7 +856,10 @@ public static class OrdersHarness
         Check(diag.Contains("\"allowOrigins\":[\"http://localhost:8765\",\"https://desk.golivepage.com\"]") && diag.Contains("\"loopbackOnly\":true"), "/diag lists the allowed origins: " + diag);
 
         // The real request handler behind a listener on every interface (what HTTP.sys does on Windows):
-        // a request from another address that says "Host: localhost" is refused on every path; from this PC it is served.
+        // a plain GET from another address that says "Host: localhost" is refused on every path; from this PC it is served.
+        // Plain GETs only: Mono's HttpListener has no server WebSocket (IsWebSocketRequest is always false), so the
+        // upgrade branch never runs here. That the address check comes before the upgrade is pinned by the source
+        // guard in test/nt8-source.test.js, and checked once on Windows with curl (nt8/PROTOCOL.md, Network access).
         IPAddress outside = null;
         try
         {
@@ -895,7 +898,7 @@ public static class OrdersHarness
                 string[] paths = { "/diag", "/session", "/", "/index.html", "/ws", "/nothing" };
                 List<string> codes = new List<string>();
                 foreach (string p in paths) { int sc; string body = Get(outside, port, p, out sc); codes.Add(p + "=" + sc + (body.Length > 0 ? "+body" : "")); }
-                Check(codes.All(x => x.EndsWith("=403")), "listener: from another address with a forged Host localhost, every path is 403 with no body: " + string.Join(" ", codes));
+                Check(codes.All(x => x.EndsWith("=403")), "listener, plain GET only (no WebSocket upgrade on Mono): from another address with a forged Host localhost, every path is 403 with no body: " + string.Join(" ", codes));
                 int logs;
                 lock (NinjaTrader.Code.Output.Lines) logs = NinjaTrader.Code.Output.Lines.Count(x => x.Contains("refused a request from " + outside));
                 Check(logs == 1, "listener: " + paths.Length + " refused requests from one address make one Output line (" + logs + ")");

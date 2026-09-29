@@ -65,8 +65,9 @@ in the Windows firewall; in an admin PowerShell:
 New-NetFirewallRule -DisplayName "ChartBridge 8765 block inbound" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Block
 ```
 
-The firewall does not filter traffic within the PC, so the chart and The Desk on this PC keep working. See
-"Network access" in `nt8/PROTOCOL.md`.
+The firewall does not filter traffic within the PC, so the chart and The Desk on this PC keep working. After
+installing 0.3.1, check once that a plain request and a WebSocket upgrade to the PC's Tailscale or LAN address
+get 403 (the two `curl` lines are in "Network access" in `nt8/PROTOCOL.md`).
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on

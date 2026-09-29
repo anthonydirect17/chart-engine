@@ -40,6 +40,18 @@ need ChartBridge's own page (gate 4 below, unchanged).
 `New-NetFirewallRule -DisplayName "ChartBridge 8765 block inbound" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Block`).
 The firewall does not filter traffic within the PC. Safety does not rest on it.
 
+**One-time check on the trading PC** (after installing 0.3.1; from another device, or from the PC itself to its
+own Tailscale or LAN address, which is not loopback). Both must print `HTTP/1.1 403` and no body; with the
+firewall rule on, a request from another device may simply time out instead, which is also fine:
+
+```
+curl -i -H "Host: localhost:8765" http://<tailscale or LAN ip>:8765/diag
+curl -i -H "Host: localhost:8765" -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" http://<tailscale or LAN ip>:8765/ws
+```
+
+The second one matters most: the WebSocket upgrade cannot be run in the Linux test harness (Mono has no server
+WebSocket), so there the order of the checks is only guarded in the source.
+
 `/diag` shows the rules in force under `network`: `loopbackOnly` (true), `allowOrigins` (ChartBridge's own page
 first, then the listed ones; not secret), `refusedNotThisPc` and `refusedOrigin` (refusals since the start).
 
