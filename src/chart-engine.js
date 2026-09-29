@@ -1596,6 +1596,8 @@ function create(container, options) {
     setCountdown(fn) { countdownFn = typeof fn === 'function' ? fn : null; dirty = true; },
     /** Fill markers: [{ t, price, side: 'buy' | 'sell', qty }] */
     setMarkers(list) { markers = (list || []).filter(m => isFinite(m.price) && isFinite(m.t)); dirty = true; },
+    /** The fill markers as set (1.6.0, for reading). */
+    getMarkers() { return markers.map(m => Object.assign({}, m)); },
     /** Drawing tool: 'hline', 'trend' or null. */
     setTool(t) { setToolInternal(t === 'hline' || t === 'trend' ? t : null); },
     getTool() { return tool; },

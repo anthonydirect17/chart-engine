@@ -16,12 +16,14 @@ await new Promise(r => bridge.stdout.once('data', r));
 const errors = [];
 const fail = m => errors.push(m);
 const isLive = () => document.getElementById('connPill')?.textContent === 'LIVE';
-/* The account whose fills are marked is chosen in the Fills settings panel of the Indicators menu (1.6.0). */
-async function pickFillAccount(page, value) {
-  await page.click('#indBtn');
-  if (await page.getAttribute('#indPanel [data-act="gear"][data-id="fills"]', 'aria-expanded') !== 'true') await page.click('#indPanel [data-act="gear"][data-id="fills"]');
-  await page.selectOption('#indPanel .ind-set[data-id="fills"] #fillAcct', value);
-  await page.keyboard.press('Escape');
+/* One account picker (1.6.0, Anthony): with no order bar (ChartBridge 0.2 here) it sits in the toolbar. */
+async function pickFillAccount(page, value) { await page.selectOption('#acctPick', value); }
+/* The fills marked are always the picker's account's, and nobody else's (review B1). */
+async function fillsMatchPicker(page) {
+  const r = await page.evaluate(() => ({ pick: document.getElementById('acctPick').value, visible: !document.getElementById('acctWrap').hidden,
+    accounts: [...new Set(window.liveChart.getMarkers().map(m => m.account))] }));
+  if (!r.visible || r.accounts.some(a => a !== r.pick)) fail('fills marked are not the visible picker\'s account: ' + JSON.stringify(r));
+  return r;
 }
 let browser = null;
 try {
@@ -39,20 +41,23 @@ try {
   if (!/Last fill (BUY|SELL)/.test(legend)) fail('legend missing last fill: ' + legend);
   await page.screenshot({ path: path.join(out, 'live-1m.png') });
 
-  // account dropdown: accounts with fills first, then the rest; picking one filters the fill marks and is remembered
-  const opts = await page.$$eval('#fillAcct option', os => os.map(o => o.value + '=' + o.textContent));
-  if (JSON.stringify(opts) !== JSON.stringify(['=All accounts', 'DEMO-EVAL=DEMO-EVAL', 'Sim101=Sim101', 'DEMO-EMPTY=DEMO-EMPTY (no fills yet)'])) fail('account options: ' + JSON.stringify(opts));
+  // the account picker (toolbar, no order bar): accounts with fills first, no "All accounts"; the fills follow it
+  const opts = await page.$$eval('#acctPick option', os => os.map(o => o.value + '=' + o.textContent));
+  if (JSON.stringify(opts) !== JSON.stringify(['DEMO-EVAL=DEMO-EVAL', 'Sim101=Sim101', 'DEMO-EMPTY=DEMO-EMPTY (no fills yet)'])) fail('account options: ' + JSON.stringify(opts));
+  if (await page.inputValue('#acctPick') !== 'Sim101' || (await fillsMatchPicker(page)).accounts.join() !== 'Sim101') fail('first run: Sim101 and its fills');
   await pickFillAccount(page, 'DEMO-EVAL'); await page.waitForTimeout(300);
   let fillText = await page.textContent('#lgFill');
-  if (!/DEMO-EVAL/.test(fillText)) fail('last fill not from the chosen account: ' + fillText);
+  if (!/DEMO-EVAL/.test(fillText) || (await fillsMatchPicker(page)).accounts.join() !== 'DEMO-EVAL') fail('fills not from the chosen account: ' + fillText);
+  await page.screenshot({ path: path.join(out, 'live-account-picker.png'), clip: { x: 0, y: 0, width: 1440, height: 200 } });
   await pickFillAccount(page, 'DEMO-EMPTY'); await page.waitForTimeout(300);
   fillText = await page.textContent('#lgFill');
-  if (fillText.trim() !== '') fail('fills shown for an account with none: ' + fillText);
+  if (fillText.trim() !== '' || (await fillsMatchPicker(page)).accounts.length) fail('fills shown for an account with none: ' + fillText);
   await page.reload();
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(500);
-  if (await page.inputValue('#fillAcct') !== 'DEMO-EMPTY') fail('account choice not remembered');
-  await pickFillAccount(page, ''); await page.waitForTimeout(300);
+  if (await page.inputValue('#acctPick') !== 'DEMO-EMPTY') fail('account choice not remembered');
+  await pickFillAccount(page, 'Sim101'); await page.waitForTimeout(300);
+  await fillsMatchPicker(page);
   const diag = await page.evaluate(async () => (await fetch('/diag')).json());
   if (!Array.isArray(diag.accounts) || diag.accounts.length !== 3 || typeof diag.clockOffsetMs !== 'number') fail('diag shape: ' + JSON.stringify(diag).slice(0, 200));
 
@@ -105,7 +110,12 @@ try {
   let found = await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id));
   if (JSON.stringify(found) !== '["levels"]') fail('search "pdh": ' + JSON.stringify(found));
   await page.keyboard.press('Enter');
-  if ((await L()).levels !== false || await count() !== '4/5') fail('Enter on "pdh" did not hide Levels: ' + await count());
+  if ((await L()).levels !== true || await count() !== '5/5') fail('Enter on a shown match must not hide it: ' + await count());
+  await page.click('#indBody [data-f="sw:levels"]');
+  if ((await L()).levels !== false || await count() !== '4/5') fail('the Levels switch did not hide Levels: ' + await count());
+  await page.focus('#indQ'); await page.keyboard.press('Enter');
+  if ((await L()).levels !== true) fail('Enter on a hidden match shows it');
+  await page.click('#indBody [data-f="sw:levels"]');
   await page.fill('#indQ', 'ibh');
   if (JSON.stringify(await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) !== '["ib"]') fail('search "ibh"');
   await page.fill('#indQ', 'profile');
@@ -116,7 +126,7 @@ try {
   // the switch by keyboard: Space hides Volume, focus stays on the switch
   await page.focus('#indBody [data-f="sw:volume"]'); await page.keyboard.press('Space');
   if ((await L()).volume !== false || await page.evaluate(() => document.activeElement.dataset.f) !== 'sw:volume') fail('Space on the Volume switch');
-  if (await page.getAttribute('#indBody [data-f="sw:volume"]', 'aria-pressed') !== 'false') fail('switch aria-pressed after hiding');
+  if (await page.getAttribute('#indBody [data-f="sw:volume"]', 'aria-pressed') !== 'false' || await page.getAttribute('#indBody [data-f="sw:volume"]', 'aria-label') !== 'Show Volume bars') fail('switch aria-pressed and label after hiding');
   const recent = await page.$$eval('#indBody .ind-rec', bs => bs.map(b => b.textContent));
   if (JSON.stringify(recent) !== '["VOL","LEVELS"]') fail('Recent: ' + JSON.stringify(recent));
   // one settings panel at a time
@@ -165,8 +175,12 @@ try {
   // "/" opens the menu of the chart under the mouse, never while typing in a box
   await page.mouse.move(500, 500); await page.focus('#chart'); await page.keyboard.press('/');
   if (await page.isHidden('#indPanel') || await page.evaluate(() => document.activeElement.id) !== 'indQ') fail('"/" did not open the menu with focus in search');
+  await page.keyboard.type('fills');
   await page.keyboard.press('Escape');
   if (await page.evaluate(() => document.activeElement.id) !== 'chart') fail('Escape after "/" did not return focus to the chart');
+  await page.click('#indBtn');
+  if (await page.inputValue('#indQ') !== '' || !/On this chart/i.test(await page.textContent('#indBody'))) fail('the menu reopened filtered to the last search');
+  await page.keyboard.press('Escape');
   await page.focus('#rangeTicks'); await page.keyboard.press('/');
   if (!(await page.isHidden('#indPanel'))) fail('"/" typed in the range box opened the menu');
   await page.focus('#chart');
@@ -186,6 +200,22 @@ try {
   await page.click('#indBody [data-act="pin"][data-id="levels"]');
   await page.keyboard.press('Escape');
   if (await count() !== '5/5' || (await chips()).length !== 5) fail('indicators back on: ' + await count());
+  // the chip strip holds 6 (Anthony); five indicators exist today, so the cap is lowered here to show the rule
+  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 4; });
+  await page.click('#indBtn');
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // unpin: 4 chips, the strip is full
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // pin again: refused, with a note
+  if (!/holds 4/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="vwap"]') || await page.getAttribute('#indBody [data-act="pin"][data-id="vwap"]', 'aria-pressed') !== 'false') fail('pinning onto a full strip was not refused with a note');
+  if (!/holds 4/.test(await page.textContent('#indLive'))) fail('the note is not announced');
+  await page.click('#indBody [data-act="remove"][data-id="fills"]');
+  await page.click('#indBody .ind-cat[data-id="trades"]'); await page.click('#indBody [data-f="add:fills"]');
+  if (!/Fills added without a chip/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="fills"]')) fail('an indicator added to a full strip got a chip');
+  await page.screenshot({ path: path.join(out, 'live-indicators-strip-full.png') });
+  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 6; });
+  for (const id of ['vwap', 'fills']) await page.click(`#indBody [data-act="pin"][data-id="${id}"]`);
+  if (await page.$('#indBody [data-act="pin"][data-id="profile"]') || await page.$$eval('#indBody .ind-cat ~ .ind-item [data-act="pin"]', b => b.length)) fail('a pin on a row that is not on the chart');
+  await page.keyboard.press('Escape');
+  if ((await chips()).length !== 5) fail('five chips again: ' + JSON.stringify(await chips()));
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();

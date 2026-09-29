@@ -55,7 +55,7 @@ const INDICATORS = [
   { id: 'ib', name: 'Initial balance', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
     opt: '1 hour, locks 10:30 ET' },
   { id: 'fills', name: 'Fills', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
-    opt: 'Side and size at the fill price' },
+    opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
 ];
 /* Listed in the menu, tagged "coming" and not selectable until they exist (the volume profile branch). */
 const COMING = [
@@ -64,6 +64,10 @@ const COMING = [
 const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }];
 const IND_IDS = INDICATORS.map(x => x.id);
 const RECENT_MAX = 5;
+/* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
+   smoke test can lower it (there are only five indicators today). */
+let api = null;
+const pinMax = () => (api ? api.PIN_MAX : 6);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
 const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true };
@@ -98,7 +102,8 @@ function cleanIndicators(v, base) {
  * One pane's indicator state (1.6.0): { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null }.
  *   on      on this chart (listed under "On this chart"); off means it waits in its group with a + to add it
  *   shown   drawn; a hidden one stays on the chart with everything it had (the switch, a chip, Hide all)
- *   pin     a chip on the pane's strip (only while it is on the chart)
+ *   pin     a chip on the pane's strip (only while it is on the chart); one added gets a chip while the strip has
+ *           fewer than 6 (pinMax), and pinning by hand is refused when it is full
  *   recent  the last 5 used from the menu, newest first
  *   restore what Hide all hid, so Restore brings back that same mix (cleared by any other show or hide)
  * The functions below never change the state they are given; they return a new one.
@@ -147,7 +152,11 @@ function copyPane(st) {
   return { ind, recent: st.recent.slice(), restore: st.restore ? st.restore.slice() : null };
 }
 const touch = (st, id) => { st.recent = [id].concat(st.recent.filter(x => x !== id)).slice(0, RECENT_MAX); };
+const pinnedCount = st => IND_IDS.filter(id => st.ind[id].on && st.ind[id].pin).length;
 const Pane = {
+  /** Chips on the strip now (pinned and on the chart), and whether it is full. */
+  pinned(st) { return pinnedCount(st); },
+  pinFull(st) { return pinnedCount(st) >= pinMax(); },
   /** Drawn or not, per indicator: what the chart shows. */
   drawn(st) { const out = {}; for (const id of IND_IDS) out[id] = !!(st.ind[id].on && st.ind[id].shown); return out; },
   /** { shown, hidden, on } counts for the button ("shown/on") and the menu. */
@@ -156,22 +165,62 @@ const Pane = {
     for (const id of IND_IDS) if (st.ind[id].on) { on++; if (st.ind[id].shown) shown++; }
     return { shown, on, hidden: on - shown };
   },
-  /** The menu's switch or +, and a Recent button: add it (shown) when it is not on the chart, else show or hide it. */
-  toggle(st, id) {
+  /*
+   * The changes, each with a fixed result (review S1): the page works out what a click means from what it shows, then
+   * applies the same absolute change to its own state and to the state read fresh from storage, so a tab never saves
+   * the opposite of what it shows when another tab changed the same pane.
+   */
+  /** Put it on the chart, shown (a chip while the strip has room; one already on keeps its chip). A recent use. */
+  add(st, id) {
     if (!IND_IDS.includes(id)) return st;
     const n = copyPane(st), x = n.ind[id];
-    if (!x.on) { x.on = true; x.shown = true; } else x.shown = !x.shown;
+    if (!x.on) { x.pin = pinnedCount(n) < pinMax(); x.on = true; }
+    x.shown = true;
     touch(n, id); n.restore = null;
     return n;
   },
-  /** A chip: show or hide one that is on the chart (not counted as a recent use). */
-  setShown(st, id, shown) {
+  /** Show or hide one that is on the chart (a chip, or the menu's switch with `recent`). */
+  setShown(st, id, shown, recent) {
     if (!IND_IDS.includes(id) || !st.ind[id].on) return st;
     const n = copyPane(st);
     n.ind[id].shown = !!shown; n.restore = null;
+    if (recent) touch(n, id);
     return n;
   },
-  /** The x: take it off the chart (its pin is kept for when it comes back). */
+  /** Hide these (Hide all) and remember them for Restore. */
+  hideIds(st, ids) {
+    const list = cleanIdList(ids).filter(id => st.ind[id].on);
+    if (!list.length) return st;
+    const n = copyPane(st);
+    for (const id of list) n.ind[id].shown = false;
+    n.restore = list;
+    return n;
+  },
+  /** Show these again (Restore). */
+  showIds(st, ids) {
+    const n = copyPane(st);
+    for (const id of cleanIdList(ids)) if (n.ind[id].on) n.ind[id].shown = true;
+    n.restore = null;
+    return n;
+  },
+  /** What the switch, +, a Recent button mean now: add it when it is not on the chart, else show or hide it. */
+  toggleOp(st, id) {
+    if (!IND_IDS.includes(id)) return x => x;
+    if (!st.ind[id].on) return x => Pane.add(x, id);
+    const v = !st.ind[id].shown;
+    return x => Pane.setShown(x, id, v, true);
+  },
+  /** What Hide all means now: hide the shown ones, or with none shown bring back what it hid (Restore). */
+  hideAllOp(st) {
+    const ids = IND_IDS.filter(id => st.ind[id].on && st.ind[id].shown);
+    if (ids.length) return x => Pane.hideIds(x, ids);
+    const back = st.restore ? st.restore.filter(id => st.ind[id].on) : [];
+    if (back.length) return x => Pane.showIds(x, back);
+    return x => x;
+  },
+  toggle(st, id) { return Pane.toggleOp(st, id)(st); },
+  hideAll(st) { return Pane.hideAllOp(st)(st); },
+  /** The x: take it off the chart (added again, it gets a chip again while the strip has room). */
   remove(st, id) {
     if (!IND_IDS.includes(id)) return st;
     const n = copyPane(st);
@@ -179,19 +228,14 @@ const Pane = {
     if (n.restore) { n.restore = n.restore.filter(x => x !== id); if (!n.restore.length) n.restore = null; }
     return n;
   },
+  /** Pin or unpin; pinning one that is on the chart while the strip is full is refused (the same state comes back). */
   pin(st, id, pinned) {
     if (!IND_IDS.includes(id)) return st;
+    const v = pinned === undefined ? !st.ind[id].pin : !!pinned;
+    if (v && !st.ind[id].pin && st.ind[id].on && pinnedCount(st) >= pinMax()) return st;
     const n = copyPane(st);
-    n.ind[id].pin = pinned === undefined ? !n.ind[id].pin : !!pinned;
+    n.ind[id].pin = v;
     return n;
-  },
-  /** Hide all shown ones and remember them; with none shown, Restore brings back exactly that mix. */
-  hideAll(st) {
-    const ids = IND_IDS.filter(id => st.ind[id].on && st.ind[id].shown);
-    const n = copyPane(st);
-    if (ids.length) { for (const id of ids) n.ind[id].shown = false; n.restore = ids; return n; }
-    if (n.restore && n.restore.some(id => n.ind[id].on)) { for (const id of n.restore) if (n.ind[id].on) n.ind[id].shown = true; n.restore = null; return n; }
-    return st;
   },
   /** The footer button's label: "Hide all (n)", or "Restore" when Hide all left nothing shown. */
   hideLabel(st) {
@@ -235,8 +279,10 @@ function create(storage) {
       for (const root of ROOTS) { const n = parseRange(r[root]); if (n !== null) next[root] = n; }
       raw.set(KEYS.range, next);
     }
-    /* 1.6.0: each pane saved by 1.4 to 1.5.3 carried over once (paneFromV1); panes never saved keep their defaults */
-    if (!raw.has(KEYS.indicators)) {
+    /* 1.6.0: each pane saved by 1.4 to 1.5.3 carried over once (paneFromV1); panes never saved keep their defaults.
+       A damaged live-indicators-v2 is carried over from v1 again rather than read as the defaults (review N3). */
+    const v2 = raw.get(KEYS.indicators);
+    if (!v2 || typeof v2 !== 'object' || isList(v2)) {             // none yet, or damaged (not JSON): carry v1 over (again)
       const v1 = raw.get(OLD.indicators);
       if (v1 && typeof v1 === 'object' && !isList(v1)) {
         const next = {};
@@ -300,8 +346,9 @@ function debounce(fn, ms) {
   return d;
 }
 
-return { create, debounce, parseRange, clampRange, cleanIndicators, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
-  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+api = { create, debounce, parseRange, clampRange, cleanIndicators, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+return api;
 });
 
 
@@ -351,7 +398,7 @@ function markup(p, o) {
   const obar = !o.trading ? '' : `
   <div class="obar-ground"><section class="obar" id="${p}obar" aria-label="Order entry" hidden>
     <button type="button" class="arm" id="${p}armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every page load."><span class="knob" aria-hidden="true"></span><span id="${p}armText">Armed off</span></button>
-    <label class="ofield"><span class="glabel">Account</span><select class="acct-sel" id="${p}oAcct" aria-label="Trade account"></select></label>
+    <label class="ofield"><span class="glabel">Account</span><select class="acct-sel acct-main" id="${p}oAcct" aria-label="Account: orders go to it and the chart marks its fills" title="Orders go to this account, and the chart marks its fills"></select></label>
     <label class="ofield"><span class="glabel">Qty</span><input class="oin" id="${p}oQty" type="number" min="1" max="1" step="1" value="1" inputmode="numeric" aria-label="Order quantity"></label>
     <span class="ofield">
       <button type="button" class="obtn buy" id="${p}buyMkt">Buy MKT</button>
@@ -378,6 +425,11 @@ function markup(p, o) {
       <button type="button" data-v="NQ">NQ</button>
       <button type="button" data-v="MES">MES</button>
       <button type="button" data-v="ES">ES</button>
+    </div>
+
+    <div class="group acct-pick" id="${p}acctWrap" hidden>
+      <label class="glabel" for="${p}acctPick">Account</label>
+      <select class="acct-sel acct-compact" id="${p}acctPick" title="The chart marks this account's fills"></select>
     </div>
 
     <div class="group">
@@ -407,13 +459,13 @@ function markup(p, o) {
             <input id="${p}indQ" type="text" placeholder="Search: vwap, ib, pdh, profile" autocomplete="off" spellcheck="false" data-f="q">
             <kbd aria-hidden="true" title="Press / with the mouse over the chart to open this menu">/</kbd>
           </div>
+          <div class="visually-hidden" id="${p}indLive" role="status" aria-live="polite"></div>
           <div class="ind-body" id="${p}indBody"></div>
           <div class="ind-sep"></div>
           <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
-          <div hidden id="${p}indParked"><span class="ind-acct" id="${p}fillAcctBox"><label class="glabel" for="${p}fillAcct">Show fills from</label><select class="acct-sel" id="${p}fillAcct" title="Which account's fills to show"><option value="">All accounts</option></select></span></div>
         </div>
       </div>
-      <div class="ind-chips" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide" hidden></div>
+      <div class="ind-chips" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
     </div>
 
     <div class="group" role="group" aria-label="Drawing tools">
@@ -555,7 +607,17 @@ function start(container, opt, PAGE) {
   const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
-  let fillAccount = store.get('live-fill-account-v1', '');   // '' = all accounts
+  /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
+     one; with no order bar (a mounted chart, or ChartBridge 0.2) a compact one sits in the toolbar. The chart marks the
+     fills of that account only. While trading is on, the account is the order account (TR.account, chosen exactly as
+     before 1.6.0); otherwise it is `viewAccount`, the last one picked, saved in live-account-v1. The 1.5 fills choice
+     (live-fill-account-v1) is read once when there is none yet; its "All accounts" is gone and means none chosen. */
+  let viewAccount = (() => {
+    const v = store.get('live-account-v1', null);
+    if (typeof v === 'string' && v) return v;
+    const old = store.get('live-fill-account-v1', '');
+    return typeof old === 'string' ? old : '';
+  })();
   const accountsSeen = new Set();
   let ticksSeen = 0;
   const delays = { feed: [], local: [] };
@@ -634,10 +696,10 @@ function start(container, opt, PAGE) {
     ibNote(ib);
   }
   const IB_NOTES = {
-    uncovered: 'IB 1h not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
-    gap: 'IB 1h not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong. A reload fetches the history again.',
-    inexact: 'IB 1h not shown: the bars do not line up with 9:30 and 10:30 ET.',
-    empty: 'IB 1h not shown: no trades yet between 9:30 and 10:30 ET.',
+    uncovered: 'Initial balance not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
+    gap: 'Initial balance not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong. A reload fetches the history again.',
+    inexact: 'Initial balance not shown: the bars do not line up with 9:30 and 10:30 ET.',
+    empty: 'Initial balance not shown: no trades yet between 9:30 and 10:30 ET.',
   };
   /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
   function ibNote(ib) {
@@ -645,7 +707,7 @@ function start(container, opt, PAGE) {
     let text = ib && S.layers.ib ? IB_NOTES[ib.state] || '' : '';
     if (ib && S.layers.ib && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
       const wd = new Date(ib.start * 1000).getUTCDay();
-      text = wd === 0 || wd === 6 ? '' : 'IB 1h: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
+      text = wd === 0 || wd === 6 ? '' : 'Initial balance: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
     }
     el.textContent = text; el.hidden = !text;
   }
@@ -695,20 +757,51 @@ function start(container, opt, PAGE) {
     fills.set(f.account + '|' + f.id, { t: f.t, price: f.p, side: f.side, qty: f.qty, root: f.root, name: f.name, account: f.account });
     if (f.account && !accountsSeen.has(f.account)) { accountsSeen.add(f.account); syncAccounts(); }
   }
-  /* Account dropdown: All accounts, or one account (Anthony, 2026-09-29). Accounts with fills come first. */
-  function syncAccounts(listed) {
-    if (listed) for (const a of listed) accountsSeen.add(a);
-    const sel = $('fillAcct');
+  /* Accounts known to this chart (ChartBridge's list and any with fills), those with fills first. */
+  function knownAccounts() {
     const withFills = new Set([...fills.values()].map(f => f.account));
     const names = [...accountsSeen].sort((a, b) => (withFills.has(b) - withFills.has(a)) || a.localeCompare(b));
-    if (fillAccount && !accountsSeen.has(fillAccount)) names.unshift(fillAccount);   // keep a saved choice even before it reconnects
-    sel.replaceChildren(new Option('All accounts', ''), ...names.map(n => new Option(withFills.has(n) ? n : n + ' (no fills yet)', n)));
-    sel.value = fillAccount;
+    if (viewAccount && !accountsSeen.has(viewAccount)) names.unshift(viewAccount);   // keep a saved choice even before it reconnects
+    return { names, withFills };
   }
+  const tradeMode = () => TRADING && TR.v2 && TR.enabled;
+  const orderBarShown = () => TRADING && TR.v2;
+  /** The account whose fills are marked (and, while trading, the order account). */
+  function account() {
+    if (tradeMode()) return TR.account;
+    return viewAccount || OT.defaultAccount(knownAccounts().names, '');
+  }
+  /* Both pickers from the state; the fills follow. */
+  function syncAccounts(listed) {
+    if (listed) for (const a of listed) accountsSeen.add(a);
+    if (tradeMode() && TR.account) viewAccount = TR.account;       // trading off later keeps showing the same account
+    const { names, withFills } = knownAccounts(), cur = account();
+    const opts = () => names.length ? names.map(n => new Option(withFills.has(n) ? n : n + ' (no fills yet)', n)) : [new Option('No accounts yet', '')];
+    $('acctWrap').hidden = orderBarShown();
+    if (!orderBarShown()) { $('acctPick').replaceChildren(...opts()); $('acctPick').value = cur; $('acctPick').disabled = !names.length; }
+    else if (tradeMode()) syncTradeAccounts();                    // trading: the accounts ChartBridge allows, as before
+    else { $('oAcct').replaceChildren(...opts()); $('oAcct').value = cur; $('oAcct').disabled = !names.length; }
+    applyMarkers();
+  }
+  function pickViewAccount(v) {
+    viewAccount = v;
+    store.set('live-account-v1', v);
+    syncAccounts();
+  }
+  /* Fills of the account picked, on this instrument. With Fills hidden (its switch, a chip or Hide all) past fills go,
+     but the open trade never does: its entry fills stay (OrderTicket.openEntryFills, checked against the position
+     ChartBridge reports while trading), and the position line, working orders and stop and target lines are not
+     indicators at all. */
   function applyMarkers() {
-    const list = S.layers.fills ? [...fills.values()].filter(f => f.root === D.root && (!fillAccount || f.account === fillAccount)) : [];
+    const acc = account();
+    const mine = acc ? [...fills.values()].filter(f => f.root === D.root && f.account === acc) : [];
+    let list = mine;
+    if (!S.layers.fills) {
+      const pos = tradeMode() ? TR.positions.get(acc + '|' + D.root) : null;
+      list = OT.openEntryFills(mine, pos ? pos.qty : undefined);
+    }
     chart.setMarkers(list);
-    const lastFill = list.sort((a, b) => a.t - b.t)[list.length - 1];
+    const lastFill = list.slice().sort((a, b) => a.t - b.t)[list.length - 1];
     const el = $('lgFill');
     if (lastFill) {
       el.className = lastFill.side === 'buy' ? 'buy' : 'sell';
@@ -806,7 +899,7 @@ function start(container, opt, PAGE) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); break;
       case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); renderTrading(); break;
       case 'order': onOrder(m); break;
-      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); break;
+      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); applyMarkers(); break;
       case 'reject': flash('Refused by ChartBridge: ' + m.reason, 'error'); renderTrading(); break;
     }
   }
@@ -869,14 +962,14 @@ function start(container, opt, PAGE) {
     TR.maxQty = t.maxQty || {};
     TR.account = OT.defaultAccount(TR.accounts, TR.account);
     if (!TR.enabled) setArmed(false);
-    syncTradeAccounts();
     renderTrading();
+    syncAccounts();
   }
   function tradingLost(reason) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
-    setArmed(false); renderTrading();
+    setArmed(false); renderTrading(); syncAccounts();
   }
   function onOrder(o) {
     if (!served(o.root)) return;
@@ -952,7 +1045,7 @@ function start(container, opt, PAGE) {
     if (!TRADING || !TR.v2) return;
     const bar = $('obar'); bar.hidden = false;
     const on = TR.enabled, root = D.root || S.root, cap = OT.maxQtyFor(TR, root);
-    for (const el of bar.querySelectorAll('button, input, select')) el.disabled = !on;
+    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on;   // the account picker works with trading off too (it drives the fills)
     const q = $('oQty'); q.max = String(cap);
     if (!q.value) q.value = '1';
     for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
@@ -1139,7 +1232,7 @@ function start(container, opt, PAGE) {
    */
   const IND = LP.INDICATORS, ALL_DEFS = IND.concat(LP.COMING);
   const defOf = id => ALL_DEFS.find(d => d.id === id);
-  const M = { q: '', cat: null, gear: null, returnTo: null };      // menu state that is not saved
+  const M = { q: '', cat: null, gear: null, returnTo: null, note: '' };   // menu state that is not saved
   const SVG = {
     plus: '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 1v8M1 5h8"/></svg>',
     pin: '<svg width="13" height="13" viewBox="0 0 14 14" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5l1.7 3.5 3.8.5-2.8 2.6.7 3.8L7 10.1 3.6 11.9l.7-3.8L1.5 5.5l3.8-.5z"/></svg>',
@@ -1160,7 +1253,7 @@ function start(container, opt, PAGE) {
     syncIndicators();
   }
   /* One change, here and in storage (read fresh there, so another tab's choices are kept). `fn` runs twice, so it
-     must not read IS: values are worked out before. */
+     must be absolute: what a click means is worked out from IS first (Pane.toggleOp, hideAllOp; review S1). */
   function changeIndicators(fn) {
     IS = fn(IS);
     prefs.updatePane(PANE, fn);
@@ -1171,13 +1264,14 @@ function start(container, opt, PAGE) {
     const st = IS.ind[d.id], coming = !!d.coming, on = !coming && st.on, shown = on && st.shown, pinned = !coming && st.pin, open = M.gear === d.id;
     const name = esc(d.name), setId = p + 'indSet-' + d.id;
     const lead = coming ? '<span class="ind-lead" aria-hidden="true"></span>'
-      : on ? `<button type="button" class="ind-switch" data-act="toggle" data-id="${d.id}" data-f="sw:${d.id}" aria-pressed="${shown}" aria-label="Show ${name}" title="Show or hide; its settings are kept"><span class="knob" aria-hidden="true"></span></button>`
+      : on ? `<button type="button" class="ind-switch" data-act="toggle" data-id="${d.id}" data-f="sw:${d.id}" aria-pressed="${shown}" aria-label="${shown ? 'Hide' : 'Show'} ${name}" title="${shown ? 'Hide' : 'Show'}; its settings are kept"><span class="knob" aria-hidden="true"></span></button>`
       : `<button type="button" class="ind-add" data-act="toggle" data-id="${d.id}" data-f="add:${d.id}" aria-label="Add ${name} to this chart" title="Add to this chart">${SVG.plus}</button>`;
-    const tools = coming ? '<span class="ind-ic-sp" aria-hidden="true"></span><span class="ind-ic-sp" aria-hidden="true"></span>'
-      : `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="Pin ${name} to the chip strip" title="Pin to the chip strip">${SVG.pin}</button>` +
-        `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}" aria-controls="${setId}" aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
+    /* the pin only on rows on this chart (Anthony); the gear wherever there is something to read */
+    const tools = coming ? '<span class="ind-ic-sp" aria-hidden="true"></span>'
+      : (on ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '') +
+        `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
     const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
-    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${d.id === 'fills' ? '<div class="ind-set-acct"></div>' : ''}</div>` : '';
+    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div></div>` : '';
     return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
       `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-name">${name}</span>` +
       (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
@@ -1188,14 +1282,13 @@ function start(container, opt, PAGE) {
     const hide = $('indHideAll'), label = LP.Pane.hideLabel(IS);
     hide.textContent = label;
     hide.disabled = label === 'Hide all (0)';
-    hide.title = label === 'Restore' ? 'Show again the ones Hide all hid' : 'Hide every indicator on this chart; their settings are kept';
+    hide.title = label === 'Restore' ? 'Show again the ones Hide all hid' : 'Hide every indicator on this chart, settings kept. The open trade, working orders and stop and target lines always stay.';
     const focusKey = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.f : null;
-    $('indParked').appendChild($('fillAcctBox'));                  // the account choice lives in the Fills settings panel
-    let html = '';
+    let html = M.note ? `<div class="ind-note">${esc(M.note)}</div>` : '';
     const q = M.q.trim();
     if (q) {
       const found = LP.searchIndicators(q);
-      html += `<div class="ind-cap" role="status">${found.length ? 'Results' : 'No match'}</div>` + found.map(rowHtml).join('');
+      html += `<div class="ind-cap">${found.length ? 'Results' : 'No match'}</div>` + found.map(rowHtml).join('');
     } else {
       if (IS.recent.length) html += '<div class="ind-recent"><span class="ind-cap-in">Recent</span>' + IS.recent.map(id => {
         const d = defOf(id), shown = IS.ind[id].on && IS.ind[id].shown;
@@ -1216,8 +1309,9 @@ function start(container, opt, PAGE) {
       html += '<div class="ind-coming">Coming: cumulative delta, time and sales</div>';
     }
     body.innerHTML = html;
-    const acctHost = body.querySelector('.ind-set[data-id="fills"] .ind-set-acct');
-    if (acctHost) acctHost.appendChild($('fillAcctBox'));
+    /* one live region, changed only when its text changes, so a screen reader hears the result count and notes once */
+    const said = M.note || (q ? (() => { const n = LP.searchIndicators(q).length; return n ? n + (n === 1 ? ' match' : ' matches') : 'No match'; })() : '');
+    if ($('indLive').textContent !== said) $('indLive').textContent = said;
     if (focusKey) {                                                 // keep the keyboard where it was
       const alt = { 'sw:': 'add:', 'add:': 'sw:', 'x:': 'add:', 'rec:': 'rec:' };
       let el = body.querySelector(`[data-f="${focusKey}"]`);
@@ -1227,7 +1321,7 @@ function start(container, opt, PAGE) {
   }
   function renderChips() {
     const strip = $('indChips'), pinned = IND.filter(d => IS.ind[d.id].on && IS.ind[d.id].pin);
-    strip.hidden = !pinned.length;
+    strip.classList.toggle('is-empty', !pinned.length);
     strip.innerHTML = pinned.map(d => {
       const shown = IS.ind[d.id].shown;
       return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
@@ -1235,11 +1329,17 @@ function start(container, opt, PAGE) {
     }).join('');
     fitChips();
   }
-  /* The strip never wraps: when the full chips do not fit on the toolbar line, each shrinks to one letter. */
+  /* The strip never wraps and never moves the toolbar (review N4): it always keeps room for a full strip of one-letter
+     chips (6), so pinning or unpinning cannot change the toolbar's lines, and chips show their names only when that
+     fits without adding a toolbar line; otherwise each is one letter. */
   function fitChips() {
-    const strip = $('indChips');
+    const strip = $('indChips'), bar = strip.closest('.bar');
+    const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
+    strip.style.setProperty('--chip-room', room + 'px');
+    strip.classList.add('is-narrow');
+    const h = bar.offsetHeight;
     strip.classList.remove('is-narrow');
-    if (!strip.hidden && strip.scrollWidth > strip.clientWidth + 1) strip.classList.add('is-narrow');
+    if (bar.offsetHeight > h || strip.scrollWidth > strip.clientWidth + 1) strip.classList.add('is-narrow');
   }
   function syncIndicators() {
     const c = LP.Pane.counts(IS);
@@ -1248,10 +1348,19 @@ function start(container, opt, PAGE) {
     renderChips();
     if (!$('indPanel').hidden) renderMenu();
   }
+  const STRIP_FULL = () => 'The chip strip holds ' + LP.PIN_MAX + ': unpin one to pin another.';
   function indAction(act, id) {
-    if (act === 'toggle') changeIndicators(st => LP.Pane.toggle(st, id));
-    else if (act === 'remove') { if (M.gear === id) M.gear = null; changeIndicators(st => LP.Pane.remove(st, id)); }
-    else if (act === 'pin') { const v = !IS.ind[id].pin; changeIndicators(st => LP.Pane.pin(st, id, v)); }
+    M.note = '';
+    if (act === 'toggle') {
+      const adding = !IS.ind[id].on, full = LP.Pane.pinFull(IS);
+      if (adding && full) M.note = LP.INDICATORS.find(d => d.id === id).name + ' added without a chip. ' + STRIP_FULL();
+      changeIndicators(LP.Pane.toggleOp(IS, id));
+    } else if (act === 'remove') { if (M.gear === id) M.gear = null; changeIndicators(st => LP.Pane.remove(st, id)); }
+    else if (act === 'pin') {
+      const v = !IS.ind[id].pin;
+      if (v && LP.Pane.pinFull(IS)) { M.note = STRIP_FULL(); renderMenu(); return; }   // refused: the strip is full
+      changeIndicators(st => LP.Pane.pin(st, id, v));
+    }
     else if (act === 'gear') { M.gear = M.gear === id ? null : id; renderMenu(); }
     else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
@@ -1259,18 +1368,23 @@ function start(container, opt, PAGE) {
   {
     const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel'), q = $('indQ');
     /* The panel stays inside the chart's own element (a pane can be narrow, and a host may clip it). */
+    /* It opens below the order bar when there is one, so the Armed switch, the account and the position readout stay
+       in view (review N5); its list scrolls inside when the space is short. */
     const place = () => {
-      const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect();
+      const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;
+      panel.style.top = Math.round(below - w.top + 6) + 'px';
       panel.style.maxWidth = Math.max(220, Math.floor(r.right - b.left - 8)) + 'px';
-      panel.style.maxHeight = Math.max(240, Math.floor(Math.min(r.bottom, window.innerHeight) - b.bottom - 14)) + 'px';
+      panel.style.maxHeight = Math.max(200, Math.floor(Math.min(r.bottom, window.innerHeight) - below - 14)) + 'px';
     };
     openMenu = (v, from) => {
       if (v === !panel.hidden) { if (v) q.focus(); return; }
       panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
       if (v) {
         M.returnTo = from && from !== document.body && !wrap.contains(from) ? from : btn;
+        M.cat = null; M.q = ''; q.value = ''; M.note = '';            // groups folded and a clean search on every open (Anthony)
         place(); renderMenu(); q.focus(); q.select();
-      } else { M.gear = null; $('indParked').appendChild($('fillAcctBox')); }
+      } else { M.gear = null; M.note = ''; M.q = ''; q.value = ''; $('indLive').textContent = ''; }   // reopening shows the normal view (review S2)
     };
     const close = refocus => {
       if (panel.hidden) return;
@@ -1280,15 +1394,18 @@ function start(container, opt, PAGE) {
     btn.addEventListener('click', () => { if (panel.hidden) openMenu(true, btn); else close(false); });
     q.addEventListener('input', () => { M.q = q.value; renderMenu(); });
     q.addEventListener('keydown', e => {
-      if (e.key !== 'Enter' || !M.q.trim()) return;                 // Enter: add, show or hide the first match
+      if (e.key !== 'Enter' || !M.q.trim()) return;                 // Enter adds or shows the first match, never hides it
       const first = LP.searchIndicators(M.q).find(d => !d.coming);
-      if (first) { e.preventDefault(); indAction('toggle', first.id); }
+      if (!first) return;
+      e.preventDefault();
+      if (!IS.ind[first.id].on) indAction('toggle', first.id);
+      else if (!IS.ind[first.id].shown) { M.note = ''; changeIndicators(st => LP.Pane.setShown(st, first.id, true, true)); }
     });
     panel.addEventListener('click', e => {
       const b = e.target.closest('button[data-act]');
       if (b && panel.contains(b)) indAction(b.dataset.act, b.dataset.id);
     });
-    $('indHideAll').addEventListener('click', () => changeIndicators(st => LP.Pane.hideAll(st)));
+    $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
       const b = e.target.closest('button[data-id]'); if (!b) return;
       const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
@@ -1308,14 +1425,17 @@ function start(container, opt, PAGE) {
       }
     });
     wrap.addEventListener('focusout', e => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) openMenu(false); });
-    /* "/" opens the menu of the chart under the mouse (else the one holding the focus, else the only one on the page).
-       Never while typing in a box (order quantity, bracket ticks, range size, a host's own fields), never with Ctrl,
+    /* "/" opens this chart's menu only when the focus is inside this chart, or on the page itself (nothing focused) with
+       the mouse over this chart (or it is the only chart). Never while typing in a box (order quantity, bracket ticks,
+       range size), never while anything outside the chart has the focus (a host's dialog or fields), never with Ctrl,
        Alt or Cmd, and the PIN pad stops every key before it gets here. */
     listen(document, 'keydown', e => {
       if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || destroyed) return;
       const a = document.activeElement;
       if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
-      const mine = hoverRoot ? hoverRoot === rootEl : a && a !== document.body ? rootEl.contains(a) : mountedRoots.size === 1;
+      const onBody = !a || a === document.body || a === document.documentElement;
+      if (!onBody && !rootEl.contains(a)) return;                   // the focus is elsewhere (a host dialog, another chart)
+      const mine = !onBody || (hoverRoot ? hoverRoot === rootEl : mountedRoots.size === 1);
       if (!mine) return;
       e.preventDefault();
       openMenu(true, a);
@@ -1330,15 +1450,14 @@ function start(container, opt, PAGE) {
       cleanups.push(() => ro.disconnect());
     }
   }
-  $('fillAcct').addEventListener('change', e => {
-    fillAccount = e.target.value; store.set('live-fill-account-v1', fillAccount); applyMarkers();
-  });
+  $('acctPick').addEventListener('change', e => pickViewAccount(e.target.value));
   $('toolTrend').addEventListener('click', () => chart.setTool(chart.getTool() === 'trend' ? null : 'trend'));
   $('toolHline').addEventListener('click', () => chart.setTool(chart.getTool() === 'hline' ? null : 'hline'));
   $('clearDraw').addEventListener('click', () => chart.clearDrawings());
   $('resetBtn').addEventListener('click', () => chart.reset());
   if (PIN) { $('pinBtn').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => PIN.openChange()); }
   syncButtons();
+  syncAccounts();
 
   /* order bar and order actions on the chart: only on a trading chart (a read-only one has no order bar at all) */
   const bracketSaved = LP.debounce((root, k) => prefs.setBracketField(root, k, brackets[root][k]), 350);
@@ -1354,9 +1473,12 @@ function start(container, opt, PAGE) {
       flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
     });
     $('oAcct').addEventListener('change', e => {
+      if (!tradeMode()) { pickViewAccount(e.target.value); return; }   // trading off: it only picks whose fills are marked
       TR.account = e.target.value;
       if (TR.armed) { setArmed(false); flash('Armed turned off: the account changed.', 'warn'); }
       renderTrading();
+      viewAccount = TR.account; store.set('live-account-v1', TR.account);
+      applyMarkers();
     });
     $('oQty').addEventListener('change', () => {
       const q = $('oQty'), v = Math.round(+q.value);

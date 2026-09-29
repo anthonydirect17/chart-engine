@@ -128,6 +128,15 @@ test('migration: a main pane saved before 1.5.3 gets IB on, with its other choic
   assert.equal(p.pane('main').ind.vwap.on, true);
 });
 
+test('migration: a damaged live-indicators-v2 is carried over from v1 again, so an explicit off stays off (review N3)', () => {
+  const s = mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { fills: false } } });
+  s.m.set('live-indicators-v2', '{bad');
+  const p = LP.create(s);
+  assert.equal(p.indicators('main').fills, false);
+  assert.equal(p.pane('main').ind.fills.on, true);
+  assert.equal(s.dump('live-indicators-v2').main.ind.fills.shown, false);
+});
+
 test('migration: nothing saved before means nothing written, and the defaults apply', () => {
   const s = mem({ 'live-settings-v2': {} });
   const p = LP.create(s);
@@ -148,21 +157,20 @@ test('each storage prefix keeps its own indicators (The Desk\'s desk: keys are n
   assert.equal(LP.create(prefixed('desk:')).indicators('main').levels, false);
 });
 
-test('Pane: the switch and + show, hide and add; the x takes it off; pins are kept', () => {
+test('Pane: the switch and + show, hide and add; one added gets a chip; the x takes it off', () => {
   const P = LP.Pane;
   let st = LP.defaultPane('pane-2');
-  st = P.toggle(st, 'vwap');                                     // + adds it, shown
-  assert.deepEqual([onIds(st), shownIds(st)], [['vwap'], ['vwap']]);
+  st = P.toggle(st, 'vwap');                                     // + adds it, shown, pinned (Anthony: added ones get a chip)
+  assert.deepEqual([onIds(st), shownIds(st), pinIds(st)], [['vwap'], ['vwap'], ['vwap']]);
   st = P.toggle(st, 'vwap');                                     // the switch hides it: still on the chart
   assert.deepEqual([onIds(st), shownIds(st)], [['vwap'], []]);
   assert.deepEqual(P.counts(st), { shown: 0, on: 1, hidden: 1 });
   st = P.pin(st, 'vwap');
-  assert.equal(st.ind.vwap.pin, true);
+  assert.equal(st.ind.vwap.pin, false);
   st = P.remove(st, 'vwap');
   assert.deepEqual(onIds(st), []);
-  assert.equal(st.ind.vwap.pin, true, 'the pin waits for it to come back');
-  st = P.toggle(st, 'vwap');                                     // added again: shown
-  assert.deepEqual(shownIds(st), ['vwap']);
+  st = P.toggle(st, 'vwap');                                     // added again: shown, and a chip again
+  assert.deepEqual([shownIds(st), pinIds(st)], [['vwap'], ['vwap']]);
   const before = st;
   assert.equal(P.setShown(st, 'levels', true), before, 'a chip only acts on one that is on the chart');
   assert.equal(P.toggle(st, 'profile'), before, 'coming indicators cannot be added');
@@ -170,6 +178,32 @@ test('Pane: the switch and + show, hide and add; the x takes it off; pins are ke
   const again = P.toggle(before, 'ib');
   assert.equal(before.ind.ib.on, false, 'the state given is never changed');
   assert.equal(again.ind.ib.on, true);
+});
+
+test('Pane: the chip strip holds 6; when full an added one gets no chip and pinning by hand is refused', () => {
+  const P = LP.Pane;
+  assert.equal(LP.PIN_MAX, 6);
+  assert.equal(P.pinned(LP.defaultPane('main')), 5);
+  assert.equal(P.pinFull(LP.defaultPane('main')), false);
+  const cap = LP.PIN_MAX;
+  try {
+    LP.PIN_MAX = 2;                                              // five indicators today: a lower cap shows the rule
+    let st = LP.defaultPane('pane-2');
+    st = P.toggle(st, 'vwap'); st = P.toggle(st, 'levels');
+    assert.deepEqual(pinIds(st), ['vwap', 'levels']);
+    assert.equal(P.pinFull(st), true);
+    st = P.toggle(st, 'ib');                                     // added while full: on the chart, no chip
+    assert.deepEqual([onIds(st), pinIds(st)], [['vwap', 'levels', 'ib'], ['vwap', 'levels']]);
+    assert.equal(P.pin(st, 'ib', true), st, 'pinning by hand when full is refused');
+    st = P.pin(st, 'vwap', false);                               // make room
+    st = P.pin(st, 'ib', true);
+    assert.deepEqual(pinIds(st).filter(id => st.ind[id].on), ['levels', 'ib']);
+    // a pin kept on one taken off does not count, and never takes a chip beyond the cap when it comes back
+    st = P.remove(st, 'levels');
+    st = P.toggle(st, 'fills');
+    st = P.toggle(st, 'levels');
+    assert.equal(P.pinned(st), 2);
+  } finally { LP.PIN_MAX = cap; }
 });
 
 test('Pane: Recent holds the last 5 used from the menu, newest first; a chip click is not a recent use', () => {
@@ -209,6 +243,43 @@ test('Pane: Hide all then Restore brings back the same mix, not everything', () 
   let t = P.hideAll(LP.defaultPane('main'));
   for (const id of ALL) t = P.remove(t, id);
   assert.equal(P.hideLabel(t), 'Hide all (0)');
+});
+
+/* A chart tab as the page runs it: what a click means is worked out from what the tab shows, then applied to its own
+   state and to storage read fresh (review S1). */
+function menuTab(s, paneId) {
+  const p = LP.create(s);
+  let IS = p.pane(paneId);
+  const change = fn => { IS = fn(IS); p.updatePane(paneId, fn); };
+  return {
+    get IS() { return IS; },
+    toggle: id => change(LP.Pane.toggleOp(IS, id)),
+    hideAll: () => change(LP.Pane.hideAllOp(IS)),
+  };
+}
+
+test('two tabs on the same indicator: each saves what it shows, never the opposite (review S1)', () => {
+  const s = mem();
+  const a = menuTab(s, 'main'), b = menuTab(s, 'main');         // both loaded with Fills shown
+  a.toggle('fills');                                             // tab A hides Fills
+  b.toggle('fills');                                             // tab B, still showing Fills, hides it too
+  assert.equal(LP.Pane.drawn(b.IS).fills, false);
+  assert.equal(LP.create(s).indicators('main').fills, false, 'saved as tab B shows it');
+  // add from two tabs: both end with it on and shown
+  const c = menuTab(s, 'pane-2'), d = menuTab(s, 'pane-2');
+  c.toggle('vwap'); d.toggle('vwap');
+  assert.equal(LP.create(s).indicators('pane-2').vwap, true);
+});
+
+test('two tabs pressing Hide all: saved as the tabs show it, and Restore brings back the same mix (review S1)', () => {
+  const s = mem();
+  const a = menuTab(s, 'main'), b = menuTab(s, 'main');
+  a.hideAll(); b.hideAll();
+  assert.deepEqual(LP.Pane.drawn(b.IS), flags([]));
+  assert.deepEqual(LP.create(s).indicators('main'), flags([]), 'saved: all hidden, not restored');
+  b.hideAll();                                                   // Restore in tab B
+  assert.deepEqual(LP.create(s).indicators('main'), flags(ALL));
+  assert.deepEqual(LP.Pane.drawn(b.IS), flags(ALL));
 });
 
 test('updatePane reads fresh: two tabs changing one pane each keep the other\'s change (review S2)', () => {

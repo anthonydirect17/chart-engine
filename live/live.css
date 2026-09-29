@@ -87,7 +87,7 @@
 .chart-live .ind-set-line { display: flex; align-items: center; gap: 10px; }
 .chart-live .ind-set-sw { width: 14px; height: 14px; flex: none; border-radius: 4px; background: var(--sw); border: 1px solid var(--line-strong); box-sizing: border-box; }
 .chart-live .ind-set-t { font: 500 11px var(--mono); color: var(--text); }
-.chart-live .ind-acct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.chart-live .ind-note { margin: 2px 4px; padding: 6px 10px; border-radius: 8px; background: var(--s2); border: 1px solid var(--line-strong); font-size: 12px; color: var(--text); }
 .chart-live .ind-cat { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 8px; border-radius: 8px; background: transparent; border: 0; cursor: pointer; color: var(--text); font: 500 13px var(--sans); text-align: left; }
 .chart-live .ind-cat:hover { background: var(--s2); }
 .chart-live .ind-cat .ind-caret { transform: rotate(-45deg); }
@@ -99,7 +99,7 @@
 .chart-live .ind-foot { display: flex; align-items: center; gap: 8px; padding: 2px 6px 4px; }
 .chart-live .ind-foot .btn:disabled { opacity: .5; cursor: default; }
 /* chip strip: pinned indicators only; lit = shown (solid, its color line), dashed grey = hidden */
-.chart-live .ind-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.chart-live .ind-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: var(--chip-room, 0px); min-height: 30px; overflow-x: auto; scrollbar-width: none; }
 .chart-live .ind-chips::-webkit-scrollbar { display: none; }
 .chart-live .ind-chip { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; font: 600 11px var(--mono); letter-spacing: .06em; cursor: pointer; background: transparent; color: var(--text3); border: 1px dashed var(--line-strong); }
 .chart-live .ind-chip[aria-pressed="true"] { background: var(--s3); color: var(--text); border-style: solid; }
@@ -111,6 +111,10 @@
 .chart-live .ind-chips.is-narrow .ind-chip-t { display: none; }
 .chart-live .ind-chips.is-narrow .ind-chip-l { display: inline; line-height: 1; }
 .chart-live .range-mode { max-width: 160px; }
+/* the account (1.6.0): one picker, easy to read at a glance; the order bar's is the larger one */
+.chart-live .acct-pick { gap: 8px; }
+.chart-live .acct-sel.acct-compact { font: 600 12px var(--mono); color: var(--head); min-width: 120px; }
+.chart-live .acct-sel.acct-main { font: 600 13px var(--mono); color: var(--head); min-height: 34px; min-width: 150px; padding: 4px 10px; }
 .chart-live .btn { font: 500 12px var(--sans); color: var(--text); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 8px; padding: 4px 10px; min-height: 30px; cursor: pointer; }
 .chart-live .btn:hover { background: var(--s3); }
 .chart-live .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
