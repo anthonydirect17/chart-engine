@@ -82,26 +82,69 @@ test('a failed start does not leave timers or account subscriptions behind', () 
 // ---- Step 2: every order path lives in ChartBridgeOrders.cs, behind its gates
 const osrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeOrders.cs'), 'utf8');
 const ocode = osrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
-const fnBody = name => {
-  const start = ocode.search(new RegExp('\\bstatic [\\w<>, ]+ ' + name + '\\('));
-  assert.ok(start >= 0, name + ' not found');
-  let i = ocode.indexOf('{', start), depth = 0;
-  for (let j = i; j < ocode.length; j++) { if (ocode[j] === '{') depth++; else if (ocode[j] === '}' && --depth === 0) return ocode.slice(start, j + 1); }
-  return ocode.slice(start);
+// every body of a function (overloads included), from its signature to its closing brace
+const fnBodies = name => {
+  const out = [], re = new RegExp('\\bstatic [\\w<>, ]+ ' + name + '\\(', 'g');
+  let m;
+  while ((m = re.exec(ocode))) {
+    const start = m.index, i = ocode.indexOf('{', start);
+    let depth = 0, end = ocode.length;
+    for (let j = i; j < ocode.length; j++) { if (ocode[j] === '{') depth++; else if (ocode[j] === '}' && --depth === 0) { end = j + 1; break; } }
+    out.push(ocode.slice(start, end));
+  }
+  assert.ok(out.length > 0, name + ' not found');
+  return out;
 };
+const fnBody = name => fnBodies(name).join('\n');
 
-test('order calls appear only in the five gated functions of ChartBridgeOrders.cs', () => {
-  const allowed = ['PlaceOrder', 'ChangeOrder', 'CancelOrder', 'Flatten', 'KeepBracket'];
+test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
+  const fromPage = ['PlaceOrder', 'ChangeOrder', 'CancelOrder', 'Flatten'];
+  const upkeep = ['KeepBracket', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs'];
   let rest = ocode;
-  for (const f of allowed) rest = rest.replace(fnBody(f), '');
+  for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
+  // only PlaceOrder and KeepBracket create orders; the rest of the upkeep only cancels or shrinks
+  for (const f of ['ChangeOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs'])
+    assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
+  // legs are GTC and named for their bracket; the upkeep touches ChartBridge's own legs only
+  const keep = fnBody('KeepBracket');
+  assert.equal((keep.match(/TimeInForce\.Gtc/g) || []).length, 2);
+  assert.match(keep, /"CB#" \+ br\.Tag \+ " stop"/);
+  assert.match(keep, /"CB#" \+ br\.Tag \+ " target"/);
+  assert.match(keep, /if \(br\.Dead \|\| filled <= br\.Covered\) return;/);
+  assert.match(fnBody('CancelLeftoverLegs'), /IsWorking\(o\.OrderState\) && IsChartBridgeLeg\(o\)/);
+  assert.match(fnBody('CheckLegs'), /if \(!Steady\(a, now\)\) continue;[\s\S]*IsChartBridgeLeg\(o\)/);
+  assert.match(fnBody('CheckLegs'), /if \(now - was\.Value < SettleMs\) return;/);
+  assert.match(ocode, /SettleMs = 4000;/);
+  assert.match(ocode, /SteadyMs = 30000;/);
+  assert.match(fnBody('OnPositionUpdate'), /MarketPosition\.Flat && SignedPosition\(account, inst\) == 0 && Steady\(/);
+});
+
+test('bracket upkeep runs even with trading off; pages hear only about tradable accounts', () => {
+  const upd = fnBody('OnOrderUpdate');
+  assert.match(upd, /^[^{]*\{\s*if \(account == null \|\| e\.Order == null\) return;/);
+  assert.ok(upd.indexOf('KeepBracket(o)') < upd.indexOf('if (Enabled && AccountTradable(account.Name) && root != null)'), 'upkeep before the trading check');
+  assert.ok(upd.indexOf('SendToTraders(OrderJson(') < upd.indexOf('Forget(o)'), 'OrderJson before Forget (Forget drops the id)');
+  assert.match(fnBody('OnPositionUpdate'), /if \(Enabled && AccountTradable\(account\.Name\) && root != null\)\s*ChartBridgeServer\.SendToTraders/);
+});
+
+test('strict messages: known keys only, bracket must be an object', () => {
+  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" \} \}/);
+  assert.match(ocode, /\{ "change", new\[\] \{ "type", "cid", "id", "price" \} \}/);
+  assert.match(ocode, /\{ "cancel", new\[\] \{ "type", "cid", "id" \} \}/);
+  assert.match(ocode, /\{ "flatten", new\[\] \{ "type", "cid", "account", "root" \} \}/);
+  assert.match(ocode, /BracketKeys = \{ "stop", "target" \}/);
+  const top = fnBody('TopLevel');
+  assert.match(top, /if \(Has\(top, "bracket"\)\) \{ why =/);
+  assert.match(top, /Duplicate\(top\)/);
+  assert.match(top, /Unknown\(top, allowed\)/);
 });
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*if \(why != null\) \{ Reject/);
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why != null\) \{ Reject/);
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -118,9 +161,19 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.match(fnBody('AccountTradable'), /if \(!Enabled \|\| string\.IsNullOrEmpty\(name\) \|\| IsNeverTradable\(name\)\) return false;/);
   assert.match(fnBody('ReadConfig'), /name\.Contains\("\*"\)\) continue;/);
   assert.match(ocode, /DefaultMaxQty = 1\b/);
-  for (const f of ['PlaceOrder', 'Flatten']) assert.match(fnBody(f), /Account account = FindAccount\(accountName\);\s*if \(account == null\) return/);
-  for (const f of ['ChangeOrder', 'CancelOrder']) assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
-  assert.match(fnBody('PlaceOrder'), /if \(qty > cap\) return/);
+  for (const f of ['PlaceOrder', 'Flatten']) assert.match(fnBody(f), /Account account = FindAccount\(accountName, out why\);\s*if \(account == null\) return why;/);
+  const find = fnBody('FindAccount');
+  assert.match(find, /if \(!AccountTradable\(name\)\)/);
+  assert.match(find, /if \(status != "Connected"\)/);
+  assert.match(find, /if \(!ChartBridgeServer\.EnsureWatched\(found\)\)/);
+  for (const f of ['ChangeOrder', 'CancelOrder']) {
+    assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
+    assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
+  }
+  // the cap is on the position: current position plus working orders on that side plus this order
+  assert.match(fnBody('PlaceOrder'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);
+  assert.match(fnBody('PlaceOrder'), /if \(\(stopTicks > 0 \|\| targetTicks > 0\) && reduces\) return/);
+  assert.match(fnBody('ChangeOrder'), /OrderType\.StopLimit\) return/);
   assert.match(fnBody('PlaceOrder'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
   assert.match(fnBody('ChangeOrder'), /PriceProblem\(/);
 });
@@ -135,8 +188,23 @@ test('the main file routes order messages only to ChartBridgeOrders, and ships b
   assert.match(check, /ChartBridgeOrders\.cs/);
 });
 
+test('the page cannot be framed, messages are capped, and the legs check runs', () => {
+  const nf = code.slice(code.indexOf('private static void NoFraming('));
+  assert.match(nf, /res\.AddHeader\("X-Frame-Options", "DENY"\);/);
+  assert.match(nf, /res\.AddHeader\("Content-Security-Policy", "frame-ancestors 'none'"\);/);
+  const serveText = code.slice(code.indexOf('private static void ServeText('), code.indexOf('private static void NoFraming('));
+  const serveFile = code.slice(code.indexOf('private static void ServeFile('), code.indexOf('private static async Task RunClient('));
+  assert.match(serveText, /NoFraming\(res\);/);
+  assert.equal((serveFile.match(/NoFraming\(res\);/g) || []).length, 2, 'ServeFile: on the file and on the 404');
+  assert.match(code, /private const int MaxMessageBytes = 65536;/);
+  assert.match(code, /if \(size > MaxMessageBytes\) break;/);
+  assert.match(code, /WebSocketCloseStatus\.MessageTooBig/);
+  assert.match(code, /public static bool EnsureWatched\(Account a\)/);
+  assert.match(code, /pollTimer = new System\.Threading\.Timer\(delegate \{[^\n]*ChartBridgeOrders\.CheckLegs\(\)/);
+});
+
 test('ChartBridgeOrders.cs is C# 5 too', () => {
-  assert.ok(!/\$"/.test(ocode), 'string interpolation');
+  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(ocode), 'string interpolation');   // a regex's end anchor $" inside a string is fine
   assert.ok(!/\?\.\w/.test(ocode), 'null-conditional ?.');
   assert.ok(!/\bnameof\(/.test(ocode), 'nameof');
 });

@@ -512,7 +512,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
                     WatchAccounts();
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } }, null, 10000, 10000);
-                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } }, null, 2000, 2000);
+                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } }, null, 2000, 2000);
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
@@ -628,9 +628,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             HttpListenerResponse res = ctx.Response;
             res.ContentType = type + "; charset=utf-8";
             res.AddHeader("Cache-Control", "no-store");
+            NoFraming(res);
             res.ContentLength64 = body.Length;
             res.OutputStream.Write(body, 0, body.Length);
             res.Close();
+        }
+
+        // The page can place orders, so no other site may show it inside a frame (clickjacking).
+        private static void NoFraming(HttpListenerResponse res)
+        {
+            res.AddHeader("X-Frame-Options", "DENY");
+            res.AddHeader("Content-Security-Policy", "frame-ancestors 'none'");
+            res.AddHeader("X-Content-Type-Options", "nosniff");
         }
 
         private static void ServeFile(HttpListenerContext ctx, string path)
@@ -642,6 +651,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
             {
                 res.StatusCode = 404;
+                NoFraming(res);
                 byte[] msg = Encoding.UTF8.GetBytes("Not found. Page files go in " + root);
                 res.OutputStream.Write(msg, 0, msg.Length);
                 res.Close();
@@ -654,10 +664,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             byte[] body = File.ReadAllBytes(full);
             res.ContentType = type;
             res.AddHeader("Cache-Control", "no-cache");
+            NoFraming(res);
             res.ContentLength64 = body.Length;
             res.OutputStream.Write(body, 0, body.Length);
             res.Close();
         }
+
+        private const int MaxMessageBytes = 65536;   // page messages are small; anything bigger is not the page
 
         private static async Task RunClient(WebSocket ws, CancellationToken token, string origin)
         {
@@ -673,16 +686,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 while (ws.State == WebSocketState.Open && !token.IsCancellationRequested)
                 {
-                    StringBuilder sb = new StringBuilder();
+                    MemoryStream bytes = new MemoryStream();   // whole message first: a UTF-8 character can span two frames
+                    int size = 0;
                     WebSocketReceiveResult r;
                     do
                     {
                         r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), token);
                         if (r.MessageType == WebSocketMessageType.Close) break;
-                        sb.Append(Encoding.UTF8.GetString(buf, 0, r.Count));
+                        size += r.Count;
+                        if (size > MaxMessageBytes) break;
+                        bytes.Write(buf, 0, r.Count);
                     } while (!r.EndOfMessage);
                     if (r.MessageType == WebSocketMessageType.Close) break;
-                    OnClientMessage(client, sb.ToString());
+                    if (size > MaxMessageBytes)
+                    {
+                        Log("client " + id + " sent a message over " + MaxMessageBytes + " bytes; closing it");
+                        try { await ws.CloseAsync(WebSocketCloseStatus.MessageTooBig, "message too big", CancellationToken.None); } catch (Exception) { }
+                        break;
+                    }
+                    string text = Encoding.UTF8.GetString(bytes.ToArray());
+                    OnClientMessage(client, text);
                 }
             }
             catch (Exception) { }
@@ -1077,6 +1100,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n = 0;
             foreach (Account a in added) n += CatchUp(a);
             if (n > 0) ChartBridgeDesk.Flush();
+        }
+
+        // Order code calls this before trading an account: an account that just connected may not be watched yet,
+        // and an unwatched account's fills and order updates would never reach the page.
+        public static bool EnsureWatched(Account a)
+        {
+            if (a == null) return false;
+            lock (Watched) { if (Watched.Contains(a)) return true; }
+            try { WatchAccounts(); } catch (Exception ex) { Log("watch accounts failed: " + ex.Message); }
+            lock (Watched) return Watched.Contains(a);
         }
 
         private static void Unwatch()

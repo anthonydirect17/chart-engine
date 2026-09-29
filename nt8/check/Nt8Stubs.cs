@@ -30,7 +30,7 @@ namespace NinjaTrader.Core
 }
 namespace NinjaTrader.Cbi
 {
-    public enum ErrorCode { NoError, UserAbort, Panic }
+    public enum ErrorCode { NoError, UserAbort, Panic, OrderRejected, UnableToChangeOrder, UnableToCancelOrder }
     public enum MarketPosition { Flat, Long, Short }
     public class MasterInstrument
     {
