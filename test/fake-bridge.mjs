@@ -9,6 +9,8 @@
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
 //                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
+//   --allow-origins=https://desk.example,http://host:8800   allowOrigins: other web pages that may open the
+//                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
 //   --tick-hours-max=3              serve at most this many hours of tick history, whatever the page asks
 //                                   (like a PC with little local tick data)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
@@ -37,6 +39,9 @@ const config = {
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
   maxQty: Object.fromEntries(flagValue('max-qty').split(',').filter(Boolean).map(x => { const [r, n] = x.split(':'); return [r.trim(), +n]; })),
   port: PORT,
+  // ChartBridge 0.3.1: exact scheme://host[:port], lower-cased (the real parser also drops a default port and
+  // a trailing slash, and skips wildcards; the fake takes the list as given)
+  allowOrigins: flagValue('allow-origins').split(',').map(x => x.trim().toLowerCase().replace(/\/$/, '')).filter(Boolean),
 };
 const ACCOUNTS = ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
 
@@ -111,6 +116,17 @@ function parseFrames(buf, onText) {
   return { rest: buf.slice(off), closed: false };
 }
 
+// ChartBridge 0.3.1 network rules (nt8/PROTOCOL.md, "Network access"): only this PC, and a browser WebSocket
+// only from ChartBridge's own page or allowOrigins. No Origin header (a local program) is allowed.
+const isLoopback = a => /^(127\.\d+\.\d+\.\d+|::1|::ffff:127\.\d+\.\d+\.\d+)$/.test(String(a || ''));
+function wsOriginAllowed(origin) {
+  if (origin === undefined) return true;
+  const o = String(origin).trim().toLowerCase();
+  if (!o || o === 'null') return false;
+  return o === 'http://localhost:' + PORT || config.allowOrigins.includes(o);
+}
+const refused = { notThisPc: 0, origin: 0 };
+
 const clients = new Set();
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
@@ -169,6 +185,7 @@ const fillsSample = () => {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json' };
 const server = http.createServer((req, res) => {
+  if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; res.writeHead(403); return res.end(); }   // first, before any routing
   // clickjacking: ChartBridge's page may never sit in another page's frame (protocol v2)
   if (!V1 && !ALLOW_FRAMES) { res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Content-Security-Policy', "frame-ancestors 'none'"); }
   let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -197,6 +214,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
       desk: { postFills: false, deskUrl: 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
+      ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin } }),
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })) }));
   }
   if (p.endsWith('/')) p += 'index.html';
@@ -206,12 +224,14 @@ const server = http.createServer((req, res) => {
   fs.createReadStream(full).pipe(res);
 });
 server.on('upgrade', (req, sock) => {
+  if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
+  if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.0', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ACCOUNTS };
+  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.1', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
   send(c, hello);
   send(c, { type: 'execs', list: fillsSample() });
