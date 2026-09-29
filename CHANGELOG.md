@@ -7,9 +7,9 @@ Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also c
 - **ChartLive.mount(container, options)**: the same live chart code runs in a host page such as The Desk's
   Live trading section, returning `{ destroy(), chart, element, paneId }`. Options: `wsUrl` (a string, or a
   function asked again for every connect and reconnect, so a relay can hand out a fresh single-use ticket),
-  `trading` (false by default: read only), `paneId`, `storagePrefix`, `onStatus`, `brand`. See `live/EMBED.md`
-  for the files to vendor, in load order.
-- **Read only when embedded**: no `GET /session`, no `auth`, only `subscribe` and `ping` ever sent (anything
+  `paneId`, `storagePrefix`, `onStatus`, `brand`. See `live/EMBED.md` for the files to vendor, in load order.
+- **Always read only when mounted** (review N1: a `trading` option is ignored; only the standalone page, booted
+  with `data-mount="page"`, can trade): no `GET /session`, no `auth`, only `subscribe` and `ping` ever sent (anything
   else is dropped), no order bar, Armed switch, Shift+click orders or draggable order lines.
 - **Nothing global**: each chart keeps to its own element (class `chart-live`, element ids prefixed per mount);
   its listeners on document and window, timers and WebSocket go with `destroy()`. Mount, destroy and mount

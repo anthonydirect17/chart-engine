@@ -94,7 +94,8 @@ try {
     // an async function, like The Desk fetching a relay ticket for every connect
     window.__urlA = () => { window.__calls.A++; return Promise.resolve('ws://localhost:' + port + '/ws?ticket=A' + window.__calls.A + '-' + Math.random().toString(36).slice(2)); };
     window.__urlB = () => { window.__calls.B++; return 'ws://localhost:' + port + '/ws?ticket=B' + window.__calls.B + '-' + Math.random().toString(36).slice(2); };
-    window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, paneId: 'main', storagePrefix: 'desk:', onStatus: s => window.__status.A.push(s.state) });
+    // trading: true is ignored by mount(): a mounted chart is read only whatever the options say
+    window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, trading: true, paneId: 'main', storagePrefix: 'desk:', onStatus: s => window.__status.A.push(s.state) });
   }, PORT);
   const paneLive = id => page.evaluate(id => { const el = document.querySelector('#' + id + ' .pill[id$="-connPill"]'); return !!el && el.textContent === 'LIVE'; }, id);
   await until(() => paneLive('paneA'), 'pane A live');
@@ -109,7 +110,7 @@ try {
   check(await page.evaluate(() => window.__spy.listeners.size > 0 && [...window.__spy.listeners].every(k => /^(document|window) /.test(k))), 'listener spy sees the chart\'s own listeners: ' + await page.evaluate(() => [...window.__spy.listeners].map(k => k.split(' ').slice(0, 2).join(' ')).join(', ')));
   check(await page.evaluate(() => !document.getElementById('connPill') && !document.getElementById('chart')), 'none of the standalone page ids exist in the host');
   check(await page.evaluate(() => document.body.getAttribute('style') === null && document.documentElement.getAttribute('style') === null && document.body.className === '' && document.documentElement.className === ''), 'no style or class put on html or body');
-  check(await page.evaluate(() => !document.querySelector('#paneA .obar, #paneA .arm, #paneA [role="switch"], #paneA .pill.armed, #paneA .side-seg')), 'no order bar, no Armed switch, no ARMED pill');
+  check(await page.evaluate(() => !document.querySelector('#paneA .obar, #paneA .arm, #paneA [role="switch"], #paneA .pill.armed, #paneA .side-seg')), 'mounted with trading: true, still no order bar, no Armed switch, no ARMED pill');
   // Shift+click and a drag on the chart: nothing is sent, no order lines
   const box = await page.locator('#paneA canvas').boundingBox();
   await page.keyboard.down('Shift');

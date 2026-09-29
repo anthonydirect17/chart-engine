@@ -314,20 +314,21 @@ const pageWsUrl = () => {
  * Mount a live chart in `container`. Options (live/EMBED.md):
  *   wsUrl          ChartBridge WebSocket URL, or a function returning one (or a promise of one), called for every
  *                  connect and reconnect. Required.
- *   trading        false (default): read only. No GET /session, no auth, no order messages ever, no order bar,
- *                  no Armed switch, no Shift+click orders, no draggable order lines.
- *   paneId         key for this chart's indicator choices (default 'main').
+ *   paneId         key for this chart's indicators and drawings (default 'main').
  *   storagePrefix  put in front of every storage key (default 'embed:'; the standalone page uses '').
  *   onStatus       called with { state, paneId, root, attempt } on every connection state change
  *                  (state: 'connecting', 'loading', 'live' or 'offline').
  *   brand          show The Desk logo and "Live chart" in the toolbar (default false).
+ * A mounted chart is always read only, whatever the options say: no GET /session, no auth, no order messages ever,
+ * no order bar, no Armed switch, no Shift+click orders, no draggable order lines. Only the standalone page
+ * (data-mount="page") can trade, and only when ChartBridge allows it.
  */
 function mount(container, options) { return start(container, options || {}, false); }
 
 function start(container, opt, PAGE) {
   if (!container || container.nodeType !== 1) throw new Error('ChartLive.mount needs a container element');
   if (!PAGE && !opt.wsUrl) throw new Error('ChartLive.mount needs options.wsUrl');
-  const TRADING = PAGE ? opt.trading !== false : opt.trading === true;
+  const TRADING = PAGE;                          // trading only on ChartBridge's own page, never through mount()
   const PANE = typeof opt.paneId === 'string' && opt.paneId ? opt.paneId : LP.MAIN_PANE;
   const PREFIX = typeof opt.storagePrefix === 'string' ? opt.storagePrefix : PAGE ? '' : EMBED_PREFIX;
   const onStatus = typeof opt.onStatus === 'function' ? opt.onStatus : null;

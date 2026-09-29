@@ -34,7 +34,6 @@ example `ws://localhost:8765` and its own relay), and `style-src` must allow inl
 ```js
 const pane = ChartLive.mount(document.getElementById('live-pane'), {
   wsUrl: () => pickUrl(),          // required; a string, or a function returning a string or a promise of one
-  trading: false,                  // the default: read only
   paneId: 'main',                  // this chart's indicator choices
   storagePrefix: 'desk:',          // this host's own settings
   onStatus: s => showState(s.state),
@@ -52,8 +51,7 @@ such as `chart.bars()`), `element` the `.chart-live` element it created in the c
 | Option | Default | What it does |
 |---|---|---|
 | `wsUrl` | none, required | ChartBridge's WebSocket URL. A **function** is called again for **every** connect and reconnect, so it can hand out a fresh single-use relay ticket each time (`/api/live/ws?ticket=...`), or choose between `ws://localhost:8765/ws` and the relay. It may return a promise; a thrown error or a rejected promise counts as a failed connect and is retried. The query string is never shown on screen. |
-| `trading` | `false` | Read only, see below. `true` is what the standalone page uses; ChartBridge only accepts orders from its own page, so a host gains nothing by setting it. |
-| `paneId` | `'main'` | Key for this chart's indicator choices (Volume, VWAP, Levels, Fills). `'main'` starts with all four on, any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
+| `paneId` | `'main'` | Key for this chart's indicator choices (Volume, VWAP, Levels, Fills) and drawings. `'main'` starts with all four on, any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
@@ -96,7 +94,10 @@ that has little tick history: Range bars start where the ticks start, and the st
 at <time> ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from
 NinjaTrader's." A relay that refuses the subscribe leaves the chart on LOADING (no `history` or `ready` arrives).
 
-## Read-only guarantee (trading: false)
+## Read-only guarantee
+
+A chart made with `ChartLive.mount` is always read only: there is no option to turn trading on (a `trading`
+option is ignored). Only the standalone page, booted by `live/index.html` with `data-mount="page"`, can trade.
 
 - The chart never requests `GET /session` and never sends `auth`.
 - Only `subscribe` and `ping` messages ever leave it: `send` drops every other type, whatever calls it.
