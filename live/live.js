@@ -526,8 +526,8 @@ function renderTrading() {
 }
 /* Position and other accounts in the bar (P&L refreshes with the status line). */
 function renderPositionInfo() {
-  const el = $('oPos'), other = $('oOther');
-  if (!TR.v2 || !TR.enabled) { el.textContent = ''; other.textContent = ''; return; }
+  const el = $('oPos'), other = $('oOther'), legsEl = $('oLegs');
+  if (!TR.v2 || !TR.enabled) { el.textContent = ''; other.textContent = ''; legsEl.textContent = ''; return; }
   const root = D.root, pos = TR.positions.get(TR.account + '|' + root), dp = precisionOf();
   if (pos && pos.qty) {
     const pnl = U.openPnl(pos.qty, pos.avgPrice, lastPrice(), (instruments[root] || {}).pointValue || 0);
@@ -537,6 +537,11 @@ function renderPositionInfo() {
     const res = document.createElement('span'); res.className = cls; res.textContent = U.fmtSigned(pnl.points, dp) + ' pt' + (pnl.dollars !== null ? ' ' + U.fmtMoney(pnl.dollars) : '');
     el.append(side, ' @ ' + U.fmtPrice(pos.avgPrice, dp) + ' ', res);
   } else el.textContent = 'Flat';
+  /* stop and target coverage, from the working orders already here (a filled-in-pieces entry has one pair per fill) */
+  const legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, root, pos.qty) : null;
+  legsEl.textContent = legs ? legs.text : '';
+  legsEl.classList.toggle('uncovered', !!(legs && legs.stopsShort));
+  legsEl.title = legs ? legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working' + (legs.stopsShort ? '. Stops cover less than the position.' : '') : '';
   let n = 0, p = 0;
   for (const o of TR.orders.values()) if (o.root === root && o.account !== TR.account && OT.isWorking(o)) n++;
   for (const [k, v] of TR.positions) if (v.qty && k.endsWith('|' + root) && !k.startsWith(TR.account + '|')) p++;

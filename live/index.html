@@ -119,6 +119,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent-text
 .oinfo { font: 500 12px var(--mono); color: var(--text2); font-variant-numeric: tabular-nums; }
 .oinfo .long, .oinfo .profit { color: var(--profit); }
 .oinfo .short, .oinfo .loss { color: var(--loss); }
+#oLegs { color: var(--text3); }
+#oLegs.uncovered { color: var(--loss); }
 .ostate { flex-basis: 100%; min-height: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; }   /* its own row, so the chart never jumps */
 .ooff { font-size: 12px; color: var(--warn); }
 .obar.armed { border-color: var(--warn); background: rgba(224, 180, 90, 0.07); box-shadow: 0 0 0 1px var(--warn) inset; }
@@ -226,7 +228,7 @@ select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2p
       <button type="button" class="btn" id="flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
       <button type="button" class="btn" id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
-    <span class="ostate"><span class="oinfo" id="oPos"></span><span class="oinfo dim" id="oOther"></span><span class="ooff" id="oOff"></span></span>
+    <span class="ostate"><span class="oinfo" id="oPos"></span><span class="oinfo" id="oLegs"></span><span class="oinfo dim" id="oOther"></span><span class="ooff" id="oOff"></span></span>
   </section>
 
   <div class="alert" id="alertBar" role="alert" hidden>

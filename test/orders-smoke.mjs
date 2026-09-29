@@ -175,6 +175,39 @@ try {
   await until(async () => (await page.textContent('#oPos')) === 'Flat', 'bar shows Flat');
   await until(() => page.evaluate(() => !window.liveChart.getPosition() && window.liveChart.getOrders().length === 0), 'position and orders gone from the chart');
 
+  // a 2-lot limit that fills in two pieces gets two stop and target pairs; the bar sums them up (item 4)
+  await page.click('#sideSeg >> text="Buy"');
+  await page.fill('#oQty', '2');
+  await page.evaluate(() => window.liveChart.goLive());
+  for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt(L - 3); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await page.waitForTimeout(200); }
+  box = await cbox();
+  await page.keyboard.down('Shift'); await page.mouse.click(px, box.y + await yAt(L - 3)); await page.keyboard.up('Shift');
+  s = await until(async () => { const x = await state(); return x.orders.length === 1 ? x : null; }, 'buy limit for the pieces test');
+  const lim3 = s && s.orders[0];
+  check(lim3 && lim3.kind === 'limit' && lim3.qty === 2, 'buy limit 2: ' + JSON.stringify(lim3));
+  await control(PORT, 'price', { root: 'MNQ', p: lim3.price });                // touches fill 1 at a time
+  s = await until(async () => { const x = await state(); return x.orders.filter(o => o.role === 'stop').length === 2 ? x : null; }, 'two stop legs, one per fill');
+  await control(PORT, 'price', { root: 'MNQ', p: lim3.price + 1 });           // off the limit, inside the bracket
+  const legsText = await until(async () => { const t = await page.textContent('#oLegs'); return t === 'stops cover 2 of 2, targets cover 2 of 2' ? t : null; }, 'leg summary 2 of 2');
+  check(!!legsText, 'leg summary: ' + await page.textContent('#oLegs'));
+  check(!(await page.getAttribute('#oLegs', 'class') || '').includes('uncovered'), 'covered: not in the error color');
+  await page.waitForTimeout(300);
+  await shot(page, 'orders-1440-legs.png');
+  const stopLegs = s.orders.filter(o => o.role === 'stop');
+  box = await cbox();
+  h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLegs[0].id);
+  await page.mouse.click(box.x + h.xbox.x + h.xbox.w / 2, box.y + h.xbox.y + h.xbox.h / 2);   // cancels that pair
+  await until(async () => (await page.textContent('#oLegs')) === 'stops cover 1 of 2, targets cover 1 of 2', 'leg summary after one pair cancelled');
+  const cls = await page.getAttribute('#oLegs', 'class') || '';
+  check(cls.includes('uncovered'), 'stops short: error class, got "' + cls + '"');
+  const col = await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color);
+  check(col === 'rgb(255, 122, 122)', 'stops short: error color, got ' + col);
+  await shot(page, 'orders-1440-legs-short.png');
+  await page.click('#flattenBtn');
+  await until(async () => (await page.textContent('#oPos')) === 'Flat', 'flat after the pieces test');
+  check((await page.textContent('#oLegs')) === '', 'no leg summary when flat');
+  await control(PORT, 'price', { root: 'MNQ', p: L });
+
   // rejects: qty over the cap (stopped in the page), and a ChartBridge refusal (more than 200 ticks away)
   await page.fill('#oQty', '9');
   await page.click('#buyMkt');

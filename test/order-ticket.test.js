@@ -98,3 +98,34 @@ test('repeatGuard ignores the same action within the window only', () => {
   assert.equal(g('sell', 1300), true);
   assert.equal(g('sell', 1800), true);
 });
+
+test('legSummary: a 2-lot filled in two pieces has two stop and target pairs that cover 2 of 2', () => {
+  const leg = (id, role, kind, qty, extra) => Object.assign({ id, account: 'Sim101', root: 'MNQ', side: 'sell', role, kind, qty, filled: 0, state: 'working', oco: 'O' + id.slice(-1) }, extra);
+  const orders = [leg('s1', 'stop', 'stop', 1), leg('t1', 'target', 'limit', 1), leg('s2', 'stop', 'stop', 1), leg('t2', 'target', 'limit', 1)];
+  const r = OT.legSummary(orders, 'Sim101', 'MNQ', 2);
+  assert.equal(r.text, 'stops cover 2 of 2, targets cover 2 of 2');
+  assert.deepEqual([r.stopLegs, r.targetLegs, r.stopsShort], [2, 2, false]);
+  // one pair gone: stops short of the position
+  const short = OT.legSummary(orders.slice(0, 2), 'Sim101', 'MNQ', 2);
+  assert.equal(short.text, 'stops cover 1 of 2, targets cover 1 of 2');
+  assert.equal(short.stopsShort, true);
+  // a stop part filled counts only what is left; other accounts, roots, sides and finished orders do not count
+  const mixed = [
+    leg('s1', 'stop', 'stop', 3, { filled: 1, state: 'partFilled' }),
+    leg('s2', 'stop', 'stop', 5, { account: 'DEMO-EVAL' }),
+    leg('s3', 'stop', 'stop', 5, { root: 'ES' }),
+    leg('s4', 'stop', 'stop', 5, { side: 'buy' }),
+    leg('s5', 'stop', 'stop', 5, { state: 'filled' }),
+    leg('s6', 'other', 'stop', 1),                    // a stop placed in NinjaTrader
+    leg('t1', 'other', 'limit', 2),                   // a limit placed in NinjaTrader acts as a target
+    leg('m1', 'other', 'market', 2),                  // a market order is neither
+  ];
+  const m = OT.legSummary(mixed, 'Sim101', 'MNQ', 3);
+  assert.equal(m.text, 'stops cover 3 of 3, targets cover 2 of 3');
+  assert.equal(m.stopsShort, false);
+  // short position: the buys protect it
+  const sh = OT.legSummary([leg('b1', 'stop', 'stop', 1, { side: 'buy' })], 'Sim101', 'MNQ', -2);
+  assert.equal(sh.text, 'stops cover 1 of 2, targets cover 0 of 2');
+  assert.equal(sh.stopsShort, true);
+  assert.equal(OT.legSummary(orders, 'Sim101', 'MNQ', 0), null);
+});

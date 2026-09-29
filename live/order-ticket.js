@@ -89,6 +89,31 @@ function orderEvent(o, prev, fmt) {
 /** A bracket goes only on an order that opens or adds: never on one against the current position. */
 function bracketAllowed(side, positionQty) { return !positionQty || (positionQty > 0) === (side === 'buy'); }
 
+/**
+ * How far the working orders protect an open position: a multi-lot entry that fills in pieces gets one stop and
+ * target pair per fill, so the chart shows stacked legs. Counts what is still to fill on the closing side (sells
+ * while long, buys while short) for one account and root: stops (bracket stops, and stop orders placed in
+ * NinjaTrader) and targets (bracket targets, and limit orders). Read only: it never changes an order.
+ * Returns null when flat, else { position, stops, targets, stopLegs, targetLegs, stopsShort, text }.
+ */
+function legSummary(orders, account, root, posQty) {
+  const pos = Math.abs(+posQty || 0);
+  if (!pos) return null;
+  const closing = posQty > 0 ? 'sell' : 'buy';
+  let stops = 0, targets = 0, stopLegs = 0, targetLegs = 0;
+  for (const o of orders) {
+    if (!isWorking(o) || o.account !== account || o.root !== root || o.side !== closing) continue;
+    const left = Math.max(0, (+o.qty || 0) - (+o.filled || 0));
+    const isStop = o.role === 'stop' || (o.role !== 'target' && (o.kind === 'stop' || o.kind === 'stopLimit'));
+    const isTarget = !isStop && (o.role === 'target' || o.kind === 'limit');
+    if (isStop) { stops += left; stopLegs++; } else if (isTarget) { targets += left; targetLegs++; }
+  }
+  return {
+    position: pos, stops, targets, stopLegs, targetLegs, stopsShort: stops < pos,
+    text: 'stops cover ' + stops + ' of ' + pos + ', targets cover ' + targets + ' of ' + pos,
+  };
+}
+
 /** Ignores the same action repeated within `ms` (a double click), so one click sends one order. */
 function repeatGuard(ms) {
   let lastKey = null, lastAt = -Infinity;
@@ -98,5 +123,5 @@ function repeatGuard(ms) {
   };
 }
 
-return { MAX_BRACKET_TICKS, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, cancelAllIds, orderEvent, repeatGuard };
+return { MAX_BRACKET_TICKS, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, cancelAllIds, orderEvent, legSummary, repeatGuard };
 });
