@@ -379,7 +379,7 @@ function start(container, opt, PAGE) {
   if (PAGE) window.liveChart = chart;  // for tests and the console; order actions still go through the checks below
 
   /* ---------------- per-instrument data */
-  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false };
+  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
@@ -392,7 +392,7 @@ function start(container, opt, PAGE) {
   const delays = { feed: [], local: [] };
 
   function resetData(root) {
-    D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = []; D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
+    D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -421,7 +421,7 @@ function start(container, opt, PAGE) {
         ? new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION })
         : new BarBuilder({ mode: 'time', seconds: tf.sec, tick: D.tick, sessionStart: SESSION });
       const from = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
-      for (let i = from; i < D.ticks.length; i++) { const k = D.ticks[i]; D.cur.add(k[0], k[1], k[2]); }
+      D.ticks.feed(D.cur, from);
       const partial = tf.mode === 'range' ? BB.partialStart(D.ticks, from, SESSION) : null;
       if (partial !== null) setStatus('Range bars start at ' + U.fmtHM(partial) + ' ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from NinjaTrader\'s.', '');
       chart.setBars(D.cur.bars, { barSeconds: tf.sec });
@@ -452,7 +452,7 @@ function start(container, opt, PAGE) {
     D.m1.seed(hist);
     if (D.tickHours > 0) {
       const lastHist = hist.length ? hist[hist.length - 1].t + 60 : -Infinity;
-      for (const k of D.ticks) if (k[0] >= Math.max(cutoff, lastHist)) D.m1.add(k[0], k[1], k[2]);
+      D.ticks.feed(D.m1, 0, Math.max(cutoff, lastHist));
     }
     D.ready = true;
     rebuild();
@@ -463,8 +463,8 @@ function start(container, opt, PAGE) {
   function onTick(m) {
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
-    D.ticks.push([t, p, v]);
-    if (D.ticks.length > 2500000) { D.ticks.splice(0, 500000); D.tickFrom = D.ticks[0][0] + 0.001; D.trimmed = true; }   // the first session left is partial now
+    D.ticks.push(t, p, v);                             // columns, not one array per trade (TickStore, bar-builder.js)
+    if (D.ticks.length > 2500000) { D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; }   // the first session left is partial now
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
     const tf = TF[S.tf];
@@ -579,7 +579,7 @@ function start(container, opt, PAGE) {
         break;
       case 'ticks':
         if (m.root !== D.root) return;
-        for (const k of m.ticks) D.ticks.push(k);
+        D.ticks.pushAll(m.ticks);
         setStatus('Loading ' + D.root + ' ticks: ' + D.ticks.length.toLocaleString(), '');
         break;
       case 'ready':
