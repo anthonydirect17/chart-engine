@@ -445,3 +445,35 @@ test('ChartBridgePin.cs is C# 5 too', () => {
   assert.ok(!/\{ get; \} =/.test(pcode), 'auto-property initializers');
   assert.ok(!/\) => [^{]*;$/m.test(pcode.split('\n').filter(l => /^\s*(public|private)/.test(l)).join('\n')), 'expression-bodied members');
 });
+
+// ---- 0.3.3: the seam between the backfill and the live trades (behaviour: nt8/check/SeamHarness.cs under Mono)
+test('0.3.3: held live trades are matched against the backfill on NinjaTrader times before ready', () => {
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.3 for NinjaTrader 8/);
+  assert.match(code, /public const string Version = "0\.3\.3";/);
+  // held with NinjaTrader's time for the trade, the backfill's basis (never the PC clock)
+  assert.match(bodyOf(code, 'private static void OnMarketData('), /c\.Pending\.Add\(new SeamTick \{ Time = e\.Time, Price = e\.Price, Volume = e\.Volume, Json = json \}\)/);
+  // the tick request ends past now; a refused one is asked once more ending now
+  assert.match(bodyOf(code, 'private static void RequestTickHistory('), /DateTime to = margin \? L\.NowNt\.AddMinutes\(TickToMarginMinutes\) : NowNt\(\);/);
+  // ready and the held trades under the Pending lock, only for the page's latest subscribe, only those Dedupe releases
+  const ready = bodyOf(code, 'private static void MarkReady(');
+  assert.match(ready, /lock \(client\.Pending\)\s*\{\s*if \(!Current\(L\)\) return;\s*SeamResult r = seam != null\s*\? ChartBridgeSeam\.Dedupe\(/);
+  assert.match(ready, /foreach \(SeamTick h in r\.Release\) client\.Send\(h\.Json\);/);
+  assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*\}/);
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
+  // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
+  assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
+  assert.match(bodyOf(code, 'private static void NoteAnswer('), /lock \(L\.Client\.Pending\) \{ if \(Current\(L\)\) L\.HeldAtAnswer = L\.Client\.Pending\.Count; \}/);
+  assert.equal((bodyOf(code, 'private static void RequestTickHistory(').match(/NoteAnswer\(L\);/g) || []).length, 1);
+  assert.equal((bodyOf(code, 'private static void RequestTicks(').match(/NoteAnswer\(L\);/g) || []).length, 1);
+  // re-review: the heldAtAnswer gate only at whole seconds; sub echoed as canonical digits
+  assert.match(code, /if \(i < heldAtAnswer \|\| unit < Second\) \{ r\.DroppedSameTime\+\+; continue; \}/);
+  assert.match(code, /long\.Parse\(sm\.Groups\[1\]\.Value, CultureInfo\.InvariantCulture\)\.ToString\(CultureInfo\.InvariantCulture\)/);
+  for (const f of ['private static void SendBars(', 'private static void SendTicks(']) {
+    const body = bodyOf(code, f);
+    assert.equal((body.match(/L\.Client\.Send\(/g) || []).length, (body.match(/Current\(L\)/g) || []).length, f + ': a Current check for every send');
+  }
+  const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
+  assert.match(orders, /check\/SeamHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /SeamHarness\.Run\(Check\);/);
+});
