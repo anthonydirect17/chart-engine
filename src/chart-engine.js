@@ -852,7 +852,9 @@ function create(container, options) {
       if (lx > -10 && lx < plotW + 10) {
         const age = now - pulseT0;
         if (age < 500 && !REDUCED) {
-          const k = age / 500;
+          // A tick handled after this frame began (its time stamp can be well behind the clock after a long task,
+          // such as building a day and a half of range bars) counts as age 0: the ring never gets a negative radius.
+          const k = Math.max(0, age / 500);
           ctx.beginPath(); ctx.arc(lx, ly, 3 + k * 9, 0, Math.PI * 2);
           ctx.strokeStyle = lastCol; ctx.globalAlpha = 0.5 * (1 - k); ctx.lineWidth = 1.5; ctx.stroke(); ctx.globalAlpha = 1;
         }
@@ -922,7 +924,7 @@ function create(container, options) {
     if (n >= 0) {
       axisTag(ly, fmtPrice(bars[n].c, o.precision), lastCol, lastTag, null, countdown());
       if (flash) {
-        const k = Math.exp(-(now - flash) / 160);
+        const k = Math.exp(-Math.max(0, now - flash) / 160);
         if (k > 0.02) {
           const top = clamp(ly - 9, 0, Math.max(0, plotH - 32));
           roundRect(plotW + 2, top, AXIS_W - 4, 32, 3);
@@ -1166,23 +1168,33 @@ function create(container, options) {
 
   /* ---------------- frame loop */
   let raf = 0, lastFrame = 0, lastDraw = 0, emaInt = 16.7, emaDraw = 1, streak = 0;
+  let lastError = '';
   function frame(now) {
-    const dt = lastFrame ? Math.min(64, now - lastFrame) : 16.7;
-    lastFrame = now;
-    const t0 = performance.now();
-    const moving = step(dt, now);
-    if (moving || dirty) {
-      dirty = false; draw(now);
-      const cost = performance.now() - t0;
-      emaDraw = emaDraw * 0.92 + cost * 0.08;
-      const gap = now - lastDraw;
-      if (gap < 40) { emaInt = emaInt * 0.9 + gap * 0.1; streak++; } else streak = 0;
-      lastDraw = now;
-      emitLegend();
-    }
-    const live = V.follow;
-    if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+    // The next frame is asked for first, so an error while drawing can never stop the chart for good (up to 1.5.0
+    // one throw ended the loop and the chart froze). The error is still reported, once per message.
     raf = requestAnimationFrame(frame);
+    try {
+      const dt = lastFrame ? Math.min(64, now - lastFrame) : 16.7;
+      lastFrame = now;
+      const t0 = performance.now();
+      const moving = step(dt, now);
+      if (moving || dirty) {
+        dirty = false; draw(now);
+        const cost = performance.now() - t0;
+        emaDraw = emaDraw * 0.92 + cost * 0.08;
+        const gap = now - lastDraw;
+        if (gap < 40) { emaInt = emaInt * 0.9 + gap * 0.1; streak++; } else streak = 0;
+        lastDraw = now;
+        emitLegend();
+      }
+      const live = V.follow;
+      if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+    } catch (e) {
+      if (typeof ctx.reset === 'function') ctx.reset();   // drop any save() the throw skipped the restore() of
+      dirty = true;
+      const msg = String(e && e.message);
+      if (msg !== lastError) { lastError = msg; setTimeout(() => { throw e; }); }
+    }
   }
   raf = requestAnimationFrame(frame);
 
