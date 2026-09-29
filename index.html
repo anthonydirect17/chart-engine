@@ -18,6 +18,7 @@
   --crimson: #9F1239; --crimson-word: #E0445E;
   --info: #7FB2FF; --warn: #E0B45A; --level: #7FB2FF; --vwap-sw: #B69CFF;
   --up-text: #4B9CD3; --down-text: #925EE3;
+  --chart-bg: #080B10; --lg-bg: rgba(8, 11, 16, 0.78); --lg-head: #F2F6FA; --lg-text2: #9AA8B8; --lg-dim: #8392A5;   /* follow the Colors panel's Background */
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -49,18 +50,20 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 button:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .meter { margin-left: auto; font: 500 11px var(--mono); color: var(--text3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-.stage { position: relative; flex: 1; min-height: 380px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.stage { position: relative; flex: 1; min-height: 380px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--chart-bg); }
 #chart { position: absolute; inset: 0; }
-.legend { position: absolute; left: 10px; top: 10px; z-index: 3; pointer-events: none; display: grid; gap: 3px; padding: 7px 10px; border-radius: 8px; background: rgba(8, 11, 16, 0.78); font-size: 12px; max-width: calc(100% - 110px); }
+.legend { position: absolute; left: 10px; top: 10px; z-index: 3; pointer-events: none; display: grid; gap: 3px; padding: 7px 10px; border-radius: 8px; background: var(--lg-bg); font-size: 12px; max-width: calc(100% - 110px); }
 .lg1 { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-.lg1 b { color: var(--head); font-weight: 600; }
+.lg1 b { color: var(--lg-head); font-weight: 600; }
 .tfbadge { font: 500 11px var(--mono); color: var(--text2); }
 .dim { color: var(--text3); }
 .feedpill { font: 600 10px/1.6 var(--mono); letter-spacing: .06em; padding: 0 7px; border-radius: 999px; color: var(--accent-soft); background: var(--accent-tint); border: 1px solid var(--accent-border); display: inline-flex; align-items: center; gap: 5px; }
 .feedpill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .feedpill.paused { color: var(--warn); background: rgba(224, 180, 90, 0.10); border-color: rgba(224, 180, 90, 0.40); }
-.lg2, .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--text3); display: flex; flex-wrap: wrap; gap: 2px 10px; }
-.lg2 span span, .lg3 span span { color: var(--head); }
+.legend .dim { color: var(--lg-dim); }
+.legend .tfbadge { color: var(--lg-text2); }
+.lg2, .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--lg-dim); display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.lg2 span span, .lg3 span span { color: var(--lg-head); }
 .lg2 .up { color: var(--up-text); }
 .lg2 .down { color: var(--down-text); }
 .lg3 .vw { color: var(--vwap-sw); }
@@ -183,6 +186,8 @@ CE.mountThemePanel(chart, $('colorsHost'), {
   onChange: c => {
     const T = chart.colors(), st = document.documentElement.style;
     st.setProperty('--vwap-sw', T.vwapText); st.setProperty('--up-text', T.upText); st.setProperty('--down-text', T.downText);
+    st.setProperty('--chart-bg', T.bg); st.setProperty('--lg-bg', T.legendBg); st.setProperty('--lg-head', T.tagText);
+    st.setProperty('--lg-text2', T.text2); st.setProperty('--lg-dim', T.axisText);
     lastKey = '';
   },
 });

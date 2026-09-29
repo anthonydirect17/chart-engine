@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.5.2
+ * chart-engine 1.5.3
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.5.2';
+const VERSION = '1.5.3';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -154,15 +154,29 @@ function luminance(color) {
 function contrast(a, b) { const la = luminance(a), lb = luminance(b); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); }
 /** Dark or white text, whichever reads better on `fill`. */
 function readableOn(fill) { return contrast(fill, '#080B10') >= contrast(fill, '#FFFFFF') ? '#080B10' : '#FFFFFF'; }
-/** The same hue, lightened just enough to read as text on `bg` (WCAG 4.5 by default). */
-function legible(color, bg, min) {
-  const target = min || 4.5; const c = parseColor(color); if (!c) return color;
+/**
+ * The same hue, moved just enough to read as text on `bg` (WCAG 4.5 by default): lightened on a dark ground,
+ * darkened on a light one (1.5.3; before, always lightened, which is the same on the dark grounds). `toward` ('#FFFFFF'
+ * or '#000000') picks the direction instead; buildTheme passes its ground's, so all of a theme moves the same way.
+ * When even white or black cannot reach `min` (a mid-grey ground), it gives that end.
+ */
+function legible(color, bg, min, toward) {
+  const target = min || 4.5; const c = parseColor(color), g = parseColor(bg); if (!c || !g) return color;
+  const to = (toward ? parseColor(toward).r > 127 : readableOn(g) === '#FFFFFF') ? 255 : 0;
   for (let k = 0; k <= 1.0001; k += 0.05) {
-    const m = { r: c.r + (255 - c.r) * k, g: c.g + (255 - c.g) * k, b: c.b + (255 - c.b) * k };
-    if (contrast(m, parseColor(bg)) >= target) return toHex(m);
+    const m = parseColor(toHex({ r: c.r + (to - c.r) * k, g: c.g + (to - c.g) * k, b: c.b + (to - c.b) * k }));   // as it will be drawn
+    if (contrast(m, g) >= target) return toHex(m);
   }
-  return '#FFFFFF';
+  return to ? '#FFFFFF' : '#000000';
 }
+/** `color` itself when it already reads at `min` on `bg`, else legible(color, bg, min). */
+function onGround(color, bg, min, toward) { const c = parseColor(color); return c && contrast(c, parseColor(bg)) >= min ? color : legible(color, bg, min, toward); }
+/** Mix of two colors, k = 0 gives `a`, 1 gives `b`, as #RRGGBB. */
+function mix(a, b, k) {
+  const x = parseColor(a), y = parseColor(b);
+  return toHex({ r: x.r + (y.r - x.r) * k, g: x.g + (y.g - x.g) * k, b: x.b + (y.b - x.b) * k });
+}
+const sameColor = (a, b) => { const x = parseColor(a), y = parseColor(b); return !!x && !!y && x.r === y.r && x.g === y.g && x.b === y.b && x.a === y.a; };
 
 /* ---------------------------------------------------------------- theme */
 const DEFAULT_THEME = {
@@ -185,14 +199,62 @@ const PRESETS = [
   { id: 'mint', name: 'Mint / coral', up: '#4FD1A5', down: '#F0717A' },
   { id: 'house', name: 'House green / red', up: '#3DDC97', down: '#FF7A7A' },
 ];
-const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5' };
+const LEVEL_COLORS = { prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ib: '#E58BD2' };
+/* Chart grounds for the Colors panel (1.5.3). The first is the default and keeps the locked look exactly. */
+const BACKGROUNDS = [
+  { id: 'dark', name: 'Dark', bg: '#080B10' },
+  { id: 'black', name: 'Black', bg: '#000000' },
+  { id: 'slate', name: 'Blue-grey', bg: '#1B2433' },
+  { id: 'light', name: 'Light', bg: '#F5F7FA' },
+];
+/*
+ * Contrast floors on a chosen ground (1.5.3): text 4.5 (WCAG AA), strong text and tag text 7, lines and marks 3,
+ * candle bodies 2.5 (the default bear purple reads at 2.77 on the default ground, which Anthony approved).
+ * On a ground where even white or black cannot reach a floor (mid-grey), the best of the two is used.
+ */
+const FLOOR = { text: 4.5, strong: 7, line: 3, candle: 2.5, cross: 3, divider: 1.4, grid: 1.12 };
+/*
+ * Neutral colors on any other ground: a mix from the ground toward an ink (the house near-white on a dark ground,
+ * the house near-black on a light one), in about the same steps as the default palette, then pushed further until
+ * it reads at its floor. Keys the caller set to something other than the default are left as set.
+ */
+const NEUTRAL_MIX = [
+  ['rth', 0.025, 0], ['grid', 0.06, FLOOR.grid], ['axisLine', 0.09, 0], ['divider', 0.2, FLOOR.divider],
+  ['cross', 0.4, FLOOR.cross], ['axisText', 0.57, FLOOR.text], ['axisTextStrong', 0.95, FLOOR.strong],
+  ['tagFill', 0.07, 0], ['tagBorder', 0.2, FLOOR.divider], ['exit', 1, FLOOR.text], ['live', 1, FLOOR.text],
+];
 
+/**
+ * The theme the chart draws with, built once per change (never per frame). On the default ground every color is
+ * exactly the house palette. On any other ground (1.5.3) the neutrals are derived from it and every colored mark
+ * (candles, VWAP, trade sides, results, drawings) keeps its hue but is moved until it reads on the ground.
+ * `ground` is 'default', 'dark' or 'light'; the page styles its legend from text2, legendBg and the rest.
+ */
 function buildTheme(partial) {
-  const T = Object.assign({}, DEFAULT_THEME, partial || {});
+  const src = Object.assign({}, DEFAULT_THEME, partial || {});
+  const T = Object.assign({}, src);
+  if (!parseColor(T.bg)) T.bg = DEFAULT_THEME.bg;
+  const custom = !sameColor(T.bg, DEFAULT_THEME.bg);
+  T.text2 = '#9AA8B8'; T.legendBg = rgba(T.bg, 0.78); T.ground = 'default';
+  let to;                                                  // which way colors move to read: white, or black
+  if (custom) {
+    const dark = readableOn(T.bg) === '#FFFFFF', ink = dark ? '#F2F6FA' : '#080B10';
+    to = dark ? '#FFFFFF' : '#000000';
+    T.ground = dark ? 'dark' : 'light';
+    for (const [k, amount, floor] of NEUTRAL_MIX) {
+      if (sameColor(src[k], DEFAULT_THEME[k])) T[k] = floor ? onGround(mix(T.bg, ink, amount), T.bg, floor, to) : mix(T.bg, ink, amount);
+    }
+    if (sameColor(src.tagText, DEFAULT_THEME.tagText)) T.tagText = onGround(ink, T.tagFill, FLOOR.strong, to);
+    T.text2 = onGround(mix(T.bg, ink, 0.65), T.bg, FLOOR.text, to);
+    T.up = onGround(T.up, T.bg, FLOOR.candle, to); T.down = onGround(T.down, T.bg, FLOOR.candle, to);
+    T.vwap = onGround(T.vwap, T.bg, FLOOR.line, to); T.drawing = onGround(T.drawing, T.bg, FLOOR.line, to);
+    for (const k of ['long', 'short', 'profit', 'loss']) T[k] = onGround(T[k], T.bg, FLOOR.text, to);
+  }
   T.upVol = rgba(T.up, T.volumeAlpha); T.downVol = rgba(T.down, T.volumeAlpha);
   T.upOnTag = readableOn(T.up); T.downOnTag = readableOn(T.down);
-  T.upText = legible(T.up, T.bg); T.downText = legible(T.down, T.bg);
-  T.vwapText = legible(T.vwap, T.bg);
+  T.upText = legible(T.up, T.bg, 4.5, to); T.downText = legible(T.down, T.bg, 4.5, to);
+  T.vwapText = legible(T.vwap, T.bg, 4.5, to);
+  T.to = to || '#FFFFFF';
   return T;
 }
 
@@ -275,6 +337,109 @@ function levelLines(lv) {
   return L.filter(x => x[1] !== null && x[1] !== undefined).map(([name, price, color, dash]) => ({ name, price, color, dash }));
 }
 
+/* ---------------------------------------------------------------- initial balance (1.5.3) */
+/*
+ * US stock market (NYSE) full-day closures, for the Initial Balance: CME equity index futures still trade on most of
+ * these days (to an early halt), but there is no 9:30 open, so there is no IB. Rules as the NYSE publishes them:
+ * New Year's Day (Sunday -> Monday; on a Saturday it is not moved to the Friday before), Martin Luther King Jr. Day,
+ * Washington's Birthday, Good Friday, Memorial Day, Juneteenth (from 2022), Independence Day, Labor Day,
+ * Thanksgiving and Christmas (Saturday -> Friday, Sunday -> Monday). Unscheduled closures (a national day of
+ * mourning) are not known in advance and are not here. Early-close days (the day after Thanksgiving, Christmas Eve,
+ * July 3) open at 9:30 as usual and do have an IB.
+ */
+const holidayCache = new Map();
+function nyseHolidays(year) {
+  let set = holidayCache.get(year);
+  if (set) return set;
+  const D = (m, d) => Date.UTC(year, m - 1, d) / 1000 / DAY;
+  const dow = day => new Date(day * DAY * 1000).getUTCDay();
+  const nth = (m, wd, n) => { let d = D(m, 1); while (dow(d) !== wd) d++; return d + 7 * (n - 1); };
+  const lastWd = (m, wd) => { let d = D(m + 1, 1) - 1; while (dow(d) !== wd) d--; return d; };
+  const observed = d => dow(d) === 6 ? d - 1 : dow(d) === 0 ? d + 1 : d;
+  // Easter Sunday (anonymous Gregorian algorithm), then Good Friday
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d4 = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d4 - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const em = Math.floor((h + l - 7 * m + 114) / 31), ed = ((h + l - 7 * m + 114) % 31) + 1;
+  const days = [
+    dow(D(1, 1)) === 6 ? null : observed(D(1, 1)),
+    nth(1, 1, 3), nth(2, 1, 3), D(em, ed) - 2, lastWd(5, 1),
+    year >= 2022 ? observed(D(6, 19)) : null,
+    observed(D(7, 4)), nth(9, 1, 1), nth(11, 4, 4), observed(D(12, 25)),
+  ];
+  set = new Set(days.filter(x => x !== null));
+  holidayCache.set(year, set);
+  return set;
+}
+/** Whether the calendar day holding bar time `t` has a regular stock market session (a weekday, not an NYSE holiday). */
+function rthDay(t) {
+  const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay();
+  return wd !== 0 && wd !== 6 && !nyseHolidays(date.getUTCFullYear()).has(day);
+}
+
+/**
+ * Today's Initial Balance: the high and low of the first hour of regular trading, 9:30:00 up to (not including)
+ * 10:30:00 ET, for the trading day `opts.asOf` falls in (sessions start at `sessionStart`, 18:00 for CME).
+ *
+ * `data` is sorted, oldest first: bars { t, h, l } of `opts.barSeconds` each (60 for 1-minute bars; t is the bar's
+ * start), or trades [t, price, ...] with barSeconds 0. A bar must lie wholly inside the window or wholly outside it:
+ * one that straddles 9:30 or 10:30 (a 1-hour bar from 9:00, for example) could carry prices from outside the hour,
+ * so the answer is then 'inexact' and no values are given. 1-minute bars never straddle (both edges are whole
+ * minutes), and give exactly what the trades inside them give. Range bars have no fixed length: pass the 1-minute
+ * bars or the trades instead.
+ *
+ * The data must reach back before 9:30 (a bar ending at or before 9:30, or a trade before it), or `opts.from`, the
+ * time from which the data is known complete, must be at or before 9:30; otherwise the answer is 'uncovered'.
+ *
+ * Returns { state, high, low, start, end }: state 'closed' (a weekend or an NYSE holiday: no regular session),
+ * 'before' (earlier than 9:30), 'forming' (9:30 to 10:30; high and low so far, null before the first trade),
+ * 'locked' (from 10:30:00), 'empty' (locked with no trades in the hour), 'uncovered' or 'inexact'. high and low are
+ * null in every state but 'forming' and 'locked'.
+ */
+function initialBalance(data, opts) {
+  const o = Object.assign({ sessionStart: 18 * 3600, start: 34200, end: 37800, barSeconds: 60, from: undefined }, opts || {});
+  const list = data || [];
+  const n = list.length;
+  const tick = n && Array.isArray(list[0]);
+  const w = tick ? 0 : o.barSeconds;
+  const tAt = i => tick ? list[i][0] : list[i].t;
+  const asOf = o.asOf !== undefined ? o.asOf : n ? tAt(n - 1) : 0;
+  const day = tradeDay(asOf, o.sessionStart);
+  const start = day * DAY + o.start, end = day * DAY + o.end;
+  const res = { state: 'before', high: null, low: null, start, end };
+  if (!rthDay(start)) { res.state = 'closed'; return res; }
+  if (asOf < start) return res;
+  // first bar ending after 9:30 (bars), or first trade at or after 9:30 (trades)
+  const after = i => w > 0 ? tAt(i) + w > start : tAt(i) >= start;
+  let lo = 0, hi = n;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (after(mid)) hi = mid; else lo = mid + 1; }
+  if (lo < n && tAt(lo) < start) { res.state = 'inexact'; return res; }          // a bar across 9:30
+  const covered = o.from !== undefined ? o.from <= start : lo > 0;
+  if (!covered) { res.state = 'uncovered'; return res; }
+  let H = -Infinity, L = Infinity;
+  for (let i = lo; i < n; i++) {
+    const t = tAt(i);
+    if (t >= end) break;
+    if (t < start || t + w > end) { res.state = 'inexact'; return res; }
+    const h = tick ? list[i][1] : list[i].h, l = tick ? list[i][1] : list[i].l;
+    if (h > H) H = h;
+    if (l < L) L = l;
+  }
+  const locked = asOf >= end;
+  if (H === -Infinity) { res.state = locked ? 'empty' : 'forming'; return res; }
+  res.state = locked ? 'locked' : 'forming'; res.high = H; res.low = L;
+  return res;
+}
+/** initialBalance() result -> level lines: dashed "IBH (forming)" / "IBL (forming)" while forming, solid once locked. */
+function ibLines(ib) {
+  if (!ib || ib.high === null || ib.low === null || (ib.state !== 'forming' && ib.state !== 'locked')) return [];
+  const forming = ib.state === 'forming', dash = forming ? [6, 4] : [], tail = forming ? ' (forming)' : '';
+  return [
+    { name: 'IBH' + tail, price: ib.high, color: LEVEL_COLORS.ib, dash, layer: 'ib' },
+    { name: 'IBL' + tail, price: ib.low, color: LEVEL_COLORS.ib, dash, layer: 'ib' },
+  ];
+}
+
 /* ---------------------------------------------------------------- DOM styles */
 const CSS = `
 .ce-host{position:relative;overflow:hidden;outline:none}
@@ -290,6 +455,7 @@ const CSS = `
 .ce-sw2{display:inline-flex;gap:2px}.ce-sw2 i{width:8px;height:14px;border-radius:2px;display:block}
 .ce-theme-panel{position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);box-sizing:border-box;background:#0B1016;border:1px solid #2A3645;border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:0 12px 32px rgba(0,0,0,.45);font:13px "IBM Plex Sans",system-ui,sans-serif;color:#E6EDF5}
 .ce-theme-panel[hidden]{display:none}
+.ce-theme-panel.ce-left{right:auto;left:0}
 .ce-lbl{font:600 10px "IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#8392A5}
 .ce-presets{display:grid;gap:6px}
 .ce-preset{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:#0F151D;border:1px solid #18212C;border-radius:8px;padding:6px 8px;color:#E6EDF5;font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px}
@@ -299,6 +465,11 @@ const CSS = `
 .ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:#0F151D;border:1px solid #2A3645;border-radius:6px;color:#E6EDF5;font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
 .ce-reset{justify-self:start;background:transparent;border:1px solid #2A3645;border-radius:8px;color:#9AA8B8;font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
 .ce-note{font-size:11px;color:#8392A5;line-height:1.4}
+.ce-grounds{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ce-ground{display:flex;align-items:center;gap:8px;background:#0F151D;border:1px solid #18212C;border-radius:8px;padding:5px 8px;color:#E6EDF5;font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
+.ce-ground[aria-pressed="true"]{border-color:#3B2A6B;background:#1A1230;color:#D8CCFF}
+.ce-ground:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
+.ce-ground i{width:16px;height:16px;border-radius:4px;flex:none;box-shadow:inset 0 0 0 1px rgba(154,168,184,.45)}
 `;
 function injectStyle() {
   if (typeof document === 'undefined' || document.getElementById('ce-style')) return;
@@ -322,7 +493,7 @@ function create(container, options) {
     axisWidth: opt.axisWidth || 78,
     timeAxisHeight: opt.timeAxisHeight || 26,
     session: Object.assign({ start: 18 * 3600, rthStart: 34200, rthEnd: 57600 }, opt.session || {}),
-    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true }, opt.layers || {}),
+    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true }, opt.layers || {}),
     motion: Object.assign({ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }, opt.motion || {}),
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
@@ -344,8 +515,17 @@ function create(container, options) {
     liveBtn.textContent = 'Jump to live ›'; liveBtn.hidden = true; container.appendChild(liveBtn);
   }
 
-  let T = buildTheme(opt.theme);
+  let themeSrc = Object.assign({}, DEFAULT_THEME, opt.theme || {});   // the colors as chosen; T is what draws
+  let T = buildTheme(themeSrc), themeBuilds = 1;
   let bars = [], levels = [], trades = [], markers = [], paused = false, countdownFn = null;
+  /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
+     Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
+     the rest with 'levels'. */
+  let levelsShown = [];
+  function shadeLevels() {
+    levelsShown = levels.map(L => Object.assign({}, L, { color: T.ground === 'default' ? L.color : onGround(L.color || T.axisText, T.bg, FLOOR.text, T.to) }));
+  }
+  const levelOn = L => !!o.layers[L.layer || 'levels'];
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
@@ -653,10 +833,10 @@ function create(container, options) {
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     // levels
-    if (o.layers.levels && levels.length) {
+    if (levelsShown.length) {
       ctx.font = '600 10px ' + T.fontCond; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
       const lw = Math.max(1, Math.round(dpr));
-      const vis = levels.filter(L => L.price >= V.lo && L.price <= V.hi).sort((a, b) => b.price - a.price);
+      const vis = levelsShown.filter(L => L.price >= V.lo && L.price <= V.hi && levelOn(L)).sort((a, b) => b.price - a.price);
       const groups = [];
       for (const L of vis) {
         const y = crisp(yOf(L.price), lw), col = L.color || T.axisText;
@@ -881,7 +1061,7 @@ function create(container, options) {
     ctx.strokeStyle = T.axisLine; ctx.lineWidth = Math.max(1, Math.round(dpr)) / dpr;
     ctx.beginPath(); ctx.moveTo(crisp(plotW, 1), 0); ctx.lineTo(crisp(plotW, 1), H); ctx.moveTo(0, crisp(plotH, 1)); ctx.lineTo(W, crisp(plotH, 1)); ctx.stroke();
 
-    const tagSrc = (o.layers.levels ? levels : []).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })), orderTags);
+    const tagSrc = levelsShown.filter(levelOn).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })), orderTags);
     const tags = tagSrc.filter(L => L.price >= V.lo && L.price <= V.hi).map(L => ({ L, y: yOf(L.price) })).sort((a, b) => a.y - b.y);
     if (n >= 0) {
       // Keep level tags clear of the last price tag (32 px tall): tags priced at or above the last price
@@ -1239,13 +1419,17 @@ function create(container, options) {
       } else return;
       pulseT0 = now; dirty = true;
     },
-    setLevels(list) { levels = (list || []).filter(L => isFinite(L.price)); dirty = true; },
+    /** Level lines: [{ name, price, color, dash, layer }]; layer 'ib' shows with the ib layer, the rest with levels. */
+    setLevels(list) { levels = (list || []).filter(L => isFinite(L.price)); shadeLevels(); dirty = true; },
+    getLevels() { return levels.map(L => Object.assign({}, L)); },
     setTrades(list) { trades = list || []; dirty = true; },
     setLayers(partial) { Object.assign(o.layers, partial || {}); dirty = true; },
     getLayers() { return Object.assign({}, o.layers); },
-    setTheme(partial) { T = buildTheme(Object.assign({}, api.getTheme(), partial || {})); legendKey = ''; dirty = true; },
-    getTheme() { const out = {}; for (const k in DEFAULT_THEME) out[k] = T[k]; return out; },
-    /** Derived colors, e.g. upText / downText for legend text that stays readable. */
+    /** Change colors, e.g. { up, down, vwap, bg }. The theme is built here, once per change. */
+    setTheme(partial) { themeSrc = Object.assign({}, themeSrc, partial || {}); T = buildTheme(themeSrc); themeBuilds++; shadeLevels(); legendKey = ''; dirty = true; },
+    /** The colors as chosen (not as moved to read on the ground; colors() has those). */
+    getTheme() { const out = {}; for (const k in DEFAULT_THEME) out[k] = themeSrc[k]; return out; },
+    /** Derived colors as drawn, e.g. upText / downText for legend text that stays readable, text2, legendBg, ground. */
     colors() { return Object.assign({}, T); },
     setPaused(v) { paused = !!v; dirty = true; },
     /** Glide and other motion time constants in ms, e.g. setMotion({ candle: 0 }) for no candle glide. */
@@ -1299,7 +1483,7 @@ function create(container, options) {
     on(ev, fn) { if (listeners[ev]) listeners[ev].push(fn); return () => { const a = listeners[ev]; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }; },
     stats() {
       const now = performance.now();
-      return { idle: now - lastDraw > 250 || streak < 3, fps: Math.round(1000 / emaInt), drawMs: emaDraw };
+      return { idle: now - lastDraw > 250 || streak < 3, fps: Math.round(1000 / emaInt), drawMs: emaDraw, themeBuilds };
     },
     resize,
     destroy() {
@@ -1315,14 +1499,15 @@ function create(container, options) {
 
 /* ---------------------------------------------------------------- color settings panel */
 /**
- * A "Colors" button with a small panel: presets, bull / bear / VWAP pickers, reset.
- * Choices are saved in this browser under `storageKey` and applied on load.
+ * A "Colors" button with a small panel: presets, bull / bear / VWAP pickers, the chart background (presets and a
+ * picker, 1.5.3), reset. Choices are saved in this browser under `storageKey` and applied on load, one color at a
+ * time on a fresh read of the key, so two charts or tabs sharing the key never undo each other.
  * `onChange(colors)` runs on load and after every change.
  */
 function mountThemePanel(chart, host, options) {
   const opt = Object.assign({ storageKey: 'chart-engine-colors-v1', label: 'Colors' }, options || {});
   injectStyle();
-  const FIELDS = [['up', 'Bull'], ['down', 'Bear'], ['vwap', 'VWAP']];
+  const FIELDS = [['up', 'Bull'], ['down', 'Bear'], ['vwap', 'VWAP'], ['bg', 'Ground']];
   const defaults = {}; for (const [k] of FIELDS) defaults[k] = DEFAULT_THEME[k];
   const load = () => { try { return JSON.parse(localStorage.getItem(opt.storageKey) || 'null'); } catch (e) { return null; } };
   const store = v => { try { localStorage.setItem(opt.storageKey, JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
@@ -1340,9 +1525,10 @@ function mountThemePanel(chart, host, options) {
     '<div class="ce-theme-panel" id="' + uid + '" role="dialog" aria-label="Chart colors" hidden>' +
       '<div class="ce-lbl">Presets</div><div class="ce-presets"></div>' +
       '<div class="ce-lbl">Custom</div>' +
-      FIELDS.map(([k, name]) => '<label class="ce-row" for="' + uid + '-' + k + '"><span>' + name + '</span>' +
-        '<input type="color" id="' + uid + '-' + k + '" data-k="' + k + '">' +
-        '<input type="text" data-hex="' + k + '" aria-label="' + name + ' hex" maxlength="7" spellcheck="false"></label>').join('') +
+      FIELDS.map(([k, name]) => (k === 'bg' ? '<div class="ce-lbl" id="' + uid + '-bglbl">Background</div><div class="ce-grounds" role="group" aria-labelledby="' + uid + '-bglbl"></div>' : '') +
+        '<label class="ce-row" for="' + uid + '-' + k + '"><span>' + (k === 'bg' ? 'Any' : name) + '</span>' +
+        '<input type="color" id="' + uid + '-' + k + '" data-k="' + k + '"' + (k === 'bg' ? ' aria-label="Background color"' : '') + '>' +
+        '<input type="text" data-hex="' + k + '" aria-label="' + (k === 'bg' ? 'Background' : name) + ' hex" maxlength="7" spellcheck="false"></label>').join('') +
       '<button type="button" class="ce-reset">Reset to default</button>' +
       '<div class="ce-note">Saved in this browser only.</div>' +
     '</div>';
@@ -1355,6 +1541,13 @@ function mountThemePanel(chart, host, options) {
     b.addEventListener('click', () => apply({ up: p.up, down: p.down }));
     presetsEl.appendChild(b);
   }
+  const groundsEl = wrap.querySelector('.ce-grounds');
+  for (const g of BACKGROUNDS) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'ce-ground'; b.dataset.bg = g.id;
+    b.innerHTML = '<i aria-hidden="true" style="background:' + g.bg + '"></i>' + g.name + (g === BACKGROUNDS[0] ? ' <span class="ce-note">(default)</span>' : '');
+    b.addEventListener('click', () => apply({ bg: g.bg }));
+    groundsEl.appendChild(b);
+  }
   function sync() {
     for (const i of wrap.querySelectorAll('.ce-theme-btn i')) i.style.background = cur[i.dataset.k];
     for (const [k] of FIELDS) {
@@ -1365,6 +1558,7 @@ function mountThemePanel(chart, host, options) {
       const p = PRESETS.find(x => x.id === b.dataset.id);
       b.setAttribute('aria-pressed', String(p.up === cur.up && p.down === cur.down));
     }
+    for (const b of groundsEl.children) b.setAttribute('aria-pressed', String(BACKGROUNDS.find(x => x.id === b.dataset.bg).bg === cur.bg));
   }
   /* Saves only the fields this change set, on a fresh read, so two charts sharing the key never undo each other. */
   function apply(partial) {
@@ -1380,7 +1574,12 @@ function mountThemePanel(chart, host, options) {
     if (/^#[0-9a-f]{6}$/i.test(v)) apply({ [inp.dataset.hex]: v });
   });
   wrap.querySelector('.ce-reset').addEventListener('click', () => apply(defaults));
-  const open = v => { panel.hidden = !v; btn.setAttribute('aria-expanded', String(v)); };
+  /* The panel opens under the button, right-aligned; when that would run off the left edge (the button wrapped to the
+     start of a toolbar row), it is left-aligned instead (1.5.3). */
+  const open = v => {
+    panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
+    if (v) { panel.classList.remove('ce-left'); if (panel.getBoundingClientRect().left < 8) panel.classList.add('ce-left'); }
+  };
   btn.addEventListener('click', () => open(panel.hidden));
   const outside = e => { if (!wrap.contains(e.target)) open(false); };
   document.addEventListener('pointerdown', outside);
@@ -1394,11 +1593,11 @@ function mountThemePanel(chart, host, options) {
 }
 
 return {
-  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, LEVEL_COLORS,
+  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
-    parseColor, rgba, luminance, contrast, readableOn, legible, buildTheme,
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines,
+    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, mix, buildTheme,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels,
   },
 };
