@@ -600,6 +600,93 @@ public static class OrdersHarness
         ChartBridgeOrders.CheckLegs(tz + 6000);
         Check(sent.Count(m => m.Contains("working stops cover 0")) == 1, "and does not repeat it every 2 seconds");
 
+        // ------------------------------------------------------------ fourth review
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, DEMO-EVAL, SimK, SimW, SimS, SimT, SimU, SimV, SimY, SimZ, Sim4A, Sim4B, Sim4C, Sim4D, Sim4E, Sim4F");
+        // the alarm fires again for the same situation on a later trade
+        SetPos(za, mnq, 0);
+        ChartBridgeOrders.CheckLegs(tz + 10000); ChartBridgeOrders.CheckLegs(tz + 12000);
+        Msg("order", Order("SimZ", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order z2 = za.Orders[za.Orders.Count - 1];
+        Fill(za, z2, 1, 25000);
+        SetPos(za, mnq, 1);
+        za.Orders[za.Orders.Count - 2].OrderState = OrderState.Cancelled;   // this trade's stop cancelled by hand too
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(tz + 20000); ChartBridgeOrders.CheckLegs(tz + 24500);
+        Check(sent.Count(m => m.Contains("SimZ") && m.Contains("working stops cover 0")) == 1, "the missing-stop alarm fires again on a later trade");
+        // a leg fill that leaves a position in the opposite direction is caught
+        Account a4a = NewAccount("Sim4A");
+        Msg("order", Order("Sim4A", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(a4a, a4a.Orders[0], 1, 25000);
+        SetPos(a4a, mnq, 1);   // the sell closed a long elsewhere, then its buy target filled: long 1, no sell stop
+        a4a.Orders[1].OrderState = OrderState.Cancelled; a4a.Orders[2].Filled = 1; a4a.Orders[2].OrderState = OrderState.Filled;
+        sent.Clear();
+        double t4 = 8000000;
+        ChartBridgeOrders.CheckLegs(t4); ChartBridgeOrders.CheckLegs(t4 + 4500);
+        Check(sent.Any(m => m.Contains("Sim4A") && m.Contains("position is 1") && m.Contains("working stops cover 0")), "a position opposite to the bracket's direction without a stop raises the alarm");
+        // a check between the order event and the position event does not forget the position
+        Account a4b = NewAccount("Sim4B");
+        Msg("order", Order("Sim4B", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(a4b, a4b.Orders[0], 1, 25000);
+        ChartBridgeOrders.CheckLegs(t4 + 10000);   // the position has not landed yet
+        SetPos(a4b, mnq, 1);
+        a4b.Orders[1].OrderState = OrderState.Cancelled;
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(t4 + 12000); ChartBridgeOrders.CheckLegs(t4 + 16500);
+        Check(sent.Any(m => m.Contains("Sim4B") && m.Contains("working stops cover 0")), "a legs check before the position update does not switch the alarm off");
+        // after a reload, working legs teach the alarm which positions to watch
+        Account a4c = NewAccount("Sim4C");
+        Manual(a4c, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24988, "cb-4c4c4c4c-1", "CB#4c4c4c4c stop f1 q1 p24990").OrderState = OrderState.Cancelled;
+        Manual(a4c, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "cb-4c4c4c4c-1", "CB#4c4c4c4c target f1 q1 p24990");
+        SetPos(a4c, mnq, 1);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(t4 + 20000); ChartBridgeOrders.CheckLegs(t4 + 24500);
+        Check(sent.Any(m => m.Contains("Sim4C") && m.Contains("working stops cover 0")), "after a reload the alarm still watches positions with ChartBridge legs");
+        // the scan does not settle "no legs needed" on a connection that is not steady yet
+        Account a4d = NewAccount("Sim4D");
+        Order d4 = Manual(a4d, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#4d4d4d4d s8 t16");
+        d4.Filled = 1; d4.AverageFillPrice = 24990; d4.OrderState = OrderState.Filled;
+        since.Remove(a4d);   // just reconnected: orders listed, position not yet
+        ChartBridgeOrders.CheckLegs(t4 + 30000); ChartBridgeOrders.CheckLegs(t4 + 34500);
+        Check(a4d.Calls.Count == 0, "reconnecting, position not loaded: no legs yet, and nothing settled");
+        SetPos(a4d, mnq, 1);   // the position loads
+        ChartBridgeOrders.CheckLegs(t4 + 36000);
+        Check(a4d.Calls.Count == 2 && a4d.Calls[0].Contains("CB#4d4d4d4d stop f1 q1"), "once the position loads, the filled entry gets its legs: " + string.Join(" | ", a4d.Calls));
+        // a new fill restarts the gap clock
+        Account a4e = NewAccount("Sim4E");
+        Order e4 = Manual(a4e, mnq, OrderAction.Buy, OrderType.Limit, 2, 24990, 0, "", "CB#4e4e4e4e s8 t16");
+        e4.Filled = 1; e4.AverageFillPrice = 24990; e4.OrderState = OrderState.PartFilled;
+        SetPos(a4e, mnq, 1);
+        ChartBridgeOrders.CheckLegs(t4 + 40000);
+        e4.Filled = 2; e4.OrderState = OrderState.Filled;   // the second fill lands just before the scan would act
+        ChartBridgeOrders.CheckLegs(t4 + 44100);
+        Check(a4e.Calls.Count == 0, "a new fill restarts the 4 seconds");
+        SetPos(a4e, mnq, 2);
+        ChartBridgeOrders.CheckLegs(t4 + 48500);
+        Check(a4e.Calls.Count == 2 && a4e.Calls[0].Contains(" stop f2 q2 "), "then both contracts get legs together: " + string.Join(" | ", a4e.Calls));
+        // the cap: position event before order event does not block an in-cap order
+        Account a4f = NewAccount("Sim4F");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "2");
+        Msg("order", Order("Sim4F", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Order f4 = a4f.Orders[0];
+        ChartBridgeOrders.OnPositionUpdate(a4f, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0 });   // what it was
+        SetPos(a4f, mnq, 1);
+        ChartBridgeOrders.OnPositionUpdate(a4f, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        f4.Filled = 1; f4.AverageFillPrice = 25000; f4.OrderState = OrderState.Filled; Update(a4f, f4);   // order event second
+        Msg("order", Order("Sim4F", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(a4f.Calls.Count == 2, "cap 2, long 1 (position event first): buying 1 more is allowed at once");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
+        // a cancelled market exit is loud too
+        sent.Clear();
+        Order cx = Manual(sx, mnq, OrderAction.Sell, OrderType.Market, 1, 0, 0, "", "CB#5e5e5e5e exit f1 q1 p24990");
+        cx.OrderState = OrderState.Cancelled;
+        Update(sx, cx);
+        Check(sent.Any(m => m.Contains("EXIT was CANCELLED")), "a cancelled market exit raises an error");
+        // a connection event matching no account resets every account
+        ChartBridgeOrders.WatchConnections();
+        Connection.FireStatus(new Connection { Status = ConnectionStatus.Connected }, ConnectionStatus.ConnectionLost);
+        Check(!since.ContainsKey(ta) && !since.ContainsKey(sa), "a status event from a connection no account holds resets every account (the safe side)");
+        ChartBridgeOrders.UnwatchConnections();
+
         // ------------------------------------------------------------ nothing is kept for finished brackets
         FieldInfo idf = typeof(ChartBridgeOrders).GetField("IdOf", BindingFlags.NonPublic | BindingFlags.Static);
         System.Collections.IDictionary ids = (System.Collections.IDictionary)idf.GetValue(null);
