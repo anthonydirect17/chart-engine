@@ -103,7 +103,7 @@ try {
   await until(() => page.evaluate(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled), 'trading after set');
   check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after the unlock');
   const fileText = fs.readFileSync(PIN_FILE, 'utf8');
-  check(/^v1 pbkdf2-sha256 600000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m.test(fileText) && !fileText.replace(/[0-9a-f]{32,}/g, '').includes(FIRST), 'the pin file holds a salted hash, never the PIN');
+  check(/^v1 pbkdf2-sha256 50000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m.test(fileText) && !fileText.replace(/[0-9a-f]{32,}/g, '').includes(FIRST), 'the pin file holds a salted hash, never the PIN');
   check(!/v1\.[0-9a-f]{32}\.[0-9a-f]{64}/.test(await storedAnywhere(page)), 'the unlock is not in localStorage, sessionStorage, a cookie or the URL');
   check(await page.isVisible('#pinBtn'), 'the PIN button shows in the toolbar');
   await shot(page, 'pin-unlocked-1440.png');
@@ -193,6 +193,58 @@ try {
   await until(async () => await pill(phone) === 'LIVE', 'phone: the new PIN opens (touch)', 15000);
   await noSideScroll(phone, 400, 'chart');
   await phoneCtx.close();
+
+  /* ---------------- 5b. review S2: /pin/status answering 500 on a reconnect keeps the page LIVE and unlocked */
+  const shown5 = await page.evaluate(() => window.__pinShown);
+  await page.route('**/pin/status', r => r.fulfill({ status: 500, contentType: 'application/json', body: '{"ok":false,"reason":"test 500"}' }));
+  await control('drop');
+  await until(async () => await pill(page) === 'LIVE' && await page.evaluate(() => window.__ws.length) > 0, 'live again after a drop with /pin/status answering 500', 15000);
+  await page.waitForTimeout(800);
+  check(await pill(page) === 'LIVE' && !(await page.$('.cb-pin')) && await page.evaluate(() => window.__pinShown) === shown5 && await page.evaluate(() => window.ChartBridgePin.active()),
+    '/pin/status 500 on a reconnect: the page stays LIVE and unlocked, no pad');
+  await page.unroute('**/pin/status');
+
+  /* ---------------- 5c. review S3: GET /session refused once after a reconnect: it asks again and trading comes back */
+  let sessionRefusals = 0;
+  await page.route('**/session', r => { if (sessionRefusals < 1) { sessionRefusals++; return r.fulfill({ status: 403, body: '' }); } return r.continue(); });
+  await control('drop');
+  await until(async () => /Signing in to ChartBridge for orders again/.test(await page.textContent('#oOff')), 'a refused sign-in says it tries again', 15000);
+  await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading back after the sign-in retry', 10000);
+  check(sessionRefusals === 1 && !(await page.$('.cb-pin')), 'a refused GET /session is retried after a status check; trading comes back with no pad');
+  await page.unroute('**/session');
+
+  /* ---------------- 5d. review B1: a damaged pin file never offers "Set a PIN" and never throws an open page out */
+  const goodPin = fs.readFileSync(PIN_FILE, 'utf8');
+  fs.writeFileSync(PIN_FILE, goodPin.slice(0, goodPin.length - 40));                      // torn after a good read
+  await control('drop');
+  await until(async () => await pill(page) === 'LIVE', 'live after a drop with a torn pin file (the copy read earlier)', 15000);
+  check(!(await page.$('.cb-pin')) && await page.evaluate(() => window.ChartBridgePin.active()), 'torn pin file: the open page reconnects, unlocked, no pad');
+  const other = await ctx.newPage();
+  await other.goto(`http://localhost:${PORT}/live/`);
+  await until(async () => await title(other) === 'Enter PIN', 'a new page with a torn pin file asks for the PIN');
+  check(await other.evaluate(async () => (await fetch('/pin/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"pin":"0000"}' })).status) === 409,
+    'torn pin file: "Enter PIN", not "Set a PIN"; setting a new PIN is refused (409)');
+  await other.close();
+  // a restarted bridge that starts with the damaged file (no good copy): the page keeps its unlock and recovers alone
+  bridge.kill();
+  await until(async () => await pill(page) === 'OFFLINE', 'offline for the restart with a torn pin file');
+  bridge = await startBridge();
+  await page.waitForTimeout(4000);
+  check(!(await page.$('.cb-pin')) && await page.evaluate(() => window.ChartBridgePin.active()) && await pill(page) !== 'LIVE',
+    'restart with a torn pin file: ChartBridge answers 503, the page keeps its unlock (no pad) and waits');
+  check(/pin\.txt/.test(await page.evaluate(() => [...document.querySelectorAll('.cb-pin-toast')].map(t => t.textContent).join(' '))), 'and says why (pin.txt)');
+  await shot(page, 'pin-torn-file-waiting.png');
+  fs.writeFileSync(PIN_FILE, goodPin);
+  await until(async () => await pill(page) === 'LIVE', 'live again once the pin file reads, no PIN typed', 20000);
+  check(!(await page.$('.cb-pin')), 'pin file readable again: the page recovers by itself, no PIN typed, no reload');
+  // the pad over an open page closes by itself when the unlock holds again (the page kept its token)
+  const shown5d = await page.evaluate(() => window.__pinShown);
+  fs.writeFileSync(PIN_FILE, goodPin.replace(/ [0-9a-f]{64}(\s*)$/, ' ' + '1'.repeat(64) + '$1'));   // another secret: the token does not hold
+  await control('drop');
+  await until(async () => await title(page) === 'Enter PIN', 'the pad when ChartBridge says the unlock does not hold', 15000);
+  fs.writeFileSync(PIN_FILE, goodPin);
+  await until(async () => !(await page.$('.cb-pin')) && await pill(page) === 'LIVE', 'the pad closes by itself once the unlock holds again', 15000);
+  check(await page.evaluate(() => window.__pinShown) === shown5d + 1, 'the pad showed once and closed by itself, no PIN typed, no reload');
 
   /* ---------------- 6. forgotten PIN: delete the pin file with ChartBridge running */
   fs.unlinkSync(PIN_FILE);

@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const DEFAULT_ITERATIONS = 600000, MIN_ITERATIONS = 1000, MAX_ITERATIONS = 10000000, MAX_BODY_BYTES = 256;
+export const DEFAULT_ITERATIONS = 50000, MIN_ITERATIONS = 1000, MAX_ITERATIONS = 1000000, MAX_BODY_BYTES = 256;
 export const HEADER = 'x-chartbridge-unlock';
 const LABEL = 'chartbridge-unlock|v1|';
 const TOKEN_RX = /^v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/;
@@ -52,15 +52,28 @@ export function parseFlat(body, keys) {
 
 const hex = b => Buffer.from(b).toString('hex');
 const derive = (pin, salt, it) => new Promise((res, rej) => crypto.pbkdf2(Buffer.from(pin, 'ascii'), salt, it, 32, 'sha256', (e, k) => e ? rej(e) : res(k)));
+const UNREADABLE = { status: 503, reason: "pin.txt cannot be read or understood; ChartBridge keeps trying. If it stays like this, delete pin.txt in ChartBridge's folder to set a new PIN" };
 const mac = (secret, nonce) => crypto.createHmac('sha256', secret).update(LABEL + nonce).digest();
 
 export class PinLock {
   // file: where the pin file lives (null keeps it in memory, lost when the bridge stops)
-  constructor({ file = null, iterations = DEFAULT_ITERATIONS } = {}) { this.file = file; this.iterations = iterations; this.mem = null; }
+  constructor({ file = null, iterations = DEFAULT_ITERATIONS } = {}) { this.file = file; this.iterations = iterations; this.mem = null; this.lastGood = null; }
 
-  read() {
+  // Three states, as ChartBridge 0.3.2 after review B1: { state: 'missing' | 'ok' | 'broken', rec }. A file that exists
+  // but cannot be read or parsed is 'broken': a PIN is still set, and rec is the last good record (or null).
+  load() {
     let text = this.mem;
-    if (this.file) { try { text = fs.readFileSync(this.file, 'utf8'); } catch (e) { return null; } }
+    if (this.file) {
+      if (!fs.existsSync(this.file)) { this.lastGood = null; return { state: 'missing', rec: null }; }
+      try { text = fs.readFileSync(this.file, 'utf8'); } catch (e) { return { state: 'broken', rec: this.lastGood }; }
+    } else if (text === null) { this.lastGood = null; return { state: 'missing', rec: null }; }
+    const rec = this.parse(text);
+    if (!rec) return { state: 'broken', rec: this.lastGood };
+    this.lastGood = rec;
+    return { state: 'ok', rec };
+  }
+  read() { return this.load().rec; }
+  parse(text) {
     if (!text) return null;
     const line = text.split('\n').map(l => l.trim()).find(l => l && !l.startsWith('#'));
     const f = line ? line.split(/ +/) : [];
@@ -74,16 +87,18 @@ export class PinLock {
     const text = ['# ChartBridge PIN (fake bridge): a salted PBKDF2-SHA256 hash of the PIN and the key that keeps open pages unlocked.',
       '# Forgot the PIN? Delete this file; the page then asks for a new PIN.',
       ['v1', 'pbkdf2-sha256', s.iterations, hex(s.salt), hex(s.hash), hex(s.secret)].join(' '), ''].join('\n');
+    this.lastGood = s;
     if (!this.file) { this.mem = text; return; }
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    fs.writeFileSync(this.file + '.tmp', text);
+    const fd = fs.openSync(this.file + '.tmp', 'w');
+    try { fs.writeSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     fs.renameSync(this.file + '.tmp', this.file);
   }
-  isSet() { return !!this.read(); }
+  isSet() { return this.load().state !== 'missing'; }
   token(secret) { const nonce = crypto.randomBytes(16).toString('hex'); return 'v1.' + nonce + '.' + hex(mac(secret, nonce)); }
-  tokenValid(t) {
+  tokenValid(t, st) {
     if (typeof t !== 'string' || !TOKEN_RX.test(t)) return false;
-    const s = this.read();
+    const s = (st || this.load()).rec;
     if (!s) return false;
     const [, nonce, m] = t.split('.');
     return crypto.timingSafeEqual(mac(s.secret, nonce), Buffer.from(m, 'hex'));
@@ -98,23 +113,27 @@ export class PinLock {
   // each answers { status, token } or { status, reason }
   async set(pin) {
     if (!validPin(pin)) return { status: 400, reason: 'the PIN must be 4 digits' };
-    if (this.read()) return { status: 409, reason: 'a PIN is already set on this PC; unlock with it, or change it once unlocked' };
+    const already = () => { const st = this.load(); return st.state === 'missing' ? null : st.state === 'broken' && !st.rec ? UNREADABLE : { status: 409, reason: 'a PIN is already set on this PC; unlock with it, or change it once unlocked' }; };
+    let no = already();
+    if (no) return no;
     const salt = crypto.randomBytes(16), s = { iterations: this.iterations, salt, hash: await derive(pin, salt, this.iterations), secret: crypto.randomBytes(32) };
-    if (this.read()) return { status: 409, reason: 'a PIN is already set on this PC; unlock with it, or change it once unlocked' };
+    if ((no = already())) return no;
     this.write(s);
     return { status: 200, token: this.token(s.secret) };
   }
   async unlock(pin) {
     if (!validPin(pin)) return { status: 400, reason: 'the PIN must be 4 digits' };
-    const s = this.read();
-    if (!s) return { status: 409, reason: 'no PIN is set on this PC yet' };
+    const st = this.load(), s = st.rec;
+    if (st.state === 'missing') return { status: 409, reason: 'no PIN is set on this PC yet' };
+    if (!s) return UNREADABLE;
     if (!(await this.matches(s, pin))) return { status: 403, reason: 'wrong PIN' };
     return { status: 200, token: this.token(s.secret) };
   }
   async change(pin, newPin) {
     if (!validPin(pin) || !validPin(newPin)) return { status: 400, reason: 'each PIN must be 4 digits' };
-    const s = this.read();
-    if (!s) return { status: 409, reason: 'no PIN is set on this PC yet' };
+    const st = this.load(), s = st.rec;
+    if (st.state === 'missing') return { status: 409, reason: 'no PIN is set on this PC yet' };
+    if (st.state === 'broken') return UNREADABLE;
     if (!(await this.matches(s, pin))) return { status: 403, reason: 'wrong PIN' };
     const salt = crypto.randomBytes(16);
     this.write({ iterations: this.iterations, salt, hash: await derive(newPin, salt, this.iterations), secret: s.secret });
@@ -144,8 +163,9 @@ export class PinLock {
       const p = new URL(req.url, 'http://x').pathname;
       if (p === '/pin/status') {
         if (!parseFlat(body, [])) return no(400, 'malformed request');
-        const set = this.isSet();
-        return reply(200, { set, unlocked: set && this.tokenValid(req.headers[HEADER]) });
+        const st = this.load(), set = st.state !== 'missing';
+        if (st.state === 'broken' && !st.rec) return no(503, UNREADABLE.reason);
+        return reply(200, { set, unlocked: set && this.tokenValid(req.headers[HEADER], st) });
       }
       let f, r;
       if (p === '/pin/set') r = (f = parseFlat(body, ['pin'])) ? await this.set(f.pin) : null;

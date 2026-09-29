@@ -591,7 +591,7 @@ test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an ope
   try {
     token = await unlockFor(port);
     const text = fs.readFileSync(file, 'utf8');
-    assert.match(text, /^v1 pbkdf2-sha256 600000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m, 'the same pin file format as ChartBridge');
+    assert.match(text, /^v1 pbkdf2-sha256 50000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m, 'the same pin file format as ChartBridge');
     assert.ok(!text.replace(/[0-9a-f]{32,}/g, '').includes(TEST_PIN), 'the pin file never holds the PIN');
     const before = JSON.parse((await get(port, '/session', null, token)).body).token;
     child.kill();
@@ -636,4 +636,42 @@ test('server (0.3.2 PIN): allowOrigins pages, local programs and relay tickets k
     assert.equal(await req('/ws?ticket=t1', 'http://localhost:' + port2), 101, 'a relay ticket stands for the relay (no Origin at ChartBridge): no PIN');
     assert.equal(await req('/ws', 'http://localhost:' + port2), 403, 'no ticket: still refused');
   } finally { relay.kill(); }
+});
+
+test('server (0.3.2 PIN, review B1): a pin file that exists but cannot be read is never "no PIN"', async () => {
+  const fs = require('node:fs'), os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-pin-b1-')), file = path.join(dir, 'pin.txt');
+  const port = 19500 + Math.floor(Math.random() * 90);
+  let child = await startBridge(port, ['--pin-file=' + file, '--test-pin=' + TEST_PIN]);
+  try {
+    const token = await unlockFor(port);
+    const good = fs.readFileSync(file, 'utf8'), torn = good.slice(0, good.length - 40);
+    const status = () => pinPost(port, '/pin/status', {}, { headers: { 'X-ChartBridge-Unlock': token } });
+    // torn after a good read: the copy in memory keeps open pages working; nothing offers or allows a new PIN
+    fs.writeFileSync(file, torn);
+    assert.deepEqual((await status()).json, { set: true, unlocked: true });
+    assert.equal((await get(port, '/session', null, token)).status, 200);
+    assert.equal((await pinPost(port, '/pin/set', { pin: '0000' })).status, 409);
+    assert.equal((await pinPost(port, '/pin/unlock', { pin: TEST_PIN })).status, 200);
+    assert.equal((await pinPost(port, '/pin/change', { pin: TEST_PIN, newPin: '0000' })).status, 503);
+    assert.equal(fs.readFileSync(file, 'utf8'), torn, 'never written over');
+    // unreadable (a directory where the file should be): the same
+    fs.unlinkSync(file); fs.writeFileSync(file, good); await status();       // good again, then unreadable
+    fs.unlinkSync(file); fs.mkdirSync(file);
+    assert.deepEqual((await status()).json, { set: true, unlocked: true });
+    fs.rmdirSync(file); fs.writeFileSync(file, torn);
+    // a restarted bridge with a damaged file has no good copy: 503 everywhere, the file kept, and it recovers when readable
+    child.kill(); await new Promise(r => setTimeout(r, 300));
+    child = await startBridge(port, ['--pin-file=' + file]);
+    const s503 = await status();
+    assert.equal(s503.status, 503); assert.match(s503.json.reason, /pin\.txt/);
+    for (const [p, b] of [['/pin/set', { pin: '0000' }], ['/pin/unlock', { pin: TEST_PIN }]]) assert.equal((await pinPost(port, p, b)).status, 503, p);
+    assert.equal((await get(port, '/session', null, token)).status, 403);
+    assert.equal(fs.readFileSync(file, 'utf8'), torn, 'never written over');
+    assert.equal(JSON.parse((await get(port, '/diag')).body).pin.set, true);
+    fs.writeFileSync(file, good);
+    assert.deepEqual((await status()).json, { set: true, unlocked: true }, 'readable again: the old token works, no PIN typed');
+    fs.unlinkSync(file);
+    assert.deepEqual((await status()).json, { set: false, unlocked: false }, 'deleted: no PIN, at once');
+  } finally { child.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

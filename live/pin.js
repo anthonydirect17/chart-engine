@@ -12,6 +12,7 @@
  *   ChartBridgePin.headers()     -> { 'X-ChartBridge-Unlock': token } for GET /session.
  *   ChartBridgePin.openChange()  -> the Change PIN dialog (current PIN, new PIN twice).
  *   ChartBridgePin.active()      -> true once unlocked against a ChartBridge that has the PIN.
+ *   ChartBridgePin.check()       -> promise of 'unlocked', 'set', 'none', 'unsupported', 'error' or 'offline'.
  *
  * The unlock lives in this closure only: never localStorage, sessionStorage, cookies or the URL bar. A reload asks
  * for the PIN again. A wrong PIN is refused and that is all: nothing is counted and nothing is ever blocked.
@@ -33,14 +34,17 @@
     try { j = await r.json(); } catch (e) { j = null; }
     return { status: r.status, body: j && typeof j === 'object' ? j : {} };
   }
-  /* 'none' (no PIN set), 'set' (locked), 'unlocked', 'unsupported' (older ChartBridge) or 'error'; throws when
-     ChartBridge does not answer at all. */
+  /* 'none' (no PIN set), 'set' (locked), 'unlocked', 'unsupported' (older ChartBridge) or 'error' (any other answer,
+     such as 503 while pin.txt cannot be read: the unlock is kept); throws when ChartBridge does not answer at all. */
+  let lastReason = '';
   async function status() {
     const r = await call('/pin/status', {});
+    lastReason = r.status === 200 ? '' : r.body.reason || 'ChartBridge answered ' + r.status;
     if (r.status === 404) return 'unsupported';
     if (r.status !== 200) return 'error';
     return !r.body.set ? 'none' : r.body.unlocked ? 'unlocked' : 'set';
   }
+  const check = () => status().then(s => s, () => 'offline');
 
   /* ---------------- gate: the first unlock, and asking again when ChartBridge says the unlock is gone */
   function gate() { return new Promise(done => runGate(done)); }
@@ -50,19 +54,40 @@
       else if (s === 'unlocked') { close(); done(); }
       else if (s === 'none') showSet(done);
       else if (s === 'set') showUnlock(done);
-      else { showWaiting('ChartBridge refused the PIN check. Open http://localhost:8765/ in its own tab.'); later(() => runGate(done)); }
+      else { showWaiting('ChartBridge could not check the PIN: ' + lastReason + '. Trying again. (Open ' + location.origin + '/ in its own tab.)'); later(() => runGate(done)); }
     }, () => { showWaiting(''); later(() => runGate(done)); });
   }
   let retryTimer = 0;
   const later = fn => { clearTimeout(retryTimer); retryTimer = setTimeout(fn, 2000); };
 
+  /* The pad again over an open page (ChartBridge answered that its unlock no longer holds). The page keeps its
+     token meanwhile and asks ChartBridge every 2 seconds: if the unlock holds again (pin.txt readable again, or put
+     back), the pad closes by itself, with no PIN typed and no reload (review B1). */
+  function relock(done) {
+    let finished = false;
+    const finish = () => { if (finished) return; finished = true; clearInterval(poll); clearTimeout(retryTimer); done(); };
+    const poll = setInterval(() => {
+      if (finished || !token) return;
+      const held = token;
+      call('/pin/status', {}).then(r => {
+        if (!finished && token === held && r.status === 200 && r.body.set && r.body.unlocked) { close(); finish(); }
+      }, () => {});
+    }, 2000);
+    runGate(finish);
+  }
+
+  let noteAt = 0, noted = '';
   function wsUrl(base) {
     const withUnlock = () => token ? base + (base.indexOf('?') < 0 ? '?' : '&') + 'unlock=' + encodeURIComponent(token) : base;
-    if (!supported) return Promise.resolve(base);
     return new Promise(resolve => {
       status().then(s => {
-        if (s === 'none' || s === 'set') { token = null; runGate(() => resolve(withUnlock())); }   // ChartBridge says this unlock is gone
-        else resolve(withUnlock());
+        if (s === 'unsupported') { supported = false; resolve(base); return; }
+        if (!supported && s !== 'error') { supported = true; if (s !== 'unlocked') { token = null; runGate(() => resolve(withUnlock())); return; } }   // ChartBridge upgraded under an open page (review N1)
+        if (s === 'none' || s === 'set') relock(() => resolve(withUnlock()));        // ChartBridge says this unlock is gone
+        else {
+          if (s === 'error' && (lastReason !== noted || Date.now() - noteAt > 60000)) { noteAt = Date.now(); noted = lastReason; toast('ChartBridge: ' + lastReason); }   // e.g. pin.txt unreadable: keep the unlock
+          resolve(withUnlock());
+        }
       }, () => resolve(withUnlock()));                                                        // not answering: keep the unlock
     });
   }
@@ -250,12 +275,13 @@
       },
     });
   }
-  function flashDone() {
+  function flashDone() { toast('PIN changed. Open pages stay unlocked.'); }
+  function toast(text) {
     const t = document.createElement('div');
-    t.className = 'cb-pin-toast'; t.setAttribute('role', 'status'); t.textContent = 'PIN changed. Open pages stay unlocked.';
+    t.className = 'cb-pin-toast'; t.setAttribute('role', 'status'); t.textContent = text;
     document.body.appendChild(t);
-    setTimeout(() => t.remove(), 4000);
+    setTimeout(() => t.remove(), 6000);
   }
 
-  window.ChartBridgePin = { gate, wsUrl, headers, openChange, active };
+  window.ChartBridgePin = { gate, wsUrl, headers, openChange, active, check };
 })();

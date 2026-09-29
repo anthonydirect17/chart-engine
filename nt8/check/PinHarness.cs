@@ -54,7 +54,8 @@ public static class PinHarness
     // ------------------------------------------------------------ hashing and pin.txt, without the server
     static void Hashing()
     {
-        Check(ChartBridgePin.DefaultIterations >= 600000 && ChartBridgePin.NewHashIterations == ChartBridgePin.DefaultIterations, "PIN: PBKDF2 iterations default to " + ChartBridgePin.DefaultIterations);
+        Check(ChartBridgePin.DefaultIterations == 50000 && ChartBridgePin.NewHashIterations == ChartBridgePin.DefaultIterations && ChartBridgePin.MaxIterations == 1000000,
+              "PIN: PBKDF2 iterations default to " + ChartBridgePin.DefaultIterations + ", at most " + ChartBridgePin.MaxIterations + " accepted from pin.txt");
         Check(ChartBridgePin.ValidPin("0000") && ChartBridgePin.ValidPin(PinA), "PIN: four ASCII digits are a PIN");
         Check(!ChartBridgePin.ValidPin("853") && !ChartBridgePin.ValidPin("85310") && !ChartBridgePin.ValidPin("85a1") && !ChartBridgePin.ValidPin(" 853")
               && !ChartBridgePin.ValidPin("٨٥٣١") && !ChartBridgePin.ValidPin("") && !ChartBridgePin.ValidPin(null), "PIN: 3 or 5 digits, letters, spaces, other scripts' digits, empty and null are not");
@@ -64,6 +65,10 @@ public static class PinHarness
         ChartBridgePin.Result r = ChartBridgePin.Set(PinA);
         long setMs = sw.ElapsedMilliseconds;
         Check(r.Ok && r.Status == 200 && Regex.IsMatch(r.Token, "^v1\\.[0-9a-f]{32}\\.[0-9a-f]{64}$"), "PIN set: a token comes back (" + setMs + " ms at the default iterations on Mono)");
+        sw = Stopwatch.StartNew();
+        bool okDefault = ChartBridgePin.Unlock(PinA).Ok;
+        long unlockMs = sw.ElapsedMilliseconds;
+        Check(okDefault && unlockMs < 1500, "unlock at the default iterations takes " + unlockMs + " ms on Mono (under 1.5 s)");
         string text = FileText(), line = DataLine();
         string[] f = line.Split(' ');
         Check(f.Length == 6 && f[0] == "v1" && f[1] == "pbkdf2-sha256" && f[2] == ChartBridgePin.DefaultIterations.ToString() && f[3].Length == 32 && f[4].Length == 64 && f[5].Length == 64,
@@ -84,13 +89,44 @@ public static class PinHarness
         Check(DataLine().Split(' ')[3] != f[3], "set: a new random salt each time");
         Check(ChartBridgePin.Unlock(PinA).Ok, "unlock: a file written at another iteration count checks with its own count");
 
-        // pin.txt that cannot be read counts as no PIN (a new one can be set over it); a too-low count is not accepted
-        File.WriteAllText(ChartBridgePin.PinFile, "garbage\n");
-        Check(!ChartBridgePin.IsSet && ChartBridgePin.Unlock(PinA).Status == 409 && ChartBridgePin.Set(PinC).Ok && ChartBridgePin.Unlock(PinC).Ok, "an unreadable pin.txt counts as no PIN; setting one replaces it");
-        string[] g = DataLine().Split(' ');
-        File.WriteAllText(ChartBridgePin.PinFile, "v1 pbkdf2-sha256 10 " + g[3] + " " + g[4] + " " + g[5] + "\n");
-        Check(!ChartBridgePin.IsSet, "pin.txt with fewer than " + ChartBridgePin.MinIterations + " iterations is not accepted");
+        // an older file keeps its own count and moves to the current count on the next Change (review S1)
         File.Delete(ChartBridgePin.PinFile);
+        ChartBridgePin.NewHashIterations = 2000;
+        ChartBridgePin.Set(PinA);
+        ChartBridgePin.NewHashIterations = 1000;
+        Check(DataLine().Split(' ')[2] == "2000" && ChartBridgePin.Unlock(PinA).Ok, "a file at another count (2000) still unlocks with its own count");
+        Check(ChartBridgePin.Change(PinA, PinA).Ok && DataLine().Split(' ')[2] == "1000", "the next Change rewrites it at the current count (1000)");
+        string[] g0 = DataLine().Split(' ');
+        File.WriteAllText(ChartBridgePin.PinFile, "v1 pbkdf2-sha256 1000001 " + g0[3] + " " + g0[4] + " " + g0[5] + "\n");
+        Check(ChartBridgePin.FileStatus == ChartBridgePin.FileState.Broken, "pin.txt with more than " + ChartBridgePin.MaxIterations + " iterations is not accepted (a slow unlock cannot be edited in)");
+        File.WriteAllText(ChartBridgePin.PinFile, "v1 pbkdf2-sha256 10 " + g0[3] + " " + g0[4] + " " + g0[5] + "\n");
+        Check(ChartBridgePin.FileStatus == ChartBridgePin.FileState.Broken, "pin.txt with fewer than " + ChartBridgePin.MinIterations + " iterations is not accepted");
+
+        // review B1: a pin.txt that exists but cannot be read or parsed is never "no PIN". With no good copy in memory
+        // (as when ChartBridge starts with a damaged file) the PIN answers 503 and the file is never written over.
+        foreach (string[] kind in new[] { new[] { "torn", "v1 pbkdf2-sha256 1000 " + g0[3] + " " + g0[4].Substring(0, 20) }, new[] { "empty", "" }, new[] { "garbage", "garbage\n" } })
+        {
+            File.Delete(ChartBridgePin.PinFile);                                  // Missing: the copy in memory is dropped
+            Check(!ChartBridgePin.IsSet, kind[0] + " file: deleting pin.txt first makes it Missing");
+            File.WriteAllText(ChartBridgePin.PinFile, kind[1]);
+            ChartBridgePin.Result s1 = ChartBridgePin.Set(PinB), u1 = ChartBridgePin.Unlock(PinA);
+            Check(ChartBridgePin.IsSet && ChartBridgePin.FileStatus == ChartBridgePin.FileState.Broken && s1.Status == 503 && u1.Status == 503 && File.ReadAllText(ChartBridgePin.PinFile) == kind[1],
+                  kind[0] + " pin.txt, no good copy: still a PIN set, Set and Unlock answer 503 (" + s1.Status + ", " + u1.Status + "), the file is not written over");
+            Check(ChartBridgePin.Change(PinA, PinB).Status == 503 && File.ReadAllText(ChartBridgePin.PinFile) == kind[1], kind[0] + " pin.txt: Change answers 503 and does not write");
+        }
+        File.Delete(ChartBridgePin.PinFile);
+        string tok0 = ChartBridgePin.Set(PinA).Token;
+        string good = File.ReadAllText(ChartBridgePin.PinFile);
+        File.WriteAllText(ChartBridgePin.PinFile, good.Substring(0, good.Length / 2));   // a torn write after a good read
+        Check(ChartBridgePin.FileStatus == ChartBridgePin.FileState.Broken && ChartBridgePin.TokenValid(tok0) && ChartBridgePin.Unlock(PinA).Ok && ChartBridgePin.Unlock(PinB).Status == 403,
+              "torn pin.txt after a good read: open pages' tokens and the right PIN keep working from the copy in memory, a wrong PIN is still refused");
+        Check(ChartBridgePin.Set(PinB).Status == 409 && ChartBridgePin.Change(PinA, PinB).Status == 503 && File.ReadAllText(ChartBridgePin.PinFile) == good.Substring(0, good.Length / 2),
+              "torn pin.txt: Set says a PIN is set (409), Change waits (503), nothing is written over it");
+        File.WriteAllText(ChartBridgePin.PinFile, good);
+        Check(ChartBridgePin.FileStatus == ChartBridgePin.FileState.Ok && ChartBridgePin.TokenValid(tok0), "the file readable again: Ok, the token still good");
+        File.Delete(ChartBridgePin.PinFile);
+        Check(!ChartBridgePin.TokenValid(tok0) && !ChartBridgePin.IsSet, "deleting pin.txt still drops the copy in memory at once: the token is dead");
+        Check(!File.Exists(ChartBridgePin.PinFile + ".tmp"), "no temp file left behind after the writes");
 
         // strict body parsing
         Check(ChartBridgePin.ParseFlat("{\"pin\":\"8531\"}", new[] { "pin" }) != null && ChartBridgePin.ParseFlat(" { \"newPin\" : \"1\" , \"pin\":\"2\" } ", new[] { "pin", "newPin" }) != null
@@ -159,20 +195,51 @@ public static class PinHarness
         ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins(Own + ", https://desk.golivepage.com");
         Check(!ChartBridgePin.WsUnlocked(Own, null), "WebSocket: listing the own page in allowOrigins does not skip the PIN");
 
-        // a wrong PIN never blocks the right one: 20 wrong in a row, then the right one at once
+        // a wrong PIN never blocks the right one (review S2): 200 wrong in a row through the real server, then the right
+        // one within a bound of a directly measured unlock. A lockout, a hidden counter or a delay anywhere on the
+        // path (ChartBridge.cs or ChartBridgePin.cs) fails this.
         string before = FileText();
+        Stopwatch direct = Stopwatch.StartNew();
+        for (int i = 0; i < 5; i++) ChartBridgePin.Unlock(PinA);
+        double directMs = direct.ElapsedMilliseconds / 5.0;
         int wrong403 = 0;
-        for (int i = 0; i < 20; i++)
+        Stopwatch wrongTime = Stopwatch.StartNew();
+        for (int i = 0; i < 200; i++)
         {
             Reply w = Post("/pin/unlock", "{\"pin\":\"" + (i % 2 == 0 ? PinB : PinC) + "\"}");
             if (w.Status == 403 && w.Body.Contains("wrong PIN") && w.Token == null) wrong403++;
         }
-        Check(wrong403 == 20, "20 wrong PINs in a row: each refused with 403 \"wrong PIN\" (" + wrong403 + ")");
+        double perWrong = wrongTime.ElapsedMilliseconds / 200.0;
+        Check(wrong403 == 200, "200 wrong PINs in a row: each refused with 403 \"wrong PIN\" (" + wrong403 + ", " + perWrong.ToString("0.0") + " ms each)");
+        Check(perWrong < 3 * directMs + 250, "wrong PINs are not slowed down (" + perWrong.ToString("0.0") + " ms each, a direct unlock " + directMs.ToString("0.0") + " ms)");
         Stopwatch sw = Stopwatch.StartNew();
         Reply right = Post("/pin/unlock", "{\"pin\":\"" + PinA + "\"}");
-        Check(right.Status == 200 && right.Token != null && ChartBridgePin.WsUnlocked(Own, right.Token), "then the right PIN unlocks at once (" + sw.ElapsedMilliseconds + " ms), nothing blocked");
+        long rightMs = sw.ElapsedMilliseconds;
+        Check(right.Status == 200 && right.Token != null && ChartBridgePin.WsUnlocked(Own, right.Token), "then the right PIN unlocks, nothing blocked");
+        Check(rightMs < 3 * directMs + 250, "and at once: " + rightMs + " ms, within 3 x a direct unlock (" + directMs.ToString("0.0") + " ms) + 250 ms");
         Check(FileText() == before, "wrong PINs change nothing on disk (nothing counted)");
         Check(ChartBridgePin.Unlock(PinB).Status == 403 && ChartBridgePin.Unlock(PinA).Ok, "and again: wrong, then right, straight after");
+
+        // review B1 through the server: pin.txt held open with no sharing (a backup or antivirus): the page keeps working
+        using (FileStream held = new FileStream(ChartBridgePin.PinFile, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            bool shareEnforced = false;
+            try { using (new FileStream(ChartBridgePin.PinFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) { } } catch (IOException) { shareEnforced = true; }
+            Check(Post("/pin/status", "{}", Own, "application/json", null, t1).Is(200, "{\"set\":true,\"unlocked\":true}") && Get("/session", t1).Status == 200 && ChartBridgePin.WsUnlocked(Own, t1)
+                  && Post("/pin/set", "{\"pin\":\"" + PinB + "\"}").Status == 409,
+                  "pin.txt held open with no sharing (" + (shareEnforced ? "the read fails, as on Windows" : "Mono does not enforce sharing: the read works") + "): status unlocked, /session 200, the WebSocket open, Set 409");
+        }
+        // with no good copy in memory (ChartBridge started with a damaged file): 503, never "Set a PIN"
+        string goodFile = FileText();
+        File.WriteAllText(ChartBridgePin.PinFile, goodFile.Substring(0, goodFile.Length - 40));
+        typeof(ChartBridgePin).GetField("lastGood", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, null);
+        Reply st503 = Post("/pin/status", "{}", Own, "application/json", null, t1);
+        Check(st503.Status == 503 && st503.Body.Contains("pin.txt") && Post("/pin/set", "{\"pin\":\"" + PinB + "\"}").Status == 503 && Post("/pin/unlock", "{\"pin\":\"" + PinA + "\"}").Status == 503
+              && Get("/session", t1).Status == 403 && FileText() == goodFile.Substring(0, goodFile.Length - 40),
+              "torn pin.txt, no good copy: status, set and unlock answer 503 (not \"no PIN\"), /session refused, the file is not written over: " + st503.Body);
+        File.WriteAllText(ChartBridgePin.PinFile, goodFile);
+        Check(Post("/pin/status", "{}", Own, "application/json", null, t1).Is(200, "{\"set\":true,\"unlocked\":true}") && Get("/session", t1).Status == 200,
+              "the file readable again: the page's token works again, no PIN typed");
 
         // restart (F5 in NinjaTrader): the page's in-memory token still works, and gets a new order token
         ChartBridgeServer.Stop();

@@ -640,7 +640,18 @@ function start(container, opt, PAGE) {
       })
       .catch(e => {
         if (sock !== ws) return;
-        applyTrading({ enabled: false, reason: 'Could not sign in to ChartBridge (' + e.message + '). Open the chart from ChartBridge itself to trade.' });
+        if (!PIN) { applyTrading({ enabled: false, reason: 'Could not sign in to ChartBridge (' + e.message + '). Open the chart from ChartBridge itself to trade.' }); return; }
+        /* With the PIN (0.3.2): ask ChartBridge again in 2 s. Still unlocked: sign in again. The unlock is gone: drop
+           the connection, and the reconnect shows the PIN pad. */
+        applyTrading({ enabled: false, reason: 'Signing in to ChartBridge for orders again (' + e.message + ')' });
+        later(() => {
+          if (destroyed || sock !== ws) return;
+          PIN.check().then(st => {
+            if (destroyed || sock !== ws) return;
+            if (st === 'none' || st === 'set') { try { sock.close(); } catch (err) { /* already closed */ } }
+            else signIn();
+          });
+        }, 2000);
       });
   }
   function applyTrading(t) {

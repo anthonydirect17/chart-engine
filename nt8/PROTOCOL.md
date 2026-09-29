@@ -102,10 +102,24 @@ v1 pbkdf2-sha256 <iterations> <salt, 16 bytes hex> <hash, 32 bytes hex> <secret,
 ```
 
 The hash is PBKDF2-HMAC-SHA256 of the PIN's four ASCII digits (`Rfc2898DeriveBytes` with
-`HashAlgorithmName.SHA256`, .NET Framework 4.7.2 and later) at 600,000 iterations for a new PIN; the file
-records its own count, so a later change of the default still reads older files. The secret is random and
-signs unlock tokens. The file is written to a temp file and swapped in, and read fresh on every check (no
-copy in memory), so deleting it takes effect at once. A missing or unreadable file means no PIN is set.
+`HashAlgorithmName.SHA256`, .NET Framework 4.7.2 and later) at 50,000 iterations for a new PIN, which keeps an
+unlock well under a second on .NET Framework's managed loop. No count protects 10,000 possible PINs against
+someone who can read the file, and the secret in the same file makes that moot; the count only slows guessing at
+the pad. The file records its own count (1,000 to 1,000,000 accepted), so a file written at 600,000 by the first
+0.3.2 build still works and moves to 50,000 on its next Change. The secret is random and signs unlock tokens.
+The file is written to a temp file, flushed to disk, and swapped in; it is read once per request, sharing
+read, write and delete so it never gets in the way of a swap.
+
+**Three states** (review B1): pin.txt is
+
+- **missing**: no PIN is set, and "Set a PIN" is offered. Deleting the file takes effect at once.
+- **ok**: read and parsed. ChartBridge keeps this last good copy in memory.
+- **broken**: it exists but cannot be read or understood (held open by a backup or antivirus, an online-only
+  cloud placeholder, a torn or empty file). A PIN is still set: nothing offers "Set a PIN" and nothing writes
+  over the file. Tokens and unlocks are checked against the last good copy, so open pages keep working. With no
+  good copy (ChartBridge started with a damaged file), the PIN endpoints answer **503** with the reason, the page
+  keeps its unlock and waits, and it recovers by itself once the file reads again. If it stays broken, delete
+  it to set a new PIN. The Output window says so at most once every 10 minutes.
 
 **The unlock token and a restart (F5).** A successful set, unlock or change answers a token:
 `v1.<nonce, 16 random bytes hex>.<HMAC-SHA256(secret, "chartbridge-unlock|v1|" + nonce) hex>`. It has no expiry
@@ -134,14 +148,25 @@ string of four ASCII digits; anything else is refused. No CORS headers; `Cache-C
 
 | path | body | answer |
 |---|---|---|
-| `/pin/status` | `{}` (and the `X-ChartBridge-Unlock` header, when the page has a token) | `200 {"set": bool, "unlocked": bool}` |
-| `/pin/set` | `{"pin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `409` when a PIN is already set |
+| `/pin/status` | `{}` (and the `X-ChartBridge-Unlock` header, when the page has a token) | `200 {"set": bool, "unlocked": bool}`; `503` while pin.txt is broken with no good copy |
+| `/pin/set` | `{"pin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `409` when a PIN is already set; `503` while pin.txt is broken with no good copy |
 | `/pin/unlock` | `{"pin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `403 {"ok":false,"reason":"wrong PIN"}`; `409` when none is set |
-| `/pin/change` | `{"pin":"<current>","newPin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `403` when the current PIN is wrong; `409` when none is set |
+| `/pin/change` | `{"pin":"<current>","newPin":"dddd"}` | `200 {"ok":true,"token":"..."}`; `403` when the current PIN is wrong; `409` when none is set; `503` while pin.txt is broken (it is only written over a file that reads) |
 
 Other answers: `405` (not POST), `403` (another origin or host), `415` (not JSON), `413` (over 256 bytes),
 `400` (anything malformed), `404` (another `/pin/` path). ChartBridge 0.3.1 and older answer `404` to
-`/pin/status`; the page then goes on without a PIN, as before.
+`/pin/status`; the page then goes on without a PIN, as before, and checks again on every reconnect, so an
+upgrade under an open page asks for the PIN then.
+
+**The page** asks for the PIN again only when ChartBridge answers `set` false or `unlocked` false. It keeps its
+token while the pad shows and asks again every 2 seconds, so the pad closes by itself if the unlock holds again.
+Any other answer (a 500 or 503, or no answer) keeps the unlock. A `GET /session` that is refused is retried
+after a status check 2 seconds later; if the unlock is gone, the page drops the connection and the reconnect
+shows the pad.
+
+**First run and revoking.** On a fresh PC, whoever opens the page first sets the PIN, so Anthony should open it
+and set the PIN right after installing. Deleting pin.txt revokes every page: each one asks for the new PIN on its
+next reconnect.
 
 **Never logged**: the PIN, the hash, the secret or any token (the Output window notes only that a PIN was set
 or changed; the refusal log takes the path without its query). `/diag` shows `"pin": {"set": true|false}` and

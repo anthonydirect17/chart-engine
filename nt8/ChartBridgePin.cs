@@ -38,8 +38,11 @@ namespace NinjaTrader.NinjaScript.AddOns
     {
         public const string FileName = "pin.txt";
         public const string Header = "X-ChartBridge-Unlock";           // the page's unlock token on GET /session and the PIN endpoints
-        public const int DefaultIterations = 600000;                    // PBKDF2-HMAC-SHA256 (OWASP 2023 figure)
-        public const int MinIterations = 1000, MaxIterations = 10000000;
+        // PBKDF2-HMAC-SHA256. 50,000 keeps an unlock well under a second on .NET Framework's managed loop (review S1:
+        // about 0.2 s on Mono, 3 s at 600,000). No count protects 10,000 possible PINs offline, and the secret in the
+        // same file makes offline cracking moot; the count only slows guessing at the pad, which is the threat here.
+        public const int DefaultIterations = 50000;
+        public const int MinIterations = 1000, MaxIterations = 1000000;   // a hand-edited count cannot make an unlock take a minute
         public const int MaxBodyBytes = 256;
         private const int SaltBytes = 16, HashBytes = 32, SecretBytes = 32, NonceBytes = 16;
         private const string TokenLabel = "chartbridge-unlock|v1|";
@@ -48,7 +51,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object FileLock = new object();
 
         // Iterations for a hash written from now on; pin.txt records its own count, so a file written with an
-        // older count still checks. Only the Mono harness lowers it (to run its many checks quickly).
+        // older count (0.3.2 before review: 600,000) still checks, and moves to this count on its next Change. Only the Mono harness lowers it (to run its many checks quickly).
         public static int NewHashIterations = DefaultIterations;
 
         public static string PinFile { get { return Path.Combine(ChartBridgeConfig.Folder, FileName); } }
@@ -57,47 +60,97 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- pin.txt
         // # comment lines, then: v1 pbkdf2-sha256 <iterations> <salt hex> <hash hex> <secret hex>
-        // Read fresh on every check (no copy in memory), so deleting the file takes effect at once.
-        // A missing or unreadable file means no PIN is set.
-        private static Stored Read()
+        // Three states, read once per request (review B1):
+        //   Missing: no pin.txt. No PIN is set; "Set a PIN" is offered. The copy in memory is dropped, so deleting
+        //            the file (the forgotten-PIN recovery) takes effect at once.
+        //   Ok:      read and parsed. It becomes the last good copy.
+        //   Broken:  pin.txt exists but cannot be read or parsed (held open by a backup or antivirus, an online-only
+        //            cloud placeholder, a torn write). A PIN IS set: nothing may offer "Set a PIN" or overwrite the
+        //            file. Tokens and unlocks are checked against the last good copy, so open pages keep working;
+        //            with no good copy (ChartBridge started with a broken file) the PIN answers 503 until the file
+        //            reads again or is deleted.
+        public enum FileState { Missing, Ok, Broken }
+        private class PinState { public FileState State; public string Problem; public Stored Rec; }
+        private static volatile Stored lastGood;   // the last record read Ok (or written); used only while the file is Broken
+
+        private static PinState Load()
         {
+            string file = PinFile;
+            if (!File.Exists(file)) { lastGood = null; return new PinState { State = FileState.Missing }; }
+            string text;
             try
             {
-                string file = PinFile;
-                if (!File.Exists(file)) return null;
-                foreach (string raw in File.ReadAllLines(file))
-                {
-                    string line = raw.Trim();
-                    if (line.Length == 0 || line.StartsWith("#")) continue;
-                    string[] f = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (f.Length != 6 || f[0] != "v1" || f[1] != "pbkdf2-sha256") return null;
-                    int it;
-                    if (!int.TryParse(f[2], NumberStyles.None, CultureInfo.InvariantCulture, out it) || it < MinIterations || it > MaxIterations) return null;
-                    Stored s = new Stored { Iterations = it, Salt = FromHex(f[3]), Hash = FromHex(f[4]), Secret = FromHex(f[5]) };
-                    if (s.Salt == null || s.Salt.Length != SaltBytes || s.Hash == null || s.Hash.Length != HashBytes || s.Secret == null || s.Secret.Length != SecretBytes) return null;
-                    return s;
-                }
-                return null;
+                // ReadWrite | Delete sharing: never in the way of a File.Replace from a Change (review N3)
+                using (FileStream fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader r = new StreamReader(fs, Encoding.ASCII)) text = r.ReadToEnd();
             }
-            catch (Exception) { return null; }
+            catch (FileNotFoundException) { lastGood = null; return new PinState { State = FileState.Missing }; }
+            catch (DirectoryNotFoundException) { lastGood = null; return new PinState { State = FileState.Missing }; }
+            catch (Exception ex) { return Broken("cannot be read (" + ex.GetType().Name + ")"); }
+            Stored parsed = Parse(text);
+            if (parsed == null) return Broken("cannot be understood (damaged or incomplete)");
+            lastGood = parsed;
+            return new PinState { State = FileState.Ok, Rec = parsed };
         }
 
-        // Write to a temp file, then swap it in, so a crash never leaves half a file.
+        private static double brokenLoggedMs = double.NegativeInfinity;
+
+        private static PinState Broken(string problem)
+        {
+            Stored good = lastGood;
+            double now = ChartBridgeTime.NowUtcMs();
+            if (now - brokenLoggedMs >= 600000)   // one Output line per 10 minutes at most
+            {
+                brokenLoggedMs = now;
+                ChartBridgeServer.Log("pin.txt " + problem + (good != null ? "; the PIN keeps working from the copy read earlier" : "; the PIN answers 503 until it reads again (delete pin.txt to set a new PIN)"));
+            }
+            return new PinState { State = FileState.Broken, Rec = good, Problem = problem };
+        }
+
+        private static Stored Parse(string text)
+        {
+            foreach (string raw in (text ?? "").Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#")) continue;
+                string[] f = line.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length != 6 || f[0] != "v1" || f[1] != "pbkdf2-sha256") return null;
+                int it;
+                if (!int.TryParse(f[2], NumberStyles.None, CultureInfo.InvariantCulture, out it) || it < MinIterations || it > MaxIterations) return null;
+                Stored s = new Stored { Iterations = it, Salt = FromHex(f[3]), Hash = FromHex(f[4]), Secret = FromHex(f[5]) };
+                if (s.Salt == null || s.Salt.Length != SaltBytes || s.Hash == null || s.Hash.Length != HashBytes || s.Secret == null || s.Secret.Length != SecretBytes) return null;
+                return s;
+            }
+            return null;
+        }
+
+        // Write to a temp file, flushed to disk, then swap it in, so a crash or power cut never leaves half a file.
         private static void Write(Stored s)
         {
             Directory.CreateDirectory(ChartBridgeConfig.Folder);
             string file = PinFile, tmp = file + ".tmp";
-            string[] lines = new string[]
+            string text =
+                "# ChartBridge PIN: a salted PBKDF2-SHA256 hash of the PIN (never the PIN itself) and the key that keeps open pages unlocked.\r\n" +
+                "# Forgot the PIN? Delete this file (NinjaTrader may stay open); ChartBridge's page then asks for a new PIN.\r\n" +
+                "v1 pbkdf2-sha256 " + s.Iterations.ToString(CultureInfo.InvariantCulture) + " " + ToHex(s.Salt) + " " + ToHex(s.Hash) + " " + ToHex(s.Secret) + "\r\n";
+            byte[] bytes = Encoding.ASCII.GetBytes(text);
+            using (FileStream fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                "# ChartBridge PIN: a salted PBKDF2-SHA256 hash of the PIN (never the PIN itself) and the key that keeps open pages unlocked.",
-                "# Forgot the PIN? Delete this file (NinjaTrader may stay open); ChartBridge's page then asks for a new PIN.",
-                "v1 pbkdf2-sha256 " + s.Iterations.ToString(CultureInfo.InvariantCulture) + " " + ToHex(s.Salt) + " " + ToHex(s.Hash) + " " + ToHex(s.Secret)
-            };
-            File.WriteAllLines(tmp, lines);
+                fs.Write(bytes, 0, bytes.Length);
+                fs.Flush(true);
+            }
             if (File.Exists(file)) File.Replace(tmp, file, null); else File.Move(tmp, file);
+            lastGood = s;
         }
 
-        public static bool IsSet { get { return Read() != null; } }
+        // A PIN is set unless pin.txt is missing (a broken file still means a PIN is set).
+        public static bool IsSet { get { return Load().State != FileState.Missing; } }
+        public static FileState FileStatus { get { return Load().State; } }
+
+        private static Result Unreadable(PinState st)
+        {
+            return Fail(503, "pin.txt " + st.Problem + "; ChartBridge keeps trying. If it stays like this, delete pin.txt in ChartBridge's folder to set a new PIN");
+        }
 
         // ---------------------------------------------------------- the PIN
         // Exactly four ASCII digits (not other scripts' digits, no spaces).
@@ -143,7 +196,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!ValidPin(pin)) return Fail(400, "the PIN must be 4 digits");
             lock (FileLock)
             {
-                if (Read() != null) return Fail(409, "a PIN is already set on this PC; unlock with it, or change it once unlocked");
+                PinState st = Load();
+                if (st.State == FileState.Broken && st.Rec == null) return Unreadable(st);        // never written over: it may hold Anthony's PIN
+                if (st.State != FileState.Missing) return Fail(409, "a PIN is already set on this PC; unlock with it, or change it once unlocked");
                 byte[] salt = RandomBytes(SaltBytes);
                 Stored s = new Stored { Iterations = NewHashIterations, Salt = salt, Hash = Derive(pin, salt, NewHashIterations), Secret = RandomBytes(SecretBytes) };
                 try { Write(s); }
@@ -157,10 +212,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Result Unlock(string pin)
         {
             if (!ValidPin(pin)) return Fail(400, "the PIN must be 4 digits");
-            Stored s = Read();
-            if (s == null) return Fail(409, "no PIN is set on this PC yet");
-            if (!Matches(s, pin)) return Fail(403, "wrong PIN");
-            return Done(MakeToken(s.Secret));
+            PinState st = Load();
+            if (st.State == FileState.Missing) return Fail(409, "no PIN is set on this PC yet");
+            if (st.Rec == null) return Unreadable(st);
+            if (!Matches(st.Rec, pin)) return Fail(403, "wrong PIN");
+            return Done(MakeToken(st.Rec.Secret));
         }
 
         // Change: needs the current PIN. The secret stays, so every page already open stays unlocked.
@@ -169,8 +225,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!ValidPin(pin) || !ValidPin(newPin)) return Fail(400, "each PIN must be 4 digits");
             lock (FileLock)
             {
-                Stored s = Read();
-                if (s == null) return Fail(409, "no PIN is set on this PC yet");
+                PinState st = Load();
+                if (st.State == FileState.Missing) return Fail(409, "no PIN is set on this PC yet");
+                if (st.State == FileState.Broken) return Unreadable(st);                         // only over a file that reads
+                Stored s = st.Rec;
                 if (!Matches(s, pin)) return Fail(403, "wrong PIN");
                 byte[] salt = RandomBytes(SaltBytes);
                 Stored n = new Stored { Iterations = NewHashIterations, Salt = salt, Hash = Derive(newPin, salt, NewHashIterations), Secret = s.Secret };
@@ -195,10 +253,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             using (HMACSHA256 h = new HMACSHA256(secret)) return h.ComputeHash(Encoding.ASCII.GetBytes(TokenLabel + nonce));
         }
 
-        public static bool TokenValid(string token)
+        public static bool TokenValid(string token) { return TokenValid(token, null); }
+
+        private static bool TokenValid(string token, PinState st)
         {
             if (token == null || !TokenRx.IsMatch(token)) return false;
-            Stored s = Read();
+            Stored s = (st ?? Load()).Rec;
             if (s == null) return false;
             string[] parts = token.Split('.');
             return SlowEquals(Mac(s.Secret, parts[1]), FromHex(parts[2]));
@@ -234,8 +294,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (path == "/pin/status")
             {
                 if (ParseFlat(body, new string[0]) == null) { Reply(ctx, 400, Reason("malformed request")); return; }
-                bool set = IsSet;
-                bool unlocked = set && TokenValid(req.Headers[Header]);
+                PinState st = Load();                                        // one read for the whole answer
+                if (st.State == FileState.Broken && st.Rec == null) { Reply(ctx, 503, Reason(Unreadable(st).Reason)); return; }
+                bool set = st.State != FileState.Missing;
+                bool unlocked = set && TokenValid(req.Headers[Header], st);
                 Reply(ctx, 200, "{\"set\":" + (set ? "true" : "false") + ",\"unlocked\":" + (unlocked ? "true" : "false") + "}");
                 return;
             }

@@ -337,8 +337,9 @@ test('PIN: checked before the stream (before the WebSocket upgrade) and before /
   assert.match(bodyOf(pcode, 'public static bool WsUnlocked(string origin, string unlock)'), /if \(!IsOwnOrigin\(origin\)\) return true;\s*return TokenValid\(unlock\);/);
 });
 
-test('PIN: salted PBKDF2-SHA256 at a high count, only the hash and a secret stored, tokens checked in constant time', () => {
-  assert.match(pcode, /public const int DefaultIterations = 600000;/);
+test('PIN: salted PBKDF2-SHA256 (50,000, capped at 1,000,000), only the hash and a secret stored, tokens checked in constant time', () => {
+  assert.match(pcode, /public const int DefaultIterations = 50000;/);
+  assert.match(pcode, /public const int MinIterations = 1000, MaxIterations = 1000000;/);
   assert.match(pcode, /new Rfc2898DeriveBytes\(Encoding\.ASCII\.GetBytes\(pin\), salt, iterations, HashAlgorithmName\.SHA256\)/);
   assert.match(pcode, /SaltBytes = 16, HashBytes = 32, SecretBytes = 32/);
   assert.match(pcode, /new HMACSHA256\(secret\)/);
@@ -347,22 +348,51 @@ test('PIN: salted PBKDF2-SHA256 at a high count, only the hash and a secret stor
   const write = bodyOf(pcode, 'private static void Write(Stored s)');
   assert.match(write, /ToHex\(s\.Salt\) \+ " " \+ ToHex\(s\.Hash\) \+ " " \+ ToHex\(s\.Secret\)/);
   assert.ok(!/\bpin\b|Token/i.test(write.replace(/"[^"]*"/g, '').replace(/PinFile/g, '')), 'Write stores the hash record only');
-  assert.match(bodyOf(pcode, 'public static bool TokenValid(string token)'), /SlowEquals\(Mac\(s\.Secret, parts\[1\]\), FromHex\(parts\[2\]\)\)/);
+  assert.match(bodyOf(pcode, 'private static bool TokenValid(string token, PinState st)'), /SlowEquals\(Mac\(s\.Secret, parts\[1\]\), FromHex\(parts\[2\]\)\)/);
   assert.match(bodyOf(pcode, 'private static bool Matches('), /SlowEquals\(Derive\(pin, s\.Salt, s\.Iterations\), s\.Hash\)/);
   // a PIN is exactly four ASCII digits (char.IsDigit would take other scripts' digits)
   assert.ok(!/IsDigit|\\d/.test(pcode), 'no char.IsDigit or \\d');
-  // the file is read fresh on every check, so deleting it takes effect at once
-  assert.ok(!/static Stored \w+\s*[;=]/.test(pcode), 'no copy of the stored record in memory');
+  // review B1: pin.txt has three states. The one copy in memory is the last good record, used only while the file
+  // exists but cannot be read; it is set only from a good parse or a write and dropped whenever the file is missing,
+  // so deleting pin.txt still takes effect at once.
+  assert.match(pcode, /private static volatile Stored lastGood;/);
+  const sets = pcode.match(/lastGood = [^;]+;/g) || [];
+  assert.deepEqual([...new Set(sets)].sort(), ['lastGood = null;', 'lastGood = parsed;', 'lastGood = s;']);
+  const load = bodyOf(pcode, 'private static PinState Load()');
+  assert.match(load, /if \(!File\.Exists\(file\)\) \{ lastGood = null; return new PinState \{ State = FileState\.Missing \}; \}/);
+  assert.match(load, /FileShare\.ReadWrite \| FileShare\.Delete/);
+  assert.match(load, /catch \(Exception ex\) \{ return Broken\(/);
+  assert.match(load, /if \(parsed == null\) return Broken\(/);
+  // Set writes only over a missing file; Change only over one that reads; the write is flushed before the swap
+  const set = bodyOf(pcode, 'public static Result Set(string pin)');
+  assert.ok(set.indexOf('if (st.State != FileState.Missing) return Fail(409') > 0 && set.indexOf('if (st.State != FileState.Missing) return Fail(409') < set.indexOf('Write(s)'), 'Set writes only when pin.txt is missing');
+  const change = bodyOf(pcode, 'public static Result Change(string pin, string newPin)');
+  assert.ok(change.indexOf('if (st.State == FileState.Broken) return Unreadable(st);') > 0 && change.indexOf('if (st.State == FileState.Broken)') < change.indexOf('Write(n)'));
+  const writeBody = bodyOf(pcode, 'private static void Write(Stored s)');
+  assert.ok(writeBody.indexOf('fs.Flush(true);') > 0 && writeBody.indexOf('fs.Flush(true);') < writeBody.indexOf('File.Replace(tmp, file, null)'), 'flushed to disk before the swap');
+  // /pin/status reads the file once
+  const status = bodyOf(pcode, 'public static void Serve(HttpListenerContext ctx, string path)');
+  assert.match(status, /PinState st = Load\(\);[^\n]*\n\s*if \(st\.State == FileState\.Broken && st\.Rec == null\) \{ Reply\(ctx, 503,/);
+  assert.match(status, /bool unlocked = set && TokenValid\(req\.Headers\[Header\], st\);/);
 });
 
 test('PIN: no lockout, ever: a wrong PIN is refused and nothing is counted, delayed or blocked', () => {
   const unlock = bodyOf(pcode, 'public static Result Unlock(string pin)');
-  assert.match(unlock, /if \(!Matches\(s, pin\)\) return Fail\(403, "wrong PIN"\);/);
+  assert.match(unlock, /if \(!Matches\(st\.Rec, pin\)\) return Fail\(403, "wrong PIN"\);/);
   assert.ok(!/Sleep|Delay|Interlocked|\+\+|--|\+=|\block\s*\(/.test(unlock), 'Unlock counts, waits or locks nothing');
   assert.ok(!/Thread\.Sleep|Task\.Delay|Interlocked|SemaphoreSlim|attempt|lockout|throttle|\bban/i.test(pcode.replace(/NO lockout/g, '')), 'no counters, delays or bans anywhere in ChartBridgePin.cs');
   // the only static state: constants, the regexes, the file lock and the iteration count for new hashes
   const statics = pcode.split('\n').filter(l => /^\s*(public|private|internal)?\s*static\s+(?!readonly\b|class\b)/.test(l) && !l.includes('(')).map(l => l.trim());
-  assert.deepEqual(statics.map(x => x.trim()), ['public static int NewHashIterations = DefaultIterations;']);
+  assert.deepEqual(statics.map(x => x.trim()), ['public static int NewHashIterations = DefaultIterations;', 'private static volatile Stored lastGood;',
+    'private static double brokenLoggedMs = double.NegativeInfinity;']);
+  // review S2: nothing on the way to the PIN in ChartBridge.cs counts, waits or blocks either
+  const handle = bodyOf(code, 'private static async Task Handle(HttpListenerContext ctx, CancellationToken token)');
+  const route = handle.split('\n').filter(l => /\/pin\//.test(l)).map(l => l.trim());
+  assert.deepEqual(route, ['if (path.StartsWith("/pin/")) { ChartBridgePin.Serve(ctx, path); return; }']);
+  for (const [name, body] of [['Handle', handle], ['ServeText', bodyOf(code, 'public static void ServeText(HttpListenerContext ctx, int status, string text, string type)')],
+    ['ChartBridgePin.Serve', bodyOf(pcode, 'public static void Serve(HttpListenerContext ctx, string path)')], ['Matches', bodyOf(pcode, 'private static bool Matches(')], ['Derive', bodyOf(pcode, 'private static byte[] Derive(')]])
+    assert.ok(!/Sleep|Delay|Interlocked|\+\+|--|\+=|\block\s*\(|\.Wait\(|SemaphoreSlim|Count\b|Add\(/.test(body.replace(/Headers\["[^"]*"\]/g, '')), name + ' counts, waits or locks nothing');
+  assert.ok(!/lockout|throttle|wrongPin|failedPin|pinAttempt|badPin/i.test(code + ocode), 'no PIN attempt counting anywhere in ChartBridge');
 });
 
 test('PIN endpoints: POST only, own page only (the exact orders Origin check), localhost, JSON, small bodies, strict keys', () => {

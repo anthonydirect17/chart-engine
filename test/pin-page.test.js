@@ -23,7 +23,15 @@ test('pin.js keeps the unlock in memory only: no storage, cookies or URL bar', (
 
 test('pin.js asks for the PIN again only when ChartBridge says the unlock is gone, never because it does not answer', () => {
   const ws = code(pin).slice(code(pin).indexOf('function wsUrl('), code(pin).indexOf('const headers = () =>'));
-  assert.match(ws, /if \(s === 'none' \|\| s === 'set'\) \{ token = null; runGate\(/);
+  assert.match(ws, /if \(s === 'none' \|\| s === 'set'\) relock\(/);
+  // review B1: while the pad is back, the page keeps its token and asks again every 2 s, closing the pad by itself
+  const relock = code(pin).slice(code(pin).indexOf('function relock('), code(pin).indexOf('function wsUrl('));
+  assert.ok(!/token = null/.test(relock), 'relock keeps the token');
+  assert.match(relock, /setInterval\([\s\S]*r\.body\.unlocked\) \{ close\(\); finish\(\); \}[\s\S]*\}, 2000\);/);
+  // review S2/M5: any answer but 200 and 404 is an 'error', which keeps the unlock
+  assert.match(code(pin), /if \(r\.status !== 200\) return 'error';/);
+  assert.match(ws, /else \{[^}]*\n?[\s\S]*resolve\(withUnlock\(\)\);\s*\}/);
+  assert.ok(!/8765/.test(code(pin)), 'no hard-coded port (review N2)');
   assert.match(ws, /\}, \(\) => resolve\(withUnlock\(\)\)\);/, 'a failed status call (ChartBridge restarting) keeps the unlock');
   // a wrong PIN: a message, nothing counted
   assert.ok(!/attempt|tries|lockout|wrongCount/i.test(code(pin)), 'no attempt counting in the page either');
