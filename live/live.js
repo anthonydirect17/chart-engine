@@ -236,7 +236,8 @@ function markup(p, o) {
         <button type="button" data-v="range">Range</button>
       </div>
       <span class="range-box" id="${p}rangeBox" hidden><label class="range-box" for="${p}rangeTicks"><input id="${p}rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="${p}rangeUnit">ticks</span></label>
-        <select class="acct-sel range-mode" id="${p}rangeMode" aria-label="How range bars are built" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
+        <label class="glabel" for="${p}rangeMode">Range style</label>
+        <select class="acct-sel range-mode" id="${p}rangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
           <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
     </div>
 
@@ -282,7 +283,7 @@ ${obar}
   <main class="stage">
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
-      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
+      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgFill"></span></div>
     </div>
@@ -383,7 +384,7 @@ function start(container, opt, PAGE) {
   if (PAGE) window.liveChart = chart;  // for tests and the console; order actions still go through the checks below
 
   /* ---------------- per-instrument data */
-  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: [], m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false };
+  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
@@ -396,7 +397,7 @@ function start(container, opt, PAGE) {
   const delays = { feed: [], local: [] };
 
   function resetData(root) {
-    D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = []; D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
+    D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -425,7 +426,7 @@ function start(container, opt, PAGE) {
         ? new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION })
         : new BarBuilder({ mode: 'time', seconds: tf.sec, tick: D.tick, sessionStart: SESSION });
       const from = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
-      for (let i = from; i < D.ticks.length; i++) { const k = D.ticks[i]; D.cur.add(k[0], k[1], k[2]); }
+      D.ticks.feed(D.cur, from);
       const partial = tf.mode === 'range' ? BB.partialStart(D.ticks, from, SESSION) : null;
       if (partial !== null) setStatus('Range bars start at ' + U.fmtHM(partial) + ' ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from NinjaTrader\'s.', '');
       chart.setBars(D.cur.bars, { barSeconds: tf.sec });
@@ -456,7 +457,7 @@ function start(container, opt, PAGE) {
     D.m1.seed(hist);
     if (D.tickHours > 0) {
       const lastHist = hist.length ? hist[hist.length - 1].t + 60 : -Infinity;
-      for (const k of D.ticks) if (k[0] >= Math.max(cutoff, lastHist)) D.m1.add(k[0], k[1], k[2]);
+      D.ticks.feed(D.m1, 0, Math.max(cutoff, lastHist));
     }
     D.ready = true;
     rebuild();
@@ -467,8 +468,8 @@ function start(container, opt, PAGE) {
   function onTick(m) {
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
-    D.ticks.push([t, p, v]);
-    if (D.ticks.length > 2500000) { D.ticks.splice(0, 500000); D.tickFrom = D.ticks[0][0] + 0.001; D.trimmed = true; }   // the first session left is partial now
+    D.ticks.push(t, p, v);                             // columns, not one array per trade (TickStore, bar-builder.js)
+    if (D.ticks.length > 2500000) { D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; }   // the first session left is partial now
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
     const tf = TF[S.tf];
@@ -570,7 +571,7 @@ function start(container, opt, PAGE) {
       case 'hello':
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
-        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version || '');
+        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
         syncAccounts(m.accounts || []);
         subscribe(S.root);
         if (m.trading && TRADING) { applyTrading(m.trading); signIn(); }   // protocol v2; ChartBridge 0.2 has no trading field
@@ -583,7 +584,7 @@ function start(container, opt, PAGE) {
         break;
       case 'ticks':
         if (m.root !== D.root) return;
-        for (const k of m.ticks) D.ticks.push(k);
+        D.ticks.pushAll(m.ticks);
         setStatus('Loading ' + D.root + ' ticks: ' + D.ticks.length.toLocaleString(), '');
         break;
       case 'ready':
@@ -833,6 +834,12 @@ function start(container, opt, PAGE) {
     $('lgVw').textContent = b.vw !== undefined ? fmt(U.roundTo(b.vw, D.tick)) : '-';
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
+  /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
+  const DRAW_ERR = 'Chart drawing error: ';
+  chart.on('error', e => {
+    if (e) setStatus(DRAW_ERR + e.message + '. The chart keeps running; reload the page if this stays.', 'error');
+    else if ($('statusMsg').textContent.startsWith(DRAW_ERR)) setStatus('', '');
+  });
   chart.on('tool', t => { $('toolTrend').setAttribute('aria-pressed', String(t === 'trend')); $('toolHline').setAttribute('aria-pressed', String(t === 'hline')); });
 
   const themePanel = CE.mountThemePanel(chart, $('colorsHost'), {
