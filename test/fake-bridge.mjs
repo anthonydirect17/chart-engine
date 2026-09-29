@@ -18,7 +18,7 @@
 //   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
 //                                   (a missing or reused one is refused), so every reconnect needs a fresh URL
 // With --test-controls, also: /test/drop closes every WebSocket (a dropped connection); /test/received lists
-// what the pages sent (message types, GET /session count, WebSocket URLs, refused tickets).
+// what the pages sent (message types, GET /session count, WebSocket URLs, ticketsRefused).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -132,7 +132,7 @@ function wsOriginAllowed(origin) {
 const refused = { notThisPc: 0, origin: 0 };
 
 const clients = new Set();
-const received = { types: {}, sessionRequests: 0, urls: [], refused: 0 };   // for /test/received
+const received = { types: {}, sessionRequests: 0, urls: [], ticketsRefused: 0 };   // for /test/received
 const ticketsUsed = new Set();
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
@@ -240,7 +240,7 @@ server.on('upgrade', (req, sock) => {
   if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (TICKETS) {
     const ticket = new URL(req.url, 'http://x').searchParams.get('ticket');
-    if (!ticket || ticketsUsed.has(ticket)) { received.refused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
+    if (!ticket || ticketsUsed.has(ticket)) { received.ticketsRefused++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return; }
     ticketsUsed.add(ticket);
   }
   received.urls.push(req.url);

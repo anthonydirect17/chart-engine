@@ -135,7 +135,7 @@ try {
   await until(() => paneLive('paneA'), 'pane A live after a second drop', 10000);
   let rec = await control(PORT, 'received');
   const ticketsA = rec.urls.filter(u => /ticket=A/.test(u));
-  check(ticketsA.length === 3 && new Set(ticketsA).size === 3 && rec.refused === 0, 'three connects, three different tickets, none refused: ' + JSON.stringify(ticketsA));
+  check(ticketsA.length === 3 && new Set(ticketsA).size === 3 && rec.ticketsRefused === 0, 'three connects, three different tickets, none refused: ' + JSON.stringify(ticketsA));
   // the fake really refuses a reused ticket (so the check above means something)
   const reused = await page.evaluate(u => new Promise(r => { const s = new WebSocket(u); s.onopen = () => { s.close(); r('open'); }; s.onerror = () => r('refused'); }), 'ws://localhost:' + PORT + ticketsA[0]);
   check(reused === 'refused', 'a reused ticket is refused by the fake relay: ' + reused);

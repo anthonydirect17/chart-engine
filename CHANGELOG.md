@@ -34,7 +34,8 @@ Page and engine only; nt8/ is unchanged except that `nt8\install.ps1` now also c
   only the colors a change sets, on a fresh read, so two charts sharing the key no longer undo each other.
 - Tests: `npm run smoke:embed` (a plain host page with one and two panes against the fake bridge); the fake
   bridge gets `--tickets` (single-use WebSocket tickets, like The Desk's relay) and, with `--test-controls`,
-  `/test/drop` and `/test/received`; a unit test checks `install.ps1` copies every local stylesheet.
+  `/test/drop` and `/test/received` (its `ticketsRefused` is apart from the network `refused` counters); a unit
+  test checks `install.ps1` copies every local stylesheet.
 
 ## 1.4.2 (2026-09-29): ChartBridge 0.3.1, network hardening
 
