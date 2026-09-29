@@ -187,9 +187,9 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | type | fields | when |
 |---|---|---|
 | `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in) | on connect |
-| `history` | `root`, `name`, `barSeconds` (60), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked |
+| `history` | `root`, `name`, `barSeconds` (60), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked; since 0.3.3 the last (forming) minute comes last, in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `ticks`: `[[t,p,v], ...]`, `done` (bool) | after `history`, the current session's trades, chunked |
-| `ready` | `root` | history and tick backfill complete; live ticks follow |
+| `ready` | `root` | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v` | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
@@ -201,6 +201,55 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 |---|---|
 | `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8) |
 | `ping` | `c` (page clock, echoed back in a `pong` with the server clock `s`) |
+
+## Backfill and live: one seam (0.3.3)
+
+A subscribe starts holding that instrument's live trades, then asks NinjaTrader for the minute history and,
+when that is back, for the tick backfill. The two streams overlap: a trade that happened just before the tick
+request was answered can be both in the backfill and held live. Before 0.3.3 ChartBridge sent both, and trades
+carry no id, so the page counted such a trade twice (range bars, the forming minute, VWAP, volume). ChartBridge
+now decides the seam by one rule before it sends `ready`:
+
+- **T** is the time of the last backfill trade. Both sides are compared on NinjaTrader's own times for the
+  trades (the backfill's bar times and each live trade's time, in NinjaTrader's time zone), never the PC clock.
+- A held trade **before T** is in the backfill already: it is not sent.
+- **At exactly T**, as many held trades are not sent as the backfill has at T with the same price and volume (a
+  multiset match: two real trades can share price, size and time).
+- The rest go out after `ready`, in the order they arrived; then live trades go straight out.
+
+**Time resolution.** Times are compared at the coarser step of the two sides: millisecond when both carry
+milliseconds (NinjaTrader 8 keeps them on tick data from most connections), whole seconds when either side
+comes in whole seconds (every time on a whole second). In whole seconds "at T" is the whole second, and a real
+trade later in that second with the same price and size as one the backfill has in it would be taken for a
+duplicate: the only case the rule can get wrong. `/diag` shows the resolution in force (`resolutionMs`).
+
+**The tick request asks past now.** NinjaTrader's help for BarsRequest says: "When using the DateTime fromLocal
+and toLocal parameters, the dates are converted to local daily timestamps (12:00 AM) and return a BarsRequest
+representing full trading days." So the time of day should not cut the backfill at all; it holds what NinjaTrader
+has when it answers. In case a connection does cut at the time, the request ends 60 minutes past the PC's
+"now" (`TickToMarginMinutes`), so the backfill still reaches past the moment the hold began even with the PC
+clock behind the data's clock. No trade exists in the future, so this can only add. If a request ending in the
+future is ever refused, it is asked once more ending now (0.3.2's request); `/diag` shows it
+(`tickRetriedEndingNow`).
+
+**The forming minute.** The minute history's last bar was still forming when NinjaTrader answered, so it can hold
+trades that are also held live, and misses later ones. ChartBridge sends it last, rebuilt from the same trades
+the held ones are matched against, so minute bars and trades meet at the same seam. A trade at exactly hh:mm:00
+opens the minute hh:mm, as the page builds minute bars (NinjaTrader is believed to do the same; not yet checked
+on a live PC). With a tick backfill (seconds and range
+charts) those are the backfill's trades. Without one (`tickHours` 0: minute and hour charts) ChartBridge asks
+NinjaTrader for the last 20,000 trades (`SeamTicksBack`, a BarsRequest by count), uses them only for this, and
+does not send them to the page. When the trades do not reach back to the minute's start, or none fall in it,
+NinjaTrader's bar is kept and every held trade is released, as in 0.3.2 (`minuteTailRebuilt` 0 in `/diag`).
+
+**A newer subscribe wins.** A page that subscribes again (for example for more tick hours) before the first load
+finishes gets nothing more from the first load: its history and ticks would otherwise be taken as the new load's.
+
+**What is left.** A gap is still possible if NinjaTrader's history lags its live data (the provider's history
+server a few seconds behind): trades after the backfill's end that arrived before the hold began are in
+neither stream. The rule cannot recover them; `/diag` shows whether the streams overlapped (`overlapMs`).
+
+The page needs no change: it takes history, ticks and live trades as before.
 
 ## Delay readout
 
@@ -227,7 +276,15 @@ JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": b
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`, `setAside`, `rejectedByDesk`); and `accounts`: one row per watched account with `name`, `connection` (status),
+`lastError`, `setAside`, `rejectedByDesk`); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
+`client`, `root`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held
+trades against, all released), `backfillTicks`, `lastBackfillTick`, `firstHeldTick` and `firstReleasedTick` (New York
+time, `yyyy-MM-dd HH:mm:ss.fff`, or null), `overlapMs` (`lastBackfillTick` minus `firstHeldTick`: 0 or more means the
+streams overlapped, so nothing fell between them; below 0, no held trade was at or before the backfill's end: a quiet
+moment, or a gap of up to that long), `held`, `droppedAsDuplicate` (= `droppedOlder` + `droppedSameTime`), `released`,
+`resolutionMs` (the time step both sides were compared at: 1, 1000, or 0.0001 for NinjaTrader's 100 ns), `tickToAheadMin`
+(60, 0 after a retry, null with no tick backfill), `tickRetriedEndingNow`, `minuteTailRebuilt` (minute bars rebuilt from
+trades; 0 when NinjaTrader's was kept, -1 when there was none); and `accounts`: one row per watched account with `name`, `connection` (status),
 `executions`, `orders`, `positions` (counts NinjaTrader holds) and `fillEvents`, `orderEvents`,
 `positionEvents` (events seen). Account names are in this local page; never copy them into reports.
 
