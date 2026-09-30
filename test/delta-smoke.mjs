@@ -418,8 +418,12 @@ try {
         label + ': the first trade at ' + U.fmtExact(r.first) + ' ET (asked ' + (r.asked.length ? r.asked.join() + ' hours, sent on as 8' : 'more than was sent') + '): the session counts from ' + (ses && U.fmtExact(ses.from)) + ', flagged partial');
       check(st.pane.title.endsWith('from ' + U.fmtExact(ses.from) + ' ET, not 18:00: the tick history starts later') && st.legend.startsWith('Delta from ' + U.fmtExact(ses.from)),
         label + ': said in the pane ("' + st.pane.title + '") and the legend ("' + st.legend + '"), never a plain "Cumulative delta"');
-      const inFrom = await q.evaluate(f => { let b = 0, s = 0; for (const [t, , v, sd] of window.__trades) if (t >= f) { if (sd === 1) b += v; else if (sd === -1) s += v; } return [b, s]; }, ses.from);
-      check(inFrom[0] === ses.buy && inFrom[1] === ses.sell, label + ': what it counts is every trade from that start: ' + JSON.stringify([inFrom, [ses.buy, ses.sell]]));
+      // the trades received and the delta read in one task, so a live trade cannot land between them
+      const [inFrom, got] = await q.evaluate(f => {
+        let b = 0, s = 0; for (const [t, , v, sd] of window.__trades) if (t >= f) { if (sd === 1) b += v; else if (sd === -1) s += v; }
+        const x = window.liveChart.getDelta().sessions.at(-1); return [[b, s], [x.buy, x.sell]];
+      }, ses.from);
+      check(inFrom[0] === got[0] && inFrom[1] === got[1], label + ': what it counts is every trade from that start: ' + JSON.stringify([inFrom, got]));
       await shot(q, 'delta-cut-short-' + (opts ? 'relay' : 'ninjatrader') + '.png', label + ': labelled from ' + U.fmtExact(ses.from));
       await cc.close(); bc.kill();
     };
@@ -442,9 +446,11 @@ try {
       if (x && x.n > 20 && x.start % 86400 === S18 && (await q.evaluate(() => Date.now() / 1000)) % 60 > 5) break;
     }
     const ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
-    const r = await q.evaluate(() => { let b = 0, s = 0, n = 0, first = null; for (const [t, , v, sd] of window.__trades) { if (first === null) first = t; n++; if (sd === 1) b += v; else if (sd === -1) s += v; } return { b, s, n, first }; });
+    // the trades received and the delta read in one task, so a live trade cannot land between them
+    const r = await q.evaluate(() => { let b = 0, s = 0, n = 0, first = null; for (const [t, , v, sd] of window.__trades) { if (first === null) first = t; n++; if (sd === 1) b += v; else if (sd === -1) s += v; }
+      const x = window.liveChart.getDelta().sessions.at(-1); return { b, s, n, first, buy: x.buy, sell: x.sell, trades: x.trades }; });
     check(!!ses && !ses.partial && ses.from - ses.start < 60 && ses.firstOpen === 0 && U.fmtHM(r.first) === '18:00', '1m opened at 17:59:20 (first trade the 18:00 open, ' + U.fmtExact(r.first) + '): the session is whole, from its first bar at ' + (ses && U.fmtExact(ses.from)) + ', opening at 0');
-    check(ses && ses.buy === r.b && ses.sell === r.s && ses.n === r.n && !/not 18:00/.test(st.pane.title), 'every trade received counted, the open\'s bar too (' + r.n + ' trades); "' + st.pane.title + '"');
+    check(ses && r.buy === r.b && r.sell === r.s && r.trades === r.n && !/not 18:00/.test(st.pane.title), 'every trade received counted, the open\'s bar too (' + r.n + ' trades); "' + st.pane.title + '"');
     await shot(q, 'delta-1m-opened-before-1800.png', '1m opened at 17:59:20: whole from 18:00');
     await c8.close(); b8.kill();
   }
