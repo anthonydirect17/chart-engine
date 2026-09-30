@@ -203,6 +203,7 @@ public static class SeamHarness
             "load: after ready only the held trades not in the backfill, in order (" + after.Count + " sent)");
         Live(1.4, 21441.25, 1);
         Check(Sent().Last().Contains("\"p\":21441.25") && client.Ready, "load: then live trades go straight out");
+        WaitFor(() => Seams() != "[]");   // MarkReady notes the seam just after it marks the page ready (the test can get there first)
         string seams = Seams();
         Check(seams.Contains("\"held\":3") && seams.Contains("\"droppedAsDuplicate\":1") && seams.Contains("\"released\":2") && seams.Contains("\"lastBackfillTick\":\"2026-09-29 ")
               && seams.Contains("\"tickToAheadMin\":60") && seams.Contains("\"minuteTailRebuilt\":1") && seams.Contains("\"resolutionMs\":1") && seams.Contains("\"overlapMs\":0"),

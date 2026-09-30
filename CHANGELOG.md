@@ -33,8 +33,8 @@ claims 1.7.0; the numbers are reconciled when both merge. Depends on ChartBridge
   trades a second) the oldest waiting data was at most 15 ms (the rule closes at 5,000), live trades waited median 0.2 ms,
   p99 20 ms; a slow page (25 ms a chunk, 100 us a trade, 1,500 a second) at most 48 ms, p99 90 ms.
 - **Cheaper text, for every load:** a trade's text is written straight into the message (0.41 us a trade on Mono, was
-  3.94 us), byte for byte what 0.3.4 wrote (252,000 trades compared in 7 time zones across the DST changes). Only one chunk
-  of text exists at a time (0.3.4 queued a whole backfill's, about 160 MB for 4.6 million trades).
+  3.94 us), byte for byte what 0.3.4 wrote (252,000 trades compared in 7 time zones across the DST changes). At most two
+  chunks of the older history's text wait for the page at a time.
 - **The page** (`live/live.js`, "Live first"): minute and hour views are exact at once; the volume profile takes each
   chunk's trades; seconds views show the bars the store holds whole; **range bars** show only from where they are proven
   exact (`RangeSync`: the first trade of a session, or a swing of more than the range each way; docs/RANGE_BARS.md, Live
@@ -111,7 +111,12 @@ Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
   (Armed off). One Output line gives the lag. A load's history and ticks chunks do not count as lag while they go out.
   This replaces a limit of 5,000 waiting messages (0.3.3; it closed a page after a long release in a busy market) and
   of 50,000 (the second 0.3.4 round; it let a slow page fall about 17 s behind). A page that stopped reading is still
-  closed after a 2 s stuck send with 5,000 waiting. `/diag` `pages` shows each page's queue and lag.
+  closed after a 2 s stuck send with 5,000 waiting. `/diag` `pages` shows each page's queue and lag. Review 4: the time
+  spent sending the page's own bulk data (a load's chunks and the held trades released after `ready`) is not counted
+  as lag, so the reload after a close at 3,000 trades a second (about 90,000 held trades) does not close itself again;
+  a close always aborts the connection, so the page sees it and reconnects (a close between two sends used to leave it
+  connected, silent and Armed); and a load queues its chunks at most three ahead of the page, so a loading page holds
+  about 4 MB of them, not the whole load (Range 40 over 28 hours was about 295 MB).
 - **Sends never throw** (review 3): a message racing a page's Close is dropped quietly (it used to throw out of the loop
   sending an order, position or fill update to every page, so the pages after it missed it); a failed send closes the
   page so it reconnects.
