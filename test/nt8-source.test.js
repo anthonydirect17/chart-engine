@@ -448,8 +448,6 @@ test('ChartBridgePin.cs is C# 5 too', () => {
 
 // ---- 0.3.3: the seam between the backfill and the live trades (behaviour: nt8/check/SeamHarness.cs under Mono)
 test('0.3.3: held live trades are matched against the backfill on NinjaTrader times before ready', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.3 for NinjaTrader 8/);
-  assert.match(code, /public const string Version = "0\.3\.3";/);
   // held with NinjaTrader's time for the trade, the backfill's basis (never the PC clock)
   assert.match(bodyOf(code, 'private static void OnMarketData('), /c\.Pending\.Add\(new SeamTick \{ Time = e\.Time, Price = e\.Price, Volume = e\.Volume, Json = json \}\)/);
   // the tick request ends past now; a refused one is asked once more ending now
@@ -476,4 +474,31 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
   assert.match(orders, /check\/SeamHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /SeamHarness\.Run\(Check\);/);
+});
+
+// ---- 0.3.4: the side of every trade (behaviour: nt8/check/SidesHarness.cs under Mono, test/trade-sides.test.js)
+test('0.3.4: every trade carries its side, additively, and the seam match ignores it', () => {
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.4 for NinjaTrader 8/);
+  assert.match(code, /public const string Version = "0\.3\.4";/);
+  const md = bodyOf(code, 'private static void OnMarketData(');
+  // Bid and Ask updates only move the quote: nothing is sent or held for them
+  const quote = md.slice(0, md.indexOf('if (type != MarketDataType.Last) return;'));
+  assert.match(quote, /NoteQuote\(type == MarketDataType\.Bid, e\.Price\); \}[\s\S]*return;/);
+  assert.ok(!/Send\(|Pending/.test(quote), 'a quote update sends or holds nothing');
+  // the live tick keeps 0.3.3's fields in order and adds s and sm at the end
+  assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ "\}"/);
+  // backfill trades: t, p, v first, then s and sm
+  const ticks = bodyOf(code, 'private static void SendTicks(');
+  assert.match(ticks, /\.Append\(bars\.Volume\[i\]\.ToString\(CultureInfo\.InvariantCulture\)\);\s*if \(sides != null\) b\.Append\(','\)\.Append\(\(\(int\)sides\.Side\[i\]\)/);
+  // the seam's match key is still price and volume only
+  assert.match(code, /private static string TradeKey\(double p, long v\)/);
+  assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
+  // tick charts ask for Bid and Ask ticks of the same window; minute charts do not
+  const rt = bodyOf(code, 'private static void RequestTicks(');
+  assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, true\);\s*RequestQuotes\(L, MarketDataType\.Ask, true\);/);
+  assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /new BarsRequest\(L\.Inst, L\.NowNt\.AddHours\(-L\.TickHours\), to\)/);
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"sides\\":"\)\.Append\(SidesJson\(\)\);/);
+  const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
+  assert.match(orders, /check\/SidesHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /SidesHarness\.Run\(Check\);/);
 });

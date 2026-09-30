@@ -1,5 +1,45 @@
 # Changelog
 
+## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
+
+ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to
+work with it. **Needs a recompile:** run `nt8\install.ps1` again (only `ChartBridge.cs` changed), then compile in
+NinjaTrader (F5). The first step toward cumulative delta (buy volume minus sell volume); the delta pane comes later.
+- **The side of every trade, live and in the backfill** (`ChartBridgeSides`), by the rule Anthony approved: the
+  exchange's aggressor flag if there were one (NinjaTrader 8 gives an add-on none, so that code is reserved); else the
+  prevailing quote, at or above the ask a buy, at or below the bid a sell; else (between bid and ask, or no usable
+  quote) the tick rule: up a buy, down a sell, unchanged the previous trade's side. Each trade also says which method
+  found its side, so the chart can show how much was inferred.
+- **Wire format, additive:** a live `tick` gains `s` (1 buy, -1 sell, 0 unknown) and `sm` (0 none, 1 aggressor flag,
+  2 bid/ask, 3 tick rule); each backfill trade becomes `[t, p, v, s, sm]`, the first three in their places. The live
+  page reads `t, p, v` by name and by position, so it takes both unchanged (a node test feeds the new messages to its
+  bar builder).
+- **Live:** the quote is the last bid and ask NinjaTrader delivered before the trade (its Bid and Ask updates).
+- **Backfill:** tick charts ask for NinjaTrader's historical Bid and Ask ticks with the trades (same window, at the
+  same time) and take for each trade the last bid and ask stamped strictly before it: a quote at the trade's own time
+  is not used, since the quote change a trade causes shares its timestamp. Trades the quote history does not cover
+  (before it, or over 5 s past the end of the shorter side) go by the tick rule; with no bid/ask history every trade
+  does, and `/diag` and the Output window say so. A refused or empty quote request is asked once more ending now,
+  and the quotes get at most 15 s after the trades are in (the live trades are held meanwhile); then the backfill goes
+  out without them.
+- **The seam (0.3.3) is unchanged:** the side takes no part in matching held live trades against the backfill, so a
+  trade the live and the history quote call differently is still sent once (with the backfill's side).
+- **`/diag` `sides`:** per instrument, live counts by method with the current quote and whether NinjaTrader's own
+  e.Bid/e.Ask on each trade match it; for the last load, counts by method, the Bid and Ask history (ticks, first and
+  last times, request result), trades before, after and between the quotes, `tieChanged`, the time resolutions, and
+  NinjaTrader's own bid/ask stamps on the trades (usable, like its fill-in, agreeing with the join).
+- **Unchanged:** orders, the PIN, network rules and fills (`ChartBridgeOrders.cs` and `ChartBridgePin.cs` untouched).
+- Research with sources: `nt8/PROTOCOL.md`, Trade side (NinjaTrader's help for MarketDataEventArgs, Order Flow
+  Cumulative Delta, historical Bid/Ask series and Tick Replay).
+- Tests: the Mono harness (`check/SidesHarness.cs`, run by `npm run check:orders`) checks the rules (at, above, at and
+  below the bid, between, no quote, one side, crossed, float noise, tick rule sequences with unchanged prices), the
+  live tagger fed by Bid and Ask updates, the as-of join (ties, no look-ahead, missing history, shorter history at
+  either end, whole-second quotes, NinjaTrader's stamps, 300,000 trades on 2,000,000 quotes in about 25 ms), and whole
+  loads through Subscribe and the live handler (the quote requests, the answers in any order, a refused or empty
+  quote history, quotes that never come, minute charts, the seam with sides that disagree, `/diag`). The 0.3.3 seam cases run unchanged.
+  `test/trade-sides.test.js` checks the page's parsing and bar building with the new messages, and the fake bridge,
+  which now sends sides (`--no-sides` for the old format).
+
 ## ChartBridge 0.3.3 (2026-09-29): the backfill and live trades meet at one seam
 
 ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to

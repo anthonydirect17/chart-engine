@@ -155,7 +155,7 @@ namespace NinjaTrader.Data
     public enum MarketDataType { Ask, Bid, Last, DailyHigh, DailyLow, DailyVolume, LastClose, Opening, OpenInterest, Settlement, Unknown }
     public enum BarsPeriodType { Tick, Volume, Range, Second, Minute, Day, Week, Month, Year }
     public class TradingHours { }
-    public class BarsPeriod { public BarsPeriodType BarsPeriodType { get; set; } public int Value { get; set; } }
+    public class BarsPeriod { public BarsPeriodType BarsPeriodType { get; set; } public int Value { get; set; } private MarketDataType mdt = MarketDataType.Last; public MarketDataType MarketDataType { get { return mdt; } set { mdt = value; } } }   // Last unless set, as NinjaTrader
     // Holds rows the harness puts in (a real Bars is filled by NinjaTrader).
     public class Bars
     {
@@ -170,6 +170,10 @@ namespace NinjaTrader.Data
         public double GetLow(int i) { return Ohlc[i][2]; }
         public double GetClose(int i) { return Ohlc[i][3]; }
         public long GetVolume(int i) { return Volumes[i]; }
+        // The bid and ask stamped on each trade of a tick series (0 when the harness sets none).
+        public readonly List<double> Bids = new List<double>(), Asks = new List<double>();
+        public double GetBid(int i) { return i < Bids.Count ? Bids[i] : 0; }
+        public double GetAsk(int i) { return i < Asks.Count ? Asks[i] : 0; }
     }
     // Every request is kept in Made so the harness can answer it (Answer) the way NinjaTrader would call back.
     public class BarsRequest : IDisposable
@@ -178,13 +182,16 @@ namespace NinjaTrader.Data
         public DateTime From, To;
         public int BarsBack = -1;
         public Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> Callback;
+        public bool Answered;
+        // Harness hook: when set and it returns true for a request, it has answered that request itself (inside Request).
+        public static Func<BarsRequest, bool> AutoAnswer;
         public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { From = from; To = to; lock (Made) Made.Add(this); }
         public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { BarsBack = barsBack; lock (Made) Made.Add(this); }
         public BarsPeriod BarsPeriod { get; set; }
         public TradingHours TradingHours { get; set; }
         public Bars Bars { get; set; }
-        public void Request(Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> callback) { Callback = callback; }
-        public void Answer(Bars bars, NinjaTrader.Cbi.ErrorCode code) { Bars = bars; Callback(this, code, code == NinjaTrader.Cbi.ErrorCode.NoError ? "" : "stub error"); }
+        public void Request(Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> callback) { Callback = callback; Func<BarsRequest, bool> auto = AutoAnswer; if (auto != null) auto(this); }
+        public void Answer(Bars bars, NinjaTrader.Cbi.ErrorCode code) { Answered = true; Bars = bars; Callback(this, code, code == NinjaTrader.Cbi.ErrorCode.NoError ? "" : "stub error"); }
         public void Dispose() { }
     }
     public class MarketDataEventArgs : EventArgs
@@ -194,6 +201,8 @@ namespace NinjaTrader.Data
         public double Price { get; set; }
         public long Volume { get; set; }
         public DateTime Time { get; set; }
+        public double Bid { get; set; }
+        public double Ask { get; set; }
     }
     public class MarketData
     {

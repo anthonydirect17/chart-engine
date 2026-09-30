@@ -5,6 +5,8 @@ talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on 
 **Read only by default.** Nothing in v1 can place, change or cancel an order. Order entry (v2, ChartBridge
 0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
 ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
+Since 0.3.4 every trade, live and in the backfill, carries its side (buy or sell) and how it was found; see
+"Trade side" below.
 
 ## Network access (0.3.1)
 
@@ -188,9 +190,9 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 |---|---|---|
 | `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
-| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, `done` (bool) | after `history`, the current session's trades, chunked |
+| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
-| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v` | every trade, live |
+| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page |
@@ -313,6 +315,73 @@ another id. The live page does not send it yet (a follow-up in `live/`).
 
 The page needs no change to work with 0.3.3: it takes history, ticks and live trades as before, and ignores `sub`.
 
+## Trade side (0.3.4)
+
+For cumulative delta every trade carries its side: a market buy (the aggressor lifted the ask) or a market sell
+(the aggressor hit the bid). Delta is buy volume minus sell volume.
+
+| field | values |
+|---|---|
+| `s` | `1` buy, `-1` sell, `0` unknown |
+| `sm` | how it was found: `0` none (unknown), `1` the exchange's aggressor flag, `2` bid/ask, `3` tick rule |
+
+On a live `tick` they are two more fields; in `ticks` each trade is `[t, p, v, s, sm]`, the first three unchanged
+in place, so a page that reads only `t, p, v` (the live page up to chart 1.5.3) works as before. A trade from an
+older ChartBridge has neither: treat it as unknown.
+
+**The rule** (Anthony, 2026-09-29), in order:
+
+1. The exchange's aggressor flag (`sm` 1). NinjaTrader 8 gives an add-on none (MarketDataEventArgs has Ask, Bid,
+   Instrument, IsReset, MarketDataType, Price, Time and Volume only), so code 1 is reserved and not sent today.
+2. The prevailing quote (`sm` 2): at or above the ask a buy, at or below the bid a sell. The quote needs both sides,
+   above zero, bid below ask; a crossed or locked quote is not used.
+3. The tick rule (`sm` 3), for a trade between bid and ask or with no usable quote: above the previous trade's price
+   a buy, below it a sell, at the same price the previous trade's side.
+4. No usable quote and no previous trade (or an unchanged price after an unknown one): `s` 0, `sm` 0.
+
+Prices are compared on a 0.000001 grid (float noise is the same price).
+
+**Live.** The quote is the last bid and the last ask NinjaTrader delivered (its Bid and Ask market data updates)
+before the trade, in the order they arrive; the tick rule uses the previous live trade of that instrument. Quotes
+are followed from the moment ChartBridge starts, so the first trades after a start can go by the tick rule. The
+held trades of a load are tagged when they arrive, like any live trade.
+
+**Backfill** (tick charts, `tickHours` above 0). With the trades ChartBridge asks NinjaTrader for the historical
+Bid ticks and Ask ticks of the same window (three requests at once; the backfill goes out when all three are
+back, in any order; a quote request ending in the future that is refused or empty is asked once more ending now,
+like the trades). The live trades stay held until the backfill goes out, so the quotes get at most 15 seconds after
+the trades are in (`QuoteWaitMs`); past that the backfill goes out without them, by the tick rule, and a late answer
+is ignored (`quotesTimedOut`). Each trade then takes, as of its time, the last bid and the last ask stamped **strictly before**
+it. The tie rule: a quote stamped at the trade's own time is not used, because a trade and the quote change it
+causes (the ask it lifted moving up, the bid stepping up to the traded price) share one timestamp, and taking that
+later quote can call a buy a sell. Times are compared at the coarser resolution of the trades and the quotes
+(1 ms, or whole seconds, as the seam judges it), so at whole seconds "the same time" is the same second.
+A trade goes by the tick rule instead when the quote history does not cover it: no bid or no ask before it
+(`beforeQuotes`), or more than 5 seconds after the end of the shorter of the two histories (`afterQuotes`), where a
+stale quote would otherwise stand. No quote history at all (or only one side): every backfill trade by the tick
+rule, said in `/diag` (`note`) and in the Output window. Minute and hour charts get no tick backfill and ask for no
+quotes.
+
+**The seam is unchanged.** The side takes no part in matching held live trades against the backfill (price, volume
+and time, as in 0.3.3). A trade in both keeps the backfill's side: the live and the history quote can disagree on
+the same trade, and matching on side would then send it twice.
+
+**Differences from NinjaTrader's own Order Flow Cumulative Delta** (its help page): in Bid Ask mode a trade between
+bid and ask gets the previous trade's side (here: the tick rule; they differ only on between-quote trades that
+changed price, counted in `/diag` `betweenQuotes`), and historically it uses the bid and ask NinjaTrader stamps on
+each trade, not separate Bid and Ask series. NinjaTrader's help says the historical Bid/Ask series "would not be
+equivalent to the bid/ask at a specific time a trade went off", and that with no bid/ask tied to the trades it fills
+the stamps in as Bid = Last and Ask = Bid + 1 tick. So `/diag` also counts the stamps (see below) to show whether
+they are real on this connection; switching the backfill to them is a later decision.
+
+**Live checks** (the trading PC): compare a minute's delta with NinjaTrader's Order Flow Cumulative Delta (Bid Ask,
+Bar period) where available; read `/diag` `sides` for `tieChanged`, `eventQuoteDiffers`, the stamps and the two
+resolutions.
+
+**Still open.** Live quote updates can arrive before the trade that caused them (seen on another connection); such a
+trade then sits between bid and ask and goes by the tick rule (`tickRule` in `/diag`). Historical tick times may sit
+on a 4 ms grid (a report on NinjaTrader's own data), so ties are not rare; `tieChanged` shows how many.
+
 ## Delay readout
 
 For each live tick the page shows two numbers:
@@ -354,6 +423,19 @@ trades; 0 when NinjaTrader's was kept, -1 when there was none), `ntTailVolume` a
 NinjaTrader's and rebuilt from trades; null when not compared); and `accounts`: one row per watched account with `name`, `connection` (status),
 `executions`, `orders`, `positions` (counts NinjaTrader holds) and `fillEvents`, `orderEvents`,
 `positionEvents` (events seen). Account names are in this local page; never copy them into reports.
+`sides` (0.3.4, see Trade side): one entry per instrument with `live` (null before its first quote or trade:
+`trades`, `aggressor`, `bidAsk`, `tickRule`, `none` counts since the start, the current `bid` and `ask`, `bidUpdates`,
+`askUpdates`, and `eventQuoteSame`, `eventQuoteDiffers`, `eventQuoteNone`: whether the Last event's own Bid and Ask
+matched the quote ChartBridge tracked) and `lastLoad` (null before the first tick chart load: `sub`, `atUtcMs`,
+`trades`, the four counts, `note` (in words when some trades could not use the quote history, else null),
+`bidTicks`, `askTicks`, `bidRequest` and `askRequest` (`ok`, `empty`, the error, or no answer in time),
+`quotesRetriedEndingNow`, `quotesTimedOut`,
+`quotesLoadMs` (subscribe to the later quote answer), `firstTrade`, `lastTrade`, `firstBid`, `lastBid`, `firstAsk`,
+`lastAsk` (New York time), `quotedTrades`, `beforeQuotes`, `afterQuotes`, `betweenQuotes` (quoted but between bid and
+ask: tick rule), `crossedQuotes`, `tieChanged` (trades the other tie rule would call differently), `tradeResolutionMs`,
+`quoteResolutionMs`, `comparedAtMs`, and `stamps`: NinjaTrader's own bid and ask on each trade, `usable`, `likeFillIn`
+(Bid = Last and Ask = Last + 1 tick; equal to `usable` means filled in, not real), `missing`, and for usable stamps
+that put the trade at the bid or ask where the join used the quote, `agree` and `disagree`).
 
 ## Fills to The Desk (0.2.0, off by default)
 
