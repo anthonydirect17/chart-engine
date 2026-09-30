@@ -458,7 +458,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   // 0.3.4: ready and the released trades as one outbox entry (a release of any size cannot close the page)
   assert.match(ready, /foreach \(SeamTick h in ContinueSides\(L, r\.Release\)\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.Fill = null;[^\n]*\s*\}/);   // 0.3.5: and an older load's history stops
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*older = client\.Fill;\s*client\.Fill = null;[^\n]*\s*\}\s*if \(older != null\) lock \(older\.Sync\) older\.Drop\(/);   // 0.3.5: and an older load's history stops, freed at once
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
@@ -518,9 +518,11 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.ok(md2.indexOf('if (!(e.Price > 0)) return;') >= 0 && md2.indexOf('if (!(e.Price > 0)) return;') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'price checked before NoteLast');
   // tick charts ask for Bid and Ask ticks of the same window; minute charts do not
   const rt = bodyOf(code, 'private static void RequestTicks(');
-  assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, !L\.Recent\);\s*RequestQuotes\(L, MarketDataType\.Ask, !L\.Recent\);/);   // 0.3.5: by count for a recent window
+  assert.match(rt, /if \(L\.NoQuotes\) return;\s*RequestQuotes\(L, MarketDataType\.Bid, !L\.Recent\);\s*RequestQuotes\(L, MarketDataType\.Ask, !L\.Recent\);/);   // 0.3.5: by count for a recent window; none for trades only
   assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /new BarsRequest\(L\.Inst, L\.QuoteFrom, to\)/);
-  assert.match(rt, /L\.QuoteFrom = L\.Recent \? DateTime\.MinValue : L\.NowNt\.AddHours\(-Math\.Min\(L\.TickHours, QuoteHoursMax\)\);/);
+  // every load keeps quote rows from the full load's start (0.3.5 review S1: the recent window too; the older history its window's)
+  assert.match(rt, /L\.QuoteFrom = L\.Background && L\.Front != null \? L\.Front\.QuoteFrom : QuoteStart\(L\.NowNt, L\.TickHours\);/);
+  assert.match(code, /public static DateTime QuoteStart\(DateTime nowNt, int tickHours\) \{ return nowNt\.AddHours\(-Math\.Min\(tickHours, QuoteHoursMax\)\); \}/);
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"sides\\":"\)\.Append\(SidesJson\(\)\);/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
   assert.match(orders, /check\/SidesHarness\.cs/);
@@ -544,7 +546,17 @@ test('0.3.5: live first: the recent window by count, ready, then the older histo
   assert.match(fin, /if \(why != null\) \{ FallBack\(L, why\); return; \}/);
   assert.match(bodyOf(code, 'private static void MarkReady('), /\(L\.Recent \? ",\\"older\\":true" : ""\)/);
   // the older history: one chunk per "more", at most MaxAsked waiting, in the data lane, only for the page's current load
-  assert.match(bodyOf(code, 'private static void OnMore('), /f\.Asked = Math\.Min\(f\.Asked \+ 1, MaxAsked\);/);
+  // upTo: the chunks the page wants in all, so asking again adds nothing (review N1); without it, one more; capped either way
+  assert.match(bodyOf(code, 'private static void OnMore('), /f\.Asked = upTo >= 0 \? Math\.Max\(0, Math\.Min\(upTo - f\.Sent, MaxAsked\)\) : Math\.Min\(f\.Asked \+ 1, MaxAsked\);/);
+  // a dropped fill answers once (review N2); a page that disconnects has its fill dropped at once (review N3)
+  assert.match(bodyOf(code, 'private static void OnMore('), /if \(f\.DroppedWhy == null \|\| f\.DropAnswered\) return;/);
+  assert.match(bodyOf(code, 'public void Close()'), /Task\.Run\(\(\) => DropFill\("the page disconnected"\)\)/);
+  // only a proven join sends older trades (review B1, S2)
+  assert.match(bodyOf(code, 'private static void FinishBackground('), /int send = j\.Send;/);
+  assert.match(code, /public int Send \{ get \{ return Proven \? Index : 0; \} \}/);
+  // the tick-hours cap: 48 while Globex trades, 120 only while it is closed
+  assert.match(bodyOf(code, 'private static void OnClientMessage('), /Math\.Min\(TickHoursCap\(CapClock\(\)\), int\.Parse\(hm\.Groups\[1\]\.Value\)\)/);
+  assert.match(code, /public const int TickHoursOpen = 48, TickHoursClosed = 120;/);
   const pump = bodyOf(code, 'private static void Pump(');
   assert.match(pump, /client\.SendData\(msg\);/);
   assert.match(pump, /if \(f\.Done \|\| f\.Asked <= 0 \|\| !Owns\(client, f\)\)/);
