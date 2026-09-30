@@ -1215,8 +1215,10 @@ function create(container, options) {
         }
       };
       // the closed candles' paths are kept while nothing about them changes (the bars in view, their places, the scale,
-      // the size, the mode, the candles); a normal frame with a trade adds only the newest bar's candle (review N4)
-      const ckey = [pane.cid, from, to, n, bars.length, V.right, V.spacing, pane.lo, pane.hi, top, h, dpr, pane.mode, db.length].join('|');
+      // the size, the mode, the candles); a normal frame with a trade adds only the newest bar's candle (review N4). The
+      // plot's width is in it: a bar's x is plotW - (V.right - i) * V.spacing, so a width change that leaves the bars in
+      // view and V.right as they were still moves every candle (review 2 S3)
+      const ckey = [pane.cid, from, to, n, bars.length, V.right, V.spacing, plotW, pane.lo, pane.hi, top, h, dpr, pane.mode, db.length].join('|');
       let cc = pane.cc;
       if (!cc || cc.key !== ckey) {
         cc = pane.cc = { key: ckey, up: new Path2D(), dn: new Path2D() };
