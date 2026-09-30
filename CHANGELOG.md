@@ -9,21 +9,31 @@ Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged 
   and once a day at 17:05 New York time (`-DailyAt`), converted to the PC's clock when registering: futures are closed
   from 17:00 to 18:00 ET, so no check lands while Anthony trades (Anthony's ruling). A missed daily run is not started
   later (no StartWhenAvailable: it could land in the trading day); the sign-in check covers a PC that was off. Never
-  two runs at once, 30 minutes at most. README: "Keep this PC up to
-  date".
+  two runs at once, 30 minutes at most. The task runs its own copy, `updater\bin\update-pc.ps1`, which changes only
+  when Anthony runs `register` or `-InstallChartBridge`; the automatic path never moves the clone (it fetches and
+  stages from git objects), so a newer ChartBridge.cs never appears where `install.ps1` copies from. git never asks
+  anything (no terminal, Credential Manager or askpass window; ssh in batch mode). README: "Keep this PC up to date".
 - **The page updates by itself**, only from the newest commit on `main` whose CI is green on ubuntu-latest and
   windows-latest (read from GitHub without a token, as The Desk's updater does), and only when the ChartBridge compiled
   on the PC is at least the page's `minChartBridge` in **`live/COMPAT.json`** (new). The compiled version comes from
-  `/diag` when ChartBridge runs, otherwise from what the tool recorded; unknown means no update, and the log says why.
-  Files are staged, then written into `www` one by one through a temporary file and an atomic replace (index.html
-  last); the previous page is kept for `rollback`.
+  `/diag` when ChartBridge runs (the newest observation, a downgrade too, with a warning in the log), otherwise from
+  what the tool recorded and never above the Version in `AddOns\ChartBridge.cs`; unknown means no update, and the log
+  says why. Files are staged, then written into `www` one by one through a temporary file and an atomic replace, the
+  engine first and index.html last. A journal (`updater\swap.json`) is written first: a run cut off by a power loss
+  or a closed lid is finished, or undone to the previous page, at the start of the next run, before pause and every
+  other gate. The previous page, kept for `rollback`, is only ever copied from a `www` that is exactly the installed
+  build, so it is never a mix.
 - **ChartBridge never installs by itself**: a new one is staged under `updater\staged\`, announced (page, Windows
   notification, log, `status.json`), and copied into `bin\Custom\AddOns` only by `-InstallChartBridge`, which Anthony
-  runs while flat before pressing F5.
+  runs while flat, with the NinjaScript Editor closed, before pressing F5. It installs from `staged\` (the announced
+  green commit), shows both versions before asking, writes all three files to temporary names and then replaces them
+  back to back. A page that needs the new ChartBridge waits until `/diag` shows it (COMPAT decides).
 - **"Update ready: reload when flat"** (`live/update-notice.js`, loaded by `live/index.html` only): the page reads
   `update.json` (written by the updater into `www`: versions and a build id only) about once a minute and says so on
   the status line; also "ChartBridge x.y.z ready to install (flat, then F5)". It never reloads, never covers the order
-  bar or the chart, and never moves them (it only takes room the status line has left).
+  bar or the chart, and never moves them: it takes no room of its own on the status line (checked from 700 to 1920
+  px). A screen reader hears the whole text once; polling survives an error. "Page update cut off: run update-pc.ps1
+  status" if an install could not repair itself.
 - **`nt8/install-files.json`**: the one list of what is installed; `nt8/install.ps1` now reads it (same files as before,
   plus `update-notice.js`).
 - **COMPAT.json in practice**: a release whose page needs a newer ChartBridge raises `minChartBridge` and adds a
@@ -31,8 +41,15 @@ Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged 
   ChartBridge in the same commit).
 - Tests: `test/pc-updater.tests.ps1` (run by `npm test` through `test/pc-updater.test.js` with Windows PowerShell 5.1 on
   Windows and pwsh elsewhere): the CI gate, the ChartBridge compatibility gate, unknown version, staging and the file
-  swap, rollback, pause, no .cs file ever written to AddOns by the automatic path, `-InstallChartBridge`, and the
-  scheduled task registered for real on the Windows runner. `npm run smoke:update`: the notice with an open position.
+  swap, a power loss at every step of an install (the review's p1 case too), rollback, pause, the version rules (the
+  review's p2 downgrade case), no .cs file ever written to AddOns by the automatic path, `-InstallChartBridge`, the
+  clone never moved, the pinned copy, and the scheduled task registered for real on the Windows runner (both
+  triggers and the daily time). `npm run smoke:update`: the notice with an open position and the width sweep.
+- Review of the first version (independent): B1 (no journal, a mixed page kept as the rollback copy), B2 (the clone
+  fast-forward), S1 to S7 and the cheap nits are fixed as above. Left as notes: N3 the 403/429 mapping is read, not
+  tested (junk, empty and refused answers are tested); N11 with OneDrive Known Folder Move, `www` and `updater\` sync
+  and OneDrive can hold a file longer than the 3 s retry (the install then fails and is undone, never mixed); N12 a PC
+  in another time zone drifts by the DST difference until `register` runs again.
 
 ## 1.6.0 (2026-09-29): the Indicators menu "E2", a chip strip per pane, one account picker, and the volume profile
 

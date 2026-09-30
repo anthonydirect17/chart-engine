@@ -41,7 +41,9 @@ test('install.ps1 and update-pc.ps1 read that list; install.ps1 names no file it
   assert.match(updater, /\$script:ManifestPath = 'nt8\/install-files\.json'/);
   for (const f of manifest.www.concat(manifest.addons.map(a => ({ from: a })))) {
     assert.ok(!code(install).includes(path.basename(f.from)), 'install.ps1 names ' + f.from);
-    assert.ok(!code(updater).includes(path.basename(f.from)) || f.from === 'nt8/ChartBridge.cs' || f.from === 'live/index.html', 'update-pc.ps1 names ' + f.from);
+    // the updater names only the files it orders (Get-PageOrder) and the one it reads the version from
+    const named = ['nt8/ChartBridge.cs', 'live/index.html', 'live/live.js', 'live/update-notice.js'];
+    assert.ok(!code(updater).includes(path.basename(f.from)) || named.includes(f.from), 'update-pc.ps1 names ' + f.from);
   }
 });
 
@@ -65,9 +67,14 @@ test('the automatic path never copies add-on files: only -InstallChartBridge, af
   const body = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Pause'));
   assert.ok(body.indexOf('Read-Host') < body.indexOf('$script:AddOnWriteAllowed = $true'), 'asks first (unless -Yes)');
   assert.match(src, /function Install-AddOnFiles[\s\S]{0,80}if \(-not \$script:AddOnWriteAllowed\) \{ throw/);
-  // the only place anything is written under AddOns is Install-AddOnFiles
-  const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => src.slice(src.lastIndexOf('function ', m.index), src.lastIndexOf('function ', m.index) + 40).split(/[\s(]/)[1]);
-  assert.deepStrictEqual([...new Set(uses)].sort(), ['Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
+  // the only place anything is written under AddOns is Install-AddOnFiles; Get-AddOnVersion only reads
+  const fnOf = i => src.slice(src.lastIndexOf('function ', i), src.lastIndexOf('function ', i) + 40).split(/[\s(]/)[1];
+  const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => fnOf(m.index));
+  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnVersion', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
+  const reader = src.slice(src.indexOf('function Get-AddOnVersion'), src.indexOf('function Get-LowerVersion'));
+  assert.ok(!/Copy-Item|Move-|Write|Set-Content|Remove-Item|Replace\(/.test(reader), 'Get-AddOnVersion only reads');
+  const inst = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Pause'));
+  assert.ok(!/Copy-Item|Move-FileAtomic/.test(inst.replace(/Install-AddOnFiles|Install-PinnedUpdater|Install-PageFiles/g, '')), '-InstallChartBridge writes AddOns only through Install-AddOnFiles');
 });
 
 test('no PowerShell command strings (Norton on WORK blocks -EncodedCommand): scripts run with -File', () => {
@@ -79,7 +86,19 @@ test('no PowerShell command strings (Norton on WORK blocks -EncodedCommand): scr
     });
     assert.ok(!/Invoke-Expression|\biex\b|EncodedCommand|FromBase64String|ToBase64String/i.test(text), f + ' builds or runs a command string');
   }
-  assert.match(updater, /'-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' \+ \(Format-Arg \$script:UpdaterSelf\) \+ ' update'/);
+  assert.match(updater, /'-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' \+ \(Format-Arg \$Script\) \+ ' update -Repo ' \+ \(Format-Arg \$RepoDir\)/);
+});
+
+test('the automatic path never moves Anthony\'s clone, and git never asks anything', () => {
+  const src = code(updater);
+  const gitCalls = [...src.matchAll(/Invoke-Git @\('([a-z-]+)'/g)].map(m => m[1]);
+  assert.ok(gitCalls.length > 5);
+  for (const c of gitCalls) assert.ok(['fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'config'].includes(c), 'git ' + c);
+  assert.ok(!/\b(merge|checkout|pull|reset|stash|clean|switch)\b'/.test(src), 'no git command that moves the clone');
+  for (const v of ["'GIT_TERMINAL_PROMPT'] = '0'", "'GCM_INTERACTIVE'] = 'never'", "'GIT_ASKPASS'] = ''", "'SSH_ASKPASS'] = ''", "'GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'"]) assert.ok(src.includes(v), v);
+  assert.match(src, /'-c', 'credential\.interactive=never', '-c', 'core\.sshCommand=ssh -o BatchMode=yes'/);
+  assert.match(src, /-WorkingDirectory \$script:P\.Bin/);
+  assert.match(src, /Install-PinnedUpdater \$script:UpdaterSelf \$head 'register'/);
 });
 
 test('the schedule (Anthony, 2026-09-30): at sign-in and once a day at 17:05 New York time, nothing repeating, no late start', () => {
@@ -140,6 +159,7 @@ test('the PowerShell tests (test/pc-updater.tests.ps1)', t => {
   const out = (r.stdout || '') + (r.stderr || '');
   const summary = /pc-updater: (\d+) passed, (\d+) failed, (\d+) skipped/.exec(out);
   t.diagnostic(summary ? summary[0] + ' (' + ps + ')' : 'no summary');
+  for (const line of out.split(/\r?\n/).filter(l => /^OK: scheduled task/.test(l))) t.diagnostic(line.trim());
   assert.ok(summary, 'the PowerShell tests ran to the end:\n' + out.slice(-4000));
   assert.strictEqual(+summary[2], 0, out.split('\n').filter(l => /FAIL/.test(l)).join('\n'));
   assert.ok(+summary[1] >= 25, 'ran them all');

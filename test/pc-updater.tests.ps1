@@ -29,6 +29,12 @@ function Skip([string]$Name, [string]$Why) { $script:Skipped++; Write-Host "  sk
 $script:FakeCi = 'success'
 $script:FakeDiag = $null
 $script:Toasts = @()
+$script:RealGitHubJson = ${function:Invoke-GitHubJson}
+$script:RealMove = ${function:Move-FileAtomic}
+# A power loss (a laptop lid): from the crash point on, nothing more is written anywhere through the updater.
+$script:CrashAt = ''; $script:PowerLost = $false
+function Invoke-CrashPoint([string]$Name) { if ($script:CrashAt -and $script:CrashAt -eq $Name) { $script:PowerLost = $true; throw "SIMULATED POWER LOSS at $Name" } }
+function Move-FileAtomic([string]$Source, [string]$Dest) { if ($script:PowerLost) { throw 'power is off' }; & $script:RealMove $Source $Dest }
 # GitHub's API as the updater reads it: check runs and statuses for a commit (the real Get-CiState runs on these).
 function Get-RepoSlug { return 'owner/chart-engine' }
 function Invoke-GitHubJson([string]$Path) {
@@ -36,9 +42,9 @@ function Invoke-GitHubJson([string]$Path) {
   if ($Path -match '/status\?') { return @{ statuses = @() } }
   $win = @{ success = @('completed', 'success'); pending = @('in_progress', $null); failure = @('completed', 'failure') }[$script:FakeCi]
   return @{ total_count = 3; check_runs = @(
-      @{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success' },
-      @{ name = 'unit (windows-latest)'; status = $win[0]; conclusion = $win[1] },
-      @{ name = 'deploy'; status = 'completed'; conclusion = 'success' }) }
+      @{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } },
+      @{ name = 'unit (windows-latest)'; status = $win[0]; conclusion = $win[1]; app = @{ slug = 'github-actions' } },
+      @{ name = 'deploy'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }) }
 }
 function Get-DiagVersion {
   if ($script:FakeDiag) { return @{ ok = $true; version = $script:FakeDiag; detail = 'stub /diag' } }
@@ -120,24 +126,24 @@ Write-Host "pc-updater tests ($($PSVersionTable.PSEdition) $($PSVersionTable.PSV
 # ---------------------------------------------------------------------------------------------- CI gate
 
 Test 'CI: both required jobs green is success' {
-  $green = @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success' }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'success' }, @{ name = 'deploy'; status = 'completed'; conclusion = 'success' })
+  $green = @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }, @{ name = 'deploy'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } })
   Assert ((Resolve-CiState $green @()).state -eq 'success') 'success'
 }
 Test 'CI: windows-latest missing is not success (pending)' {
-  $r = Resolve-CiState @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success' }) @()
+  $r = Resolve-CiState @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }) @()
   Assert ($r.state -eq 'pending' -and $r.detail -match 'windows-latest') $r.detail
 }
 Test 'CI: a failed required job is failure' {
-  $r = Resolve-CiState @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success' }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'failure' }) @()
+  $r = Resolve-CiState @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'failure'; app = @{ slug = 'github-actions' } }) @()
   Assert ($r.state -eq 'failure') $r.detail
 }
 Test 'CI: any other failed check or status is failure; running is pending; nothing is pending' {
-  $ok = @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success' }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'success' })
-  Assert ((Resolve-CiState ($ok + @(@{ name = 'deploy'; status = 'completed'; conclusion = 'failure' })) @()).state -eq 'failure') 'other check failed'
+  $ok = @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } })
+  Assert ((Resolve-CiState ($ok + @(@{ name = 'deploy'; status = 'completed'; conclusion = 'failure'; app = @{ slug = 'github-actions' } })) @()).state -eq 'failure') 'other check failed'
   Assert ((Resolve-CiState $ok @(@{ context = 'x'; state = 'error' })).state -eq 'failure') 'status error'
-  Assert ((Resolve-CiState ($ok + @(@{ name = 'deploy'; status = 'in_progress'; conclusion = $null })) @()).state -eq 'pending') 'running'
+  Assert ((Resolve-CiState ($ok + @(@{ name = 'deploy'; status = 'in_progress'; conclusion = $null; app = @{ slug = 'github-actions' } })) @()).state -eq 'pending') 'running'
   Assert ((Resolve-CiState @() @()).state -eq 'pending') 'no results'
-  Assert ((Resolve-CiState @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'skipped' }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'success' }) @()).state -eq 'failure') 'a skipped required job is not success'
+  Assert ((Resolve-CiState @(@{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'skipped'; app = @{ slug = 'github-actions' } }, @{ name = 'unit (windows-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }) @()).state -eq 'failure') 'a skipped required job is not success'
 }
 Test 'CI: GitHub not reachable is unknown; the repo is read from the origin URL' {
   $script:FakeCi = 'unknown'
@@ -148,6 +154,25 @@ Test 'CI: GitHub not reachable is unknown; the repo is read from the origin URL'
   Assert ((ConvertTo-RepoSlug 'https://github.com/anthonydirect17/chart-engine.git') -eq 'anthonydirect17/chart-engine') 'https'
   Assert ((ConvertTo-RepoSlug 'git@github.com:anthonydirect17/chart-engine') -eq 'anthonydirect17/chart-engine') 'ssh'
   Assert ($null -eq (ConvertTo-RepoSlug 'C:\somewhere\origin.git')) 'not GitHub'
+}
+Test 'CI through the real GitHub reader: junk is unknown, an empty answer pending, a failed request unknown' {
+  $keep = ${function:Invoke-GitHubJson}
+  ${function:Invoke-GitHubJson} = $script:RealGitHubJson
+  try {
+    $script:WebAnswer = 'not json'
+    function Invoke-WebRequest { if ($script:WebAnswer -eq 'throw') { throw (New-Object System.Net.WebException 'stub: refused') }; return @{ Content = $script:WebAnswer } }
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'unknown') 'junk'
+    $script:WebAnswer = '{}'
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'pending') 'no check_runs'
+    $script:WebAnswer = 'throw'
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'unknown') 'refused'
+    $script:WebAnswer = '{"check_runs":[{"name":"unit (ubuntu-latest)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}},{"name":"unit (windows-latest)","status":"completed","conclusion":"success","app":{"slug":"other-app"}}]}'
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'pending') 'a required job from another app does not count'
+  } finally { Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue; ${function:Invoke-GitHubJson} = $keep }
+}
+Test 'git never asks anything from the hidden task' {
+  Assert ((Invoke-Git @('config', '--get', 'core.sshCommand')).out.Trim() -eq 'ssh -o BatchMode=yes') 'ssh in batch mode'
+  Assert ((Invoke-Git @('config', '--get', 'credential.interactive')).out.Trim() -eq 'never') 'no credential window'
 }
 Test 'CI pending: no update, nothing written to www or AddOns' {
   $script:FakeCi = 'pending'; $script:FakeDiag = $null
@@ -231,14 +256,15 @@ Test 'a second run changes nothing (up to date, same installedAt); the command r
   Assert ((Get-UpdateJson)['page']['installedAt'] -eq $before) 'installedAt kept'
 }
 $script:C2 = $null
-Test 'a new commit on main is installed; the previous page is kept; the clone fast forwards' {
+Test 'a new commit on main is installed; the previous page is kept; the clone is never moved' {
   $script:C2 = Commit 'page change' { Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* a page change */`n") }
   $r = Run-Update
   Assert ($r.outcome -eq 'updated') $r.outcome
   Assert ((Get-Text (Get-WwwFile 'live.js')) -match 'a page change') 'new live.js'
   Assert ((Get-Text (Get-LocalPath (Join-Path $script:P.Previous 'page') 'live.js')) -notmatch 'a page change') 'old live.js kept'
   Assert ((Read-JsonFile (Join-Path $script:P.Previous 'previous.json'))['build'] -eq $script:FirstBuild) 'previous build'
-  Assert ((G $clone @('rev-parse', 'HEAD')) -eq $script:C2) 'clone moved to main'
+  Assert ((G $clone @('rev-parse', 'HEAD')) -eq $c1) 'the clone stays where Anthony left it'
+  Assert ((G $clone @('rev-parse', 'refs/remotes/origin/main')) -eq $script:C2) 'only origin/main moved (fetch)'
 }
 Test 'a commit that changes no page file keeps the build (no "Update ready" on open pages)' {
   $before = Get-UpdateJson
@@ -320,7 +346,19 @@ Test 'the add-on copy refuses without -InstallChartBridge' {
   Assert $threw 'refused'
   Assert ((Get-AddOnsPrint) -eq $addOnsBefore) 'AddOns unchanged'
 }
-Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files and the matching page' {
+Test 'the task''s own copy of the updater: pinned, and changed only by register or -InstallChartBridge' {
+  $dest = Install-PinnedUpdater (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1') $c1 'register'
+  Assert ((Get-Hash $dest) -eq (Get-Hash (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1'))) 'a copy of the updater'
+  Assert ((Read-JsonFile (Join-Path $script:P.Bin 'pinned.json'))['from'] -eq 'register') 'pinned.json'
+  $before = Get-Hash $dest
+  [void](Run-Update); [void](Run-Update)
+  Assert ((Get-Hash $dest) -eq $before) 'automatic runs leave it alone'
+  $args = Get-TaskArguments $dest $clone
+  Assert ($args -match [regex]::Escape($dest) -and $args -match ' update -Repo ') $args
+}
+Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files; the page that needs them waits for F5' {
+  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') "// the ChartBridge compiled on this PC (older)`r`npublic const string Version = ""0.3.3"";`r`n"
+  $addOnsBefore2 = Get-AddOnsPrint
   $script:Yes = $true
   $code = Invoke-InstallChartBridge
   $script:Yes = $false
@@ -331,8 +369,14 @@ Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files and the
   Assert ((Get-Text (Join-Path $script:P.AddOns 'SomethingElse.cs')) -match 'another add-on') 'other add-ons untouched'
   $bk = @(Get-ChildItem -Recurse -LiteralPath $script:P.PrevAddOns -Filter 'ChartBridge.cs')
   Assert ($bk.Count -eq 1 -and (Get-Text $bk[0].FullName) -match 'older') 'the replaced ChartBridge.cs kept'
-  Assert ((Get-Text (Get-WwwFile 'live.js')) -match 'needs 0\.3\.9') 'the matching page installed'
+  Assert ($addOnsBefore2 -ne (Get-AddOnsPrint)) 'AddOns changed (by hand, with y)'
+  Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns -Filter '*.upd-tmp').Count -eq 0) 'no temporary file left in AddOns'
+  Assert ((Get-Text (Get-WwwFile 'live.js')) -notmatch 'needs 0\.3\.9') 'the page that needs 0.3.9 is not installed before F5'
+  Assert ((Read-State)['pendingPage']['needs'] -eq '0.3.9') 'the page waits for F5'
   Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq '0.3.9' -and -not (Get-UpdateJson)['chartBridge']['ready']) 'update.json: copied, waiting for F5'
+  $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
+  Assert ($pin['from'] -eq '-InstallChartBridge' -and $pin['commit'] -eq $script:CbCommit) 'the task''s updater now comes from the staged commit'
+  Assert ((Get-Hash (Join-Path $script:P.Bin 'update-pc.ps1')) -eq (Get-Hash (Join-Path (Join-Path $script:P.Staged 'bin') 'update-pc.ps1'))) 'the staged updater'
   Assert ((Get-Hash $script:P.Config) -eq $configHash -and (Get-Hash (Join-Path $cbDir 'pin.txt')) -eq $pinHash) 'config.txt and pin.txt untouched'
 }
 Test 'before F5 (ChartBridge not running): the lower of last seen and copied counts' {
@@ -340,16 +384,137 @@ Test 'before F5 (ChartBridge not running): the lower of last seen and copied cou
   $c = Get-CompiledChartBridge (Read-State)
   Assert ($c.version -eq '0.3.3' -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
 }
-Test 'after F5 /diag shows the new version: confirmed; then without /diag the recorded version counts' {
+Test 'after F5 /diag shows the new version: confirmed, the waiting page installs; without /diag the recorded version counts' {
   $script:FakeDiag = '0.3.9'
   $r = Run-Update
-  Assert (@('up_to_date', 'updated') -contains $r.outcome) $r.outcome
+  Assert ($r.outcome -eq 'updated') $r.outcome
+  Assert ((Get-Text (Get-WwwFile 'live.js')) -match 'needs 0\.3\.9') 'the page that needs 0.3.9 installed after F5'
+  Assert (-not (Read-State).Contains('pendingPage')) 'nothing waits any more'
   $s = Read-State
   Assert ($s['chartBridge']['installed']['confirmed'] -eq $true) 'confirmed'
   Assert (-not (Get-UpdateJson)['chartBridge']['copied']) 'no longer waiting for F5'
   $script:FakeDiag = $null
   $c = Get-CompiledChartBridge (Read-State)
   Assert ($c.version -eq '0.3.9' -and $c.source -eq 'recorded') "$($c.version) $($c.source)"
+}
+Test 'Anthony goes back to 0.3.3 by hand: the newest /diag counts, and with NinjaTrader closed the lower one (the reviewer''s p2)' {
+  $script:FakeDiag = '0.3.3'
+  $s = Read-State; [void](Get-CompiledChartBridge $s); Save-State $s
+  Assert ((Get-Text $script:P.Log) -match 'went down from 0\.3\.9 to 0\.3\.3') 'a downgrade is logged'
+  $script:FakeDiag = $null
+  $c = Get-CompiledChartBridge (Read-State)
+  Assert ($c.version -eq '0.3.3') "counts 0.3.3, got $($c.version) ($($c.detail))"
+  # a hand copy this tool never saw: AddOns\ChartBridge.cs says 0.3.2, so no more than that counts
+  $s = Read-State; $s['chartBridge']['diagVersion'] = '0.3.9'; Save-State $s
+  $keep = Get-Text (Join-Path $script:P.AddOns 'ChartBridge.cs')
+  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') ($keep -replace 'public const string Version = "[^"]+"', 'public const string Version = "0.3.2"')
+  $c = Get-CompiledChartBridge (Read-State)
+  Assert ($c.version -eq '0.3.2') "the lower of recorded and AddOns: $($c.version)"
+  Put (Join-Path $script:P.AddOns 'ChartBridge.cs') $keep
+  $script:FakeDiag = '0.3.9'
+  $s = Read-State; [void](Get-CompiledChartBridge $s); Save-State $s
+}
+
+# ---------------------------------------------------------------------------------------------- a page install cut off
+
+function Get-Marks {
+  $a = if ((Get-Text (Get-WwwFile 'live.js')) -match 'MARK-(\d+)') { $Matches[1] } else { '0' }
+  $b = if ((Get-Text (Get-WwwFile 'src/chart-engine.js')) -match 'MARK-(\d+)') { $Matches[1] } else { '0' }
+  return "$a/$b"
+}
+function New-MarkCommit([int]$K) {
+  return (Commit "live.js and chart-engine.js change together ($K)" {
+    foreach ($f in @('live/live.js', 'src/chart-engine.js')) {
+      $t = (Get-Text (Get-LocalPath $src $f)) -replace '/\* MARK-\d+ \*/', ''
+      Put (Get-LocalPath $src $f) ($t + "/* MARK-$K */")
+    }
+  })
+}
+function Invoke-Cut([string]$At) {
+  $script:CrashAt = $At; $script:PowerLost = $false
+  $state = Read-State
+  $out = 'no crash'
+  try { $r = Invoke-Pass -State $state; $out = $r.outcome } catch { $out = $_.Exception.Message }
+  $script:CrashAt = ''; $script:PowerLost = $false
+  return $out
+}
+function Assert-Whole([string]$Why) {
+  $s = Read-State
+  Assert (-not (Test-Path $script:P.Journal)) "$Why : the journal is gone"
+  Assert ((Get-BuildId $script:P.Www @($s['page']['files'])) -eq $s['page']['build']) "$Why : www is exactly the recorded build"
+  $m = (Get-Marks).Split('/')
+  Assert ($m[0] -eq $m[1]) "$Why : live.js and chart-engine.js from the same commit ($(Get-Marks))"
+  Assert ((Get-UpdateJson)['page']['build'] -eq $s['page']['build'] -and -not (Get-UpdateJson)['page']['state']) "$Why : update.json says that build"
+  $pv = Read-JsonFile (Join-Path $script:P.Previous 'previous.json')
+  $pm = (Get-Text (Get-LocalPath (Join-Path $script:P.Previous 'page') 'live.js')) -match 'MARK-(\d+)'
+  $pa = if ($pm) { $Matches[1] } else { '0' }
+  $pm2 = (Get-Text (Get-LocalPath (Join-Path $script:P.Previous 'page') 'src/chart-engine.js')) -match 'MARK-(\d+)'
+  $pb = if ($pm2) { $Matches[1] } else { '0' }
+  Assert ($pa -eq $pb -and (Get-BuildId (Join-Path $script:P.Previous 'page') @($pv['files'])) -eq $pv['build']) "$Why : the rollback copy is whole ($pa/$pb)"
+}
+
+Test 'the reviewer''s p1: cut off after one file, then CI pending for a newer commit: finished first, the rollback copy stays whole' {
+  $script:FakeCi = 'success'; $script:FakeDiag = '0.3.9'
+  [void](Run-Update)
+  $base = Get-Marks
+  [void](New-MarkCommit 100)
+  $out = Invoke-Cut 'file:1'
+  Assert ($out -match 'SIMULATED POWER LOSS|install_failed') "cut off: $out"
+  Assert (Test-Path $script:P.Journal) 'the journal says a swap was running'
+  [void](Commit 'docs only, CI running' { Put (Get-LocalPath $src 'nt8/NOTES.txt') "docs 2`n" })
+  $script:FakeCi = 'pending'
+  $r = Run-Update
+  Assert ($r.outcome -eq 'ci_pending' -and $r.recovered -eq 'finished') "$($r.outcome) / $($r.recovered)"
+  Assert-Whole 'after the recovery'
+  Assert ((Get-Marks) -eq '100/100') "the new page: $(Get-Marks)"
+  Assert-Code (Invoke-Rollback) 0 'rollback'
+  Assert ((Get-Marks) -eq $base) "rollback goes to the whole old page ($base), got $(Get-Marks)"
+  Assert-Whole 'after the rollback'
+  $script:FakeCi = 'success'
+}
+
+$points = @('after-previous', 'after-journal') + @(1..9 | ForEach-Object { "file:$_" }) + @('after-files', 'after-state')
+$k = 200
+foreach ($pt in $points) {
+  $k++
+  Test "a power loss at $pt; the next run (paused) finishes or undoes it first; never a mixed page" {
+    $script:FakeCi = 'success'; $script:FakeDiag = '0.3.9'
+    [void](Invoke-Resume); [void](Run-Update)
+    $old = Get-Marks
+    [void](New-MarkCommit $k)
+    $out = Invoke-Cut $pt
+    Assert ($out -ne 'updated') "cut off at $pt ($out)"
+    [void](Invoke-Pause)
+    $r = Run-Update
+    Assert ($r.outcome -eq 'paused') $r.outcome
+    Assert-Whole "cut at $pt"
+    if ($pt -eq 'after-previous') { Assert ((Get-Marks) -eq $old) "nothing had changed: $(Get-Marks)" }
+    else { Assert ((Get-Marks) -eq "$k/$k" -and $r.recovered -eq 'finished') "finished: $(Get-Marks) ($($r.recovered))" }
+    [void](Invoke-Resume)
+    Assert ((Run-Update).outcome -match 'updated|up_to_date') 'then updates as usual'
+    Assert ((Get-Marks) -eq "$k/$k") 'on the new page'
+  }
+}
+Test 'cut off with neither the new nor the old files whole: STOP, and the page is told' {
+  [void](New-MarkCommit 300)
+  $out = Invoke-Cut 'file:1'
+  $j = Read-JsonFile $script:P.Journal
+  Put (Get-LocalPath $j['target']['source'] 'live.js') 'spoiled'
+  Put (Get-LocalPath $j['back']['source'] 'live.js') 'spoiled'
+  $r = Run-Update
+  Assert ($r.outcome -eq 'interrupted' -and $script:StopOutcomes -contains 'interrupted') $r.outcome
+  Assert ((Get-UpdateJson)['page']['state'] -eq 'interrupted') 'update.json: interrupted'
+  Assert-Code (Invoke-Rollback) 1 'rollback refuses too'
+  # Anthony's way out (the STOP text): install.ps1 while flat, then delete swap.json; here: the staged commit again
+  Remove-Item -LiteralPath $script:P.Journal -Force
+  Remove-Dir $script:P.Staged
+  Assert ((Run-Update).outcome -eq 'updated') 'installs again'
+  Assert ((Get-Marks) -eq '300/300') 'whole'
+}
+Test 'the write order: the engine first, the libraries and styles, live.js, index.html last' {
+  $o = Get-PageOrder @('index.html', 'live.js', 'live.css', 'bar-builder.js', 'src/chart-engine.js', 'update-notice.js', 'pin.css', 'order-ticket.js', 'pin.js')
+  Assert ($o[0] -eq 'src/chart-engine.js' -and $o[$o.Count - 1] -eq 'index.html') ($o -join ',')
+  Assert ([array]::IndexOf($o, 'live.js') -gt [array]::IndexOf($o, 'bar-builder.js') -and [array]::IndexOf($o, 'live.js') -gt [array]::IndexOf($o, 'live.css')) ($o -join ',')
 }
 
 # ---------------------------------------------------------------------------------------------- the rest
@@ -363,7 +528,10 @@ Test 'the manifest check refuses paths outside www, .cs page files and odd add-o
       @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'live/a.js'; to = '../a.js' }) },
       @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'nt8/ChartBridge.cs'; to = 'x.cs' }) },
       @{ addons = @('live/live.js'); www = @(@{ from = 'live/a.js'; to = 'a.js' }) },
-      @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'live/a.js'; to = 'update.json' }) })) {
+      @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'live/a.js'; to = 'update.json' }) },
+      @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'live/a.js'; to = 'x.cs.' }) },
+      @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'live/a.js'; to = 'a.js ' }) },
+      @{ addons = @('nt8/ChartBridge.cs'); www = @(@{ from = 'live/a.js'; to = 'src/../../a.js' }) })) {
     $threw = $false
     try { Test-Manifest $bad } catch { $threw = $true }
     Assert $threw "refused $(ConvertTo-Json $bad -Compress -Depth 5)"
@@ -406,7 +574,8 @@ if ($IsWin) {
       Assert ("$($t.Principal.LogonType)" -eq 'Interactive' -and "$($t.Principal.RunLevel)" -eq 'Limited') "principal $($t.Principal.LogonType) $($t.Principal.RunLevel)"
       $a = $t.Actions[0]
       Assert ($a.Execute -match 'WindowsPowerShell\\v1\.0\\powershell\.exe$') $a.Execute
-      Assert ($a.Arguments -match '-File ' -and $a.Arguments -match ' update$' -and $a.Arguments -match 'update-pc\.ps1') $a.Arguments
+      Assert ($a.Arguments -match '-File ' -and $a.Arguments -match ' update -Repo ' -and $a.Arguments -match 'updater\\bin\\update-pc\.ps1') "the pinned copy: $($a.Arguments)"
+      Assert ($a.WorkingDirectory -eq $script:P.Bin -and (Test-Path (Join-Path $script:P.Bin 'update-pc.ps1'))) "working folder $($a.WorkingDirectory)"
       Assert ($a.Arguments -notmatch '(?i)(^|\s)[-/](e|ec|en\w*|c|co\w*)(\s|$)') "no command string: $($a.Arguments)"
       $kinds = @($t.Triggers | ForEach-Object { $_.CimClass.CimClassName })
       Assert ($kinds.Count -eq 2 -and $kinds -contains 'MSFT_TaskLogonTrigger' -and $kinds -contains 'MSFT_TaskDailyTrigger') ($kinds -join ',')

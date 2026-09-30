@@ -131,23 +131,36 @@ across fake restarts.
 new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
 
 - **The page updates by itself.** The updater checks when you sign in and once a day at 5:05 PM New York time, while
-  futures are closed. It installs the newest commit on `main` whose CI is green on both ubuntu-latest and windows-latest, and only when that page works with the ChartBridge compiled on this PC
-  (`live/COMPAT.json`). An open page keeps running what it loaded, so an open trade is never disturbed.
+  futures are closed. It installs the newest commit on `main` whose CI is green on both ubuntu-latest and
+  windows-latest, and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
+  page keeps running what it loaded, so an open trade is never disturbed.
 - **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
   flat, then presses F5.
+- **Your clone is never moved.** The updater only fetches `main` and stages what it needs under `updater\staged\`; it
+  never checks out, pulls or merges. Pull the clone yourself when you want to (that changes nothing the task runs).
+- **The task runs its own copy** of the updater, `updater\bin\update-pc.ps1`. That copy changes only when you run
+  `register` again (it copies the clone's file) or `-InstallChartBridge` (it copies the one from the staged, green
+  commit). A new commit on `main` never changes it by itself.
+- **A cut-off install repairs itself.** If the PC loses power or sleeps while page files are being replaced, the next
+  run finishes the install (or goes back to the previous page) before anything else, even when paused.
 - State and log: `Documents\NinjaTrader 8\ChartBridge\updater\` (`update.log`, `status.json`, `state.json`, the staged
-  files and the previous page). `config.txt` and the PIN file are never touched.
+  files, the previous page, `bin\`). `config.txt` and the PIN file are never touched.
 
 **One-time setup.** Open Windows PowerShell (not as administrator), with NinjaTrader running and ChartBridge compiled.
 Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line, fix it, paste the block again).
 
-1. The clone, on `main`, with the updater:
+1. The clone, on `main`, up to date. This block never switches branches: if the clone is on another branch or has
+   changes, it stops and says so.
 
    ```powershell
    $ce = @("$env:USERPROFILE\chart-engine", 'C:\TheDesk\chart-engine') | Where-Object { Test-Path (Join-Path $_ '.git') } | Select-Object -First 1
    if (-not $ce) { 'STOP: no chart-engine clone at %USERPROFILE%\chart-engine or C:\TheDesk\chart-engine' } else {
-     Set-Location $ce; git checkout main; git pull --ff-only
-     if ($LASTEXITCODE -eq 0 -and (Test-Path .\nt8\update-pc.ps1)) { "OK: $ce is on main" } else { 'STOP: git could not bring the clone to main (see the lines above)' } }
+     Set-Location $ce; $br = git symbolic-ref --short HEAD; $dirty = git status --porcelain --untracked-files=no
+     if ($br -ne 'main') { "STOP: the clone is on '$br', not main. When the work there is saved: git checkout main, then paste this block again" }
+     elseif ($dirty) { 'STOP: the clone has changed files (git status shows them). Commit or put them aside, then paste this block again' }
+     else { git pull --ff-only; if ($LASTEXITCODE -ne 0) { 'STOP: git pull failed (see the lines above)' }
+       elseif ((git symbolic-ref --short HEAD) -eq 'main' -and (Test-Path .\nt8\update-pc.ps1)) { "OK: $ce is on main, up to date" }
+       else { 'STOP: the clone is not on main with nt8\update-pc.ps1' } } }
    ```
 
 2. What this PC has now (reads only; it asks ChartBridge's `/diag` for the version compiled here):
@@ -181,26 +194,34 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 register
    ```
 
-**What the notices mean.** On the chart page's status line, at the bottom (never over the order bar or the chart; it
-never reloads anything):
+   On Windows 11, if a console window stays open while the check runs, that is Windows Terminal being the default
+   terminal; the window closes when the run ends.
+
+**What the notices mean.** On the chart page's status line, at the bottom (never over the order bar or the chart, and
+it never moves them; it never reloads anything):
 
 - **Update ready: reload when flat**: new page files are installed. Reload the page when flat to use them.
 - **ChartBridge x.y.z ready to install (flat, then F5)**: a new ChartBridge is staged. Nothing happens until Anthony
   installs it (below). A Windows notification says the same once, and so do `update.log` and `status.json`.
 - **ChartBridge x.y.z copied: press F5 when flat**: it was copied; it runs after F5 in the NinjaScript Editor.
+- **Page update cut off: run update-pc.ps1 status**: an install was cut off and could not repair itself (rare). Do not
+  reload; run `status` when flat.
 
 On a narrow window the notice is shortened ("Update ready"); hovering it shows the whole text.
 
-**Install a new ChartBridge** (while flat in every account):
+**Install a new ChartBridge** (while flat in every account, with the NinjaScript Editor closed: an open editor compiles
+as soon as a file changes):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 -InstallChartBridge
 ```
 
-It asks once (type `y`), copies the staged add-on files into `bin\Custom\AddOns` (the files it replaces are kept in
-`updater\previous-addons\`) and the matching page, then says: NinjaTrader > New > NinjaScript Editor > **F5** while
-flat, then open `http://localhost:8765/diag` and check `"version"` shows the new one (or run `update-pc.ps1 status`),
-then reload the chart page.
+It installs from `updater\staged\` (the green commit that was announced), never from the clone. It shows the staged
+version and the one compiled here, asks once (type `y`), then writes the add-on files next to the old ones and replaces
+them back to back (the files it replaces are kept in `updater\previous-addons\`). Then it says: open the NinjaScript
+Editor and press **F5** while flat, then open `http://localhost:8765/diag` and check `"version"` shows the new one (or
+run `update-pc.ps1 status`), then reload the chart page. A page that needs the new ChartBridge waits until /diag shows
+it (the next check after F5, or run `update-pc.ps1 update`); a page that works with both installs at once.
 
 **Pause, roll back, and the rest:**
 
@@ -216,6 +237,9 @@ then reload the chart page.
 Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
 without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader
 closed and nothing recorded yet); the page needs a newer ChartBridge; paused; or a commit rolled back by hand.
+
+With NinjaTrader closed, the ChartBridge version counted is the newest one `/diag` showed (or the one
+`-InstallChartBridge` copied, once seen), and never above the version in `bin\Custom\AddOns\ChartBridge.cs`.
 
 ## Trading from the chart
 

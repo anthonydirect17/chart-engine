@@ -10,7 +10,9 @@
  *   - ChartBridge: "ChartBridge x.y.z ready to install (flat, then F5)" when the updater has staged a newer one, and
  *     "ChartBridge x.y.z copied: press F5 when flat" once Anthony has copied it and not compiled it yet.
  * It never reloads the page, never opens anything, and sits on the status line at the bottom: it never covers the
- * order bar, the chart or anything of the live trade. Nothing is sent anywhere.
+ * order bar, the chart or anything of the live trade, and never moves them (it takes no room of its own on the line;
+ * a smoke sweeps 700 to 1920 px). Nothing is sent anywhere. When an install was cut off and could not be finished,
+ * it says so ("Page update cut off: run update-pc.ps1 status").
  */
 (function () {
   'use strict';
@@ -22,10 +24,12 @@
     if (document.getElementById('updNoticeStyle')) return;
     const s = document.createElement('style');
     s.id = 'updNoticeStyle';
-    // flex-basis 0: the notice only takes room the status line has left, so it never wraps the line, never pushes
-    // the chart up and never moves the order bar; a long one ends in "..." (the whole text is in its tooltip)
-    s.textContent = '.chart-live .status .upd-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); font-family: var(--sans); }' +
-      '.chart-live .status .upd-note::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }';
+    // flex-basis 0 and a margin that cancels the status line's 16 px column gap: the notice's outer size is 0, so it
+    // never wraps the line, never pushes the chart up and never moves the order bar; it only fills room that is left
+    // (text-indent puts the gap back inside it). A long text ends in "...", and a shorter form is picked when it fits.
+    s.textContent = '.chart-live .status .upd-note { flex: 1 1 0; min-width: 0; margin-left: -16px; text-indent: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); font-family: var(--sans); }' +
+      '.chart-live .status .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
+      '.chart-live .status .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }';
     document.head.appendChild(s);
   }
 
@@ -38,8 +42,9 @@
     el = document.createElement('span');
     el.className = 'upd-note';
     el.id = 'updNote';
-    el.setAttribute('role', 'status');
     el.hidden = true;
+    // what a screen reader says: the whole text, changed only when it changes (the visible form is refitted, unread)
+    el.innerHTML = '<span class="upd-vis" aria-hidden="true"></span><span class="upd-sr" role="status"></span>';
     footer.insertBefore(el, footer.querySelector('.ro'));
     return el;
   }
@@ -47,14 +52,17 @@
   function messages(u) {
     const parts = [], tips = [];
     const page = u && u.page, cb = (u && u.chartBridge) || {};
-    if (page && page.build) {
+    if (page && page.state === 'interrupted') {
+      parts.push(['Page update cut off: run update-pc.ps1 status', 'Page update cut off']);
+      tips.push('An install of new page files was cut off and could not be finished or undone. When flat, run nt8\\update-pc.ps1 status.');
+    } else if (page && page.build) {
       if (base === null) {
         base = page.build;
         // installed after this page began loading: what is running may be the old files (or a mix)
         if (+page.installedAt > started) pageNew = true;
       } else if (page.build !== base) pageNew = true;
     }
-    if (pageNew) {
+    if (pageNew && !(page && page.state === 'interrupted')) {   // never "reload" into a page that is cut off
       parts.push(['Update ready: reload when flat', 'Update ready']);
       tips.push('New chart page files' + (page && page.version ? ' (' + page.version + ')' : '') + ' are installed on this PC. This page keeps running what it loaded; reload it when flat to use them.');
     }
@@ -75,10 +83,12 @@
     shown = m;
     const node = spot();
     if (!node) return;
+    const vis = node.firstChild, sr = node.lastChild;
     node.title = [m.text, m.tip].filter(Boolean).join('\n');
     node.hidden = !m.text;
+    if (sr.textContent !== m.text) sr.textContent = m.text;
     // a narrow window: a shorter form when the whole text does not fit in the room the status line has left
-    for (const f of m.forms || [m.text]) { node.textContent = f; if (node.hidden || node.scrollWidth <= node.clientWidth + 1) break; }
+    for (const f of m.forms || [m.text]) { if (vis.textContent !== f) vis.textContent = f; if (node.hidden || node.scrollWidth <= node.clientWidth + 1) break; }
   }
 
   function schedule(ms) { clearTimeout(timer); timer = setTimeout(check, ms); }
@@ -86,14 +96,19 @@
   function check() {
     return fetch('update.json', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
-      .then(u => { const m = messages(u); show(m); schedule(POLL_MS); return m; },
-        () => { schedule(base === null ? SLOW_MS : POLL_MS); return null; });   // keeps what it shows
+      .then(u => { schedule(POLL_MS); const m = messages(u); show(m); return m; },
+        () => { schedule(base === null ? SLOW_MS : POLL_MS); return null; })   // keeps what it shows
+      .catch(() => { schedule(POLL_MS); return null; });                     // polling never stops
   }
 
   // the footer appears once live.js has built the page (after the PIN): attach the notice then
   const attach = setInterval(() => { if (spot()) { clearInterval(attach); show(shown); } }, 1000);
   // the room on the status line changes (its messages, the window's width, the fonts): pick the form that fits again
   setInterval(() => { if (el && !el.hidden) show(shown); }, 2000);
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => { if (el && !el.hidden) show(shown); });
+    const watch = setInterval(() => { if (spot()) { clearInterval(watch); ro.observe(el); } }, 1000);
+  }
   window.addEventListener('resize', () => { if (el && !el.hidden) show(shown); });
   window.ChartUpdateNotice = { checkNow: check };
   check();
