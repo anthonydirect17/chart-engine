@@ -670,6 +670,17 @@ Test '-InstallChartBridge never pins an older updater than the pinned one' {
 }
 $script:AddOnNames = @('ChartBridge.cs', 'ChartBridgeOrders.cs', 'ChartBridgePin.cs')
 function Get-AddOnMarks { return (($script:AddOnNames | ForEach-Object { if ((Get-Text (Join-Path $script:P.AddOns $_)) -match '0\.4\.1') { 'new' } else { 'old' } }) -join '/') }
+Test 'Get-AddOnHashes: a file another program holds reads as unreadable, never a crash that hides a mix (review 4 SF1)' {
+  if (-not (Test-Path $script:P.AddOns)) { New-Item -ItemType Directory -Force -Path $script:P.AddOns | Out-Null }
+  Put (Join-Path $script:P.AddOns 'HeldProbe.cs') 'probe'
+  $real = ${function:Get-FileSha256}
+  Set-Item function:script:Get-FileSha256 { param([string]$Path) if ($Path -like '*HeldProbe.cs') { throw 'The process cannot access the file because it is being used by another process.' } }
+  try { $h = Get-AddOnHashes @('HeldProbe.cs', 'NotThere.cs') } finally { Set-Item function:script:Get-FileSha256 $real; Remove-Item -LiteralPath (Join-Path $script:P.AddOns 'HeldProbe.cs') -Force }
+  Assert ($h['HeldProbe.cs'] -eq 'unreadable') "a held file is 'unreadable' (got $($h['HeldProbe.cs']))"
+  Assert ($h['NotThere.cs'] -eq 'missing') 'a missing file is still missing'
+  Assert (-not (Test-SameHashes $h @{ 'HeldProbe.cs' = 'unreadable'; 'NotThere.cs' = 'x' })) 'an unreadable set never matches another set'
+}
+
 Test '-InstallChartBridge: an add-on file held past the retry puts back every file already replaced; AddOns exactly as before (the reviewer''s p5_addons)' {
   $script:FakeDiag = '0.4.0'
   [void](Commit 'ChartBridge 0.4.1 (all three files change)' { Set-CbVersion '0.4.1'; foreach ($n in @('ChartBridgeOrders.cs', 'ChartBridgePin.cs')) { $f = Get-LocalPath $src "nt8/$n"; Put $f ((Get-Text $f) + "`n// 0.4.1`n") } })

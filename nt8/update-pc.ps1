@@ -1167,7 +1167,7 @@ function Invoke-Status {
   Write-Host "task:         $(if ($task) { "$TaskName ($($task.State))" } else { 'not registered (update-pc.ps1 register)' })"
   if ($task) {
     $want = ''
-    try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' '17:05'))).ToString('HH:mm') } catch { }
+    try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' '17:05'))).ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture) } catch { }
     foreach ($d in @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })) {
       $sb = Read-StartBoundary ([string]$d.StartBoundary)
       $note = ''
@@ -1225,12 +1225,15 @@ function Invoke-Rollback {
   } finally { $lock.Dispose() }
 }
 
-# The sha256 of each named file in AddOns, or 'missing' (read only).
+# The sha256 of each named file in AddOns, 'missing', or 'unreadable' when another program holds it (read only). An
+# unreadable file never matches a recorded set, so a mix stays reported instead of the run stopping on the read.
 function Get-AddOnHashes([string[]]$Names) {
   $h = @{}
   foreach ($n in $Names) {
     $f = Join-Path $script:P.AddOns $n
-    if (Test-Path -LiteralPath $f) { $h[$n] = Get-FileSha256 $f } else { $h[$n] = 'missing' }
+    if (Test-Path -LiteralPath $f) {
+      try { $h[$n] = Get-FileSha256 $f } catch { $h[$n] = 'unreadable' }
+    } else { $h[$n] = 'missing' }
   }
   return $h
 }
@@ -1252,6 +1255,7 @@ function Install-AddOnFiles($Stage, $State) {
   if (-not (Test-Path $script:P.AddOns)) { New-Item -ItemType Directory -Force -Path $script:P.AddOns | Out-Null }
   $names = @(Get-Field $Stage 'addonFiles' @())
   $before = Get-AddOnHashes $names
+  foreach ($n in $names) { if ($before[$n] -eq 'unreadable') { throw "$n in AddOns cannot be read (another program holds it): nothing was copied, try again" } }
   $keep = [string](Get-Field (Get-Field $State['chartBridge'] 'mixed') 'backup' '')
   $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff'))
   for ($i = 2; Test-Path -LiteralPath $backup; $i++) { $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff') + "-$i") }
@@ -1690,7 +1694,7 @@ function Sync-DailyTrigger {
     $at = [string](Get-Field $pin 'dailyAt' '17:05')
     $want = ConvertFrom-NewYorkTime $at
     $sb = Read-StartBoundary ([string]$daily[0].StartBoundary)
-    $res.have = $sb.hhmm; $res.want = $want.ToString('HH:mm')
+    $res.have = $sb.hhmm; $res.want = $want.ToString('HH:mm', [Globalization.CultureInfo]::InvariantCulture)
     if ($sb.ok -and -not $sb.offset -and $sb.hhmm -eq $res.want) { return $res }
     $why = ''; if ($sb.offset) { $why = ' (it was kept on UTC: StartBoundary had a UTC offset)' }
     Set-ScheduledTask -TaskName $TaskName -Trigger (@($others) + @(New-DailyTrigger $want)) | Out-Null
