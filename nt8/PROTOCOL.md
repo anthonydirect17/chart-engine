@@ -445,8 +445,9 @@ credit** (review 5 S1): right after a load, the live trades queued behind the re
 long, and that is not counted, so the chart can run behind by up to the length of the release plus 5 s before the rule
 acts, not 5 s, while trading stays enabled. Review 5 measured, at 3,000 trades a second: healthy pages 4.4 to 14.3 s
 behind right after a load, never closed; a page slower than the market closed only 37.6 s after `ready`; with repeated
-loads a slow page reached 17.2 s behind before its close. What shrinks the release is sending recent ticks first (the
-next step, branch live-first); this branch changes no page code. Order lane messages do not count (they go out first
+loads a slow page reached 17.2 s behind before its close. Live first (0.3.5, below) shrinks the release to the trades
+held while the recent window loads: in the same model, the page is 0.35 to 1.05 s behind right after `ready` (see Live
+first, post-load lag). Order lane messages do not count (they go out first
 anyway). Also closed, as before: 5,000 entries waiting while the message being sent has been stuck for over 2 seconds
 (a page that stopped reading), and over 5,000 order-lane messages waiting. The age is checked when something is queued
 for the page (and while a load waits to queue its next chunk), so a page with nothing new waiting is not closed; order
@@ -598,11 +599,29 @@ as a load's bulk data (like `history` and `ticks`), so it never counts as lag. H
 simulated at its pace, a million older trades in 101 chunks while live trades arrive):
 
 - a page taking 5 ms a 10,000-trade chunk and 30 us a live trade (Chromium on the build box: 2 to 3 ms a chunk, at most
-  13 ms; review 3 measured 26 to 31 us a live trade), 3,000 live trades a second: the older history in 3.4 s; the oldest
-  waiting market data at most 15 ms (the rule closes at 5,000 ms: a margin over 4.9 s); live trades waited median 0.2 ms,
-  p99 20 ms, at most 25 ms (3.3 ms p99 with no history coming);
-- a slow page, 25 ms a chunk and 100 us a trade, 1,500 live trades a second: 6.0 s; oldest waiting data at most 48 ms;
-  live trades waited p99 90 ms (60 ms p99 with no history coming: most of it is the slow page itself).
+  16 ms; review 3 measured 26 to 31 us a live trade), 3,000 live trades a second: the older history in 3.4 to 3.8 s; the
+  oldest waiting market data at most 15 to 44 ms (the rule closes at 5,000 ms: a margin of more than 4.9 s); live trades
+  waited median 0.2 ms, p99 20 to 31 ms, at most 25 to 62 ms (3.3 to 3.5 ms p99 with no history coming);
+- a slow page, 25 ms a chunk and 100 us a trade, 1,500 live trades a second: 5.9 to 6.0 s; oldest waiting data at most
+  43 to 48 ms; live trades waited p99 86 to 90 ms (60 ms p99 with no history coming: most of it is the slow page itself).
+(Numbers vary run to run on the build box; ranges over the runs made.)
+
+**Post-load lag** (review 5 S1, measured in review 5's own model: Lanes5.cs B's page with a Chromium-like buffer of
+24,000 or 400 messages, a 250 ms freeze at `ready`, 20 or 45 us a live trade, 3.5 ms a chunk, 3,000 live trades a second;
+driven through ChartBridge's own SubscribeLiveFirst, the recent window of 100,000 trades answered after 1, 2 or 5 s, the
+older history of 4.6 million trades answered 25 s after `ready` and pulled by the page). How far behind the page's live
+trades were:
+
+| | right after `ready` (first 5 s) | while NinjaTrader loads the rest | while 4.6 million older trades stream |
+|---|---|---|---|
+| 0.3.4 full load of 30, 45, 60 s (90,000 to 180,000 held; 7c28d55, the same box) | 4.3 to 13.1 s | | |
+| live first, recent window in 1 s (3,000 held) | 0.35 s (20 us), 0.42 s (45 us) | 0.01 to 0.04 s | 0.04 to 0.08 s (461 chunks in 6.4 to 7.1 s) |
+| live first, recent window in 2 s (6,000 held) | 0.43 s (20 us), 0.58 s (45 us), 0.53 s (400-message buffer) | 0.01 to 0.02 s | 0.05 to 0.07 s |
+| live first, recent window in 5 s (15,000 held) | 0.67 s (20 us), 1.05 s (45 us) | 0.01 to 0.02 s | 0.05 to 0.07 s |
+
+Never closed; the oldest waiting data (the 5 s rule's measure) at most 0.25 s. The post-load lag is now the release of
+the trades held while the recent window loads, so it grows with NinjaTrader's time to answer the requests by count: if
+that were as long as a full load's, it would be as before. `/diag` `fills.timeToLiveMs` shows it on the trading PC.
 
 **NinjaTrader's memory and CPU.** The recent window adds one request by count (100,000 trades, up to 800,000 quote rows a
 side, thinned to the rows that change the quote). The older history is the request a full load makes, copied the same way,

@@ -30,8 +30,11 @@ claims 1.7.0; the numbers are reconciled when both merge. Depends on ChartBridge
   seam's tick-rule continuation (ContinueSides, FixLast) run as before, on the recent window.
 - **The 5 s rule and the lanes:** `olderTicks` is data-lane bulk data (never counted as lag), `more` is market data
   only. Harness, a million older trades while live trades arrive: at the page's pace (5 ms a chunk, 30 us a trade, 3,000
-  trades a second) the oldest waiting data was at most 15 ms (the rule closes at 5,000), live trades waited median 0.2 ms,
-  p99 20 ms; a slow page (25 ms a chunk, 100 us a trade, 1,500 a second) at most 48 ms, p99 90 ms.
+  trades a second) the oldest waiting data was at most 15 to 44 ms (the rule closes at 5,000), live trades waited median
+  0.2 ms, p99 20 to 31 ms; a slow page (25 ms a chunk, 100 us a trade, 1,500 a second) at most 48 ms, p99 86 to 90 ms.
+- **Post-load lag** (review 5 S1): in review 5's own model at 3,000 trades a second, the page's live trades were 0.35 to
+  1.05 s behind right after `ready` (the recent window answered in 1 to 5 s), against 4.3 to 13.1 s after a full load of
+  30 to 60 s on 7c28d55, and at most 0.08 s while 4.6 million older trades streamed (461 chunks in 6.3 to 7.3 s).
 - **Cheaper text, for every load:** a trade's text is written straight into the message (0.41 us a trade on Mono, was
   3.94 us), byte for byte what 0.3.4 wrote (252,000 trades compared in 7 time zones across the DST changes). At most two
   chunks of the older history's text wait for the page at a time.
