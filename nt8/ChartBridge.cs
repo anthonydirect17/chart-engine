@@ -1078,21 +1078,27 @@ namespace NinjaTrader.NinjaScript.AddOns
         // within each lane is kept. A data message never goes out ahead of an order-lane message sent before it.
         // The outbox holds one message (a string), several sent in order (a string[], SendAll), or Wake (an order-lane
         // message is waiting).
-        // A page more than 5 s behind is reconnected (review 3, Anthony's "just a reset"): it is closed, and it reconnects on
-        // its own and reloads. "Behind" is how long the oldest waiting market data entry has waited (DataAgeMs), counted
-        // from when it was queued, or from when the last history or ticks chunk (a load's bulk data) finished sending if that
-        // is later: a load's chunks go out back to back at the page's pace, and none of them is late for the page. Also
-        // closed: 5,000 entries waiting while the message being sent has been stuck for over StuckMs (2 s), and over 5,000
-        // order-lane messages waiting.
+        // A page more than 5 s behind is reconnected (review 3, Anthony's "just a reset"): it is closed (and its socket
+        // aborted, so the page sees it), and it reconnects on its own and reloads. "Behind" is how long the oldest waiting
+        // market data entry has waited (DataAgeMs), not counting the time spent sending the page's own bulk data meanwhile:
+        // a load's history and ticks chunks and the held trades released after "ready" (review 4 B1). They go out back to
+        // back at the page's pace and none of them is late; a live backlog still ages during every other send, so bulk data
+        // can never hide it. Only bulk sends that have finished are credited, so a page frozen in the middle of one still
+        // ages. Also closed: 5,000 entries waiting while the message being sent has been stuck for over StuckMs (2 s), and
+        // over 5,000 order-lane messages waiting.
         public const int SoftCap = 5000;
         public const double StuckMs = 2000, MaxLagMs = 5000;
         private static readonly object Wake = new object();
         private readonly BlockingCollection<object> outbox = new BlockingCollection<object>(new ConcurrentQueue<object>());
-        private readonly ConcurrentQueue<long> queuedAt = new ConcurrentQueue<long>();   // Stopwatch time each data entry was queued, in outbox order
+        private struct Stamp { public long At, Bulk; }   // when a data entry was queued, and bulkSpent then
+        private readonly ConcurrentQueue<Stamp> queuedAt = new ConcurrentQueue<Stamp>();   // one per data entry, in outbox order
         private readonly ConcurrentQueue<string> orderLane = new ConcurrentQueue<string>();
         private int orderLaneCount;
         private long sendStarted;               // Stopwatch timestamp when the message being sent was handed to the socket; 0 when none
-        private long bulkDone;                  // Stopwatch timestamp when the last history or ticks chunk finished sending
+        private long bulkSpent;                 // Stopwatch ticks spent on finished bulk sends (chunks and released trades), in all
+        private int bulkQueued;                 // history and ticks chunks queued and not yet sent (a load keeps at most BulkWindow)
+        private volatile bool loopStarted;
+        private readonly ManualResetEventSlim bulkSent = new ManualResetEventSlim(false);
         private readonly CancellationTokenSource cts = new CancellationTokenSource();
 
         public ChartBridgeClient(WebSocket socket, int id) { Socket = socket; Id = id; }
@@ -1132,12 +1138,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // How long the oldest waiting market data entry has waited, in ms (0 when none waits). See above.
         public double DataAgeMs()
         {
-            long q;
+            Stamp q;
             if (!queuedAt.TryPeek(out q)) return 0;
-            return Math.Max(0, MsSince(Math.Max(q, Interlocked.Read(ref bulkDone))));
+            long waited = Stopwatch.GetTimestamp() - q.At - (Interlocked.Read(ref bulkSpent) - q.Bulk);
+            return Math.Max(0, waited * 1000.0 / Stopwatch.Frequency);
         }
 
         public int Queued { get { return outbox.Count; } }
+        public int BulkQueued { get { return Volatile.Read(ref bulkQueued); } }
         public int OrderLaneQueued { get { return Volatile.Read(ref orderLaneCount); } }
 
         // Into the outbox, or false when the page is closed for being behind or stuck (see above). Never blocks, never
@@ -1149,7 +1157,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (age > MaxLagMs) { NotKeepingUp(age); return true; }
             try
             {
-                if (item != Wake) queuedAt.Enqueue(Stopwatch.GetTimestamp());
+                if (item != Wake)
+                {
+                    queuedAt.Enqueue(new Stamp { At = Stopwatch.GetTimestamp(), Bulk = Interlocked.Read(ref bulkSpent) });
+                    string one = item as string;
+                    if (one != null && Bulk(one)) Interlocked.Increment(ref bulkQueued);
+                }
                 if (!outbox.TryAdd(item)) NotKeepingUp(null);
             }
             catch (InvalidOperationException) { }   // closed meanwhile (CompleteAdding): Send after Close does nothing
@@ -1218,27 +1231,56 @@ namespace NinjaTrader.NinjaScript.AddOns
             return true;
         }
 
+        // A load's history and ticks chunks are made and queued a few at a time (review 4 S1): before each one, the loading
+        // thread waits until fewer than BulkWindow chunks wait for this page, so a load holds a few MB here, not all of it
+        // (a 20,000-trade chunk is about 1.3 MB as a .NET string). While it waits it checks the 5 s rule, so a page frozen
+        // during a load is closed too. False when the page was closed. No wait before the send loop runs (the harness).
+        public static int BulkWindow = 3;   // settable only for the harness (to compare with queuing a whole load at once)
+        public bool WaitForBulkRoom()
+        {
+            while (loopStarted && Volatile.Read(ref bulkQueued) >= BulkWindow)
+            {
+                if (cts.IsCancellationRequested) return false;
+                double age = DataAgeMs();
+                if (age > MaxLagMs) { NotKeepingUp(age); return false; }
+                bulkSent.Reset();
+                if (Volatile.Read(ref bulkQueued) < BulkWindow) break;
+                bulkSent.Wait(100);
+            }
+            return !cts.IsCancellationRequested;
+        }
+
         public async Task SendLoop()
         {
+            loopStarted = true;
             try
             {
                 foreach (object item in outbox.GetConsumingEnumerable(cts.Token))
                 {
                     if (!await SendOrderLane()) return;
                     if (item == Wake) continue;
-                    long ignored; queuedAt.TryDequeue(out ignored);   // this entry no longer waits
+                    Stamp ignored; queuedAt.TryDequeue(out ignored);   // this entry no longer waits
                     string[] batch = item as string[];
                     if (batch == null)
                     {
                         string one = (string)item;
+                        bool bulk = Bulk(one);
+                        long t0 = Stopwatch.GetTimestamp();
                         if (!await SendText(one)) return;
-                        if (Bulk(one)) Interlocked.Exchange(ref bulkDone, Stopwatch.GetTimestamp());
+                        if (bulk)
+                        {
+                            Interlocked.Add(ref bulkSpent, Stopwatch.GetTimestamp() - t0);
+                            Interlocked.Decrement(ref bulkQueued);
+                            bulkSent.Set();
+                        }
                         continue;
                     }
-                    foreach (string msg in batch)
+                    foreach (string msg in batch)   // the release after "ready": bulk too (review 4 B1)
                     {
                         if (!await SendOrderLane()) return;
+                        long t0 = Stopwatch.GetTimestamp();
                         if (!await SendText(msg)) return;
+                        Interlocked.Add(ref bulkSpent, Stopwatch.GetTimestamp() - t0);
                     }
                 }
             }
@@ -1261,6 +1303,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             try { cts.Cancel(); } catch (Exception) { }
             try { outbox.CompleteAdding(); } catch (Exception) { }
+            // Review 4 B2: also end the connection, so the page always sees the close and reconnects (a close between two
+            // sends used to leave the socket open: the page stayed connected, silent and Armed). Abort is thread safe.
+            try { if (Socket != null) Socket.Abort(); } catch (Exception) { }
+            try { bulkSent.Set(); } catch (Exception) { }
         }
     }
 
@@ -2052,6 +2098,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (inChunk == chunk || i == n - 1)
                 {
                     b.Append("],\"done\":").Append(final && i == n - 1 ? "true" : "false").Append('}');
+                    if (!L.Client.WaitForBulkRoom()) return;   // a few chunks at a time (review 4 S1)
                     if (!Current(L)) return;
                     L.Client.Send(b.ToString());
                     b = null;
@@ -2327,6 +2374,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (inChunk == chunk || i == n - 1)
                 {
                     b.Append("],\"done\":").Append(i == n - 1 ? "true" : "false").Append('}');
+                    if (!L.Client.WaitForBulkRoom()) return;   // a few chunks at a time (review 4 S1)
                     if (!Current(L)) return;   // the page subscribed again: stop mid-backfill
                     L.Client.Send(b.ToString()); b = null;
                 }

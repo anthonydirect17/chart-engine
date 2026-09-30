@@ -428,31 +428,50 @@ under 1 ms (0.3.3 and the first 0.3.4 round: 0.45 s and 4.1 s, when the page was
 connection when the oldest market data waiting for it has waited more than 5 seconds; the page then reconnects on its
 own (without asking for the PIN again, as after any drop), signs in again and reloads, so it shows live data again and
 Armed is off. The Output window says so once, with the lag: "Client N is not keeping up: 5.0 s behind; closing it (the
-page reconnects and reloads)." The wait is counted from when the data was queued, or, when later, from when the last
-`history` or `ticks` chunk of a load finished sending: a load's chunks go out back to back at the page's pace and none
-of them is late (a 48 hour backfill is about 130 chunks of 20,000 trades; Chromium takes about 3.5 ms for one). Order
-lane messages do not count (they go out first anyway). Also closed, as before: 5,000 entries waiting while the message
-being sent has been stuck for over 2 seconds (a page that stopped reading), and over 5,000 order-lane messages waiting.
-Harness:
+page reconnects and reloads)." A close always ends the connection itself (the socket is aborted), so the page sees it
+and reconnects, whenever it lands (review 4 B2: a close between two sends used to leave the page connected, silent and
+Armed).
 
-- a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after about 7 s, 5.0 s behind;
-  one taking 0.4 ms (2,500 a second) after 18 to 25 s (it falls behind by about 0.2 s a second), 5.0 s behind (0.3.3
-  closed both at 5,000 entries, about 1.7 s behind; the second 0.3.4 round let them fall about 17 s behind);
-- 20,000 held trades released after `ready` at the page's real pace (30 us a message; review 3 measured 26 to 31 us a
-  live trade), with 3,000 live trades a second after it: not closed, every message in order (a slow page at 200 us a
-  message with 1,500 a second is not closed either: the last of the release waits about 4 s);
-- a 48 hour load (130 chunks), then a 20,000-trade release and live trades: not closed at 3.5 ms a chunk (drained in
-  about 1.4 s) or at 50 ms a chunk (about 8.7 s; the oldest wait never over about 1 s).
+How the wait is counted (review 4 B1): each waiting entry's time since it was queued, minus the time ChartBridge spent
+meanwhile sending the page's own bulk data: a load's `history` and `ticks` chunks, and the held trades released after
+`ready`. Those go out back to back at the page's pace and none of them is late; after a lag close at 3,000 trades a
+second the reload holds the load's seconds times the rate (about 90,000 trades for a 30 s load), and counting that
+release as lag would close the page again on every reload. A live backlog still ages during every other send, so bulk
+data can never hide it, and only bulk sends that have finished are credited, so a page frozen in the middle of one
+still ages. Order lane messages do not count (they go out first anyway). Also closed, as before: 5,000 entries waiting
+while the message being sent has been stuck for over 2 seconds (a page that stopped reading), and over 5,000
+order-lane messages waiting. The age is checked when something is queued for the page (and while a load waits to queue
+its next chunk), so a page with nothing new waiting is not closed; order replies stuck behind a stuck send with no
+market data waiting are closed only by the 5,000-entry rule (review 4 N3). Harness (Mono; times vary run to run):
 
-Memory (review 3 measured 350 bytes a queued trade): at most about 5 s of market data waits per page, about 15,000
-trades or 5 MB at 3,000 trades a second, plus a load's own `history` and `ticks` chunks while they go out (about
-600 KB each; a 48 hour backfill about 75 MB for the seconds it takes). An entry is not a message: the release after
-`ready` and each chunk count as one. There is no limit on the number of pages (each open tab, The Desk's relay, each
-embed is one).
+- a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after about 7 s, 5.0 s behind,
+  also right after a load; one taking 0.4 ms (2,500 a second) after about 15 to 28 s (it falls behind by about 0.2 s a
+  second), 5.0 s behind (0.3.3 closed both at 5,000 entries, about 1.7 s behind; the second 0.3.4 round let them fall
+  about 17 s behind);
+- the reload at 3,000 trades a second in review 4's model (230 chunks at 3.5 ms, a 250 ms page freeze on `ready`), with
+  90,000 or 130,000 held trades released at 42 or 84 us a message and 3,000 live trades a second behind: never closed,
+  everything delivered, the oldest live wait 0.7 to 2.0 s (the third round closed three of these four 5.2 to 5.4 s after
+  `ready`, and would have again on every reload);
+- a 48 hour load (130 chunks), then a release and live trades: not closed at 3.5 ms or 50 ms a chunk.
+
+Memory. A 20,000-trade `ticks` chunk is about 1.1 to 1.3 MB as a .NET string (600 KB on the wire). Since review 4
+(S1) a load makes and queues its chunks at most three ahead of the page (`BulkWindow`): the loading thread waits for
+room before making the next one, so a loading page holds about 4 MB of chunks, not the whole load (before: a 48 hour
+backfill about 166 MB, Anthony's Range 40 over 28 hours, 4.6 million trades, about 295 MB per loading page, several
+pages reloading together about 0.9 GB). Harness, a 600,000-trade load through the real subscribe, four runs: at 3.5 ms
+a chunk (Chromium's measured pace) about one chunk ever waited either way (making a chunk takes longer on Mono) and
+"ready" reached the page after 2.7 to 5.0 s either way; at 300 ms a chunk (a page slower than ChartBridge makes the
+chunks) the old way had 17 to 23 of the 30 chunks waiting at once (18 to 25 MB), the window 3 (3 MB), and "ready" came
+after 9.3 to 9.8 s either way: the window does not slow a load. Market data
+(review 3 measured 350 bytes a queued trade): at most about 5 s waits per page, about 15,000 trades or 5 MB at 3,000
+trades a second. The held trades of a loading page (in `Pending`) are about 350 bytes each: 90,000 are about 31 MB for
+the seconds of the load. An entry is not a message: the release after `ready` and each chunk count as one. There is no
+limit on the number of pages (each open tab, The Desk's relay, each embed is one).
 
 A Send that races a page's Close (a tab closing while NinjaTrader sends an order update to every page) drops the
 message quietly instead of throwing out of the loop that sends it to the other pages (review 3 S2). A send that fails
-closes the page, so it reconnects instead of staying connected and silent (review 3 N1). A load's own warnings
+closes the page and ends its connection, so it reconnects instead of staying connected and silent (review 3 N1, review 4
+B2). A load's own warnings
 ("Minute history failed", "Tick history failed", "No instrument") go in the data lane, after that load's history, as in
 0.3.3 (review 3 N3). `pong` goes in the order lane, so it measures the round trip to ChartBridge and not the market data
 waiting in front of it (review 3 N4).
