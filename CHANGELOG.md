@@ -70,7 +70,9 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
     (in whole seconds), and that delta counted from the moment the page went live, the delta is built again at once
     with the later, honest start, the one on screen kept until then, and labelled "this PC's clock is 10 s behind the
     exchange's". Review 2's scenario C (the clock 10 s behind, a 1m view with no tick backfill going live at 17:59:53)
-    now reads "Cumulative delta +N from 18:01 ET, not 18:00: this PC's clock is 10 s behind the exchange's".
+    now reads "Cumulative delta +N from 18:01 ET, not 18:00: this PC's clock is 10 s behind the exchange's". The
+    status line's feed delay (`rx - u`) said "(PC clock ahead)" when it was negative, which means the PC's clock is
+    behind the data's; it now says "(PC clock behind)" (wrong since 1.1.0, found while testing this).
 
   Anything else, such as a backfill The Desk's relay capped at 8 hours or NinjaTrader sending less than asked, is never
   taken as whole, even when it starts seconds after 18:00. A bar that started before that moment is left out whole

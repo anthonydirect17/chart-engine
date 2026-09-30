@@ -2009,7 +2009,7 @@ function start(container, opt, PAGE) {
   /* ---------------- status line */
   every(() => {
     const f = median(delays.feed), l = median(delays.local);
-    $('dFeed').textContent = f === null ? '-' : Math.round(f) + ' ms' + (f < 0 ? ' (PC clock ahead)' : '');
+    $('dFeed').textContent = f === null ? '-' : Math.round(f) + ' ms' + (f < 0 ? ' (PC clock behind)' : '');
     $('dLocal').textContent = l === null ? '-' : (l < 1 ? '<1' : Math.round(l)) + ' ms';
     const s = chart.stats();
     $('fps').textContent = s.idle ? 'idle' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms/frame';
