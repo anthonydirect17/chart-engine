@@ -220,8 +220,9 @@ try {
     const base = await look(a);
     check(base.theme === '#080B10' && base.canvas === '#080B10' && base.legend === 'rgba(8, 11, 16, 0.78)', 'default ground unchanged: ' + JSON.stringify(base));
     await a.screenshot({ path: path.join(SHOTS, 'bg-dark-default.png') });
-    /* ---- the order bar looks exactly as in 1.5.2 on every ground, off and Armed (review 2, B1), and the page chrome
-       goes light only on clearly light grounds (9:1 against #080B10 or more) */
+    /* ---- the order bar looks exactly as in 1.5.2 on every ground the page chrome keeps dark, off and Armed (review 2,
+       B1); since 1.9.0 it goes light with the chrome on clearly light grounds (9:1 against #080B10 or more; Anthony:
+       "white chart, white top bar"), its ground the chart's */
     await a.waitForFunction(() => !document.getElementById('armBtn').disabled, null, { timeout: 15000 });
     const sweep = await a.evaluate(({ grounds }) => {
       const props = ['color', 'backgroundColor', 'borderTopColor', 'borderBottomColor', 'boxShadow', 'opacity', 'colorScheme', 'outlineColor'];
@@ -229,7 +230,7 @@ try {
       const snap = () => JSON.stringify(els().map(el => { const cs = getComputedStyle(el); return props.map(k => cs[k]); }));
       const hex = document.querySelector('.ce-theme-panel input[data-hex="bg"]');
       const setBg = v => { hex.value = v; hex.dispatchEvent(new Event('input', { bubbles: true })); };
-      const out = { off: [], armed: [], chrome: [], n: 0, lit: [] };
+      const out = { off: [], armed: [], chrome: [], n: 0, lit: [], unfollowed: [] };
       setBg('#080B10');
       for (const armed of [false, true]) {
         if (armed) document.getElementById('armBtn').click();
@@ -238,9 +239,10 @@ try {
         if (armed) out.baseArmed = base; else out.baseOff = base;
         for (const [g, light] of grounds) {
           setBg(g); out.n++;
-          if (snap() !== base) out[armed ? 'armed' : 'off'].push(g);
           const root = getComputedStyle(document.querySelector('.chart-live')).backgroundColor;
           const isLight = root !== 'rgb(8, 11, 16)';
+          if (!light && snap() !== base) out[armed ? 'armed' : 'off'].push(g);
+          if (light && getComputedStyle(document.querySelector('.obar-ground')).backgroundColor !== root) out.unfollowed.push(g);
           if (isLight !== light) out.chrome.push(g + (light ? ' should be light' : ' should stay dark'));
           if (isLight) out.lit.push(g);
         }
@@ -252,7 +254,8 @@ try {
       return out;
     }, { grounds: CE.BACKGROUNDS.map(g => g.bg).concat([...Array(256).keys()].map(v => { const h = v.toString(16).padStart(2, '0').toUpperCase(); return '#' + h + h + h; }))
         .map(g => [g, !!U.chromeColors(U.buildTheme({ bg: g }))]) });
-    check(sweep.off.length === 0 && sweep.armed.length === 0, 'order bar computed styles identical to the default ground on the 4 presets and 256 greys, off and Armed (' + sweep.n + ' grounds): ' + JSON.stringify([sweep.off.slice(0, 5), sweep.armed.slice(0, 5)]));
+    check(sweep.off.length === 0 && sweep.armed.length === 0, 'order bar computed styles identical to the default ground on every dark and mid ground of the 4 presets and 256 greys, off and Armed (' + sweep.n + ' grounds): ' + JSON.stringify([sweep.off.slice(0, 5), sweep.armed.slice(0, 5)]));
+    check(sweep.unfollowed.length === 0, 'on every light ground the order bar takes the page chrome\'s ground (1.9.0): ' + sweep.unfollowed.slice(0, 5).join(', '));
     check(sweep.literal.buy === 'rgb(61, 220, 151)' && sweep.literal.sell === 'rgb(255, 122, 122)' && sweep.literal.bar === 'rgb(15, 21, 29)' && sweep.literal.ground === 'rgb(8, 11, 16)',
       'order bar in the 1.5.2 colors: Buy #3DDC97, Sell #FF7A7A, bar #0F151D: ' + JSON.stringify(sweep.literal));
     check(sweep.chrome.length === 0 && !sweep.lit.includes('#888888') && sweep.lit.includes('#F5F7FA'), 'the page chrome goes light only at 9:1 or more against #080B10 (' + (sweep.lit.length / 2) + ' of the grounds): ' + sweep.chrome.slice(0, 5).join(', '));

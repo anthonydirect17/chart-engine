@@ -8,21 +8,22 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.7.0 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
+- **Engine version:** 1.9.0 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
   default ground every color below is unchanged. 1.6.0 is the live page's Indicators menu "E2" and chip strip; the
   chart itself draws exactly as in 1.5.3. 1.7.0 adds the cumulative delta pane below the chart; with it off the chart
-  draws exactly as in 1.6.0).
+  draws exactly as in 1.6.0. 1.9.0 adds color presets and indicator colors in the gears; with the default colors the
+  chart draws exactly as in 1.7.0).
 
 ## Colors
 
 Candle colors are Anthony's choice and can be changed in the chart's **Colors** panel (presets and
-pickers, saved per browser). Defaults:
+pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defaults:
 
 | Use | Value |
 |---|---|
 | Bull candle and volume | `#4B9CD3` Carolina blue (volume at 26% opacity) |
 | Bear candle and volume | `#6D28D9` deep purple (volume at 26% opacity) |
-| VWAP | `#B69CFF` (also in the Colors panel) |
+| VWAP | `#B69CFF` (its color in the VWAP gear, 1.9.0) |
 | Trade entry | `#3DDC97` long, `#FF7A7A` short (house trade-side colors) |
 | Trade result line and chip | `#3DDC97` profit, `#FF7A7A` loss |
 | Trade exit, live dot | `#F2F6FA` |
@@ -83,10 +84,28 @@ frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
   house near-black, borders 12% and 24%, text at 7:1 and secondary text, accents (deep purple `#6D28D9` on a light
   purple tint), warn and info at 4.5:1, each on the darkest surface it sits on. On the default, dark and mid grounds
   the page keeps the dark house style.
-- **The order bar never changes with the ground:** on every ground it is exactly the 1.5.2 bar (dark `#0F151D` bar,
-  green Buy, red Sell, the amber Armed switch and tint), on the house ground `#080B10`.
+- **The order bar follows the page chrome (1.9.0, Anthony: "white chart, white top bar").** On the default, dark
+  and mid grounds it is exactly the 1.5.2 bar (dark `#0F151D` bar, green Buy, red Sell, the amber Armed switch and
+  tint, on `#080B10`). On a clearly light ground it goes light with the toolbar: its ground is the chart's, the bar
+  the raised surface, Buy and Sell keep an 8% tint (16% on hover) of the house `#3DDC97` and `#FF7A7A`, their text
+  the same hue darkened until it reads 4.5:1 on the hover tint, Armed the amber `--warn` with ground-colored text
+  (4.5:1). Before 1.9.0 the bar never changed with the ground (review 2, B1); Anthony asked for it to follow. Only
+  colors change: every control, its place and what it does stay as they were.
 - Saved per browser with the other colors (`live-colors-v1`, one field at a time, per storage prefix, so The
   Desk's embedded chart keeps its own).
+
+**Presets and indicator colors (1.9.0, Anthony: "Bar colors and chart color should be a preset. Indicator colors
+should have their own preset group, so I can set colors for indicators on a white chart vs a dark chart").**
+- The Colors panel holds Bull, Bear and the Background (VWAP moved to its gear), then two preset groups: **Chart
+  presets** (bull, bear and the background) and **Indicator presets** (every indicator color). Each lists its presets
+  (a swatch and the name; the one matching the colors in use is shown pressed), a pencil to rename, an x to delete
+  (a second click confirms, Escape keeps it), and a name box with Save (Replace when the name is taken, any case).
+- Indicator colors are set in each indicator's gear, a picker and a hex box each, and Default colors: VWAP (line),
+  Levels (prior day, overnight, value area, prior close), Initial balance (high, low), Volume profile (point of
+  control). The volume bars and the delta pane keep the candle colors; fills keep the house trade-side colors. On a
+  ground other than the default they move to read exactly as the house colors do (the IB high stays the brighter).
+- The colors in use stay per browser (`live-colors-v1`, `live-indicator-colors-v1`); the presets go through one small
+  store interface (`LivePrefs.localPresetStore`: this browser today, a store shared by every PC once one is chosen).
 
 ## Type
 

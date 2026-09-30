@@ -445,7 +445,9 @@ formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `build
 
 Defaults: bull `#4B9CD3` (Carolina blue), bear `#6D28D9` (deep purple), VWAP `#B69CFF`.
 `mountThemePanel(chart, host)` adds a **Colors** button with presets and pickers; choices are saved in
-that browser. Trade marks use the house trade colors on purpose: entries are green (long) or red
+that browser. Its options (1.9.0): `vwap: false` leaves the VWAP picker out (the live page sets the VWAP in its gear),
+`note` replaces the line at its foot, and the returned `slot` is an empty element above Reset for a page's own rows
+(the live page's named chart and indicator presets). Trade marks use the house trade colors on purpose: entries are green (long) or red
 (short), results are green (profit) or red (loss). Text drawn in a candle color is lightened
 automatically so it stays readable.
 

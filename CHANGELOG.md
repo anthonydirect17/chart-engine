@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.9.0 (2026-09-30): color presets, indicator colors in their gears, the order bar follows the chrome
+
+Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling.
+The Desk gets it with the new `live/live.js`, `live/live.css` and `src/chart-engine.js`. With the default colors the
+chart draws exactly as 1.7.0; the order bar's controls, places and actions are unchanged (only its colors on a light
+ground). No file under `nt8/`, `live/order-ticket.js`, `live/pin.js` or the order tests changes.
+- **Named presets, two groups** (Anthony: "Bar colors and chart color should be a preset. Indicator colors should have
+  their own preset group"). The Colors panel gets **Chart presets** (bull, bear and the background) and **Indicator
+  presets** (every indicator color). Save the colors in use under a name (Enter or Save; a name already used, in any
+  case, is replaced and the button says Replace), pick one to apply it, rename it (the pencil; Enter keeps, Escape
+  cancels) and delete it (the x, a second click confirms). The one matching the colors in use shows as pressed. Up to 24
+  per group, names up to 40 characters. The built-in presets (Carolina, Mint, House, the four grounds) stay as they were.
+- **One small store for the presets:** `LivePrefs.localPresetStore(storage)` (`list`, `save`, `rename`, `remove`, each
+  returning a promise, and `shared`), in this browser today (`live-color-presets-v1`, per storage prefix, read fresh on
+  every call so two windows do not undo each other). A store shared by every PC plugs in as `ChartLive.mount`'s
+  `presetStore` option once Anthony chooses one (live/EMBED.md); the panel's foot says where presets are kept.
+  Damaged or blocked storage lists nothing and refuses to save with a plain message; nothing throws.
+- **Indicator colors in each indicator's gear** (the brief: editable in that indicator's own settings): a
+  picker and a hex box per color, and Default colors. VWAP (line), Levels (prior day high and low, overnight, value area,
+  prior close), Initial balance (high, low), Volume profile (point of control). Applied at once to the chart, without
+  rebuilding anything from the bars; shared by the charts of one storage prefix (`live-indicator-colors-v1`). The VWAP
+  picker moves out of the Colors panel into the VWAP gear; a VWAP color saved before 1.9.0 is kept. On a ground other
+  than the default the chosen colors move to read as the house ones do (the IB high still the brighter).
+- **The order bar follows the page chrome** (Anthony: "white chart, white top bar"). On a clearly light ground (the
+  same 9:1 rule as the toolbar) the bar goes light with the rest of the chrome: its ground and surface from
+  `chromeColors`, Buy and Sell on a light tint of the house green and red with their text darkened in the same hue to
+  4.5:1, Armed in the chrome's amber at 4.5:1. On the default, dark and mid grounds it is exactly the 1.5.2 bar, as
+  before. This reverses the 1.5.3 rule "the order bar never changes with the ground" (review 2, B1), at Anthony's request.
+- **Engine:** `levelLines(lv, colors)` and `ibLines(ib, colors)` take optional colors over `LEVEL_COLORS`
+  (`levelColors`); `chromeColors` adds `--buy`, `--sell` (with `-edge`, `-tint`, `-hover`) and `--warn-tint`;
+  `mountThemePanel` takes `vwap: false`, `note`, and returns `slot` and `isOpen()`. The Colors panel scrolls when taller
+  than the window.
+- **Tests:** `test/presets.test.js` (the store, its refusals, damaged storage, prefixes, indicator colors and their
+  migration, level and IB colors, Buy, Sell and Armed contrast on every light ground) and `npm run smoke:presets` (the
+  panel, every preset action, the light order bar and its Buy MKT and Flatten, the gears, a second window, a reload).
+  `smoke:ib` now checks the bar is unchanged on non-light grounds and follows the chrome on light ones; `smoke:embed`
+  sets pane B's VWAP in its gear.
+
 ## 1.7.0 (2026-09-30): the cumulative delta pane
 
 Page and engine; works with ChartBridge 0.3.4 (trade sides) and draws nothing but a note with 0.3.3 and older, no

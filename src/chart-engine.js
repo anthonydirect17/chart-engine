@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.7.0
+ * chart-engine 1.9.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.7.0';
+const VERSION = '1.9.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -366,6 +366,15 @@ function chromeColors(T) {
     '--loss': on(T.loss, FLOOR.text), '--profit': on(T.profit, FLOOR.text), '--panel': bg,
     '--scheme': 'light',
   };
+  /* The order bar follows the page chrome (1.9.0, Anthony: "white chart, white top bar"). Its Buy and Sell keep a tint
+     of the house green and red, and their text reads on the strongest of those tints (hover, over the bar). The house
+     amber tints the bar while Armed; the switch and the pill are ground-colored text on --warn. */
+  for (const [side, house] of [['buy', '#3DDC97'], ['sell', '#FF7A7A']]) {
+    const hover = mix(s2, house, 0.16), text = legible(on(house, FLOOR.text), hover, FLOOR.text, BLACK);
+    v['--' + side] = text; v['--' + side + '-edge'] = rgba(text, 0.55);
+    v['--' + side + '-tint'] = rgba(house, 0.08); v['--' + side + '-hover'] = rgba(house, 0.16);
+  }
+  v['--warn-tint'] = rgba('#E0B45A', 0.07);
   // the Colors button and panel (mountThemePanel reads these, falling back to the dark house colors)
   Object.assign(v, {
     '--ce-text': v['--text'], '--ce-text2': v['--text2'], '--ce-muted': v['--text3'], '--ce-s2': s2, '--ce-s3': s3,
@@ -445,14 +454,21 @@ function sessionLevels(bars, opts) {
   if (on.length) { res.onh = Math.max(...on.map(b => b.h)); res.onl = Math.min(...on.map(b => b.l)); }
   return res;
 }
-/** sessionLevels() result -> level lines in the house style. */
-function levelLines(lv) {
+/* LEVEL_COLORS with the valid #RRGGBB entries of `colors` over it (1.9.0: the page's indicator colors). */
+function levelColors(colors) {
+  const out = Object.assign({}, LEVEL_COLORS);
+  if (colors) for (const k of Object.keys(LEVEL_COLORS)) if (/^#[0-9a-f]{6}$/i.test(colors[k])) out[k] = colors[k].toUpperCase();
+  return out;
+}
+/** sessionLevels() result -> level lines in the house style, or in `colors` ({ prior, overnight, value, close }). */
+function levelLines(lv, colors) {
   if (!lv) return [];
+  const C = levelColors(colors);
   const L = [
-    ['PDH', lv.pdh, LEVEL_COLORS.prior, [6, 4]], ['VAH', lv.vah, LEVEL_COLORS.value, [3, 4]],
-    ['ONH', lv.onh, LEVEL_COLORS.overnight, [6, 4]], ['Prior close', lv.pc, LEVEL_COLORS.close, [2, 3]],
-    ['ONL', lv.onl, LEVEL_COLORS.overnight, [6, 4]], ['VAL', lv.val, LEVEL_COLORS.value, [3, 4]],
-    ['PDL', lv.pdl, LEVEL_COLORS.prior, [6, 4]],
+    ['PDH', lv.pdh, C.prior, [6, 4]], ['VAH', lv.vah, C.value, [3, 4]],
+    ['ONH', lv.onh, C.overnight, [6, 4]], ['Prior close', lv.pc, C.close, [2, 3]],
+    ['ONL', lv.onl, C.overnight, [6, 4]], ['VAL', lv.val, C.value, [3, 4]],
+    ['PDL', lv.pdl, C.prior, [6, 4]],
   ];
   return L.filter(x => x[1] !== null && x[1] !== undefined).map(([name, price, color, dash]) => ({ name, price, color, dash }));
 }
@@ -640,14 +656,14 @@ const IB_FORMING_DASH = [12, 5];
 /**
  * initialBalance() result -> level lines "IBH" and "IBL", drawn from 9:30 (`from`) to the right edge: long dashes
  * while forming, solid once locked. The high is the brighter orchid (Anthony, 1.5.3); `tone` keeps it the brighter
- * one on any ground.
+ * one on any ground. `colors` ({ ibHigh, ibLow }, 1.9.0) replaces the house orchids.
  */
-function ibLines(ib) {
+function ibLines(ib, colors) {
   if (!ib || ib.high === null || ib.low === null || (ib.state !== 'forming' && ib.state !== 'locked')) return [];
-  const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [];
+  const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [], C = levelColors(colors);
   return [
-    { name: 'IBH', price: ib.high, color: LEVEL_COLORS.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
-    { name: 'IBL', price: ib.low, color: LEVEL_COLORS.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
+    { name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
+    { name: 'IBL', price: ib.low, color: C.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
   ];
 }
 
@@ -717,7 +733,7 @@ const CSS = `
 .ce-theme-btn:hover{background:var(--ce-s3,#141C26)}
 .ce-theme-btn:focus-visible,.ce-theme-panel button:focus-visible,.ce-theme-panel input:focus-visible{outline:2px solid var(--ce-accent,#B69CFF);outline-offset:2px}
 .ce-sw2{display:inline-flex;gap:2px}.ce-sw2 i{width:8px;height:14px;border-radius:2px;display:block}
-.ce-theme-panel{color-scheme:var(--ce-scheme,dark);position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);box-sizing:border-box;background:var(--ce-panel,#0B1016);border:1px solid var(--ce-line,#2A3645);border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:var(--ce-shadow,0 12px 32px rgba(0,0,0,.45));font:13px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5)}
+.ce-theme-panel{color-scheme:var(--ce-scheme,dark);position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:268px;max-width:calc(100vw - 32px);max-height:calc(100vh - 96px);overflow-y:auto;overscroll-behavior:contain;box-sizing:border-box;background:var(--ce-panel,#0B1016);border:1px solid var(--ce-line,#2A3645);border-radius:12px;padding:12px;display:grid;gap:10px;box-shadow:var(--ce-shadow,0 12px 32px rgba(0,0,0,.45));font:13px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5)}
 .ce-theme-panel[hidden]{display:none}
 .ce-theme-panel.ce-left{right:auto;left:0}
 .ce-lbl{font:600 10px "IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--ce-muted,#8392A5)}
@@ -729,6 +745,7 @@ const CSS = `
 .ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:6px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
 .ce-reset{justify-self:start;background:transparent;border:1px solid var(--ce-line,#2A3645);border-radius:8px;color:var(--ce-text2,#9AA8B8);font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
 .ce-note{font-size:11px;color:var(--ce-muted,#8392A5);line-height:1.4}
+.ce-slot{display:grid;gap:10px}.ce-slot:empty{display:none}
 .ce-grounds{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .ce-ground{display:flex;align-items:center;gap:8px;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line-soft,#18212C);border-radius:8px;padding:5px 8px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
 .ce-ground[aria-pressed="true"]{border-color:var(--ce-tint-border,#3B2A6B);background:var(--ce-tint,#1A1230);color:var(--ce-tint-text,#D8CCFF)}
@@ -2175,11 +2192,13 @@ function create(container, options) {
  * picker, 1.5.3), reset. Choices are saved in this browser under `storageKey` and applied on load, one color at a
  * time on a fresh read of the key, so two charts or tabs sharing the key never undo each other.
  * `onChange(colors)` runs on load and after every change.
+ * 1.9.0: `vwap: false` leaves the VWAP picker out (the live page sets it in the VWAP indicator's gear); `note` replaces
+ * the line at the bottom; the returned `slot` is an element before Reset where a host adds its own sections.
  */
 function mountThemePanel(chart, host, options) {
-  const opt = Object.assign({ storageKey: 'chart-engine-colors-v1', label: 'Colors' }, options || {});
+  const opt = Object.assign({ storageKey: 'chart-engine-colors-v1', label: 'Colors', vwap: true, note: 'Saved in this browser only.' }, options || {});
   injectStyle();
-  const FIELDS = [['up', 'Bull'], ['down', 'Bear'], ['vwap', 'VWAP'], ['bg', 'Ground']];
+  const FIELDS = [['up', 'Bull'], ['down', 'Bear'], ['vwap', 'VWAP'], ['bg', 'Ground']].filter(([k]) => k !== 'vwap' || opt.vwap);
   const defaults = {}; for (const [k] of FIELDS) defaults[k] = DEFAULT_THEME[k];
   const load = () => { try { return JSON.parse(localStorage.getItem(opt.storageKey) || 'null'); } catch (e) { return null; } };
   const store = v => { try { localStorage.setItem(opt.storageKey, JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
@@ -2201,11 +2220,12 @@ function mountThemePanel(chart, host, options) {
         '<label class="ce-row" for="' + uid + '-' + k + '"><span>' + (k === 'bg' ? 'Any' : name) + '</span>' +
         '<input type="color" id="' + uid + '-' + k + '" data-k="' + k + '"' + (k === 'bg' ? ' aria-label="Background color"' : '') + '>' +
         '<input type="text" data-hex="' + k + '" aria-label="' + (k === 'bg' ? 'Background' : name) + ' hex" maxlength="7" spellcheck="false"></label>').join('') +
+      '<div class="ce-slot"></div>' +
       '<button type="button" class="ce-reset">Reset to default</button>' +
-      '<div class="ce-note">Saved in this browser only.</div>' +
+      '<div class="ce-note">' + opt.note + '</div>' +
     '</div>';
   host.appendChild(wrap);
-  const btn = wrap.querySelector('.ce-theme-btn'), panel = wrap.querySelector('.ce-theme-panel');
+  const btn = wrap.querySelector('.ce-theme-btn'), panel = wrap.querySelector('.ce-theme-panel'), slot = wrap.querySelector('.ce-slot');
   const presetsEl = wrap.querySelector('.ce-presets');
   for (const p of PRESETS) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'ce-preset'; b.dataset.id = p.id;
@@ -2269,7 +2289,7 @@ function mountThemePanel(chart, host, options) {
   wrap.addEventListener('keydown', e => { if (e.key === 'Escape') { open(false); btn.focus(); } });
   sync(); changed();
   return {
-    element: wrap, get: () => Object.assign({}, cur), set: apply, close: () => open(false),
+    element: wrap, slot, get: () => Object.assign({}, cur), set: apply, close: () => open(false), isOpen: () => !panel.hidden,
     /** Remove the panel and its document listener (for a chart that is taken down, such as an embedded pane). */
     destroy() { document.removeEventListener('pointerdown', outside); wrap.remove(); },
   };

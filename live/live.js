@@ -27,6 +27,11 @@
  *                       since 1.7.0 what the delta pane shows)
  *   live-pane-heights-v1  { <paneId>: { delta: 0.2 } } the delta pane's share of the chart height, per pane (1.7.0)
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
+ *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
+ *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
+ *                       live-colors-v1 up to 1.8 is read once, while this key does not exist yet.
+ *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg } }], indicator: [{ id, name, colors }] } the
+ *                       named presets (1.9.0), through presetStore below so a store shared by every PC can replace it
  * The 1.3 keys live-settings-v1 and live-range-v1, and 1.4 to 1.5.3's live-indicators-v1 ({ <paneId>: { volume, vwap,
  * levels, fills, ib } }), are read once, when the new keys do not exist yet, and left in place.
  */
@@ -52,7 +57,7 @@ const INDICATORS = [
   { id: 'volume', name: 'Volume bars', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
     opt: 'Bottom 16% of the plot, in the candle colors' },
   { id: 'vwap', name: 'VWAP', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
-    opt: 'Session VWAP from 18:00 ET; its color is in Colors' },
+    opt: 'Session VWAP from 18:00 ET' },
   { id: 'levels', name: 'Levels', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
     alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val value area',
     opt: 'Prior day high, low, close and value area; overnight high and low' },
@@ -101,8 +106,38 @@ const PANE_HEIGHTS = { delta: { def: ENGINE.PANE_RATIO, min: ENGINE.PANE_RATIO_M
 const UNPINNED_BY_DEFAULT = ['delta'];
 const MAIN_PANE = 'main';
 
+/*
+ * The indicators' own colors (1.9.0, Anthony: indicator colors are their own preset group, "so I can set colors for
+ * indicators on a white chart vs a dark chart"), each set in its indicator's gear. Defaults are the engine's house
+ * colors. The volume bars and the delta pane keep the candle colors, and the fills the house trade-side green and red.
+ */
+const INDICATOR_COLORS = [
+  { key: 'vwap', id: 'vwap', name: 'Line', def: ENGINE.DEFAULT_THEME.vwap },
+  { key: 'prior', id: 'levels', name: 'Prior day high and low', def: ENGINE.LEVEL_COLORS.prior },
+  { key: 'overnight', id: 'levels', name: 'Overnight high and low', def: ENGINE.LEVEL_COLORS.overnight },
+  { key: 'value', id: 'levels', name: 'Value area high and low', def: ENGINE.LEVEL_COLORS.value },
+  { key: 'close', id: 'levels', name: 'Prior close', def: ENGINE.LEVEL_COLORS.close },
+  { key: 'ibHigh', id: 'ib', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
+  { key: 'ibLow', id: 'ib', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
+  { key: 'vpPoc', id: 'vp', name: 'Point of control', def: ENGINE.DEFAULT_THEME.vpPoc },
+];
+const IND_COLOR_KEYS = INDICATOR_COLORS.map(c => c.key);
+const HEX = /^#[0-9a-f]{6}$/i;
+/** The allowed colors of `v` (#RRGGBB, upper case) for `keys`; the rest left out. */
+function cleanColors(v, keys) {
+  const out = {};
+  if (v && typeof v === 'object') for (const k of keys) if (own(v, k) && typeof v[k] === 'string' && HEX.test(v[k])) out[k] = v[k].toUpperCase();
+  return out;
+}
+/* The two preset groups: a chart preset is the bar colors and the chart background, an indicator preset every
+   indicator color. */
+const PRESET_GROUPS = { chart: ['up', 'down', 'bg'], indicator: IND_COLOR_KEYS };
+const PRESET_MAX = 24, PRESET_NAME_MAX = 40;
+/** A preset name as kept: trimmed, inner spaces as one, at most 40 characters; '' when nothing is left. */
+function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX).trim() : ''; }
+
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
-  paneHeights: 'live-pane-heights-v1' };
+  paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1' };
 const OLD = { settings: 'live-settings-v1', range: 'live-range-v1', indicators: 'live-indicators-v1' };
 
 /** A whole number of ticks from 1 to 400, or null when the text is not one (half typed, empty, 0, 4.5). */
@@ -355,6 +390,8 @@ function create(storage) {
   }
   migrate();
   const paneOk = paneId => typeof paneId === 'string' && !!paneId && !Object.prototype.hasOwnProperty.call(Object.prototype, paneId);
+  /* the indicator colors set by hand; before the first one, the VWAP color the Colors panel kept up to 1.8 */
+  const savedIndColors = () => raw.has(KEYS.indicatorColors) ? cleanColors(obj(KEYS.indicatorColors), IND_COLOR_KEYS) : cleanColors(obj(KEYS.colors), ['vwap']);
 
   return {
     raw,
@@ -419,6 +456,18 @@ function create(storage) {
       all[paneId] = pane;
       return raw.set(KEYS.paneHeights, all);
     },
+    /** Every indicator color (INDICATOR_COLORS): the one set by hand, else the house default. */
+    indicatorColors() {
+      const s = savedIndColors(), out = {};
+      for (const c of INDICATOR_COLORS) out[c.key] = s[c.key] || c.def;
+      return out;
+    },
+    /** Set indicator colors ({ key: '#RRGGBB' }, read fresh, only these written); false when none is allowed. */
+    setIndicatorColors(colors) {
+      const set = cleanColors(colors, IND_COLOR_KEYS);
+      if (!Object.keys(set).length) return false;
+      return raw.set(KEYS.indicatorColors, Object.assign(savedIndColors(), set));
+    },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** Set one bracket field ('stop' or 'target', whole ticks 0 to 200) for one root; the other field is kept. */
     setBracketField(root, field, ticks) {
@@ -447,6 +496,73 @@ function orderAccount(allowed, wanted) {
   return { account, missed: want && want !== account ? want : '' };
 }
 
+/*
+ * Named color presets (1.9.0), behind one small interface so a store shared by every PC (Anthony's choice; which
+ * store is still to be decided) can replace this browser's storage without changing the page:
+ *   list()                     -> Promise of { chart: [preset], indicator: [preset] }
+ *   save(group, name, colors)  -> Promise of { lists, preset, replaced }; a preset of that name (any case) is replaced
+ *   rename(group, id, name)    -> Promise of { lists, preset }
+ *   remove(group, id)          -> Promise of { lists }
+ *   shared                     true when every PC sees the same presets
+ * A preset is { id, name, colors }; `colors` holds every key of its group (PRESET_GROUPS). Each call reads the store
+ * fresh and changes one preset, so two tabs never undo each other's. A refused call rejects with an Error whose
+ * message the page shows as it is.
+ */
+function cleanPresets(v) {
+  const out = { chart: [], indicator: [] };
+  for (const g of Object.keys(PRESET_GROUPS)) {
+    const list = v && typeof v === 'object' && isList(v[g]) ? v[g] : [], names = new Set(), ids = new Set();
+    for (const p of list) {
+      if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id || ids.has(p.id)) continue;
+      const name = presetName(p.name), colors = cleanColors(p.colors, PRESET_GROUPS[g]);
+      if (!name || names.has(name.toLowerCase()) || Object.keys(colors).length !== PRESET_GROUPS[g].length) continue;
+      names.add(name.toLowerCase()); ids.add(p.id);
+      out[g].push({ id: p.id, name, colors });
+      if (out[g].length >= PRESET_MAX) break;
+    }
+  }
+  return out;
+}
+function localPresetStore(storage) {
+  const read = () => { try { const s = storage && storage.getItem(KEYS.presets); return cleanPresets(s ? JSON.parse(s) : null); } catch (e) { return cleanPresets(null); } };
+  const write = v => { try { if (!storage) return false; storage.setItem(KEYS.presets, JSON.stringify(v)); return true; } catch (e) { return false; } };
+  const fail = m => Promise.reject(new Error(m));
+  const done = (all, extra) => write(all) ? Promise.resolve(Object.assign({ lists: all }, extra)) : fail('Not saved: this browser blocks site storage.');
+  const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const taken = (list, name, id) => list.some(p => p.id !== id && p.name.toLowerCase() === name.toLowerCase());
+  return {
+    shared: false,
+    list() { return Promise.resolve(read()); },
+    save(group, name, colors) {
+      if (!own(PRESET_GROUPS, group)) return fail('Unknown preset group.');
+      const n = presetName(name), c = cleanColors(colors, PRESET_GROUPS[group]);
+      if (!n) return fail('Type a name for the preset first.');
+      if (Object.keys(c).length !== PRESET_GROUPS[group].length) return fail('Not saved: a color is missing.');
+      const all = read(), list = all[group], same = list.find(p => p.name.toLowerCase() === n.toLowerCase());
+      if (same) { same.name = n; same.colors = c; return done(all, { preset: same, replaced: true }); }
+      if (list.length >= PRESET_MAX) return fail('This group holds ' + PRESET_MAX + ' presets: delete one to save another.');
+      const p = { id: newId(), name: n, colors: c };
+      list.push(p);
+      return done(all, { preset: p, replaced: false });
+    },
+    rename(group, id, name) {
+      if (!own(PRESET_GROUPS, group)) return fail('Unknown preset group.');
+      const n = presetName(name), all = read(), p = all[group].find(x => x.id === id);
+      if (!p) return fail('That preset is gone (deleted in another window).');
+      if (!n) return fail('Type a name for the preset first.');
+      if (taken(all[group], n, id)) return fail('Another preset is already called ' + n + '.');
+      p.name = n;
+      return done(all, { preset: p });
+    },
+    remove(group, id) {
+      if (!own(PRESET_GROUPS, group)) return fail('Unknown preset group.');
+      const all = read();
+      all[group] = all[group].filter(p => p.id !== id);
+      return done(all, {});
+    },
+  };
+}
+
 /** Runs fn after `ms` of quiet; flush() runs a waiting call now (on commit, or when the page is closing). */
 function debounce(fn, ms) {
   let timer = null, args = null;
@@ -457,7 +573,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { create, debounce, orderAccount, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+api = { create, debounce, orderAccount, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -655,6 +771,8 @@ const pageWsUrl = () => {
  *   onStatus       called with { state, paneId, root, attempt } on every connection state change
  *                  (state: 'connecting', 'loading', 'live' or 'offline').
  *   brand          show The Desk logo and "Live chart" in the toolbar (default false).
+ *   presetStore    where the Colors panel's named presets live (1.9.0): an object with LivePrefs.localPresetStore's
+ *                  interface (list, save, rename, remove, shared). Default: this browser's storage, under the prefix.
  * A mounted chart is always read only, whatever the options say: no GET /session, no auth, no order messages ever,
  * no order bar, no Armed switch, no Shift+click orders, no draggable order lines. Only the standalone page
  * (data-mount="page") can trade, and only when ChartBridge allows it.
@@ -707,11 +825,12 @@ function start(container, opt, PAGE) {
   const etNow = () => Date.now() / 1000 + etOffset;
   const nowMs = () => (performance.timeOrigin || Date.now() - performance.now()) + performance.now();
 
+  let IC = prefs.indicatorColors();                    // the indicators' colors (1.9.0), set in their gears
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
     layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false },
-    motion: GLIDE[S.glide], clock: etNow,
+    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc },
   });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
@@ -719,7 +838,7 @@ function start(container, opt, PAGE) {
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
-    lv: [], ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
+    lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null };
@@ -768,7 +887,7 @@ function start(container, opt, PAGE) {
 
   function resetData(root) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
-    D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
+    D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
     D.backfill = 0; D.deltaCov = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
@@ -816,7 +935,8 @@ function start(container, opt, PAGE) {
   function updateLevels() {
     if (!D.m1 || !D.m1.bars.length) return;
     const lv = U.sessionLevels(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, tick: D.tick });
-    D.lv = U.levelLines(lv);
+    D.lvSrc = lv;
+    D.lv = U.levelLines(lv, IC);
     D.day = U.tradeDay(etNow(), SESSION);
     updateIB(true);
   }
@@ -839,8 +959,16 @@ function start(container, opt, PAGE) {
     D.ib = ib;
     if (!force && key === D.ibKey) return;
     D.ibKey = key;
-    chart.setLevels(D.lv.concat(U.ibLines(ib)));
+    chart.setLevels(D.lv.concat(U.ibLines(ib, IC)));
     ibNote(ib);
+  }
+  /* New indicator colors (a gear, an indicator preset, Default colors): the chart's VWAP and profile colors, the level
+     and IB lines as they are, and the swatches. Nothing is computed again from the bars. */
+  function applyIndicatorColors() {
+    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc });
+    if (D.lvSrc) D.lv = U.levelLines(D.lvSrc, IC);
+    if (D.m1) chart.setLevels(D.lv.concat(U.ibLines(D.ib, IC)));
+    paintColors();
   }
   const IB_NOTES = {
     uncovered: 'Initial balance not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
@@ -1945,30 +2073,168 @@ function start(container, opt, PAGE) {
   chart.on('paneResize', e => { if (e && e.done) prefs.setPaneHeight(PANE, 'delta', e.ratio); });
   chart.on('tool', t => { $('toolTrend').setAttribute('aria-pressed', String(t === 'trend')); $('toolHline').setAttribute('aria-pressed', String(t === 'hline')); });
 
+  let PR = null;                                         // the preset groups in the Colors panel, below (1.9.0)
+  const presetStore = opt.presetStore && typeof opt.presetStore.list === 'function' ? opt.presetStore
+    : LP.localPresetStore(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   const themePanel = CE.mountThemePanel(chart, $('colorsHost'), {
-    storageKey: PREFIX + 'live-colors-v1',
-    onChange: () => {
-      const T = chart.colors(), st = rootEl.style;
-      st.setProperty('--vwap-sw', T.vwapText); st.setProperty('--up-text', T.upText); st.setProperty('--down-text', T.downText);
-      // the legend sits on the chart, so it follows the chart's ground (1.5.3); the toolbar and status line stay dark
-      st.setProperty('--chart-bg', T.bg); st.setProperty('--lg-bg', T.legendBg); st.setProperty('--lg-head', T.tagText);
-      st.setProperty('--lg-text2', T.text2); st.setProperty('--lg-dim', T.axisText); st.setProperty('--lg-buy', T.long); st.setProperty('--lg-sell', T.short);
-      // buy and sell keep their green and red; where they do not read on the ground, a halo in the house ink (1.5.3)
-      const halo = ink => ink ? '0 0 2px ' + ink + ', 0 0 1px ' + ink + ', 0 0 1px ' + ink : 'none';
-      st.setProperty('--lg-buy-halo', halo(T.halo.long)); st.setProperty('--lg-sell-halo', halo(T.halo.short));
-      rootEl.dataset.ground = T.ground;
-      // a light ground takes the toolbar, menus and status line light too (Anthony, 1.5.3); dark grounds keep the house style
-      const chrome = U.chromeColors(T);
-      for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
-      st.setProperty('--ib-sw', chrome ? U.markOnGround(CE.LEVEL_COLORS.ibHigh, T.bg, CE.FLOOR.text, T.to) : CE.LEVEL_COLORS.ibHigh);
-      // the volume profile: its menu swatch as the IB's (on the page chrome), the legend's POC on the chart ground
-      st.setProperty('--vp-sw', chrome ? U.markOnGround(CE.DEFAULT_THEME.vpPoc, T.bg, CE.FLOOR.text, T.to) : CE.DEFAULT_THEME.vpPoc);
-      st.setProperty('--vp-poc', T.vpPocText);
-      st.setProperty('--delta-sw', T.upText);                       // the delta pane's swatch: the bull candle color, readable here
-      deltaLegendKey = '';
-      legendKey = '';
-    },
+    storageKey: PREFIX + 'live-colors-v1', vwap: false,
+    note: presetStore.shared ? 'Presets are shared by every PC. The colors in use are saved in this browser.' : 'Colors and presets are saved in this browser only.',
+    onChange: () => { paintColors(); if (PR) renderPresets(); },
   });
+  /* The page's colors from the chart's theme and the indicator colors: the legend, the swatches, and on a light ground
+     the toolbar, the order bar, the menus and the status line (chromeColors). */
+  function paintColors() {
+    const T = chart.colors(), st = rootEl.style;
+    st.setProperty('--vwap-sw', T.vwapText); st.setProperty('--up-text', T.upText); st.setProperty('--down-text', T.downText);
+    // the legend sits on the chart, so it follows the chart's ground (1.5.3)
+    st.setProperty('--chart-bg', T.bg); st.setProperty('--lg-bg', T.legendBg); st.setProperty('--lg-head', T.tagText);
+    st.setProperty('--lg-text2', T.text2); st.setProperty('--lg-dim', T.axisText); st.setProperty('--lg-buy', T.long); st.setProperty('--lg-sell', T.short);
+    // buy and sell keep their green and red; where they do not read on the ground, a halo in the house ink (1.5.3)
+    const halo = ink => ink ? '0 0 2px ' + ink + ', 0 0 1px ' + ink + ', 0 0 1px ' + ink : 'none';
+    st.setProperty('--lg-buy-halo', halo(T.halo.long)); st.setProperty('--lg-sell-halo', halo(T.halo.short));
+    rootEl.dataset.ground = T.ground;
+    // a light ground takes the toolbar, the order bar (1.9.0), menus and status line light too (Anthony); dark grounds keep the house style
+    const chrome = U.chromeColors(T);
+    for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
+    // menu swatches sit on the page chrome: the indicator colors, moved to read there on a light one
+    const onChrome = c => chrome ? U.markOnGround(c, T.bg, CE.FLOOR.text, T.to) : c;
+    st.setProperty('--ib-sw', onChrome(IC.ibHigh));
+    st.setProperty('--vp-sw', onChrome(IC.vpPoc));
+    st.setProperty('--vp-poc', T.vpPocText);                      // the legend's POC, on the chart ground
+    st.setProperty('--delta-sw', T.upText);                       // the delta pane's swatch: the bull candle color, readable here
+    deltaLegendKey = '';
+    legendKey = '';
+  }
+
+  /*
+   * Color presets (1.9.0, Anthony: "Bar colors and chart color should be a preset. Indicator colors should have their
+   * own preset group"). Two groups in the Colors panel: chart presets (bull, bear and the chart background) and
+   * indicator presets (every indicator color, each set in its gear). Pick one to use it; save the colors in use under a
+   * name (a name already there replaces that preset); rename; delete, after a second click. The presets come from
+   * presetStore; the colors in use stay this browser's (live-colors-v1, live-indicator-colors-v1).
+   */
+  const PR_GROUPS = [
+    { g: 'chart', title: 'Chart presets', hint: 'Bar colors and the chart background.', place: 'Name this chart look' },
+    { g: 'indicator', title: 'Indicator presets', hint: 'Every indicator\'s colors, set in its gear in the Indicators menu.', place: 'Name these indicator colors' },
+  ];
+  const PR_SVG = {
+    edit: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M2 10l.6-2.4L8.2 2 10 3.8 4.4 9.4z"/></svg>',
+    x: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>',
+  };
+  PR = { lists: { chart: [], indicator: [] }, note: { chart: '', indicator: '' }, edit: null, confirm: null };
+  const prCurrent = g => { if (g !== 'chart') return Object.assign({}, IC); const c = themePanel.get(); return { up: c.up, down: c.down, bg: c.bg }; };
+  const prSame = (g, colors) => { const cur = prCurrent(g); return LP.PRESET_GROUPS[g].every(k => cur[k] === colors[k]); };
+  const prSwatch = (g, c) => g === 'chart'
+    ? `<span class="pr-sw" style="background:${c.bg}" aria-hidden="true"><i style="background:${c.up}"></i><i style="background:${c.down}"></i></span>`
+    : `<span class="pr-sw pr-sw-ind" aria-hidden="true">${['vwap', 'prior', 'ibHigh', 'vpPoc'].map(k => `<i style="background:${c[k]}"></i>`).join('')}</span>`;
+  const prSel = f => '[data-f="' + CSS.escape(f) + '"]';
+  themePanel.slot.innerHTML = PR_GROUPS.map(G => `<div class="pr-group" data-g="${G.g}" role="group" aria-labelledby="${p}pr-${G.g}">` +
+    `<div class="ce-lbl" id="${p}pr-${G.g}">${G.title}</div><div class="ce-note">${G.hint}</div><div class="pr-list"></div>` +
+    `<div class="pr-save"><input type="text" class="pr-name-in" maxlength="${LP.PRESET_NAME_MAX}" placeholder="${G.place}" aria-label="${G.place}" spellcheck="false" autocomplete="off">` +
+    `<button type="button" class="pr-btn" data-act="save">Save</button></div><div class="pr-note" role="status"></div></div>`).join('');
+
+  function prRow(g, pr) {
+    const name = esc(pr.name), id = esc(pr.id);
+    if (PR.edit && PR.edit.g === g && PR.edit.id === pr.id)
+      return `<div class="pr-row is-edit" data-id="${id}"><input type="text" class="pr-edit" data-f="edit:${id}" value="${esc(PR.edit.text)}" maxlength="${LP.PRESET_NAME_MAX}" aria-label="New name for ${name}" spellcheck="false" autocomplete="off">` +
+        `<button type="button" class="pr-btn" data-act="rename-ok" data-f="renok:${id}">Save</button><button type="button" class="pr-btn quiet" data-act="cancel" data-f="cancel:${id}">Cancel</button></div>`;
+    if (PR.confirm && PR.confirm.g === g && PR.confirm.id === pr.id)
+      return `<div class="pr-row is-confirm" data-id="${id}"><span class="pr-ask">Delete ${name}?</span>` +
+        `<button type="button" class="pr-btn bad" data-act="delete-ok" data-f="delok:${id}">Delete</button><button type="button" class="pr-btn quiet" data-act="cancel" data-f="cancel:${id}">Keep</button></div>`;
+    return `<div class="pr-row" data-id="${id}"><button type="button" class="pr-pick" data-act="pick" data-f="pick:${id}" aria-pressed="${prSame(g, pr.colors)}" title="Use ${name}">${prSwatch(g, pr.colors)}<span class="pr-n">${name}</span></button>` +
+      `<button type="button" class="pr-ic" data-act="rename" data-f="ren:${id}" aria-label="Rename ${name}" title="Rename">${PR_SVG.edit}</button>` +
+      `<button type="button" class="pr-ic" data-act="delete" data-f="del:${id}" aria-label="Delete ${name}" title="Delete">${PR_SVG.x}</button></div>`;
+  }
+  /* Save, or Replace when the name typed is a preset's already */
+  function prLabel(box) {
+    const n = LP.presetName(box.querySelector('.pr-name-in').value).toLowerCase(), save = box.querySelector('[data-act="save"]');
+    const same = n ? PR.lists[box.dataset.g].find(x => x.name.toLowerCase() === n) : null;
+    save.textContent = same ? 'Replace' : 'Save';
+    save.title = same ? 'Replace ' + same.name + ' with the colors in use' : 'Save the colors in use as a preset';
+  }
+  function renderPresets() {
+    for (const box of themePanel.slot.querySelectorAll('.pr-group')) {
+      const g = box.dataset.g, a = document.activeElement, focus = a && box.contains(a) ? a.dataset.f : null;
+      box.querySelector('.pr-list').innerHTML = PR.lists[g].length ? PR.lists[g].map(pr => prRow(g, pr)).join('') : '<div class="pr-empty">None saved yet.</div>';
+      box.querySelector('.pr-note').textContent = PR.note[g];
+      prLabel(box);
+      if (focus && !box.contains(document.activeElement)) (box.querySelector(prSel(focus)) || box.querySelector('.pr-name-in')).focus();
+    }
+  }
+  const prFocusRow = (box, id) => { const b = box.querySelector(prSel('pick:' + id)); (b || box.querySelector('.pr-name-in')).focus(); };
+  /* One store call: the lists it returns, and a note (what was done, or why it was refused). */
+  function prRun(g, call, said) {
+    return call.then(r => { PR.lists = r.lists; PR.note[g] = said(r); }, e => { PR.note[g] = e && e.message ? e.message : 'Not saved.'; })
+      .then(() => { if (!destroyed) renderPresets(); });
+  }
+  function prSave(box) {
+    const g = box.dataset.g, input = box.querySelector('.pr-name-in');
+    prRun(g, presetStore.save(g, input.value, prCurrent(g)), r => { input.value = ''; return (r.replaced ? 'Replaced ' : 'Saved ') + r.preset.name + '.'; });
+  }
+  function prRename(box, pr) {
+    const g = box.dataset.g;
+    prRun(g, presetStore.rename(g, pr.id, PR.edit ? PR.edit.text : ''), r => { PR.edit = null; return 'Renamed to ' + r.preset.name + '.'; })
+      .then(() => { if (!PR.edit) prFocusRow(box, pr.id); });
+  }
+  function prPick(g, pr) {
+    PR.note[g] = 'Using ' + pr.name + '.';
+    if (g === 'chart') { themePanel.set({ up: pr.colors.up, down: pr.colors.down, bg: pr.colors.bg }); return; }   // painted and listed again by onChange
+    setIndicatorColors(pr.colors);
+    renderPresets();
+  }
+  const prRefresh = () => presetStore.list().then(lists => { PR.lists = LP.cleanPresets(lists); }, e => {
+    PR.note.chart = PR.note.indicator = 'Presets not reachable' + (e && e.message ? ': ' + e.message : '.');
+  }).then(() => { if (!destroyed) renderPresets(); });
+  themePanel.slot.addEventListener('click', e => {
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    const box = b.closest('.pr-group'), g = box.dataset.g, row = b.closest('.pr-row'), id = row ? row.dataset.id : null;
+    const pr = id ? PR.lists[g].find(x => x.id === id) : null, act = b.dataset.act;
+    PR.note[g] = '';
+    if (act === 'save') { prSave(box); return; }
+    if (act === 'cancel') { PR.edit = PR.confirm = null; renderPresets(); prFocusRow(box, id); return; }
+    if (!pr) { renderPresets(); return; }
+    if (act === 'pick') prPick(g, pr);
+    else if (act === 'rename') {
+      PR.edit = { g, id, text: pr.name }; PR.confirm = null; renderPresets();
+      const inp = box.querySelector('.pr-edit'); if (inp) { inp.focus(); inp.select(); }
+    } else if (act === 'rename-ok') prRename(box, pr);
+    else if (act === 'delete') { PR.confirm = { g, id }; PR.edit = null; renderPresets(); const k = box.querySelector('[data-act="delete-ok"]'); if (k) k.focus(); }
+    else if (act === 'delete-ok') { PR.confirm = null; prRun(g, presetStore.remove(g, id), () => 'Deleted ' + pr.name + '.').then(() => box.querySelector('.pr-name-in').focus()); }
+  });
+  themePanel.slot.addEventListener('input', e => {
+    const t = e.target;
+    if (t.classList.contains('pr-name-in')) prLabel(t.closest('.pr-group'));
+    else if (t.classList.contains('pr-edit') && PR.edit) PR.edit.text = t.value;
+  });
+  /* Enter saves; Escape leaves a rename or a delete question without closing the panel */
+  themePanel.slot.addEventListener('keydown', e => {
+    const t = e.target, box = t.closest && t.closest('.pr-group'); if (!box) return;
+    const row = t.closest('.pr-row'), id = row ? row.dataset.id : null;
+    if (e.key === 'Enter' && t.classList.contains('pr-name-in')) { e.preventDefault(); prSave(box); }
+    else if (e.key === 'Enter' && t.classList.contains('pr-edit')) {
+      e.preventDefault();
+      const pr = PR.lists[box.dataset.g].find(x => x.id === id); if (pr) prRename(box, pr);
+    } else if (e.key === 'Escape' && row && (row.classList.contains('is-edit') || row.classList.contains('is-confirm'))) {
+      e.preventDefault(); e.stopPropagation();
+      PR.edit = PR.confirm = null; renderPresets(); prFocusRow(box, id);
+    }
+  });
+  themePanel.element.querySelector('.ce-theme-btn').addEventListener('click', () => {
+    if (!themePanel.isOpen()) return;
+    PR.edit = PR.confirm = null; PR.note.chart = PR.note.indicator = '';
+    prRefresh();                                              // another tab (or PC) may have changed them
+  });
+  prRefresh();
+
+  /* Indicator colors (1.9.0): set in the gears and by an indicator preset; saved one change at a time, read fresh. */
+  function setIndicatorColors(colors) {
+    const set = LP.cleanColors(colors, LP.IND_COLOR_KEYS);
+    if (!Object.keys(set).length) return;
+    IC = Object.assign({}, IC, set);
+    prefs.setIndicatorColors(set);
+    applyIndicatorColors();
+    if (PR && themePanel.isOpen()) renderPresets();
+  }
 
   function syncButtons() {
     for (const b of $('symSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.root));
@@ -2087,7 +2353,7 @@ function start(container, opt, PAGE) {
       : (on ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '') +
         `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
     const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
-    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}</div>` : '';
+    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}${colorsHtml(d.id)}</div>` : '';
     return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
       `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-name">${name}</span>` +
       (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
@@ -2103,6 +2369,27 @@ function start(container, opt, PAGE) {
       return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
     }).join('');
   }
+  /* An indicator's colors in its gear panel (1.9.0): a picker and a hex box each, and Default colors. Every chart on
+     this page and its storage prefix shares them, as the Colors panel's; an indicator preset saves them all. */
+  function colorsHtml(id) {
+    const list = LP.INDICATOR_COLORS.filter(c => c.id === id);
+    if (!list.length) return '';
+    const who = esc(defOf(id).name);
+    return '<div class="ind-colors">' + list.map(c => {
+      const lbl = p + 'indCol-' + c.key;
+      return `<div class="ind-color"><span class="ind-color-n" id="${lbl}">${esc(c.name)}</span>` +
+        `<input type="color" data-ck="${c.key}" data-f="col:${c.key}" value="${IC[c.key].toLowerCase()}" aria-labelledby="${lbl}" title="${who}: ${esc(c.name)}">` +
+        `<input type="text" class="ind-hex" data-hk="${c.key}" data-f="hex:${c.key}" value="${IC[c.key]}" maxlength="7" spellcheck="false" autocomplete="off" aria-label="${who} ${esc(c.name)} hex"></div>`;
+    }).join('') +
+      `<div class="ind-colors-foot"><button type="button" class="ind-rec" data-act="coldef" data-id="${id}" data-f="coldef:${id}">Default colors</button>` +
+      '<span class="ind-set-note">Save them all as an indicator preset in Colors.</span></div></div>';
+  }
+  /* A hex box: #RRGGBB, #RGB, the # may be left out (as the Colors panel's). */
+  const hexOf = text => {
+    let v = String(text).trim(); if (v[0] !== '#') v = '#' + v;
+    if (/^#[0-9a-f]{3}$/i.test(v)) v = '#' + v[1] + v[1] + v[2] + v[2] + v[3] + v[3];
+    return /^#[0-9a-f]{6}$/i.test(v) ? v.toUpperCase() : null;
+  };
   function renderMenu() {
     const body = $('indBody'), c = LP.Pane.counts(IS);
     $('indSum').textContent = c.on ? c.shown + ' shown' + (c.hidden ? ', ' + c.hidden + ' hidden' : '') : 'none on this chart';
@@ -2189,6 +2476,11 @@ function start(container, opt, PAGE) {
       changeIndicators(st => LP.Pane.pin(st, id, v));
     }
     else if (act === 'gear') { M.gear = M.gear === id ? null : id; renderMenu(); }
+    else if (act === 'coldef') {
+      const set = {}; for (const c of LP.INDICATOR_COLORS) if (c.id === id) set[c.key] = c.def;
+      setIndicatorColors(set);
+      renderMenu();
+    }
     else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
   let openMenu;
@@ -2233,6 +2525,21 @@ function start(container, opt, PAGE) {
       if (!b || !panel.contains(b)) return;
       if (b.dataset.act === 'opt') { M.note = ''; setIndicatorOption(b.dataset.id, b.dataset.k, b.dataset.v); return; }   // saved per pane, as it is
       indAction(b.dataset.act, b.dataset.id);
+    });
+    /* a color picker or hex box in a gear: applied as it changes, the menu is not drawn again (a picker stays open) */
+    panel.addEventListener('input', e => {
+      const t = e.target, k = t.dataset.ck || t.dataset.hk;
+      if (!k || !panel.contains(t)) return;
+      const v = t.dataset.ck ? t.value.toUpperCase() : hexOf(t.value);
+      if (!v) { t.setAttribute('aria-invalid', 'true'); return; }
+      t.removeAttribute('aria-invalid');
+      setIndicatorColors({ [k]: v });
+      const other = panel.querySelector(t.dataset.ck ? `input[data-hk="${k}"]` : `input[data-ck="${k}"]`);
+      if (other) other.value = t.dataset.ck ? v : v.toLowerCase();
+    });
+    panel.addEventListener('change', e => {
+      const t = e.target, k = t.dataset.hk;
+      if (k && panel.contains(t)) { t.removeAttribute('aria-invalid'); t.value = IC[k]; }   // leaving the box puts the color in use back
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
