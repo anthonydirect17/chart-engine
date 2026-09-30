@@ -445,7 +445,7 @@ try {
     const off = offsetAt(8, 0, 0, bt => dowOf(bt) === dow && U.rthDay(bt) && U.rthDay(bt - 86400 * (dow === 1 ? 3 : 1)));
     if (off === null) { console.log('  (no plain ' + DOW[dow] + ' in the last 40 days: skipped)'); continue; }
     const br = await startBridge(off, ['--market-hours', '--tick-hours-max=120']);
-    const ctx = await closedContext(off, false);
+    const ctx = await closedContext(off, true);   // live trades held: the counts are compared with the page's
     await vpOn(ctx);
     const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
     for (const tf of ['range', 's15']) {
@@ -467,7 +467,7 @@ try {
     if (off === null) console.log('  (no NYSE holiday in the last 40 days: skipped)');
     else {
       const br = await startBridge(off, ['--market-hours', '--tick-hours-max=120']);
-      const ctx = await closedContext(off, false);
+      const ctx = await closedContext(off, true);   // live trades held: the counts are compared with the page's
       await vpOn(ctx);
       const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
       const hDay = Math.floor((await etNowOf(q)) / 86400) * 86400;
