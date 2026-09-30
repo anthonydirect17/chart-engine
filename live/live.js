@@ -564,7 +564,7 @@ ${obar}
     <span id="${p}ticksSeen">0 ticks</span>
     <span class="ibnote" id="${p}ibNote" hidden></span>
     <span class="ibnote" id="${p}vpNote" hidden></span>
-    <span class="ibnote" id="${p}fillNote" hidden></span>
+    <span class="ibnote" id="${p}fillNote" hidden></span><button type="button" class="reload" id="${p}fillReload" hidden title="Load the chart again. Orders keep working meanwhile.">Reload</button>
     <span class="msg" id="${p}statusMsg"></span>
     <span class="ro" id="${p}statusRo">Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.</span>
   </footer>
@@ -655,7 +655,8 @@ function start(container, opt, PAGE) {
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
     lv: [], ib: null, ibKey: '', vp: null, liveFrom: null,
-    sub: 0, fill: null, sync: null, fallback: false, m1Cut: false };   // live first (1.8.0): see "Live first" below
+    sub: 0, fill: null, sync: null, syncAt: null, fallback: false, m1Cut: false, m1Partial: null,   // live first (1.8.0): see "Live first" below
+    soft: null, quotes: true };   // soft: a reload that keeps the view and order entry (1.8.0, review N6); quotes: sides from quotes
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   /* Minute and hour views load no tick history, except for the volume profile (1.8.0, Anthony's ruling 2026-09-30): with
@@ -666,18 +667,15 @@ function start(container, opt, PAGE) {
     const now = etNow(), from = new CE.VolumeProfile({ tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth' }).startOf(now);
     return from < now ? from : null;
   };
-  const ticksWanted = () => {
-    if (TF[S.tf].mode === 'range') return BB.rangeTickHours(etNow(), SESSION);
-    if (TF[S.tf].sec < 60) return 8;
-    const from = vpFrom();
-    return from === null ? 0 : Math.min(48, Math.ceil((etNow() - from) / 3600) + 1);
-  };
-  const ticksMissing = () => {
-    if (TF[S.tf].mode === 'range') return BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed);
-    if (TF[S.tf].sec < 60) return D.tickHours === 0;
-    const from = vpFrom();
-    return from !== null && D.tickFrom > from;
-  };
+  /* Each rule for ticks as its own function, and the load asks for the most any of them wants (so another rule, such as a
+     closed market's profile, joins as one more term of the max). */
+  const minuteView = () => TF[S.tf].mode === 'time' && TF[S.tf].sec >= 60;
+  const viewTicksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
+  const viewTicksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
+  const profileTicksWanted = () => { const from = minuteView() ? vpFrom() : null; return from === null ? 0 : Math.min(48, Math.ceil((etNow() - from) / 3600) + 1); };
+  const profileTicksMissing = () => { const from = minuteView() ? vpFrom() : null; return from !== null && D.tickFrom > from; };
+  const ticksWanted = () => Math.max(viewTicksWanted(), profileTicksWanted());
+  const ticksMissing = () => viewTicksMissing() || profileTicksMissing();
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -696,16 +694,18 @@ function start(container, opt, PAGE) {
   let ticksSeen = 0;
   const delays = { feed: [], local: [] };
 
-  function resetData(root) {
+  /* keep (1.8.0, review N6): a reload of the same instrument that keeps the chart on screen and order entry working until
+     the new load is live (the last price stays for click-to-place; ChartBridge checks every order against its own). */
+  function resetData(root, keep) {
+    D.soft = keep && D.ready && D.root === root && D.m1 && D.m1.last ? { last: D.m1.last.c } : null;
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
-    D.fill = null; D.sync = null; D.fallback = false; D.m1Cut = false; rebuildGen++; fillNote();
+    D.fill = null; D.sync = null; D.syncAt = null; D.fallback = false; D.m1Cut = false; D.m1Partial = null; rebuildGen++; fillNote();
     D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
-    chart.setBars([], { barSeconds: TF[S.tf].sec });
-    chart.setLevels([]);
+    if (!D.soft) { chart.setBars([], { barSeconds: TF[S.tf].sec }); chart.setLevels([]); }
     chart.setDrawings(store.get(drawingsKey(root), []));
     applyMarkers();
     renderTrading();
@@ -721,14 +721,14 @@ function start(container, opt, PAGE) {
     if (D.fill) D.fill.rebuilding = false;               // (this build replaces it)
     const tf = TF[S.tf];
     chart.setBarSeconds(tf.sec);
-    D.sync = null; D.fallback = false;
+    D.sync = null; D.fallback = false; D.syncAt = null;
     if (tf.mode === 'time' && tf.sec >= 60) {
       D.cur = null;
       const bars = tf.sec === 60 ? D.m1.bars : U.aggregate(D.m1.bars, tf.sec);
       chart.setBars(bars, { barSeconds: tf.sec });
       chart.setCountdown(null);
-    } else if (D.fill && !D.fill.done) {
-      buildEarly(tf);                                    // the older history is still coming (live first)
+    } else if (D.fill && !fillWhole()) {
+      buildEarly(tf);                                    // the older history is still coming, or ended short (live first)
     } else {
       D.cur = newBuilder(tf);
       const from = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
@@ -759,20 +759,25 @@ function start(container, opt, PAGE) {
   /*
    * Live first (1.8.0, ChartBridge 0.3.5; nt8/PROTOCOL.md "Live first"). ChartBridge sends the most recent trades, then
    * `ready` with `older`: the chart goes live (and orders work) at once, and the page pulls the older history, newest first,
-   * one chunk per "more" it sends (the next asked as each one comes, so at most two are on the way and live trades never
-   * wait behind the history). Each chunk goes in front of the store (TickStore.prependAll): the store is one unbroken run
-   * of trades at every moment. Until the history is all in:
+   * asking with `upTo` for two chunks more than it has (so at most two are ever on the way, re-asks included, and live
+   * trades never wait behind the history). Each chunk goes in front of the store (TickStore.prependAll) after a check that
+   * it is older than the store's first trade (a chunk that is not is refused, with every older trade taken so far): the
+   * store is one unbroken, exact run of trades at every moment. Until the history is all in:
    *   - minute and hour views are exact at once (they come from the minute history);
    *   - the volume profile takes each chunk's trades of its session as they come (it counts per price, in any order);
    *   - seconds views show the bars the store holds whole (from the first bar after the store's first trade);
    *   - range views show range bars only from where they are proven exact (BarBuilder's RangeSync: the first trade of a
-   *     session seen, or a swing of more than the range each way), and 1-minute bars until such a point is seen;
+   *     session seen, or a swing of more than the range each way), with the 1-minute bars of the minutes before that point
+   *     on their left, and 1-minute bars alone until such a point is seen;
    *   - seconds and range bars carry no VWAP (the legend says "loading"): their session VWAP needs every trade since
    *     18:00 ET, and an estimate from the minute history differed from it by up to 8 ticks on sample data, a line that
    *     would jump when the history lands.
    * When the last chunk is in, the view is rebuilt from the whole store exactly as a full load builds it, in slices of the
-   * page's time (no frame waits on it), and swapped in: the bars from the proven point on are the same bars, so nothing the
-   * trader was looking at moves; older bars appear to the left, and the VWAP line appears.
+   * page's time (no frame waits on it), and swapped in: the range bars from the proven point on are the same bars in price
+   * and volume (docs/RANGE_BARS.md), older range bars take the place of the 1-minute stand-ins, and the VWAP line appears.
+   * The history can end short instead (ChartBridge could not prove the join, the older trades end before the recent ones,
+   * it failed, or it was dropped): the store then holds one exact run from its first trade, the view stays as it was while
+   * loading (proven range bars, no VWAP), and the status line says why and offers a reload.
    * The delta pane (next step) takes the same path: add its trades in historyGrew and rebuild it when the last one is in.
    */
   let rebuildGen = 0;
@@ -786,8 +791,12 @@ function start(container, opt, PAGE) {
     if (document.visibilityState === 'visible' || !yieldCh) requestAnimationFrame(() => f());
     else { yieldQ.push(f); yieldCh.port2.postMessage(0); }
   };
+  /* The whole history is in and exact (live first); false while it loads or when it ended short. */
+  const fillWhole = () => !!(D.fill && D.fill.done && !D.fill.short);
 
-  /* Seconds and range views while the older history is still coming. */
+  /* A range build fed through this notes the first proven bar (RangeSync) in `sync`. */
+  const syncSink = (b, sync) => ({ addQuiet(t, p, v) { const n0 = b.bars.length; b.addQuiet(t, p, v); if (sync.bar < 0 && sync.rs.step(t, p)) sync.bar = n0; } });
+  /* Seconds and range views while the older history is still coming, or after it ended short. */
   function buildEarly(tf) {
     const b = newBuilder(tf, true), t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
     D.cur = b;
@@ -800,46 +809,64 @@ function start(container, opt, PAGE) {
     }
     const sync = { rs: new BB.RangeSync(ranges[D.root], D.tick, SESSION), bar: -1 };
     D.sync = sync;
-    D.ticks.feed({ addQuiet(t, p, v) { const n0 = b.bars.length; b.addQuiet(t, p, v); if (sync.bar < 0 && sync.rs.step(t, p)) sync.bar = n0; } }, 0);
+    D.ticks.feed(syncSink(b, sync), 0);
     showEarlyRange();
   }
-  /* A range view before the whole history is in: range bars from the proven point, or 1-minute bars until one is seen. */
+  /* A range view before the whole history is in: range bars from the proven point, with the 1-minute bars of the whole
+     minutes before it on their left (never a lone bar, review S3), or 1-minute bars alone until such a point is seen. */
   function showEarlyRange() {
     const tf = TF[S.tf];
     if (D.sync && D.sync.bar >= 0) {
       D.fallback = false;
+      const rb = D.cur.bars.slice(D.sync.bar);
+      D.syncAt = rb.length ? rb[0].t : null;
       chart.setBarSeconds(tf.sec);
-      chart.setBars(D.cur.bars.slice(D.sync.bar), { barSeconds: tf.sec });
+      chart.setBars(D.syncAt === null ? rb : m1Before(D.syncAt).concat(rb), { barSeconds: tf.sec });
       chart.setCountdown(() => { const r = D.cur && D.cur.rangeLeft(); return r ? '▲' + r.up + ' ▼' + r.down : ''; });
     } else {
-      D.fallback = true;
+      D.fallback = true; D.syncAt = null;
       chart.setBarSeconds(60);
-      chart.setBars(D.m1.bars, { barSeconds: 60 });
+      chart.setBars(D.m1.bars.map(noVwap), { barSeconds: 60 });
       chart.setCountdown(null);
     }
     legendKey = ''; fillNote();
   }
-  /* The whole history is in: the view built from the whole store, in slices, then swapped in. */
-  function exactRebuild() {
+  /* The 1-minute bars of the whole minutes before bar time t: no trade in them is also in a range bar from t on. */
+  function m1Before(t) {
+    const bars = D.m1.bars, cut = Math.floor(t / 60) * 60;
+    let lo = 0, hi = bars.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (bars[m].t < cut) lo = m + 1; else hi = m; }
+    return bars.slice(0, lo).map(noVwap);
+  }
+  /* A range view draws no VWAP until the history is whole, on its 1-minute stand-ins either (the line would stop where
+     the range bars start); the minute builder's own bars keep theirs. */
+  const noVwap = b => ({ t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, vw: null });
+  /* The view built from the whole store in slices, then swapped in: exactly as a full load builds it once the history is
+     all in, or (early) the proven view again when the history ended short after some older trades came. */
+  function sliceBuild(early) {
     const tf = TF[S.tf], gen = ++rebuildGen;
     if (!D.ready) return;
     if (tf.mode === 'time' && tf.sec >= 60) { rebuild(); return; }
-    const b = newBuilder(tf);
-    const from = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
+    const b = newBuilder(tf, early), t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
+    const from = !early && tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
+    const minT = early && tf.mode === 'time' ? (isFinite(t0) ? (Math.floor(t0 / tf.sec) + 1) * tf.sec : Infinity) : undefined;
+    const sync = early && tf.mode === 'range' ? { rs: new BB.RangeSync(ranges[D.root], D.tick, SESSION), bar: -1 } : null;
+    const sink = sync ? syncSink(b, sync) : b;
     let i = from;
     D.fill.rebuilding = true;
     const step = () => {
       if (gen !== rebuildGen || destroyed || !D.ready || !D.fill) return;
-      const t0 = performance.now();
-      while (i < D.ticks.length && performance.now() - t0 < SLICE_MS) {
+      const s0 = performance.now();
+      while (i < D.ticks.length && performance.now() - s0 < SLICE_MS) {
         const end = Math.min(D.ticks.length, i + SLICE_CHECK);
-        D.ticks.feed(b, i, undefined, end);
+        D.ticks.feed(sink, i, minT, end);
         i = end;
       }
       if (i < D.ticks.length) { yieldTask(step); return; }
       D.fill.rebuilding = false;
-      D.cur = b; D.sync = null; D.fallback = false;
-      showBuilt(tf, from);
+      D.cur = b;
+      if (sync) { D.sync = sync; showEarlyRange(); }
+      else { D.sync = null; D.fallback = false; D.syncAt = null; showBuilt(tf, early ? 0 : from); }
       applyMarkers();
       legendKey = ''; fillNote();
     };
@@ -852,33 +879,74 @@ function start(container, opt, PAGE) {
       for (let i = 0; i < n; i++) { const t = D.ticks.time(i); if (t >= from) D.vp.add(t, D.ticks.price(i), D.ticks.volume(i)); }
     }
     if (done) {
-      if (D.m1Cut) { buildM1(); updateLevels(); }         // the forming minute, now from every trade in it
-      exactRebuild();
+      const f = D.fill;
+      if (!f.short) {
+        if (D.m1Cut) { buildM1(); updateLevels(); }     // the forming minute, now from every trade in it
+        sliceBuild(false);
+      } else if (f.got || f.regrow) sliceBuild(true);   // ended short after some older trades came: the proven view of the store
+      legendKey = '';
+      updateIB(true);
     }
     fillNote(); vpNote(); vpLegend();
   }
+  /* The next chunks: two more than the page has (asking again with the same number adds nothing at ChartBridge). */
+  const askMore = () => { if (D.fill) send({ type: 'more', sub: D.sub, upTo: D.fill.chunks + 2 }); };
   function onOlder(m) {
     const f = D.fill;
-    if (!m.done) send({ type: 'more', sub: D.sub });    // the next one while this one is taken in
     const list = Array.isArray(m.ticks) ? m.ticks : [];
+    // Review B1: the older history must end at or before the store's first trade. A chunk that does not is refused, and
+    // with it every older trade taken in so far: the store stays one exact run of trades from its first (recent) one.
+    if (list.length && D.ticks.length && !(list[0][0] <= list[list.length - 1][0] && list[list.length - 1][0] <= D.ticks.time(0))) {
+      dropOlder();
+      f.done = true; f.short = true; f.refused = true; f.doneMs = nowMs();
+      historyGrew(0, true);
+      return;
+    }
+    f.chunks++;
+    if (!m.done) askMore();                              // the next one while this one is taken in
     D.ticks.prependAll(list);
-    f.got += list.length; f.chunks++; f.lastMs = nowMs();
-    if (m.done) { f.done = true; f.doneMs = nowMs(); f.error = typeof m.error === 'string' ? m.error : null; f.gapMs = +m.gapMs >= 0 ? +m.gapMs : null; }
+    f.got += list.length; f.lastMs = nowMs();
+    if (m.done) {
+      f.done = true; f.doneMs = nowMs();
+      f.error = typeof m.error === 'string' ? m.error : null;
+      f.gapMs = +m.gapMs >= 0 ? +m.gapMs : null;
+      f.mismatch = m.joinMismatch === true; f.startsAfter = m.startsAfter === true; f.dropped = m.dropped === true;
+      f.short = !!(f.error || f.gapMs !== null || f.mismatch || f.dropped);
+      // Review S2: ChartBridge sends no older trade when it cannot prove the join (or sees a gap); should any have come
+      // before it said so, they are dropped, so no trade is ever kept twice or with a hole behind it.
+      if ((f.mismatch || f.gapMs !== null) && f.got) { dropOlder(); historyGrew(0, true); return; }
+    }
     historyGrew(list.length, !!m.done);
   }
+  /* Every older trade taken in during this load leaves the store (they are in front of the recent ones, in one block). */
+  function dropOlder() {
+    const f = D.fill;
+    if (!f || !f.got) return;
+    D.ticks.dropFirst(f.got);
+    f.got = 0; f.regrow = true;                          // a view built meanwhile may hold them: built again (historyGrew)
+    if (D.vp) vpBuild();
+  }
+  /* New York time of t for the status line, with the day when it is not today. */
+  const whenEt = t => (U.tradeDay(t, 0) === U.tradeDay(etNow(), 0) ? U.fmtHM(t) : U.fmtFull(t).replace(/\s+/g, ' ')) + ' ET';
   /* The quiet line: how much of the history is in while it loads; afterwards only when something is missing. */
   function fillNote() {
     const el = $('fillNote'); if (!el) return;
     const f = D.fill;
-    let text = '';
+    let text = '', reload = false;
     if (f && D.ticks.length) {
-      const span = Math.max(0, (f.liveAt - D.ticks.time(0)) / 3600), got = span < 1 ? Math.round(span * 60) + ' min' : Math.floor(span) + ' h';
+      const first = D.ticks.time(0), span = Math.max(0, (f.liveAt - first) / 3600), got = span < 1 ? Math.round(span * 60) + ' min' : Math.floor(span) + ' h';
+      const tail = TF[S.tf].sec < 60 || TF[S.tf].mode === 'range' ? ' Range and seconds bars show what is proven, without VWAP.' : '';
       if (!f.done) text = 'History: loading ' + got + ' of ' + D.tickHours + ' h' + (D.fallback ? '; range bars from the first full swing, 1m bars until then' : '');
-      else if (f.error) text = 'History: ' + got + ' of ' + D.tickHours + ' h loaded (' + f.error + ')';
-      else if (f.gapMs !== null) text = 'History: NinjaTrader\'s older trades end ' + Math.round(f.gapMs / 1000) + ' s before the recent ones; trades in between may be missing';
+      else if (f.refused) { text = 'History: NinjaTrader\'s older trades overlapped the recent ones, so they were left out; the history starts at ' + whenEt(first) + '.' + tail; reload = true; }
+      else if (f.mismatch) { text = 'History: NinjaTrader\'s older trades did not line up with the recent ones at ' + whenEt(first) + ', so they were left out; the history starts there.' + tail; reload = true; }
+      else if (f.gapMs !== null) { text = 'History: NinjaTrader\'s older trades end ' + Math.round(f.gapMs / 1000) + ' s before the recent ones, so they were left out; the history starts at ' + whenEt(first) + '.' + tail; reload = true; }
+      else if (f.dropped || f.error) { text = 'History: ' + got + ' of ' + D.tickHours + ' h loaded, back to ' + whenEt(first) + ' (' + (f.error || 'dropped') + ').' + tail; reload = true; }
+      else if (f.startsAfter) text = 'History: back to ' + whenEt(first) + ', where the recent trades begin (NinjaTrader\'s older history starts after them).';
     }
     if (el.textContent !== text) el.textContent = text;
     el.hidden = !text;
+    const r = $('fillReload');
+    if (r) r.hidden = !(text && reload);
   }
 
   function updateLevels() {
@@ -902,7 +970,10 @@ function start(container, opt, PAGE) {
    */
   function updateIB(force) {
     if (!D.m1) return;
-    const ib = U.initialBalance(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, barSeconds: 60 });
+    let ib = U.initialBalance(D.m1.bars, { asOf: etNow(), sessionStart: SESSION, barSeconds: 60 });
+    // live first: a minute whose first trades are not in (the recent trades start inside it, and the history has not come
+    // or ended short) could leave a high or low out: the IB is not shown for it (the "gap" note offers a reload)
+    if (D.m1Partial !== null && D.m1Partial >= ib.start && D.m1Partial < ib.end && (ib.state === 'forming' || ib.state === 'locked')) ib = Object.assign({}, ib, { state: 'gap', high: null, low: null });
     const key = ib.state + '|' + ib.high + '|' + ib.low + '|' + ib.start;
     D.ib = ib;
     if (!force && key === D.ibKey) return;
@@ -1000,7 +1071,7 @@ function start(container, opt, PAGE) {
     prefs.setIndicatorOption(PANE, id, key, value);
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
-      if (id === 'vp') { vpLegendVer = -1; if (ticksMissing() && ws && ws.readyState === 1 && helloSeen) subscribe(S.root); else vpBuild(); }   // Session needs more hours than RTH
+      if (id === 'vp') { vpLegendVer = -1; if (ticksMissing() && ws && ws.readyState === 1 && helloSeen) subscribe(S.root, { keep: true }); else vpBuild(); }   // Session needs more hours than RTH; orders keep working
     }
     syncIndicators();
     return true;
@@ -1009,7 +1080,7 @@ function start(container, opt, PAGE) {
   function onReady() {
     D.cutoff = D.tickHours > 0 ? Math.floor(etNow() / 60) * 60 : Infinity;
     buildM1();
-    D.ready = true;
+    D.ready = true; D.soft = null;
     D.liveFrom = etNow();
     rebuild();
     vpBuild();
@@ -1033,6 +1104,7 @@ function start(container, opt, PAGE) {
       D.ticks.feed(D.m1, 0, from);
       D.m1Cut = !!(D.fill && !D.fill.done && D.ticks.length && D.ticks.time(0) > from);
     }
+    D.m1Partial = D.m1Cut ? Math.max(cutoff, hist.length ? hist[hist.length - 1].t + 60 : -Infinity) : null;   // that minute lacks its first trades
   }
 
   function onTick(m) {
@@ -1048,7 +1120,7 @@ function start(container, opt, PAGE) {
     if (tf.mode === 'time' && tf.sec >= 60) chart.update(tf.sec === 60 ? r1.bar : U.foldLast(D.m1.bars, tf.sec));
     else if (D.cur) {
       const n0 = D.cur.bars.length, ch = D.cur.add(t, p, v).changed;
-      if (D.sync && D.sync.bar < 0) { if (D.sync.rs.step(t, p)) { D.sync.bar = n0; showEarlyRange(); } else if (D.fallback) chart.update(r1.bar); }
+      if (D.sync && D.sync.bar < 0) { if (D.sync.rs.step(t, p)) { D.sync.bar = n0; showEarlyRange(); } else if (D.fallback) chart.update(noVwap(r1.bar)); }
       else for (let i = 0; i < ch.length; i++) chart.update(ch[i]);   // a finished range bar, phantom bars, the new bar
     }
     const now = nowMs();
@@ -1174,7 +1246,7 @@ function start(container, opt, PAGE) {
     ws = sock;
     sock.onopen = () => { if (sock !== ws) return; wsTries = 0; everConnected = true; setStatus('', ''); };
     sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } handle(m); };
-    sock.onclose = () => { if (sock !== ws) return; ws = null; D.ready = false; setConn('offline'); tradingLost('Not connected to ChartBridge.'); scheduleReconnect(); };
+    sock.onclose = () => { if (sock !== ws) return; ws = null; D.ready = false; D.soft = null; setConn('offline'); tradingLost('Not connected to ChartBridge.'); scheduleReconnect(); };
     sock.onerror = () => { /* onclose follows */ };
   }
   function scheduleReconnect() {
@@ -1192,13 +1264,20 @@ function start(container, opt, PAGE) {
     if (!TRADING && !READ_ONLY_TYPES.includes(obj && obj.type)) return;
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
-  function subscribe(root) {
-    resetData(root);
+  /* opts.keep (1.8.0, review N6): the same instrument again, keeping the view and order entry until it is live (resetData).
+     Used when only the tick history changes: the volume profile switched on, or Session after RTH, on a minute view. */
+  function subscribe(root, opts) {
+    resetData(root, !!(opts && opts.keep));
     setConn('loading');
     D.tickHours = ticksWanted();
     D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
     const msg = { type: 'subscribe', root, days: 5, tickHours: D.tickHours };
-    if (LIVE_FIRST) { D.sub = ++subSeq; msg.sub = D.sub; if (D.tickHours > 0) msg.liveFirst = true; }
+    // A minute view asks for ticks only for the volume profile, which counts trades, not sides: no Bid and Ask requests
+    // for NinjaTrader (quotes false, ChartBridge 0.3.5). The sides of those trades then come from the tick rule, and D.quotes
+    // says so: a delta pane must not take them for a full load's (it shows its partial label on minute views).
+    const tradesOnly = LIVE_FIRST && D.tickHours > 0 && minuteView();
+    D.quotes = !tradesOnly;
+    if (LIVE_FIRST) { D.sub = ++subSeq; msg.sub = D.sub; if (D.tickHours > 0) msg.liveFirst = true; if (tradesOnly) msg.quotes = false; }
     else D.sub = 0;
     send(msg);
   }
@@ -1232,10 +1311,11 @@ function start(container, opt, PAGE) {
       case 'ready':
         if (m.root !== D.root || stale(m)) return;
         setStatus('', '');
-        // live first: the older history follows; ask for two chunks (then one more as each comes)
-        D.fill = m.older === true && D.sub > 0 && D.tickHours > 0 ? { got: 0, chunks: 0, done: false, rebuilding: false, error: null, gapMs: null, liveAt: etNow(), readyMs: nowMs(), doneMs: null, lastMs: nowMs() } : null;
+        // live first: the older history follows; ask for two chunks (then two more than the page has, as each comes)
+        D.fill = m.older === true && D.sub > 0 && D.tickHours > 0 ? { got: 0, chunks: 0, done: false, short: false, rebuilding: false, error: null, gapMs: null,
+          mismatch: false, startsAfter: false, dropped: false, refused: false, regrow: false, liveAt: etNow(), readyMs: nowMs(), doneMs: null, lastMs: nowMs() } : null;
         onReady();
-        if (D.fill) { send({ type: 'more', sub: D.sub }); send({ type: 'more', sub: D.sub }); fillNote(); }
+        if (D.fill) { askMore(); fillNote(); }
         break;
       case 'olderTicks':
         if (m.root !== D.root || stale(m) || !D.fill || D.fill.done || !D.ready) return;
@@ -1331,7 +1411,7 @@ function start(container, opt, PAGE) {
     renderTrading();
   }
 
-  const lastPrice = () => (D.m1 && D.m1.last ? D.m1.last.c : null);
+  const lastPrice = () => (D.m1 && D.m1.last ? D.m1.last.c : D.soft ? D.soft.last : null);   // soft: a reload keeping order entry
   const capNow = () => OT.maxQtyFor(TR, D.root);
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
 
@@ -1342,7 +1422,7 @@ function start(container, opt, PAGE) {
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
     if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
-    if (!D.ready || !TR.account) { flash('Still loading: nothing was sent.', 'warn'); return false; }
+    if (!(D.ready || D.soft) || !TR.account) { flash('Still loading: nothing was sent.', 'warn'); return false; }   // soft: a profile reload keeps it (review N6)
     return true;
   }
   function sendOrder(side, kind, price) {
@@ -1460,6 +1540,8 @@ function start(container, opt, PAGE) {
     $('alertText').textContent = alerts.join('\n'); $('alertBar').hidden = false;
   }
   $('alertClose').addEventListener('click', () => { alerts.length = 0; $('alertBar').hidden = true; });
+  /* The history ended short (live first): one click loads the chart again, keeping the view and order entry meanwhile. */
+  $('fillReload').addEventListener('click', () => { if (ws && ws.readyState === 1 && helloSeen) subscribe(S.root, { keep: true }); });
   /* Order messages show for a while, then clear (errors stay longer). */
   let flashTimer = 0;
   function flash(text, level) { setStatus(text, level); const t = text; flashTimer = setTimeout(() => { if ($('statusMsg').textContent === t) setStatus('', ''); }, level === 'error' ? 12000 : 6000); }
@@ -1469,12 +1551,14 @@ function start(container, opt, PAGE) {
   chart.on('legend', e => {
     vpLegend();
     const { bar: b, prev, forming } = e;
-    const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap, D.fallback].join('|');
+    const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap, D.fallback, D.syncAt, D.fill && D.fill.done].join('|');
     if (key === legendKey) return;
     legendKey = key;
     const dp = precisionOf(), fmt = p => U.fmtPrice(p, dp);
     const chg = prev ? b.c - prev.c : 0, pct = prev ? chg / prev.c * 100 : 0;
-    $('lgTf').textContent = S.tf === 'range' ? 'Range ' + (ranges[D.root] || '') + 't' + (S.rangeMode === 'traded' ? ' traded' : '') + (D.fallback ? ' (1m until loaded)' : '') : TF[S.tf].label;
+    // live first: 1-minute stand-ins before the first proven range bar (or all of them until one), labelled as such
+    const early = !D.fallback ? (D.syncAt !== null && b.t < D.syncAt ? ' (1m before ' + U.fmtHM(D.syncAt) + ')' : '') : D.fill && D.fill.done && D.fill.short ? ' (1m until a full swing)' : ' (1m until loaded)';
+    $('lgTf').textContent = S.tf === 'range' ? 'Range ' + (ranges[D.root] || '') + 't' + (S.rangeMode === 'traded' ? ' traded' : '') + early : TF[S.tf].label;
     $('lgTime').textContent = U.fmtFull(b.t) + (forming ? ' · forming' : '');
     $('lgO').textContent = fmt(b.o); $('lgH').textContent = fmt(b.h); $('lgL').textContent = fmt(b.l); $('lgC').textContent = fmt(b.c);
     const chgEl = $('lgChg');
@@ -1482,7 +1566,7 @@ function start(container, opt, PAGE) {
     chgEl.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
     $('lgV').textContent = U.fmtVolume(b.v);
     $('lgVwWrap').hidden = !S.layers.vwap;
-    $('lgVw').textContent = b.vw !== undefined && b.vw !== null ? fmt(U.roundTo(b.vw, D.tick)) : D.fill && !D.fill.done ? 'loading' : '-';
+    $('lgVw').textContent = b.vw !== undefined && b.vw !== null ? fmt(U.roundTo(b.vw, D.tick)) : D.fill && !D.fill.done ? 'loading' : '-';   // ended short: none (the status line says why)
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
@@ -1606,7 +1690,8 @@ function start(container, opt, PAGE) {
       if (k === 'ib') ibNote(D.ib);
       if (k === 'vp') {                                          // built from the tick store when shown, dropped when not
         // a minute view with the profile on asks for the session's ticks (1.8.0, live first)
-        if (drawn.vp && ticksMissing() && ws && ws.readyState === 1 && helloSeen) subscribe(S.root); else vpBuild();
+        // (a reload that keeps the view and order entry until it is live: review N6)
+        if (drawn.vp && ticksMissing() && ws && ws.readyState === 1 && helloSeen) subscribe(S.root, { keep: true }); else vpBuild();
       }
     }
     legendKey = '';
@@ -1929,8 +2014,9 @@ function start(container, opt, PAGE) {
     if (D.m1) updateIB(false);
     // the volume profile moves to the new session at 18:00 ET on the clock, before its first trade
     if (D.vp && D.vp.advance(etNow())) vpLegend();
-    // live first: no chunk for 10 s (NinjaTrader still loading, or a request lost): ask again (ChartBridge keeps at most 4 asked)
-    if (D.fill && !D.fill.done && D.ready && nowMs() - D.fill.lastMs > 10000) { D.fill.lastMs = nowMs(); send({ type: 'more', sub: D.sub }); }
+    // live first: no chunk for 10 s (NinjaTrader still loading, or a request lost): ask again, for the same chunks (upTo:
+    // ChartBridge adds none for a repeat, so at most two are ever on their way; review N1). A dropped history is answered.
+    if (D.fill && !D.fill.done && D.ready && nowMs() - D.fill.lastMs > 10000) { D.fill.lastMs = nowMs(); askMore(); }
     vpNote(); vpLegend();
   }, 500);
 

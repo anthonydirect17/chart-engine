@@ -48,8 +48,11 @@ trades, since 0.3.4 how each trade's side, buy or sell, was found, and since 0.3
 **Live first** (chart 1.8.0 with ChartBridge 0.3.5): the chart asks for the most recent trades first, goes live with them
 (orders work from then on), and pulls the older history in the background, newest first, without holding up a frame or a
 live trade. "History: loading 6 h of 28 h" shows in the status line meanwhile. Minute and hour views are exact at once;
-range bars show from the first point where they are proven exact (1-minute bars until then) and nothing on screen moves
-when the rest comes in; the volume profile on a minute view now counts the whole session. With ChartBridge 0.3.4 or older,
+range bars show from the first point where they are proven exact (the 1-minute bars before it on their left, or 1-minute
+bars until then), and when the rest comes in those range bars stay the same in price and volume while older ones replace
+the 1-minute stand-ins; the volume profile on a minute view now counts the whole session. If the older history cannot be
+joined exactly (NinjaTrader's two answers differ), the chart keeps the recent trades only, says so, and offers a Reload;
+orders keep working meanwhile. With ChartBridge 0.3.4 or older,
 or through The Desk's relay, the chart loads everything first, as before. See `nt8/PROTOCOL.md`, Live first, and
 `docs/RANGE_BARS.md`.
 

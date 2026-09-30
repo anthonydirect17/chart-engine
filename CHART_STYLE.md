@@ -266,6 +266,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Levels, VWAP, the Initial Balance and trade marks are computed from bars, never typed in. A level that cannot be
   computed exactly is not drawn (the IB says why on the status line).
 - Live first (1.8.0): while the older history is still loading, nothing is drawn that it could change. Range bars show
-  only from a point where they are proven the same as a full load's (1-minute bars before it, the legend saying "Range
-  40t (1m until loaded)"); range and seconds bars draw no VWAP (legend "VWAP loading"). The status line says "History:
-  loading 6 h of 28 h" in the quiet grey, beside the other notes, and the note goes when the history is in.
+  only from a point where they are proven the same as a full load's, with the 1-minute bars of the minutes before it on
+  their left (the legend on one of them says "Range 40t (1m before 10:31)"), or 1-minute bars alone until such a point
+  (the legend "Range 40t (1m until loaded)"); range and seconds bars, and those stand-ins, draw no VWAP (legend "VWAP
+  loading"). The status line says "History: loading 6 h of 28 h" in the quiet grey, beside the other notes, and the note
+  goes when the history is in. When the history ends short the note says why and ends with "Reload" in the accent text
+  color, underlined, the one control on the status line.

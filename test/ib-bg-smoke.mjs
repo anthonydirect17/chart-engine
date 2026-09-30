@@ -340,7 +340,12 @@ try {
       'embedded ground saved under desk:, the page\'s untouched');
     await host.close();
     // reset puts the default ground back
-    await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape'); await a.waitForTimeout(200);
+    await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape');
+    // wait for the state, not a fixed 200 ms (it failed once on a busy host): the ground drawn and the page's own ground back
+    await a.waitForFunction(() => {
+      const d = document.querySelector('#chart canvas').getContext('2d').getImageData(4, 4, 1, 1).data;
+      return d[0] === 8 && d[1] === 11 && d[2] === 16 && getComputedStyle(document.querySelector('.chart-live')).backgroundColor === 'rgb(8, 11, 16)';
+    }, null, { timeout: 10000, polling: 50 }).catch(() => {});
     check((await look(a)).canvas === '#080B10', 'Reset to default: the dark ground again');
     check(await a.evaluate(() => getComputedStyle(document.querySelector('.chart-live')).backgroundColor) === 'rgb(8, 11, 16)' && await a.evaluate(() => document.querySelector('.chart-live').style.getPropertyValue('--s2')) === '',
       'back on the dark ground the toolbar is the house style again');

@@ -43,7 +43,7 @@ claims 1.7.0; the numbers are reconciled when both merge. Depends on ChartBridge
   exact (`RangeSync`: the first trade of a session, or a swing of more than the range each way; docs/RANGE_BARS.md, Live
   first), with 1-minute bars until then ("Range 40t (1m until loaded)"); range and seconds bars draw no VWAP until the
   history is in ("VWAP loading"). When the last chunk is in, the view is rebuilt from the whole store in slices and swapped
-  in: no bar shown before moves. "History: loading 6 h of 28 h" in the status line meanwhile, never over the order bar.
+  in: the range bars shown before stay the same in price and volume (review 1 below). "History: loading 6 h of 28 h" in the status line meanwhile, never over the order bar.
   The store keeps every trade while the history comes (the 2.5 million trim waits). A message of an older subscribe is
   dropped by its `sub` (with 0.3.5).
 - **Volume profile on minute views** (Anthony's ruling tonight): with the profile on and ChartBridge 0.3.5, 1m, 5m, 15m and
@@ -56,6 +56,42 @@ claims 1.7.0; the numbers are reconciled when both merge. Depends on ChartBridge
   `recentWindowMin`, `backgroundAnswerMs`, `backgroundMs`, `chunks`, `maxOldestDataMs`, the join (`matched`, `checked`,
   `mismatchAt`, `gapMs`, `sidesDiffer`), `state` and `fellBack`; `seams` entries say `liveFirst`.
 - **The delta pane** (next): the same path serves it (its trades per chunk in `historyGrew`, a rebuild at the end).
+- **Review 1 (2026-09-30), fixed:**
+  - **B1, the Sunday open:** NinjaTrader answers a request by date with whole trading days, so at the Sunday 18:00 ET open
+    (or after a holiday) the recent trades by count reach back into Friday while the older history holds only Sunday's
+    session; `ChartBridgeFill.Join` sent Sunday's opening print again in front of Friday's trades. Join now sees an older
+    history that starts after the page's first trade (`startsAfter`: nothing older, the page says the history starts where
+    the recent trades begin), keeps its position within the trades at the front's time, checks the trades before the join
+    as well as after, and sends older trades only when the join is proven. The page refuses any chunk that is not wholly
+    at or before its first trade. Harness: the reviewer's J1 to J4, a whole load whose older history is answered in whole
+    trading days (a Sunday open, and answers that differ at the front), a hunt over 3,000 tapes; the fake bridge answers
+    in whole trading days too, with a Sunday-open tape (`--calendar`) in `smoke:live-first`.
+  - **S1, sides:** the recent window's quote rows by count are cut at the full load's quote start (now minus
+    min(tickHours, 24) h), and the older history uses the same start: sides from the front are a full load's (the
+    reviewer's case: 8,151 of 15,000 differed, now none). The sides proof now cuts its full load at a quote start too.
+  - **S2, a join that does not match:** nothing older is sent, the page is told (`joinMismatch`, at once), keeps the recent
+    trades only (every trade once), says so and offers a one-click Reload (chosen over reloading on its own: no loop, and
+    never taking the chart or orders away without Anthony's click).
+  - **S3, the 1m fallback:** when a live trade gives the first proven point, the range bars appear to the right of the
+    1-minute bars of the minutes before it (the reviewer saw 6,511 bars become 1); the price axis fits.
+  - **N1:** the page asks with `upTo` (two chunks more than it has), so a re-ask adds nothing: at most two chunks on the way.
+  - **N2:** a dropped older history answers the next `more` (empty, done, `dropped`); the page stops loading, says so,
+    offers a Reload and trims its store again.
+  - **N3:** a page that disconnects, or subscribes again, has its older history dropped and freed at once.
+  - **N4:** documented: range bars keep their price and volume across the swap; a bar opened in a same-millisecond pileup
+    can move by 10 us inside that millisecond, which changes nothing on screen (docs/RANGE_BARS.md).
+  - **N5:** when the history ends short (an error, a gap, a mismatch, a drop), range and seconds bars keep no VWAP; the
+    Initial balance is not drawn when one of its minutes lacks its first trades.
+  - **N6:** switching the profile (or Session after RTH) on in a minute view, and the Reload, load again with the chart kept
+    and order entry working until the new load is live.
+  - **N7:** the fake bridge joins with a port of `ChartBridgeFill.Join` (`test/fill-join.js`), checked against the C#'s
+    answers on 157 cases (`nt8/check/join-cases.txt`), so the smokes exercise the real join logic.
+  - **N8:** `smoke:ib` waits for the Reset state instead of 200 ms; `smoke:perf` measures a live-first load again when it
+    had a frame over 50 ms, and fails only if the second one does too.
+  - **Trades only for a minute view's profile:** its subscribe says `quotes: false`, and ChartBridge asks NinjaTrader for no
+    Bid and Ask ticks (the sides come from the tick rule; the page does not use them on a minute view).
+  - **Tick hours:** ChartBridge serves 48 hours of ticks while CME Globex trades, and up to 120 only while it is closed (the
+    weekend, or a weekday with no trade for 90 minutes), for the weekend volume profile of chart-rulings.
 - **Unchanged:** orders, the PIN, network rules and fills (`ChartBridgeOrders.cs`, `ChartBridgePin.cs`,
   `live/order-ticket.js`, `live/pin.js` and the fake bridge's order handling untouched).
 - Tests: `check/FillHarness.cs` (run by `npm run check:orders`): FrontStart and Join by hand and the sides proof, the

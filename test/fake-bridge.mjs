@@ -54,8 +54,19 @@
 //   --recent-ms=300                 how long NinjaTrader takes to answer the recent window (live trades are held meanwhile)
 //   --older-ms=1500                 how long it takes to answer the whole window after ready
 //   --older-chunk=10000             trades per olderTicks message
+//   As ChartBridge 0.3.5 does it: the recent window is the last trades by count (it can reach back before the hours asked);
+//   the older history is answered in whole trading days (from 18:00 ET before the day the hours asked start on; a Saturday
+//   or Sunday gives Sunday 18:00) and joined to the page's first trade by test/fill-join.js, a port of ChartBridge's own
+//   ChartBridgeFill.Join (review N7): only a proven join sends older trades; otherwise one empty chunk with done and
+//   joinMismatch, gapMs or startsAfter. The page asks with upTo (chunks in all); a repeat adds nothing.
+//   --join-mismatch                 the older history's copy of the page's first trade has another volume (NinjaTrader's
+//                                   two answers differing), so the join is not proven
+//   --calendar                      sample data on the real calendar at the fake's clock: weekends and the 17:00 to 18:00 ET
+//                                   break where they fall (with --clock-offset, a Sunday 18:00 open with Friday before it)
 //   With --test-controls: POST /test/features?liveFirst=0 makes hello leave the feature out (a full load, like 0.3.4) for
-//   new connections; POST /test/tape?root=NQ&from=<t> the tape's trades from that time; /test/received counts "more".
+//   new connections; POST /test/tape?root=NQ&from=<t> the tape's trades from that time; /test/received counts "more";
+//   POST /test/drop-fill drops every page's older history (as ChartBridge's idle drop or a send error): a page with chunks
+//   asked is told at once (empty, done, dropped), any other at its next "more".
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -85,6 +96,8 @@ const LIVE_FIRST = !!flag('live-first') && !V1;
 let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
 const RECENT_TICKS = +flagValue('recent-ticks') || 100000, RECENT_MS = flagValue('recent-ms') === '' ? 300 : +flagValue('recent-ms');
 const OLDER_MS = flagValue('older-ms') === '' ? 1500 : +flagValue('older-ms'), OLDER_CHUNK = +flagValue('older-chunk') || 10000;
+const JOIN_MISMATCH = !!flag('join-mismatch'), CALENDAR = !!flag('calendar');
+const { join: fillJoin } = require('./fill-join.js');
 /* The side of a trade from the previous one (see the header): [s, sm]. */
 function sideOf(p, prev, prevSide) {
   if (prev === undefined) return [0, 0];
@@ -116,12 +129,18 @@ const INSTR = {
 };
 const rq = (p, t) => Math.round(p / t) * t;
 
-// Sample history shifted so its last bar is the current minute.
+// Sample history shifted so its last bar is the current minute (--calendar: made on the real calendar up to now, unshifted).
 function makeData(rootSym) {
-  const feed = SampleFeed.create({ seed: 20260929 + rootSym.length });
+  const liveMin = Math.floor(etNow() / 60) * 60;
+  // --calendar: the feed made up to the next Tuesday 10:31 ET (its demo trades need that morning), from a week before, and
+  // cut at the current minute
+  let tue = Math.floor(liveMin / 86400);
+  while (new Date(tue * 86400000).getUTCDay() !== 2 || tue * 86400 + 37860 < liveMin) tue++;
+  const feed = CALENDAR ? SampleFeed.create({ seed: 20260929 + rootSym.length, start: (tue - 8) * 86400 + 18 * 3600, live: tue * 86400 + 37860 })
+    : SampleFeed.create({ seed: 20260929 + rootSym.length });
   const k = INSTR[rootSym].scale;
-  const base = feed.base.slice(0, -1);
-  const shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
+  const base = CALENDAR ? feed.base.filter(b => b.t <= liveMin) : feed.base.slice(0, -1);
+  const shift = CALENDAR ? 0 : liveMin - base[base.length - 1].t;
   const bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
   return bars;
@@ -195,7 +214,7 @@ class Tape {
 }
 const tapes = {};
 if (LIVE_FIRST) for (const r of Object.keys(INSTR)) {
-  const hist = ticksFrom(data[r], 48), now = etNow(), k = new Tape(hist.length + 65536);
+  const hist = ticksFrom(data[r], CALENDAR ? 96 : 48), now = etNow(), k = new Tape(hist.length + 65536);   // --calendar: back over a weekend
   let prevP, prevS = 0;
   for (const x of hist) {
     if (x[0] > now) break;                          // the tape ends now; live trades carry on from here
@@ -309,7 +328,8 @@ function subscribeTape(c, m, r) {
   c.stats = { subscribedMs: Date.now() };
   setTimeout(() => {
     if (c.seq !== seq || c.sock.destroyed) return;
-    const end = k.n, start = Math.max(from, end - RECENT_TICKS);
+    // the recent window: the last trades by count (not cut at the hours asked, as NinjaTrader's barsBack request)
+    const end = k.n, start = Math.max(0, end - RECENT_TICKS);
     // the front: the first trade whose side does not lean on the one before the window (the fake's sides: a price change
     // sets the side, an unchanged price keeps the previous one)
     let w = start;
@@ -319,26 +339,54 @@ function subscribeTape(c, m, r) {
     for (let i = Math.max(end, heldFrom); i < k.n; i++) sendTick(c, r, i);   // the held trades not in the recent window
     c.ready = true;
     c.stats.readyMs = Date.now();
-    c.fill = { seq, sub, root: r, from, next: w, asked: 0, ready: false, done: false, chunks: 0 };
-    setTimeout(() => { if (c.fill && c.fill.seq === seq) { c.fill.ready = true; pump(c); } }, OLDER_MS);
+    const R = { t: k.t.subarray(start, end), p: k.p.subarray(start, end), v: k.v.subarray(start, end), w: w - start };
+    c.fill = { seq, sub, root: r, bFrom: 0, next: 0, asked: 0, sent: 0, ready: false, done: false, chunks: 0, flags: {}, droppedWhy: null, dropAnswered: false };
+    setTimeout(() => {
+      const f = c.fill;
+      if (!f || f.seq !== seq || f.done) return;
+      // the whole window, as a request by date answers it: whole trading days, up to now
+      const bFrom = k.at(tradingDayStart(etNow() - hours * 3600)), bEnd = k.n;
+      let bv = k.v.subarray(bFrom, bEnd);
+      if (JOIN_MISMATCH) { bv = Float64Array.from(bv); const i = start + R.w - bFrom; if (i >= 0 && i < bv.length) bv[i] += 1; else if (bv.length) bv[0] += 1; }
+      const j = fillJoin(k.t.subarray(bFrom, bEnd), k.p.subarray(bFrom, bEnd), bv, R.t, R.p, R.v, R.w);
+      f.bFrom = bFrom; f.next = j.send;
+      f.flags = { gapMs: j.gapMs >= 0 ? j.gapMs * 1000 : undefined, joinMismatch: !j.matched && j.gapMs < 0 ? true : undefined, startsAfter: j.startsAfter || undefined };
+      c.stats.join = { index: j.index, send: j.send, matched: j.matched, startsAfter: j.startsAfter, gapMs: j.gapMs };
+      f.ready = true; pump(c);
+    }, OLDER_MS);
   }, RECENT_MS);
+}
+/* The trading day a request by date starting at bar time t returns (NinjaTrader: whole trading days): from 18:00 ET the
+   evening before t's date; a Saturday or Sunday date gives Monday's day, from Sunday 18:00. */
+function tradingDayStart(t) {
+  let day = Math.floor(t / 86400);
+  const wd = new Date(day * 86400000).getUTCDay();
+  if (wd === 6) day += 2; else if (wd === 0) day += 1;
+  return (day - 1) * 86400 + 18 * 3600;
 }
 function more(c, m) {
   received.more = (received.more || 0) + 1;
   const f = c.fill;
-  if (!f || f.done || (Number.isInteger(m.sub) && m.sub !== f.sub)) return;
-  f.asked = Math.min(4, f.asked + 1);
+  if (!f || (Number.isInteger(m.sub) && m.sub !== f.sub)) return;
+  if (f.done) { if (f.droppedWhy && !f.dropAnswered) dropAnswer(c, f); return; }
+  f.asked = Number.isInteger(m.upTo) ? Math.max(0, Math.min(m.upTo - f.sent, 4)) : Math.min(4, f.asked + 1);   // upTo: a repeat adds nothing
   pump(c);
+}
+function dropAnswer(c, f) {
+  f.dropAnswered = true;
+  const msg = { type: 'olderTicks', root: f.root, ticks: [], left: 0, done: true, dropped: true, error: 'ChartBridge dropped the older history (' + f.droppedWhy + ')' };
+  if (f.sub !== undefined) msg.sub = f.sub;
+  send(c, msg);
 }
 function pump(c) {
   const f = c.fill, k = f && tapes[f.root];
   while (f && f.ready && !f.done && f.asked > 0 && !c.sock.destroyed) {
-    f.asked--;
-    const b = f.next, a = Math.max(f.from, b - OLDER_CHUNK);
+    f.asked--; f.sent++;
+    const b = f.next, a = Math.max(0, b - OLDER_CHUNK);
     f.next = a; f.chunks++;
-    const msg = { type: 'olderTicks', root: f.root, ticks: k.rows(a, b), left: a - f.from, done: a <= f.from };
+    const msg = { type: 'olderTicks', root: f.root, ticks: k.rows(f.bFrom + a, f.bFrom + b), left: a, done: a <= 0 };
     if (f.sub !== undefined) msg.sub = f.sub;
-    if (msg.done) { f.done = true; c.stats.doneMs = Date.now(); c.stats.chunks = f.chunks; }
+    if (msg.done) { Object.assign(msg, f.flags); f.done = true; c.stats.doneMs = Date.now(); c.stats.chunks = f.chunks; }
     send(c, msg);
   }
 }
@@ -428,6 +476,9 @@ const server = http.createServer((req, res) => {
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
+    else if (p === '/test/drop-fill') {
+      for (const c of clients) { const f = c.fill; if (f && !f.done) { f.done = true; f.droppedWhy = 'the test dropped it'; if (f.asked > 0) dropAnswer(c, f); } }
+    }
     else if (p === '/test/tape') {
       const k = tapes[r], from = k ? k.at(+q.get('from') || 0) : 0;
       res.writeHead(200, { 'Content-Type': 'application/json' });

@@ -10,6 +10,9 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const BB = require('../live/bar-builder.js');
+const FJ = require('./fill-join.js');
+const U = require('../src/chart-engine.js').util;
+const fs = require('node:fs');
 
 /* a seeded random walk, one tick at a time with jumps now and then, times that sometimes repeat */
 function walk(n, seed, opts) {
@@ -159,7 +162,8 @@ test('fake bridge --live-first: recent window, ready, older history on request; 
     const ws = await wsConnect(port);
     assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'hello')));
     assert.deepEqual(ws.msgs.find(m => m.type === 'hello').features, ['liveFirst']);
-    ws.onMsg = m => { if (m.type === 'ready' && m.older) { ws.send({ type: 'more', sub: 5 }); ws.send({ type: 'more', sub: 5 }); } else if (m.type === 'olderTicks' && !m.done) ws.send({ type: 'more', sub: 5 }); };
+    let chunks = 0;
+    ws.onMsg = m => { if (m.type === 'ready' && m.older) ws.send({ type: 'more', sub: 5, upTo: 2 }); else if (m.type === 'olderTicks' && !m.done) ws.send({ type: 'more', sub: 5, upTo: ++chunks + 2 }); };
     ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 3, sub: 5, liveFirst: true });
     assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'olderTicks' && m.done), 20000), 'the older history ends');
     await new Promise(r => setTimeout(r, 300));
@@ -200,5 +204,110 @@ test('fake bridge --live-first: a page that does not ask gets a full load from t
     assert.ok(await ws2.until(() => ws2.msgs.some(m => m.type === 'hello')));
     assert.equal(ws2.msgs.find(m => m.type === 'hello').features, undefined, 'features off: hello as 0.3.4');
     ws2.close();
+  } finally { child.kill(); }
+});
+
+/* ---------------- the join: the fake bridge's port of ChartBridgeFill.Join gives the C#'s answers (review N7) */
+test('fill-join.js (the fake bridge\'s join) gives ChartBridge\'s answers on every case in nt8/check/join-cases.txt', () => {
+  const lines = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'join-cases.txt'), 'utf8').split('\n').filter(l => l && l[0] !== '#');
+  assert.ok(lines.length > 100);
+  const cols = x => { const t = [], p = [], v = []; for (const y of x ? x.split(' ') : []) { const [a, b, c] = y.split(':'); t.push(+a); p.push(+b); v.push(+c); } return { t, p, v }; };
+  let checked = 0;
+  for (const line of lines) {
+    const c = line.split('\t'), B = cols(c[2]), R = cols(c[3]);
+    const j = FJ.join(B.t, B.p, B.v, R.t, R.p, R.v, +c[1]);
+    const got = [j.index, j.send, j.matched ? 1 : 0, j.startsAfter ? 1 : 0, j.gapMs >= 0 ? 1 : 0, j.mismatchAt, j.checked].join(' ');
+    assert.equal(got, c.slice(4, 11).join(' '), c[0]);
+    checked++;
+  }
+  assert.ok(checked > 100);
+});
+
+/* Seconds to add to the clock to stand at hh:mm New York time on the most recent past `dow` (0 Sunday .. 6 Saturday). */
+function offsetToDay(dow, hh, mm) {
+  const now = Date.now() / 1000, today = Math.floor(U.zoneSeconds(now) / 86400);
+  for (let back = 0; back < 14; back++) {
+    const bt = (today - back) * 86400 + hh * 3600 + mm * 60;
+    if (new Date(bt * 1000).getUTCDay() !== dow) continue;
+    let unix = bt - (U.zoneSeconds(now) - now);
+    unix = bt - (U.zoneSeconds(unix) - unix);
+    if (unix > now) continue;
+    return Math.round(unix - now);
+  }
+  throw new Error('no day found');
+}
+/* A live-first load through the fake, pulled as live.js pulls it; what the page got, in its order. */
+async function pull(port, tickHours, opts) {
+  const o = opts || {};
+  const ws = await wsConnect(port);
+  let chunks = 0;
+  ws.onMsg = m => { if (m.type === 'ready' && m.older) { for (let i = 0; i < (o.asks || 1); i++) ws.send({ type: 'more', sub: 9, upTo: 2 }); } else if (m.type === 'olderTicks' && !m.done && !o.noMore) ws.send({ type: 'more', sub: 9, upTo: ++chunks + 2 }); };
+  ws.send({ type: 'subscribe', root: 'NQ', days: 1, tickHours, sub: 9, liveFirst: true });
+  if (o.before) await o.before(ws);
+  assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'olderTicks' && m.done), 20000), 'the older history ends');
+  await fetch(`http://127.0.0.1:${port}/test/hold?root=NQ`, { method: 'POST' });
+  await new Promise(r => setTimeout(r, 300));
+  const got = ws.msgs.slice();
+  ws.close();
+  const ready = got.findIndex(m => m.type === 'ready');
+  const older = got.filter(m => m.type === 'olderTicks');
+  const recent = got.slice(0, ready).filter(m => m.type === 'ticks').flatMap(m => m.ticks);
+  const page = older.slice().reverse().flatMap(m => m.ticks).concat(recent, got.slice(ready + 1).filter(m => m.type === 'tick' && m.root === 'NQ').map(m => [m.t, m.p, m.v]));
+  const tape = await (await fetch(`http://127.0.0.1:${port}/test/tape?root=NQ&from=${page[0][0]}`, { method: 'POST' })).json();
+  let bad = -1;
+  if (tape.n !== page.length) bad = Math.min(tape.n, page.length);
+  for (let i = 0; i < Math.min(tape.n, page.length) && bad < 0; i++) if (page[i][0] !== tape.t[i] || page[i][1] !== tape.p[i] || page[i][2] !== tape.v[i]) bad = i;
+  return { older, recent, page, tape, bad, last: older[older.length - 1] };
+}
+
+test('fake bridge --live-first at the Sunday 18:00 ET open (--calendar): the recent window reaches into Friday, the older history (whole trading days) is Sunday only, nothing is sent twice', async () => {
+  const port = 19600 + Math.floor(Math.random() * 300);
+  const child = await startBridge(port, ['--live-first', '--calendar', '--clock-offset=' + offsetToDay(0, 18, 5), '--tick-rate=2', '--live-rate=60', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=200']);
+  try {
+    const r = await pull(port, 26);
+    const sunday = x => new Date(x * 1000).getUTCDay() === 0;
+    assert.ok(r.recent.length > 100 && !sunday(r.recent[0][0]) && r.recent.some(x => sunday(x[0])), 'the recent trades start before the weekend and include Sunday\'s');
+    assert.equal(r.older.length, 1);
+    assert.deepEqual([r.last.ticks.length, r.last.done, r.last.startsAfter, r.last.joinMismatch], [0, true, true, undefined], 'nothing older, done, startsAfter');
+    assert.equal(r.bad, -1, 'the page\'s trades are the tape from its first trade on, each once (' + r.page.length + ' against ' + r.tape.n + ')');
+    const loads = await (await fetch(`http://127.0.0.1:${port}/test/loads`, { method: 'POST' })).json();
+    assert.ok(loads.some(l => l && l.join && l.join.startsAfter && l.join.matched), 'the fake joined with the port: startsAfter, matched where it starts');
+  } finally { child.kill(); }
+});
+
+test('fake bridge --live-first --join-mismatch: nothing older is sent, the page is told (joinMismatch), and a repeated upTo adds no chunk', async () => {
+  const port = 19600 + Math.floor(Math.random() * 300);
+  const child = await startBridge(port, ['--live-first', '--join-mismatch', '--tick-rate=2', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=200']);
+  try {
+    const r = await pull(port, 3, { asks: 4 });
+    assert.equal(r.older.length, 1);
+    assert.deepEqual([r.last.ticks.length, r.last.done, r.last.joinMismatch], [0, true, true]);
+    assert.equal(r.bad, -1, 'the page holds the tape from its front, each trade once');
+  } finally { child.kill(); }
+  const port2 = 19600 + Math.floor(Math.random() * 300);
+  const child2 = await startBridge(port2, ['--live-first', '--tick-rate=2', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=200', '--older-chunk=1000']);
+  try {
+    // the page asks upTo 2 four times at ready and nothing more: exactly two chunks come
+    const ws = await wsConnect(port2);
+    ws.onMsg = m => { if (m.type === 'ready' && m.older) for (let i = 0; i < 4; i++) ws.send({ type: 'more', sub: 9, upTo: 2 }); };
+    ws.send({ type: 'subscribe', root: 'NQ', days: 1, tickHours: 3, sub: 9, liveFirst: true });
+    assert.ok(await ws.until(() => ws.msgs.filter(m => m.type === 'olderTicks').length >= 2, 8000));
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(ws.msgs.filter(m => m.type === 'olderTicks').length, 2, 'two chunks, not four');
+    ws.close();
+  } finally { child2.kill(); }
+});
+
+test('fake bridge --live-first: a dropped older history is answered (empty, done, dropped), at once when chunks were asked', async () => {
+  const port = 19600 + Math.floor(Math.random() * 300);
+  const child = await startBridge(port, ['--live-first', '--tick-rate=2', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=5000']);
+  try {
+    const r = await pull(port, 3, { before: async ws => {
+      assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'ready')));
+      await new Promise(res => setTimeout(res, 200));
+      await fetch(`http://127.0.0.1:${port}/test/drop-fill`, { method: 'POST' });
+    } });
+    assert.equal(r.older.length, 1);
+    assert.ok(r.last.done && r.last.dropped && /dropped/.test(r.last.error) && r.last.ticks.length === 0);
   } finally { child.kill(); }
 });

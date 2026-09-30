@@ -8,7 +8,9 @@
 // backfill is one session, so the RTH run asks for denser sample ticks (17 a second, not 15) to stay over a million.
 // Live first (1.8.0, ChartBridge 0.3.5): three more loads where the bridge sends the recent trades first and the 1.7 million
 // older ones after ready, measured from LIVE until 10 s after the last chunk, so every chunk and the rebuild at the end are
-// in the window. Those fail on any frame over 50 ms (PERF_SMOKE_LIVE_FIRST=0 leaves them out).
+// in the window. Those fail on any frame over 50 ms (PERF_SMOKE_LIVE_FIRST=0 leaves them out). A live-first load with a frame
+// over 50 ms is measured once more (review N8: one frame of 50 ms came once on a host loaded by other jobs); it fails only
+// when the second measurement has one too. Both are reported.
 //   npm run smoke:perf           (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser; about 3 minutes)
 //   PERF_SMOKE_ROOT=../old-checkout npm run smoke:perf    measures another checkout's page on the same feed
 import { spawnSync } from 'node:child_process';
@@ -25,16 +27,30 @@ const RTH = process.env.PERF_SMOKE_VP === 'rth';
 const ET = process.env.PERF_SMOKE_ET || (RTH ? '13:30' : '01:30'), TICK_RATE = +process.env.PERF_SMOKE_TICK_RATE || (RTH ? 17 : 15);
 const errors = [];
 const LIVE_FIRST = process.env.PERF_SMOKE_LIVE_FIRST !== '0' && !process.env.PERF_SMOKE_ROOT;
-for (let i = 0; i < LOADS * (LIVE_FIRST ? 2 : 1); i++) {
+const runs = [];
+let portNext = PORT;
+const measure = (i, lf) => {
+  const one = out + '.' + i + '.' + portNext;
   const args = [path.join(here, 'test', 'perf-live.mjs'), '--view=range', '--secs=10', '--warm=3', '--et=' + ET, '--tick-rate=' + TICK_RATE, '--live-rate=150',
-    '--port=' + (PORT + i), '--json=' + out, '--root=' + path.resolve(process.env.PERF_SMOKE_ROOT || here)]
+    '--port=' + (portNext++), '--json=' + one, '--root=' + path.resolve(process.env.PERF_SMOKE_ROOT || here)]
     .concat(process.env.PERF_SMOKE_VP === '0' ? [] : [process.env.PERF_SMOKE_VP === 'rth' ? '--vp=rth' : '--vp'])
-    .concat(i >= LOADS ? ['--live-first'] : []);
+    .concat(lf ? ['--live-first'] : []);
   const r = spawnSync(process.execPath, args, { stdio: ['ignore', 'ignore', 'inherit'], timeout: 180000 });
-  if (r.status !== 0) { errors.push('load ' + (i + 1) + ': perf-live exited ' + r.status); continue; }
+  const got = fs.existsSync(one) ? fs.readFileSync(one, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l))[0] : null;
+  fs.rmSync(one, { force: true });
+  if (r.status !== 0 || !got) { errors.push('load ' + (i + 1) + ': perf-live exited ' + r.status); return null; }
+  return got;
+};
+for (let i = 0; i < LOADS * (LIVE_FIRST ? 2 : 1); i++) {
+  const lf = i >= LOADS;
+  let d = measure(i, lf);
+  if (d && lf && d.over50 > 0) {
+    const again = measure(i, lf);
+    console.log('load ' + (i + 1) + ' (live first): ' + d.over50 + ' frame(s) over 50 ms (load average ' + os.loadavg()[0].toFixed(1) + '); measured again: ' + (again ? again.over50 : 'no result'));
+    if (again) { again.firstOver50 = d.over50; d = again; }
+  }
+  if (d) runs.push(d);
 }
-const runs = fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
-fs.rmSync(out, { force: true });
 runs.forEach((d, i) => {
   const lf = d.liveFirst;
   const tag = 'load ' + (i + 1) + ' (' + d.version + ', ' + (lf ? 'live first: ' + d.backfillTicks.toLocaleString() + ' recent + ' + lf.olderTicks.toLocaleString() + ' older' : d.backfillTicks.toLocaleString()) + ' ticks)';
