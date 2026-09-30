@@ -71,7 +71,8 @@ then two reviews (fixes marked "review" and "review 2").
   - **A second Cancel all** while one is under way adds only orders not already in it and not cancelled in the last
     5 s: a repeat click sends nothing ("Still cancelling on EVAL-1 MNQ: 12 left. Nothing new to send."; review 2 S2,
     where 1.6.0 and the first cut sent 32 cancels and ChartBridge refused 12, leaving 6 orders working). A cancel
-    ChartBridge refused can go again at the next click (review 3 N1).
+    ChartBridge refused can go again at the next click (review 3 N1); one refused for the rate (a busy PC can deliver
+    two of the page's seconds close together) is sent again once by itself, first in line, at the pace.
   - **Flatten is never blocked** (review 3 S4): it goes out at once, never behind the pace, and with 6 a second for a
     batch Anthony's Buy, Sell and Flatten fit within one second (at 8, ChartBridge refused a Flatten after two quick
     orders, as in 1.6.0). If ChartBridge still refuses a Flatten for the rate, the page sends it once more 1.1 s later

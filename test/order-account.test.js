@@ -166,10 +166,16 @@ test('Cancel all: a second click sends nothing new, each send skips an order no 
   h.api.cancelAll();
   assert.equal(h.sent.length, 17);
   assert.match(h.flashes.at(-1)[0], /^Those cancels went out a moment ago\. Nothing new to send\./);
-  // ChartBridge refused one of them: that one can go again at once
-  assert.equal(h.api.onRefused({ type: 'reject', id: 'A20', reason: 'too many order actions (more than 10 a second)' }), false, 'shown as a refusal');
+  // ChartBridge refused one of them (not for the rate): shown, and that one can go again at the next click
+  assert.equal(h.api.onRefused({ type: 'reject', id: 'A20', reason: 'account EVAL-1 is in tradeAccounts but not connected in NinjaTrader' }), false, 'shown as a refusal');
   h.wait(1200); h.api.cancelAll();
   assert.deepEqual(h.sent.slice(17), ['A20']);
+  // refused for the rate: sent again once by itself, at the pace; a second rate refusal of it is shown
+  h.wait(1200);
+  assert.equal(h.api.onRefused({ type: 'reject', id: 'A20', reason: 'More than 10 order actions in one second. Slow down.' }), true);
+  assert.match(h.flashes.at(-1)[0], /^ChartBridge refused a cancel for the rate/);
+  assert.deepEqual(h.sent.slice(18), ['A20']);
+  assert.equal(h.api.onRefused({ type: 'reject', id: 'A20', reason: 'More than 10 order actions in one second. Slow down.' }), false);
   assert.ok(inWindow(h.at));
   // a Cancel all right after a batch ended waits for the pace too
   const g = cancelHarness(6);

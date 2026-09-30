@@ -1438,9 +1438,23 @@ function start(container, opt, PAGE) {
     batchStop(e => e.account === account && e.root === root);
     lastFlatten = { account, root, at: performance.now(), again: !!again };
   }
-  /* A refusal from ChartBridge. Returns true when handled here (a Flatten sent again), else the page shows it. */
+  /* A refusal from ChartBridge. Returns true when handled here (a Flatten or a Cancel all's cancel sent again), else the
+     page shows it. */
+  const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
   function onRefused(m) {
+    const wasBatch = typeof m.id === 'string' && cancelSent.has(m.id);
     if (typeof m.id === 'string') cancelSent.delete(m.id);         // a refused cancel can go again at once (review 3 N1)
+    /* A Cancel all's cancel refused for the rate (the page keeps 6 in 1.1 s, but a busy PC can deliver two of its
+       seconds close together): it goes again once, first in line, at the pace. */
+    const o = wasBatch && TR.orders.get(m.id);
+    if (o && RATE_REFUSAL.test(m.reason || '') && !requeued.has(m.id)) {
+      requeued.add(m.id);
+      if (!batch) batch = { groups: [], timer: false };
+      batch.groups.push({ account: o.account, root: o.root, queue: [m.id] });
+      flash('ChartBridge refused a cancel for the rate (more than 10 order actions a second): it goes again in turn.', 'warn');
+      cancelPump();
+      return true;
+    }
     const f = lastFlatten;
     if (m.id || m.cid || !f || f.again || !RATE_REFUSAL.test(m.reason || '') || performance.now() - f.at > 3000) return false;
     lastFlatten = null;
