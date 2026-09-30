@@ -455,6 +455,14 @@ function levelLines(lv) {
 }
 
 /* ---------------------------------------------------------------- initial balance (1.5.3) */
+/** Good Friday of `year` as a day number: Easter Sunday (anonymous Gregorian algorithm) less two days. */
+function goodFriday(year) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d4 = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d4 - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const em = Math.floor((h + l - 7 * m + 114) / 31), ed = ((h + l - 7 * m + 114) % 31) + 1;
+  return Date.UTC(year, em - 1, ed) / 1000 / DAY - 2;
+}
 /*
  * US stock market (NYSE) full-day closures, for the Initial Balance: CME equity index futures still trade on most of
  * these days (to an early halt), but there is no 9:30 open, so there is no IB. Rules as the NYSE publishes them:
@@ -473,14 +481,9 @@ function nyseHolidays(year) {
   const nth = (m, wd, n) => { let d = D(m, 1); while (dow(d) !== wd) d++; return d + 7 * (n - 1); };
   const lastWd = (m, wd) => { let d = D(m + 1, 1) - 1; while (dow(d) !== wd) d--; return d; };
   const observed = d => dow(d) === 6 ? d - 1 : dow(d) === 0 ? d + 1 : d;
-  // Easter Sunday (anonymous Gregorian algorithm), then Good Friday
-  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d4 = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d4 - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const em = Math.floor((h + l - 7 * m + 114) / 31), ed = ((h + l - 7 * m + 114) % 31) + 1;
   const days = [
     dow(D(1, 1)) === 6 ? null : observed(D(1, 1)),
-    nth(1, 1, 3), nth(2, 1, 3), D(em, ed) - 2, lastWd(5, 1),
+    nth(1, 1, 3), nth(2, 1, 3), goodFriday(year), lastWd(5, 1),
     year >= 2022 ? observed(D(6, 19)) : null,
     observed(D(7, 4)), nth(9, 1, 1), nth(11, 4, 4), observed(D(12, 25)),
   ];
@@ -522,6 +525,44 @@ function rthClose(t) {
   if (!rthDay(t)) return null;
   const day = Math.floor(t / DAY);
   return nyseEarlyCloses(new Date(day * DAY * 1000).getUTCFullYear()).has(day) ? 46800 : 57600;
+}
+/*
+ * CME Globex equity index futures (NQ, MNQ, ES and so on), for the volume profile's loads (1.6.1, review 2 S5): Globex
+ * trades on most NYSE holidays, so "the stock market is closed" is not "CME is closed". The days with no Globex
+ * session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them (cmeClosures). On the
+ * other NYSE holidays (Martin Luther King Jr. Day, Presidents Day, Memorial Day, Juneteenth, Independence Day, Labor
+ * Day, Thanksgiving) Globex trades from 18:00 the evening before and halts at 13:00 ET; on an NYSE early close day
+ * it halts at 13:15 ET. Unscheduled changes are not known in advance and are not here.
+ */
+const cmeClosureCache = new Map();
+function cmeClosures(year) {
+  let set = cmeClosureCache.get(year);
+  if (set) return set;
+  const hol = nyseHolidays(year), D = (m, d) => Date.UTC(year, m - 1, d) / 1000 / DAY;
+  const days = [D(1, 1), D(1, 2), goodFriday(year), D(12, 24), D(12, 25), D(12, 26)].filter(d => hol.has(d));
+  set = new Set(days);
+  cmeClosureCache.set(year, set);
+  return set;
+}
+/** Whether trading day d (tradeDay's number, sessions from 18:00 ET) has a CME Globex session: Monday to Friday, not a CME closure. */
+function cmeSessionDay(d) {
+  const date = new Date(d * DAY * 1000), wd = date.getUTCDay();
+  return wd !== 0 && wd !== 6 && !cmeClosures(date.getUTCFullYear()).has(d);
+}
+/**
+ * Whether CME Globex equity index futures are closed at exchange wall-clock time t: the 17:00 to 18:00 ET break every
+ * day, Friday 17:00 to Sunday 18:00, a day with no Globex session (cmeClosures), and after the halt on an NYSE holiday
+ * (13:00 ET) or an NYSE early close (13:15 ET) until 18:00.
+ */
+function cmeClosed(t) {
+  const s = tod(t);
+  if (s >= 61200 && s < 64800) return true;
+  if (!cmeSessionDay(tradeDay(t, 64800))) return true;
+  const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay(), y = date.getUTCFullYear();
+  if (wd === 0 || wd === 6 || s >= 64800) return false;          // Sunday evening, or any evening's new session
+  if (nyseHolidays(y).has(day)) return s >= 46800;
+  if (nyseEarlyCloses(y).has(day)) return s >= 47700;
+  return false;
 }
 
 /**
@@ -2005,16 +2046,22 @@ class VolumeProfile {
     }
   }
   /**
-   * While the market is closed (the 17:00 to 18:00 ET break, and a trading day with no stock market session: a
-   * weekend or an NYSE holiday), the time from which a kept profile needs every trade: the start of the last trading
-   * day with a stock market session (its 18:00 ET the evening before, or its 9:30 with `rth`). Null while the market
-   * is open (1.6.1: the page then loads ticks for the view only). Pure: `now` is exchange wall-clock seconds.
+   * While CME Globex is closed (cmeClosed: the 17:00 to 18:00 ET break, Friday 17:00 to Sunday 18:00, a day with no
+   * Globex session, and after an NYSE holiday's 13:00 halt), the time from which a kept profile needs every trade:
+   * for the full session, the start (18:00 ET the evening before) of the last Globex session, by the CME calendar; with
+   * `rth`, 9:30 of the last day with a stock market session, by the NYSE calendar. Null while Globex trades, also on an
+   * NYSE holiday before its halt (1.6.1, review 2 S5: the page then loads ticks for the view only, never more).
+   * Pure: `now` is exchange wall-clock seconds.
    */
   closedFrom(now) {
+    if (!cmeClosed(now)) return null;
+    if (this.rth) {
+      let day = Math.floor(now / DAY);
+      for (let k = 0; k < 12; k++, day--) if (rthDay(day * DAY + 43200) && day * DAY + this.rthStart <= now) return day * DAY + this.rthStart;
+      return null;
+    }
     let d = tradeDay(now, this.sessionStart);
-    const s = tod(now);
-    if (!closedDay(d) && !(s >= this.sessionStart - 3600 && s < this.sessionStart)) return null;
-    for (let k = 0; k < 10 && closedDay(d); k++) d--;
+    for (let k = 0; k < 12 && !cmeSessionDay(d); k++) d--;
     return this.startOfDay(d);
   }
   static _share(p) {
@@ -2207,7 +2254,7 @@ return {
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, nyseHolidays, nyseEarlyCloses, rthClose,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
   },
   VolumeProfile,

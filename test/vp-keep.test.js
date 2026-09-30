@@ -152,7 +152,7 @@ test('fromStore: the last session with trades; RTH looks back only over a weeken
   assert.equal(weekday(VolumeProfile.fromStore(tg, opts(false))), 'Fri', 'the full session of Friday 27 Nov started Thursday 18:00');
 });
 
-test('closedFrom: which ticks a kept profile needs while the market is closed (null while it is open)', () => {
+test('closedFrom: which ticks a kept profile needs while CME Globex is closed (null while it trades, holidays included)', () => {
   const s = new VolumeProfile({ keep: true }), r = new VolumeProfile({ keep: true, rth: true });
   const cases = [
     // [clock, Session from, RTH from]
@@ -163,18 +163,55 @@ test('closedFrom: which ticks a kept profile needs while the market is closed (n
     [et(2026, 9, 26, 12, 0), et(2026, 9, 24, 18, 0), et(2026, 9, 25, 9, 30)],       // Saturday
     [et(2026, 9, 27, 17, 59), et(2026, 9, 24, 18, 0), et(2026, 9, 25, 9, 30)],      // Sunday before 18:00
     [et(2026, 9, 27, 18, 0), null, null],                                           // Sunday 18:00: Monday's session is open
-    [et(2026, 9, 7, 12, 0), et(2026, 9, 3, 18, 0), et(2026, 9, 4, 9, 30)],          // Labor Day
-    [et(2026, 11, 26, 12, 0), et(2026, 11, 24, 18, 0), et(2026, 11, 25, 9, 30)],    // Thanksgiving
-    [et(2026, 12, 27, 17, 59), et(2026, 12, 23, 18, 0), et(2026, 12, 24, 9, 30)],   // Sunday after Christmas on a Friday
+    // review 2 S5: Globex trades on Labor Day and Thanksgiving until 13:00 ET, so nothing more is asked then
+    [et(2026, 9, 7, 10, 0), null, null],                                            // Labor Day morning
+    [et(2026, 9, 7, 12, 59), null, null],
+    [et(2026, 9, 7, 13, 0), et(2026, 9, 6, 18, 0), et(2026, 9, 4, 9, 30)],          // Labor Day after the halt: the holiday's own session; RTH Friday's
+    [et(2026, 9, 7, 17, 59), et(2026, 9, 6, 18, 0), et(2026, 9, 4, 9, 30)],
+    [et(2026, 9, 7, 18, 0), null, null],                                            // Tuesday's session is open
+    [et(2026, 1, 19, 11, 0), null, null],                                           // Martin Luther King Jr. Day, trading
+    [et(2026, 11, 26, 12, 0), null, null],                                          // Thanksgiving, trading
+    [et(2026, 11, 26, 15, 0), et(2026, 11, 25, 18, 0), et(2026, 11, 25, 9, 30)],    // Thanksgiving after the halt
+    [et(2026, 11, 27, 14, 0), et(2026, 11, 26, 18, 0), et(2026, 11, 27, 9, 30)],    // the day after, past the 13:15 early close
+    [et(2026, 11, 27, 13, 0), null, null],                                          // before it
+    // the days with no Globex session at all: Good Friday, Christmas, New Year's Day
+    [et(2026, 4, 2, 20, 0), et(2026, 4, 1, 18, 0), et(2026, 4, 2, 9, 30)],          // Thursday evening before Good Friday: no session
+    [et(2026, 4, 3, 12, 0), et(2026, 4, 1, 18, 0), et(2026, 4, 2, 9, 30)],          // Good Friday
+    [et(2026, 12, 25, 12, 0), et(2026, 12, 23, 18, 0), et(2026, 12, 24, 9, 30)],    // Christmas on a Friday
+    [et(2026, 12, 27, 17, 59), et(2026, 12, 23, 18, 0), et(2026, 12, 24, 9, 30)],   // Sunday after it
+    [et(2026, 12, 27, 18, 0), null, null],
+    [et(2026, 1, 1, 12, 0), et(2025, 12, 30, 18, 0), et(2025, 12, 31, 9, 30)],      // New Year's Day
+    [et(2026, 1, 1, 18, 0), null, null],                                            // Friday's session is open
   ];
   for (const [t, sf, rf] of cases) {
     assert.equal(s.closedFrom(t), sf, 'Session at ' + U.fmtFull(t));
     assert.equal(r.closedFrom(t), rf, 'RTH at ' + U.fmtFull(t));
   }
-  // the longest reach: Sunday 17:59 after a Friday holiday, 96 hours; the page asks for at most 120
-  assert.ok((et(2026, 12, 27, 17, 59) - s.closedFrom(et(2026, 12, 27, 17, 59))) / 3600 <= 96);
+  // the longest reach: Sunday 17:59 after a Friday holiday, 96 h less a minute: the page asks ceil + 1 = 97 hours
+  assert.equal(Math.ceil((et(2026, 12, 27, 17, 59) - s.closedFrom(et(2026, 12, 27, 17, 59))) / 3600) + 1, 97);
   assert.equal(U.closedDay(Math.floor(et(2026, 9, 26, 12, 0) / 86400)), true);
   assert.equal(U.closedDay(Math.floor(et(2026, 9, 28, 12, 0) / 86400)), false);
+});
+
+test('cmeClosed: the CME Globex calendar, not the NYSE one (review 2 S5)', () => {
+  const iso = y => [...U.cmeClosures(y)].map(d => new Date(d * 86400000).toISOString().slice(0, 10)).sort();
+  assert.deepEqual(iso(2026), ['2026-01-01', '2026-04-03', '2026-12-25']);
+  assert.deepEqual(iso(2027), ['2027-01-01', '2027-03-26', '2027-12-24']);   // Christmas on a Saturday: the Friday
+  assert.deepEqual(iso(2022), ['2022-04-15', '2022-12-26']);               // New Year's on a Saturday: not moved
+  const open = [et(2026, 9, 28, 3, 0), et(2026, 9, 27, 18, 0), et(2026, 9, 25, 16, 59), et(2026, 9, 7, 12, 59), et(2026, 7, 3, 12, 0), et(2026, 6, 19, 9, 30)];
+  const shut = [et(2026, 9, 28, 17, 0), et(2026, 9, 25, 17, 0), et(2026, 9, 26, 12, 0), et(2026, 9, 27, 17, 59), et(2026, 9, 7, 13, 0), et(2026, 7, 3, 13, 0),
+    et(2026, 12, 24, 13, 15), et(2026, 12, 24, 20, 0), et(2026, 12, 25, 12, 0), et(2026, 4, 3, 9, 30)];
+  for (const t of open) assert.equal(U.cmeClosed(t), false, 'open at ' + U.fmtFull(t));
+  for (const t of shut) assert.equal(U.cmeClosed(t), true, 'closed at ' + U.fmtFull(t));
+  // every minute of 2026 and 2027: while Globex trades closedFrom is null (the page asks for the view's ticks only)
+  const s = new VolumeProfile({ keep: true }), r = new VolumeProfile({ keep: true, rth: true });
+  let max = 0;
+  for (let t = et(2026, 1, 1, 0, 0); t < et(2028, 1, 1, 0, 0); t += 60) {
+    const a = s.closedFrom(t), b = r.closedFrom(t);
+    if (!U.cmeClosed(t)) { assert.equal(a, null); assert.equal(b, null); continue; }
+    max = Math.max(max, Math.ceil((t - a) / 3600) + 1, Math.ceil((t - b) / 3600) + 1);
+  }
+  assert.ok(max <= 97, 'the most asked is ' + max + ' hours');
 });
 
 test('fromStore: nothing that counts gives an empty profile, never an error', () => {
@@ -187,12 +224,14 @@ test('fromStore: nothing that counts gives an empty profile, never an error', ()
   assert.equal(vp.day, null);
 });
 
-test('the page asks for the last session while the market is closed, and ChartBridge serves up to 120 hours of ticks', () => {
+test('the page asks for the last session while CME is closed, as much as ChartBridge serves by its version; nt8/ is unchanged', () => {
   const fs = require('node:fs'), path = require('node:path');
   const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8');
-  assert.match(cs, /int tickHours = hm\.Success \? Math\.Max\(0, Math\.Min\(120, int\.Parse\(hm\.Groups\[1\]\.Value\)\)\) : ChartBridgeConfig\.DefaultTickHours;/);
+  assert.match(cs, /int tickHours = hm\.Success \? Math\.Max\(0, Math\.Min\(48, int\.Parse\(hm\.Groups\[1\]\.Value\)\)\) : ChartBridgeConfig\.DefaultTickHours;/, 'review 2 S3: 0.3.4 as on main');
   const js = fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8').replace(/\r\n/g, '\n');
   assert.match(js, /const VP_CLOSED_HOURS = 120;/);
-  assert.match(js, /return Math\.max\(viewTicksWanted\(\), from === null \? 0 : Math\.min\(VP_CLOSED_HOURS, Math\.ceil\(\(etNow\(\) - from\) \/ 3600\) \+ 1\)\);/);
-  assert.match(js, /const ticksMissing = \(\) => \{ const from = vpClosedFrom\(\); return viewTicksMissing\(\) \|\| \(from !== null && D\.tickFrom > from\); \};/);
+  assert.match(js, /return n >= 3005 \? VP_CLOSED_HOURS : 48;/, 'from ChartBridge 0.3.5 on');
+  assert.match(js, /const ticksWanted = \(\) => Math\.min\(ticksWantedAll\(\), bridgeTickHours\(\)\);/);
+  assert.match(js, /bridgeVersion = typeof m\.version === 'string' \? m\.version : '';\n/);
+  assert.doesNotMatch(js, /install\.ps1 again/, 'no install advice on the page (review 2 S4)');
 });

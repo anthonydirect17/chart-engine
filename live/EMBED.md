@@ -66,8 +66,12 @@ created in the container. `setIndicatorOption` sets an indicator's own option on
 9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default). It returns false for an option or value
 that does not exist. `indicatorOptions('vp')` reads it back (`{ session: 'full' }`). The Volume profile's gear panel in the
 Indicators menu has the same Session / RTH switch. Over weekends and NYSE holidays the profile keeps the last session
-(legend "(Fri)") until the next session's first trade, and while the market is closed a mounted chart with the profile
-on asks ChartBridge for that session's ticks too, up to 120 hours back (1.6.1; 48 with a ChartBridge older than 1.6.1's).
+(legend "(Fri)") until the next session's first trade, and while CME Globex is closed a mounted chart with the profile
+on asks for that session's ticks too (1.6.1): up to 48 hours with ChartBridge 0.3.4 and older, up to 97 hours from
+0.3.5 (by the version in `hello`). The Desk's relay clamps `tickHours` to `THEDESK_LIVE_RELAY_TICK_HOURS` (default 8),
+so its Live tab shows the weekend profile only as far back as that: on a weekend usually none, with a neutral note
+("no trades of the last session in the tick history this view loaded"), never install advice. To show it, the relay
+needs its own change (its cap raised, up to ChartBridge's).
 
 | Option | Default | What it does |
 |---|---|---|
@@ -112,7 +116,7 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 
 | Message | Fields and bounds |
 |---|---|
-| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
+| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day. With the volume profile on and CME Globex closed (1.6.1), up to the last session's start: at most `48` with ChartBridge 0.3.4 and older, at most `97` from 0.3.5 (the chart reads the version in `hello`; it never asks past ChartBridge's cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
 | `ping` | `c` (the page clock). Allowed, but the chart does not send it today. |
 
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC

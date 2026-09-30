@@ -230,6 +230,9 @@
 .chart-live .alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--loss); border-radius: 12px; background: rgba(255, 122, 122, 0.12); color: var(--head); font-weight: 500; }
 .chart-live .alert-title { font: 700 11px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--loss); }
 .chart-live .alert-text { flex: 1 1 200px; white-space: pre-line; }
+.chart-live .alert.warn { border-color: var(--warn); background: rgba(224, 180, 90, 0.10); }   /* cancels not sent (1.6.1): stays until dismissed */
+.chart-live .alert.warn .alert-title { color: var(--warn); }
+.chart-live .batch-note { color: var(--head); }                  /* a Cancel all under way, whatever is shown (1.6.1) */
 .chart-live select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 
 @media (max-width: 720px) {

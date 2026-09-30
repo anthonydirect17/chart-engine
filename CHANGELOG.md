@@ -2,11 +2,12 @@
 
 ## 1.6.1 (2026-09-30): the order account comes back after a reload or a reconnect, and the volume profile keeps the last session over weekends and holidays
 
-Page, engine and one line of ChartBridge. **ChartBridge needs a recompile for the weekend profile to reach back past
-48 hours** (run `nt8\install.ps1` again, then compile in NinjaTrader, F5): `ChartBridge.cs` now serves up to 120 hours
-of ticks per subscribe (48 before). Everything else works with ChartBridge 0.3.2, 0.3.3 and 0.3.4 as they are. The
-Desk gets it with the new `live/live.js`, `live/live.css` and `src/chart-engine.js` (`live/order-ticket.js` is
-byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30, then a review (fixes marked "review").
+Page and engine only; nt8/ is unchanged (review 2 S3). Run `nt8\install.ps1` again after pulling (it copies the page
+and engine files); **no NinjaTrader recompile, no F5**. Works with ChartBridge 0.3.2, 0.3.3 and 0.3.4 as they are;
+with those the weekend profile reaches back 48 hours (it says so, below), and the whole last session once ChartBridge
+0.3.5 (the live-first branch) serves more. The Desk gets it with the new `live/live.js`, `live/live.css` and
+`src/chart-engine.js` (`live/order-ticket.js` is byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30,
+then two reviews (fixes marked "review" and "review 2").
 
 ### The order account after a reload or a dropped connection (Anthony: "the account I was using", not Sim101)
 
@@ -26,7 +27,9 @@ byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30, then a review 
   turns off if ChartBridge's list changes while trading and the account in use is no longer on it.
 - **Very visible.** Each time trading comes on, the Account picker gets a ring for about 3.6 s (purple, amber on the
   fallback; a still ring with reduced motion) and the order bar's state row says which account orders go to: "On
-  EVAL-1, the account this tab was on. Armed is off." (or "the last account picked" in a new tab), "Still on EVAL-1.
+  EVAL-1, the account this tab was on. Armed is off." after a reload ("the account of the tab that opened this one" in
+  a tab copied with window.open, "the account this tab's session was on" in a duplicated tab; review 2 N3; "the last
+  account picked" in a new tab), "Still on EVAL-1.
   Armed is off." after a reconnect, "On EVAL-1 (picked while trading was off). Armed is off." when the picker was
   changed during a drop (review N3), or the fallback note. It goes after 8 s (the fallback's after 15 s), and at once
   on a pick, when Armed goes on, and when trading is lost (review S2). The note takes what is left of that row, never
@@ -44,11 +47,32 @@ byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30, then a review 
   line). The x and the drag also refuse an order that is not on the account shown ("Not sent: that order is not on
   EVAL-1.") or no longer working ("Not sent: that order is no longer working."; review N4). While trading is off
   there is no order account at all. The fills follow the picker as in 1.6.0.
-- **A Cancel all of more than 8 orders** (review N1, from 1.5): its cancels go out 8 a second, so until the last one
-  is sent the account picker and the Armed switch are locked and the state row says "Cancelling... EVAL-1 and Armed
-  are locked until the last cancel is sent." Each cancel is sent only while Armed is on and the account is the one
-  it started on; if Armed goes off or the connection drops first, the page says how many were not sent. Flatten is
-  never locked.
+- **Cancel all, once clicked, finishes** (review N1, then review 2 S1, S2, N1). Its ids are the working orders of the
+  account and instrument shown at the click, after `ready()`. They go out by order id, fewer than 8 order actions of
+  any kind in any 1.1 s (ChartBridge refuses more than 10 a second; the rest leaves room for Anthony's own clicks),
+  and **the rest keep going out whatever Armed, the picker or the instrument show afterwards**: Anthony asked for
+  those cancels, a cancel only takes an order away, and each goes to that order's own account. So "the account shown
+  is the account used" holds for every order, change, Flatten and every Cancel all click; only the tail of a Cancel
+  all Anthony already clicked can go out after a switch, and the state row says so while it does, "Cancelling on
+  EVAL-1 MNQ: 12 left (8 a second).", whatever account or instrument is shown.
+  - **Nothing is locked** while it runs: Armed, the account picker, the instrument and Flatten all work. 1.6.1's first
+    cut locked the picker and Armed until the last cancel, and an instrument switch then dropped the rest and kept
+    Flatten out of reach for up to 2 s per 16 orders (review 2 S1). The picker lock is gone too: its only purpose was
+    to stop a late cancel going out while another account is shown, which is now the rule, named on screen, and it
+    would keep Anthony from flattening another account for those seconds.
+  - Each send skips an order no longer working (filled, cancelled). **Flatten** during a batch takes the rest of that
+    account and instrument off the batch (ChartBridge's Flatten cancels them), so no red "No working order" follows
+    (review 2 S2); the x on one of them takes it off too.
+  - **A second Cancel all** while one is under way adds only orders not already in it and not cancelled in the last
+    5 s: a repeat click sends nothing ("Still cancelling on EVAL-1 MNQ: 12 left. Nothing new to send."; review 2 S2,
+    where 1.6.0 and the first cut sent 32 cancels and ChartBridge refused 12, leaving 6 orders working).
+  - It stops only for what ChartBridge would refuse: **the connection drops**, trading goes off, or the account leaves
+    ChartBridge's list. Then a note that stays until Anthony dismisses it, or until those orders are no longer working,
+    says so in the warning color above the chart: "12 cancels on EVAL-1 MNQ were not sent: the connection to
+    ChartBridge dropped. Those orders may still be working. Check them, then Cancel all again on that account and
+    instrument (or in NinjaTrader)." (review 2 S1; a 6 s status line before.)
+  - 8 orders or fewer all go out at the click, so Armed going off right after drops none (review 2 N1). The account
+    note keeps its full 8 s or 15 s whatever a batch does (review 2 N2).
 - **A pick while trading is off counts.** During a drop or the sign-in window the picker still switches the fills,
   and that account is also the one orders go to when trading comes back (if allowed), so the picker never jumps. Its
   tooltip says so.
@@ -71,23 +95,35 @@ byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30, then a review 
   and Session shows the holiday's own Globex session. On weekday evenings nothing changed from 1.6.0 (review S4: the
   ruling covers weekends and holidays): the profile moves to the new session at 18:00, and RTH is empty overnight
   until 9:30. Whether RTH should also stay up through weekday nights is a question for Anthony.
-- **A load, a reload or a reconnect while the market is closed** (the 17:00 to 18:00 ET break, a weekend, an NYSE
-  holiday) with the profile on asks ChartBridge for the last session's ticks on every view (Range, seconds, minute
-  and hour views): back to 18:00 ET before the last day with a stock market session, or its 9:30 for RTH
-  (`VolumeProfile.closedFrom`), on top of what the view asks for (review B1: 1.6.1's first cut only worked on a page
-  left open since Friday). Switching the profile on, or Session / RTH, while closed loads them first. Sunday 17:59
-  after a Friday holiday needs 96 hours, hence ChartBridge's new cap of 120 (above). While the market is open the
-  page asks for exactly what 1.6.0 asked for.
-- **With an older ChartBridge** (48 hours at most) the profile shows what it got and says so: the legend reads "(Fri
-  from 12:00)" and the note "Volume profile from 12:00 ET: the tick history does not reach back to 18:00 ET.
-  ChartBridge older than chart 1.6.1's serves at most 48 hours of ticks: run nt8\install.ps1 again and compile." With
-  no ticks of the last session at all it shows none and a small note, never an error.
+- **A load, a reload or a reconnect while CME Globex is closed** with the profile on asks ChartBridge for the last
+  session's ticks on every view (Range, seconds, minute and hour views), on top of what the view asks for (review B1:
+  1.6.1's first cut only worked on a page left open since Friday). "Closed" is the CME Globex calendar, not the
+  NYSE's (review 2 S5): the 17:00 to 18:00 ET break, Friday 17:00 to Sunday 18:00, the days with no Globex session
+  (New Year's Day, Good Friday, Christmas), and after the halt on the other NYSE holidays (13:00 ET) and on NYSE
+  early-close days (13:15 ET) until 18:00 (`util.cmeClosed`). Session asks back to the start of the last Globex
+  session (18:00 ET the evening before); RTH to the last stock market day's 9:30, by the NYSE calendar
+  (`VolumeProfile.closedFrom`). Switching the profile on, or Session / RTH, while closed loads them first.
+- **While Globex trades the page asks for exactly what 1.6.0 asked for**, holidays included: on Labor Day morning a
+  1m view loads no ticks, as on any weekday (the first cut asked 72 to 97 hours then). RTH on such a morning has no
+  session of its own and says "Volume profile (RTH): no stock market session today. The last one loads only while
+  Globex is halted: reload after 13:00 ET to see it."
+- **How far back ChartBridge serves goes by the version in its hello** (review 2 S3): 48 hours up to 0.3.4, 120 from
+  0.3.5; the page never asks for more than that. The longest reach is Sunday 17:59 after a Friday holiday: 97 hours
+  (96 h less a minute, rounded up, plus one). With 0.3.4 on a Sunday the profile shows what it got and says so, with
+  no install advice: the legend reads "(Fri from 12:00)" and the note "Volume profile from 12:00 ET: the tick
+  history does not reach back to 18:00 ET. This ChartBridge (0.3.4) serves 48 hours of ticks." In an embed (The
+  Desk's relay serves 8 hours) the note says only where the ticks start (review 2 S4). With no ticks of the last
+  session at all it shows none and a small note, never an error.
+- **A session's first trade a few ms after 18:00:00.000** (or 9:30), with nothing traded before it (after a holiday
+  halt or the break), no longer makes the profile "partial" (review 2 S4): when the ticks were asked from before the
+  session's start and its first trade came within 3 minutes of it, the session counts as whole.
 - **Legend:** the session's day at the end, "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", in the quiet grey,
   and "(Fri from 12:00)" when its ticks start after the session did; the tooltip names the date.
 - **The IB is unchanged** (none on weekends and NYSE holidays): it shares no code with the profile.
 - Engine: `VolumeProfile` option `keep` (over a trading day with no stock market session, `advance()` does nothing and
   an RTH profile outlives the Globex trades; the next session's first trade moves it), `closedFrom(now)`,
-  `startOfDay(d)`, `VolumeProfile.fromStore(store, opts)` (looks back only over closed days), `util.closedDay(d)`.
+  `startOfDay(d)`, `VolumeProfile.fromStore(store, opts)` (looks back only over closed days), `util.closedDay(d)`,
+  and the CME calendar `util.cmeClosed(t)`, `util.cmeSessionDay(d)`, `util.cmeClosures(year)` (review 2 S5).
   Without `keep` the engine counts as in 1.6.0.
 - **Overlap with the live-first branch** (minute charts loading ticks back to 18:00 while the market is open): both
   change `ticksWanted` and `ticksMissing` in live.js. 1.6.1 only adds the market-closed request on top of the view's.
@@ -97,31 +133,47 @@ byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30, then a review 
 - New `test/order-account.test.js` (`orderAccount`: restored when allowed, Sim101 or the first allowed with the
   missed account named, nothing picked, junk, always an allowed account; live.js: every order path through `ready()`
   with the shown-account check, `TR.account` set only from `orderAccount`, the picker or cleared, Armed never from
-  storage, the tab's account in sessionStorage first, a batched Cancel all locking the picker and Armed but never
-  Flatten, the trading page not following other tabs, no 1.5 key) and `test/vp-keep.test.js` (a Friday kept over the
-  weekend, the switch at Sunday 18:00's first trade, RTH over a weekend, weekday evenings as 1.6.0, Thanksgiving,
-  Christmas, `keep` off unchanged, `fromStore` over a weekend, Labor Day and Thanksgiving and not over a weekday
-  night, `closedFrom` at ten clocks, ChartBridge's cap).
+  storage, the tab's account in sessionStorage first, the trading page not following other tabs, no 1.5 key; review 2:
+  live.js's Cancel all code run on its own with the page stubbed, 20 orders sent by id through an Armed off, an
+  account and an instrument switch, a second click, orders gone meanwhile, a Flatten, a drop, the account leaving
+  the list, 3 orders with Armed off at once, the pace with other orders just sent, never over 8 in 1.1 s, nothing
+  locked) and `test/vp-keep.test.js` (a Friday kept over the weekend, the switch at Sunday 18:00's first trade, RTH
+  over a weekend, weekday evenings as 1.6.0, Thanksgiving, Christmas, `keep` off unchanged, `fromStore` over a
+  weekend, Labor Day and Thanksgiving and not over a weekday night, `closedFrom` at 25 clocks, the CME calendar and
+  every minute of 2026 and 2027: null while Globex trades, at most 97 hours; nt8/ as on main, the page's cap by
+  version, no install advice).
 - `test/fake-bridge.mjs --market-hours`: the sample on the real calendar (moved by whole weeks), no trades while CME is
-  closed, tick history counted back from the clock, as ChartBridge does.
+  closed (`util.cmeClosed`), tick history counted back from the clock, as ChartBridge does. `--tick-shift-ms=137`
+  stamps every trade that much later (a session's first trade at 18:00:00.137); `--version` sets hello's version.
 - `npm run smoke:orders`, a 1.6.1 section: first visit on Sim101 with the ring and the note; pick, arm, reload with the
   PIN: back on the tab's account, Armed off; every order path on the restored account, with every message the page
   sent for that account; a stored account that is not a trade account (the fallback); two tabs, including the
   review's case (tab A with a DEMO-EVAL long and stop reloads after tab B picked Sim101 and comes back on DEMO-EVAL);
   the named other account; a dropped connection; the note cleared on Armed on and on trading lost; a pick while
-  trading is off ("picked while trading was off"); the title and the pill at 1440 and 400 px; a batched Cancel all
-  of 10 (picker and Armed locked, Flatten free, every cancel for its account).
+  trading is off ("picked while trading was off"); the title and the pill at 1440 and 400 px. Review 2: a Cancel
+  all of 10 (nothing locked, the state row counting down, every cancel for DEMO-EVAL); R15 an instrument switch
+  300 ms into 20 (Armed off but usable, arm and Flatten on NQ at once, all 20 cancelled); R16 a drop 300 ms in (8
+  sent, the note naming DEMO-EVAL MNQ and 12 still up after the reconnect and 7 s, gone once they are cancelled);
+  R17 DEMO-EVAL leaving the list (the note says why, the fallback note keeps its 15 s, Dismiss); R18 Flatten 300 ms
+  in (flat, nothing working, no cancel after it, no reject); R19 a second Cancel all (20 cancels in all, at most 8 in
+  any second, no reject); 3 orders with Armed off in the same task (all 3 sent).
 - `npm run smoke:vp`, new, all with the page's own subscribe (no hook on it): Saturday and Sunday 12:00 on Range, 15s,
-  1m and 15m, Session and RTH (Friday's profile, every Friday trade the page got); a reconnect on each; an older
-  ChartBridge (48 hours) on Sunday ("(Fri from 12:0x)" and its note); Sunday 17:59:45 (kept over 18:00 on the clock,
-  then Monday's session from the first trade); Monday and Tuesday 08:00 (RTH empty until 9:30, as in 1.6.0); the most
-  recent NYSE holiday on Range and 1m. `npm run smoke:embed`: a pick saved by another tab still followed by both
+  1m and 15m, Session and RTH (Friday's profile, every Friday trade the page got) with ChartBridge 0.3.5; a reconnect
+  on each; ChartBridge 0.3.4 on Sunday (asks 48, "(Fri from 12:0x)" and its note, no install advice, a view switch
+  does not load again); Sunday 17:59:45 (kept over 18:00 on the clock, then Monday's session from the first trade);
+  Monday and Tuesday 08:00 (RTH empty until 9:30, as in 1.6.0); the most recent NYSE holiday with Globex trading at
+  12:00 (every view asks its own hours only, RTH says why it is empty) and at 14:00 after the halt (RTH keeps the
+  last RTH day, Session the holiday's own session) on Range and 1m; review 2's +137 ms case (the Saturday after a
+  Thursday holiday, and Tuesday 17:30 after a Monday holiday: the whole session, no "from 18:00"); The Desk's embed
+  through a relay serving 8 hours on Sunday (a neutral note). `npm run smoke:embed`: a pick saved by another tab still followed by both
   mounted panes, and no account note or ring in the embed.
 - **Changed because the old behaviour changed:** `smoke:vp`'s two legend checks now expect the day, " (Tue)";
-  `smoke:orders`' trading-off tooltip check now expects the new tooltip text. No other existing check changed;
+  `smoke:orders`' trading-off tooltip check now expects the new tooltip text; review 2 replaced the first cut's lock
+  checks (unit and smoke:orders) and its holiday and older-ChartBridge checks in smoke:vp. No other existing check changed;
   `test/order-ticket.test.js` and `live/order-ticket.js` are untouched.
 - Order-path files changed: `live/live.js` (account handling, `ready()`, Cancel all, the chart's move and cancel
-  handlers, the title and pill) and `test/orders-smoke.mjs`. Unchanged: `live/order-ticket.js`, `live/pin.js`,
+  handlers, Flatten taking its orders off a Cancel all, the order-action count in `send`, the title and pill) and
+  `test/orders-smoke.mjs`. Unchanged: `live/order-ticket.js`, `live/pin.js`,
   `test/order-ticket.test.js`, `test/fake-orders.mjs`, `nt8/ChartBridgeOrders.cs`.
 
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side

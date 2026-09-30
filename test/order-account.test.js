@@ -75,14 +75,140 @@ test('live.js: TR.account is set only from orderAccount, the picker, or cleared;
   assert.equal((PAGE.match(/saveTabAccount\(/g) || []).length, 2, 'called on the two kinds of pick, never on a fallback');
 });
 
-test('live.js: a batched Cancel all locks the picker and Armed until its last cancel is sent, and sends only for its account (review N1)', () => {
-  const ca = PAGE.slice(PAGE.indexOf('function cancelAll('), PAGE.indexOf('function setArmed('));
-  assert.match(ca, /const acct = TR\.account, seq = \+\+cancelSeq, batched = ids\.length > 8;/);
-  assert.match(ca, /if \(TR\.armed && TR\.account === acct\) send\(\{ type: 'cancel', id \}\); else unsent\+\+;/);
-  assert.match(PAGE, /sel\.disabled = !TR\.accounts\.length \|\| !!TR\.cancelling;/);
-  assert.match(PAGE, /el\.disabled = !on \|\| \(el === \$\('armBtn'\) && !!TR\.cancelling\);/);
+/* Cancel all's batch (review 2 S1, S2, N1), run on its own: live.js's code from CANCEL_CHUNK to setArmed, with the page
+   around it stubbed (the socket, the timers, the elements). The page itself is driven in test/orders-smoke.mjs. */
+function cancelHarness(n, opts = {}) {
+  const OT = require('../live/order-ticket.js');
+  const src = PAGE.slice(PAGE.indexOf('  const CANCEL_CHUNK'), PAGE.indexOf('  function setArmed('));
+  const TR = { enabled: true, armed: true, account: 'EVAL-1', accounts: ['Sim101', 'EVAL-1'], orders: new Map(), positions: new Map() };
+  for (let i = 1; i <= n; i++) TR.orders.set('A' + i, { id: 'A' + i, account: 'EVAL-1', root: 'MNQ', side: 'buy', kind: 'limit', state: 'working', qty: 1, price: 100 - i, oco: null });
+  for (const o of opts.others || []) TR.orders.set(o.id, o);
+  const D = { root: 'MNQ' }, ws = { readyState: 1 }, sent = [], at = [], flashes = [], timers = [], els = {}, clock = { t: 1000 };
+  const $ = id => els[id] || (els[id] = { textContent: '', title: '', hidden: true });
+  let counted = null;                                                    // live.js's send counts every order action (actionSent)
+  const api = new Function('TR', 'D', 'OT', 'ws', 'send', 'later', 'flash', 'ready', '$', 'performance',
+    src + '\n  return { cancelAll, batchStop, unsentCheck, actionSent, get batch() { return batch; }, unsent };')(
+    TR, D, OT, ws, m => { if (ws.readyState === 1) { sent.push(m.id); at.push(clock.t); counted(); } }, (fn, ms) => timers.push({ fn, ms }), (t, l) => flashes.push([t, l]),
+    () => TR.armed && TR.enabled && ws.readyState === 1, $, { now: () => clock.t });
+  counted = api.actionSent;
+  // the next timer: the clock moves to it (a whole 1.1 s after the first of the last 8 sends)
+  const tick = () => { const t = timers.shift(); if (t) { clock.t += t.ms; t.fn(); } return !!t; };
+  const wait = ms => { clock.t += ms; };
+  return { TR, D, ws, sent, at, flashes, timers, els, api, tick, wait, clock };
+}
+
+test('Cancel all: the rest go out by id whatever Armed, the account shown or the instrument say; nothing is locked (review 2 S1)', () => {
+  const h = cancelHarness(20);
+  h.api.cancelAll();
+  assert.equal(h.sent.length, 8, 'the first 8 at the click');
+  assert.match(h.els.oCancel.textContent, /^Cancelling on EVAL-1 MNQ: 12 left/);
+  h.TR.armed = false; h.D.root = 'NQ'; h.TR.account = 'Sim101';          // Armed off, the instrument and the account switched
+  h.tick();
+  assert.equal(h.sent.length, 16, '8 more 1.1 s later');
+  h.tick();
+  assert.deepEqual(h.sent, [...Array(20)].map((_, i) => 'A' + (i + 1)), 'all 20, by id, once each');
+  assert.equal(h.els.oCancel.textContent, '', 'the note goes with the last one');
+  assert.equal(h.api.batch, null);
+  assert.equal(h.timers.length, 0);
+  for (let i = 0; i < h.at.length; i++) assert.ok(h.at.filter(t => t >= h.at[i] && t < h.at[i] + 1100).length <= 8, 'never over 8 in 1.1 s');
+  // nothing in live.js locks the picker or Armed any more
+  assert.doesNotMatch(PAGE, /TR\.cancelling|cancelSeq/);
+  assert.match(PAGE, /sel\.disabled = !TR\.accounts\.length;/);
+  assert.match(PAGE, /if \(el !== \$\('oAcct'\)\) el\.disabled = !on;/);
+});
+
+test('Cancel all of 8 or fewer: all sent at the click, so Armed going off right after drops none (review 2 N1)', () => {
+  const h = cancelHarness(3);
+  h.api.cancelAll();
+  h.TR.armed = false;
+  assert.deepEqual(h.sent, ['A1', 'A2', 'A3']);
+  assert.equal(h.els.oCancel.textContent, '');
+});
+
+test('Cancel all: a second click sends nothing new, each send skips an order no longer working, never over 8 in 1.1 s (review 2 S2)', () => {
+  const h = cancelHarness(20);
+  h.api.cancelAll();
+  h.wait(300);
+  h.api.cancelAll();                                                     // the second click, orders still on the chart
+  assert.equal(h.sent.length, 8);
+  assert.match(h.flashes.at(-1)[0], /^Still cancelling on EVAL-1 MNQ: 12 left\. Nothing new to send\./);
+  for (const id of ['A9', 'A10', 'A11']) h.TR.orders.delete(id);         // filled or cancelled meanwhile
+  h.tick();
+  assert.deepEqual(h.sent.slice(8), ['A12', 'A13', 'A14', 'A15', 'A16', 'A17', 'A18', 'A19']);
+  // a new order on the same account and instrument, then Cancel all again: only that one is added, in turn
+  h.TR.orders.set('A21', { id: 'A21', account: 'EVAL-1', root: 'MNQ', side: 'buy', kind: 'limit', state: 'working', qty: 1, price: 50, oco: null });
+  h.api.cancelAll();
+  assert.equal(h.sent.length, 16, 'added, not sent at once: 8 went out in the last 1.1 s');
+  assert.match(h.flashes.at(-1)[0], /^Added 1 to the cancels under way, on EVAL-1 MNQ\./);
+  h.tick();
+  assert.deepEqual(h.sent.slice(16), ['A20', 'A21']);
+  assert.equal(h.api.batch, null);
+  // the orders still working (their cancels on the way): another click within 5 s sends nothing
+  h.api.cancelAll();
+  assert.equal(h.sent.length, 18);
+  assert.match(h.flashes.at(-1)[0], /^Those cancels went out a moment ago\. Nothing new to send\./);
+  for (let i = 0; i < h.at.length; i++) assert.ok(h.at.filter(t => t >= h.at[i] && t < h.at[i] + 1100).length <= 8, 'never over 8 in 1.1 s');
+  // a Cancel all right after a batch ended waits for the pace too
+  const g = cancelHarness(8);
+  g.api.cancelAll();
+  assert.equal(g.api.batch, null);
+  g.TR.orders.set('B1', { id: 'B1', account: 'EVAL-1', root: 'MNQ', side: 'buy', kind: 'limit', state: 'working', qty: 1, price: 50, oco: null });
+  g.wait(200); g.api.cancelAll();
+  assert.equal(g.sent.length, 8, 'the 9th waits');
+  g.tick();
+  assert.deepEqual(g.sent.slice(8), ['B1']);
+  assert.ok(g.at[8] - g.at[0] >= 1100);
+});
+
+test('Cancel all: the orders just sent count toward the pace, so ChartBridge never sees more than 10 a second', () => {
+  const h = cancelHarness(10);
+  for (let i = 0; i < 6; i++) { h.api.actionSent(); h.wait(150); }        // six Shift+clicks in the last 0.9 s
+  h.api.cancelAll();
+  assert.ok(h.sent.length <= 2, 'at most 8 actions in 1.1 s: ' + h.sent.length);
+  while (h.tick());
+  assert.equal(h.sent.length, 10);
+  assert.match(PAGE, /if \(ws && ws\.readyState === 1\) \{ ws\.send\(JSON\.stringify\(obj\)\); if \(ORDER_ACTIONS\.includes\(obj\.type\)\) actionSent\(\); \}/);
+});
+
+test('Cancel all: Flatten mid-batch takes the rest (no "No working order" after it), the x takes its own id (review 2 S2)', () => {
+  const h = cancelHarness(20);
+  h.api.cancelAll();
+  h.api.batchStop(e => e.account === 'EVAL-1' && e.root === 'MNQ');     // what the Flatten button does after its send
+  h.tick();
+  assert.equal(h.sent.length, 8, 'nothing after Flatten');
   const fl = PAGE.slice(PAGE.indexOf("$('flattenBtn').addEventListener"), PAGE.indexOf("$('cancelAllBtn').addEventListener"));
-  assert.doesNotMatch(fl, /cancelling/, 'Flatten is never blocked by it');
+  assert.match(fl, /send\(\{ type: 'flatten', account: TR\.account, root: D\.root \}\);\n\s+batchStop\(e => e\.account === TR\.account && e\.root === D\.root\);/);
+  assert.match(PAGE, /send\(\{ type: 'cancel', id: e\.id \}\);\n\s+batchStop\(x => x\.id === e\.id\);/);
+  assert.doesNotMatch(fl, /ready\(\) && !batch|batch\)/, 'Flatten is never blocked by a batch');
+});
+
+test('Cancel all: a drop mid-batch leaves a note that names the account, the instrument and the count, until dismissed or the orders are gone (review 2 S1)', () => {
+  const h = cancelHarness(20);
+  h.api.cancelAll();
+  h.ws.readyState = 3;                                                   // the connection dropped before the next 8
+  h.tick();
+  assert.equal(h.sent.length, 8);
+  assert.equal(h.api.batch, null);
+  assert.equal(h.els.unsentBar.hidden, false);
+  assert.match(h.els.unsentText.textContent, /^12 cancels on EVAL-1 MNQ were not sent: the connection to ChartBridge dropped\.\nThose orders may still be working\./);
+  // reconnected: the orders list still has 5 of them
+  h.TR.orders = new Map([...h.TR.orders].filter(([id]) => ['A16', 'A17', 'A18', 'A19', 'A20'].includes(id)));
+  h.api.unsentCheck();
+  assert.match(h.els.unsentText.textContent, /^5 cancels on EVAL-1 MNQ were not sent/);
+  h.TR.orders.clear();
+  h.api.unsentCheck();
+  assert.equal(h.els.unsentBar.hidden, true, 'gone with the orders');
+  // the account leaving ChartBridge's list: those stay in the note (not in the orders list), the rest go on
+  const g = cancelHarness(12, { others: [] });
+  g.api.cancelAll();
+  g.TR.accounts = ['Sim101'];
+  g.api.batchStop(e => !g.TR.accounts.includes(e.account), 'the account is no longer a trade account in ChartBridge');
+  g.TR.orders.clear(); g.api.unsentCheck();
+  assert.match(g.els.unsentText.textContent, /^4 cancels on EVAL-1 MNQ were not sent: the account is no longer a trade account in ChartBridge\./);
+  // the wiring: a drop, trading off and the account list, and Dismiss
+  assert.match(PAGE, /batchStop\(\(\) => true, 'the connection to ChartBridge dropped'\);   \/\/ before the orders are cleared/);
+  assert.match(PAGE, /if \(!TR\.enabled\) batchStop\(\(\) => true, 'trading went off \(' \+ TR\.reason\.replace\(\/\\\.\$\/, ''\) \+ '\)'\);/);
+  assert.match(PAGE, /\$\('unsentClose'\)\.addEventListener\('click', \(\) => \{ unsent\.clear\(\); renderUnsent\(\); \}\);/);
 });
 
 test('order-ticket.js is unchanged by 1.6.1 (defaultAccount stays for anything else that uses it)', () => {

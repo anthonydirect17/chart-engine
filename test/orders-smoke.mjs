@@ -341,13 +341,21 @@ try {
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     // every message a page sends, and the account of every order ChartBridge reports to it
     await ctx.addInitScript(() => {
-      window.__sent = []; window.__orderAcct = {};
+      window.__sent = []; window.__orderAcct = {}; window.__rejects = []; window.__statusSeen = [];
+      const iv = setInterval(() => { const el = document.getElementById('statusMsg'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
       const send = WebSocket.prototype.send;
-      WebSocket.prototype.send = function (d) { try { window.__sent.push(JSON.parse(d)); } catch (e) { /* not JSON */ } return send.call(this, d); };
+      WebSocket.prototype.send = function (d) { try { window.__sent.push(Object.assign(JSON.parse(d), { __at: performance.now() })); } catch (e) { /* not JSON */ } return send.call(this, d); };
       const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
       Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
+        window.__inject = m => fn({ data: JSON.stringify(m) });   // a ChartBridge message made up by the test (R17)
         d.set.call(this, ev => {
-          try { const m = JSON.parse(ev.data); if (m.type === 'order' && m.id) window.__orderAcct[m.id] = m.account; if (m.type === 'trading' && window.__holdTrading) return; } catch (e) { /* not JSON */ }
+          try {
+            const m = JSON.parse(ev.data);
+            if (m.type === 'order' && m.id) window.__orderAcct[m.id] = m.account;
+            if (m.type === 'reject') window.__rejects.push(m.reason);
+            if (m.type === 'trading' && m.enabled) window.__lastTrading = m;
+            if (m.type === 'trading' && window.__holdTrading) return;
+          } catch (e) { /* not JSON */ }
           return fn(ev);   // __holdTrading: the sign-in answer held back, so trading stays off after a reconnect
         });
       } });
@@ -517,18 +525,140 @@ try {
     await A.evaluate(() => { window.__sent.length = 0; });
     await A.click('#armBtn'); await A.click('#flattenBtn');
     await until(async () => (await A.textContent('#oPos')) === 'Flat' && (await state5()).orders.length === 0, '1.6.1 tab A flat on DEMO-EVAL');
-    // review N1: a Cancel all of more than 8 locks the picker and Armed until its last cancel is sent; Flatten stays free
-    for (let i = 0; i < 10; i++) await control(P5, 'elsewhere', { account: 'DEMO-EVAL', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: L5 - 20 - i });
-    await until(() => A.evaluate(() => window.liveChart.getOrders().length === 10), '1.6.1 ten DEMO-EVAL orders on the chart');
+    // review 2 S1, S2, N1, N2: a Cancel all goes out by id, 8 a second, and locks nothing: Armed, the picker, the
+    // instrument and Flatten all work while it runs. The state row names what is still going out.
+    const place = async (n, from) => { for (let i = 0; i < n; i++) await control(P5, 'elsewhere', { account: 'DEMO-EVAL', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: L5 - (from || 20) - i }); };
+    const evalWorking = async () => (await state5()).orders.filter(o => o.account === 'DEMO-EVAL' && o.root === 'MNQ').length;
+    // the orders on the chart, and 1.2 s since the last cancels (the page sends at most 8 in any 1.1 s)
+    const onChart = async n => { await until(() => A.evaluate(k => window.liveChart.getOrders().length === k, n), '1.6.1 ' + n + ' DEMO-EVAL orders on the chart'); await A.waitForTimeout(1200); };
+    const sentOf = type => A.evaluate(t => window.__sent.filter(m => m.type === t).map(m => ({ id: m.id, acct: window.__orderAcct[m.id], at: m.__at, account: m.account, root: m.root })), type);
+    const bar = () => A.evaluate(() => ({ unsent: document.getElementById('unsentBar').hidden ? '' : document.getElementById('unsentText').textContent, batch: document.getElementById('oCancel').textContent,
+      acct: document.getElementById('oAcct').disabled, arm: document.getElementById('armBtn').disabled, flatten: document.getElementById('flattenBtn').disabled, note: document.getElementById('oAcctNote').textContent }));
+    const armOn = async () => { if (await A.getAttribute('#armBtn', 'aria-checked') !== 'true') await A.click('#armBtn'); };
+    const armOff = async () => { if (await A.getAttribute('#armBtn', 'aria-checked') === 'true') await A.click('#armBtn'); };
+    const batchDone = what => until(async () => (await bar()).batch === '' && await evalWorking() === 0, what, 8000);
+
+    // 10 orders: nothing locked, the state row counts down, every cancel for DEMO-EVAL
+    await place(10);
+    await onChart(10);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    let bb = await bar();
+    check(!bb.acct && !bb.arm && !bb.flatten && bb.batch === 'Cancelling on DEMO-EVAL MNQ: 2 left (8 a second).', '1.6.1 review 2 S1: during a Cancel all nothing is locked, the state row names it: ' + JSON.stringify(bb));
+    await shot(A, 'orders-1440-cancel-all-under-way.png');
+    await batchDone('1.6.1 all ten cancelled');
+    let cs = await sentOf('cancel');
+    check(cs.length === 10 && cs.every(x => x.acct === 'DEMO-EVAL'), '1.6.1 ten cancels, all DEMO-EVAL: ' + cs.map(x => x.acct).join());
+
+    // R15: an instrument switch 300 ms into a batch of 20: Armed goes off but stays usable, Flatten works at once, and
+    // all 20 cancels Anthony asked for go out (1.6.1 before review 2: 8 of 20, Armed locked about 1.8 s)
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.click('#symSeg button[data-v="NQ"]');
+    bb = await bar();
+    const armedAfter = await A.getAttribute('#armBtn', 'aria-checked');
+    check(armedAfter === 'false' && !bb.arm && /^Cancelling on DEMO-EVAL MNQ: 12 left/.test(bb.batch), 'R15: after the switch Armed is off and not locked, the state row still names DEMO-EVAL MNQ: ' + JSON.stringify(bb));
+    await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 NQ loaded', 8000);
+    await A.click('#armBtn'); await A.click('#flattenBtn');
+    const fl15 = await sentOf('flatten');
+    check(fl15.length === 1 && fl15[0].account === 'DEMO-EVAL' && fl15[0].root === 'NQ', 'R15: arm and Flatten on NQ right after the switch: ' + JSON.stringify(fl15));
+    await until(async () => await evalWorking() === 0, 'R15 every MNQ order cancelled', 8000);
+    cs = await sentOf('cancel');
+    check(cs.length === 20 && cs.every(x => x.acct === 'DEMO-EVAL') && await evalWorking() === 0, 'R15: all 20 cancels sent by id, 0 DEMO-EVAL MNQ orders working: ' + cs.length);
+    await until(async () => (await bar()).batch === '', 'R15 the batch note gone', 5000);
+    await armOff();
+    await A.click('#symSeg button[data-v="MNQ"]');
+    await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 back on MNQ', 8000);
+
+    // R16: the connection drops 300 ms into a batch of 20: a note that stays (not a 6 s status line) names the account,
+    // the instrument and the 12 cancels not sent; it stays over the reconnect and goes by itself once they are cancelled
+    await place(20);
+    await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
+    await control(P5, 'drop');
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), 'R16 reconnected', 15000);
+    await tradingOn(A);
+    await A.waitForTimeout(7000);                                                     // longer than any status line
+    bb = await bar();
+    check(/^12 cancels on DEMO-EVAL MNQ were not sent: the connection to ChartBridge dropped\.\nThose orders may still be working\./.test(bb.unsent) && await evalWorking() === 12 && (await sentOf('cancel')).length === 8,
+      'R16: 8 sent, the note stays over the reconnect and 7 s: ' + JSON.stringify(bb.unsent) + ' working ' + await evalWorking() + ', sent ' + JSON.stringify(await sentOf('cancel')));
+    await shot(A, 'orders-1440-cancels-not-sent.png');
+    await A.click('#armBtn'); await A.click('#cancelAllBtn');
+    await batchDone('R16 the rest cancelled');
+    await until(async () => (await bar()).unsent === '', 'R16 the note goes once those orders are no longer working', 5000);
+    await armOff();
+
+    // R17: DEMO-EVAL leaves ChartBridge's list 300 ms into a batch of 20: the rest are not sent (ChartBridge would refuse
+    // them), the note says why and stays until dismissed; the fallback note keeps its 15 s after the batch (N2)
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.evaluate(() => window.__inject(Object.assign({}, window.__lastTrading, { accounts: ['Sim101'] })));
+    await A.waitForTimeout(3000);                                                     // past where the batch would have ended
+    bb = await bar();
+    const a17 = await acct(A);
+    check(/^12 cancels on DEMO-EVAL MNQ were not sent: the account is no longer a trade account in ChartBridge\./.test(bb.unsent) && (await sentOf('cancel')).length === 8 && a17.shown === 'Sim101' && a17.armed === 'false' && a17.note === 'Last account DEMO-EVAL not available, on Sim101.',
+      'R17 and N2: 8 sent, the note says why, the fallback note still up 3 s later: ' + JSON.stringify({ unsent: bb.unsent, note: a17.note, shown: a17.shown }));
+    await A.click('#unsentClose');
+    check((await bar()).unsent === '', 'R17: Dismiss takes the note away');
+    await A.evaluate(() => window.__inject(window.__lastTrading));                   // DEMO-EVAL allowed again
+    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    await A.click('#armBtn'); await A.click('#cancelAllBtn');
+    await batchDone('R17 the rest cancelled after DEMO-EVAL came back');
+    await armOff();
+
+    // R18: Flatten 300 ms into a batch of 20 with a position: flat, every order gone, and no cancel after the Flatten
+    // (so no red "No working order" from ChartBridge)
+    await armOn();
+    await A.fill('#bStop', '0'); await A.press('#bStop', 'Tab');
+    await A.click('#buyMkt');                                                         // the long first (the MNQ cap counts working orders)
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), 'R18 long 1');
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await A.waitForTimeout(1200);                                                     // ChartBridge's 10 a second counts the Buy too
     await A.click('#cancelAllBtn');
-    const lock = await A.evaluate(() => ({ acct: document.getElementById('oAcct').disabled, arm: document.getElementById('armBtn').disabled, flatten: document.getElementById('flattenBtn').disabled, note: document.getElementById('oAcctNote').textContent }));
-    check(lock.acct && lock.arm && !lock.flatten && /^Cancelling\.\.\. DEMO-EVAL and Armed are locked/.test(lock.note), '1.6.1 N1: during the batch the picker and Armed are locked, Flatten is not: ' + JSON.stringify(lock));
-    await shot(A, 'orders-1440-cancel-all-locked.png');
-    await until(async () => (await state5()).orders.length === 0 && await A.evaluate(() => !document.getElementById('oAcct').disabled && !document.getElementById('armBtn').disabled && document.getElementById('oAcctNote').textContent === ''), '1.6.1 N1: all ten cancelled, then unlocked', 6000);
-    const cancels = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => window.__orderAcct[m.id]));
-    check(cancels.length === 10 && cancels.every(x => x === 'DEMO-EVAL'), '1.6.1 N1: ten cancels, all DEMO-EVAL: ' + cancels.join());
-    await A.click('#armBtn');
+    await A.waitForTimeout(300);
+    await A.click('#flattenBtn');
+    await A.waitForTimeout(3000);
+    const msgs18 = await A.evaluate(() => window.__sent.filter(m => ['cancel', 'flatten'].includes(m.type)).map(m => m.type));
+    const rej18 = await A.evaluate(() => window.__rejects.slice());
+    check((await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0 && msgs18.lastIndexOf('cancel') < msgs18.indexOf('flatten') && rej18.length === 0 && (await status(A)).cls.indexOf('error') < 0,
+      'R18: Flatten mid-batch: flat, no order working, no cancel after it, no reject: ' + msgs18.join(',') + ' ' + JSON.stringify(rej18));
+    await armOff();
+
+    // R19: a second Cancel all 300 ms into a batch of 20 sends nothing new; never more than 8 in any second; none left
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; window.__statusSeen.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.click('#cancelAllBtn');
+    const st19 = { text: (await A.evaluate(() => window.__statusSeen.filter(t => /^Still cancelling/.test(t)))).join(' | ') };
+    await batchDone('R19 all cancelled');
+    const times = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.__at));
+    const most = Math.max(...times.map(t => times.filter(u => u >= t && u < t + 1000).length));
+    const rej19 = await A.evaluate(() => window.__rejects.slice());
+    check(times.length === 20 && most <= 8 && rej19.length === 0 && /^Still cancelling on DEMO-EVAL MNQ: 12 left\. Nothing new to send\./.test(st19.text),
+      'R19: the second click sent nothing new (' + times.length + ' cancels, at most ' + most + ' in a second, rejects ' + JSON.stringify(rej19) + '): ' + st19.text);
+    await armOff();
+
+    // review 2 N1: a Cancel all of 3, and Armed off in the same task: all 3 are sent at the click
+    await place(3);
+    await onChart(3);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await armOn();
+    await A.evaluate(() => { document.getElementById('cancelAllBtn').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); document.getElementById('armBtn').click(); });
+    await until(async () => await evalWorking() === 0, 'N1 the three cancelled');
+    check((await sentOf('cancel')).length === 3 && await A.getAttribute('#armBtn', 'aria-checked') === 'false', 'review 2 N1: 3 of 3 sent though Armed went off in the same task');
     // a phone: the note never wraps the order bar
     await B.setViewportSize({ width: 400, height: 860 });
     await reloadTab(B);

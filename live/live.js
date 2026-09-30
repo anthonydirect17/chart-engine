@@ -481,7 +481,7 @@ function markup(p, o) {
       <button type="button" class="btn" id="${p}flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
       <button type="button" class="btn" id="${p}cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
-    <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
+    <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" id="${p}oCancel" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
   </section></div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
@@ -558,7 +558,11 @@ ${obar}
   <div class="alert" id="${p}alertBar" role="alert" hidden>
     <span class="alert-title">ChartBridge</span><span class="alert-text" id="${p}alertText"></span>
     <button type="button" class="btn" id="${p}alertClose">Dismiss</button>
-  </div>
+  </div>${o.trading ? `
+  <div class="alert warn" id="${p}unsentBar" role="alert" hidden>
+    <span class="alert-title">Cancel all</span><span class="alert-text" id="${p}unsentText"></span>
+    <button type="button" class="btn" id="${p}unsentClose">Dismiss</button>
+  </div>` : ''}
 
   <main class="stage">
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
@@ -667,25 +671,37 @@ function start(container, opt, PAGE) {
   if (PAGE) window.liveChart = chart;  // for tests and the console; order actions still go through the checks below
 
   /* ---------------- per-instrument data */
-  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
+  const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, tickCapped: false, trimmed: false,
     lv: [], ib: null, ibKey: '', vp: null, liveFrom: null };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   const viewTicksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
   const viewTicksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
-  /* While the market is closed (the 17:00 to 18:00 ET break, weekends, NYSE holidays) with the volume profile on, every
-     view also asks for the ticks of the last session, so the profile it keeps survives a load, a reload and a
-     reconnect (1.6.1, Anthony's ruling 2026-09-30; review B1): from 18:00 ET before the last day with a stock market
-     session, or its 9:30 for RTH (VolumeProfile.closedFrom). Sunday 17:59 after a Friday holiday reaches back 96
-     hours; ChartBridge serves up to VP_CLOSED_HOURS (1.6.1's nt8/ChartBridge.cs; an older one stops at 48 and the
-     profile then says where its ticks start). While the market is open nothing changes here. */
+  /* While CME Globex is closed (the 17:00 to 18:00 ET break, Friday 17:00 to Sunday 18:00, the few days with no Globex
+     session, and after an NYSE holiday's 13:00 halt) with the volume profile on, every view also asks for the ticks of
+     the last session, so the profile it keeps survives a load, a reload and a reconnect (1.6.1, Anthony's ruling
+     2026-09-30; review B1): from 18:00 ET before the last Globex session, or the last stock market day's 9:30 for RTH
+     (VolumeProfile.closedFrom). While Globex trades, holidays included, the page asks for the view's ticks only, as
+     1.6.0 did (review 2 S5). Sunday 17:59 after a Friday holiday reaches back 97 hours. How much ChartBridge serves
+     goes by the version in its hello (review 2 S3): 48 hours up to 0.3.4, VP_CLOSED_HOURS from 0.3.5; the page never
+     asks for more than that, so it knows where its ticks can start, and the profile says so when that is after the
+     session's start. */
   const VP_CLOSED_HOURS = 120;
+  let bridgeVersion = '';                                       // from hello
+  const bridgeTickHours = () => {
+    const v = /(\d+)\.(\d+)\.(\d+)/.exec(bridgeVersion || ''), n = v ? (+v[1]) * 1e6 + (+v[2]) * 1e3 + (+v[3]) : 0;
+    return n >= 3005 ? VP_CLOSED_HOURS : 48;
+  };
   const vpClosedFrom = () => S.layers.vp ? new CE.VolumeProfile({ sessionStart: SESSION, rth: S.options.vp.session === 'rth', keep: true }).closedFrom(etNow()) : null;
-  const ticksWanted = () => {
+  /* The hours the view and the profile want, before ChartBridge's limit. */
+  const ticksWantedAll = () => {
     const from = vpClosedFrom();
     return Math.max(viewTicksWanted(), from === null ? 0 : Math.min(VP_CLOSED_HOURS, Math.ceil((etNow() - from) / 3600) + 1));
   };
-  const ticksMissing = () => { const from = vpClosedFrom(); return viewTicksMissing() || (from !== null && D.tickFrom > from); };
+  const ticksWanted = () => Math.min(ticksWantedAll(), bridgeTickHours());
+  /* Missing for the profile: the ticks do not reach its session's start, and the page did not already ask for all
+     ChartBridge serves (else every view switch on a weekend would load the same 48 hours again). */
+  const ticksMissing = () => { const from = vpClosedFrom(); return viewTicksMissing() || (from !== null && D.tickFrom > from && D.tickHours < bridgeTickHours()); };
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -845,11 +861,20 @@ function start(container, opt, PAGE) {
   function vpCover() {
     const now = etNow(), held = !D.vp.empty, need = D.vp.day !== null ? D.vp.startOfDay(D.vp.day) : D.vp.startOf(now);
     const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
-    const coveredFrom = D.tickHours > 0 ? Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
+    /* The first tick later than asked means NinjaTrader sent less, except when the ticks were asked from before the
+       session's start and its first trade came within a few minutes of it: a session's first trade is stamped a few ms
+       after 18:00:00.000 (or 9:30), and nothing trades before it after a halt or the break (review 2 S4). */
+    const sessionFirst = !D.trimmed && D.tickFrom <= need && t0 >= need && t0 <= need + VP_FIRST_TRADE_SLACK;
+    const coveredFrom = D.tickHours > 0 ? (sessionFirst ? Math.min(D.tickFrom, need) : Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity)) : D.liveFrom;
     return { now, held, need, coveredFrom, partial: held && coveredFrom > need };
   }
-  /* An older ChartBridge serves at most 48 hours of ticks: say so when the page asked for more (the market closed). */
-  const vpOldBridge = () => D.tickHours > 48 ? ' ChartBridge older than chart 1.6.1\'s serves at most 48 hours of ticks: run nt8\\install.ps1 again and compile.' : '';
+  const VP_FIRST_TRADE_SLACK = 180;                                // seconds
+  /* Why the tick history starts after the session did, when the page knows: on the trading page, ChartBridge's limit by
+     the version in its hello, when its ticks do start there. No install advice: chart 1.6.1 needs no new ChartBridge.
+     In an embed a relay may serve less (The Desk's serves 8 hours), and a PC may hold less tick history, so the note
+     then says only where the ticks start (review 2 S4). */
+  const vpCapWhy = () => PAGE && D.tickCapped && D.ticks.length && D.ticks.time(0) - D.tickFrom <= 600   // and it did serve that much
+    ? ' This ChartBridge' + (bridgeVersion ? ' (' + bridgeVersion + ')' : '') + ' serves ' + D.tickHours + ' hours of ticks.' : '';
   /* The quiet note while the profile is on and cannot show the whole session (or RTH) for a reason. */
   function vpNote() {
     const el = $('vpNote'); if (!el) return;
@@ -858,12 +883,13 @@ function start(container, opt, PAGE) {
       const { now, held, need, coveredFrom, partial } = vpCover(), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
       if (!held) {                                     // nothing counted yet: a small note, never an error
         if (rth && U.rthDay(need) && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
+        else if (rth && !U.rthDay(now) && !U.cmeClosed(now)) text = 'Volume profile (RTH): no stock market session today. The last one loads only while Globex is halted: reload after 13:00 ET to see it.';
         else if (D.tickHours === 0) text = 'Volume profile from ' + U.fmtHM(Math.min(coveredFrom, now)) + ' ET: this view loads no tick history, so it counts the live trades from then on.';
-        else text = 'Volume profile' + (rth ? ' (RTH)' : '') + ': no trades of the last session in the tick history this view loaded.' + vpOldBridge();
+        else text = 'Volume profile' + (rth ? ' (RTH)' : '') + ': no trades of the last session in the tick history this view loaded.' + vpCapWhy();
       }
       else if (partial) {                              // the session held is only partly in the tick history
         const at = U.fmtHM(Math.min(coveredFrom, now));
-        text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.' + vpOldBridge()
+        text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.' + vpCapWhy()
           : 'Volume profile from ' + at + ' ET: this view loads no tick history, so it counts the live trades from then on.';
       }
     }
@@ -1070,12 +1096,14 @@ function start(container, opt, PAGE) {
   const READ_ONLY_TYPES = ['subscribe', 'ping'];
   function send(obj) {
     if (!TRADING && !READ_ONLY_TYPES.includes(obj && obj.type)) return;
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); if (ORDER_ACTIONS.includes(obj.type)) actionSent(); }
   }
+  const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten'];   // what ChartBridge counts, 10 a second at most
   function subscribe(root) {
     resetData(root);
     setConn('loading');
     D.tickHours = ticksWanted();
+    D.tickCapped = ticksWantedAll() > D.tickHours;                // ChartBridge serves less than the profile needs
     D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
     send({ type: 'subscribe', root, days: 5, tickHours: D.tickHours });
   }
@@ -1084,6 +1112,7 @@ function start(container, opt, PAGE) {
     switch (m.type) {
       case 'hello':
         helloSeen = true;
+        bridgeVersion = typeof m.version === 'string' ? m.version : '';
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
@@ -1114,7 +1143,7 @@ function start(container, opt, PAGE) {
     }
     if (TRADING) switch (m.type) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); break;
-      case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); renderTrading(); break;
+      case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); unsentCheck(); renderTrading(); break;
       case 'order': onOrder(m); break;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); applyMarkers(); break;
       case 'reject': flash('Refused by ChartBridge: ' + m.reason, 'error'); renderTrading(); break;
@@ -1125,7 +1154,6 @@ function start(container, opt, PAGE) {
   const TR = {
     v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
-    cancelling: 0,                       // a batched Cancel all under way (its number): the picker and Armed are locked
     account: '', side: 'buy',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
@@ -1178,6 +1206,10 @@ function start(container, opt, PAGE) {
     TR.reason = FRAMED ? FRAMED_REASON : t.enabled ? '' : (t.reason || 'Trading is not enabled in ChartBridge.');
     TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
     TR.maxQty = t.maxQty || {};
+    // a Cancel all under way stops for what ChartBridge would refuse: all of it while trading is off, and the orders of
+    // an account no longer on its list (review 2 S1; they cannot be cancelled from the page then)
+    if (!TR.enabled) batchStop(() => true, 'trading went off (' + TR.reason.replace(/\.$/, '') + ')');
+    else batchStop(e => !TR.accounts.includes(e.account), 'the account is no longer a trade account in ChartBridge');
     const was = TR.account, cameOn = TR.enabled && !was;           // trading comes on: a load, a PIN entry, a reconnect
     const pick = LP.orderAccount(TR.accounts, TR.enabled ? viewAccount : '');
     TR.account = TR.enabled ? pick.account : '';                   // no order account while trading is off
@@ -1197,21 +1229,32 @@ function start(container, opt, PAGE) {
     const text = pick.missed ? 'Last account ' + pick.missed + ' not available, on ' + pick.account + '.'
       : before && pick.account !== before ? 'On ' + pick.account + ' (picked while trading was off). Armed is off.'
       : !first ? 'Still on ' + pick.account + '. Armed is off.'
-      : 'On ' + pick.account + (!before ? '' : restored.from === 'tab' ? ', the account this tab was on' : ', the last account picked') + '. Armed is off.';
+      : 'On ' + pick.account + (!before ? '' : restored.from === 'tab' ? tabWording() : ', the last account picked') + '. Armed is off.';
     el.textContent = text; el.title = text; el.classList.toggle('warn', !!pick.missed);
     sel.classList.remove('acct-flash', 'warn'); void sel.offsetWidth;   // restart the highlight
     sel.classList.add('acct-flash'); sel.classList.toggle('warn', !!pick.missed);
     later(() => { if (seq === noteSeq) sel.classList.remove('acct-flash', 'warn'); }, 3600);
     later(() => { if (seq === noteSeq) { el.textContent = ''; el.title = ''; } }, pick.missed ? 15000 : 8000);
   }
+  /* Where the tab's account came from (review 2 N3): a reload of this tab, a copy opened from another tab (window.open
+     copies sessionStorage), or another way of reaching the page in this tab's session (a duplicated tab, typing the
+     address again). */
+  function tabWording() {
+    let nav = '';
+    try { const e = performance.getEntriesByType('navigation')[0]; nav = e ? e.type : ''; } catch (e) { /* not supported */ }
+    if (nav === 'reload') return ', the account this tab was on';
+    let opened = false;
+    try { opened = !!window.opener; } catch (e) { opened = true; }
+    return opened ? ', the account of the tab that opened this one' : ', the account this tab\'s session was on';
+  }
   function clearAccountNote() { noteSeq++; $('oAcctNote').textContent = ''; $('oAcctNote').title = ''; $('oAcct').classList.remove('acct-flash', 'warn'); }
   function tradingLost(reason) {
     TR.signInStarted = false;
     if (!TR.v2) return;
+    batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
     TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
     if (TR.account) lastOrderAccount = TR.account;
     TR.account = '';                                               // the tab's account stays in viewAccount (syncAccounts)
-    TR.cancelling = 0;                                             // a Cancel all under way stops (Armed goes off)
     clearAccountNote();                                            // it named an account and "Armed is off" (review S2)
     setArmed(false); renderTrading(); syncAccounts();
   }
@@ -1221,6 +1264,7 @@ function start(container, opt, PAGE) {
     const ev = OT.orderEvent(o, prev, p => U.fmtPrice(p, precisionOf()));
     if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
     if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
+    if (!OT.isWorking(o) && unsent.delete(o.id)) renderUnsent();
     renderTrading();
   }
 
@@ -1255,29 +1299,96 @@ function start(container, opt, PAGE) {
   }
   function workingHere() { return [...TR.orders.values()].filter(o => o.account === TR.account && o.root === D.root && OT.isWorking(o)); }
 
-  /* Cancel all: one cancel per order (a bracket leg takes its pair), at most 8 a second (ChartBridge allows 10). */
+  /*
+   * Cancel all (review 2 S1, S2, N1): one cancel per order id (a bracket leg takes its pair), sent while fewer than 8
+   * order actions of any kind (orders, changes, cancels, Flatten) went out in the last 1.1 s: ChartBridge refuses more
+   * than 10 a second, and this leaves room for Anthony's own clicks. The ids are the working orders of the account and
+   * instrument shown at Anthony's click, after ready(). From then on the rest go out by id whatever Armed, the picker
+   * or the instrument show: Anthony asked for those cancels, a cancel only takes an order away, and each goes to that
+   * order's own account. Nothing is locked while they go out: Armed, the picker, the instrument and Flatten all work.
+   * The state row says "Cancelling on EVAL-1 MNQ: 12 left" until the last one is sent, whatever is shown. Each send
+   * skips an id that is no longer working (filled, cancelled, or taken by Flatten). A Cancel all while one is under
+   * way adds only the ids not in it and not cancelled in the last 5 s (a second click sends nothing new), at the same
+   * pace. It stops only for what ChartBridge would refuse: the connection drops, trading goes off, or the account
+   * leaves ChartBridge's list. Then a note that stays until Anthony dismisses it, or until those orders are no longer
+   * working, names the account, the instrument and how many cancels were not sent.
+   */
+  const CANCEL_CHUNK = 8, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
+  let batch = null;                                                // { queue: [{ id, account, root }], timer }
+  const unsent = new Map();                                        // id -> { account, root, why }: for the note
+  const actionTimes = [];                                          // when the last order actions went out (any kind): a batch sends while fewer than 8 went out in 1.1 s
+  function actionSent() { actionTimes.push(performance.now()); if (actionTimes.length > 64) actionTimes.shift(); }
+  const cancelSent = new Map();                                    // id -> when its cancel went out (a second click sends it again only after 5 s)
   function cancelAll() {
     if (!ready()) return;
-    const pos = TR.positions.get(TR.account + '|' + D.root);
-    const ids = OT.cancelAllIds([...TR.orders.values()], TR.account, D.root, pos ? pos.qty : 0);
+    const account = TR.account, root = D.root, pos = TR.positions.get(account + '|' + root), now = performance.now();
+    const ids = OT.cancelAllIds([...TR.orders.values()], account, root, pos ? pos.qty : 0);
     const keptNote = ids.kept ? ' Kept ' + ids.kept + ' order' + (ids.kept > 1 ? 's' : '') + ' protecting the open position (cancel those one by one, or Flatten).' : '';
-    if (!ids.length) { flash('Nothing to cancel on ' + TR.account + ' ' + D.root + '.' + keptNote, ''); return; }
-    /* More than 8 go out in batches 1.1 s apart: until the last one is sent the account picker and the Armed switch are
-       locked, so a late cancel never goes out while another account is shown (review N1). Flatten is never locked. */
-    const acct = TR.account, seq = ++cancelSeq, batched = ids.length > 8;
-    let unsent = 0;
-    if (batched) { TR.cancelling = seq; clearAccountNote(); $('oAcctNote').textContent = 'Cancelling... ' + acct + ' and Armed are locked until the last cancel is sent.'; renderTrading(); syncAccounts(); }
-    ids.forEach((id, i) => later(() => {
-      if (TR.armed && TR.account === acct) send({ type: 'cancel', id }); else unsent++;
-      if (i === ids.length - 1 && batched) {
-        if (TR.cancelling === seq) { TR.cancelling = 0; $('oAcctNote').textContent = ''; renderTrading(); syncAccounts(); }
-        if (unsent) flash(unsent + ' of ' + ids.length + ' cancels were not sent: Armed went off or the connection dropped. Check the working orders.', 'warn');
-      }
-    }, Math.floor(i / 8) * 1100));
-    flash('Cancelling ' + ids.length + ' order' + (ids.length > 1 ? 's' : '') + ' on ' + TR.account + ' ' + D.root + '.' + keptNote, '');
+    if (!ids.length) { flash('Nothing to cancel on ' + account + ' ' + root + '.' + keptNote, ''); return; }
+    for (const [id, t] of cancelSent) if (t < now - CANCEL_AGAIN) cancelSent.delete(id);
+    const queued = new Set(batch ? batch.queue.map(e => e.id) : []);
+    const fresh = ids.filter(id => !queued.has(id) && !cancelSent.has(id));
+    const left = ids.filter(id => queued.has(id)).length;
+    if (!fresh.length) { flash((left ? 'Still cancelling on ' + account + ' ' + root + ': ' + left + ' left.' : 'Those cancels went out a moment ago.') + ' Nothing new to send.' + keptNote, 'warn'); return; }
+    const running = !!batch;
+    if (!batch) batch = { queue: [], timer: false };
+    for (const id of fresh) batch.queue.push({ id, account, root });
+    flash((running ? 'Added ' + fresh.length + ' to the cancels under way, on ' : 'Cancelling ' + fresh.length + ' order' + (fresh.length > 1 ? 's' : '') + ' on ') + account + ' ' + root + '.' + keptNote, '');
+    cancelPump();                                                  // as many as the pace allows now, the rest in turn
+  }
+  function cancelPump() {
+    const b = batch;
+    if (!b) return;
+    const now = performance.now();
+    while (actionTimes.length && actionTimes[0] <= now - CANCEL_GAP) actionTimes.shift();
+    while (b.queue.length && actionTimes.length < CANCEL_CHUNK) {
+      if (!ws || ws.readyState !== 1 || !TR.enabled) { batchStop(() => true, 'the connection to ChartBridge dropped'); return; }
+      const e = b.queue.shift();
+      if (!TR.orders.has(e.id)) continue;                          // no longer working: nothing to send
+      send({ type: 'cancel', id: e.id });                          // counted in actionTimes by send
+      cancelSent.set(e.id, now);
+    }
+    if (!b.queue.length) batch = null;
+    else if (!b.timer) { b.timer = true; later(() => { b.timer = false; if (batch === b) cancelPump(); }, Math.max(20, actionTimes[0] + CANCEL_GAP - now)); }
+    renderBatch();
+  }
+  /* Take cancels out of the batch. With `why`, those still working go to the note (not sent); without it (Flatten,
+     the x) they are taken care of another way. */
+  function batchStop(match, why) {
+    if (!batch) return;
+    const out = batch.queue.filter(match);
+    if (!out.length) return;
+    batch.queue = batch.queue.filter(e => !match(e));
+    if (why) {
+      for (const e of out) if (TR.orders.has(e.id)) unsent.set(e.id, { account: e.account, root: e.root, why });
+      renderUnsent();
+    }
+    if (!batch.queue.length) batch = null;
+    renderBatch();
+  }
+  const countBy = (list, key) => { const g = new Map(); for (const e of list) { const k = key(e); g.set(k, (g.get(k) || 0) + 1); } return g; };
+  function renderBatch() {
+    const el = $('oCancel'), g = countBy(batch ? batch.queue : [], e => e.account + ' ' + e.root);
+    const text = g.size ? 'Cancelling on ' + [...g].map(([k, n]) => k + ': ' + n + ' left').join(', ') + ' (8 a second).' : '';
+    if (el.textContent !== text) { el.textContent = text; el.title = text; }
+  }
+  /* The note for cancels that were not sent: it stays until dismissed, or until those orders are no longer working. */
+  function renderUnsent() {
+    const g = countBy(unsent.values(), e => e.account + ' ' + e.root + '|' + e.why);
+    $('unsentBar').hidden = !g.size;
+    $('unsentText').textContent = !g.size ? '' : [...g].map(([k, n]) => {
+      const [where, why] = k.split('|');
+      return n + ' cancel' + (n > 1 ? 's' : '') + ' on ' + where + (n > 1 ? ' were' : ' was') + ' not sent: ' + why + '.';
+    }).join('\n') + '\nThose orders may still be working. Check them, then Cancel all again on that account and instrument (or in NinjaTrader).';
+  }
+  /* After a full orders list: an unsent cancel whose order is no longer working needs no note. The orders of an account
+     ChartBridge no longer allows are not in that list, so those stay. */
+  function unsentCheck() {
+    let changed = false;
+    for (const [id, e] of unsent) if (TR.accounts.includes(e.account) && !TR.orders.has(id)) { unsent.delete(id); changed = true; }
+    if (changed) renderUnsent();
   }
 
-  let cancelSeq = 0;
   function setArmed(on) {
     if (!TRADING) return;
     const v = !!on && TR.enabled;
@@ -1295,14 +1406,14 @@ function start(container, opt, PAGE) {
     const sel = $('oAcct');
     sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
     sel.value = TR.account;
-    sel.disabled = !TR.accounts.length || !!TR.cancelling;         // enabled again after a trading-off spell with no accounts (review 2, S1); locked during a batched Cancel all
+    sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1); never locked by a Cancel all (review 2 S1)
   }
   /* Order bar, order lines, position line; also run on every instrument switch and order message. */
   function renderTrading() {
     if (!TRADING || !TR.v2) return;
     const bar = $('obar'); bar.hidden = false;
     const on = TR.enabled, root = D.root || S.root, cap = OT.maxQtyFor(TR, root);
-    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on || (el === $('armBtn') && !!TR.cancelling);   // the account picker works with trading off too (it drives the fills); Armed is locked during a batched Cancel all
+    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on;   // the account picker works with trading off too (it drives the fills); nothing is locked by a Cancel all (review 2 S1)
     // the tab title and the ARMED pill name the account (review S5): two tabs on two accounts are by design now
     if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
     $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
@@ -1795,9 +1906,11 @@ function start(container, opt, PAGE) {
       if (!ready()) return;
       if (!sameAction('flatten', performance.now())) return;
       send({ type: 'flatten', account: TR.account, root: D.root });
+      batchStop(e => e.account === TR.account && e.root === D.root);   // Flatten cancels those itself: no "No working order" after it (review 2 S2)
       flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
     }));
     $('cancelAllBtn').addEventListener('click', pointerOnly(cancelAll));
+    $('unsentClose').addEventListener('click', () => { unsent.clear(); renderUnsent(); });
 
     /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
     chart.setOrderPreview(previewAt);
@@ -1813,6 +1926,7 @@ function start(container, opt, PAGE) {
       if (!ready()) return;
       if (notShown(e.id)) return;
       send({ type: 'cancel', id: e.id });
+      batchStop(x => x.id === e.id);                               // sent now, not again with a Cancel all under way
       flash('Cancelling order ' + e.id, '');
     });
   }

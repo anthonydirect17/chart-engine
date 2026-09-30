@@ -1795,7 +1795,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string root = rm.Success ? rm.Groups[1].Value.ToUpperInvariant() : "MNQ";
                 Match dm = DaysRx.Match(text), hm = TickHoursRx.Match(text);
                 int days = dm.Success ? Math.Max(1, Math.Min(60, int.Parse(dm.Groups[1].Value))) : ChartBridgeConfig.DefaultDays;
-                int tickHours = hm.Success ? Math.Max(0, Math.Min(120, int.Parse(hm.Groups[1].Value))) : ChartBridgeConfig.DefaultTickHours;   // 120 (48 before chart 1.6.1): the page asks past 48 only while the market is closed, for the volume profile's last session
+                int tickHours = hm.Success ? Math.Max(0, Math.Min(48, int.Parse(hm.Groups[1].Value))) : ChartBridgeConfig.DefaultTickHours;
                 Match sm = SubRx.Match(text);
                 StartLoad(client, root, days, tickHours, sm.Success ? long.Parse(sm.Groups[1].Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture) : null);   // canonical digits: "007" is not JSON
             }
