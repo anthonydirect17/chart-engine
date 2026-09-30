@@ -540,7 +540,10 @@ the page reads, so a relay that drops it can never make a page wait for history 
    last 24 hours, 2.5 s at most after the trades), classified the same way, and joined to the page's first trade (below).
    The page gets everything before that trade in `olderTicks` chunks of 10,000 trades, **newest first** (each chunk oldest
    first inside), one per `more` it sends. The page asks for two at `ready`, then one more as each arrives, so at most two
-   are ever waiting for it.
+   are ever waiting for it. ChartBridge has the load's state in place before `ready` is queued, so a `more` sent the moment
+   the page sees `ready` is never lost (the harness sends them at that very moment); while no chunk has come for 10 s (the
+   whole window still loading in NinjaTrader), the page asks again, and ChartBridge keeps at most 4 asked. A page that asks
+   for nothing for 120 s has its older history dropped (it went away).
 5. If the recent window fails, comes back empty, or has no trade whose side stands on its own (below), the load goes on as
    a full load of 0.3.4 (the live trades still held; a plain `ready`); `/diag` says why (`fellBack`). If the older
    history fails, the last `olderTicks` says so (`error`) and the page keeps what it has.

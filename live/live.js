@@ -776,11 +776,16 @@ function start(container, opt, PAGE) {
    * The delta pane (next step) takes the same path: add its trades in historyGrew and rebuild it when the last one is in.
    */
   let rebuildGen = 0;
-  const SLICE = 150000;                                  // trades per slice of an exact rebuild (a few ms each)
+  /* An exact rebuild runs one slice per frame while the tab is shown (a slice stops after SLICE_MS, so the frame keeps
+     its time), and back to back through a message channel while it is hidden (no frames then, and timers are slowed). */
+  const SLICE_MS = 6, SLICE_CHECK = 20000;               // time per slice; trades between clock reads
   const yieldQ = [];
-  const yieldCh = typeof MessageChannel === 'function' ? new MessageChannel() : null;   // not slowed in a hidden tab, unlike timers
+  const yieldCh = typeof MessageChannel === 'function' ? new MessageChannel() : null;
   if (yieldCh) { yieldCh.port1.onmessage = () => { const f = yieldQ.shift(); if (f) f(); }; cleanups.push(() => { yieldCh.port1.onmessage = null; yieldCh.port1.close(); yieldCh.port2.close(); }); }
-  const yieldTask = f => { if (yieldCh) { yieldQ.push(f); yieldCh.port2.postMessage(0); } else setTimeout(f, 0); };
+  const yieldTask = f => {
+    if (document.visibilityState === 'visible' || !yieldCh) requestAnimationFrame(() => f());
+    else { yieldQ.push(f); yieldCh.port2.postMessage(0); }
+  };
 
   /* Seconds and range views while the older history is still coming. */
   function buildEarly(tf) {
@@ -825,9 +830,12 @@ function start(container, opt, PAGE) {
     D.fill.rebuilding = true;
     const step = () => {
       if (gen !== rebuildGen || destroyed || !D.ready || !D.fill) return;
-      const end = Math.min(D.ticks.length, i + SLICE);
-      D.ticks.feed(b, i, undefined, end);
-      i = end;
+      const t0 = performance.now();
+      while (i < D.ticks.length && performance.now() - t0 < SLICE_MS) {
+        const end = Math.min(D.ticks.length, i + SLICE_CHECK);
+        D.ticks.feed(b, i, undefined, end);
+        i = end;
+      }
       if (i < D.ticks.length) { yieldTask(step); return; }
       D.fill.rebuilding = false;
       D.cur = b; D.sync = null; D.fallback = false;
@@ -854,7 +862,7 @@ function start(container, opt, PAGE) {
     if (!m.done) send({ type: 'more', sub: D.sub });    // the next one while this one is taken in
     const list = Array.isArray(m.ticks) ? m.ticks : [];
     D.ticks.prependAll(list);
-    f.got += list.length; f.chunks++;
+    f.got += list.length; f.chunks++; f.lastMs = nowMs();
     if (m.done) { f.done = true; f.doneMs = nowMs(); f.error = typeof m.error === 'string' ? m.error : null; f.gapMs = +m.gapMs >= 0 ? +m.gapMs : null; }
     historyGrew(list.length, !!m.done);
   }
@@ -1225,7 +1233,7 @@ function start(container, opt, PAGE) {
         if (m.root !== D.root || stale(m)) return;
         setStatus('', '');
         // live first: the older history follows; ask for two chunks (then one more as each comes)
-        D.fill = m.older === true && D.sub > 0 && D.tickHours > 0 ? { got: 0, chunks: 0, done: false, rebuilding: false, error: null, gapMs: null, liveAt: etNow(), readyMs: nowMs(), doneMs: null } : null;
+        D.fill = m.older === true && D.sub > 0 && D.tickHours > 0 ? { got: 0, chunks: 0, done: false, rebuilding: false, error: null, gapMs: null, liveAt: etNow(), readyMs: nowMs(), doneMs: null, lastMs: nowMs() } : null;
         onReady();
         if (D.fill) { send({ type: 'more', sub: D.sub }); send({ type: 'more', sub: D.sub }); fillNote(); }
         break;
@@ -1921,6 +1929,8 @@ function start(container, opt, PAGE) {
     if (D.m1) updateIB(false);
     // the volume profile moves to the new session at 18:00 ET on the clock, before its first trade
     if (D.vp && D.vp.advance(etNow())) vpLegend();
+    // live first: no chunk for 10 s (NinjaTrader still loading, or a request lost): ask again (ChartBridge keeps at most 4 asked)
+    if (D.fill && !D.fill.done && D.ready && nowMs() - D.fill.lastMs > 10000) { D.fill.lastMs = nowMs(); send({ type: 'more', sub: D.sub }); }
     vpNote(); vpLegend();
   }, 500);
 

@@ -345,6 +345,7 @@ public static class FillHarness
             WholeLoad();
             Stale();
             Fallbacks();
+            Idle();
             MinuteAndOld();
             Pacing();
         }
@@ -366,6 +367,18 @@ public static class FillHarness
         lock (sent) sent.Clear();
         int m0 = MadeCount();
         DateTime before = DateTime.Now;
+        // The page asks for two chunks the moment it sees ready: here at the very moment ready is queued, before ChartBridge
+        // has even asked for the older history (the tightest race there can be; the requests must not be lost).
+        Action<string> tap = client.Tap;
+        client.Tap = x =>
+        {
+            tap(x);
+            if (x.StartsWith("{\"type\":\"ready\"") && x.Contains("\"sub\":41"))
+            {
+                Priv("OnClientMessage", client, "{\"type\":\"more\",\"sub\":41}");
+                Priv("OnClientMessage", client, "{\"type\":\"more\",\"sub\":41}");
+            }
+        };
         Priv("SubscribeLiveFirst", client, "MNQ", 5, 1, "41");
         e = Deliver(k, e, 30100);                         // held
         BarsRequest minutes = Find(m0, IsMinute);
@@ -398,9 +411,8 @@ public static class FillHarness
         BarsRequest bb = Made(m0).Where(r => IsKind(r, MarketDataType.Bid)).Skip(1).FirstOrDefault(), ba = Made(m0).Where(r => IsKind(r, MarketDataType.Ask)).Skip(1).FirstOrDefault();
         Check(bt != null && bt.BarsBack < 0 && bt.To >= before.AddMinutes(ChartBridgeServer.TickToMarginMinutes).AddSeconds(-5) && bt.From <= before.AddHours(-1).AddSeconds(5) && bb != null && ba != null && bb.BarsBack < 0,
             "live first: after ready the whole window is asked as a full load asks it (from tickHours back, ending 60 minutes past now; the quotes too)");
-        // The page asks for two chunks before the older history is in; live trades keep flowing straight out.
-        Priv("OnClientMessage", client, "{\"type\":\"more\",\"sub\":41}");
-        Priv("OnClientMessage", client, "{\"type\":\"more\",\"sub\":41}");
+        client.Tap = tap;
+        // The page asked for two chunks at ready, before the older history is in; live trades keep flowing straight out.
         int liveBefore = Sent().Count;
         e = Deliver(k, e, 30400);
         Check(Sent().Count > liveBefore && Sent().Skip(liveBefore).All(x => x.StartsWith("{\"type\":\"tick\"")), "live first: live trades go straight out while the older history loads");
@@ -428,7 +440,7 @@ public static class FillHarness
         Thread.Sleep(50);
         l = Sent();
         List<string> older = l.Where(x => x.StartsWith("{\"type\":\"olderTicks\"")).ToList();
-        Check(older.Count > 3 && older.Last().Contains("\"done\":true") && older.Take(older.Count - 1).All(x => x.Contains("\"done\":false")) && older.All(x => x.Contains("\"sub\":41")),
+        Check(older.Count > 3 && older[0].Contains("\"left\":") && older.Last().Contains("\"done\":true") && older.Take(older.Count - 1).All(x => x.Contains("\"done\":false")) && older.All(x => x.Contains("\"sub\":41")),
             "live first: the older history in " + older.Count + " chunks, the last says done");
         // Newest first: each chunk ends where the one before it began.
         bool newestFirst = true;
@@ -553,6 +565,37 @@ public static class FillHarness
             string last = Sent().First(x => x.StartsWith("{\"type\":\"olderTicks\""));
             Check(last.Contains("\"ticks\":[]") && last.Contains("\"done\":true") && last.Contains("\"error\":\"the older history did not load"), "older fails: one empty chunk, done, with the reason (" + last + ")");
         }
+    }
+
+    // A page that stops asking (closed, stuck) does not keep the older history in NinjaTrader's memory.
+    static void Idle()
+    {
+        ChartBridgeConfig.RecentTicks = 200; ChartBridgeServer.OlderChunk = 100;
+        int idleWas = ChartBridgeServer.FillIdleMs;
+        ChartBridgeServer.FillIdleMs = 300;
+        try
+        {
+            DateTime t0 = new DateTime(DateTime.Now.AddMinutes(-20).Ticks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond);
+            Tape k = MakeTape(t0, 3000, 0, 93, -1, -1, 300);
+            Deliver(k, 0, 2600);
+            lock (sent) sent.Clear();
+            int m0 = MadeCount();
+            Priv("SubscribeLiveFirst", client, "MNQ", 5, 1, "65");
+            Find(m0, IsMinute).Answer(new Bars(), ErrorCode.NoError);
+            Find(m0, r => IsKind(r, MarketDataType.Last)).Answer(TradeBars(k, 2400, 2600), ErrorCode.NoError);
+            Find(m0, r => IsKind(r, MarketDataType.Bid)).Answer(QuoteBars(k.BT, k.BP, 0, k.BT.Count), ErrorCode.NoError);
+            Find(m0, r => IsKind(r, MarketDataType.Ask)).Answer(QuoteBars(k.AT, k.AP, 0, k.AT.Count), ErrorCode.NoError);
+            Check(WaitFor(() => Made(m0).Count(r => IsKind(r, MarketDataType.Last)) == 2), "idle: live, the older history asked");
+            Made(m0).Where(r => IsKind(r, MarketDataType.Last)).Skip(1).First().Answer(TradeBars(k, 0, 2600), ErrorCode.NoError);
+            Made(m0).Where(r => IsKind(r, MarketDataType.Bid)).Skip(1).First().Answer(QuoteBars(k.BT, k.BP, 0, k.BT.Count), ErrorCode.NoError);
+            Made(m0).Where(r => IsKind(r, MarketDataType.Ask)).Skip(1).First().Answer(QuoteBars(k.AT, k.AP, 0, k.AT.Count), ErrorCode.NoError);
+            Check(WaitFor(() => ((string)Priv("DiagJson")).Contains("\"sub\":65,\"tickHours\":1,\"atUtcMs\"") && ((string)Priv("DiagJson")).Contains("dropped: the page stopped asking"), 3000),
+                "idle: a page that asks for nothing for FillIdleMs has its older history dropped (/diag says so)");
+            Priv("OnClientMessage", client, "{\"type\":\"more\",\"sub\":65}");
+            Thread.Sleep(50);
+            Check(!Sent().Any(x => x.StartsWith("{\"type\":\"olderTicks\"")), "idle: a request after that sends nothing (the page reloads to get it)");
+        }
+        finally { ChartBridgeServer.FillIdleMs = idleWas; }
     }
 
     // A minute chart asking live first loads as before (no tick window); a page that does not ask gets no count request.

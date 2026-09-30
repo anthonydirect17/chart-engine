@@ -56,8 +56,9 @@ claims 1.7.0; the numbers are reconciled when both merge. Depends on ChartBridge
 - **Unchanged:** orders, the PIN, network rules and fills (`ChartBridgeOrders.cs`, `ChartBridgePin.cs`,
   `live/order-ticket.js`, `live/pin.js` and the fake bridge's order handling untouched).
 - Tests: `check/FillHarness.cs` (run by `npm run check:orders`): FrontStart and Join by hand and the sides proof, the
-  text against 0.3.4's, whole loads (the tape, a resubscribe mid-history, the recent window refused or empty, the older
-  history failing, minute charts, a page that does not ask), `/diag`, and the pacing rows above. `test/live-first.test.js`:
+  text against 0.3.4's, whole loads (the tape, with the page's first two `more` sent the very moment `ready` is queued; a
+  resubscribe mid-history; the recent window refused or empty; the older history failing; a page that stops asking;
+  minute charts; a page that does not ask), `/diag`, and the pacing rows above. `test/live-first.test.js`:
   `TickStore.prependAll`, `RangeSync` against full builds on 240 made-up histories (both styles, 4 to 40 ticks, across the
   break), and the fake bridge's protocol trade by trade. `npm run smoke:live-first`: NQ Range 40 in a busy market, time to
   live, orders at ready mid-history, the progress line's place, no bar moving, the store equal to the tape, sides, Range,

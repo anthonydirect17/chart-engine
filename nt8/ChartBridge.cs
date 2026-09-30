@@ -2625,6 +2625,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (from >= ticks.Count) why = "no trade in the recent window has a side that does not depend on older trades";
                 }
                 if (why != null) { FallBack(L, why); return; }   // a full load as before, still holding the live trades
+                // The older history's state exists before "ready" goes out, so a "more" the page sends at once is never missed.
+                L.Fill = new FillState { Seq = L.Seq, Sub = L.Sub, Root = L.Root, Diag = L.Diag, LastAskMs = ChartBridgeTime.NowUtcMs() };
             }
             try
             {
@@ -2762,6 +2764,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     : ChartBridgeSeam.Dedupe(null, null, null, 0, client.Pending);
                 // "ready" and the released trades go into the page's outbox as ONE data-lane entry (SendAll, 0.3.4): order
                 // traffic still goes out between them, and the page is not closed while it keeps draining (ChartBridgeClient).
+                if (L.Fill != null) client.Fill = L.Fill;   // 0.3.5: before "ready", so the page's first "more" finds it
                 List<string> burst = new List<string>(r.Release.Count + 1);
                 // 0.3.5: "older" tells a live-first page that the older history follows, for it to pull ("more").
                 burst.Add("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + (L.Recent ? ",\"older\":true" : "") + "}");
@@ -2803,12 +2806,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeClient client = L.Client;
             Load B = new Load { Client = client, Root = L.Root, Name = L.Name, Seq = L.Seq, Sub = L.Sub, TickHours = L.TickHours, Inst = L.Inst,
                                 NowNt = NowNt(), StartedMs = L.StartedMs, Background = true, Front = L, Diag = L.Diag };
-            FillState f = new FillState { Seq = L.Seq, Sub = L.Sub, Root = L.Root, Diag = L.Diag, LastAskMs = ChartBridgeTime.NowUtcMs() };
-            lock (client.Pending)
-            {
-                if (!Current(L)) return;
-                client.Fill = f;
-            }
+            FillState f = L.Fill;                    // put on the client with "ready" (MarkReady)
+            if (f == null || !Owns(client, f)) return;
             B.Fill = f;
             if (B.Diag != null) B.Diag.State = "older history asked";
             try { RequestTicks(B); }
