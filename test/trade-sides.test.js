@@ -55,14 +55,24 @@ test('live: a 0.3.4 tick message gives the page the same trade and delays as a 0
   assert.deepEqual(bars(b), bars(a));
 });
 
-test('the page reads live ticks by name and backfill trades by their first three places only', () => {
+test('the page reads live ticks by name and backfill trades by their places: t, p, v first, then the side (chart 1.7.0)', () => {
   const live = fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8');
   const bb = fs.readFileSync(path.join(__dirname, '..', 'live', 'bar-builder.js'), 'utf8');
   assert.match(live, /const t = m\.t, p = m\.p, v = m\.v \|\| 0;/, 'onTick reads t, p, v by name');
+  assert.match(live, /D\.ticks\.push\(t, p, v, m\.s, m\.sm\)/, 'and since chart 1.7.0 the side and method by name');
   assert.match(live, /D\.ticks\.pushAll\(m\.ticks\);/, 'the backfill goes to TickStore.pushAll');
-  assert.match(bb, /pushAll\(list\) \{ for \(let i = 0; i < list\.length; i\+\+\) \{ const x = list\[i\]; this\.push\(x\[0\], x\[1\], x\[2\]\); \} \}/,
-    'pushAll takes x[0], x[1], x[2] and nothing else');
+  // chart 1.7.0 (the delta pane) keeps the side too: x[0], x[1], x[2] are still t, p, v in their places, x[3] and x[4]
+  // the side and method (absent in the 0.3.3 format, which stores "no side")
+  assert.match(bb, /pushAll\(list\) \{ for \(let i = 0; i < list\.length; i\+\+\) \{ const x = list\[i\]; this\.push\(x\[0\], x\[1\], x\[2\], x\[3\], x\[4\]\); \} \}/,
+    'pushAll takes x[0], x[1], x[2] as t, p, v in place, then x[3], x[4] as side and method');
   assert.ok(!/\.length\s*===?\s*3/.test(live.slice(live.indexOf("case 'ticks'"), live.indexOf("case 'ready'"))), 'no length check on a trade');
+  const a = new BB.TickStore(), b = new BB.TickStore();
+  a.pushAll(OLD.slice(0, 50)); b.pushAll(NEW.slice(0, 50));
+  for (let i = 0; i < 50; i++) {
+    assert.deepEqual(b.at(i), a.at(i));
+    assert.equal(a.side(i), undefined, 'the old format: no side');
+    assert.deepEqual([b.side(i), b.method(i)], NEW[i].slice(3, 5), 'the new format: its side and method');
+  }
 });
 
 /* ---------------- the fake bridge speaks the new format (and the old with --no-sides) */

@@ -4,14 +4,15 @@
 //
 //   node test/perf-live.mjs [--view=range|m1] [--secs=30] [--root=DIR] [--label=main] [--port=8830]
 //                           [--tick-rate=15] [--live-rate=100] [--range=40] [--et=HH:MM] [--second-tab] [--embed]
-//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]]
+//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--delta=0]
 //
 // --root serves the page from another checkout (the bridge is always this one), so an older version can be measured
 // on the same feed. It sets the saved settings (NQ, the view, Range 40, NinjaTrader style) in both the 1.3 and the
 // 1.4 keys before the page loads. --et runs the page and bridge clocks at that New York time (01:30 loads the most
 // Range history, 33 hours). --embed measures ChartLive.mount in test/embed-host.html (1.5.0 and later) instead of the
 // standalone page. CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser. --vp turns the volume profile on
-// (1.6.0; --vp=rth for its RTH choice), so its build at load and its drawing are measured too.
+// (1.6.0; --vp=rth for its RTH choice), so its build at load and its drawing are measured too. The delta pane (1.7.0)
+// is on by default on the main pane, so it is measured unless --delta=0 turns it off (saved as off before the load).
 //
 // Measures, over the window after a warm-up: requestAnimationFrame intervals (frames over 16.7 ms and 33 ms), the
 // chart's own frame callback (step and draw), long tasks, each live tick message (JSON, onTick, the bar builders,
@@ -43,6 +44,7 @@ const OFFSET = (() => {
 const HEADED = !!arg('headed', false), EMBED = !!arg('embed', false);   // a real window (run under xvfb-run on a server)
 const SECOND = !!arg('second-tab', false), PROFILE = !!arg('profile', false), WARM = +arg('warm', 5);
 const VP = arg('vp', false);               // true, or 'rth'
+const DELTA_OFF = arg('delta', '1') === '0';
 
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
   '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -60,6 +62,7 @@ const init = `(() => {
       localStorage.setItem('live-indicators-v1', ${JSON.stringify(JSON.stringify({ main: { vp: true } }))});
       localStorage.setItem('live-indicator-options-v1', ${JSON.stringify(JSON.stringify({ main: { vp: { session: VP === 'rth' ? 'rth' : 'full' } } }))});
     }
+    if (${JSON.stringify(DELTA_OFF)}) localStorage.setItem('live-indicators-v2', ${JSON.stringify(JSON.stringify({ main: { ind: { delta: { on: false, shown: true, pin: false }, vp: { on: !!VP, shown: true, pin: !!VP } } } }))});
   } catch (e) {}
   const P = window.__perf = { backfill: 0, tickHours: null, lagMax: 0, lag: [], on: false, tick: [], rafCb: [], ts: [], long: [], heap: [], update: 0, updateN: 0, setBars: 0, setBarsN: 0, add: 0, addN: 0 };
   const now = () => performance.now();
@@ -119,13 +122,15 @@ try {
   await page.bringToFront();
   await page.waitForTimeout(WARM * 1000);
   const before = await page.evaluate(() => ({ iso: self.crossOriginIsolated, bars: window.__chart.bars().length, heap: performance.memory && performance.memory.usedJSHeapSize, version: window.ChartEngine.VERSION,
-    vp: typeof window.__chart.getProfile === 'function' && window.__chart.getLayers().vp && window.__chart.getProfile() ? window.__chart.getProfile().total : null }));
+    vp: typeof window.__chart.getProfile === 'function' && window.__chart.getLayers().vp && window.__chart.getProfile() ? window.__chart.getProfile().total : null,
+    delta: typeof window.__chart.getDelta === 'function' && window.__chart.getLayers().delta && window.__chart.getDelta() ? window.__chart.getDelta().trades : null }));
   const cdp = await ctx.newCDPSession(page);
   if (PROFILE) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 100 }); await cdp.send('Profiler.start'); }
   await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8', 'disabled-by-default-v8.gc', 'blink.user_timing', 'toplevel'] });
   await page.evaluate(() => { window.__perf.on = true; });
   await page.waitForTimeout(SECS * 1000);
-  const P = await page.evaluate(() => { window.__perf.on = false; const p = window.__perf; return Object.assign({}, p, { bars: window.__chart.bars().length, stats: window.__chart.stats() }); });
+  const P = await page.evaluate(() => { window.__perf.on = false; const p = window.__perf; return Object.assign({}, p, { bars: window.__chart.bars().length, stats: window.__chart.stats(),
+    deltaEnd: typeof window.__chart.getDelta === 'function' && window.__chart.getLayers().delta && window.__chart.getDelta() ? { trades: window.__chart.getDelta().trades, bars: window.__chart.getDelta().bars.length } : null }); });
   const trace = JSON.parse((await browser.stopTracing()).toString());
   let profile = null;
   if (PROFILE) profile = (await cdp.send('Profiler.stop')).profile;
@@ -158,7 +163,8 @@ try {
 
   result = {
     label: LABEL + (EMBED ? ' (embedded)' : ''), version: before.version, embed: EMBED, view: VIEW === 'm1' ? '1m' : 'Range ' + RANGE, secs: SECS, secondTab: SECOND, crossOriginIsolated: before.iso,
-    et: ET || 'now', headed: HEADED, volumeProfile: VP ? { mode: VP === 'rth' ? 'rth' : 'full', volumeAtStart: before.vp, builds: P.stats.profileBuilds } : null, rafLagMaxMs: r2(P.lagMax), rafLagWindowP99: r2(q(P.lag, 0.99)), rafLagWindowMax: r2(Math.max(0, ...P.lag)), frameLoopAlive: P.rafCb.length > 0, tickHours: P.tickHours, backfillTicks: P.backfill, loadMs, bars: P.bars, liveTicks: P.tick.length, ticksPerSec: r2(P.tick.length / SECS),
+    et: ET || 'now', headed: HEADED, volumeProfile: VP ? { mode: VP === 'rth' ? 'rth' : 'full', volumeAtStart: before.vp, builds: P.stats.profileBuilds } : null,
+    deltaPane: before.delta === null && !P.deltaEnd ? null : { tradesAtStart: before.delta, tradesAtEnd: P.deltaEnd && P.deltaEnd.trades, bars: P.deltaEnd && P.deltaEnd.bars }, rafLagMaxMs: r2(P.lagMax), rafLagWindowP99: r2(q(P.lag, 0.99)), rafLagWindowMax: r2(Math.max(0, ...P.lag)), frameLoopAlive: P.rafCb.length > 0, tickHours: P.tickHours, backfillTicks: P.backfill, loadMs, bars: P.bars, liveTicks: P.tick.length, ticksPerSec: r2(P.tick.length / SECS),
     frames: iv.length, fps: r2(iv.length / SECS), frameP50: r2(q(iv, 0.5)), frameP99: r2(q(iv, 0.99)), frameMax: r2(Math.max(0, ...iv)),
     over16: iv.filter(d => d > FRAME * 1.25).length, over33: iv.filter(d => d > 33.4).length, over50: iv.filter(d => d > 50).length, droppedFrames: dropped,
     chartFrameMeanMs: r3(mean(P.rafCb)), chartFrameP95: r3(q(P.rafCb, 0.95)), chartFrameP99: r3(q(P.rafCb, 0.99)), chartFrameMax: r2(Math.max(0, ...P.rafCb)),

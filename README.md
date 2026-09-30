@@ -31,8 +31,10 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
-On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills and the
-**Initial balance** (today's 1-hour IB, 1.5.3) per chart pane, with a search box ("/" opens it), a Recent line, Hide
+On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills, the
+**Initial balance** (today's 1-hour IB, 1.5.3), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
+buys minus market sells below the chart, counted from when the page opens or the trades' sides were measured, and from
+0 again at 18:00 ET; the sides from ChartBridge 0.3.4) per chart pane, with a search box ("/" opens it), a Recent line, Hide
 all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). Hiding
 Fills never hides the open trade (its entry fills, the position line, working orders, stop and target lines). One
 **Account** picker, the order bar's (or, with no order bar, a compact one in the toolbar), chooses the account for
@@ -410,6 +412,13 @@ trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET se
 9:30:00 up to 16:00:00 ET. `setProfile(profile | null)` hands one to the chart, drawn while the `vp` layer is on
 (`setLayers({ vp: true })`, off by default) as bars from the right edge of the plot behind the candles; the chart
 redraws on its own when the profile changes.
+
+Cumulative delta (1.7.0): `new ChartEngine.CumulativeDelta({ sessionStart, seconds, coveredFrom })` counts trades
+(`add(t, v, side, barT, method)`, side 1 buy, -1 sell, 0 or none unknown) into one candle per price bar of the
+running buys minus sells, from 0 at each 18:00 ET session, from `coveredFrom` on (the start of the page's
+window of trades with measured sides). `setDelta(delta | null)` hands one to the chart, drawn in a pane below the plot while the `delta` layer is on;
+`setDeltaView({ mode: 'cum' | 'bar', ratio, note, reason })`, `deltaPane()`, `deltaToY(v)` and
+`on('paneResize', { ratio, height, done })` for the divider.
 
 Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { pointValue })` ·
 `setOrderEditing(bool)` · `setOrderPreview(fn)` · `orderHandles()` · `priceToY(price)` · `yToPrice(y)` ·

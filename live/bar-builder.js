@@ -196,30 +196,77 @@ class BarBuilder {
 
 /*
  * TickStore: the page's trades [t, p, v] kept in columns of 64-bit floats, in blocks of 65,536, instead of one small
- * array per trade. The range view holds up to 33 hours of ticks (about 2 million on a busy NQ day): as arrays that
+ * array per trade. The range view holds up to 34 hours of ticks (about 2 million on a busy NQ day): as arrays that
  * was about 2 million objects (some 150 MB of JavaScript heap) for the garbage collector to walk and move, and the
  * page's frames waited on it. Blocks live outside that heap, are never copied as the store grows, and the oldest
  * are dropped whole when the page trims its history.
+ * Each trade's side (1.7.0, ChartBridge 0.3.4 sends `s` and `sm` with every trade; nt8/PROTOCOL.md, Trade side) is one
+ * byte beside its block: 0 when the trade came with no side at all (ChartBridge 0.3.3 and older), else
+ * 1 + (s + 1) + 3 * sm for s = 1 buy, -1 sell, 0 unknown and sm = 0 none, 1 aggressor, 2 bid/ask, 3 tick rule. A side
+ * or method that is not one of those is kept as unknown (s 0, sm 0). The page never works a side out itself.
  */
 const BLOCK = 65536, SHIFT = 16, MASK = BLOCK - 1;
+/* The side byte for s and sm as ChartBridge sends them (see above). */
+function sideCode(s, sm) {
+  if (s === undefined || s === null) return 0;
+  if (s !== 1 && s !== -1 && s !== 0) return 1 + 1;              // not a side: unknown
+  return 1 + (s + 1) + 3 * (sm === 1 || sm === 2 || sm === 3 ? sm : 0);
+}
+/* The side (1, -1, 0) of a side byte, or undefined for a trade that came with none; and its method (0 to 3). */
+const codeSide = c => c ? (c - 1) % 3 - 1 : undefined;
+const codeMethod = c => c ? Math.floor((c - 1) / 3) : 0;
 class TickStore {
   constructor() { this.clear(); }
-  clear() { this.blocks = []; this.start = 0; this.length = 0; }
-  /** Add one trade at the end. */
-  push(t, p, v) {
-    const j = this.start + this.length;
-    let b = this.blocks[j >>> SHIFT];
-    if (!b) { b = new Float64Array(BLOCK * 3); this.blocks.push(b); }
-    const k = (j & MASK) * 3;
+  clear() { this.blocks = []; this.sides = []; this.start = 0; this.length = 0; }
+  /*
+   * The block pair and the slot writer every way in goes through (review 2, merge planning): a trade's columns and its
+   * side byte always live at the same slot j (the store's start plus its index) of `blocks` and `sides`, so a block is
+   * only ever added or dropped with its side block. _addBlock appends a pair, _addBlockFront puts one in front (for a
+   * prepend of older trades: live-first's `prependAll` must add its front blocks with it and write each trade with
+   * `_put`, never `blocks` alone, or the sides shift against the trades), and _put writes one trade and its side.
+   */
+  _addBlock() { this.blocks.push(new Float64Array(BLOCK * 3)); this.sides.push(new Uint8Array(BLOCK)); }
+  _addBlockFront() { this.blocks.unshift(new Float64Array(BLOCK * 3)); this.sides.unshift(new Uint8Array(BLOCK)); }
+  _put(j, t, p, v, s, sm) {
+    const b = this.blocks[j >>> SHIFT], k = (j & MASK) * 3;
     b[k] = t; b[k + 1] = p; b[k + 2] = v || 0;
+    this.sides[j >>> SHIFT][j & MASK] = sideCode(s, sm);
+  }
+  /** Add one trade at the end; s and sm (ChartBridge 0.3.4) are left out for a trade that has none. */
+  push(t, p, v, s, sm) {
+    const j = this.start + this.length;
+    if (!this.blocks[j >>> SHIFT]) this._addBlock();
+    this._put(j, t, p, v, s, sm);
     this.length++;
   }
-  /** Add trades as ChartBridge sends them, [[t, p, v], ...]. */
-  pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2]); } }
+  /** Add trades as ChartBridge sends them, [[t, p, v], ...] or since 0.3.4 [[t, p, v, s, sm], ...]. The only pushAll:
+      a merge must keep this five-place one (a second, three-place pushAll defined after it would win silently and drop
+      every backfill side; review 2's trial merge). */
+  pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2], x[3], x[4]); } }
   _get(i, f) { const j = i + this.start; return this.blocks[j >>> SHIFT][(j & MASK) * 3 + f]; }
   time(i) { return this._get(i, 0); }
   price(i) { return this._get(i, 1); }
   volume(i) { return this._get(i, 2); }
+  _code(i) { const j = i + this.start; return this.sides[j >>> SHIFT][j & MASK]; }
+  /** The side of trade i: 1 buy, -1 sell, 0 unknown, or undefined when it came with none (ChartBridge 0.3.3). */
+  side(i) { return codeSide(this._code(i)); }
+  /** How its side was found: 0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule. */
+  method(i) { return codeMethod(this._code(i)); }
+  /**
+   * The index of the first trade in [from, to) whose side was measured (1.7.0, round 4): method 1 (the aggressor flag) or
+   * 2 (the prevailing bid or ask), never the tick rule. ChartBridge 0.3.4.1 asks NinjaTrader for historical quotes only
+   * for its last `quoteHours` of the backfill (0 by default: none), and the trades before that get tick-rule sides, so
+   * the backfill's measured window starts here. Returns `to` when there is none. Reads the side bytes directly.
+   */
+  firstMeasured(from, to) {
+    const stop = Math.min(this.length, to === undefined ? this.length : to);
+    for (let i = Math.max(0, from || 0); i < stop;) {
+      const j = i + this.start, sd = this.sides[j >>> SHIFT];
+      const end = Math.min(stop, i + BLOCK - (j & MASK));
+      for (let m = j & MASK; i < end; i++, m++) { const c = sd[m]; if (c >= 4 && c <= 9) return i; }   // codes 1 + (s + 1) + 3 * sm, sm 1 or 2
+    }
+    return stop;
+  }
   /** The trade at i as [t, p, v] (a new array; for tests and rare use, not in loops). */
   at(i) { return i >= 0 && i < this.length ? [this._get(i, 0), this._get(i, 1), this._get(i, 2)] : undefined; }
   /** Drop the oldest n trades. */
@@ -227,7 +274,7 @@ class TickStore {
     n = Math.max(0, Math.min(this.length, n));
     this.start += n; this.length -= n;
     const whole = this.start >>> SHIFT;
-    if (whole) { this.blocks.splice(0, whole); this.start &= MASK; }
+    if (whole) { this.blocks.splice(0, whole); this.sides.splice(0, whole); this.start &= MASK; }
     if (!this.length) this.clear();
   }
   /** Feed trades from index `from` (with t >= minT, when given) to builder.add(t, p, v), oldest first. */
@@ -242,6 +289,72 @@ class TickStore {
         if (quiet) builder.addQuiet(b[k], b[k + 1], b[k + 2]); else builder.add(b[k], b[k + 1], b[k + 2]);
       }
     }
+  }
+  /**
+   * feed() with each trade's side (1.7.0): builder.addQuiet(t, p, v, s, sm), s undefined for a trade that came with
+   * none. For the cumulative delta (ChartEngine.CumulativeDelta), which counts exactly the trades this store holds.
+   * `to` (optional) stops before that index, so a long build can go in slices (the page's delta, review S5); returns
+   * the index it stopped at.
+   */
+  feedSides(builder, from, minT, to) {
+    const min = minT === undefined || minT === null ? -Infinity : minT, stop = to === undefined ? this.length : Math.min(this.length, to);
+    let i = Math.max(0, from || 0);
+    while (i < stop) {
+      const j = i + this.start, b = this.blocks[j >>> SHIFT], sd = this.sides[j >>> SHIFT];
+      const end = Math.min(stop, i + BLOCK - (j & MASK));
+      for (let m = j & MASK, k = m * 3; i < end; i++, m++, k += 3) {
+        if (!(b[k] >= min)) continue;
+        const c = sd[m];
+        builder.addQuiet(b[k], b[k + 1], b[k + 2], codeSide(c), codeMethod(c));
+      }
+    }
+    return i;
+  }
+}
+/*
+ * RangeReplay (1.7.0, round 6): the delta's counted trades on a new load's range bars, by their order in the store, not
+ * by their time. The builder is fed the store from `from` exactly as the chart's range bars were built; each counted trade
+ * (from `segs`, TickStores with { st, i, end }, end null for one that grows) is matched to the next store trade with the
+ * same time, price and volume and counted (`count(t, v, s, barT, sm)`) in the bar the builder holds right after that
+ * store trade went in, as live trades are. So trades that share a millisecond across a range-bar boundary stay in their
+ * own bars. A store trade before the next counted one (or at its time but not it) only builds bars; a counted trade the
+ * store does not hold (not in this load's backfill) goes in the builder's newest bar at that point. step(n) does at most
+ * n trades and returns true when both are through; the store and the last segment may grow meanwhile.
+ */
+class RangeReplay {
+  constructor(store, from, segs, builder, count) {
+    this.store = store; this.i = Math.max(0, from || 0); this.segs = segs.slice(); this.builder = builder; this.count = count;
+  }
+  _seg() {
+    while (this.segs.length) {
+      const g = this.segs[0], end = g.end === null ? g.st.length : g.end;
+      if (g.i < end) return g;
+      if (g.end === null) return null;
+      this.segs.shift();
+    }
+    return null;
+  }
+  _bar(t) { const b = this.builder.bars; return b.length ? b[b.length - 1].t : t; }
+  step(n) {
+    const st = this.store, bd = this.builder;
+    for (let k = 0; k < n; k++) {
+      const g = this._seg(), more = this.i < st.length;
+      if (!g && !more) return true;
+      if (!g) { bd.addQuiet(st.time(this.i), st.price(this.i), st.volume(this.i)); this.i++; continue; }
+      const c = g.st, j = g.i, tj = c.time(j);
+      if (more) {
+        const ts = st.time(this.i);
+        if (ts < tj || (ts === tj && !(st.price(this.i) === c.price(j) && st.volume(this.i) === c.volume(j)))) {
+          bd.addQuiet(ts, st.price(this.i), st.volume(this.i)); this.i++; continue;   // only builds bars
+        }
+        if (ts === tj) {                                                           // the same trade: its bar, in order
+          bd.addQuiet(ts, st.price(this.i), st.volume(this.i)); this.i++;
+          this.count(tj, c.volume(j), c.side(j), this._bar(tj), c.method(j)); g.i++; continue;
+        }
+      }
+      this.count(tj, c.volume(j), c.side(j), this._bar(tj), c.method(j)); g.i++;     // not in this store
+    }
+    return false;
   }
 }
 /* the time of trade i, in a TickStore or a plain [[t, p, v], ...] list */
@@ -288,5 +401,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, RangeReplay };
 });
