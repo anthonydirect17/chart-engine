@@ -384,9 +384,15 @@ test('cost: 500,000 trades build quickly (amortised O(1) adds); POC and value ar
   for (let i = 0; i < n; i++) { const x = oneSession[i]; vp.add(x[0], x[1], x[2]); }
   const addMs = performance.now() - t;
   assert.equal(vp.trades, n);
-  t = performance.now();
-  const va = vp.valueArea(), poc = vp.poc();         // the first ask after the build: nothing cached yet
-  const vaMs = performance.now() - t;
+  // the ask after a build, nothing cached: the best of 5 (each after one more trade, which clears the cache), so other
+  // test files running at the same time do not make it flaky (as perf.test.js times)
+  let va, poc, vaMs = Infinity;
+  for (let k = 0; k < 5; k++) {
+    if (k) vp.add(oneSession[k][0], oneSession[k][1], 1);
+    t = performance.now();
+    va = vp.valueArea(); poc = vp.poc();
+    vaMs = Math.min(vaMs, performance.now() - t);
+  }
   assert.ok(va.volume >= 0.7 * vp.total && poc.volume > 0);
   assert.ok(addMs < 2000, '500k adds took ' + addMs.toFixed(1) + ' ms');
   assert.ok(vaMs < 50, 'POC and value area took ' + vaMs.toFixed(2) + ' ms');

@@ -436,13 +436,19 @@ How the wait is counted (review 4 B1): each waiting entry's time since it was qu
 meanwhile sending the page's own bulk data: a load's `history` and `ticks` chunks, and the held trades released after
 `ready`. Those go out back to back at the page's pace and none of them is late; after a lag close at 3,000 trades a
 second the reload holds the load's seconds times the rate (about 90,000 trades for a 30 s load), and counting that
-release as lag would close the page again on every reload. A live backlog still ages during every other send, so bulk
-data can never hide it, and only bulk sends that have finished are credited, so a page frozen in the middle of one
-still ages. Order lane messages do not count (they go out first anyway). Also closed, as before: 5,000 entries waiting
-while the message being sent has been stuck for over 2 seconds (a page that stopped reading), and over 5,000
-order-lane messages waiting. The age is checked when something is queued for the page (and while a load waits to queue
-its next chunk), so a page with nothing new waiting is not closed; order replies stuck behind a stuck send with no
-market data waiting are closed only by the 5,000-entry rule (review 4 N3). Harness (Mono; times vary run to run):
+release as lag would close the page again on every reload. A live backlog still ages during every other send, and only
+bulk sends that have finished are credited, so a page frozen in the middle of one still ages. **The price of that
+credit** (review 5 S1): right after a load, the live trades queued behind the release are as late as the release is
+long, and that is not counted, so the chart can run behind by up to the length of the release plus 5 s before the rule
+acts, not 5 s, while trading stays enabled. Review 5 measured, at 3,000 trades a second: healthy pages 4.4 to 14.3 s
+behind right after a load, never closed; a page slower than the market closed only 37.6 s after `ready`; with repeated
+loads a slow page reached 17.2 s behind before its close. What shrinks the release is sending recent ticks first (the
+next step, branch live-first); this branch changes no page code. Order lane messages do not count (they go out first
+anyway). Also closed, as before: 5,000 entries waiting while the message being sent has been stuck for over 2 seconds
+(a page that stopped reading), and over 5,000 order-lane messages waiting. The age is checked when something is queued
+for the page (and while a load waits to queue its next chunk), so a page with nothing new waiting is not closed; order
+replies stuck behind a stuck send with no market data waiting are closed only by the 5,000-entry rule (review 4 N3).
+Harness (Mono; times vary run to run):
 
 - a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after about 7 s, 5.0 s behind,
   also right after a load; one taking 0.4 ms (2,500 a second) after about 15 to 28 s (it falls behind by about 0.2 s a
