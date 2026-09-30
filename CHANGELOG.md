@@ -31,7 +31,12 @@ recompile. Run `nt8\install.ps1` again after pulling. The Desk gets it with the 
   picker still works: it lists every account ChartBridge knows and switches the fills (the other order controls stay
   off, and nothing can be sent). With no order bar (a mounted chart such as The Desk's, or ChartBridge 0.2) a compact
   Account picker sits in the toolbar. Saved in `live-account-v1`, per prefix; a 1.5 `live-fill-account-v1` choice is
-  read once when there is none ("All accounts" means none picked). The order path is unchanged: while trading, the
+  read once when there is none ("All accounts" means none picked). Charts with one prefix follow each other's pick
+  (the Desk's panes at once, other tabs through the storage event); a saved account ChartBridge no longer lists reads
+  "(no longer listed)". The trading page shows no toolbar picker while connecting, so the toolbar does not jump. The
+  picker's tooltip says what it does now: with trading off, "this only picks whose fills the chart marks". After an
+  empty `hello` (no connected account yet) the picker is enabled again when the sign-in turns trading on (review 2,
+  S1). The order path is unchanged: while trading, the
   order account is chosen exactly as before (Sim101 first, never from storage), the Armed switch still turns off when
   it changes, and nothing new is sent to ChartBridge.
 - **The live trade always stays visible** (Anthony). Hide all includes Fills, and hiding Fills hides past fills and
@@ -52,10 +57,15 @@ recompile. Run `nt8\install.ps1` again after pulling. The Desk gets it with the 
   }`), per storage prefix (The Desk's `desk:` keys stay its own). What a click means is worked out from what the tab
   shows and saved as that fixed result on a fresh read, so two tabs never undo each other and a tab never saves the
   opposite of what it shows (review S1: the switch, +, Recent, Enter and Hide all were saved as relative toggles).
+  Showing (the switch, a chip, Enter, Restore) writes "on the chart and shown", so even one another tab took off is
+  drawn after a reload as it is now (review 2, N7).
   **Carried over once** from `live-indicators-v1` (left in place): every indicator draws exactly as before and an
   explicit off stays off. On the main pane all five stay on its chart, pinned, the ones that were off hidden; on any
   other pane only the ones that were on are on its chart. A damaged `live-indicators-v2` is carried over from v1 again
   (review N3). New panes start with nothing on (Anthony's rule); the main pane with the five on.
+- **Open for Anthony** (review 2, S2, unchanged from 1.5.x): after a reconnect, or when trading comes on after the
+  sign-in, the order account goes back to Sim101 (or the first allowed account), not the one in use; Armed is off after
+  it and the picker shows the real order account. Which account should a load or a reconnect start on?
 - **Going back to 1.5.x** (review N2): 1.6.0 never writes `live-indicators-v1`, so a 1.5.x page opened afterwards (or a
   1.5.3 tab left open) shows the set from before the upgrade, and what it saves is not read by 1.6.0 again. Nothing is
   lost; each version keeps its own key.

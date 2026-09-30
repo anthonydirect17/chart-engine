@@ -255,6 +255,7 @@ function menuTab(s, paneId) {
     get IS() { return IS; },
     toggle: id => change(LP.Pane.toggleOp(IS, id)),
     hideAll: () => change(LP.Pane.hideAllOp(IS)),
+    remove: id => change(st => LP.Pane.remove(st, id)),
   };
 }
 
@@ -280,6 +281,23 @@ test('two tabs pressing Hide all: saved as the tabs show it, and Restore brings 
   b.hideAll();                                                   // Restore in tab B
   assert.deepEqual(LP.create(s).indicators('main'), flags(ALL));
   assert.deepEqual(LP.Pane.drawn(b.IS), flags(ALL));
+});
+
+test('two tabs: showing writes on and shown, so a tab that shows one another tab took off draws what a reload draws (review 2, N7)', () => {
+  const s = mem();
+  const a = menuTab(s, 'main'), b = menuTab(s, 'main');
+  a.remove('vwap');                                              // tab A takes VWAP off the chart
+  b.toggle('vwap'); b.toggle('vwap');                           // tab B (stale) hides it, then shows it again
+  assert.equal(LP.Pane.drawn(b.IS).vwap, true);
+  assert.equal(LP.create(s).indicators('main').vwap, true, 'saved as tab B shows it');
+  // Restore likewise
+  const c = menuTab(s, 'pane-3'), d = menuTab(s, 'pane-3');
+  c.toggle('ib'); d.toggle('ib');
+  d.hideAll();                                                   // tab D hides IB (remembered for Restore)
+  c.remove('ib');                                                // tab C takes it off
+  d.hideAll();                                                   // Restore in tab D
+  assert.equal(LP.Pane.drawn(d.IS).ib, true);
+  assert.equal(LP.create(s).indicators('pane-3').ib, true);
 });
 
 test('updatePane reads fresh: two tabs changing one pane each keep the other\'s change (review S2)', () => {

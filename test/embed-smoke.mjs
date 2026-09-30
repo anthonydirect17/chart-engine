@@ -212,6 +212,8 @@ try {
     a = await acct('paneA');
     check(a.value === 'DEMO-EVAL' && a.marks.join() === 'DEMO-EVAL' && /DEMO-EVAL/.test(await page.textContent('#paneA [id$="-lgFill"]')), 'embed: switching the account switches the fills: ' + JSON.stringify(a));
     check(await page.evaluate(() => localStorage.getItem('desk:live-account-v1')) === '"DEMO-EVAL"' && await page.evaluate(() => localStorage.getItem('live-account-v1')) === null, 'embed: the account is saved under the prefix only');
+    const b = await acct('paneB');
+    check(b.value === 'DEMO-EVAL' && b.marks.every(x => x === 'DEMO-EVAL'), 'embed: the other pane with the same prefix follows the pick at once (review 2, N6): ' + JSON.stringify(b));
     await shot(page, 'embed-account-picker.png');
   }
   // B on ES at 5m, A stays MNQ 1m
@@ -377,6 +379,7 @@ try {
     await p2.evaluate(port => {
       localStorage.clear();
       // saved by 1.5.3 under this prefix: carried over once to live-indicators-v2 (1.6.0), VWAP's explicit off kept
+      localStorage.setItem(ChartLive.EMBED_PREFIX + 'live-account-v1', JSON.stringify('GONE-ACCT'));   // an account ChartBridge no longer lists
       localStorage.setItem(ChartLive.EMBED_PREFIX + 'live-indicators-v1', JSON.stringify({ main: { volume: true, vwap: false, levels: true, fills: true, ib: true } }));
       document.getElementById('paneB').hidden = true; window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws' });
     }, PORT + 1);
@@ -385,6 +388,8 @@ try {
     const keys = await p2.evaluate(() => Object.keys(localStorage)), prefix = await p2.evaluate(() => ChartLive.EMBED_PREFIX);
     check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'string wsUrl on ChartBridge 0.2 works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
     check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), {}); return false; } catch (e) { return /wsUrl/.test(e.message); } }), 'mount without wsUrl throws');
+    const gone = await p2.evaluate(() => { const sel = document.querySelector('#paneA [id$="-acctPick"]'); return { value: sel.value, text: sel.selectedOptions[0].textContent, marks: window.__a.chart.getMarkers().length }; });
+    check(gone.value === 'GONE-ACCT' && gone.text === 'GONE-ACCT (no longer listed)' && gone.marks === 0, 'a saved account ChartBridge no longer lists is shown plainly, with no fills: ' + JSON.stringify(gone));
     const mig = await p2.evaluate(() => ({ layers: window.__a.chart.getLayers(), count: document.querySelector('#paneA .ind-count').textContent, v2: JSON.parse(localStorage.getItem(ChartLive.EMBED_PREFIX + 'live-indicators-v2')), plain: localStorage.getItem('live-indicators-v2') }));
     check(mig.layers.vwap === false && mig.layers.volume === true && mig.count === '4/5' && mig.v2 && mig.v2.main.ind.vwap.on === true && mig.v2.main.ind.vwap.shown === false && mig.plain === null,
       'a 1.5.3 embed\'s indicators carried over under its own prefix, VWAP still off: ' + JSON.stringify(mig));

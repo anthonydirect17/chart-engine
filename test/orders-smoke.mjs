@@ -335,6 +335,7 @@ try {
   check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent('#oOff')), 'reason shown: ' + await off.textContent('#oOff'));
   const enabled = await off.$$eval('#obar button, #obar input, #obar select', els => els.filter(e => !e.disabled).map(e => e.id));
   check(JSON.stringify(enabled) === '["oAcct"]', 'while trading is off only the account picker works: ' + enabled.join(','));
+  check(/^Trading is off: this only picks whose fills/.test(await off.getAttribute('#oAcct', 'title')), 'trading off: the picker says it only picks the fills: ' + await off.getAttribute('#oAcct', 'title'));
   // trading off: the picker still switches whose fills are marked (the accounts ChartBridge knows)
   check(await off.isHidden('#acctWrap') && await off.inputValue('#oAcct') === 'Sim101' && /Sim101/.test(await off.textContent('#lgFill')), 'trading off: Sim101 picked, its fills marked');
   await off.selectOption('#oAcct', 'DEMO-EVAL'); await off.waitForTimeout(200);
@@ -369,6 +370,30 @@ try {
     await shot(host, 'orders-framed-refused.png');
   }
   await host.close();
+
+  /* ---------------- hello with no accounts, then the sign-in turns trading on: the picker works (review 2, S1) */
+  await startBridge(PORT + 4, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--no-hello-accounts', '--test-pin=' + TEST_PIN]);
+  {
+    const na = await open(browser, PORT + 4, 1440);
+    await until(() => na.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading on after an empty hello');
+    const r = await na.evaluate(() => ({ disabled: document.getElementById('oAcct').disabled, options: [...document.getElementById('oAcct').options].map(o => o.value), title: document.getElementById('oAcct').title, toolbar: document.getElementById('acctWrap').hidden }));
+    check(!r.disabled && JSON.stringify(r.options) === '["Sim101","DEMO-EVAL"]' && /^Orders go to this account/.test(r.title) && r.toolbar, 'empty hello, then trading: the order bar picker is enabled with the trade accounts: ' + JSON.stringify(r));
+    await na.selectOption('#oAcct', 'DEMO-EVAL');
+    check(await na.inputValue('#oAcct') === 'DEMO-EVAL', 'and the order account can be changed');
+    await na.close();
+  }
+  /* ---------------- connecting (no hello yet): the trading page shows no toolbar picker, so the toolbar never jumps (review 2, N4) */
+  {
+    const cn = await browser.newPage({ viewport: { width: 1680, height: 860 } });
+    await cn.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+    await cn.addInitScript(() => { window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} }; });   // never connects
+    await cn.goto(`http://localhost:${PORT + 4}/live/`);
+    await unlockIfAsked(cn);
+    await cn.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'CONNECTING', null, { timeout: 15000 });
+    await cn.waitForTimeout(300);
+    check(await cn.isHidden('#acctWrap'), 'trading page while connecting: no toolbar account picker');
+    await cn.close();
+  }
 
   /* ---------------- ChartBridge 0.2 (protocol v1): read only exactly as before */
   await startBridge(PORT + 2, ['--v1']);

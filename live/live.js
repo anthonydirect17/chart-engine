@@ -42,7 +42,7 @@ const RANGE_MIN = 1, RANGE_MAX = 400;
  * The indicators (1.6.0 menu). `id` is also the chart layer (fills: the fill marks). Listed in the order the menu's
  * "On this chart" group and the chip strip show them. `sw` is the CSS color of the swatch; `short` is the chip text and
  * `letter` the chip on a narrow pane; `alias` holds the short names search matches; `opt` is the read-only setting the
- * gear shows (only what the chart really does; the Fills gear also holds the fill account choice).
+ * gear shows (only what the chart really does; the account whose fills are marked is the one account picker's).
  */
 const INDICATORS = [
   { id: 'volume', name: 'Volume bars', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
@@ -153,6 +153,12 @@ function copyPane(st) {
 }
 const touch = (st, id) => { st.recent = [id].concat(st.recent.filter(x => x !== id)).slice(0, RECENT_MAX); };
 const pinnedCount = st => IND_IDS.filter(id => st.ind[id].on && st.ind[id].pin).length;
+/* On the chart and shown (in a copy): one that was off gets a chip while the strip has room. */
+function putOn(n, id) {
+  const x = n.ind[id];
+  if (!x.on) { x.pin = pinnedCount(n) < pinMax(); x.on = true; }
+  x.shown = true;
+}
 const Pane = {
   /** Chips on the strip now (pinned and on the chart), and whether it is full. */
   pinned(st) { return pinnedCount(st); },
@@ -171,12 +177,12 @@ const Pane = {
    * the opposite of what it shows when another tab changed the same pane.
    */
   /** Put it on the chart, shown (a chip while the strip has room; one already on keeps its chip). A recent use. */
-  add(st, id) {
+  add(st, id, recent) {
     if (!IND_IDS.includes(id)) return st;
-    const n = copyPane(st), x = n.ind[id];
-    if (!x.on) { x.pin = pinnedCount(n) < pinMax(); x.on = true; }
-    x.shown = true;
-    touch(n, id); n.restore = null;
+    const n = copyPane(st);
+    putOn(n, id);
+    if (recent !== false) touch(n, id);
+    n.restore = null;
     return n;
   },
   /** Show or hide one that is on the chart (a chip, or the menu's switch with `recent`). */
@@ -199,16 +205,15 @@ const Pane = {
   /** Show these again (Restore). */
   showIds(st, ids) {
     const n = copyPane(st);
-    for (const id of cleanIdList(ids)) if (n.ind[id].on) n.ind[id].shown = true;
+    for (const id of cleanIdList(ids)) putOn(n, id);              // shown here means shown after a reload too (review 2, N7)
     n.restore = null;
     return n;
   },
   /** What the switch, +, a Recent button mean now: add it when it is not on the chart, else show or hide it. */
   toggleOp(st, id) {
     if (!IND_IDS.includes(id)) return x => x;
-    if (!st.ind[id].on) return x => Pane.add(x, id);
-    const v = !st.ind[id].shown;
-    return x => Pane.setShown(x, id, v, true);
+    if (!st.ind[id].on || !st.ind[id].shown) return x => Pane.add(x, id);   // showing writes on and shown, whatever another tab did
+    return x => Pane.setShown(x, id, false, true);
   },
   /** What Hide all means now: hide the shown ones, or with none shown bring back what it hid (Restore). */
   hideAllOp(st) {
@@ -381,6 +386,8 @@ let mountCount = 0;
    is over it. */
 let hoverRoot = null;
 const mountedRoots = new Set();
+/* Charts on one page that share a storage prefix follow each other's account pick (review 2, N6). */
+const accountPeers = new Set();
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -619,6 +626,7 @@ function start(container, opt, PAGE) {
     return typeof old === 'string' ? old : '';
   })();
   const accountsSeen = new Set();
+  let helloSeen = false;                                       // ChartBridge has said which accounts it knows
   let ticksSeen = 0;
   const delays = { feed: [], local: [] };
 
@@ -776,8 +784,15 @@ function start(container, opt, PAGE) {
     if (listed) for (const a of listed) accountsSeen.add(a);
     if (tradeMode() && TR.account) viewAccount = TR.account;       // trading off later keeps showing the same account
     const { names, withFills } = knownAccounts(), cur = account();
-    const opts = () => names.length ? names.map(n => new Option(withFills.has(n) ? n : n + ' (no fills yet)', n)) : [new Option('No accounts yet', '')];
-    if ($('acctWrap').hidden !== orderBarShown()) { $('acctWrap').hidden = orderBarShown(); fitChips(); }   // the toolbar changed
+    const label = n => !accountsSeen.has(n) ? (helloSeen ? n + ' (no longer listed)' : n) : withFills.has(n) ? n : n + ' (no fills yet)';
+    const opts = () => names.length ? names.map(n => new Option(label(n), n)) : [new Option('No accounts yet', '')];
+    /* the toolbar picker: only with no order bar; on the trading page not before ChartBridge's hello says which (review 2, N4) */
+    const noToolbarPicker = orderBarShown() || (TRADING && !helloSeen);
+    if ($('acctWrap').hidden !== noToolbarPicker) { $('acctWrap').hidden = noToolbarPicker; fitChips(); }   // the toolbar changed
+    if (orderBarShown()) {                                         // say what the picker does now (review 2, S2)
+      const t = tradeMode() ? 'Orders go to this account, and the chart marks its fills' : 'Trading is off: this only picks whose fills the chart marks';
+      $('oAcct').title = t; $('oAcct').setAttribute('aria-label', 'Account. ' + t);
+    }
     if (!orderBarShown()) { $('acctPick').replaceChildren(...opts()); $('acctPick').value = cur; $('acctPick').disabled = !names.length; }
     else if (tradeMode()) syncTradeAccounts();                    // trading: the accounts ChartBridge allows, as before
     else { $('oAcct').replaceChildren(...opts()); $('oAcct').value = cur; $('oAcct').disabled = !names.length; }
@@ -787,7 +802,21 @@ function start(container, opt, PAGE) {
     viewAccount = v;
     store.set('live-account-v1', v);
     syncAccounts();
+    for (const peer of accountPeers) if (peer.prefix === PREFIX && peer.follow !== followAccount) peer.follow(v);
   }
+  /* Another chart with this prefix (on this page, or in another tab) picked an account: show the same. While trading
+     the order account is not changed; only the account shown after trading goes off is. */
+  function followAccount(v) {
+    if (typeof v !== 'string' || v === viewAccount || destroyed) return;
+    viewAccount = v;
+    syncAccounts();
+  }
+  accountPeers.add({ prefix: PREFIX, follow: followAccount });
+  cleanups.push(() => { for (const peer of accountPeers) if (peer.follow === followAccount) accountPeers.delete(peer); });
+  listen(window, 'storage', e => {
+    if (e.key !== PREFIX + 'live-account-v1') return;
+    try { followAccount(JSON.parse(e.newValue)); } catch (err) { /* not ours */ }
+  });
   /* Fills of the account picked, on this instrument. With Fills hidden (its switch, a chip or Hide all) past fills go,
      but the open trade never does: its entry fills stay (OrderTicket.openEntryFills, checked against the position
      ChartBridge reports while trading), and the position line, working orders and stop and target lines are not
@@ -867,6 +896,7 @@ function start(container, opt, PAGE) {
   function handle(m) {
     switch (m.type) {
       case 'hello':
+        helloSeen = true;
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
@@ -1039,6 +1069,7 @@ function start(container, opt, PAGE) {
     const sel = $('oAcct');
     sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
     sel.value = TR.account;
+    sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1)
   }
   /* Order bar, order lines, position line; also run on every instrument switch and order message. */
   function renderTrading() {
@@ -1399,7 +1430,7 @@ function start(container, opt, PAGE) {
       if (!first) return;
       e.preventDefault();
       if (!IS.ind[first.id].on) indAction('toggle', first.id);
-      else if (!IS.ind[first.id].shown) { M.note = ''; changeIndicators(st => LP.Pane.setShown(st, first.id, true, true)); }
+      else if (!IS.ind[first.id].shown) { M.note = ''; changeIndicators(st => LP.Pane.add(st, first.id)); }
     });
     panel.addEventListener('click', e => {
       const b = e.target.closest('button[data-act]');
@@ -1409,7 +1440,7 @@ function start(container, opt, PAGE) {
     $('indChips').addEventListener('click', e => {
       const b = e.target.closest('button[data-id]'); if (!b) return;
       const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
-      changeIndicators(st => LP.Pane.setShown(st, id, v));
+      changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
     });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
     wrap.addEventListener('keydown', e => {

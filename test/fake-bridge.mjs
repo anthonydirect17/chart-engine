@@ -22,6 +22,8 @@
 //   --pin-file=path                 where the PIN hash lives (ChartBridge 0.3.2 keeps pin.txt in its folder), so a
 //                                   restarted fake keeps the PIN and an open page's unlock; default: memory only
 //   --test-pin=2468                 start with this made-up PIN set (tests only), unless the pin file has one
+//   --no-hello-accounts             hello lists no accounts and no fills are sent (NinjaTrader with no connected
+//                                   account yet); trading and its accounts come from the sign-in as usual
 //   --pin-off                       behave like ChartBridge 0.3.1 for the PIN only (no /pin/, nothing gated), to
 //                                   measure a page from a checkout older than the PIN (perf-live --root)
 // ChartBridge 0.3.2's PIN (test/fake-pin.mjs): the page's WebSocket needs ?unlock=<token> and GET /session the
@@ -55,6 +57,7 @@ const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + nam
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
 const PIN_OFF = !!flag('pin-off');
+const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
@@ -321,10 +324,10 @@ server.on('upgrade', (req, sock) => {
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.2', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: ACCOUNTS };
+  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.2', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
   send(c, hello);
-  send(c, { type: 'execs', list: fillsSample() });
+  send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
     const r = parseFrames(Buffer.concat([c.buf, d]), t => onMessage(c, t));
     c.buf = r.rest; if (r.closed) sock.end();
