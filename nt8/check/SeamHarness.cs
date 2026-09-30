@@ -40,6 +40,7 @@ public static class SeamHarness
         Check = check;
         Pure();
         Load();
+        FillHarness.Run(Check);   // live first (0.3.5): the joins as pure functions (check/FillHarness.cs)
     }
 
     // ------------------------------------------------------------ the pure functions
@@ -160,7 +161,7 @@ public static class SeamHarness
         client.Tap = s => { lock (sent) sent.Add(s); };
         clients[77] = client;
         BarsRequest.AutoAnswer = SidesHarness.QuoteAnswer;   // no quote history unless a case sets one
-        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); }
+        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); FillHarness.Load(Check, inst); }
         finally
         {
             BarsRequest.AutoAnswer = null;

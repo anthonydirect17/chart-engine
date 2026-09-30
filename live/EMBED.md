@@ -110,6 +110,7 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 |---|---|
 | `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
 | `ping` | `c` (the page clock). Allowed, but the chart does not send it today. |
+| `more` | `sub` (the chart's subscribe id). 1.8.0, only to ChartBridge 0.3.5 or later, whose `hello` lists `liveFirst` in `features`: the chart then subscribes with `sub` and `liveFirst: true` and asks for the older history one chunk at a time (`olderTicks`, nt8/PROTOCOL.md "Live first"). Market data only. A relay that passes `hello` without `features` (The Desk's does) never sees it: the chart loads everything first, as before. |
 
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC
 that has little tick history: Range bars start where the ticks start, and the status line says "Range bars start
@@ -122,7 +123,8 @@ A chart made with `ChartLive.mount` is always read only: there is no option to t
 option is ignored). Only the standalone page, booted by `live/index.html` with `data-mount="page"`, can trade.
 
 - The chart never requests `GET /session` and never sends `auth`.
-- Only `subscribe` and `ping` messages ever leave it: `send` drops every other type, whatever calls it.
+- Only `subscribe`, `ping` and `more` (the next chunk of market data, 1.8.0) messages ever leave it: `send` drops every
+  other type, whatever calls it.
   Messages about trading from ChartBridge (`trading`, `orders`, `order`, `position`, `reject`) are ignored.
 - There is no order bar, no Armed switch and no ARMED pill in the page at all, no Shift+click order preview or
   placing, and no draggable order lines (order editing is never turned on in the chart).

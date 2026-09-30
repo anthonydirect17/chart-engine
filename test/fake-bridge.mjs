@@ -43,6 +43,19 @@
 // tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
 // quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
 // previous side by the tick rule (sm 3), the first is unknown (0, 0). Sample data, not a real classification.
+// Live first (ChartBridge 0.3.5, nt8/PROTOCOL.md "Live first"), sample data, never market data:
+//   --live-first                    hello lists "liveFirst"; a subscribe with liveFirst gets the most recent trades, then
+//                                   ready with older, then the older history, newest first, one olderTicks chunk per "more".
+//                                   The data is one tape per instrument: the tick history, then every live trade appended to
+//                                   it, so what a page gets can be checked trade by trade (/test/tape). Live trades during a
+//                                   load are held and the ones not in the recent window released after ready, as ChartBridge
+//                                   does. A full load (no liveFirst) is served from the same tape.
+//   --recent-ticks=100000           trades in the recent window (ChartBridge's recentTicks)
+//   --recent-ms=300                 how long NinjaTrader takes to answer the recent window (live trades are held meanwhile)
+//   --older-ms=1500                 how long it takes to answer the whole window after ready
+//   --older-chunk=10000             trades per olderTicks message
+//   With --test-controls: POST /test/features?liveFirst=0 makes hello leave the feature out (a full load, like 0.3.4) for
+//   new connections; POST /test/tape?root=NQ&from=<t> the tape's trades from that time; /test/received counts "more".
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -68,6 +81,10 @@ const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES =
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const SIDES = !flag('no-sides') && !V1;           // ChartBridge 0.2 (--v1) had no sides either
+const LIVE_FIRST = !!flag('live-first') && !V1;
+let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
+const RECENT_TICKS = +flagValue('recent-ticks') || 100000, RECENT_MS = flagValue('recent-ms') === '' ? 300 : +flagValue('recent-ms');
+const OLDER_MS = flagValue('older-ms') === '' ? 1500 : +flagValue('older-ms'), OLDER_CHUNK = +flagValue('older-chunk') || 10000;
 /* The side of a trade from the previous one (see the header): [s, sm]. */
 function sideOf(p, prev, prevSide) {
   if (prev === undefined) return [0, 0];
@@ -160,6 +177,34 @@ function avgVol(bars) {
 const data = {};
 for (const r of Object.keys(INSTR)) data[r] = makeData(r);
 
+/* --live-first: one tape of trades per instrument, in columns (history up to now, then every live trade), with sides. */
+class Tape {
+  constructor(cap) { this.n = 0; this._grow(cap || 1024); }
+  _grow(cap) {
+    const old = this.n ? this : null;
+    this.cap = cap;
+    const t = new Float64Array(cap), p = new Float64Array(cap), v = new Float64Array(cap), s = new Int8Array(cap), m = new Int8Array(cap);
+    if (old) { t.set(this.t.subarray(0, this.n)); p.set(this.p.subarray(0, this.n)); v.set(this.v.subarray(0, this.n)); s.set(this.s.subarray(0, this.n)); m.set(this.m.subarray(0, this.n)); }
+    this.t = t; this.p = p; this.v = v; this.s = s; this.m = m;
+  }
+  push(t, p, v, s, sm) { if (this.n === this.cap) this._grow(this.cap * 2); const i = this.n++; this.t[i] = t; this.p[i] = p; this.v[i] = v; this.s[i] = s; this.m[i] = sm; }
+  row(i) { return SIDES ? [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i]] : [this.t[i], this.p[i], this.v[i]]; }
+  rows(a, b) { const out = new Array(Math.max(0, b - a)); for (let i = a; i < b; i++) out[i - a] = this.row(i); return out; }
+  /* the first trade at or after time t */
+  at(t) { let lo = 0, hi = this.n; while (lo < hi) { const m = (lo + hi) >> 1; if (this.t[m] < t) lo = m + 1; else hi = m; } return lo; }
+}
+const tapes = {};
+if (LIVE_FIRST) for (const r of Object.keys(INSTR)) {
+  const hist = ticksFrom(data[r], 48), now = etNow(), k = new Tape(hist.length + 65536);
+  let prevP, prevS = 0;
+  for (const x of hist) {
+    if (x[0] > now) break;                          // the tape ends now; live trades carry on from here
+    const [sd, sm] = sideOf(x[1], prevP, prevS);
+    k.push(x[0], x[1], x[2], sd, sm); prevP = x[1]; prevS = sd;
+  }
+  tapes[r] = k;
+}
+
 // ---------------------------------------------------------------- tiny WebSocket server
 function frame(text) {
   const payload = Buffer.from(text);
@@ -215,6 +260,7 @@ function onMessage(c, text) {
   const type = m && typeof m.type === 'string' ? m.type : '?';
   received.types[type] = (received.types[type] || 0) + 1;
   if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
+  if (m.type === 'more') { more(c, m); return; }                        // live first (0.3.5): market data only
   if (m.type === 'subscribe') subscribe(c, m);
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (['order', 'change', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);
@@ -223,6 +269,7 @@ const tickCache = new Map();             // --tick-rate: millions of ticks, made
 function subscribe(c, m) {
   const r = INSTR[m.root] ? m.root : 'MNQ';
   c.root = r; c.ready = false;
+  if (LIVE_FIRST) return subscribeTape(c, m, r);
   const bars = data[r];
   for (let i = 0; i < bars.length; i += 4000) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
@@ -238,14 +285,84 @@ function subscribe(c, m) {
   c.ready = true;
 }
 
+/* --live-first: a load from the tape, as ChartBridge 0.3.5 does it (a full load when the page does not ask for live first). */
+function subscribeTape(c, m, r) {
+  const sub = Number.isInteger(m.sub) ? m.sub : undefined, k = tapes[r], bars = data[r];
+  const tag = o => (sub !== undefined ? Object.assign(o, { sub }) : o);
+  c.seq = (c.seq || 0) + 1; c.fill = null;
+  const seq = c.seq;
+  for (let i = 0; i < bars.length; i += 4000) {
+    const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
+    send(c, tag({ type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length }));
+  }
+  const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours);
+  const from = hours > 0 ? k.at(etNow() - hours * 3600) : k.n;
+  const sendTicks = (a, b) => {
+    for (let i = a; i < b || i === a; i += 20000) { send(c, tag({ type: 'ticks', root: r, ticks: k.rows(i, Math.min(b, i + 20000)), done: i + 20000 >= b })); if (b <= a) break; }
+  };
+  if (!(m.liveFirst === true && hours > 0)) {       // a full load: everything at once (no live trade can come in between here)
+    if (hours > 0) sendTicks(from, k.n);
+    send(c, tag({ type: 'ready', root: r })); c.ready = true;
+    return;
+  }
+  const heldFrom = k.n;                             // live trades from here on are held until ready
+  c.stats = { subscribedMs: Date.now() };
+  setTimeout(() => {
+    if (c.seq !== seq || c.sock.destroyed) return;
+    const end = k.n, start = Math.max(from, end - RECENT_TICKS);
+    // the front: the first trade whose side does not lean on the one before the window (the fake's sides: a price change
+    // sets the side, an unchanged price keeps the previous one)
+    let w = start;
+    while (w < end && !(w === 0 || k.p[w] !== k.p[w - 1])) w++;
+    sendTicks(w, end);
+    send(c, tag({ type: 'ready', root: r, older: true }));
+    for (let i = Math.max(end, heldFrom); i < k.n; i++) sendTick(c, r, i);   // the held trades not in the recent window
+    c.ready = true;
+    c.stats.readyMs = Date.now();
+    c.fill = { seq, sub, root: r, from, next: w, asked: 0, ready: false, done: false, chunks: 0 };
+    setTimeout(() => { if (c.fill && c.fill.seq === seq) { c.fill.ready = true; pump(c); } }, OLDER_MS);
+  }, RECENT_MS);
+}
+function more(c, m) {
+  received.more = (received.more || 0) + 1;
+  const f = c.fill;
+  if (!f || f.done || (Number.isInteger(m.sub) && m.sub !== f.sub)) return;
+  f.asked = Math.min(4, f.asked + 1);
+  pump(c);
+}
+function pump(c) {
+  const f = c.fill, k = f && tapes[f.root];
+  while (f && f.ready && !f.done && f.asked > 0 && !c.sock.destroyed) {
+    f.asked--;
+    const b = f.next, a = Math.max(f.from, b - OLDER_CHUNK);
+    f.next = a; f.chunks++;
+    const msg = { type: 'olderTicks', root: f.root, ticks: k.rows(a, b), left: a - f.from, done: a <= f.from };
+    if (f.sub !== undefined) msg.sub = f.sub;
+    if (msg.done) { f.done = true; c.stats.doneMs = Date.now(); c.stats.chunks = f.chunks; }
+    send(c, msg);
+  }
+}
+function sendTick(c, r, i) {
+  const k = tapes[r], now = Date.now();
+  const msg = { type: 'tick', root: r, t: k.t[i], u: now - 20, rx: now, p: k.p[i], v: k.v[i] };
+  if (SIDES) { msg.s = k.s[i]; msg.sm = k.m[i]; }
+  send(c, msg);
+}
+
 const last = {}, held = {}, lastSide = {};
 for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
+if (LIVE_FIRST) for (const r of Object.keys(INSTR)) { const k = tapes[r]; if (k.n) { last[r] = k.p[k.n - 1]; lastSide[r] = k.s[k.n - 1]; } }
 function trade(r, p) {
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
   last[r] = p; lastSide[r] = s;
   const now = Date.now();
   const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
   if (SIDES) { msg.s = s; msg.sm = sm; }
+  if (LIVE_FIRST) {                                   // on the tape: never older than its last trade
+    const k = tapes[r];
+    if (k.n && msg.t < k.t[k.n - 1]) msg.t = k.t[k.n - 1];
+    k.push(msg.t, p, msg.v, s, sm);
+  }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade
 }
@@ -262,7 +379,7 @@ else {
   setInterval(() => {
     const burst = ((Date.now() - t0) % 10000) < 1500 ? 3 : 1;
     for (const r of Object.keys(INSTR)) {
-      if (held[r] || ![...clients].some(c => c.ready && c.root === r)) continue;
+      if (held[r] || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
       const n = poisson(LIVE_RATE * burst / 100);
       for (let k = 0; k < n; k++) {
         const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
@@ -310,6 +427,13 @@ const server = http.createServer((req, res) => {
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
+    else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
+    else if (p === '/test/tape') {
+      const k = tapes[r], from = k ? k.at(+q.get('from') || 0) : 0;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(k ? { n: k.n - from, t: Array.from(k.t.subarray(from, k.n)), p: Array.from(k.p.subarray(from, k.n)), v: Array.from(k.v.subarray(from, k.n)), s: Array.from(k.s.subarray(from, k.n)), m: Array.from(k.m.subarray(from, k.n)) } : null));
+    }
+    else if (p === '/test/loads') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify([...clients].map(c => c.stats || null))); }
     else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ root: r, last: last[r], held: !!held[r] }));
@@ -346,6 +470,7 @@ server.on('upgrade', (req, sock) => {
   clients.add(c);
   const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.2', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
+  if (liveFirstOn) { hello.features = ['liveFirst']; hello.version = 'fake-0.3.5'; }
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {

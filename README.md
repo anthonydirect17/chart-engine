@@ -42,7 +42,16 @@ prices only, picked next to the range size, which is kept per instrument. Every 
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
 `ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
 sees (accounts, fill counts, clock, The Desk queue, since 0.3.3 where each load's backfill met the live
-trades, and since 0.3.4 how each trade's side, buy or sell, was found); see `nt8/PROTOCOL.md`.
+trades, since 0.3.4 how each trade's side, buy or sell, was found, and since 0.3.5 how each live-first load went); see
+`nt8/PROTOCOL.md`.
+
+**Live first** (chart 1.8.0 with ChartBridge 0.3.5): the chart asks for the most recent trades first, goes live with them
+(orders work from then on), and pulls the older history in the background, newest first, without holding up a frame or a
+live trade. "History: loading 6 h of 28 h" shows in the status line meanwhile. Minute and hour views are exact at once;
+range bars show from the first point where they are proven exact (1-minute bars until then) and nothing on screen moves
+when the rest comes in; the volume profile on a minute view now counts the whole session. With ChartBridge 0.3.4 or older,
+or through The Desk's relay, the chart loads everything first, as before. See `nt8/PROTOCOL.md`, Live first, and
+`docs/RANGE_BARS.md`.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
 line; recompile or restart NinjaTrader after a change):
@@ -53,6 +62,7 @@ line; recompile or restart NinjaTrader after a change):
 | `roots` | `MNQ, NQ, MES, ES` | Instruments offered. |
 | `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
+| `recentTicks` | `100000` | Live first (0.3.5): the most recent trades a chart gets before it goes live; the older history follows (5,000 to 500,000). |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
@@ -297,6 +307,8 @@ npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reco
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:vp         # the volume profile: on from the menu, the POC row, Session and RTH, two tabs
+npm run smoke:live-first # live first against the fake's tape: time to live, orders at ready, every trade once, full-load bars
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 ```
 

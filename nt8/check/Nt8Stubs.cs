@@ -28,7 +28,11 @@ namespace NinjaTrader.Code
 }
 namespace NinjaTrader.Core
 {
-    public class GeneralOptionsClass { public TimeZoneInfo TimeZoneInfo { get { return TimeZoneInfo.Local; } } }
+    public class GeneralOptionsClass
+    {
+        public static TimeZoneInfo Zone;   // the harness may set NinjaTrader's time zone; the PC's otherwise
+        public TimeZoneInfo TimeZoneInfo { get { return Zone ?? TimeZoneInfo.Local; } }
+    }
     public static class Globals
     {
         private static string userDataDir = "/tmp/nt8/";

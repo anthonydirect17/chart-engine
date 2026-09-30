@@ -265,3 +265,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Anything not real is labelled on the chart (legend "sample data", SIM pill).
 - Levels, VWAP, the Initial Balance and trade marks are computed from bars, never typed in. A level that cannot be
   computed exactly is not drawn (the IB says why on the status line).
+- Live first (1.8.0): while the older history is still loading, nothing is drawn that it could change. Range bars show
+  only from a point where they are proven the same as a full load's (1-minute bars before it, the legend saying "Range
+  40t (1m until loaded)"); range and seconds bars draw no VWAP (legend "VWAP loading"). The status line says "History:
+  loading 6 h of 28 h" in the quiet grey, beside the other notes, and the note goes when the history is in.

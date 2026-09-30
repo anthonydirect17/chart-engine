@@ -458,7 +458,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   // 0.3.4: ready and the released trades as one outbox entry (a release of any size cannot close the page)
   assert.match(ready, /foreach \(SeamTick h in ContinueSides\(L, r\.Release\)\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*\}/);
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.Fill = null;[^\n]*\s*\}/);   // 0.3.5: and an older load's history stops
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
@@ -479,8 +479,8 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
 
 // ---- 0.3.4: the side of every trade (behaviour: nt8/check/SidesHarness.cs under Mono, test/trade-sides.test.js)
 test('0.3.4: every trade carries its side, additively, and the seam match ignores it', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.4 for NinjaTrader 8/);
-  assert.match(code, /public const string Version = "0\.3\.4";/);
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.[4-9] for NinjaTrader 8/);
+  assert.match(code, /public const string Version = "0\.3\.[4-9]";/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   // Bid and Ask updates only move the quote: nothing is sent or held for them
   const quote = md.slice(0, md.indexOf('if (type != MarketDataType.Last) return;') + 45);
@@ -489,8 +489,9 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   // the live tick keeps 0.3.3's fields in order and adds s and sm at the end
   assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ "\}"/);
   // backfill trades: t, p, v first, then s and sm
-  const ticks = bodyOf(code, 'private static void SendTicks(');
-  assert.match(ticks, /\.Append\(bars\.Volume\[i\]\.ToString\(CultureInfo\.InvariantCulture\)\);\s*if \(sides != null\) b\.Append\(','\)\.Append\(\(\(int\)sides\.Side\[i\]\)/);
+  // (0.3.5: written by AppendTrade with no string per number; FillHarness.cs checks the text is 0.3.4's)
+  assert.match(bodyOf(code, 'private static void SendTicks('), /AppendTrade\(b, bars, sides, i, et\);/);
+  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*if \(sides != null\) \{ b\.Append\(','\); CbJson\.AppendLong\(b, sides\.Side\[i\]\); b\.Append\(','\); CbJson\.AppendLong\(b, sides\.Method\[i\]\); \}/);
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
   assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
@@ -513,11 +514,45 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.ok(md2.indexOf('if (!(e.Price > 0)) return;') >= 0 && md2.indexOf('if (!(e.Price > 0)) return;') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'price checked before NoteLast');
   // tick charts ask for Bid and Ask ticks of the same window; minute charts do not
   const rt = bodyOf(code, 'private static void RequestTicks(');
-  assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, true\);\s*RequestQuotes\(L, MarketDataType\.Ask, true\);/);
+  assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, !L\.Recent\);\s*RequestQuotes\(L, MarketDataType\.Ask, !L\.Recent\);/);   // 0.3.5: by count for a recent window
   assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /new BarsRequest\(L\.Inst, L\.QuoteFrom, to\)/);
-  assert.match(rt, /L\.QuoteFrom = L\.NowNt\.AddHours\(-Math\.Min\(L\.TickHours, QuoteHoursMax\)\);/);
+  assert.match(rt, /L\.QuoteFrom = L\.Recent \? DateTime\.MinValue : L\.NowNt\.AddHours\(-Math\.Min\(L\.TickHours, QuoteHoursMax\)\);/);
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"sides\\":"\)\.Append\(SidesJson\(\)\);/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
   assert.match(orders, /check\/SidesHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /SidesHarness\.Run\(Check\);/);
+});
+
+// ---- 0.3.5: live first (behaviour: nt8/check/FillHarness.cs under Mono, test/live-first.test.js, test/live-first-smoke.mjs)
+test('0.3.5: live first: the recent window by count, ready, then the older history pulled by the page in the data lane', () => {
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.5 for NinjaTrader 8/);
+  assert.match(code, /public const string Version = "0\.3\.5";/);
+  // the page learns of it from hello, and asks with liveFirst; only tick charts load that way
+  assert.match(bodyOf(code, 'private static string HelloJson('), /b\.Append\(",\\"features\\":\[\\"liveFirst\\"\]"\);/);
+  assert.match(bodyOf(code, 'private static void StartLoad('), /Recent = liveFirst && tickHours > 0/);
+  // the recent window asks by count (NinjaTrader's from/to requests are whole days); the older history as before
+  const th = bodyOf(code, 'private static void RequestTickHistory(');
+  assert.match(th, /BarsRequest ticks = L\.Recent \? new BarsRequest\(L\.Inst, ChartBridgeConfig\.RecentTicks\) : new BarsRequest\(L\.Inst, L\.NowNt\.AddHours\(-L\.TickHours\), to\);/);
+  assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /BarsRequest quotes = L\.Recent \? new BarsRequest\(L\.Inst, RecentQuoteRows\) : new BarsRequest\(L\.Inst, L\.QuoteFrom, to\);/);
+  // ready says "older" only for a recent window, and the background starts after ready
+  const fin = bodyOf(code, 'private static void Finish(');
+  assert.match(fin, /MarkReady\(L, seam\);\s*\}\s*if \(L\.Recent\) StartBackground\(L\);/);
+  assert.match(fin, /if \(why != null\) \{ FallBack\(L, why\); return; \}/);
+  assert.match(bodyOf(code, 'private static void MarkReady('), /\(L\.Recent \? ",\\"older\\":true" : ""\)/);
+  // the older history: one chunk per "more", at most MaxAsked waiting, in the data lane, only for the page's current load
+  assert.match(bodyOf(code, 'private static void OnMore('), /f\.Asked = Math\.Min\(f\.Asked \+ 1, MaxAsked\);/);
+  const pump = bodyOf(code, 'private static void Pump(');
+  assert.match(pump, /client\.SendData\(msg\);/);
+  assert.match(pump, /if \(f\.Done \|\| f\.Asked <= 0 \|\| !Owns\(client, f\)\)/);
+  assert.ok(!/"olderTicks"|"more"/.test(code.slice(code.indexOf('OrderLaneTypes'), code.indexOf('OrderLaneTypes') + 200)), 'olderTicks is not an order-lane type');
+  assert.match(code, /\|\| json\.StartsWith\("\{\\"type\\":\\"olderTicks\\"", StringComparison\.Ordinal\);/);
+  // "more" is market data only: routed apart from every order message
+  const msg = bodyOf(code, 'private static void OnClientMessage(');
+  assert.ok(msg.indexOf('type == "more"') < msg.indexOf('ChartBridgeOrders.OnMessage('), '"more" handled before the order routing');
+  assert.match(msg, /else if \(type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "cancel" \|\| type == "flatten"\)\s*ChartBridgeOrders\.OnMessage\(client, type, text\);/);
+  // the older history is not matched against held trades; the recent window's seam is the 0.3.3 one
+  assert.match(bodyOf(code, 'private static void NoteAnswer('), /if \(L\.Background\) return;/);
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"fills\\":"\)\.Append\(FillsJson\(\)\);/);
+  const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
+  assert.match(orders, /check\/FillHarness\.cs/);
 });
