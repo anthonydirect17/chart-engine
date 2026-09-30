@@ -85,7 +85,7 @@ per pane (`live-pane-heights-v1`). The divider is an element inside the chart; n
 | Option | Default | What it does |
 |---|---|---|
 | `wsUrl` | none, required | ChartBridge's WebSocket URL. A **function** is called again for **every** connect and reconnect, so it can hand out a fresh single-use relay ticket each time (`/api/live/ws?ticket=...`), or choose between `ws://localhost:8765/ws` and the relay. It may return a promise; a thrown error or a rejected promise counts as a failed connect and is retried. The query string is never shown on screen. |
-| `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Cumulative delta, Fills: on the chart, shown, pinned; and their options), the delta pane's height and drawings. `'main'` starts with the five and the cumulative delta pane on (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
+| `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Cumulative delta, Fills: on the chart, shown, pinned; and their options), the delta pane's height and drawings. `'main'` starts with the five on and pinned and the cumulative delta pane on without a chip (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
@@ -131,7 +131,8 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC
 that has little tick history: Range bars start where the ticks start, and the status line says "Range bars start
 at <time> ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from
-NinjaTrader's." A relay that refuses the subscribe leaves the chart on LOADING (no `history` or `ready` arrives).
+NinjaTrader's." The delta pane (1.7.0) then counts that session from its first complete bar and labels it with the
+exact start ("from 18:05:00.3 ET, not 18:00"); it never takes a capped backfill as the whole session. A relay that refuses the subscribe leaves the chart on LOADING (no `history` or `ready` arrives).
 
 ## Read-only guarantee
 

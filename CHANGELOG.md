@@ -26,48 +26,70 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
 - **Height:** about 20% of the chart at first; the band between the chart and the pane is a divider: drag it, or Tab to
   it and use the arrow keys (2%), Page Up and Down (10%), Home and End (`role="separator"`, its value in `aria-valuenow`).
   Kept between 8% and 60% of the chart, and never under 48 px for the pane or 120 px for the price chart
-  (`PANE_RATIO_MIN`, `PANE_RATIO_MAX`, `PANE_MIN`, `PRICE_MIN`). Saved per pane when a move ends
-  (`live-pane-heights-v1`, `{ <paneId>: { delta } }`, per storage prefix).
+  (`PANE_RATIO_MIN`, `PANE_RATIO_MAX`, `PANE_MIN`, `PRICE_MIN`; the page reads the three ratios from the engine, review
+  N8). Saved per pane when a move ends (`live-pane-heights-v1`, `{ <paneId>: { delta } }`, per storage prefix), and
+  only when the height changed: a key on a chart too small to move it saves nothing (review N7). The divider's band
+  starts at the pane's top edge and stops at the price axis, so it covers neither the price plot nor its axis (review
+  N2), and "Jump to live" sits above the pane, not over it (review N3).
 - **A normal E2 indicator**, "Cumulative delta" (chip DELTA, letter D) in the Volume group; search finds it by delta,
   cd, cvd, cumulative, order flow and flow. Show and hide keep it and its settings, the x takes it off, Hide all and
   Restore, pin, the two-tab rule, like the others. "Coming" now reads "time and sales".
-- **On by default on the main pane** (Anthony), shown and pinned: with the five that makes six chips, a full strip, so
-  the volume profile added to the main pane now gets no chip (the menu says so, as for any addition to a full strip).
-  Other panes (grid panes, mounted panes) start without it and add it from the menu. A saved layout with no delta entry
-  (every 1.6.0 save) gets it on for the main pane, with a chip only while the strip has room (a 1.6.0 main pane with the
-  profile pinned already has six); an explicit off or hidden stays as it is. The carry-over from `live-indicators-v1`
-  (1.5.3 and older) does the same: the main pane gets it on, the sixth chip. The toolbar and the order bar do not move:
+- **On by default on the main pane** (Anthony), shown, **without a chip** (review N5; `UNPINNED_BY_DEFAULT` in
+  live/live.js): the strip keeps the five chips of 1.6.0 ("V W L I F"), so the volume profile added to the main pane
+  still gets the sixth, and the delta pane is shown, hidden and taken off from the Indicators menu, or pinned there for
+  a chip like any other. Other panes (grid panes, mounted panes) start without it and add it from the menu (a chip, as
+  for any addition while the strip has room). A saved layout with no delta entry (every 1.6.0 save) gets it on for the
+  main pane, shown, no chip; saved after Hide all (nothing shown, a Restore mix kept), it comes back as it was, the
+  delta pane hidden with the rest and added to the Restore mix, so Restore brings back the old mix and the pane (review
+  N6). An explicit entry (off, hidden, pinned) stays as it is. The carry-over from `live-indicators-v1` (1.5.3 and older)
+  does the same: the main pane gets it on, shown, no chip. The toolbar and the order bar do not move:
   their geometry is that of 1.6.0 at 1920, 1680, 1440, 1280, 1024 and 400 px on 1m, 15s and Range (measured), and
   nothing is added to the status line, so the chart area keeps its height too.
 - **ChartBridge 0.3.3 or older** (trades without `s`): the pane is there (the layout does not change) and draws nothing
   but "Delta needs ChartBridge 0.3.4 on this PC"; the legend says the same, with no number. Whether a load has sides is
   read from its first trade; before any trade (a 1m view on a weekend), from hello's version. Never estimated.
-- **Coverage, the honest start** (open for Anthony, below): the cumulative is only right if the page has every trade
-  since 18:00. The page works out from when it has every trade: the tick backfill's start (the start asked for, or the
-  first trade when NinjaTrader sent more than 10 minutes less, or the page dropped its oldest trades; a first trade
-  within 10 minutes after an 18:00 start that the request reached back past means the daily break or a weekend, so that
-  session is whole), or with no tick history (1m and longer on a first load) the first live trade. A bar that started
-  before that moment is left out whole (blank, never a part of a bar), and a session that started before it counts from
-  0 on its first complete bar and says so: the pane's title reads "Cumulative delta +1,234 from 21:40 ET, not 18:00: the
-  tick history starts later" (or "this view loads no tick history"), the legend "Delta from 21:40 +1,234", with a
-  dashed line at that first bar; before the first complete bar, "starts with the next full bar". Bar delta counts each
-  complete bar the same way. Range views load whole sessions, so they always start at 18:00.
+- **Coverage, honest by construction** (review B1, S1, S3): the cumulative is only right if the page has every trade
+  since 18:00, so it counts from 18:00 only when that is provable, never by a guess. The page holds every trade from
+  the earlier of two moments (`deltaCoveredFrom` in live/live.js): just after the store's first trade (the backfill is
+  one run up to ChartBridge's seam, then every live trade; another trade of the same instant or bar before it may be
+  missing), and the moment the page went live (the PC's clock at `ready`, plus 5 s for a PC clock behind the
+  exchange's), since every trade after it came in live. Once the page has dropped its oldest trades only the store
+  counts. A session is whole when that moment is at or before its 18:00 start: the backfill holds a trade from before
+  18:00 (Range views now ask one hour more, 10 to 34 hours, so the request reaches into the previous session's last
+  trading hour, before the 17:00 close, and a weekday load proves the session whole), or the page was live across 18:00
+  (a minute view opened at 17:59 or on Sunday afternoon counts the new session whole from its first bar, trade or no
+  trade in the break). Anything else, such as a backfill The Desk's relay capped at 8 hours or NinjaTrader sending less
+  than asked, is never taken as whole, even when it starts seconds after 18:00. A bar that started before that moment
+  is left out whole (blank, never a part of a bar), and a session that started before it counts from 0 on its first
+  complete bar and says so with that bar's exact start, seconds and tenths when not on the minute (`util.fmtExact`,
+  review N1): the pane's title reads "Cumulative delta +1,234 from 18:37:16.6 ET, not 18:00: the tick history starts
+  later" (or "this view loads no tick history", or "the oldest trades were dropped"), the legend "Delta from 18:37:16.6
+  +1,234", with a dashed line at that first bar; before the first complete bar, "starts with the next full bar". Bar
+  delta counts each complete bar the same way.
+- **Minute views** (review S2, Anthony keeps the label for now): a first load on 1m and longer asks for no tick history
+  (a fast load), so the cumulative starts with the first complete bar after the page went live, labelled. To load the
+  ticks back to 18:00 whenever the delta pane is on, set `DELTA_WANTS_SESSION_TICKS` to `true` in live/live.js (next to
+  `ticksWanted`, one line): the subscribe then asks `BB.sessionTickHours` (back past the session start, as for Range),
+  and switching the pane on reloads first when the ticks are missing.
 - **Unknown sides** (`s` 0, or none): the legend adds "· 37 unknown" (the session's unknown volume in contracts, dim)
   when there are any. The core also counts them in trades, those with no side at all, and the volume sided by the tick
   rule (`unknownTrades`, `missing`, `byRule`), for a later readout.
 - **Data:** the page's TickStore keeps each trade's side and method in one byte beside its block
   (`TickStore.push(t, p, v, s, sm)`, `side(i)`, `method(i)`, `feedSides`; `at(i)` still `[t, p, v]`, `feed` unchanged).
-  The delta is built from the store at `ready`, on a bar type, size or style change and when it is shown (range bars and
-  the delta in one pass; time bars bucket themselves; shown on its own, the delta on range bars goes through a new
-  builder fed the same trades from the same place, which makes the same bars), then each live trade is added right
-  after the bar builders with the start of the bar it made: one trade, one O(1) add, never a rebuild per trade or per
-  frame. So it holds exactly the trades the store holds (ChartBridge 0.3.3's seam, not the page, keeps a trade from
-  coming twice), and a new session at 18:00 starts at 0 with its first trade. Hidden, there is no delta at all.
+  The delta is built from the store at `ready`, on a bar type, size or style change and when it comes onto the chart
+  (time bars bucket themselves; on range bars it goes through a new builder fed the same trades from the same place,
+  which makes the same bars as the chart's), in slices of at most 8 ms (`DELTA_SLICE_MS`, one task each, review S5),
+  handed to the chart only when complete; then each live trade is added right after the bar builders with the start of
+  the bar it made: one trade, one O(1) add, never a rebuild per trade or per frame. So it holds exactly the trades the
+  store holds (ChartBridge 0.3.3's seam, not the page, keeps a trade from coming twice), and a new session at 18:00
+  starts at 0 with its first trade. It is kept while the pane is on the chart, shown or hidden, so the chip shows it
+  again at once (review S5); off the chart, there is no delta at all. The engine keeps the closed candles' paths and
+  the closed bars' value range between frames and draws only the newest candle and the axis each frame (review N4).
 - **Legend:** "Delta +12,345" (bull color above zero, bear below), "Bar delta +123", thousands separators.
 - Engine API: `setDelta(delta | null)`, `getDelta()`, layer `delta` (default false), `setDeltaView({ mode, ratio, note,
   reason })`, `deltaPane()` (`{ on, top, height, ratio, mode, note, title, lo, hi, plotHeight }`), `deltaToY(v)`,
   event `paneResize` (`{ ratio, height, done }`), `PANE_RATIO`, `PANE_RATIO_MIN`, `PANE_RATIO_MAX`, `PANE_MIN`,
-  `PRICE_MIN`, `PANE_GAP`; `CumulativeDelta({ sessionStart, seconds, coveredFrom })` with `add(t, v, side, barT, sm)`,
+  `PRICE_MIN`, `PANE_GAP`, `util.fmtExact(t)`; `CumulativeDelta({ sessionStart, seconds, coveredFrom })` with `add(t, v, side, barT, sm)`,
   `addQuiet`, `bars`, `sessions` (`buy`, `sell`, `unknown`, `unknownTrades`, `missing`, `byRule`, `partial`, `from`),
   `at(t)`, `indexOf`, `lowerBound`, `sessionOf`, `startOf`, `version`, `uncovered`, `skipped`.
 - **The fake bridge** (tests only) sends sides like ChartBridge 0.3.4 (the same change as branch `bridge-side`, 0.3.4)
@@ -84,52 +106,53 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   rebuild from the store and the store's own sums, on range and 5m bars; on a stand-in canvas: the pane only with the
   layer, 20%, the candles inside it, off draws the same with or without a delta, bar mode from zero, the note draws
   nothing else, the divider's keys, drag and limits, one crosshair and a drag in the pane, frames that never touch the
-  delta); `test/prefs.test.js` (default on for the main pane and the sixth chip, off on a new pane, search, show and
-  hide and remove; a 1.6.0 save without the key, with six chips already, an explicit off, junk; the 1.5.3 and 1.3
-  carry-overs; the Show option and the height per pane, fresh reads, limits, junk, `__proto__`, per prefix). The 1.6.0
-  tests that count what is on the main pane count the delta pane too and still check what they checked.
-  `npm run smoke:delta` (NQ Range 40 on sample data at 13:00 ET: on by default under the chart at 20%, in the count and
-  the strip; candles in both colors in the pane; its totals per session equal every trade the page received, counted in
-  the test, also after 3 s of live trades, with no new delta; the crosshair over the pane; Bar delta from the gear and
+  delta, the closed candles' paths kept between frames, the divider band clear of the plot and the axis and "Jump to
+  live" above the pane, no save from a key that moves nothing, `fmtExact`); `test/prefs.test.js` (default on for the
+  main pane with no chip, the profile then the sixth chip, off on a new pane, search, show and hide, pin by hand and
+  remove; a 1.6.0 save without the key, with six chips already, saved after Hide all and its Restore, an explicit off,
+  junk; the 1.5.3 and 1.3 carry-overs; the Show option and the height per pane, fresh reads, limits, junk,
+  `__proto__`, per prefix); `test/bar-builder.test.js` (Range and the session asking one hour more, back before the
+  17:00 close). The 1.6.0 tests that count what is on the main pane count the delta pane too and still check what they
+  checked; the chip strips are those of 1.6.0 again.
+  `npm run smoke:delta` (NQ Range 40 on sample data at 13:00 ET: on by default under the chart at 20%, in the count,
+  with no chip (pinned from the menu for the chip checks); candles in both colors in the pane; its totals per session
+  equal every trade the page received, counted in the test, also after 3 s of live trades, with no new delta; the crosshair over the pane; Bar delta from the gear and
   back, both after a reload; the black ground; 5m and 15s rebuilt once; the divider dragged, keyed (ArrowDown, End,
-  Home, within the limits) and kept after a reload; the chip, Hide all and Restore, search, the x and the +; ChartBridge
-  0.3.3: the pane empty, the note, no number; 15s with 2 hours of ticks labelled "from 11:00 ET, not 18:00"; a 1m first
-  load labelled; mounted panes: pane-2 off, added from its menu, `setIndicatorOption('delta', 'show', 'bar')` and its
-  height under `desk:`; the clock at 17:59:35: at 18:00 a new session from 0 with no rebuild). The live (ChartBridge 0.2:
+  Home, within the limits) and kept after a reload; the divider band and "Jump to live"; the chip, which shows it
+  again at once with the same delta (review S5), Hide all and Restore, search, the x and the +; ChartBridge 0.3.3: the
+  pane empty, the note, no number; 15s with 2 hours of ticks labelled "from 11:00:15 ET, not 18:00"; a 1m first load
+  labelled; mounted panes: pane-2 off, added from its menu, `setIndicatorOption('delta', 'show', 'bar')` and its
+  height under `desk:`; review B1 at 02:05 ET on Range: The Desk's relay capping `tickHours` at 8 and NinjaTrader
+  sending 8 of the 11 hours asked, each labelled partial from its exact start, never plain, and counting every trade
+  from that start; review S1: 1m opened at 17:59:20 with nothing traded in the break counts the session whole from
+  18:00, every trade received; the clock at 17:59:35: at 18:00 a new session from 0 with no rebuild). The live
+  (ChartBridge 0.2:
   the note), embed, settings, IB and volume profile smokes count the delta pane and check what they checked before.
-- **Performance** (`npm run smoke:perf`, NQ Range 40, 150 trades a second with bursts of 450, three loads of 10 s,
-  headless Chromium on the build box; the smoke now runs with the delta pane on, `PERF_SMOKE_DELTA=0` for off, with the
-  profile as before). Frames over 50 ms per load, and the chart's own frame time:
-  - 01:30 ET (1.81 million backfill trades), chart 1.6.0 on the same feed: 0, 0, 0; 1.09 to 1.11 ms.
-  - 01:30 ET, 1.7.0, delta off: 0, 0, 0; 1.06 to 1.19 ms.
-  - 01:30 ET, 1.7.0, delta on (400 candles, about 1.78 million trades counted): 0, 1, 0; 1.47 to 1.74 ms. Four more
-    loads (with the legend change at the end of this item): 0, 1, 0, 0; 1.39 to 1.60 ms, delta off beside them 0, 0, 0, 0.
-  - 13:30 ET (1.11 million trades), RTH profile: 1.6.0 0, 0, 0 (1.09 to 1.21 ms); 1.7.0 delta on 1, 0, 0 (1.23 to
-    1.44 ms).
-  So the pane costs about 0.3 to 0.5 ms a frame. The frames over 50 ms with it on were single ones: one was a 117 ms
-  gap with no long task at all (the chart's own frame at most 10.8 ms, the tick handler at most 2.1 ms); later the box
-  got busy with other work (a load of 4 to 6 on 4 cores) and loads run in turn showed frames over 50 ms for 1.6.0 too
-  (0, 4, 3 and 1 in four loads; 1.7.0 with the pane 0, 4, 0 and 1; without it 0, 0, 3 and 9), and traces of those
-  long tasks show the compositor's commit (30 to 78 ms) with the chart's animation frame at 5 to 17 ms inside. Within
-  this box's noise, not proven zero: worth a run on Anthony's PC. The legend now writes its delta text only when it
-  changes, and the pane's value range and title widths are kept between frames. Not in the smoke: building the delta
-  with the range bars at a load is about 40 to 80 ms more for 1.8 million trades (Node, this box).
+- **Performance** (`npm run smoke:perf`, NQ Range 40 at 01:30 ET, 1.82 million backfill trades, 150 trades a second
+  with bursts of 450, three loads of 10 s, headless Chromium on the build box, a shared box; the smoke runs with the
+  delta pane on, `PERF_SMOKE_DELTA=0` for off). After the review fixes, six runs alternating on and off, the box's load
+  average (1 min) at each start 2.01, 2.15, 1.91, 1.57, 2.38, 2.97:
+  - delta on (400 candles, about 1.78 million trades counted), 9 loads: frames over 50 ms 0 in every load, long tasks 0;
+    chart frame 1.29 to 1.42 ms, tick handler 29 to 33 us.
+  - delta off, 9 loads: frames over 50 ms 0, long tasks 0; chart frame 1.10 to 1.19 ms, tick handler 27 to 32 us.
+  So the pane costs about 0.2 ms a chart frame (0.3 to 0.5 ms before review N4). Showing the pane (review S5, the same
+  view, three times each): before, one long task of 132, 195 and 174 ms and frame gaps up to 183 ms; now none, the
+  longest frame gap 17 ms, both from the chip (kept while hidden) and from the menu's switch (a new build in slices).
+  In the first round, with the box at a load of 4 to 11, loads showed single frames over 50 ms for 1.6.0 too (traces
+  showed the compositor's commit); worth a run on Anthony's PC.
 - **Drawing with the pane off is unchanged:** the canvas calls of 1.6.0 and 1.7.0 with the delta layer off (with and
   without a delta handed to the chart) are identical in 78 of 78 frames recorded on a stand-in canvas (plot, levels, the
   profile, fills, orders and the position, drawings, the crosshair over the plot and both axes, a drag, the wheel, the
   black ground, a live update; 1078 by 626 at dpr 1, 1440 by 760 at dpr 2, 400 by 700 at dpr 3).
-- **Open for Anthony:** (1) Coverage on minute views: a first load on 1m and longer asks for no tick history (a fast
-  load), so the cumulative starts with the first complete bar after the page went live and says so. Should the page ask
-  ChartBridge for the ticks back to 18:00 whenever the delta pane is shown (a slower load of the default view, and with
-  0.3.4 a quote history too), or keep the label? The 15s and 30s views ask for 8 hours, so late in the day they start
-  partway too (labelled). (2) The candle colors: the pane uses the bull and bear candle colors, not the trade-side green
-  and red (the house style keeps those for sides and P&L). (3) A range bar with no trade (a NinjaTrader-style phantom
-  bar) has no delta candle; should it show a flat one at the running value? (4) Unknown sides count in the legend as
-  contracts ("· 37 unknown"); trades or a share instead? (5) Hidden layouts: a 1.6.0 main pane saved with everything
-  hidden by Hide all gets the delta pane shown (the ruling: no delta entry means on). (6) Merge order with `bridge-side`:
-  its `test/trade-sides.test.js` checks that the page reads only the first three places of a backfill trade and that
-  `pushAll` passes `x[0], x[1], x[2]`; the page now reads the side too, so that one check needs updating when both are
-  in main (the fake bridge change here is the same as that branch's, so it merges clean).
+- **Open for Anthony:** (1) Minute views keep the label for now (review S2); `DELTA_WANTS_SESSION_TICKS` loads the
+  ticks back to 18:00 instead (a slower load of the default view, and with 0.3.4 a quote history too). The 15s and 30s
+  views ask for 8 hours, so late in the day they start partway too (labelled). (2) The candle colors: the pane uses the
+  bull and bear candle colors, not the trade-side green and red (the house style keeps those for sides and P&L). (3) A
+  range bar with no trade (a NinjaTrader-style phantom bar) has no delta candle; should it show a flat one at the
+  running value? (4) Unknown sides count in the legend as contracts ("· 37 unknown"); trades or a share instead? (5)
+  The delta pane has no chip by default (review N5); pin it from the menu for one, or say if it should have the sixth.
+- **Merged with main** (ChartBridge 0.3.4, 7c28d55): `test/trade-sides.test.js` now checks that `pushAll` passes all
+  five places of a backfill trade and that the store keeps the sides from both formats.
 
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
 
