@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.6.0
+ * chart-engine 1.6.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -1911,6 +1911,13 @@ function mountThemePanel(chart, host, options) {
  * the RTH profile empties at 18:00 and stays empty until 9:30. Trades outside the window change nothing but the
  * `outside` count (not `skipped`, which is for bad input), and do not change `version`.
  *
+ * Keep (option `keep: true`, Anthony's ruling 2026-09-30; the page uses it): the profile keeps the last session it
+ * counted after that session ends, over the 17:00 ET close, the 18:00 start, weekends and holidays, until the first
+ * trade counted in a later session, so a Friday can be reviewed over the weekend. With `rth` only a trade inside the
+ * RTH window counts, so the overnight trades never empty it: the day's RTH stays up until the next 9:30 with a
+ * stock market session (a holiday keeps the day before). advance() does nothing with `keep`. Without `keep` (the
+ * default) the session moves as above.
+ *
  * Cost: add() is amortised O(1): most trades only add to a row, and a row outside the array grows it to twice
  * the span needed, so the copies add up to O(1) per trade (one add can copy the whole span; a new session
  * clears the old span once). poc() and valueArea() walk the rows once (a session of NQ is a few thousand rows)
@@ -1962,11 +1969,31 @@ class VolumeProfile {
     this.rth = !!o.rth;
     this.rthStart = o.rthStart === undefined ? 34200 : o.rthStart;
     this.rthEnd = o.rthEnd === undefined ? 57600 : o.rthEnd;
+    this.keep = !!o.keep;
     if (!(this.tick > 0 && isFinite(this.tick))) throw new RangeError('VolumeProfile: tick must be a positive number');
     if (!(Number.isInteger(this.rowTicks) && this.rowTicks >= 1)) throw new RangeError('VolumeProfile: rowTicks must be a whole number of ticks, 1 or more');
     VolumeProfile._share(this.valueAreaShare);
     this._vol = new Float64Array(0); this._base = 0;
     this.reset();
+  }
+  /**
+   * A profile of the last session with trades in `store` (the page's TickStore, or anything with length, time(i) and
+   * feed(builder, from, minT), oldest first), made with `opts` (1.6.1; with `keep: true` it is the one the page
+   * draws). It feeds from the start of the last trade's session; while that holds nothing (RTH before 9:30, a weekend
+   * or a holiday since) from one trading day earlier, at most 7 days back and not before the store's first trade.
+   * Empty when the store holds nothing that counts.
+   */
+  static fromStore(store, opts) {
+    let vp = new VolumeProfile(opts);
+    const n = store && store.length || 0;
+    if (!n) return vp;
+    const first = store.time(0);
+    for (let t = store.time(n - 1), k = 0; ; t -= DAY, k++) {
+      const from = vp.startOf(t);
+      store.feed(vp, 0, from);
+      if (!vp.empty || from <= first || k >= 7) return vp;
+      vp = new VolumeProfile(opts);
+    }
   }
   static _share(p) {
     if (!(p > 0 && p <= 1)) throw new RangeError('VolumeProfile: the value area share must be above 0 and at most 1');
@@ -1996,8 +2023,9 @@ class VolumeProfile {
    * The time from which this profile needs every trade, for the trading day holding t: that session's start
    * (18:00 ET the evening before), or with `rth` that day's 9:30. For coverage notes (was the history long enough).
    */
-  startOf(t) {
-    const d = tradeDay(t, this.sessionStart);
+  startOf(t) { return this.startOfDay(tradeDay(t, this.sessionStart)); }
+  /** startOf for trading day d (as in `day`): the session held starts at startOfDay(profile.day). */
+  startOfDay(d) {
     if (this.rth) return d * DAY + this.rthStart;
     return this.sessionStart ? (d - 1) * DAY + this.sessionStart : d * DAY;
   }
@@ -2030,11 +2058,17 @@ class VolumeProfile {
         !isFinite(t) || !isFinite(price) || !(v > 0 && v < Infinity)) { this.skipped++; return false; }
     const d = tradeDay(t, this.sessionStart);
     let fresh = false;
-    if (d !== this.day) {
+    if (this.keep) {                                     // only a trade that counts moves it to a later session
       if (this.day !== null && d < this.day) { this.skipped++; return false; }
-      this._clear(); this.day = d; fresh = true;
+      if (this.rth && !this.inRth(t)) { this.outside++; return false; }
+      if (d !== this.day) { this._clear(); this.day = d; fresh = true; }
+    } else {
+      if (d !== this.day) {
+        if (this.day !== null && d < this.day) { this.skipped++; return false; }
+        this._clear(); this.day = d; fresh = true;
+      }
+      if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
     }
-    if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
     const r = this._row(price);
     if ((r < this._base || r >= this._base + this._vol.length) && !this._grow(r)) { this.skipped++; return fresh; }
     this._vol[r - this._base] += v;
@@ -2050,9 +2084,11 @@ class VolumeProfile {
   addAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.add(x[0], x[1], x[2]); } return this; }
   /**
    * Move to the session holding t with no trade (for example on the clock at 18:00 ET before the first trade of
-   * the new session). Returns true when the profile moved to that later session (it is then empty).
+   * the new session). Returns true when the profile moved to that later session (it is then empty). With `keep` it
+   * does nothing and returns false: a kept profile moves only with the first trade counted in a later session.
    */
   advance(t) {
+    if (this.keep) return false;
     const d = tradeDay(t, this.sessionStart);
     if (!isFinite(d) || (this.day !== null && d <= this.day)) return false;
     this._clear(); this.day = d;

@@ -385,6 +385,22 @@ function create(storage) {
   };
 }
 
+/*
+ * The order account when trading comes on (1.6.1, Anthony's ruling 2026-09-30: "the account I was using", not
+ * Sim101). `allowed` is ChartBridge's list of trade accounts now; `wanted` is the account this tab is on: after a page
+ * load the last one picked on this PC (live-account-v1 under the storage prefix), after a reconnect that keeps the
+ * page the one it was on. It is used only when ChartBridge allows it now; otherwise Sim101 (or the first allowed, as
+ * before), and `missed` names the account that could not be used, for the note "Last account ... not available".
+ * Nothing about Armed is here: Armed is never saved and is off after every load and every reconnect.
+ */
+function orderAccount(allowed, wanted) {
+  const list = Array.isArray(allowed) ? allowed.filter(a => typeof a === 'string' && a) : [];
+  const want = typeof wanted === 'string' ? wanted : '';
+  if (want && list.includes(want)) return { account: want, missed: '' };
+  const account = list.includes('Sim101') ? 'Sim101' : list[0] || '';
+  return { account, missed: want && want !== account ? want : '' };
+}
+
 /** Runs fn after `ms` of quiet; flush() runs a waiting call now (on commit, or when the page is closing). */
 function debounce(fn, ms) {
   let timer = null, args = null;
@@ -395,7 +411,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { create, debounce, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+api = { create, debounce, orderAccount, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -465,7 +481,7 @@ function markup(p, o) {
       <button type="button" class="btn" id="${p}flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
       <button type="button" class="btn" id="${p}cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
-    <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim" id="${p}oOther"></span><span class="ooff" id="${p}oOff"></span></span>
+    <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
   </section></div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
@@ -549,7 +565,7 @@ ${obar}
     <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
-      <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span></span><span id="${p}lgFill"></span></div>
+      <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgFill"></span></div>
     </div>
     <div class="notice" id="${p}notice" hidden>
       <h2 id="${p}noticeTitle">Waiting for ChartBridge</h2>
@@ -661,12 +677,19 @@ function start(container, opt, PAGE) {
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
      one; with no order bar (a mounted chart, or ChartBridge 0.2) a compact one sits in the toolbar. The chart marks the
-     fills of that account only. While trading is on, the account is the order account (TR.account, chosen exactly as
-     before 1.6.0); otherwise it is `viewAccount`, the last one picked, saved in live-account-v1. The 1.5 fills choice
-     (live-fill-account-v1) is read once when there is none yet; its "All accounts" is gone and means none chosen. */
+     fills of that account only. While trading is on, the account is the order account (TR.account); otherwise it is
+     `viewAccount`, the last one picked, saved in live-account-v1. The 1.5 fills choice (live-fill-account-v1) is read
+     once when there is none yet; its "All accounts" is gone and means none chosen.
+     On the trading page (1.6.1, Anthony's ruling 2026-09-30) `viewAccount` is also the account this tab is on: when
+     trading comes on (after a load, a PIN entry or a reconnect) the order account is that one if ChartBridge allows it
+     now, else Sim101 with a note (LivePrefs.orderAccount, applyTrading). After a load it is the last one picked on
+     this PC; the 1.5 fills choice is never an order account, so the trading page does not read it. Each trading tab
+     keeps its own account while open: a pick in another tab is saved (the next load starts on it) but never changes
+     this tab (followAccount). Armed is never saved: it is off after every load and every reconnect. */
   let viewAccount = (() => {
     const v = store.get('live-account-v1', null);
     if (typeof v === 'string' && v) return v;
+    if (TRADING) return '';
     const old = store.get('live-fill-account-v1', '');
     return typeof old === 'string' ? old : '';
   })();
@@ -773,9 +796,13 @@ function start(container, opt, PAGE) {
    * Built from the TickStore when the indicator is on at `ready`, when it is switched on, and when the option
    * changes (the store holds every trade the page got: the backfill, then each live tick), then fed each live tick
    * right after the store's push in onTick, so it holds exactly what the store holds (VolumeProfile in the engine
-   * has the notes, and the backfill seam that is not settled). It holds the trading day of the clock: the timer
-   * below moves it to the new session at 18:00 ET even before the first trade. It does not depend on the view, so
-   * changing bars keeps it. While it is off there is no profile at all.
+   * has the notes, and the backfill seam that is not settled). It holds the last session with trades and keeps it
+   * after that session ends (1.6.1, Anthony's ruling 2026-09-30: the engine's `keep`): over the 17:00 ET close, the
+   * 18:00 start, weekends and NYSE holidays, until the next session's first trade (with RTH the next 9:30 trade), so
+   * a Friday can be reviewed over the weekend. The legend names the session's day, "(Fri)". Built from the store by
+   * VolumeProfile.fromStore: the last trade's session, or a day earlier at a time while that holds nothing (RTH before
+   * 9:30, over a weekend or a holiday). The IB keeps its own rule (none on weekends and holidays). It does not depend on the view,
+   * so changing bars keeps it. While it is off there is no profile at all.
    * Views that load no tick history (1m and longer, when the page subscribed on one: tickHours 0) have only the
    * live trades since `ready`, so the profile starts at the first live trade; a quiet note on the status line says
    * so, and says when the tick history does not reach back to 18:00 (or 9:30 for RTH).
@@ -783,10 +810,8 @@ function start(container, opt, PAGE) {
   function vpBuild() {
     D.vp = null;
     if (S.layers.vp && D.ready) {
-      const now = etNow();
-      const vp = new CE.VolumeProfile({ tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth' });
-      D.ticks.feed(vp, 0, vp.startOf(now));
-      vp.advance(now);
+      const opts = { tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth', keep: true };
+      const vp = CE.VolumeProfile.fromStore(D.ticks, opts);   // the last session with trades, kept until the next one's first
       D.vp = vp;
     }
     chart.setProfile(D.vp);
@@ -797,16 +822,19 @@ function start(container, opt, PAGE) {
     const el = $('vpNote'); if (!el) return;
     let text = '';
     if (S.layers.vp && D.ready && D.vp) {
-      const now = etNow(), need = D.vp.startOf(now), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
+      // the session held (kept after it ends), or while there is none yet the clock's
+      const now = etNow(), held = D.vp.day !== null, need = held ? D.vp.startOfDay(D.vp.day) : D.vp.startOf(now), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
       // every trade is known from here on: the tick backfill's start (later when NinjaTrader sent less than asked,
-      // or the page dropped its oldest ticks), or with no tick history (tickHours 0) the moment the page went live
+      // or the page dropped its oldest ticks; earlier when it sent more), or with no tick history (tickHours 0) the
+      // moment the page went live
       const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
-      const coveredFrom = D.tickHours > 0 ? Math.max(D.tickFrom, D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
-      if (rth && !U.rthDay(need)) {
-        const wd = new Date(need * 1000).getUTCDay();
-        text = wd === 0 || wd === 6 ? '' : 'Volume profile (RTH): no stock market session on ' + U.fmtDate(need) + ' (NYSE holiday).';
-      } else if (rth && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
-      else if (coveredFrom > need) {
+      const coveredFrom = D.tickHours > 0 ? Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
+      if (!held) {                                     // nothing counted yet: a small note, never an error
+        if (rth && U.rthDay(need) && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
+        else if (D.tickHours === 0) text = 'Volume profile from ' + U.fmtHM(Math.min(coveredFrom, now)) + ' ET: this view loads no tick history, so it counts the live trades from then on.';
+        else text = 'Volume profile' + (rth ? ' (RTH)' : '') + ': no trades of the last session in the tick history this view loaded.';
+      }
+      else if (coveredFrom > need) {                   // the session held is only partly in the tick history
         const at = U.fmtHM(Math.min(coveredFrom, now));
         text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.'
           : 'Volume profile from ' + at + ' ET: this view loads no tick history, so it counts the live trades from then on.';
@@ -823,9 +851,11 @@ function start(container, opt, PAGE) {
     el.hidden = !cols;
     if (!cols || cols.version === vpLegendVer) return;
     vpLegendVer = cols.version;
-    const va = D.vp.valueArea(), dp = precisionOf();
+    const va = D.vp.valueArea(), dp = precisionOf(), day = D.vp.day * 86400;
     $('lgPoc').textContent = U.fmtPrice(D.vp.poc().price, dp); $('lgVal').textContent = U.fmtPrice(va.val, dp); $('lgVah').textContent = U.fmtPrice(va.vah, dp);
-    el.title = 'Volume profile, ' + (D.vp.rth ? 'RTH 9:30 to 16:00 ET' : 'full session from 18:00 ET') + ': point of control and 70% value area';
+    $('lgVpDay').textContent = ' (' + U.fmtDay(day).split(' ')[0] + ')';   // the session's trading day: "(Fri)"
+    el.title = 'Volume profile of ' + U.fmtDate(day) + ', ' + (D.vp.rth ? 'RTH 9:30 to 16:00 ET' : 'full session from 18:00 ET the day before') +
+      ': point of control and 70% value area. Kept after the session ends until the next session\'s first trade.';
   }
   /*
    * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
@@ -917,7 +947,7 @@ function start(container, opt, PAGE) {
     const noToolbarPicker = orderBarShown() || (TRADING && !helloSeen);
     if ($('acctWrap').hidden !== noToolbarPicker) { $('acctWrap').hidden = noToolbarPicker; fitChips(); }   // the toolbar changed
     if (orderBarShown()) {                                         // say what the picker does now (review 2, S2)
-      const t = tradeMode() ? 'Orders go to this account, and the chart marks its fills' : 'Trading is off: this only picks whose fills the chart marks';
+      const t = tradeMode() ? 'Orders go to this account, and the chart marks its fills' : 'Trading is off: this picks whose fills the chart marks, and the account orders go to when trading comes back on';
       $('oAcct').title = t; $('oAcct').setAttribute('aria-label', 'Account. ' + t);
     }
     if (!orderBarShown()) { $('acctPick').replaceChildren(...opts()); $('acctPick').value = cur; $('acctPick').disabled = !names.length; }
@@ -931,10 +961,10 @@ function start(container, opt, PAGE) {
     syncAccounts();
     for (const peer of accountPeers) if (peer.prefix === PREFIX && peer.follow !== followAccount) peer.follow(v);
   }
-  /* Another chart with this prefix (on this page, or in another tab) picked an account: show the same. While trading
-     the order account is not changed; only the account shown after trading goes off is. */
+  /* Another chart with this prefix (on this page, or in another tab) picked an account: show the same. Never on the
+     trading page (1.6.1): there it is the account this tab trades, and each tab keeps its own while open. */
   function followAccount(v) {
-    if (typeof v !== 'string' || v === viewAccount || destroyed) return;
+    if (TRADING || typeof v !== 'string' || v === viewAccount || destroyed) return;
     viewAccount = v;
     syncAccounts();
   }
@@ -1117,15 +1147,35 @@ function start(container, opt, PAGE) {
     TR.reason = FRAMED ? FRAMED_REASON : t.enabled ? '' : (t.reason || 'Trading is not enabled in ChartBridge.');
     TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
     TR.maxQty = t.maxQty || {};
-    TR.account = OT.defaultAccount(TR.accounts, TR.account);
-    if (!TR.enabled) setArmed(false);
+    const was = TR.account, cameOn = TR.enabled && !was;           // trading comes on: a load, a PIN entry, a reconnect
+    const pick = LP.orderAccount(TR.accounts, TR.enabled ? viewAccount : '');
+    TR.account = TR.enabled ? pick.account : '';                   // no order account while trading is off
+    if (cameOn || !TR.enabled || TR.account !== was) setArmed(false);   // Armed always starts off; never restored
     renderTrading();
     syncAccounts();
+    if (TR.enabled && TR.account && (cameOn || pick.missed)) accountNote(pick, cameOn);
   }
+  /* Trading came on, or the account in use is no longer allowed: say which account orders go to and make the picker
+     stand out for a moment (1.6.1, Anthony trades account to account). The picker already shows it (syncAccounts). */
+  let sessionsOn = 0, noteSeq = 0;
+  function accountNote(pick, cameOn) {
+    const sel = $('oAcct'), el = $('oAcctNote'), seq = ++noteSeq;
+    const first = cameOn && ++sessionsOn === 1;
+    const text = pick.missed ? 'Last account ' + pick.missed + ' not available, on ' + pick.account + '.'
+      : first ? 'On ' + pick.account + (viewAccount && store.get('live-account-v1', null) === pick.account ? ', the last account picked' : '') + '. Armed is off.'
+      : 'Still on ' + pick.account + '. Armed is off.';
+    el.textContent = text; el.title = text; el.classList.toggle('warn', !!pick.missed);
+    sel.classList.remove('acct-flash', 'warn'); void sel.offsetWidth;   // restart the highlight
+    sel.classList.add('acct-flash'); sel.classList.toggle('warn', !!pick.missed);
+    later(() => { if (seq === noteSeq) sel.classList.remove('acct-flash', 'warn'); }, 3600);
+    later(() => { if (seq === noteSeq) { el.textContent = ''; el.title = ''; } }, pick.missed ? 15000 : 8000);
+  }
+  function clearAccountNote() { noteSeq++; $('oAcctNote').textContent = ''; $('oAcctNote').title = ''; $('oAcct').classList.remove('acct-flash', 'warn'); }
   function tradingLost(reason) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
+    TR.account = '';                                               // the tab's account stays in viewAccount (syncAccounts)
     setArmed(false); renderTrading(); syncAccounts();
   }
   function onOrder(o) {
@@ -1149,6 +1199,7 @@ function start(container, opt, PAGE) {
     if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
     if (!D.ready || !TR.account) { flash('Still loading: nothing was sent.', 'warn'); return false; }
+    if ($('oAcct').value !== TR.account) { flash('The account shown is not the order account: nothing was sent.', 'error'); syncAccounts(); return false; }
     return true;
   }
   function sendOrder(side, kind, price) {
@@ -1651,6 +1702,7 @@ function start(container, opt, PAGE) {
     $('oAcct').addEventListener('change', e => {
       if (!tradeMode()) { pickViewAccount(e.target.value); return; }   // trading off: it only picks whose fills are marked
       TR.account = e.target.value;
+      clearAccountNote();
       if (TR.armed) { setArmed(false); flash('Armed turned off: the account changed.', 'warn'); }
       renderTrading();
       viewAccount = TR.account; store.set('live-account-v1', TR.account);
@@ -1693,13 +1745,16 @@ function start(container, opt, PAGE) {
     /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
     chart.setOrderPreview(previewAt);
     chart.on('orderPlace', e => sendOrder(TR.side, OT.placeKind(TR.side, e.price, lastPrice()), e.price));
+    const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash('Not sent: that order is not on ' + TR.account + '.', 'error'); renderTrading(); return true; };
     chart.on('orderMove', e => {
       if (!ready()) { renderTrading(); return; }
+      if (notShown(e.id)) return;
       send({ type: 'change', id: e.id, price: e.price });
       flash('Moving order ' + e.id + ' to ' + U.fmtPrice(e.price, precisionOf()), '');
     });
     chart.on('orderCancel', e => {
       if (!ready()) return;
+      if (notShown(e.id)) return;
       send({ type: 'cancel', id: e.id });
       flash('Cancelling order ' + e.id, '');
     });
@@ -1730,8 +1785,7 @@ function start(container, opt, PAGE) {
     // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
     // since the drop hide the IB (a 'gap') rather than leave a stale one up
     if (D.m1) updateIB(false);
-    // the volume profile moves to the new session at 18:00 ET on the clock, before its first trade
-    if (D.vp && D.vp.advance(etNow())) vpLegend();
+    // the volume profile keeps its session until the next session's first trade (1.6.1): nothing moves it on the clock
     vpNote(); vpLegend();
   }, 500);
 

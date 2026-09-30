@@ -24,6 +24,15 @@ const BASE_PORT = +(process.env.VP_SMOKE_PORT || 8851);
 const errors = [];
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
 const check = (ok, m) => { if (!ok) fail(m); else console.log('  ok   ' + m); };
+async function until(fn, what, ms) {
+  const end = Date.now() + (ms || 8000);
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > end) { fail('timed out: ' + what); return null; }
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
 
 /* Seconds to add to the real clock to stand at hh:mm New York time on the most recent day with a regular session. */
 function offsetTo(hh, mm) {
@@ -107,6 +116,7 @@ const state = p => p.evaluate(() => {
     // the Session / RTH switch in the profile's gear panel (Indicators menu, 1.6.0), when that panel is open
     pressed: (() => { const b = [...document.querySelectorAll('#indBody [data-act="opt"][data-id="vp"]')]; return b.length ? b.filter(x => x.getAttribute('aria-pressed') === 'true').map(x => x.dataset.v) : null; })(),
     note: document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent,
+    day: vp && vp.day !== null ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(vp.day * 86400000).getUTCDay()] : null,   // the session's trading day (1.6.1)
   };
 });
 /* Pixels of the profile's colors on the canvas: along the POC row, and in the column just left of the plot's right edge. */
@@ -170,7 +180,8 @@ try {
   check(s1.total === s1.expect.session && s1.total > 0, 'session profile holds every trade from 18:00 ET the page got: ' + s1.total + ' = ' + s1.expect.session);
   check(await p.textContent('#indCount') === '6/6', 'Indicators count 6/6');
   const fmt = v => U.fmtPrice(v, 2);
-  check(s1.legend === 'POC ' + fmt(s1.poc) + ' · VA ' + fmt(s1.va[0]) + ' to ' + fmt(s1.va[1]), 'legend: ' + s1.legend);
+  const today = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(U.zoneSeconds(Date.now() / 1000 + off) * 1000).getUTCDay()];
+  check(s1.legend === 'POC ' + fmt(s1.poc) + ' · VA ' + fmt(s1.va[0]) + ' to ' + fmt(s1.va[1]) + ' (' + today + ')' && s1.day === today, 'legend, with the session\'s day (1.6.1): ' + s1.legend);
   check(s1.va[0] <= s1.poc && s1.poc <= s1.va[1], 'VAL <= POC <= VAH');
   check(px1.pocN > 20 && px1.pocLast >= px1.right - 2 && px1.pocFirst >= px1.right - px1.maxW - 3 && px1.pocFirst <= px1.right - px1.maxW * 0.5,
     'POC row drawn from the right edge, about ' + CE.VP_WIDTH * 100 + '% of the plot wide: device x ' + px1.pocFirst + ' to ' + px1.pocLast + ' (edge ' + px1.right + ', full width ' + Math.round(px1.maxW) + ')');
@@ -190,7 +201,7 @@ try {
   const s2 = await state(p), px2 = await pixels(p);
   check(s2.rth === true && s2.total === s2.expect.rth && s2.total > 0 && s2.total < s1.total, 'RTH profile holds exactly the trades from 9:30 ET: ' + s2.total + ' = ' + s2.expect.rth + ' (session ' + s1.total + ')');
   check(s2.low === s2.expect.rthLow && s2.high === s2.expect.rthHigh, 'RTH low and high are those of the trades from 9:30: ' + s2.low + ' to ' + s2.high);
-  check(s2.legend === 'POC ' + fmt(s2.poc) + ' · VA ' + fmt(s2.va[0]) + ' to ' + fmt(s2.va[1]) && s2.legend !== s1.legend, 'legend follows: ' + s2.legend);
+  check(s2.legend === 'POC ' + fmt(s2.poc) + ' · VA ' + fmt(s2.va[0]) + ' to ' + fmt(s2.va[1]) + ' (' + today + ')' && s2.legend !== s1.legend, 'legend follows: ' + s2.legend);
   check(JSON.stringify(px2.column) !== JSON.stringify(px1.column), 'RTH draws differently at the right edge: ' + JSON.stringify(px2.column));
   check(await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.vp.session) === 'rth' && await p.evaluate(() => { const x = JSON.parse(localStorage.getItem('live-indicators-v2')).main.ind.vp; return x.on && x.shown; }),
     'both saved for the main pane');
@@ -287,6 +298,162 @@ try {
     await label(q, 'SAMPLE DATA (fake bridge), not market data. 1m: profile from the first live trade');
     await q.screenshot({ path: path.join(SHOTS, 'vp-m1-live-only-sample.png') });
     await ctx2.close(); br2.kill();
+  }
+
+  /* ---------------- 1.6.1 (Anthony's ruling 2026-09-30): after the session ends the profile keeps the last session
+     until the next session's first trade. The sample bridge trades around the clock, so the page here drops every
+     trade while the market is closed (Friday 17:00 to Sunday 18:00 ET), and asks for enough tick history to reach the
+     last session (a test hook on its subscribe: loading ticks back to 18:00 for minute views is another branch). */
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dowOf = bt => new Date(bt * 1000).getUTCDay();
+  const trades = pg => pg.evaluate(() => window.__kept.slice());   // the trades the page kept (after the closed-market filter)
+  const etNowOf = pg => pg.evaluate(() => window.ChartEngine.util.zoneSeconds(Date.now() / 1000));
+  async function closedContext(offset, closed, tickHours) {
+    const ctx = await context(offset);
+    await ctx.addInitScript(`(() => {
+      const closed = ${JSON.stringify(closed)};
+      window.__open = ${closed.gate ? 'false' : 'true'}; window.__kept = [];
+      const shut = t => closed.spans.some(([a, b]) => t >= a && t < b);
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (d) {
+        if (typeof d === 'string' && d.startsWith('{"type":"subscribe"')) { const m = JSON.parse(d); m.tickHours = ${tickHours}; d = JSON.stringify(m); }
+        return send.call(this, d);
+      };
+      const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+      Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return desc.get.call(this); }, set(fn) {
+        desc.set.call(this, ev => {
+          if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"hello"')) window.__kept = [];
+          if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); m.ticks = m.ticks.filter(x => !shut(x[0])); if (m.root === 'NQ') for (const x of m.ticks) window.__kept.push(x); return fn({ data: JSON.stringify(m) }); }
+          if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"tick"')) { const m = JSON.parse(ev.data); if (shut(m.t) || !window.__open) return; if (m.root === 'NQ') window.__kept.push([m.t, m.p, m.v || 0]); }
+          return fn(ev);
+        });
+      } });
+      try { localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } })); } catch (e) {}
+    })();`);
+    return ctx;
+  }
+  /* Seconds to add to the real clock to stand at hh:mm:ss New York time on the most recent past day `want` accepts. */
+  function offsetAt(hh, mm, ss, want) {
+    const now = Date.now() / 1000, today = Math.floor(U.zoneSeconds(now) / 86400);
+    for (let back = 0; back < 40; back++) {
+      const bt = (today - back) * 86400 + hh * 3600 + mm * 60 + ss;
+      if (!want(bt)) continue;
+      let unix = bt - (U.zoneSeconds(now) - now);
+      unix = bt - (U.zoneSeconds(unix) - unix);
+      if (unix > now) continue;
+      return Math.round(unix - now);
+    }
+    return null;
+  }
+  const pickHours = async (pg, v) => { await pg.click('#indBtn'); await pg.click('#indBody [data-act="gear"][data-id="vp"]'); await pg.click('#indBody [data-act="opt"][data-id="vp"][data-v="' + v + '"]'); await pg.keyboard.press('Escape'); await pg.waitForTimeout(400); };
+
+  /* The last session with trades before `cut`, counted by hand from the trades the page kept: the full session
+     (18:00 to 17:00, the engine's trading day) or RTH (9:30 to 16:00 on a stock market day). */
+  function lastSession(list, cut, rth) {
+    const inRth = t => U.rthDay(t) && U.tod(t) >= 34200 && U.tod(t) < 57600;
+    const day = t => rth ? Math.floor(t / 86400) : U.tradeDay(t, 64800);
+    let d = null;
+    for (const [t, , v] of list) if (t < cut && v > 0 && (!rth || inRth(t))) d = day(t);
+    if (d === null) return { day: null, total: 0 };
+    return { day: DOW[dowOf(d * 86400)], total: list.reduce((a, [t, , v]) => a + (t < cut && v > 0 && (!rth || inRth(t)) && day(t) === d ? v : 0), 0) };
+  }
+
+  /* Saturday 12:00 ET: Friday's session and Friday's RTH stay up */
+  {
+    const offS = offsetAt(12, 0, 0, bt => dowOf(bt) === 6);
+    const brS = await startBridge(offS);
+    const satDay = Math.floor(U.zoneSeconds(Date.now() / 1000 + offS) / 86400) * 86400;   // Saturday 00:00
+    const friTo = satDay - 7 * 3600;                                                          // Friday 17:00
+    const ctxS = await closedContext(offS, { spans: [[friTo, satDay + 86400 + 18 * 3600]] }, 45);
+    const q = await openPage(ctxS, `http://localhost:${brS.port}/live/`);
+    const now0 = await etNowOf(q);
+    check(dowOf(now0) === 6 && U.tod(now0) >= 12 * 3600 && U.tod(now0) < 12 * 3600 + 120, 'Saturday clock: ' + U.fmtFull(now0));
+    let w = await state(q);
+    const got = await trades(q), friSession = lastSession(got, Infinity, false), friRth = lastSession(got, Infinity, true);
+    check(friSession.day === 'Fri' && friRth.day === 'Fri', 'the sample trades the page kept end on Friday: ' + JSON.stringify([friSession, friRth]));
+    check(w.on && w.has && w.day === 'Fri' && w.total === friSession.total && w.total > 0, 'Saturday: the profile keeps Friday\'s session, every Friday trade the page got: ' + w.total + ' = ' + friSession.total + ' (' + w.day + ')');
+    // no note, or the plain coverage note when the sample itself starts late in that session (its data has gaps)
+    const firstFri = got.find(([t]) => U.tradeDay(t, 64800) === U.tradeDay(friTo - 3600, 64800));
+    const late = firstFri && firstFri[0] - (friTo - 23 * 3600) > 600;
+    check(/ \(Fri\)$/.test(w.legend || '') && (late ? w.note === 'Volume profile from ' + U.fmtHM(firstFri[0]) + ' ET: the tick history does not reach back to 18:00 ET.' : w.note === ''),
+      'Saturday: the legend says (Fri); the note only says where the loaded ticks start: ' + w.legend + ' | ' + (w.note || 'no note'));
+    await q.waitForTimeout(1600);                                                                   // the timer runs: nothing moves it
+    check((await state(q)).total === friSession.total && (await state(q)).day === 'Fri', 'Saturday: still Friday after the timer ran');
+    await label(q, 'SAMPLE DATA (fake bridge), not market data. Saturday: Friday\'s profile kept');
+    await q.screenshot({ path: path.join(SHOTS, 'vp-saturday-friday-kept-sample.png') });
+    await pickHours(q, 'rth');
+    w = await state(q);
+    check(w.rth && w.day === 'Fri' && w.total === friRth.total && w.total > 0 && / \(Fri\)$/.test(w.legend || ''), 'Saturday, RTH: Friday 9:30 to 16:00, ' + w.total + ' = ' + friRth.total + ', ' + w.legend);
+    await q.reload(); await live(q);
+    w = await state(q);
+    check(w.rth && w.day === 'Fri' && w.total === friRth.total, 'Saturday, after a reload: Friday\'s RTH rebuilt from the tick history');
+    await pickHours(q, 'full');
+    await q.close(); await ctxS.close();
+
+    // a Saturday load with no tick history of the last session (the view's own ticks, nothing on Saturday): a note
+    const ctxN = await closedContext(offS, { spans: [[friTo, satDay + 86400 + 18 * 3600]] }, 8);
+    const q2 = await openPage(ctxN, `http://localhost:${brS.port}/live/`);
+    w = await state(q2);
+    check(w.on && !w.legend && w.total === 0 && /^Volume profile: no trades of the last session in the tick history this view loaded\.$/.test(w.note), 'Saturday, no Friday ticks loaded: no profile, a small note, no error: ' + w.note);
+    await ctxN.close(); brS.kill();
+  }
+
+  /* Sunday 17:59:45 ET: the last session stays over 18:00 on the clock; the next session's first trade switches to
+     Monday's. (At this clock the sample data has a gap on Friday, so the last session with trades is Thursday's: the
+     rule is the same.) */
+  {
+    const offU = offsetAt(17, 59, 45, bt => dowOf(bt) === 0);
+    const brU = await startBridge(offU);
+    const sunDay = Math.floor(U.zoneSeconds(Date.now() / 1000 + offU) / 86400) * 86400;
+    const friTo = sunDay - 2 * 86400 + 17 * 3600, open = sunDay + 18 * 3600;
+    const ctxU = await closedContext(offU, { spans: [[friTo, open]], gate: true }, 100);
+    const q = await openPage(ctxU, `http://localhost:${brU.port}/live/`);
+    let w = await state(q);
+    const prev = lastSession(await trades(q), open, false);
+    check(prev.day !== null && prev.day !== 'Sun' && prev.day !== 'Mon' && w.day === prev.day && w.total === prev.total && w.total > 0, 'Sunday before 18:00: the last session with trades (' + prev.day + '): ' + w.total + ' = ' + prev.total);
+    await until(async () => (await etNowOf(q)) >= open + 2, 'the page clock past Sunday 18:00', 30000);
+    w = await state(q);
+    check(w.day === prev.day && w.total === prev.total && new RegExp(' \\(' + prev.day + '\\)$').test(w.legend || ''), 'Sunday 18:00:02 on the clock, no trade yet: still ' + prev.day + ' (1.6.0 emptied it here): ' + w.legend);
+    const before = (await trades(q)).length;
+    await q.evaluate(() => { window.__open = true; });                                             // the first trades of Monday's session
+    await until(async () => (await trades(q)).length > before, 'a live trade after 18:00', 5000);
+    await q.waitForTimeout(700);
+    await q.evaluate(() => { window.__open = false; }); await q.waitForTimeout(300);          // hold the trades while counting
+    w = await state(q);
+    const mon = lastSession(await trades(q), Infinity, false);
+    check(mon.day === 'Mon' && w.day === 'Mon' && w.total === mon.total && w.total > 0 && / \(Mon\)$/.test(w.legend || ''), 'the first trade after Sunday 18:00 switches to Monday\'s session: ' + w.total + ' = ' + mon.total + ', ' + w.legend);
+    await label(q, 'SAMPLE DATA (fake bridge), not market data. Sunday 18:00: Monday\'s session from its first trade');
+    await q.screenshot({ path: path.join(SHOTS, 'vp-sunday-switch-sample.png') });
+    await ctxU.close(); brU.kill();
+  }
+
+  /* An NYSE holiday (a weekday with no stock market session, such as Labor Day), 12:00 ET: RTH keeps the last RTH
+     day over the weekend and the holiday; Session shows the holiday's own Globex session */
+  {
+    const offH = offsetAt(12, 0, 0, bt => dowOf(bt) > 0 && dowOf(bt) < 6 && !U.rthDay(bt));
+    if (offH === null) console.log('  (no NYSE holiday in the last 40 days: skipped)');
+    else {
+      const brH = await startBridge(offH);
+      const hDay = Math.floor(U.zoneSeconds(Date.now() / 1000 + offH) / 86400) * 86400;
+      let fri = hDay - 86400;
+      while (dowOf(fri) !== 5) fri -= 86400;
+      const closed = dowOf(hDay) === 1 ? [[fri + 17 * 3600, hDay - 6 * 3600]] : [];                  // a Monday holiday: the weekend before is closed
+      const ctxH = await closedContext(offH, { spans: closed }, 110);
+      const q = await openPage(ctxH, `http://localhost:${brH.port}/live/`);
+      await q.evaluate(() => { window.__open = false; });                                       // no live trades while counting
+      await pickHours(q, 'rth');
+      let w = await state(q);
+      const lastRth = lastSession(await trades(q), Infinity, true);
+      check(lastRth.day !== null && lastRth.day !== DOW[dowOf(hDay)] && w.rth && w.day === lastRth.day && w.total === lastRth.total && w.total > 0 && new RegExp(' \\(' + lastRth.day + '\\)$').test(w.legend || ''),
+        'NYSE holiday ' + U.fmtDate(hDay) + ', RTH: the last RTH day (' + lastRth.day + ') kept over the holiday, ' + w.total + ' = ' + lastRth.total + ', ' + w.legend);
+      await label(q, 'SAMPLE DATA (fake bridge), not market data. NYSE holiday: the last RTH kept');
+      await q.screenshot({ path: path.join(SHOTS, 'vp-holiday-rth-kept-sample.png') });
+      await pickHours(q, 'full');
+      w = await state(q);
+      const hol = lastSession(await trades(q), Infinity, false);
+      check(hol.day === DOW[dowOf(hDay)] && w.day === hol.day && w.total === hol.total, 'NYSE holiday, Session: the holiday\'s own Globex session (' + w.day + '), ' + w.total + ' = ' + hol.total);
+      await ctxH.close(); brH.kill();
+    }
   }
 } finally {
   await browser.close();

@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.6.1 (2026-09-30): the order account comes back after a reload or a reconnect, and the volume profile keeps the last session
+
+Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile (nt8/ is unchanged). Run `nt8\install.ps1`
+again after pulling. The Desk gets it with the new `live/live.js`, `live/live.css` and `src/chart-engine.js`
+(`live/order-ticket.js` is byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30.
+
+### The order account after a reload or a dropped connection (Anthony: "the account I was using", not Sim101)
+
+- **Restored when allowed.** On the trading page, when trading comes on (a page load, a PIN entry, a reconnect,
+  including the one after ChartBridge 0.3.4's 5 s lag reset) the order bar selects the account this tab is on: after
+  a load, the account last picked on this PC (`live-account-v1` under the storage prefix, written by every pick in
+  the order bar); after a reconnect that keeps the page, the account it was on, so a reconnect never switches the
+  account. It is used only if it is in the `tradeAccounts` list ChartBridge offers now. Otherwise the bar is on
+  Sim101 (or the first allowed account when Sim101 is not allowed, as before) with the note "Last account EVAL-1
+  not available, on Sim101." in the warning color; the stored pick is kept, so a later load tries it again. The rule
+  is `LivePrefs.orderAccount(allowed, wanted)` in live.js. This replaces 1.6.0's safety default ("the order account
+  is never read from storage") and answers the 1.6.0 open question (review 2, S2).
+- **Armed always starts off** after a load, a PIN entry and a reconnect. It is never saved or restored. It also
+  turns off if ChartBridge's list changes while trading and the account in use is no longer on it.
+- **Very visible.** Each time trading comes on, the Account picker gets a ring for about 3.6 s (purple, amber on the
+  fallback; a still ring with reduced motion) and the order bar's state row says "On EVAL-1, the last account
+  picked. Armed is off.", "Still on EVAL-1. Armed is off." after a reconnect, or the fallback note (8 s, the
+  fallback 15 s; cleared by a pick). The note takes what is left of that row and never wraps, and the ring is a
+  shadow, so neither moves the chart (checked at 1440 and 400 px).
+- **The account shown is the account used.** Every order path sends for `TR.account` and only after `ready()`, which
+  now also refuses ("The account shown is not the order account: nothing was sent.") if the picker does not show
+  `TR.account`. Checked: order bar Buy and Sell, click-trade and Shift+click (`orderPlace`), Flatten, Cancel all,
+  single cancel (the x) and modify (dragging a line). The x and the drag now also refuse an order that is not on the
+  account shown ("Not sent: that order is not on EVAL-1."), belt and braces: the chart only shows that account's
+  orders. While trading is off there is no order account at all (`TR.account` is empty). The fills follow the picker
+  as in 1.6.0.
+- **A pick while trading is off counts.** During a drop or the sign-in window the picker still switches the fills,
+  and now that account is also the one orders go to when trading comes back (if allowed), so the picker never jumps.
+  Its tooltip says so: "Trading is off: this picks whose fills the chart marks, and the account orders go to when
+  trading comes back on".
+- **Two tabs.** Each trading tab keeps its own account while it is open: tab A on EVAL-1 and tab B on EVAL-2 stay
+  on their own accounts through picks in the other tab and through reconnects. Storage holds the last pick made in
+  any tab, and a reload restores that last pick (tab A reloaded after tab B picked EVAL-2 comes back on EVAL-2, with
+  the note and the ring). The trading page therefore no longer follows another tab's pick through the storage event
+  (1.6.0 did while trading was off).
+- **The 1.5 fills choice is never an order account:** the trading page no longer reads `live-fill-account-v1`.
+- **The Desk's embed (`ChartLive.mount`) is unchanged:** it has no order account, its picker only picks fills, and
+  it still follows picks from other charts and tabs with its prefix.
+
+### The volume profile on weekends and holidays (Anthony: keep the last session until the next session's first trade)
+
+- After the session ends (the 17:00 ET close, over weekends and NYSE holidays) the profile keeps drawing the last
+  session it counted until the next session's first trade arrives, then switches to the new session, so a Friday can
+  be reviewed over the weekend. Both modes: Session keeps the last session through 18:00 and the weekend; RTH keeps
+  the day's RTH through the overnight until the next 9:30 trade on a stock market day (on Thanksgiving, Wednesday's
+  RTH stays until Friday 9:30). 1.6.0 emptied it at 18:00 on the clock and showed none on weekends and holidays.
+- **Legend:** the session's day at the end, "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", in the quiet grey; the
+  tooltip names the date.
+- **Built from what the page loaded** (`VolumeProfile.fromStore`): the last trade's session, or, while that holds
+  nothing (RTH before 9:30, a weekend, a holiday), one trading day earlier, at most 7 days back. A page loaded on a
+  weekend whose views loaded no ticks of the last session shows no profile and a small note ("Volume profile: no
+  trades of the last session in the tick history this view loaded."), never an error. Loading ticks back to 18:00
+  for minute views while the profile is on is on another branch, not here. The coverage note counts ticks that reach
+  earlier than asked.
+- **The IB is unchanged** (none on weekends and NYSE holidays): it does not share the profile's code.
+- Engine: `VolumeProfile` option `keep` (only a trade that counts moves it to a later session; `advance()` does
+  nothing), `startOfDay(d)`, `VolumeProfile.fromStore(store, opts)`. Without `keep` the engine counts as in 1.6.0.
+
+### Tests
+
+- New `test/order-account.test.js` (`orderAccount`: restored when allowed, Sim101 or the first allowed with the
+  missed account named, nothing picked, junk, always an allowed account; live.js: every order path through `ready()`
+  with the shown-account check, `TR.account` set only from `orderAccount`, the picker or cleared, Armed never from
+  storage, the trading page not following other tabs, no 1.5 key) and `test/vp-keep.test.js` (a Friday kept over the
+  weekend with the clock moving, the switch at Sunday 18:00's first trade, RTH through the overnight, Thanksgiving,
+  Christmas, `keep` off unchanged, `fromStore` with RTH before 9:30 and over a weekend and a holiday, empty stores).
+- `npm run smoke:orders`, a new 1.6.1 section: first visit on Sim101 with the ring and the note; pick DEMO-EVAL, arm,
+  reload with the PIN: DEMO-EVAL, Armed off, the ring, its fills, the chart not moved; then armed on the restored
+  account, Buy, Sell, Shift+click, a drag, the x, Cancel all and Flatten, with every message the page sent for
+  DEMO-EVAL and nothing on Sim101; a stored DEMO-EMPTY (known, not a trade account): Sim101 with the note, orders to
+  Sim101; two tabs through a pick in the other tab, a dropped connection ("Still on", Armed off in both) and a reload
+  (the last pick); 400 px with the note on one line.
+- `npm run smoke:vp`, new: Saturday 12:00 ET (the sample bridge's trades dropped while the market is closed, and the
+  page's subscribe asking for enough ticks, a test hook): Friday's session and RTH kept, the timer moving nothing,
+  after a reload too, "(Fri)"; a Saturday load with no Friday ticks: the note; Sunday 17:59:45: kept over 18:00 on the
+  clock, then Monday's session from the first trade after 18:00; the most recent NYSE holiday (Labor Day): RTH kept
+  from the last RTH day, Session the holiday's own Globex session. `npm run smoke:embed`: a pick saved by another tab
+  still followed by both mounted panes, and no account note or ring in the embed.
+- **Changed because the old behaviour changed:** `smoke:vp`'s two legend checks now expect the day, " (Tue)";
+  `smoke:orders`' trading-off tooltip check now expects the new tooltip text (the pick is also the account used when
+  trading comes back). No other existing check changed; `test/order-ticket.test.js` and `live/order-ticket.js` are
+  untouched.
+- Order-path files changed: `live/live.js` (account handling, `ready()`, the chart's move and cancel handlers) and
+  `test/orders-smoke.mjs`. Unchanged: `live/order-ticket.js`, `live/pin.js`, `test/order-ticket.test.js`,
+  `test/fake-bridge.mjs`, `test/fake-orders.mjs`, `nt8/`.
+
 ## 1.6.0 (2026-09-29): the Indicators menu "E2", a chip strip per pane, one account picker, and the volume profile
 
 Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile. The engine adds the volume profile (below) and
