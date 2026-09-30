@@ -149,14 +149,16 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 
 - **Armed** switch. Off after every page load, and it turns itself off when the account or instrument
   changes, the connection drops or ChartBridge turns trading off. While it is on, the bar and the chart are
-  outlined in amber, the legend shows ARMED and the tab title starts with ARMED. **Nothing trades while it
+  outlined in amber, the legend shows ARMED with the account and the tab title starts with ARMED and names the
+  instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
   is off**, and nothing asks for confirmation while it is on: one click sends the order.
 - **Account** (only `tradeAccounts`), **Qty** (1 to that instrument's cap). The chart marks this account's fills
-  (1.6.0). After a reload, a PIN entry or a reconnect the bar comes back on the account last picked on this PC when
-  `tradeAccounts` still has it, else on Sim101 with the note "Last account ... not available, on Sim101" (1.6.1);
-  the picker is ringed for a moment and a note says which account orders go to. Armed is always off then. Each tab
-  keeps its own account while open; a reload starts on the last one picked in any tab. With trading off the picker
-  lists every account ChartBridge knows and still switches the fills.
+  (1.6.0). When trading comes on the bar is on the account this tab was using (1.6.1): after a reconnect or a PIN
+  entry the one it was on, after a reload of the tab the one that tab was on, in a new tab the last one picked on
+  this PC; always only if `tradeAccounts` still has it, else Sim101 with the note "Last account ... not available,
+  on Sim101". The picker is ringed for a moment and a note says which account orders go to. Armed is always off
+  then. Each tab keeps its own account. Other accounts with orders or a position on the instrument are named in the
+  bar. With trading off the picker lists every account ChartBridge knows and still switches the fills.
 - **Buy MKT / Sell MKT**.
 - **Shift+click** a price on the chart to place a limit or stop at that price. The side is the bar's
   Buy / Sell choice; the kind follows from where you click: a better price than the last trade is a limit

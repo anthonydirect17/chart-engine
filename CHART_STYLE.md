@@ -152,9 +152,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   (price minus half a tick to plus half a tick) in whole device pixels, with a 1 px gap once rows are 4 px or taller;
   rows thinner than a pixel share it, the bar as long as the largest of them and the POC winning, so it always
   shows; the POC bar is at least 2 CSS px tall, centred on its row. Off by default on every pane; the Indicators menu adds it (Volume group), and its gear panel holds a Session (from 18:00 ET) or RTH (9:30:00 up to 16:00:00 ET, 13:00 on NYSE early-close days, none on
-  weekends and NYSE holidays) choice. After the session ends (the 17:00 ET close, weekends, holidays) the last
-  session's profile stays until the next session's first trade (for RTH the next 9:30 trade), so a Friday can be
-  reviewed over the weekend (1.6.1, Anthony's ruling 2026-09-30); the IB keeps its own rule. Candles over the rows
+  weekends and NYSE holidays) choice. Over weekends and NYSE holidays the last session's profile stays until the next
+  session's first trade, so a Friday can be reviewed over the weekend, also after a load or a reconnect (the page then
+  loads that session's ticks); on weekday evenings it moves at 18:00 as before (1.6.1, Anthony's ruling 2026-09-30);
+  the IB keeps its own rule. Candles over the rows
   read lower than on the bare ground (default: bear 1.99:1 over the value area, 2.42:1 over the other rows); their
   floor there is open for Anthony. The legend adds "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", the POC price
   in the gold and the session's day in the quiet grey.

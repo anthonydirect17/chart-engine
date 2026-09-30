@@ -65,8 +65,9 @@ trading page, where each tab keeps its own order account).
 created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (1.6.0); today there is one, the volume profile's hours: `pane.setIndicatorOption('vp', 'session', 'rth')` for RTH
 9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default). It returns false for an option or value
 that does not exist. `indicatorOptions('vp')` reads it back (`{ session: 'full' }`). The Volume profile's gear panel in the
-Indicators menu has the same Session / RTH switch. After a session ends the profile keeps it (legend "(Fri)") until
-the next session's first trade (1.6.1), in a mounted chart too.
+Indicators menu has the same Session / RTH switch. Over weekends and NYSE holidays the profile keeps the last session
+(legend "(Fri)") until the next session's first trade, and while the market is closed a mounted chart with the profile
+on asks ChartBridge for that session's ticks too, up to 120 hours back (1.6.1; 48 with a ChartBridge older than 1.6.1's).
 
 | Option | Default | What it does |
 |---|---|---|
