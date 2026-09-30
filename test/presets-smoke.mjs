@@ -3,9 +3,12 @@
 //   npm run smoke:presets   (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
 // Checks: the Colors panel's two preset groups (chart: bull, bear and background; indicator: every indicator color)
 // save, replace by name, pick, rename and delete, and survive a reload and a second tab; VWAP is no longer in the
-// Colors panel but in its gear, as are the levels', the IB's and the profile's colors, drawn at once; the order bar is
-// the 1.5.2 bar on the dark grounds and goes light with a light chart, Buy, Sell and Armed readable; the Armed switch,
-// Buy and Flatten still work the same way. Screenshots of each, light and dark, go to SHOTS (default test/out).
+// Colors panel but in its gear, as are the levels', the IB's and the profile's colors, drawn at once; a VWAP color
+// saved before 1.9.0 survives a ground change and a reload (review R1); a chart preset brings its indicator preset
+// (the "Include the current indicator colors" box), and one deleted since is ignored; the order bar is the 1.5.2 bar
+// on the default ground and matches every other ground (review 1's 21 grounds: every text at full strength 4.5:1,
+// every dimmed control at least as strong as on the house bar, disarmed, armed and trading off); the Armed switch,
+// Buy and Flatten still work the same way. Screenshots of each go to SHOTS (default test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -104,7 +107,86 @@ const px = s => { const m = s.match(/[\d.]+/g).map(Number); return { r: m[0], g:
 const hexOf = s => '#' + ['r', 'g', 'b'].map(k => Math.round(px(s)[k]).toString(16).padStart(2, '0')).join('').toUpperCase();
 const overRgb = (top, under) => { const t = px(top), u = px(under); return '#' + ['r', 'g', 'b'].map(k => Math.round(t[k] * t.a + u[k] * (1 - t.a)).toString(16).padStart(2, '0')).join('').toUpperCase(); };
 
+/* Every text in the order bar and the status line, per ground and state, as review 1 measured it: the text over its
+   own background and what is behind it, faded by its opacity. States: disarmed and armed, each with the state row's
+   notes shown, and each with every control disabled (trading off). */
+const REVIEW_GROUNDS = ['#080B10', '#000000', '#1B2433', '#F5F7FA', '#FFFFFF', '#E0E0E0', '#D0D0D0', '#C8C8C8', '#BBBBBB', '#B0B0B0', '#A0A0A0',
+  '#808080', '#FFF8E1', '#FFE0E0', '#E8F5E9', '#E3F2FD', '#D0D8E0', '#F0E6FF', '#FFFF00', '#00FF00', '#FF00FF'];
+const contrastSweep = (p, grounds) => p.evaluate(grounds => {
+  const parse = s => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return [0, 0, 0, 0]; const a = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number); return [a[0], a[1], a[2], a.length > 3 ? a[3] : 1]; };
+  const over = (f, b) => { const a = f[3]; return [f[0] * a + b[0] * (1 - a), f[1] * a + b[1] * (1 - a), f[2] * a + b[2] * (1 - a), 1]; };
+  const lum = c => { const f = v => { v /= 255; return v <= .03928 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4); }; return .2126 * f(c[0]) + .7152 * f(c[1]) + .0722 * f(c[2]); };
+  const cr = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+  const backdrop = el => { const chain = []; for (let e = el.parentElement; e; e = e.parentElement) chain.push(e); let b = [255, 255, 255, 1]; for (const e of chain.reverse()) { const bg = parse(getComputedStyle(e).backgroundColor); if (bg[3] > 0) b = over(bg, b); } return b; };
+  const ownBg = (el, b) => { const bg = parse(getComputedStyle(el).backgroundColor); return bg[3] > 0 ? over(bg, b) : b; };
+  const opac = el => { let o = 1; for (let e = el; e && e !== document.body; e = e.parentElement) o *= +getComputedStyle(e).opacity; return o; };
+  const setBg = v => { const hex = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); hex.value = v; hex.dispatchEvent(new Event('input', { bubbles: true })); };
+  const $ = id => document.getElementById(id);
+  const scan = () => [...document.querySelectorAll('.obar-ground, .obar-ground *, #statusMsg')].filter(e => e.offsetParent !== null || e.id === 'armBtn').flatMap(el => {
+    const own = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+    if (!own && !/^(INPUT|SELECT)$/.test(el.tagName)) return [];
+    const fg = parse(getComputedStyle(el).color), bd = backdrop(el), bg = ownBg(el, bd), o = opac(el), fgc = over(fg, bg);
+    const final = o < 1 ? over([fgc[0], fgc[1], fgc[2], o], bd) : fgc, bgFinal = o < 1 ? over([bg[0], bg[1], bg[2], o], bd) : bg;
+    return [{ id: el.id || (typeof el.className === 'string' && el.className) || el.tagName, text: (el.textContent || el.value || '').trim().slice(0, 24), cr: +cr(final, bgFinal).toFixed(2), o: +o.toFixed(3) }];
+  });
+  const notes = on => {
+    $('oLegs').textContent = on ? 'No stop working' : ''; $('oLegs').classList.toggle('uncovered', on);
+    $('oOther').textContent = on ? 'Another account on MNQ: LONG 1' : ''; $('oOther').classList.toggle('live', on);
+    $('oAcctNote').textContent = on ? 'Orders go to Sim101' : ''; $('oAcctNote').classList.toggle('warn', on);
+    $('oCancel').textContent = on ? 'Cancelling 2 orders' : ''; $('oCancel').classList.toggle('away', on);
+    $('oOff').textContent = on ? 'Trading off: reason' : ''; $('oOff').hidden = !on;
+    $('oPos').innerHTML = on ? '<span class="long">LONG 1</span> @ 100.00 <span class="profit">+2.00 pt +$4.00</span> <span class="loss">-1.00 pt</span> <span class="short">SHORT</span>' : 'Flat';
+  };
+  const out = {};
+  for (const g of grounds) {
+    setBg(g);
+    const r = {};
+    for (const armed of [false, true]) {
+      if (($('armBtn').getAttribute('aria-checked') === 'true') !== armed) $('armBtn').click();
+      notes(true);
+      r[armed ? 'armed' : 'disarmed'] = scan();
+      const dis = [...$('obar').querySelectorAll('button, input, select')].filter(e => e !== $('oAcct'));
+      dis.forEach(e => { e.disabled = true; });
+      r[armed ? 'armed, trading off' : 'disarmed, trading off'] = scan();
+      dis.forEach(e => { e.disabled = false; });
+      notes(false);
+    }
+    if ($('armBtn').getAttribute('aria-checked') === 'true') $('armBtn').click();
+    out[g] = r;
+  }
+  setBg('#080B10');
+  return out;
+}, grounds);
+
+/* A fresh browser profile at `origin` with only `seed` in its storage, loaded and live. */
+async function freshPage(seed) {
+  const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await c.addInitScript(`(() => { const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000}; })();`);
+  await c.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+  const p = await c.newPage();
+  p.on('pageerror', e => fail('pageerror: ' + e.message));
+  await p.goto(URL); await live(p);
+  await p.evaluate(seed => { localStorage.clear(); for (const k in seed) localStorage.setItem(k, JSON.stringify(seed[k])); }, seed);
+  await p.reload(); await live(p);
+  return { p, close: () => c.close() };
+}
+
 try {
+  /* ---------------- review R1: a VWAP color saved before 1.9.0, then a ground change first, then a reload */
+  {
+    const { p, close } = await freshPage({ 'live-colors-v1': { up: '#4B9CD3', down: '#6D28D9', vwap: '#FFCC00', bg: '#080B10' } });
+    check((await theme(p)).vwap === '#FFCC00', 'R1: the 1.8 VWAP color #FFCC00 drawn after the upgrade');
+    const ic = await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicator-colors-v1')));
+    check(ic && ic.vwap === '#FFCC00', 'R1: copied into live-indicator-colors-v1 on page start: ' + JSON.stringify(ic));
+    await openColors(p); await p.click('.ce-ground[data-bg="black"]'); await p.waitForTimeout(150); await closeColors(p);
+    const cols = await p.evaluate(() => JSON.parse(localStorage.getItem('live-colors-v1')));
+    check(cols.bg === '#000000' && !('vwap' in cols), 'R1: the Black ground written by the Colors panel, which no longer keeps the VWAP: ' + JSON.stringify(cols));
+    await p.reload(); await live(p);
+    const t1 = await theme(p);
+    check(t1.vwap === '#FFCC00' && t1.bg === '#000000', 'R1: after the ground change and a reload the VWAP is still #FFCC00: ' + JSON.stringify(t1));
+    await close();
+  }
+
   const a = await openPage();
   await a.waitForFunction(() => !document.getElementById('armBtn').disabled, null, { timeout: 15000 });
 
@@ -121,11 +203,15 @@ try {
   /* ---------------- save a white chart look, then a dark one */
   await a.click('.ce-ground[data-bg="light"]');
   await a.fill('.ce-theme-panel input[data-hex="up"]', '#1F6FB2'); await a.waitForTimeout(80);
+  check(await a.isChecked(group('chart') + ' .pr-inc-in') && (await a.textContent(group('chart') + ' .pr-inc')).includes('Include the current indicator colors') && !(await a.$(group('indicator') + ' .pr-inc-in')),
+    'the chart group offers "Include the current indicator colors", ticked by default (Q4); the indicator group does not');
+  await a.uncheck(group('chart') + ' .pr-inc-in');                  // first without: nothing linked, no indicator preset made
   await a.fill(group('chart') + ' .pr-name-in', 'White chart');
   check((await a.textContent(group('chart') + ' [data-act="save"]')) === 'Save', 'a new name: Save');
   await a.press(group('chart') + ' .pr-name-in', 'Enter'); await a.waitForTimeout(150);
   check(JSON.stringify(await names(a, 'chart')) === '["White chart"]' && JSON.stringify(await pressed(a, 'chart')) === '["White chart"]', 'Enter saved "White chart", shown as in use: ' + await names(a, 'chart'));
   check((await note(a, 'chart')) === 'Saved White chart.' && (await a.inputValue(group('chart') + ' .pr-name-in')) === '', 'note "Saved White chart.", the box emptied');
+  check(JSON.stringify(await names(a, 'indicator')) === '[]' && !('ind' in (await a.evaluate(() => JSON.parse(localStorage.getItem('live-color-presets-v1')))).chart[0]), 'box unticked: no link kept, no indicator preset made');
   await a.click('.ce-ground[data-bg="dark"]'); await a.fill('.ce-theme-panel input[data-hex="up"]', '#4B9CD3'); await a.waitForTimeout(80);
   await a.fill(group('chart') + ' .pr-name-in', 'Dark desk'); await a.click(group('chart') + ' [data-act="save"]'); await a.waitForTimeout(150);
   check(JSON.stringify(await pressed(a, 'chart')) === '["Dark desk"]', 'the dark look saved and in use; White chart is not');
@@ -169,11 +255,47 @@ try {
   check(ob.ground === 'rgb(8, 11, 16)' && ob.bar === 'rgb(15, 21, 29)' && ob.buy === 'rgb(61, 220, 151)' && ob.sell === 'rgb(255, 122, 122)'
     && ob.buyBg === 'rgba(61, 220, 151, 0.08)' && ob.sellBg === 'rgba(255, 122, 122, 0.08)', 'dark ground: the 1.5.2 order bar (#080B10, #0F151D, Buy #3DDC97, Sell #FF7A7A): ' + JSON.stringify(ob));
   check(JSON.stringify(ob) === JSON.stringify(base), 'dark ground: the order bar exactly as before the presets were used');
-  for (const g of ['#000000', '#1B2433', '#888888']) {
+  // every other ground: the top bar matches it (Anthony: Black a black bar, Blue-grey a blue-grey one), as chromeColors
+  const rgbOf = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
+  for (const g of ['#000000', '#1B2433', '#888888', '#FFF8E1']) {
     await setBg(a, g); await a.waitForTimeout(60);
-    const o = await obar(a);
-    check(o.bar === base.bar && o.buy === base.buy && o.sell === base.sell && o.ground === base.ground, g + ': the order bar keeps the 1.5.2 colors (a dark or mid ground)');
+    const o = await obar(a), v = U.chromeColors(U.buildTheme({ bg: g }));
+    check(o.ground === rgbOf(v['--bg']) && o.toolbar === o.ground && o.bar === rgbOf(v['--s2']) && o.buy === rgbOf(v['--buy']) && o.sell === rgbOf(v['--sell']) && o.scheme === v['--scheme'],
+      g + ': the toolbar and the order bar match the ground (' + v['--bg'] + ', bar ' + v['--s2'] + ', Buy ' + v['--buy'] + ', Sell ' + v['--sell'] + ')');
   }
+  await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(100);
+  check(JSON.stringify(await obar(a)) === JSON.stringify(base), 'back on the default ground: the order bar exactly as before');
+
+  /* ---------------- review 1's 21 grounds: every text at full strength 4.5:1, every dimmed control at least as strong
+     as on the house bar (disarmed Buy 2.85, Sell 2.28, Flatten 4.01; trading off Buy 2.51), in every state */
+  await closeColors(a);
+  const sweep = await contrastSweep(a, REVIEW_GROUNDS);
+  fs.writeFileSync(path.join(SHOTS, 'presets-contrast.json'), JSON.stringify(sweep));
+  const house = sweep['#080B10'], weak = [], dimWeak = [], mins = {};
+  for (const g of REVIEW_GROUNDS) for (const st of Object.keys(house)) {
+    const els = sweep[g][st];
+    if (els.length !== house[st].length) { weak.push(g + ' ' + st + ': ' + els.length + ' texts, ' + house[st].length + ' on the house bar'); continue; }
+    els.forEach((e, i) => {
+      const h = house[st][i], kind = e.o < 1 ? 'dim' : 'full', key = st + (kind === 'dim' ? ' (dimmed)' : '');
+      if (e.id !== h.id || (e.o < 1) !== (h.o < 1)) { weak.push(g + ' ' + st + ' #' + i + ' ' + e.id + ' vs ' + h.id); return; }
+      if (kind === 'full' && e.cr < 4.5) weak.push(g + ' ' + st + ' ' + e.id + ' "' + e.text + '" ' + e.cr);
+      if (kind === 'dim' && e.cr < h.cr) dimWeak.push(g + ' ' + st + ' ' + e.id + ' ' + e.cr + ' < house ' + h.cr);
+      if (!mins[key] || e.cr < mins[key].cr) mins[key] = { cr: e.cr, g, id: e.id };
+    });
+  }
+  check(weak.length === 0, 'full strength: every order bar and status text reads 4.5:1 or more on the 21 grounds in 4 states: ' + weak.slice(0, 6).join('; '));
+  check(dimWeak.length === 0, 'dimmed (disarmed, trading off): every control at least as strong as on the house bar on the 21 grounds: ' + dimWeak.slice(0, 6).join('; '));
+  const dimHouse = st => Object.fromEntries(house[st].filter(e => e.o < 1).map(e => [e.id + (e.text ? ' ' + e.text : ''), e.cr]));
+  console.log('       house bar dimmed, disarmed: ' + JSON.stringify(dimHouse('disarmed')));
+  console.log('       house bar dimmed, trading off: ' + JSON.stringify(dimHouse('disarmed, trading off')));
+  for (const k of Object.keys(mins)) console.log('       min ' + k + ': ' + mins[k].cr + ' (' + mins[k].g + ', ' + mins[k].id + ')');
+  // the top bar on the four grounds and two custom ones, disarmed
+  for (const [g, name] of [['#080B10', 'dark'], ['#000000', 'black'], ['#1B2433', 'blue-grey'], ['#F5F7FA', 'light'], ['#808080', 'custom-808080'], ['#FFF8E1', 'custom-FFF8E1']]) {
+    await setBg(a, g); await a.mouse.move(700, 600); await a.waitForTimeout(200);
+    await a.screenshot({ path: path.join(SHOTS, 'presets-top-bar-' + name + '.png'), clip: { x: 0, y: 0, width: 1440, height: 330 } });
+  }
+  await setBg(a, '#080B10'); await a.waitForTimeout(60);
+  await openColors(a);
   await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(100);
 
   /* ---------------- rename (Escape keeps the panel open), delete after a second click */
@@ -245,7 +367,9 @@ try {
   await openColors(a);
   await a.fill(group('indicator') + ' .pr-name-in', 'Light indicators'); await a.press(group('indicator') + ' .pr-name-in', 'Enter'); await a.waitForTimeout(120);
   check(JSON.stringify(await names(a, 'indicator')) === '["Dark indicators","Light indicators"]', 'a second indicator preset for the light chart');
+  await a.check(group('chart') + ' .pr-inc-in');
   await a.fill(group('chart') + ' .pr-name-in', 'White chart'); await a.press(group('chart') + ' .pr-name-in', 'Enter'); await a.waitForTimeout(120);
+  check((await note(a, 'chart')) === 'Saved White chart, with the indicator preset Light indicators.', 'Q4: White chart saved, linked to the indicator preset holding the colors in use: ' + await note(a, 'chart'));
   await shot(a, 'presets-colors-panel-light-two-groups');
   await closeColors(a);
 
@@ -266,6 +390,32 @@ try {
   t = await theme(a);
   check(t.bg === '#F5F7FA' && t.vwap === '#6D28D9', 'after a reload: the light chart and its VWAP color');
   check((await levelColor(a, 'PDH')) === '#00AAFF', 'after a reload: the level colors in use');
+
+  /* ---------------- Q4: a chart preset brings its indicator preset; a new set is saved as one; a deleted one is ignored */
+  const stored = () => a.evaluate(() => JSON.parse(localStorage.getItem('live-color-presets-v1')));
+  let all = await stored();
+  const lightInd = all.indicator.find(x => x.name === 'Light indicators');
+  check(all.chart.find(x => x.name === 'White chart').ind === lightInd.id && !('ind' in all.chart.find(x => x.name === 'Dark desk')), 'Q4: White chart keeps the id of Light indicators; Dark desk (saved unticked) has none');
+  await a.click(rowBtn('indicator', 'Dark indicators', 'pick')); await a.waitForTimeout(120);
+  check((await theme(a)).vwap === '#FF8800', 'Dark indicators in use (VWAP #FF8800)');
+  await a.click(rowBtn('chart', 'White chart', 'pick')); await a.waitForTimeout(150);
+  t = await theme(a);
+  check(t.bg === '#F5F7FA' && t.vwap === '#6D28D9' && JSON.stringify(await pressed(a, 'indicator')) === '["Light indicators"]' && (await note(a, 'chart')) === 'Using White chart, with Light indicators.',
+    'Q4: picking White chart also applies Light indicators: ' + JSON.stringify(t) + ' ' + await note(a, 'chart'));
+  await closeColors(a);
+  await openGear(a, 'vwap'); await typeHex(a, '.ind-set[data-id="vwap"] input[data-hk="vwap"]', '#12AB34'); await closeMenu(a);
+  await openColors(a);
+  await a.fill(group('chart') + ' .pr-name-in', 'Linked new'); await a.press(group('chart') + ' .pr-name-in', 'Enter'); await a.waitForTimeout(150);
+  all = await stored();
+  const made = all.indicator.find(x => x.name === 'Linked new');
+  check(made && made.colors.vwap === '#12AB34' && all.chart.find(x => x.name === 'Linked new').ind === made.id && /with the indicator colors saved as the indicator preset Linked new\.$/.test(await note(a, 'chart')),
+    'Q4: indicator colors no preset holds are saved as a new indicator preset under the chart preset\'s name, and linked: ' + await note(a, 'chart'));
+  // the linked indicator preset deleted: the chart preset still works, no link, no error
+  await a.click(rowBtn('indicator', 'Light indicators', 'delete')); await a.click(group('indicator') + ' [data-act="delete-ok"]'); await a.waitForTimeout(120);
+  await a.click(rowBtn('chart', 'Dark desk', 'pick')); await a.waitForTimeout(120);
+  await a.click(rowBtn('chart', 'White chart', 'pick')); await a.waitForTimeout(150);
+  t = await theme(a);
+  check(t.bg === '#F5F7FA' && t.vwap === '#12AB34' && (await note(a, 'chart')) === 'Using White chart.', 'Q4: White chart after Light indicators was deleted: its chart colors, the indicator colors left as they were, no error: ' + JSON.stringify(t));
   await closeColors(a);
   await b.close();
 } finally {

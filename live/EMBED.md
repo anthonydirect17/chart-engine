@@ -96,7 +96,7 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
-| `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors), rename(group, id, name), remove(group, id), shared }`, each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
+| `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors, ind), rename(group, id, name), remove(group, id), shared }` (`ind`: a chart preset's linked indicator preset id), each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
 
 Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
 on up to every 5 s. Before the first connection the chart shows "Waiting for ChartBridge"; after a drop it shows

@@ -29,9 +29,10 @@
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
  *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
  *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
- *                       live-colors-v1 up to 1.8 is read once, while this key does not exist yet.
- *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg } }], indicator: [{ id, name, colors }] } the
- *                       named presets (1.9.0), through presetStore below so a store shared by every PC can replace it
+ *                       live-colors-v1 up to 1.8 is copied in once, on page start, when this key has no VWAP.
+ *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
+ *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
+ *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
  * The 1.3 keys live-settings-v1 and live-range-v1, and 1.4 to 1.5.3's live-indicators-v1 ({ <paneId>: { volume, vwap,
  * levels, fills, ib } }), are read once, when the new keys do not exist yet, and left in place.
  */
@@ -387,6 +388,10 @@ function create(storage) {
         raw.set(KEYS.indicators, next);
       }
     }
+    /* 1.9.0 (review R1): the VWAP color the Colors panel kept in live-colors-v1 up to 1.8, copied once into the
+       indicator colors, before the Colors panel (which no longer holds VWAP) writes that key again without it */
+    const ic = cleanColors(obj(KEYS.indicatorColors), IND_COLOR_KEYS), oldVwap = cleanColors(obj(KEYS.colors), ['vwap']);
+    if (!ic.vwap && oldVwap.vwap) raw.set(KEYS.indicatorColors, Object.assign(ic, oldVwap));
   }
   migrate();
   const paneOk = paneId => typeof paneId === 'string' && !!paneId && !Object.prototype.hasOwnProperty.call(Object.prototype, paneId);
@@ -500,11 +505,13 @@ function orderAccount(allowed, wanted) {
  * Named color presets (1.9.0), behind one small interface so a store shared by every PC (Anthony's choice; which
  * store is still to be decided) can replace this browser's storage without changing the page:
  *   list()                     -> Promise of { chart: [preset], indicator: [preset] }
- *   save(group, name, colors)  -> Promise of { lists, preset, replaced }; a preset of that name (any case) is replaced
+ *   save(group, name, colors, ind) -> Promise of { lists, preset, replaced }; a preset of that name (any case) is
+ *                              replaced. `ind` (chart presets only): the id of an indicator preset to bring with it
  *   rename(group, id, name)    -> Promise of { lists, preset }
  *   remove(group, id)          -> Promise of { lists }
  *   shared                     true when every PC sees the same presets
- * A preset is { id, name, colors }; `colors` holds every key of its group (PRESET_GROUPS). Each call reads the store
+ * A preset is { id, name, colors } (a chart preset may add `ind`, its linked indicator preset's id; a link to one
+ * deleted since is ignored); `colors` holds every key of its group (PRESET_GROUPS). Each call reads the store
  * fresh and changes one preset, so two tabs never undo each other's. A refused call rejects with an Error whose
  * message the page shows as it is.
  */
@@ -517,7 +524,9 @@ function cleanPresets(v) {
       const name = presetName(p.name), colors = cleanColors(p.colors, PRESET_GROUPS[g]);
       if (!name || names.has(name.toLowerCase()) || Object.keys(colors).length !== PRESET_GROUPS[g].length) continue;
       names.add(name.toLowerCase()); ids.add(p.id);
-      out[g].push({ id: p.id, name, colors });
+      const q = { id: p.id, name, colors };
+      if (g === 'chart' && typeof p.ind === 'string' && p.ind && p.ind.length <= 64) q.ind = p.ind;   // its indicator preset
+      out[g].push(q);
       if (out[g].length >= PRESET_MAX) break;
     }
   }
@@ -533,15 +542,17 @@ function localPresetStore(storage) {
   return {
     shared: false,
     list() { return Promise.resolve(read()); },
-    save(group, name, colors) {
+    save(group, name, colors, ind) {
       if (!own(PRESET_GROUPS, group)) return fail('Unknown preset group.');
       const n = presetName(name), c = cleanColors(colors, PRESET_GROUPS[group]);
       if (!n) return fail('Type a name for the preset first.');
       if (Object.keys(c).length !== PRESET_GROUPS[group].length) return fail('Not saved: a color is missing.');
       const all = read(), list = all[group], same = list.find(p => p.name.toLowerCase() === n.toLowerCase());
-      if (same) { same.name = n; same.colors = c; return done(all, { preset: same, replaced: true }); }
+      const link = group === 'chart' && all.indicator.some(p => p.id === ind) ? ind : null;   // only an indicator preset there now
+      if (same) { same.name = n; same.colors = c; if (link) same.ind = link; else delete same.ind; return done(all, { preset: same, replaced: true }); }
       if (list.length >= PRESET_MAX) return fail('This group holds ' + PRESET_MAX + ' presets: delete one to save another.');
       const p = { id: newId(), name: n, colors: c };
+      if (link) p.ind = link;
       list.push(p);
       return done(all, { preset: p, replaced: false });
     },
@@ -2081,8 +2092,8 @@ function start(container, opt, PAGE) {
     note: presetStore.shared ? 'Presets are shared by every PC. The colors in use are saved in this browser.' : 'Colors and presets are saved in this browser only.',
     onChange: () => { paintColors(); if (PR) renderPresets(); },
   });
-  /* The page's colors from the chart's theme and the indicator colors: the legend, the swatches, and on a light ground
-     the toolbar, the order bar, the menus and the status line (chromeColors). */
+  /* The page's colors from the chart's theme and the indicator colors: the legend, the swatches, and on any ground but
+     the default the toolbar, the order bar, the menus and the status line (chromeColors). Once per change. */
   function paintColors() {
     const T = chart.colors(), st = rootEl.style;
     st.setProperty('--vwap-sw', T.vwapText); st.setProperty('--up-text', T.upText); st.setProperty('--down-text', T.downText);
@@ -2093,11 +2104,12 @@ function start(container, opt, PAGE) {
     const halo = ink => ink ? '0 0 2px ' + ink + ', 0 0 1px ' + ink + ', 0 0 1px ' + ink : 'none';
     st.setProperty('--lg-buy-halo', halo(T.halo.long)); st.setProperty('--lg-sell-halo', halo(T.halo.short));
     rootEl.dataset.ground = T.ground;
-    // a light ground takes the toolbar, the order bar (1.9.0), menus and status line light too (Anthony); dark grounds keep the house style
+    // the toolbar, the order bar, menus and status line match the chart's ground (Anthony: 1.5.3 a light one, 1.9.0 every
+    // one); the default ground keeps the house style exactly
     const chrome = U.chromeColors(T);
     for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
     // menu swatches sit on the page chrome: the indicator colors, moved to read there on a light one
-    const onChrome = c => chrome ? U.markOnGround(c, T.bg, CE.FLOOR.text, T.to) : c;
+    const onChrome = c => chrome ? U.markOnGround(c, chrome['--bg'], CE.FLOOR.text, T.to) : c;
     st.setProperty('--ib-sw', onChrome(IC.ibHigh));
     st.setProperty('--vp-sw', onChrome(IC.vpPoc));
     st.setProperty('--vp-poc', T.vpPocText);                      // the legend's POC, on the chart ground
@@ -2112,6 +2124,10 @@ function start(container, opt, PAGE) {
    * indicator presets (every indicator color, each set in its gear). Pick one to use it; save the colors in use under a
    * name (a name already there replaces that preset); rename; delete, after a second click. The presets come from
    * presetStore; the colors in use stay this browser's (live-colors-v1, live-indicator-colors-v1).
+   * A chart preset can bring an indicator preset with it (1.9.0, Anthony: "link the groups"): saved with "Include the
+   * current indicator colors" (ticked by default) it keeps the id of the indicator preset holding the indicator colors
+   * in use (saved as a new one, under the chart preset's name, when none holds them), and picking it applies both. A
+   * link to an indicator preset deleted since is ignored.
    */
   const PR_GROUPS = [
     { g: 'chart', title: 'Chart presets', hint: 'Bar colors and the chart background.', place: 'Name this chart look' },
@@ -2131,7 +2147,9 @@ function start(container, opt, PAGE) {
   themePanel.slot.innerHTML = PR_GROUPS.map(G => `<div class="pr-group" data-g="${G.g}" role="group" aria-labelledby="${p}pr-${G.g}">` +
     `<div class="ce-lbl" id="${p}pr-${G.g}">${G.title}</div><div class="ce-note">${G.hint}</div><div class="pr-list"></div>` +
     `<div class="pr-save"><input type="text" class="pr-name-in" maxlength="${LP.PRESET_NAME_MAX}" placeholder="${G.place}" aria-label="${G.place}" spellcheck="false" autocomplete="off">` +
-    `<button type="button" class="pr-btn" data-act="save">Save</button></div><div class="pr-note" role="status"></div></div>`).join('');
+    `<button type="button" class="pr-btn" data-act="save">Save</button></div>` +
+    (G.g === 'chart' ? `<label class="pr-inc"><input type="checkbox" class="pr-inc-in" checked>Include the current indicator colors</label>` : '') +
+    `<div class="pr-note" role="status"></div></div>`).join('');
 
   function prRow(g, pr) {
     const name = esc(pr.name), id = esc(pr.id);
@@ -2141,7 +2159,8 @@ function start(container, opt, PAGE) {
     if (PR.confirm && PR.confirm.g === g && PR.confirm.id === pr.id)
       return `<div class="pr-row is-confirm" data-id="${id}"><span class="pr-ask">Delete ${name}?</span>` +
         `<button type="button" class="pr-btn bad" data-act="delete-ok" data-f="delok:${id}">Delete</button><button type="button" class="pr-btn quiet" data-act="cancel" data-f="cancel:${id}">Keep</button></div>`;
-    return `<div class="pr-row" data-id="${id}"><button type="button" class="pr-pick" data-act="pick" data-f="pick:${id}" aria-pressed="${prSame(g, pr.colors)}" title="Use ${name}">${prSwatch(g, pr.colors)}<span class="pr-n">${name}</span></button>` +
+    const ip = prLinked(pr), use = 'Use ' + name + (ip ? ', with the indicator preset ' + esc(ip.name) : '');
+    return `<div class="pr-row" data-id="${id}"><button type="button" class="pr-pick" data-act="pick" data-f="pick:${id}" aria-pressed="${prSame(g, pr.colors)}" title="${use}">${prSwatch(g, pr.colors)}<span class="pr-n">${name}</span></button>` +
       `<button type="button" class="pr-ic" data-act="rename" data-f="ren:${id}" aria-label="Rename ${name}" title="Rename">${PR_SVG.edit}</button>` +
       `<button type="button" class="pr-ic" data-act="delete" data-f="del:${id}" aria-label="Delete ${name}" title="Delete">${PR_SVG.x}</button></div>`;
   }
@@ -2162,14 +2181,30 @@ function start(container, opt, PAGE) {
     }
   }
   const prFocusRow = (box, id) => { const b = box.querySelector(prSel('pick:' + id)); (b || box.querySelector('.pr-name-in')).focus(); };
-  /* One store call: the lists it returns, and a note (what was done, or why it was refused). */
+  /* One store call: the lists it returns, cleaned first (a shared store hands over what another PC wrote: presets of a
+     bad shape, a bad color or no name are left out), and a note (what was done, or why it was refused). */
+  const prName = r => (r && r.preset && LP.presetName(r.preset.name)) || 'the preset';
   function prRun(g, call, said) {
-    return call.then(r => { PR.lists = r.lists; PR.note[g] = said(r); }, e => { PR.note[g] = e && e.message ? e.message : 'Not saved.'; })
+    return Promise.resolve(call).then(r => { PR.lists = LP.cleanPresets(r && r.lists); PR.note[g] = said(r || {}); },
+      e => { PR.note[g] = e && e.message ? String(e.message) : 'Not saved.'; })
       .then(() => { if (!destroyed) renderPresets(); });
   }
+  /* a chart preset's indicator preset, while it is still there */
+  const prLinked = pr => pr.ind ? PR.lists.indicator.find(x => x.id === pr.ind) || null : null;
   function prSave(box) {
-    const g = box.dataset.g, input = box.querySelector('.pr-name-in');
-    prRun(g, presetStore.save(g, input.value, prCurrent(g)), r => { input.value = ''; return (r.replaced ? 'Replaced ' : 'Saved ') + r.preset.name + '.'; });
+    const g = box.dataset.g, input = box.querySelector('.pr-name-in'), inc = box.querySelector('.pr-inc-in'), name = LP.presetName(input.value);
+    const said = (r, extra) => { input.value = ''; return (r.replaced ? 'Replaced ' : 'Saved ') + prName(r) + (extra || '') + '.'; };
+    if (g !== 'chart' || !inc || !inc.checked || !name) { prRun(g, presetStore.save(g, input.value, prCurrent(g)), r => said(r)); return; }
+    // the indicator colors in use go with it: the indicator preset that holds them, else a new one under this name
+    const held = PR.lists.indicator.find(x => prSame('indicator', x.colors));
+    const taken = new Set(PR.lists.indicator.map(x => x.name.toLowerCase()));
+    let iname = name; for (let i = 2; taken.has(iname.toLowerCase()); i++) iname = LP.presetName(name.slice(0, LP.PRESET_NAME_MAX - 4) + ' ' + i);
+    const ind = held ? Promise.resolve({ preset: held, made: false }) : presetStore.save('indicator', iname, prCurrent('indicator')).then(r => ({ preset: r.preset, made: true }), e => ({ e }));
+    prRun(g, ind.then(L => presetStore.save('chart', name, prCurrent('chart'), L.preset ? L.preset.id : null).then(r => Object.assign({}, r, { L }))), r => {
+      const L = r.L || {};
+      if (!L.preset) return said(r, ' without the indicator colors' + (L.e && L.e.message ? ' (' + String(L.e.message).replace(/\.$/, '') + ')' : ''));
+      return said(r, L.made ? ', with the indicator colors saved as the indicator preset ' + prName(L) : ', with the indicator preset ' + prName(L));
+    });
   }
   function prRename(box, pr) {
     const g = box.dataset.g;
@@ -2178,7 +2213,12 @@ function start(container, opt, PAGE) {
   }
   function prPick(g, pr) {
     PR.note[g] = 'Using ' + pr.name + '.';
-    if (g === 'chart') { themePanel.set({ up: pr.colors.up, down: pr.colors.down, bg: pr.colors.bg }); return; }   // painted and listed again by onChange
+    if (g === 'chart') {
+      const ip = prLinked(pr);                                      // its indicator preset too, when it is still there
+      if (ip) { PR.note.chart = 'Using ' + pr.name + ', with ' + ip.name + '.'; PR.note.indicator = 'Using ' + ip.name + '.'; setIndicatorColors(ip.colors); }
+      themePanel.set({ up: pr.colors.up, down: pr.colors.down, bg: pr.colors.bg });   // painted and listed again by onChange
+      return;
+    }
     setIndicatorColors(pr.colors);
     renderPresets();
   }

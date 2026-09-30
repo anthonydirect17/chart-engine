@@ -13,9 +13,9 @@
   --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
   --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8; --delta-sw: #4B9CD3;
   /* The chart's ground and the legend on it follow the Colors panel's Background (1.5.3; set from the engine's
-     theme). These are the defaults: exactly the look before. On a light ground the page also sets the variables
-     above (and --panel, --scheme, --ce-*) from ChartEngine.util.chromeColors, so the toolbar, menus and status line
-     go light too (Anthony); on the dark grounds they stay in the house style. */
+     theme). These are the defaults: exactly the look before. On any ground but the default the page also sets the
+     variables above (and --panel, --scheme, --ce-*, the order bar's) from ChartEngine.util.chromeColors, so the
+     toolbar, menus, order bar and status line match the chart's ground (Anthony, 1.5.3 light, 1.9.0 every ground). */
   --chart-bg: #080B10; --lg-bg: rgba(8, 11, 16, 0.78); --lg-head: #F2F6FA; --lg-text2: #9AA8B8; --lg-dim: #8392A5;
   --lg-buy: #3DDC97; --lg-sell: #FF7A7A;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -99,6 +99,8 @@
 .chart-live .ind-hex { width: 100%; box-sizing: border-box; min-width: 0; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text); font: 500 12px var(--mono); padding: 4px 6px; min-height: 26px; }
 .chart-live .ind-hex[aria-invalid="true"] { border-color: var(--loss); box-shadow: inset 0 0 0 1px var(--loss); }
 .chart-live .ind-colors-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+/* the Colors panel scrolls when it is taller than the window: on this page it holds the preset groups (1.9.0) */
+.chart-live .ce-theme-panel { max-height: calc(100vh - 96px); overflow-y: auto; overscroll-behavior: contain; }
 /* color presets in the Colors panel (1.9.0): the panel's own colors (--ce-*) */
 .chart-live .pr-group { display: grid; gap: 6px; }
 .chart-live .pr-list { display: grid; gap: 4px; }
@@ -114,6 +116,8 @@
 .chart-live .pr-ic { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ce-text2, #9AA8B8); cursor: pointer; }
 .chart-live .pr-ic:hover { background: var(--ce-s3, #141C26); color: var(--ce-text, #E6EDF5); }
 .chart-live .pr-save { display: flex; gap: 6px; }
+.chart-live .pr-inc { display: flex; align-items: center; gap: 6px; min-height: 24px; font-size: 12px; color: var(--ce-text2, #9AA8B8); cursor: pointer; }
+.chart-live .pr-inc input { margin: 0; flex: none; accent-color: var(--ce-accent, #B69CFF); }
 .chart-live .pr-name-in, .chart-live .pr-edit { flex: 1 1 auto; min-width: 0; box-sizing: border-box; background: var(--ce-s2, #0F151D); border: 1px solid var(--ce-line, #2A3645); border-radius: 6px; color: var(--ce-text, #E6EDF5); font: 500 12px var(--sans); padding: 5px 8px; min-height: 30px; }
 .chart-live .pr-name-in::placeholder { color: var(--ce-muted, #8392A5); }
 .chart-live .pr-btn { flex: none; background: var(--ce-s2, #0F151D); border: 1px solid var(--ce-line, #2A3645); border-radius: 8px; color: var(--ce-text, #E6EDF5); font: 500 12px var(--sans); padding: 4px 10px; min-height: 30px; cursor: pointer; }
@@ -201,10 +205,10 @@
 .chart-live .status .ro { margin-left: auto; font-family: var(--sans); }
 
 /* order bar (protocol v2): hidden with an older ChartBridge, disabled with the reason when trading is off */
-/* The order bar follows the page chrome (1.9.0, Anthony: "white chart, white top bar"): on the default, dark and mid
-   grounds it is exactly the 1.5.2 bar (the fallbacks below are its colors), on a clearly light ground it goes light
-   with the toolbar. Buy stays green, Sell red and Armed amber on every ground, each reading at 4.5:1
-   (ChartEngine.util.chromeColors). Only colors follow; nothing about how it works changes. */
+/* The order bar follows the page chrome (1.9.0, Anthony: "white chart, white top bar", and the top bar matches every
+   ground): on the default ground it is exactly the 1.5.2 bar (the fallbacks below are its colors), on any other it
+   takes the toolbar's colors for that ground. Buy stays green, Sell red and Armed amber on every ground, each reading
+   at 4.5:1 (ChartEngine.util.chromeColors). Only colors follow; nothing about how it works changes. */
 .chart-live .obar-ground { border-radius: 12px; background: var(--bg); color: var(--text); color-scheme: var(--scheme, dark); }
 .chart-live .obar-ground:has(> .obar[hidden]) { display: none; }
 .chart-live .obar { color-scheme: var(--scheme, dark); color: var(--text); }
@@ -227,8 +231,10 @@
 .chart-live .obtn.sell:hover { background: var(--sell-hover, rgba(255, 122, 122, 0.16)); }
 .chart-live .side-seg button[data-v="buy"][aria-pressed="true"] { color: var(--buy, #3DDC97); background: var(--buy-tint, rgba(61, 220, 151, 0.10)); box-shadow: inset 0 0 0 1px var(--buy-edge, rgba(61, 220, 151, 0.5)); }
 .chart-live .side-seg button[data-v="sell"][aria-pressed="true"] { color: var(--sell, #FF7A7A); background: var(--sell-tint, rgba(255, 122, 122, 0.10)); box-shadow: inset 0 0 0 1px var(--sell-edge, rgba(255, 122, 122, 0.5)); }
-.chart-live .obar .is-off { opacity: 0.45; }
-.chart-live .obar button:disabled, .chart-live .obar input:disabled, .chart-live .obar select:disabled { opacity: 0.4; cursor: not-allowed; }
+/* dimmed while disarmed and while trading is off: 0.45 and 0.4 on the house bar, raised on another ground until each
+   control reads at least as well as it does there (chromeColors, 1.9.0) */
+.chart-live .obar .is-off { opacity: var(--obar-off, 0.45); }
+.chart-live .obar button:disabled, .chart-live .obar input:disabled, .chart-live .obar select:disabled { opacity: var(--obar-disabled, 0.4); cursor: not-allowed; }
 .chart-live .oinfo { font: 500 12px var(--mono); color: var(--text2); font-variant-numeric: tabular-nums; }
 .chart-live .oinfo .long, .chart-live .oinfo .profit { color: var(--profit); }
 .chart-live .oinfo .short, .chart-live .oinfo .loss { color: var(--loss); }

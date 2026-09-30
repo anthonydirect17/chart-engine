@@ -457,7 +457,8 @@ for any color set `theme.bg`. On the default ground every color is the locked pa
 trade and order colors) just enough to read, once per change, never per frame, keeping bull and bear, buy and sell,
 and the IB high and low apart on every ground (buy and sell keep their green and red, outlined where needed). `getTheme()` returns the colors as chosen; `colors()` the colors as
 drawn, including `text2`, `legendBg` and `ground` for a page's own legend; `util.chromeColors(colors())` gives the CSS
-colors for a page's toolbar on a light ground (null on dark ones), which the live page and the demo apply.
+colors for a page's toolbar, and the live page's order bar, on any ground but the default (null there; 1.9.0, before
+only on a light ground), which the live page and the demo apply.
 
 ## Develop
 

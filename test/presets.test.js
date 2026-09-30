@@ -1,7 +1,8 @@
 'use strict';
 // Color presets (1.9.0): the preset store behind one small interface (this browser's storage today, a store shared by
-// every PC later), the indicator colors set in their gears, the level and IB lines drawn in them, and the order bar
-// following a light chart ground with Buy, Sell and Armed still readable.
+// every PC later), chart presets linked to an indicator preset, the indicator colors set in their gears, the level and
+// IB lines drawn in them, and the order bar matching every chart ground with Buy, Sell and Armed still readable and its
+// dimmed controls at least as strong as on the house bar.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const CE = require('../src/chart-engine.js');
@@ -126,6 +127,31 @@ test('indicator colors: the house defaults, set by hand one change at a time, an
   assert.equal(LP.create(st).indicatorColors().vwap, '#FFCC00');
 });
 
+test('the old VWAP color survives a ground change made first (review R1)', () => {
+  // 1.8 kept the VWAP in live-colors-v1; the page starts, and the first change is the ground (the Colors panel, which
+  // no longer holds VWAP, writes live-colors-v1 again without it)
+  const st = memStorage({ 'live-colors-v1': JSON.stringify({ up: '#4B9CD3', down: '#6D28D9', vwap: '#FFCC00', bg: '#080B10' }) });
+  const page = LP.create(st);                                       // page start: copied across once
+  assert.deepEqual(JSON.parse(st.getItem('live-indicator-colors-v1')), { vwap: '#FFCC00' });
+  st.setItem('live-colors-v1', JSON.stringify({ up: '#4B9CD3', down: '#6D28D9', bg: '#000000' }));   // Black clicked
+  assert.equal(page.indicatorColors().vwap, '#FFCC00');
+  assert.equal(LP.create(st).indicatorColors().vwap, '#FFCC00', 'after a reload');
+  // an indicator key with other colors but no VWAP takes the old VWAP too, and keeps its colors
+  const st2 = memStorage({ 'live-colors-v1': JSON.stringify({ vwap: '#abcdef' }), 'live-indicator-colors-v1': JSON.stringify({ prior: '#123456' }) });
+  LP.create(st2);
+  assert.deepEqual(JSON.parse(st2.getItem('live-indicator-colors-v1')), { prior: '#123456', vwap: '#ABCDEF' });
+  // a VWAP set in the gear is never replaced by the old one
+  const st3 = memStorage({ 'live-colors-v1': JSON.stringify({ vwap: '#ABCDEF' }), 'live-indicator-colors-v1': JSON.stringify({ vwap: '#111111' }) });
+  assert.equal(LP.create(st3).indicatorColors().vwap, '#111111');
+  // nothing to carry: nothing written (a fresh page writes no color key)
+  const fresh = memStorage();
+  LP.create(fresh);
+  assert.equal(fresh.getItem('live-indicator-colors-v1'), null);
+  const bad = memStorage({ 'live-colors-v1': JSON.stringify({ vwap: 'pink' }) });
+  LP.create(bad);
+  assert.equal(bad.getItem('live-indicator-colors-v1'), null);
+});
+
 test('level and IB lines take the indicator colors; without them, the house colors as before', () => {
   const lv = { pdh: 110, pdl: 90, pc: 100, onh: 105, onl: 95, vah: 104, val: 96 };
   const house = U.levelLines(lv);
@@ -140,37 +166,105 @@ test('level and IB lines take the indicator colors; without them, the house colo
   assert.deepEqual(U.ibLines(null, { ibHigh: '#abcdef' }), []);
 });
 
-test('the order bar follows a light ground: Buy green, Sell red, Armed amber, each reading 4.5:1 where it sits', () => {
-  // dark, black, blue-grey and mid greys: nothing is set, so the bar keeps its 1.5.2 colors (the CSS fallbacks)
-  for (const bg of ['#080B10', '#000000', '#1B2433', '#333333', '#888888']) assert.equal(U.chromeColors(U.buildTheme({ bg })), null, bg);
-  let s = 7;
+/* The grounds of review 1's in-page sweep: the four presets, white, light and mid greys around the light/dark switch,
+   tinted lights and three loud colors. */
+const REVIEW_GROUNDS = ['#080B10', '#000000', '#1B2433', '#F5F7FA', '#FFFFFF', '#E0E0E0', '#D0D0D0', '#C8C8C8', '#BBBBBB', '#B0B0B0', '#A0A0A0',
+  '#808080', '#FFF8E1', '#FFE0E0', '#E8F5E9', '#E3F2FD', '#D0D8E0', '#F0E6FF', '#FFFF00', '#00FF00', '#FF00FF'];
+function sweepGrounds(seed, n) {
+  let s = seed;
   const rnd = () => (s = (s * 48271) % 2147483647) / 2147483647;
-  const grounds = ['#F5F7FA', '#FFFFFF', '#E8E0C8', '#CFE3FF', '#B0B0B0', '#FFFF00', '#00FF00', '#FFE4EA'];
-  while (grounds.length < 300) { const h = '#' + [0, 0, 0].map(() => Math.floor(150 + rnd() * 106).toString(16).padStart(2, '0')).join(''); if (U.chromeColors(U.buildTheme({ bg: h }))) grounds.push(h); }
-  const over = (color, under) => {                                  // an rgba() tint as it shows over `under`
-    const c = U.parseColor(color), g = U.parseColor(under);
-    return '#' + ['r', 'g', 'b'].map(k => Math.round(c[k] * c.a + g[k] * (1 - c.a)).toString(16).padStart(2, '0')).join('');
-  };
-  for (const bg of grounds) {
-    const v = U.chromeColors(U.buildTheme({ bg }));
+  const out = REVIEW_GROUNDS.slice();
+  for (let v = 0; v < 256; v += 3) { const h = v.toString(16).padStart(2, '0'); out.push('#' + h + h + h); }
+  while (out.length < n) out.push('#' + [0, 0, 0].map(() => Math.floor(rnd() * 256).toString(16).padStart(2, '0')).join(''));
+  return out;
+}
+const over = (color, under) => {                                  // an rgba() tint as it shows over `under`
+  const c = U.parseColor(color), g = U.parseColor(under);
+  return '#' + ['r', 'g', 'b'].map(k => Math.round(c[k] * c.a + g[k] * (1 - c.a)).toString(16).padStart(2, '0')).join('');
+};
+
+test('the order bar matches every ground: Buy green, Sell red, Armed amber, each reading 4.5:1 where it sits', () => {
+  // the default ground: nothing is set, so the bar keeps its 1.5.2 colors (the CSS fallbacks)
+  assert.equal(U.chromeColors(U.buildTheme({ bg: '#080B10' })), null);
+  const mins = {};
+  for (const bg of sweepGrounds(7, 700)) {
+    const T = U.buildTheme({ bg }), v = U.chromeColors(T);
+    if (T.ground === 'default') continue;
     assert.ok(v, bg);
-    for (const k of ['--buy', '--buy-edge', '--buy-tint', '--buy-hover', '--sell', '--sell-edge', '--sell-tint', '--sell-hover', '--warn-tint']) assert.ok(U.CHROME_VARS.includes(k) && v[k], bg + ' ' + k);
+    for (const k of ['--buy', '--buy-edge', '--buy-tint', '--buy-hover', '--sell', '--sell-edge', '--sell-tint', '--sell-hover', '--warn-tint', '--obar-off', '--obar-disabled']) assert.ok(U.CHROME_VARS.includes(k) && v[k], bg + ' ' + k);
+    const armedBar = over(v['--warn-tint'], v['--bg']);
+    const need = (what, fg, surface) => {
+      const c = U.contrast(fg, surface); mins[what] = Math.min(mins[what] || 99, c);
+      assert.ok(c >= F.text - 0.02, bg + ' ' + what + ' ' + fg + ' on ' + surface + ' reads ' + c.toFixed(2));
+    };
     for (const side of ['buy', 'sell']) {
-      // the button text on its tint and on its hover tint, over the bar (--s2)
-      for (const tint of [v['--' + side + '-tint'], v['--' + side + '-hover']]) {
-        const c = U.contrast(v['--' + side], over(tint, v['--s2']));
-        assert.ok(c >= F.text - 0.02, bg + ' ' + side + ' ' + v['--' + side] + ' on ' + tint + ' reads ' + c.toFixed(2));
-      }
+      // the button text on its tint and on its hover tint, over the bar (--s2) and over the Armed bar
+      for (const tint of [v['--' + side + '-tint'], v['--' + side + '-hover']]) for (const under of [v['--s2'], armedBar]) need(side, v['--' + side], over(tint, under));
     }
+    // every other text on the bar at full strength: labels, the Flatten and Cancel all buttons, the boxes, the state row
+    for (const under of [v['--bg'], v['--s2'], armedBar]) for (const k of ['--text', '--head', '--text2', '--text3', '--profit', '--loss', '--warn', '--accent-soft']) need(k, v[k], under);
     // still green and still red: the hue is kept (green channel leads for Buy, red for Sell)
     const b = U.parseColor(v['--buy']), r = U.parseColor(v['--sell']);
     assert.ok(b.g > b.r && b.g > b.b, bg + ' Buy stays green: ' + v['--buy']);
     assert.ok(r.r > r.g && r.r > r.b, bg + ' Sell stays red: ' + v['--sell']);
     assert.ok(U.distinct(v['--buy'], v['--sell']), bg + ' Buy and Sell apart');
     // Armed: the switch and the pill are ground-colored text on --warn, the bar tinted amber
-    assert.ok(U.contrast(v['--bg'], v['--warn']) >= F.text - 0.02, bg + ' Armed text on ' + v['--warn']);
-    assert.ok(U.contrast(v['--warn'], over(v['--warn-tint'], v['--bg'])) >= F.text - 0.02, bg + ' Armed bar text');
+    need('armed switch', v['--bg'], v['--warn']);
+    need('armed bar text', v['--warn'], armedBar);
   }
+  for (const k in mins) assert.ok(mins[k] >= F.text - 0.02, k);
+});
+
+test('dimmed order bar controls (disarmed, trading off) read at least as well on every ground as on the house bar (review R2)', () => {
+  const H = U.OBAR_DIM.house;
+  // the house bar's own numbers, as review 1 measured them in the page (disarmed Buy 2.85, Sell 2.28, Flatten 4.01; trading off Buy 2.51)
+  assert.deepEqual(H.off.map(x => +x.toFixed(1)), [2.9, 2.3, 4.0]);
+  assert.equal(+H.disabled[0].toFixed(1), 2.5);
+  assert.deepEqual(U.OBAR_DIM.alpha, { off: 0.45, disabled: 0.4 });
+  const worst = { off: [], disabled: [] };
+  for (const bg of sweepGrounds(11, 700)) {
+    const T = U.buildTheme({ bg }), v = U.chromeColors(T);
+    if (!v) continue;
+    const d = U.obarDims(v, 0.08, 0.08);
+    for (const k of ['off', 'disabled']) {
+      const a = +v['--obar-' + k];
+      assert.ok(a >= U.OBAR_DIM.alpha[k] && a <= 1, bg + ' ' + k + ' opacity ' + a);
+      d[k].forEach((x, i) => {
+        const c = U.fadedContrast(x, a);
+        worst[k][i] = Math.min(worst[k][i] === undefined ? 99 : worst[k][i], c - H[k][i]);
+        assert.ok(c >= H[k][i], bg + ' ' + k + ' #' + i + ' reads ' + c.toFixed(2) + ' under the house ' + H[k][i].toFixed(2) + ' at ' + a);
+      });
+    }
+  }
+  // the opacity is only as strong as it needs to be: the light Light preset gets more, Black about the house's
+  assert.ok(+U.chromeColors(U.buildTheme({ bg: '#F5F7FA' }))['--obar-off'] > 0.45);
+  assert.ok(+U.chromeColors(U.buildTheme({ bg: '#000000' }))['--obar-off'] <= 0.5);
+  for (const k of ['off', 'disabled']) assert.ok(worst[k].every(x => x >= 0), k);
+});
+
+test('linked presets: a chart preset keeps its indicator preset\'s id; a link to one deleted since is left alone', async () => {
+  const st = memStorage(), s = LP.localPresetStore(st);
+  const ind = (await s.save('indicator', 'Light indicators', IND())).preset;
+  const a = await s.save('chart', 'White chart', WHITE, ind.id);
+  assert.equal(a.preset.ind, ind.id);
+  assert.equal((await s.list()).chart[0].ind, ind.id, 'kept in the store');
+  // only an indicator preset that is there, and only on a chart preset
+  assert.equal((await s.save('chart', 'Other', DARK, 'p-nope')).preset.ind, undefined, 'an unknown id is not kept');
+  assert.equal((await s.save('indicator', 'Ind 2', IND(), ind.id)).preset.ind, undefined, 'an indicator preset has no link');
+  // replacing without the link drops it; with it, it comes back; a rename keeps it
+  assert.equal((await s.save('chart', 'white CHART', WHITE)).preset.ind, undefined);
+  assert.equal((await s.save('chart', 'White chart', WHITE, ind.id)).preset.ind, ind.id);
+  assert.equal((await s.rename('chart', a.preset.id, 'Day')).preset.ind, ind.id);
+  // the indicator preset deleted: the chart preset stays, its link simply points at nothing
+  await s.remove('indicator', ind.id);
+  const after = await s.list();
+  assert.deepEqual(after.chart.find(p => p.name === 'Day').colors, WHITE);
+  assert.equal(after.indicator.some(p => p.id === ind.id), false);
+  // cleanPresets keeps a link of the right shape on chart presets only
+  const c = LP.cleanPresets({ chart: [{ id: 'a', name: 'A', colors: DARK, ind: 'p1' }, { id: 'b', name: 'B', colors: DARK, ind: 5 }, { id: 'c', name: 'C', colors: DARK, ind: 'x'.repeat(65) }],
+    indicator: [{ id: 'p1', name: 'I', colors: IND(), ind: 'a' }] });
+  assert.deepEqual(c.chart.map(p => p.ind), ['p1', undefined, undefined]);
+  assert.equal(c.indicator[0].ind, undefined);
 });
 
 test('the Colors panel: VWAP can be left out of it, the house default keeps it', () => {

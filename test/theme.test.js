@@ -217,6 +217,23 @@ test('chart: IB lines show with their own layer, not with Levels, and are shaded
   assert.equal(chart.getTheme().bg, '#1B2433');
 });
 
+test('the IB high stays the brighter with colors set in the IB gear, on every ground (Anthony, 1.9.0)', () => {
+  const { E, chart, texts, frame } = stubChart();
+  const U2 = E.util;
+  const color = name => { const t = texts.filter(x => x.s.replace(/^ · /, '') === name); return t[t.length - 1].color; };
+  const draw = (hi, lo, bg) => { chart.setTheme({ bg }); chart.setLevels(U2.ibLines({ state: 'locked', high: 102, low: 98, start: 1790000000 }, { ibHigh: hi, ibLow: lo })); texts.length = 0; frame(); return [color('IBH'), color('IBL')]; };
+  // on the default ground colors the page chose that keep the order are drawn exactly as chosen
+  assert.deepEqual(draw('#FFD0F0', '#C040A0', '#080B10'), ['#FFD0F0', '#C040A0']);
+  // a high picked darker than its low, or the same color: the high is drawn the brighter, by a visible step
+  for (const bg of ['#080B10', '#000000', '#1B2433', '#F5F7FA', '#FFFFFF', '#808080', '#B0B0B0']) {
+    for (const [hi, lo] of [['#333333', '#FFFFFF'], ['#E58BD2', '#F7C6EC'], ['#E58BD2', '#E58BD2'], ['#000000', '#FFFFFF'], ['#FFFFFF', '#FFFFFF'], ['#00FF00', '#FF0000']]) {
+      const [h, l] = draw(hi, lo, bg);
+      assert.ok(U2.luminance(h) > U2.luminance(l) && U2.contrast(h, l) >= CE.PAIR.contrast - 0.01, bg + ': IB high ' + hi + ' / low ' + lo + ' drawn ' + h + ' / ' + l);
+    }
+  }
+  assert.equal(chart.getLevels().find(l => l.name === 'IBH').color, '#00FF00', 'the level itself keeps the color chosen');
+});
+
 test('chart: the theme is built once per change, never per frame', () => {
   const { chart, frame } = stubChart();
   const n0 = chart.stats().themeBuilds;
@@ -258,33 +275,50 @@ test('chart: the IB lines start at 9:30 (Anthony), the other levels run across t
   assert.ok(lineAt(102).x > ibh.x, 'a later start moves right');
 });
 
-test('light ground: the toolbar, menus and status line go light, text at the chart floors (Anthony)', () => {
+test('every ground but the default: the toolbar, menus and status line match it, text at the chart floors (Anthony)', () => {
   assert.equal(U.chromeColors(U.buildTheme()), null, 'default ground: the page keeps its dark style');
-  for (const bg of ['#000000', '#1B2433', '#333333']) assert.equal(U.chromeColors(U.buildTheme({ bg })), null, bg + ' is dark: no change');
-  // only clearly light grounds (review 2, B1): 9:1 or more against the house near-black; every grey below keeps the dark chrome
+  assert.equal(U.chromeColors(U.buildTheme({ bg: '#080b10' })), null, 'the default ground typed in: the same');
+  // 1.9.0 (Anthony: the top bar matches every ground): Black a black chrome, Blue-grey a blue-grey one, every grey its own
   for (let v = 0; v < 256; v++) {
-    const h = v.toString(16).padStart(2, '0'), bg = '#' + h + h + h, light = U.contrast(bg, '#080B10') >= U.CHROME_LIGHT;
-    assert.equal(!!U.chromeColors(U.buildTheme({ bg })), light, bg + (light ? ' light chrome' : ' dark chrome'));
+    const h = v.toString(16).padStart(2, '0'), bg = '#' + h + h + h, T = U.buildTheme({ bg }), c = U.chromeColors(T);
+    if (T.ground === 'default') { assert.equal(c, null); continue; }
+    assert.ok(c, bg);
+    assert.equal(c['--scheme'], T.ground === 'light' ? 'light' : 'dark', bg + ' scheme');
+    const end = T.ground === 'light' ? '#000000' : '#FFFFFF';
+    // the chart's own color, or on a mid grey (black or white text under 9:1 on it) that grey moved just far enough
+    if (U.contrast(bg, end) >= 9) assert.equal(c['--bg'], T.bg, bg);
+    else assert.ok(U.contrast(c['--bg'], end) >= 9 && U.contrast(c['--bg'], end) < 9.3, bg + ' moved to ' + c['--bg']);
   }
-  assert.equal(U.chromeColors(U.buildTheme({ bg: '#888888' })), null, '#888888 keeps the dark chrome');
+  const black = U.chromeColors(U.buildTheme({ bg: '#000000' })), slate = U.chromeColors(U.buildTheme({ bg: '#1B2433' }));
+  assert.equal(black['--bg'], '#000000'); assert.equal(slate['--bg'], '#1B2433');
+  // a dark ground lifts the house surfaces by the house steps and keeps the house text where it reads
+  assert.deepEqual([black['--s2'], black['--text'], black['--text2'], black['--buy'], black['--sell'], black['--warn']], ['#070A0D', '#E6EDF5', '#9AA8B8', '#3DDC97', '#FF7A7A', '#E0B45A']);
+  assert.deepEqual([slate['--s2'], slate['--s3'], slate['--line-strong']], ['#222E40', '#273549', '#3D4F68']);
+  const house = U.chromeColors(Object.assign(U.buildTheme({ bg: '#000000' }), { bg: '#080B10' }));
+  assert.deepEqual([house['--s2'], house['--s3'], house['--line'], house['--line-strong'], house['--panel'], house['--accent-tint'], house['--accent-border']],
+    ['#0F151D', '#141C26', '#18212C', '#2A3645', '#0B1016', '#1A1230', '#3B2A6B'], 'the lift of the house ground is the house chrome itself');
   assert.ok(U.chromeColors(U.buildTheme({ bg: '#F5F7FA' })), 'the Light preset takes it light');
   let s = 99;
   const rnd = () => (s = (s * 48271) % 2147483647) / 2147483647;
-  const grounds = ['#F5F7FA', '#FFFFFF', '#E8E0C8', '#CFE3FF', '#B0B0B0', '#FFFF00', '#00FF00'];
-  while (grounds.length < 300) { const h = '#' + [0, 0, 0].map(() => Math.floor(160 + rnd() * 96).toString(16).padStart(2, '0')).join(''); if (U.chromeColors(U.buildTheme({ bg: h }))) grounds.push(h); }
+  const grounds = ['#F5F7FA', '#FFFFFF', '#E8E0C8', '#CFE3FF', '#B0B0B0', '#FFFF00', '#00FF00', '#000000', '#1B2433', '#808080', '#767676', '#737373', '#FF00FF', '#0033FF'];
+  while (grounds.length < 600) grounds.push('#' + [0, 0, 0].map(() => Math.floor(rnd() * 256).toString(16).padStart(2, '0')).join(''));
   for (const bg of grounds) {
     const T = U.buildTheme({ bg }), v = U.chromeColors(T);
-    assert.ok(v, bg + ' light');
-    assert.equal(v['--bg'], T.bg);
+    if (T.ground === 'default') continue;
+    assert.ok(v, bg);
     for (const k of U.CHROME_VARS) assert.ok(k in v, k);
+    // a clearly light ground (9:1 against the house near-black, the 1.5.3 rule) keeps its 1.5.3 floors: text 7:1
+    const strong = T.ground === 'light' && U.contrast(bg, '#080B10') >= 9 ? F.strong : F.text;
+    const armed = U.mix(v['--bg'], '#E0B45A', 0.07);
     const on = (k, floor, surface) => { const c = U.contrast(v[k], surface); assert.ok(c >= floor - 0.02, bg + ' ' + k + ' ' + v[k] + ' on ' + surface + ' reads ' + c.toFixed(2)); };
-    for (const surface of [v['--bg'], v['--s2'], v['--s3']]) {
-      on('--text', F.strong, surface); on('--head', F.strong, surface);
+    for (const surface of [v['--bg'], v['--s2'], v['--s3'], armed]) {
+      on('--text', strong, surface); on('--head', strong, surface);
       on('--text2', F.text, surface); on('--text3', F.text, surface);
       for (const k of ['--info', '--warn', '--loss', '--profit']) on(k, F.text, surface);
     }
     on('--crimson-word', F.text, v['--bg']);
     on('--accent-text', F.text, v['--accent-tint']); on('--ce-tint-text', F.text, v['--ce-tint']);
+    on('--accent-soft', F.text, v['--s2']); on('--accent-soft', F.text, armed);   // the account note on the order bar
     on('--warn', F.text, v['--bg']);                            // the Armed switch: ground-colored text on warn
   }
 });
