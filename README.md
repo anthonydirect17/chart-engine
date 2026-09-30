@@ -125,6 +125,95 @@ simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`). The
 asks for one to be set unless started with `--test-pin=<made-up PIN>`, and `--pin-file=<path>` keeps it
 across fake restarts.
 
+### Keep this PC up to date
+
+`nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
+new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
+
+- **The page updates by itself**, at sign-in and every 4 hours, from the newest commit on `main` whose CI is green on
+  both ubuntu-latest and windows-latest, and only when that page works with the ChartBridge compiled on this PC
+  (`live/COMPAT.json`). An open page keeps running what it loaded, so an open trade is never disturbed.
+- **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
+  flat, then presses F5.
+- State and log: `Documents\NinjaTrader 8\ChartBridge\updater\` (`update.log`, `status.json`, `state.json`, the staged
+  files and the previous page). `config.txt` and the PIN file are never touched.
+
+**One-time setup.** Open Windows PowerShell (not as administrator), with NinjaTrader running and ChartBridge compiled.
+Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line, fix it, paste the block again).
+
+1. The clone, on `main`, with the updater:
+
+   ```powershell
+   $ce = @("$env:USERPROFILE\chart-engine", 'C:\TheDesk\chart-engine') | Where-Object { Test-Path (Join-Path $_ '.git') } | Select-Object -First 1
+   if (-not $ce) { 'STOP: no chart-engine clone at %USERPROFILE%\chart-engine or C:\TheDesk\chart-engine' } else {
+     Set-Location $ce; git checkout main; git pull --ff-only
+     if ($LASTEXITCODE -eq 0 -and (Test-Path .\nt8\update-pc.ps1)) { "OK: $ce is on main" } else { 'STOP: git could not bring the clone to main (see the lines above)' } }
+   ```
+
+2. What this PC has now (reads only; it asks ChartBridge's `/diag` for the version compiled here):
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 status
+   ```
+
+   STOP "page folder is missing": this PC never had the live page. While flat, run
+   `powershell -ExecutionPolicy Bypass -File nt8\install.ps1`, press F5 in the NinjaScript Editor, then paste block 2
+   again. STOP "version is not known": start NinjaTrader (ChartBridge compiled), then paste block 2 again.
+
+3. A dry run (fetches `main`, asks GitHub for CI, changes nothing):
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 check
+   ```
+
+4. The first update, by hand:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 update
+   ```
+
+5. The scheduled task for this Windows user (at sign-in and every 4 hours; `-Hours 2` for another interval):
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 register
+   ```
+
+**What the notices mean.** On the chart page's status line, at the bottom (never over the order bar or the chart; it
+never reloads anything):
+
+- **Update ready: reload when flat**: new page files are installed. Reload the page when flat to use them.
+- **ChartBridge x.y.z ready to install (flat, then F5)**: a new ChartBridge is staged. Nothing happens until Anthony
+  installs it (below). A Windows notification says the same once, and so do `update.log` and `status.json`.
+- **ChartBridge x.y.z copied: press F5 when flat**: it was copied; it runs after F5 in the NinjaScript Editor.
+
+On a narrow window the notice is shortened ("Update ready"); hovering it shows the whole text.
+
+**Install a new ChartBridge** (while flat in every account):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 -InstallChartBridge
+```
+
+It asks once (type `y`), copies the staged add-on files into `bin\Custom\AddOns` (the files it replaces are kept in
+`updater\previous-addons\`) and the matching page, then says: NinjaTrader > New > NinjaScript Editor > **F5** while
+flat, then open `http://localhost:8765/diag` and check `"version"` shows the new one (or run `update-pc.ps1 status`),
+then reload the chart page.
+
+**Pause, roll back, and the rest:**
+
+| Command (`powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 ...`) | What it does |
+| --- | --- |
+| `status` | what is installed and waiting, and why (reads only) |
+| `check` | dry run: what `update` would do now |
+| `update` | the automatic path, by hand |
+| `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
+| `pause` / `resume` | turns the automatic update off and on (off is never the default) |
+| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user |
+
+Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
+without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader
+closed and nothing recorded yet); the page needs a newer ChartBridge; paused; or a commit rolled back by hand.
+
 ## Trading from the chart
 
 Decided by Anthony on 2026-09-29: market buy and sell, limit and stop by clicking a price, brackets (stop
@@ -288,7 +377,7 @@ colors for a page's toolbar on a light ground (null on dark ones), which the liv
 ## Develop
 
 ```sh
-npm test          # unit tests (Node 20+, no install needed)
+npm test          # unit tests (Node 20+, no install needed); with pwsh or Windows PowerShell also the updater's tests
 npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
 npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
@@ -297,6 +386,7 @@ npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reco
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 ```
 

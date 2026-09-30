@@ -1,0 +1,19 @@
+{
+  "about": "The one list of what gets installed on a trading PC. nt8/install.ps1 copies all of it; nt8/update-pc.ps1 installs the www part automatically and stages the add-on part, which only update-pc.ps1 -InstallChartBridge copies (Anthony, while flat). Paths are relative to the repo; add-on files go to Documents\\NinjaTrader 8\\bin\\Custom\\AddOns, page files to Documents\\NinjaTrader 8\\ChartBridge\\www.",
+  "addons": [
+    "nt8/ChartBridge.cs",
+    "nt8/ChartBridgeOrders.cs",
+    "nt8/ChartBridgePin.cs"
+  ],
+  "www": [
+    { "from": "live/index.html", "to": "index.html" },
+    { "from": "live/live.js", "to": "live.js" },
+    { "from": "live/live.css", "to": "live.css" },
+    { "from": "live/bar-builder.js", "to": "bar-builder.js" },
+    { "from": "live/order-ticket.js", "to": "order-ticket.js" },
+    { "from": "live/pin.js", "to": "pin.js" },
+    { "from": "live/pin.css", "to": "pin.css" },
+    { "from": "live/update-notice.js", "to": "update-notice.js" },
+    { "from": "src/chart-engine.js", "to": "src/chart-engine.js" }
+  ]
+}

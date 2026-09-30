@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (2026-09-30): keep each trading PC up to date (`nt8/update-pc.ps1`)
+
+Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged and ChartBridge stays 0.3.3.
+- **`nt8/update-pc.ps1`**, Windows PowerShell 5.1 and git, no admin: `status`, `check` (dry run), `update` (the
+  automatic path), `-InstallChartBridge`, `rollback`, `pause`, `resume`, `register`, `unregister`. The scheduled task
+  runs `update` for the signed-in user at sign-in and every 4 hours (never two at once). README: "Keep this PC up to
+  date".
+- **The page updates by itself**, only from the newest commit on `main` whose CI is green on ubuntu-latest and
+  windows-latest (read from GitHub without a token, as The Desk's updater does), and only when the ChartBridge compiled
+  on the PC is at least the page's `minChartBridge` in **`live/COMPAT.json`** (new). The compiled version comes from
+  `/diag` when ChartBridge runs, otherwise from what the tool recorded; unknown means no update, and the log says why.
+  Files are staged, then written into `www` one by one through a temporary file and an atomic replace (index.html
+  last); the previous page is kept for `rollback`.
+- **ChartBridge never installs by itself**: a new one is staged under `updater\staged\`, announced (page, Windows
+  notification, log, `status.json`), and copied into `bin\Custom\AddOns` only by `-InstallChartBridge`, which Anthony
+  runs while flat before pressing F5.
+- **"Update ready: reload when flat"** (`live/update-notice.js`, loaded by `live/index.html` only): the page reads
+  `update.json` (written by the updater into `www`: versions and a build id only) about once a minute and says so on
+  the status line; also "ChartBridge x.y.z ready to install (flat, then F5)". It never reloads, never covers the order
+  bar or the chart, and never moves them (it only takes room the status line has left).
+- **`nt8/install-files.json`**: the one list of what is installed; `nt8/install.ps1` now reads it (same files as before,
+  plus `update-notice.js`).
+- **COMPAT.json in practice**: a release whose page needs a newer ChartBridge raises `minChartBridge` and adds a
+  `history` line; `page` follows `package.json` (a test holds both, and that `minChartBridge` is never above the
+  ChartBridge in the same commit).
+- Tests: `test/pc-updater.tests.ps1` (run by `npm test` through `test/pc-updater.test.js` with Windows PowerShell 5.1 on
+  Windows and pwsh elsewhere): the CI gate, the ChartBridge compatibility gate, unknown version, staging and the file
+  swap, rollback, pause, no .cs file ever written to AddOns by the automatic path, `-InstallChartBridge`, and the
+  scheduled task registered for real on the Windows runner. `npm run smoke:update`: the notice with an open position.
+
 ## 1.6.0 (2026-09-29): the Indicators menu "E2", a chip strip per pane, one account picker, and the volume profile
 
 Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile. The engine adds the volume profile (below) and
