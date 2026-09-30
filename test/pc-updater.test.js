@@ -118,8 +118,12 @@ test('the PowerShell tests (test/pc-updater.tests.ps1)', t => {
   const git = spawnSync('git', ['--version'], { encoding: 'utf8' });
   const ps = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';     // Windows PowerShell 5.1, as on the trading PCs
   if (git.error) { t.skip('no git here'); return; }
+  // PowerShell 7's module path (CI's default shell) breaks modules in Windows PowerShell 5.1: start it as a scheduled
+  // task does, with its own
+  const env = Object.assign({}, process.env);
+  if (process.platform === 'win32') delete env.PSModulePath;
   const r = spawnSync(ps, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'test', 'pc-updater.tests.ps1')],
-    { encoding: 'utf8', timeout: 600000, maxBuffer: 16 * 1024 * 1024 });
+    { encoding: 'utf8', timeout: 600000, maxBuffer: 16 * 1024 * 1024, env });
   if (r.error && r.error.code === 'ENOENT') { t.skip('no ' + ps + ' here'); return; }
   const out = (r.stdout || '') + (r.stderr || '');
   const summary = /pc-updater: (\d+) passed, (\d+) failed, (\d+) skipped/.exec(out);

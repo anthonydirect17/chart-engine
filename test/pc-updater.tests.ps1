@@ -66,7 +66,7 @@ function Put([string]$Path, [string]$Text) {
   [IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding($false)))
 }
 function Get-Text([string]$Path) { return [IO.File]::ReadAllText($Path) }
-function Get-Hash([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Get-Hash([string]$Path) { return (Get-FileSha256 $Path) }
 # The same text as the commit: git archive writes line endings as this PC's git does (core.autocrlf on Windows), as a
 # checkout for nt8\install.ps1 would.
 function Get-TextSame([string]$A, [string]$B) { return ((Get-Text $A).Replace("`r`n", "`n") -eq (Get-Text $B).Replace("`r`n", "`n")) }

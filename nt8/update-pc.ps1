@@ -186,12 +186,21 @@ function Get-TextHash([string]$Text) {
   return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
 }
 
+# SHA-256 of a file (not Get-FileHash: that is a script function of a module that can fail to load in Windows
+# PowerShell 5.1 when PowerShell 7's module path is inherited).
+function Get-FileSha256([string]$Path) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $fs = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite')
+  try { $bytes = $sha.ComputeHash($fs) } finally { $fs.Dispose(); $sha.Dispose() }
+  return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
+}
+
 # One id for a set of page files: which files, and every byte of each. Two commits with the same page files have
 # the same build, so an update that changed only nt8\ or the docs shows no "Update ready" on the page.
 function Get-BuildId([string]$Root, [string[]]$Targets) {
   $lines = foreach ($t in ($Targets | Sort-Object)) {
     $f = Get-LocalPath $Root $t
-    if (Test-Path -LiteralPath $f) { "$t " + (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() }
+    if (Test-Path -LiteralPath $f) { "$t " + (Get-FileSha256 $f) }
     else { "$t missing" }
   }
   return (Get-TextHash ($lines -join "`n")).Substring(0, 16)
