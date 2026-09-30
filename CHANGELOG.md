@@ -5,7 +5,11 @@
 Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged and ChartBridge stays 0.3.3.
 - **`nt8/update-pc.ps1`**, Windows PowerShell 5.1 and git, no admin: `status`, `check` (dry run), `update` (the
   automatic path), `-InstallChartBridge`, `rollback`, `pause`, `resume`, `register`, `unregister`. The scheduled task
-  runs `update` for the signed-in user at sign-in and every 4 hours (never two at once). README: "Keep this PC up to
+  runs `update` for the signed-in user when Anthony signs in (after 2 minutes; an at-startup trigger would need admin)
+  and once a day at 17:05 New York time (`-DailyAt`), converted to the PC's clock when registering: futures are closed
+  from 17:00 to 18:00 ET, so no check lands while Anthony trades (Anthony's ruling). A missed daily run is not started
+  later (no StartWhenAvailable: it could land in the trading day); the sign-in check covers a PC that was off. Never
+  two runs at once, 30 minutes at most. README: "Keep this PC up to
   date".
 - **The page updates by itself**, only from the newest commit on `main` whose CI is green on ubuntu-latest and
   windows-latest (read from GitHub without a token, as The Desk's updater does), and only when the ChartBridge compiled

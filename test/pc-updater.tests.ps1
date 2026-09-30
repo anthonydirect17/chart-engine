@@ -387,10 +387,16 @@ Test 'the command line runs under this PowerShell with -File and ends in OK or S
   Assert (($r.code -eq 0) -eq ($last -match '^OK')) "exit code $($r.code) matches"
 }
 
-# ---------------------------------------------------------------------------------------------- the scheduled task (Windows)
+# ---------------------------------------------------------------------------------------------- the scheduled task
+
+Test 'the daily time: 17:05 New York is 21:05 UTC in summer and 22:05 UTC in winter' {
+  Assert ((ConvertFrom-NewYorkTime '17:05' ([datetime]'2026-07-15')).ToUniversalTime().ToString('HH:mm') -eq '21:05') 'summer (EDT)'
+  Assert ((ConvertFrom-NewYorkTime '17:05' ([datetime]'2026-12-15')).ToUniversalTime().ToString('HH:mm') -eq '22:05') 'winter (EST)'
+  Assert ((ConvertFrom-NewYorkTime '09:30' ([datetime]'2026-12-15')).ToUniversalTime().ToString('HH:mm') -eq '14:30') 'another time'
+}
 
 if ($IsWin) {
-  Test 'register: a task for this user, at sign-in and every 4 hours, IgnoreNew, -File, no admin' {
+  Test 'register: a task for this user, at sign-in and daily at 17:05 New York time, IgnoreNew, -File, no admin' {
     $script:TaskName = 'ChartEngine Updater CI ' + [guid]::NewGuid().ToString('N').Substring(0, 8)
     $TaskName = $script:TaskName
     try {
@@ -403,12 +409,16 @@ if ($IsWin) {
       Assert ($a.Arguments -match '-File ' -and $a.Arguments -match ' update$' -and $a.Arguments -match 'update-pc\.ps1') $a.Arguments
       Assert ($a.Arguments -notmatch '(?i)(^|\s)[-/](e|ec|en\w*|c|co\w*)(\s|$)') "no command string: $($a.Arguments)"
       $kinds = @($t.Triggers | ForEach-Object { $_.CimClass.CimClassName })
-      Assert ($kinds -contains 'MSFT_TaskLogonTrigger' -and $kinds -contains 'MSFT_TaskTimeTrigger') ($kinds -join ',')
-      $every = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger' })[0]
-      Assert ($every.Repetition.Interval -eq 'PT4H') "interval $($every.Repetition.Interval)"
-      Assert (-not $every.Repetition.Duration) "no end to the repetition: '$($every.Repetition.Duration)'"
+      Assert ($kinds.Count -eq 2 -and $kinds -contains 'MSFT_TaskLogonTrigger' -and $kinds -contains 'MSFT_TaskDailyTrigger') ($kinds -join ',')
+      $daily = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })[0]
+      Assert ($daily.DaysInterval -eq 1) "every day: $($daily.DaysInterval)"
+      $want = (ConvertFrom-NewYorkTime '17:05').ToString('HH:mm')
+      Assert (([datetime]$daily.StartBoundary).ToString('HH:mm') -eq $want) "daily at $want local (17:05 New York): $($daily.StartBoundary)"
+      Assert (-not $daily.Repetition.Interval) "no repetition: '$($daily.Repetition.Interval)'"
+      Assert ($t.Settings.StartWhenAvailable -eq $false) 'a missed daily run is not started later (it could land in the trading day)'
       $logon = @($t.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })[0]
       Assert ($logon.Delay -eq 'PT2M' -and $logon.UserId) "logon trigger for this user, delay $($logon.Delay)"
+      Assert (-not $logon.Repetition.Interval) 'the sign-in check does not repeat'
       Assert ($t.Settings.ExecutionTimeLimit -eq 'PT30M') "time limit $($t.Settings.ExecutionTimeLimit)"
       Assert-Code (Invoke-Unregister) 0 'unregister OK'
       Assert (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 'gone'

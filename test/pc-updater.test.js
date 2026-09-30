@@ -82,6 +82,18 @@ test('no PowerShell command strings (Norton on WORK blocks -EncodedCommand): scr
   assert.match(updater, /'-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' \+ \(Format-Arg \$script:UpdaterSelf\) \+ ' update'/);
 });
 
+test('the schedule (Anthony, 2026-09-30): at sign-in and once a day at 17:05 New York time, nothing repeating, no late start', () => {
+  const src = code(updater);
+  assert.match(src, /\[string\]\$DailyAt = '17:05'/);
+  assert.match(src, /New-ScheduledTaskTrigger -AtLogOn -User \$user/);
+  assert.match(src, /\$logon\.Delay = 'PT2M'/);
+  assert.match(src, /New-ScheduledTaskTrigger -Daily -At \$local/);
+  assert.match(src, /-Trigger @\(\$logon, \$daily\)/);
+  assert.ok(!/RepetitionInterval|StartWhenAvailable|\$Hours/.test(src), 'no repetition, no late start of a missed run');
+  assert.match(src, /-MultipleInstances IgnoreNew/);
+  assert.match(src, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 30\)/);
+});
+
 test('the scripts suit Windows PowerShell 5.1: ASCII only, no PowerShell 7 syntax; no dashes Anthony does not use', () => {
   for (const f of ['nt8/update-pc.ps1', 'nt8/install.ps1', 'test/pc-updater.tests.ps1', 'nt8/install-files.json', 'live/COMPAT.json']) {
     const t = read(f);

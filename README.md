@@ -130,8 +130,8 @@ across fake restarts.
 `nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
 new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
 
-- **The page updates by itself**, at sign-in and every 4 hours, from the newest commit on `main` whose CI is green on
-  both ubuntu-latest and windows-latest, and only when that page works with the ChartBridge compiled on this PC
+- **The page updates by itself.** The updater checks when you sign in and once a day at 5:05 PM New York time, while
+  futures are closed. It installs the newest commit on `main` whose CI is green on both ubuntu-latest and windows-latest, and only when that page works with the ChartBridge compiled on this PC
   (`live/COMPAT.json`). An open page keeps running what it loaded, so an open trade is never disturbed.
 - **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
   flat, then presses F5.
@@ -172,7 +172,10 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 update
    ```
 
-5. The scheduled task for this Windows user (at sign-in and every 4 hours; `-Hours 2` for another interval):
+5. The scheduled task for this Windows user. It checks when you sign in and once a day at 5:05 PM New York time, while
+   futures are closed (`-DailyAt 17:10` for another New York time). It prints that time on this PC's clock. If the PC
+   is off or asleep at 5:05 PM, that day's check is skipped rather than run later in the trading day; the next sign-in
+   or the next day checks. If this PC's time zone changes, paste this block again to move the daily check.
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 register
@@ -208,7 +211,7 @@ then reload the chart page.
 | `update` | the automatic path, by hand |
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
 | `pause` / `resume` | turns the automatic update off and on (off is never the default) |
-| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user |
+| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 5:05 PM New York time |
 
 Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
 without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader

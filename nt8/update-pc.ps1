@@ -16,7 +16,8 @@
                           Anthony presses F5 in the NinjaScript Editor while flat
     rollback              puts the previous page files back (and skips that commit until a newer one is on main)
     pause / resume        a manual switch for the automatic path (off by default)
-    register / unregister the scheduled task for this Windows user: at sign-in and every -Hours hours (4)
+    register / unregister the scheduled task for this Windows user: at sign-in, and daily at -DailyAt (New York
+                          time, 17:05 by default: futures are closed from 17:00 to 18:00 ET)
 
   Rules (Anthony, 2026-09-30):
     - The automatic path never writes a .cs file into bin\Custom\AddOns: the next F5 anyone pressed would compile it
@@ -36,8 +37,9 @@ param(
   [string]$Command = 'status',
   [switch]$InstallChartBridge,
   [switch]$Yes,
-  [ValidateRange(1, 24)]
-  [int]$Hours = 4,
+  # The daily check, in New York time (Anthony, 2026-09-30: 17:05, inside the 17:00 to 18:00 ET futures break).
+  [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9]$')]
+  [string]$DailyAt = '17:05',
   [string]$TaskName = 'ChartEngine Updater',
   # Tests only: load the functions without running a command.
   [switch]$NoRun
@@ -924,10 +926,29 @@ function Invoke-Resume {
   return (Write-Verdict $true 'resumed: the next automatic run updates as usual')
 }
 
-# The scheduled task: this Windows user, only while signed in (no password stored, no admin), at sign-in (after two
-# minutes) and every -Hours hours. Never two runs at once (IgnoreNew). It runs Windows PowerShell with -File.
+# The scheduled task: this Windows user, only while signed in (no password stored, no admin). Anthony's ruling
+# (2026-09-30): check once at startup, then once a day.
+#   - At sign-in, after two minutes: the "startup" check (an at-startup trigger needs admin or SYSTEM).
+#   - Daily at -DailyAt New York time (17:05), converted to this PC's clock when registering: futures are closed from
+#     17:00 to 18:00 ET, so the check, and any brief console flash, never lands while Anthony trades.
+#   - No "run as soon as possible after a missed start" (StartWhenAvailable): Task Scheduler would run a missed 17:05
+#     whenever the PC is next awake, at any hour, often inside the trading day. The sign-in trigger already covers a PC
+#     that was off; one that slept through 17:05 checks the next day.
+# Never two runs at once (IgnoreNew), 30 minutes at most. It runs Windows PowerShell with -File.
 function Get-TaskArguments {
   return ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + (Format-Arg $script:UpdaterSelf) + ' update')
+}
+
+# HH:mm New York time on a given day, as this PC's local time (DST on both sides, on that day).
+function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
+  $tz = $null
+  foreach ($id in @('Eastern Standard Time', 'America/New_York')) {
+    try { $tz = [TimeZoneInfo]::FindSystemTimeZoneById($id); break } catch { }
+  }
+  if (-not $tz) { throw 'the New York time zone is not known on this PC' }
+  $h, $m = $HHmm.Split(':')
+  $ny = New-Object DateTime($Day.Year, $Day.Month, $Day.Day, [int]$h, [int]$m, 0, [DateTimeKind]::Unspecified)
+  return [TimeZoneInfo]::ConvertTime($ny, $tz, [TimeZoneInfo]::Local)
 }
 
 function Invoke-Register {
@@ -939,15 +960,18 @@ function Invoke-Register {
   $action = New-ScheduledTaskAction -Execute $ps -Argument (Get-TaskArguments) -WorkingDirectory $script:P.Repo
   $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
   $logon.Delay = 'PT2M'
-  $every = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Hours $Hours)
+  $local = ConvertFrom-NewYorkTime $DailyAt
+  $daily = New-ScheduledTaskTrigger -Daily -At $local
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries `
+  $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $every) -Principal $principal -Settings $settings -Force `
+  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($logon, $daily) -Principal $principal -Settings $settings -Force `
     -Description "Keeps the chart page in ChartBridge's www folder up to date (green commits on main only). Never installs ChartBridge. Log: $($script:P.Log)" | Out-Null
   $t = Get-ScheduledTask -TaskName $TaskName
-  Write-Log "registered the scheduled task '$TaskName': at sign-in and every $Hours hours"
-  return (Write-Verdict ($null -ne $t) "scheduled task '$TaskName' registered: at sign-in and every $Hours hours ($($t.State))")
+  $when = "at sign-in (after 2 minutes) and daily at $DailyAt New York time, $($local.ToString('HH:mm')) on this PC's clock"
+  Write-Log "registered the scheduled task '$TaskName': $when"
+  Write-Host "If this PC's time zone changes, run register again to move the daily check."
+  return (Write-Verdict ($null -ne $t) "scheduled task '$TaskName' registered: $when ($($t.State))")
 }
 
 function Invoke-Unregister {
