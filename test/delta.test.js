@@ -232,6 +232,48 @@ test('TickStore.firstMeasured: the first trade whose side came from the quote or
   assert.equal(agg.firstMeasured(0), 1, 'the aggressor flag (sm 1) is measured');
 });
 
+test('RangeReplay: the count on a new load\'s range bars by store order, not time; three trades a millisecond across bar boundaries (round 6)', () => {
+  // the store as a later load holds it; the count holds the same trades from index C on (and one the store lacks)
+  const mk = () => new BB.BarBuilder({ mode: 'range', rangeTicks: 6, rangeMode: 'nt', tick: 0.25, sessionStart: S18 });
+  for (const style of ['nt', 'traded']) {
+    const store = new BB.TickStore(), T = et(2026, 9, 29, 10, 0);
+    let p = 20000, sd = 1;
+    for (let i = 0; i < 30000; i++) {
+      p += (Math.sin(i * 0.37) > 0 ? 0.25 : -0.25) * (1 + (i % 3 === 0 ? 1 : 0));
+      sd = Math.sin(i * 1.3) > 0 ? 1 : -1;
+      store.push(T + Math.floor(i / 3) * 0.001, p, 1 + (i % 4), sd, 2);   // three trades in each millisecond
+    }
+    const C = 10000;
+    const count = new BB.TickStore();
+    for (let i = C; i < store.length; i++) count.push(store.time(i), store.price(i), store.volume(i), store.side(i), store.method(i));
+    const opts = { sessionStart: S18, coveredFrom: store.time(C) };
+    const builderOf = () => { const b = mk(); b.rangeMode = style; return b; };
+    // the reference: the store's own path (the first load: builder and delta fed together, counted from index C)
+    const ref = new CE.CumulativeDelta(opts), rb = builderOf();
+    store.feedSides({ addQuiet(t, pr, v, s2, sm) { rb.addQuiet(t, pr, v); } }, 0, null, C);
+    store.feedSides({ addQuiet(t, pr, v, s2, sm) { rb.addQuiet(t, pr, v); ref.add(t, v, s2, rb.bars[rb.bars.length - 1].t, sm); } }, C);
+    // the count replayed on the store in slices
+    const got = new CE.CumulativeDelta(opts), gb = builderOf();
+    const rp = new BB.RangeReplay(store, 0, [{ st: count, i: 0, end: null }], gb, (t, v, s2, barT, sm) => got.add(t, v, s2, barT, sm));
+    let steps = 0; while (!rp.step(777)) steps++;
+    assert.ok(steps > 10, 'in slices');
+    assert.deepEqual(got.bars.map(brief), ref.bars.map(brief), style + ': every candle as the store\'s own path, ' + ref.bars.length + ' of them');
+    assert.deepEqual(gb.bars.map(b => [b.t, b.o, b.c]), rb.bars.map(b => [b.t, b.o, b.c]), 'the same range bars');
+    // what the old mapping by time did: the last bar starting at or before the trade's time
+    const byTime = new CE.CumulativeDelta(opts), bars = rb.bars;
+    count.feedSides({ addQuiet(t, pr, v, s2, sm) { let lo = 0, hi = bars.length - 1, r = 0; while (lo <= hi) { const m = (lo + hi) >> 1; if (bars[m].t <= t) { r = m; lo = m + 1; } else hi = m - 1; } byTime.add(t, v, s2, bars[r].t, sm); } }, 0);
+    assert.notDeepEqual(byTime.bars.map(brief), ref.bars.map(brief), 'by time the candles would move (why round 6 replays by order)');
+  }
+  // a counted trade the store does not hold goes in the builder's bar at that point, counted once
+  const st = new BB.TickStore(), cnt = new BB.TickStore(), T = et(2026, 9, 29, 11, 0);
+  st.pushAll([[T, 100, 1, 1, 2], [T + 1, 100.25, 1, 1, 2], [T + 3, 100.5, 1, -1, 2]]);
+  cnt.pushAll([[T + 1, 100.25, 1, 1, 2], [T + 2, 100.25, 5, -1, 2], [T + 3, 100.5, 1, -1, 2]]);
+  const cd = new CE.CumulativeDelta({ sessionStart: S18 }), b = mk();
+  const rp = new BB.RangeReplay(st, 0, [{ st: cnt, i: 0, end: null }], b, (t, v, s2, barT, sm) => cd.add(t, v, s2, barT, sm));
+  while (!rp.step(2));
+  assert.deepEqual([cd.trades, cd.session.buy, cd.session.sell], [3, 1, 6]);
+});
+
 /* The page's path (live/live.js): the backfill into the store, the delta built from it at ready (with the range bars in
    one pass), then each live trade pushed to the store, added to the bar builder and to the delta with its bar. */
 function pagePath(view, trades, split) {

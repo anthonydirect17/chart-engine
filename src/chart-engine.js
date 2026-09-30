@@ -759,7 +759,7 @@ function create(container, options) {
      chart's height it asks for, a note drawn instead of anything else (the page's "Delta needs ChartBridge 0.3.4 on
      this PC"), and its own eased value scale. */
   let delta = null;
-  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
+  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', missed: 0, title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
      the rest with 'levels'. */
@@ -1254,9 +1254,12 @@ function create(container, options) {
     const title = pane.mode === 'bar' ? 'Bar delta' : 'Cumulative delta';
     const val = !show ? '' : lb ? fmtSigned(pane.mode === 'bar' ? lb.c - lb.o : lb.c, 0) : '-';
     // a session counted from later than its start (1.7.0, round 4): "since 10:04 ET", and "(page opened)" when the page's
-    // opening is why (setDeltaView reason)
+    // opening is why (setDeltaView reason); and for the newest session the seconds the count missed (round 6), when 1 or
+    // more: "since 10:04 ET (page opened), missed 32 s", or "since 18:00 ET, missed 32 s" for a session held from its start
+    const missed = pane.missed >= 1 && lses && lses === delta.session ? Math.round(pane.missed) : 0;
     const since = !show ? '' : !delta.bars.length ? 'starts with the next full bar'
-      : pane.mode !== 'bar' && lses && lses.partial ? 'since ' + fmtExact(lses.from) + ' ET' + (pane.reason ? ' (' + pane.reason + ')' : '') : '';
+      : pane.mode !== 'bar' && lses && (lses.partial || missed) ? 'since ' + fmtExact(lses.partial ? lses.from : lses.start) + ' ET' +
+        (lses.partial && pane.reason ? ' (' + pane.reason + ')' : '') + (missed ? ', missed ' + missed + ' s' : '') : '';
     pane.title = [title, val, since, pane.note].filter(Boolean).join(' ');
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     // text widths kept per font and text (the title and the start rarely change; the value's digits are few)
@@ -2031,13 +2034,15 @@ function create(container, options) {
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
      * share of the chart's height, PANE_RATIO_MIN to PANE_RATIO_MAX; about 20% by default), note (drawn instead of any
      * delta, '' for none), reason (why a session counts from later than its start, in brackets after "since 21:40 ET",
-     * for example 'page opened') }. Only the fields given change.
+     * for example 'page opened'), missed (seconds the newest session's count missed; shown from 1 s: "missed 32 s") }. Only
+     * the fields given change.
      */
     setDeltaView(v) {
       if (!v) return;
       if (v.mode === 'cum' || v.mode === 'bar') { if (pane.mode !== v.mode) pane.init = false; pane.mode = v.mode; }
       if (typeof v.note === 'string') pane.note = v.note;
       if (typeof v.reason === 'string') pane.reason = v.reason;
+      if (typeof v.missed === 'number' && isFinite(v.missed)) pane.missed = Math.max(0, v.missed);
       if (typeof v.ratio === 'number' && isFinite(v.ratio)) { pane.ratio = clamp(v.ratio, PANE_RATIO_MIN, PANE_RATIO_MAX); layout(); clampRight(); }
       dirty = true;
     },

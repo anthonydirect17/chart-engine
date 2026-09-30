@@ -311,6 +311,52 @@ class TickStore {
     return i;
   }
 }
+/*
+ * RangeReplay (1.7.0, round 6): the delta's counted trades on a new load's range bars, by their order in the store, not
+ * by their time. The builder is fed the store from `from` exactly as the chart's range bars were built; each counted trade
+ * (from `segs`, TickStores with { st, i, end }, end null for one that grows) is matched to the next store trade with the
+ * same time, price and volume and counted (`count(t, v, s, barT, sm)`) in the bar the builder holds right after that
+ * store trade went in, as live trades are. So trades that share a millisecond across a range-bar boundary stay in their
+ * own bars. A store trade before the next counted one (or at its time but not it) only builds bars; a counted trade the
+ * store does not hold (not in this load's backfill) goes in the builder's newest bar at that point. step(n) does at most
+ * n trades and returns true when both are through; the store and the last segment may grow meanwhile.
+ */
+class RangeReplay {
+  constructor(store, from, segs, builder, count) {
+    this.store = store; this.i = Math.max(0, from || 0); this.segs = segs.slice(); this.builder = builder; this.count = count;
+  }
+  _seg() {
+    while (this.segs.length) {
+      const g = this.segs[0], end = g.end === null ? g.st.length : g.end;
+      if (g.i < end) return g;
+      if (g.end === null) return null;
+      this.segs.shift();
+    }
+    return null;
+  }
+  _bar(t) { const b = this.builder.bars; return b.length ? b[b.length - 1].t : t; }
+  step(n) {
+    const st = this.store, bd = this.builder;
+    for (let k = 0; k < n; k++) {
+      const g = this._seg(), more = this.i < st.length;
+      if (!g && !more) return true;
+      if (!g) { bd.addQuiet(st.time(this.i), st.price(this.i), st.volume(this.i)); this.i++; continue; }
+      const c = g.st, j = g.i, tj = c.time(j);
+      if (more) {
+        const ts = st.time(this.i);
+        if (ts < tj || (ts === tj && !(st.price(this.i) === c.price(j) && st.volume(this.i) === c.volume(j)))) {
+          bd.addQuiet(ts, st.price(this.i), st.volume(this.i)); this.i++; continue;   // only builds bars
+        }
+        if (ts === tj) {                                                           // the same trade: its bar, in order
+          bd.addQuiet(ts, st.price(this.i), st.volume(this.i)); this.i++;
+          this.count(tj, c.volume(j), c.side(j), this._bar(tj), c.method(j)); g.i++; continue;
+        }
+      }
+      this.count(tj, c.volume(j), c.side(j), this._bar(tj), c.method(j)); g.i++;     // not in this store
+    }
+    return false;
+  }
+}
 /* the time of trade i, in a TickStore or a plain [[t, p, v], ...] list */
 const timeAt = (ticks, i) => typeof ticks.time === 'function' ? ticks.time(i) : ticks[i][0];
 
@@ -355,5 +401,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, RangeReplay };
 });

@@ -939,12 +939,13 @@ function start(container, opt, PAGE) {
    * the new backfill with tick-rule sides) are not in it, by the measured-sides rule.
    */
   const K = { root: null, opened: false, started: false, load: 0, open: false, openWhy: '', liveFrom: null, firstT: null, fixedFrom: -Infinity,
-    floor: -Infinity, trimmed: false, day: null, trades: new BB.TickStore(), base: null };
+    floor: -Infinity, day: null, trades: new BB.TickStore(), base: null, lastT: null, gap: false, missed: 0 };
   // K.base: the backfill's measured trades, { store, from, to }: on the count's first load the store itself (nothing
   // copied), and before a later load only this session's part of it, copied once (countKeepBase), so no store is held twice
   let loadSeq = 0;
   function countReset(root) {
-    K.root = root; K.started = false; K.trades = new BB.TickStore(); K.base = null; K.day = null; K.firstT = null; K.floor = -Infinity; K.trimmed = false;
+    K.root = root; K.started = false; K.trades = new BB.TickStore(); K.base = null; K.day = null; K.firstT = null; K.floor = -Infinity;
+    K.lastT = null; K.gap = false; K.missed = 0;
     K.openWhy = K.opened ? '' : 'page opened';         // "(page opened)" only for the page's first instrument
     K.opened = true;
   }
@@ -953,9 +954,9 @@ function start(container, opt, PAGE) {
     const live = D.liveFrom === null ? Infinity : D.liveFrom + liveLate();
     const n = D.ticks.length, k = D.ticks.firstMeasured(0, Math.min(D.backfill, n));
     let cov;
-    if (k < Math.min(D.backfill, n)) cov = { from: D.ticks.time(k) + 1e-6, index: k, by: 'store', why: '' };   // the backfill's measured window
+    if (k < Math.min(D.backfill, n)) cov = { from: D.ticks.time(k), index: k, by: 'store', why: '' };   // the backfill's measured window, from its first trade on
     else {                                                                    // none: from the page's opening
-      const b = Math.min(D.backfill, n), first = b < n ? D.ticks.time(b) + 1e-6 : Infinity;
+      const b = Math.min(D.backfill, n), first = b < n ? D.ticks.time(b) : Infinity;   // the first live trade counts (round 6)
       cov = live < first ? { from: live, index: b, by: 'live', why: K.openWhy } : { from: first, index: b, by: 'first', why: K.openWhy };
     }
     if (D.trimmed && n && D.ticks.time(0) + 1e-6 > cov.from) cov = { from: D.ticks.time(0) + 1e-6, index: cov.index, by: 'store', why: '' };
@@ -981,24 +982,38 @@ function start(container, opt, PAGE) {
     const b = K.base;
     if (!b || b.store !== D.ticks) return;
     b.from -= n; b.to -= n;
-    if (b.from < 0) { b.from = 0; K.floor = Math.max(K.floor, D.ticks.time(0) + 1e-6); K.trimmed = true; }
+    if (b.from < 0) { b.from = 0; K.floor = Math.max(K.floor, D.ticks.time(0) + 1e-6); }
     if (b.to <= 0) K.base = null;
   }
-  /* A live trade of the count's instrument; true when the count's trades were dropped (a new session, or the cap). */
+  /*
+   * A live trade of the count's instrument; true when the count's trades were dropped (a new session, or the cap).
+   * The seconds the count missed (round 6): a later load of the instrument (a reconnect, a bridge restart, a view that
+   * needs more ticks) leaves a hole, the trades between the last one counted before it and the first of the new load
+   * (ChartBridge holds a page's trades during a load and sends the ones its backfill holds only there, with tick-rule
+   * sides under quoteHours 0). Its length on the trades' own clock, from the last trade before it (the hole can be no
+   * longer), in this session only; the label shows the session's total from 1 s ("missed 32 s").
+   */
   function countAdd(m) {
     const t = m.t, day = U.tradeDay(t, SESSION);
     let dropped = false;
     if (K.day !== null && day > K.day && (K.trades.length || K.base)) { K.trades = new BB.TickStore(); K.base = null; dropped = true; }   // 18:00 ET: a new session from 0
+    if (K.day !== null && day > K.day) K.missed = 0;
     if (K.day === null || day > K.day) K.day = day;
     if (K.firstT === null) K.firstT = t;
+    if (K.gap && D.ready && D.root === K.root) {         // the first trade of the new load
+      K.gap = false;
+      if (K.lastT !== null) { const hole = t - Math.max(K.lastT, BB.sessionStartOf(t, SESSION)); if (hole > 0) { K.missed += hole; deltaView(); deltaLegend(true); } }
+    }
+    if (K.lastT === null || t > K.lastT) K.lastT = t;
     K.trades.push(t, m.p, m.v || 0, m.s, m.sm);
-    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; K.trimmed = true; dropped = true; }
+    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; dropped = true; }
     return dropped;
   }
+  const countMissed = () => K.started && K.root === D.root ? K.missed : 0;
   /* The window a build counts from: the count's, when it began on an earlier load of this instrument, else this store's. */
   function deltaCoverage() {
     if (!(K.started && K.root === D.root && K.load !== loadSeq)) return storeCoverage();
-    const live = K.liveFrom + liveLate(), first = K.firstT !== null ? K.firstT + 1e-6 : Infinity;
+    const live = K.liveFrom + liveLate(), first = K.firstT !== null ? K.firstT : Infinity;
     let cov = !K.open ? { from: K.fixedFrom, by: 'store', why: '' } : live < first ? { from: live, by: 'live', why: K.openWhy } : { from: first, by: 'first', why: K.openWhy };
     if (K.floor > cov.from) cov = { from: K.floor, by: 'store', why: '' };
     cov.journal = true; cov.index = 0;
@@ -1039,12 +1054,11 @@ function start(container, opt, PAGE) {
     const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: cov.from, byTime: !range && tf.sec >= 300 });
     let job;
     if (cov.journal) {
-      // from the count (a later load of the same instrument): its trades on this load's bars, a range trade on the chart's
-      // range bar holding its time (range bars are built from this load's store)
-      const bars = () => D.cur ? D.cur.bars : [];
-      const barAt = t => { const b = bars(); let lo = 0, hi = b.length - 1, r = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (b[mid].t <= t) { r = mid; lo = mid + 1; } else hi = mid - 1; } return r < 0 ? t : b[r].t; };
-      job = deltaJob = { cd, cov, feed: range ? { addQuiet: (t, p, v, s2, sm) => cd.add(t, v, s2, barAt(t), sm) } : cd,
-        segs: (K.base ? [{ st: K.base.store, i: K.base.from, end: K.base.to }] : []).concat({ st: K.trades, i: 0, end: null }) };
+      // from the count (a later load of the same instrument): its trades on this load's bars; on range bars by their order
+      // in this load's store, as the chart's range bars were built (BB.RangeReplay, round 6), never by their time
+      const segs = (K.base ? [{ st: K.base.store, i: K.base.from, end: K.base.to }] : []).concat({ st: K.trades, i: 0, end: null });
+      job = deltaJob = range ? { cd, cov, segs, replay: null, i: o.rangeFrom === undefined ? null : o.rangeFrom, scan: 0, from: D.tickFrom }
+        : { cd, cov, feed: cd, segs };
     } else {
       // counted from the window's first trade by its place in the store (never a backfill trade before it, whatever its
       // time); range bars are still built from their session's start, the trades before the window only into the bars
@@ -1064,7 +1078,13 @@ function start(container, opt, PAGE) {
         if (j < n && BB.sessionStartOf(D.ticks.time(j), SESSION) < job.from) { later(slice, 0); return; }
         job.i = j < n ? j : 0;                              // no session start covered: from the first trade, as the chart
       }
-      if (job.segs) {                                       // the count: its kept backfill part, then its live trades (to their end)
+      if (job.replay !== undefined) {                       // the count on range bars
+        if (!job.replay) job.replay = new BB.RangeReplay(D.ticks, job.i, job.segs, rangeBuilder(), (t, v, s2, barT, sm) => job.cd.add(t, v, s2, barT, sm));
+        let done;
+        do done = job.replay.step(DELTA_SLICE_TRADES);
+        while (!done && performance.now() - t0 < DELTA_SLICE_MS);
+        if (!done) { later(slice, 0); return; }
+      } else if (job.segs) {                                // the count: its kept backfill part, then its live trades (to their end)
         for (;;) {
           const g = job.segs[0], end = () => g.end === null ? g.st.length : g.end;
           do g.i = g.st.feedSides(job.feed, g.i, null, Math.min(end(), g.i + DELTA_SLICE_TRADES));
@@ -1093,7 +1113,7 @@ function start(container, opt, PAGE) {
   /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
      session may count from later than 18:00, for its title. */
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
-  function deltaView() { chart.setDeltaView({ note: S.layers.delta && D.ready && bridgeSides() === false ? OLD_BRIDGE : '', reason: deltaWhy() }); }
+  function deltaView() { chart.setDeltaView({ note: S.layers.delta && D.ready && bridgeSides() === false ? OLD_BRIDGE : '', reason: deltaWhy(), missed: countMissed() }); }
   /* "Delta +12,345" in the legend (the bar under the crosshair, else the newest), "Bar delta" in bar mode, the start
      when the session counts from later than 18:00, and the unknown sides (they add nothing) when there are any. */
   let legendBarT = null, deltaLegendKey = '';
@@ -1114,10 +1134,12 @@ function start(container, opt, PAGE) {
     if (!cd) { deltaLegendKey = ''; return; }
     const bar = S.options.delta.show === 'bar', b = legendBarT === null ? cd.last : cd.at(legendBarT), ses = b ? cd.sessionOf(b) : cd.session;
     const v = b ? (bar ? b.c - b.o : b.c) : null;
-    const key = [cd.version, legendBarT, bar, v].join('|');
+    const missed = !bar && ses && ses === cd.session && countMissed() >= 1 ? Math.round(countMissed()) : 0;   // round 6
+    const key = [cd.version, legendBarT, bar, v, missed].join('|');
     if (!force && key === deltaLegendKey) return;
     deltaLegendKey = key;
-    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' since ' + U.fmtExact(ses.from) : ''));
+    const since = !bar && ses && (ses.partial || missed) ? U.fmtExact(ses.partial ? ses.from : ses.start) : '';
+    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (since ? ' since ' + since : '') + (missed ? ', missed ' + missed + ' s' : ''));
     const dv = $('lgDv');
     put(dv, 'textContent', v === null ? '-' : U.fmtSigned(v, 0));
     put(dv, 'className', 'dv' + (v > 0 ? ' up' : v < 0 ? ' down' : ''));
@@ -1125,7 +1147,8 @@ function start(container, opt, PAGE) {
     put(du, 'hidden', !(unk > 0));
     put(du, 'textContent', unk > 0 ? ' · ' + U.fmtPrice(unk, 0) + ' unknown' : '');
     put(el, 'title', (bar ? 'Bar delta: each bar\'s market buys minus market sells' : 'Cumulative delta: market buys minus market sells since ' +
-      (ses && ses.partial ? U.fmtExact(ses.from) + ' ET' + (deltaWhy() ? ' (' + deltaWhy() + ')' : '') : '18:00 ET')) + '. Sides from ChartBridge; unknown sides add nothing.');
+      (ses && ses.partial ? U.fmtExact(ses.from) + ' ET' + (deltaWhy() ? ' (' + deltaWhy() + ')' : '') : '18:00 ET') + (missed ? ', missing ' + missed + ' s the page was reloading or reconnecting' : '')) +
+      '. Sides from ChartBridge; unknown sides add nothing.');
   }
   /*
    * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
@@ -1202,7 +1225,7 @@ function start(container, opt, PAGE) {
     // from just after it is held, so count from there, a few seconds earlier (round 5: on 5m and longer they show)
     if (!deltaFed) {
       const cov = deltaJob ? deltaJob.cov : D.delta ? D.deltaCov : null;
-      if (cov && cov.by === 'live' && t + 1e-6 < cov.from) { deltaStart({ keep: true }); deltaFed = true; }
+      if (cov && cov.by === 'live' && t < cov.from) { deltaStart({ keep: true }); deltaFed = true; }
     }
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
@@ -1350,7 +1373,7 @@ function start(container, opt, PAGE) {
   function subscribe(root) {
     loadSeq++;
     if (root !== K.root) countReset(root);             // a new instrument: a new count; the same one keeps its count (round 5)
-    else countKeepBase();
+    else if (K.started) { countKeepBase(); K.gap = true; }   // and notes the seconds it misses (round 6)
     resetData(root);
     setConn('loading');
     D.tickHours = ticksWanted();
