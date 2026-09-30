@@ -1082,10 +1082,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // aborted, so the page sees it), and it reconnects on its own and reloads. "Behind" is how long the oldest waiting
         // market data entry has waited (DataAgeMs), not counting the time spent sending the page's own bulk data meanwhile:
         // a load's history and ticks chunks and the held trades released after "ready" (review 4 B1). They go out back to
-        // back at the page's pace and none of them is late; a live backlog still ages during every other send, so bulk data
-        // can never hide it. Only bulk sends that have finished are credited, so a page frozen in the middle of one still
-        // ages. Also closed: 5,000 entries waiting while the message being sent has been stuck for over StuckMs (2 s), and
-        // over 5,000 order-lane messages waiting.
+        // back at the page's pace; a live backlog ages during every other send. Only bulk sends that have finished are
+        // credited, so a page frozen in the middle of one still ages. The price of that credit (review 5 S1): right after
+        // a load, live trades queued behind the release are as late as the release is long, and that does not count, so
+        // a page can run up to the release's length plus 5 s behind before it is closed (review 5 measured 4.4 to 14.3 s
+        // on healthy pages at 3,000 trades a second). Counting it closed every reload at that rate in a loop. Sending
+        // recent ticks first (next: branch live-first) is what shrinks the release. Also closed: 5,000 entries waiting
+        // while the message being sent has been stuck for over StuckMs (2 s), and over 5,000 order-lane messages waiting.
         public const int SoftCap = 5000;
         public const double StuckMs = 2000, MaxLagMs = 5000;
         private static readonly object Wake = new object();
@@ -1289,8 +1292,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // Review 3 N1: a send that failed ends the page's stream; close it so the page reconnects instead of waiting.
                 ChartBridgeServer.Log("Client " + Id + " send stopped: " + ex.Message + "; closing it.");
-                Close();
             }
+            finally { Close(); }   // every way out (review 5 N6: also when the socket is no longer open); Close is idempotent
         }
 
         public string DiagJson()
@@ -2127,7 +2130,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 RequestQuotes(L, MarketDataType.Ask, true);
                 return;
             }
-            if (L.MinuteTail == null) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }); return; }
+            if (L.MinuteTail == null) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
             // Minute and hour charts: only the last trades, for the forming minute (not sent to the page).
             BarsRequest ticks = new BarsRequest(L.Inst, SeamTicksBack);
             ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
@@ -2143,7 +2146,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception ex) { Log("last trades error: " + ex.Message); }
                 finally { try { req.Dispose(); } catch (Exception) { } }
                 RawBars copy = raw;
-                L.HeadSent.ContinueWith(delegate { Finish(L, copy); });
+                L.HeadSent.ContinueWith(delegate { Finish(L, copy); }, TaskScheduler.Default);
             }));
         }
 
@@ -2288,14 +2291,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (L.Asks == null && L.AskNote == "asked") L.AskNote = late;
                     }
                     Proceed(L);
-                });
+                }, TaskScheduler.Default);
         }
 
         private static void Proceed(Load L)
         {
             RawBars copy;
             lock (L) copy = L.LastTicks;
-            L.HeadSent.ContinueWith(delegate { Finish(L, copy); });
+            L.HeadSent.ContinueWith(delegate { Finish(L, copy); }, TaskScheduler.Default);   // review 5 N4: Finish can wait at the page's pace; never on a NinjaTrader scheduler
         }
 
         // Order on the wire: minute history, its last bar (rebuilt from the ticks when it can be), the tick backfill

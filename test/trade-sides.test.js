@@ -10,6 +10,7 @@ const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const BB = require('../live/bar-builder.js');
 
 const et = (h, m, s) => Date.UTC(2026, 8, 29, h, m, 0) / 1000 + (s || 0);
@@ -113,8 +114,17 @@ async function startBridge(port, flags) {
   return child;
 }
 
+// A port nobody is listening on, from the OS (fake-bridge.test.js picks random ports in 18700 to 19499).
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)); });
+  });
+}
+
 async function load(flags) {
-  const port = 19100 + Math.floor(Math.random() * 400);
+  const port = await freePort();
   const child = await startBridge(port, flags);
   try {
     const ws = await wsConnect(port);
