@@ -37,6 +37,12 @@
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day)
+//   --no-sides                      behave like ChartBridge 0.3.3 for trade sides: ticks as [t,p,v] and live ticks without
+//                                   s and sm (to check the page against an older add-on)
+// Trade sides (ChartBridge 0.3.4, nt8/PROTOCOL.md "Trade side"): every backfill trade is [t, p, v, s, sm] and every live
+// tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
+// quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
+// previous side by the tick rule (sm 3), the first is unknown (0, 0). Sample data, not a real classification.
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -61,6 +67,14 @@ const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
+const SIDES = !flag('no-sides') && !V1;           // ChartBridge 0.2 (--v1) had no sides either
+/* The side of a trade from the previous one (see the header): [s, sm]. */
+function sideOf(p, prev, prevSide) {
+  if (prev === undefined) return [0, 0];
+  if (p > prev + 1e-9) return [1, 2];
+  if (p < prev - 1e-9) return [-1, 2];
+  return prevSide ? [prevSide, 3] : [0, 0];
+}
 const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
@@ -112,7 +126,11 @@ function ticksFrom(bars, hours) {
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
     const v = Math.max(1, Math.round(b.v / prices.length));
-    prices.forEach((p, i) => out.push([+(b.t + i * 59.9 / prices.length).toFixed(3), p, v]));
+    prices.forEach((p, i) => {
+      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, v];
+      if (SIDES) { const prev = out.length ? out[out.length - 1] : undefined; row.push(...sideOf(p, prev && prev[1], prev && prev[3])); }
+      out.push(row);
+    });
   }
   return out;
 }
@@ -220,12 +238,14 @@ function subscribe(c, m) {
   c.ready = true;
 }
 
-const last = {}, held = {};
+const last = {}, held = {}, lastSide = {};
 for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
 function trade(r, p) {
-  last[r] = p;
+  const [s, sm] = sideOf(p, last[r], lastSide[r]);
+  last[r] = p; lastSide[r] = s;
   const now = Date.now();
   const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
+  if (SIDES) { msg.s = s; msg.sm = sm; }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade
 }
