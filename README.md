@@ -56,6 +56,9 @@ line; recompile or restart NinjaTrader after a change):
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
+| `bars` | off | `on` sends each session's 1-minute bars to The Desk after the close (ChartBridge 0.3.6, see below). |
+| `barsRoots` | `NQ, MNQ, ES, MES` | Whose bars `bars = on` sends. |
+| `pc` | the Windows computer name | This PC's name in the bars messages, e.g. `HOME` or `WORK`. |
 | `trading` | `false` | `true` turns on order entry from the chart (see below). |
 | `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
@@ -118,6 +121,29 @@ Anthony out of a trade:
   in The Desk (`ChartLive.mount`) never shows the PIN pad.
 
 Details: "PIN" in `nt8/PROTOCOL.md`.
+
+### Daily bars to The Desk (`bars = on`, ChartBridge 0.3.6, off by default)
+
+The Desk tags each trade with the levels around it, and for that it needs the day's 1-minute bars. With
+`bars = on` in `config.txt`, ChartBridge sends them from NinjaTrader's own data:
+
+- **What:** every finished 1-minute bar (open, high, low, close, volume, exactly as NinjaTrader has them) of
+  the session, 18:00 to 17:00 New York time (the Sunday evening counts as Monday), for NQ, MNQ, ES and MES.
+  One message per contract per session: the front month the chart uses, plus any other contract of that
+  root you had fills in that session. Each bar carries its start time. Nothing else: no account, no PIN,
+  no token, only the market data and this PC's name (`pc`).
+- **When:** a few minutes after the 17:00 close, if NinjaTrader is connected; and when ChartBridge starts
+  (about 2 minutes after, once the charts have loaded), any of the last 5 sessions The Desk has not taken
+  yet, so the first run also sends the day before. Weekends and full holidays are skipped.
+- **Never in the way:** the requests run one at a time on their own low-priority thread, wait while a chart
+  is loading, and never touch order entry. A request NinjaTrader does not answer in 2 minutes, or that
+  fails, is logged and tried again 15 minutes later.
+- **Like fills:** each message waits in `pending_bars.jsonl` (next to `pending_fills.jsonl`) until The
+  Desk takes it (`POST /api/bars` at `deskUrl`, retried every 10 seconds), so a restart or The Desk being
+  closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl`. Sessions
+  The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
+  sent per contract, how many wait, and the last problem. Details: "Daily bars to The Desk" in
+  `nt8/PROTOCOL.md`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
@@ -298,6 +324,9 @@ npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
+npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
+npm run check:orders     # the order gates, the PIN, the seam and trade sides under Mono
+npm run check:bars       # daily bars: session dates, stamps, catch-up, the queue (Mono)
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in

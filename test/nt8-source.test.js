@@ -479,8 +479,8 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
 
 // ---- 0.3.4: the side of every trade (behaviour: nt8/check/SidesHarness.cs under Mono, test/trade-sides.test.js)
 test('0.3.4: every trade carries its side, additively, and the seam match ignores it', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.4 for NinjaTrader 8/);
-  assert.match(code, /public const string Version = "0\.3\.4";/);
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.6-pre for NinjaTrader 8/);
+  assert.match(code, /public const string Version = "0\.3\.6-pre";/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   // Bid and Ask updates only move the quote: nothing is sent or held for them
   const quote = md.slice(0, md.indexOf('if (type != MarketDataType.Last) return;') + 45);

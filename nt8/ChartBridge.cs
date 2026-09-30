@@ -1,4 +1,4 @@
-// ChartBridge 0.3.4 for NinjaTrader 8
+// ChartBridge 0.3.6-pre for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
@@ -9,7 +9,7 @@
 // places, changes or cancels an order itself.
 // Protocol: nt8/PROTOCOL.md in https://github.com/anthonydirect17/chart-engine (MIT).
 //
-// Install: copy this file, ChartBridgeOrders.cs and ChartBridgePin.cs to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
+// Install: copy this file, ChartBridgeOrders.cs, ChartBridgePin.cs and ChartBridgeBars.cs to Documents\NinjaTrader 8\bin\Custom\AddOns\ and the page files to
 // Documents\NinjaTrader 8\ChartBridge\www\ (nt8\install.ps1 does both), then compile in the
 // NinjaScript Editor. Output from the add-on appears in the Output window (New > NinjaScript Output).
 //
@@ -109,10 +109,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
         //                                  they can never trade. Requests still have to come from this PC.
         //                                  One line: the last allowOrigins line wins. Non-ASCII hosts in punycode.)
+        //   bars = on, barsRoots, pc      (daily 1-minute bars to The Desk; off by default; see ChartBridgeBars.cs)
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
+            ChartBridgeBars.ResetConfig();
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -133,6 +135,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
                 else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
+                else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
         }
@@ -1489,7 +1492,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.4";
+        public const string Version = "0.3.6-pre";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -1537,6 +1540,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
+                    ChartBridgeBars.Start();   // daily bars to The Desk, when bars = on (its own low-priority thread)
                     return true;
                 }
                 catch (Exception ex)
@@ -1556,6 +1560,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Gate)
             {
                 try { if (cts != null) cts.Cancel(); } catch (Exception) { }
+                ChartBridgeBars.Stop();
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
                 accountTimer = null;
                 try { if (pollTimer != null) pollTimer.Dispose(); } catch (Exception) { }
@@ -1820,6 +1825,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void SendToTraders(string json)
         {
             foreach (ChartBridgeClient c in Clients.Values) if (c.Trader) c.Send(json);
+        }
+
+        // A page is loading its history (subscribed, not ready yet): the daily bars wait (ChartBridgeBars.cs).
+        public static bool PagesLoading()
+        {
+            foreach (ChartBridgeClient c in Clients.Values) if (c.Root != null && !c.Ready) return true;
+            return false;
         }
 
         // ---------------------------------------------------------- instruments and front month
@@ -2710,6 +2722,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"network\":").Append(ChartBridgeAccess.DiagJson());
             b.Append(",\"pin\":").Append(ChartBridgePin.DiagJson());   // whether a PIN is set, nothing else
             b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());
+            b.Append(",\"bars\":").Append(ChartBridgeBars.DiagJson());   // 0.3.6: daily 1-minute bars to The Desk
             b.Append(",\"seams\":").Append(SeamsJson());   // 0.3.3: where each load's backfill met the live trades
             b.Append(",\"sides\":").Append(SidesJson());   // 0.3.4: how each trade's side was found, live and in the last backfill
             b.Append(",\"accounts\":[");

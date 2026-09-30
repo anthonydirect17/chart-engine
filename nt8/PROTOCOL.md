@@ -535,7 +535,8 @@ JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": b
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`, `setAside`, `rejectedByDesk`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
+`lastError`, `setAside`, `rejectedByDesk`); `bars` (0.3.6, see Daily bars to The Desk: `enabled`, `roots`, `lastSent`
+(the latest session The Desk took, per contract), `waiting`, `setAside`, `lastRequest`, `lastError`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
 (entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
 waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
 `client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held
@@ -581,6 +582,44 @@ Desk being closed loses nothing; The Desk ignores duplicates. A request gives up
 The Desk refuses as malformed is set aside in `rejected_fills.jsonl` so it never blocks the queue. Fills from every watched account are
 sent: The Desk's Accounts menu decides which accounts count. ChartBridge sends no commission (NinjaTrader's
 figure is its own commission template, not what was charged).
+
+## Daily bars to The Desk (0.3.6, off by default)
+
+Contract v1 (2026-09-30, approved by Anthony), shared with The Desk's `POST /api/bars`. With `bars = on` in
+`config.txt` (`barsRoots`, default `NQ, MNQ, ES, MES`; `pc`, default the Windows computer name), ChartBridge
+sends each session's 1-minute bars to The Desk (`nt8/ChartBridgeBars.cs`).
+
+- **Session:** 18:00 New York time (the previous calendar day) to 17:00; its date is the New York date it ends
+  on, so the Sunday 18:00 open belongs to Monday. Daylight saving comes from the time zone (it changes on a
+  Sunday at 2 AM, when the market is shut, so a session is always 23 hours). Early closes are ordinary
+  sessions that end sooner; full holidays of the trading hours template (`TradingHours.Holidays`) are skipped.
+- **Which contracts:** per root, the contract the chart uses for that session: `contract.<ROOT>` if set, else
+  the front month by the chart's roll rule (8 days before the third-Friday expiry) on the session date. Plus
+  any other contract of that root with fills in that session (from the watched accounts' executions;
+  NinjaTrader keeps the current session's only, so after a restart older sessions get the front month only).
+- **The request:** `BarsRequest(instrument, from, to)`, 1 minute, `MarketDataType.Last`, the instrument's trading
+  hours (as the chart), `MergePolicy.DoNotMerge` (that contract's own prices). NinjaTrader turns from and to
+  into whole trading days, so ChartBridge asks from the day before the session's open to the day after its
+  close (never past now), in NinjaTrader's time zone, and keeps the minutes that opened at or after the
+  session's open and closed by its close and by now. No partial bars.
+- **Stamps:** NinjaTrader stamps a bar at its close, in the time zone set under Tools > Options > General. Each
+  bar is sent as `[t, o, h, l, c, v]` with `t` its open: the stamp converted to UTC, less 60 s, in Unix
+  milliseconds. Sorted by `t`, one per minute; prices and volume exactly as NinjaTrader has them.
+- **When:** from 17:05 New York time for the session that just closed, if a price feed is connected; and from
+  2 minutes after ChartBridge starts, any of the last 5 sessions not taken by The Desk yet. What is due is
+  looked at once a minute; requests go one at a time on ChartBridge's bars thread (background, below normal
+  priority), only while no page is loading its history, 2 s apart. A request not answered in 2 minutes, an
+  error, an empty answer or an unknown instrument is logged once and tried again after 15 minutes.
+- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.6-pre","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
+  "tick":0.25,"session":"2026-09-30","tf":"1m","stamp":"open","bars":[[t,o,h,l,c,v],...],"complete":true}`,
+  one per contract per session. Market data and the PC name only.
+- **Queue:** each message is written to `pending_bars.jsonl` (next to `pending_fills.jsonl`, replaced
+  atomically) before it is sent, then posted to `deskUrl` + `/api/bars`, one per request, oldest first, with
+  a 10 second limit and nothing added (The Desk guards it as it guards `POST /api/fills`, and refuses it
+  through the public tunnel). Anything but an answer retries every 10 seconds; 400 or 422 (malformed) sets it
+  aside in `rejected_bars.jsonl` with The Desk's reason in the Output window, and it is not asked for again
+  until the next start. Sessions The Desk took are kept in `sent_bars.txt` (`yyyy-MM-dd contract`, 40 days)
+  so the catch-up skips them. The Desk stores by (contract, t), so a message sent twice stores once.
 
 ## Orders (protocol v2, Step 2: trading from the chart)
 

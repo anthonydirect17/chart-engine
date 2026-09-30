@@ -15,6 +15,7 @@ New-Item -ItemType Directory -Force -Path $addons, $www, (Join-Path $www 'src') 
 Copy-Item (Join-Path $repo 'nt8\ChartBridge.cs') (Join-Path $addons 'ChartBridge.cs') -Force
 Copy-Item (Join-Path $repo 'nt8\ChartBridgeOrders.cs') (Join-Path $addons 'ChartBridgeOrders.cs') -Force   # order entry (off unless config.txt turns it on)
 Copy-Item (Join-Path $repo 'nt8\ChartBridgePin.cs') (Join-Path $addons 'ChartBridgePin.cs') -Force       # the PIN on ChartBridge's own page (0.3.2)
+Copy-Item (Join-Path $repo 'nt8\ChartBridgeBars.cs') (Join-Path $addons 'ChartBridgeBars.cs') -Force     # daily 1-minute bars to The Desk (0.3.6, off unless bars = on)
 Copy-Item (Join-Path $repo 'live\index.html') (Join-Path $www 'index.html') -Force
 Copy-Item (Join-Path $repo 'live\live.js') (Join-Path $www 'live.js') -Force
 Copy-Item (Join-Path $repo 'live\live.css') (Join-Path $www 'live.css') -Force
@@ -24,7 +25,7 @@ Copy-Item (Join-Path $repo 'live\pin.js') (Join-Path $www 'pin.js') -Force
 Copy-Item (Join-Path $repo 'live\pin.css') (Join-Path $www 'pin.css') -Force
 Copy-Item (Join-Path $repo 'src\chart-engine.js') (Join-Path $www 'src\chart-engine.js') -Force
 
-Write-Host "ChartBridge.cs, ChartBridgeOrders.cs, ChartBridgePin.cs -> $addons"
+Write-Host "ChartBridge.cs, ChartBridgeOrders.cs, ChartBridgePin.cs, ChartBridgeBars.cs -> $addons"
 Write-Host "live page       -> $www"
 Write-Host ""
 Write-Host "Next: NinjaTrader > New > NinjaScript Editor > compile (F5)."

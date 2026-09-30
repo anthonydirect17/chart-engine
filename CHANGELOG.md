@@ -1,5 +1,31 @@
 # Changelog
 
+## ChartBridge 0.3.6-pre (2026-09-30): daily 1-minute bars to The Desk
+
+ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged. **Needs a recompile:** run
+`nt8\install.ps1` again (it now also copies the new `ChartBridgeBars.cs`), then compile in NinjaTrader (F5).
+Off until `bars = on` is in `config.txt`. The version is 0.3.6-pre until it is merged after 0.3.5.
+- **What it sends** (contract v1, approved by Anthony 2026-09-30): after each session closes (17:00 New York
+  time, plus 5 minutes), every finished 1-minute bar of that session (18:00 the day before to 17:00; the
+  Sunday evening counts as Monday) for NQ, MNQ, ES and MES, from NinjaTrader's own data, to The Desk's
+  `POST /api/bars`. One message per contract per session: the front month the chart uses, plus any other
+  contract of that root you had fills in that session. Each bar is `[t, o, h, l, c, v]` with `t` its start
+  in UTC milliseconds (NinjaTrader stamps bars at their close; ChartBridge takes a minute off). Only market
+  data and the PC name (`pc`, default the Windows computer name) leave the PC.
+- **Catch-up:** at the start (2 minutes in, after the charts have loaded) any of the last 5 sessions The Desk
+  has not taken yet is sent, so the first run also delivers the day before. Weekends and full holidays are
+  skipped.
+- **Never in the way:** one request at a time, on its own background thread at below-normal priority, only
+  while no chart is loading, 2 minutes at most per request; failures are logged once and tried again 15
+  minutes later. The order code (`ChartBridgeOrders.cs`) is byte for byte unchanged.
+- **Like fills:** messages wait in `pending_bars.jsonl` until The Desk takes them (10 s per request, retried
+  every 10 s); malformed ones are set aside in `rejected_bars.jsonl`; `sent_bars.txt` records what was taken.
+  `/diag` has a `bars` section.
+- **Settings:** `bars = on`, `barsRoots = NQ, MNQ, ES, MES`, `pc = HOME`.
+- **Checks:** `npm run check:bars` (Mono): session dates, daylight saving in March and November, early closes,
+  close stamps to open times from five NinjaTrader time zones, the catch-up, contracts, the queue against a
+  stand-in Desk, whole passes (109 checks). `test/nt8-bars.test.js` guards the source in CI.
+
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
 
 ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to

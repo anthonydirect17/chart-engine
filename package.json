@@ -23,7 +23,8 @@
     "perf:live": "node test/perf-live.mjs",
     "bridge": "node test/fake-bridge.mjs",
     "check:nt8": "sh nt8/check/check.sh",
-    "check:orders": "sh nt8/check/orders.sh"
+    "check:orders": "sh nt8/check/orders.sh",
+    "check:bars": "sh nt8/check/bars.sh"
   },
   "devDependencies": {
     "playwright": "^1.56.1"
