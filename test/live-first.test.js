@@ -229,7 +229,8 @@ test('fake bridge --live-first: the served window, the profile before ready, and
     const off = tape.t.findIndex(t => t >= page[0][0]);
     for (let i = 0; i < page.length; i++) {
       const x = page[i], j = off + i;
-      if (x[0] !== tape.t[j] || x[1] !== tape.p[j] || x[2] !== tape.v[j] || x[3] !== tape.s[j] || x[4] !== tape.m[j]) assert.fail('trade ' + i + ': ' + JSON.stringify(x));
+      // the window's trades are [t, p, v] (no side, as ChartBridge 0.3.5 sends them); live ticks carry theirs
+      if (x[0] !== tape.t[j] || x[1] !== tape.p[j] || x[2] !== tape.v[j] || (i >= win.length && (x[3] !== tape.s[j] || x[4] !== tape.m[j])) || (i < win.length && x.length !== 3)) assert.fail('trade ' + i + ': ' + JSON.stringify(x));
     }
     // the table plus the trades after it are exactly the session's trades
     const P = got[prof], sessionTrades = [];

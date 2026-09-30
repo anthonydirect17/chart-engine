@@ -190,6 +190,9 @@ try {
     let b = await books(br);
     check(b.NQ.asked === 1 && b.NQ.served === 0, 'NinjaTrader asked once for the window (' + JSON.stringify(b.NQ) + ')');
     await hold(p, br, false);
+    // the delta pane (1.7.0) counts live trades from the page's open; the served window's trades carry no side
+    const d0 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, by: D.deltaCov && D.deltaCov.by }; });
+    check(d0.on && (d0.by === 'live' || d0.by === 'first'), 'the delta pane counts from the page\'s open (' + JSON.stringify(d0) + ')');
     // a reload: from the served window
     await p.reload(); await live(p);
     await hold(p, br, true);
@@ -198,17 +201,29 @@ try {
     check(b.NQ.asked === 1 && b.NQ.served === 1 && c.first === a.first, 'reload: the same window from ChartBridge\'s memory (' + JSON.stringify(b.NQ) + '), first trade ' + hm(c.first) + ' ET');
     check(c.firstBar === a.firstBar && !c.barsBad && c.bars >= a.bars && c.storeBad < 0, 'reload: the bars start where they started (' + hm(c.firstBar) + ' ET) and are exact (' + c.bars + ' bars)');
     check(c.vp && !c.vp.bad, 'reload: the profile is exact');
+    await p.waitForFunction(() => { const D = window.liveData(); return !!D.delta; }, null, { timeout: 10000 }).catch(() => {});
+    const d1 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, by: D.deltaCov && D.deltaCov.by, legend: document.getElementById('lgDl') ? document.getElementById('lgDl').textContent : '' }; });
+    check(d1.on && (d1.by === 'live' || d1.by === 'first'), 'reload from memory: the delta pane counts again from the reload (a page reload is a new page: ' + JSON.stringify(d1) + ')');
     // a second page
     const p2 = await openPage(ctx, `http://localhost:${br.port}/live/`);
     const d = await exact(p2, br);
     b = await books(br);
     check(b.NQ.asked === 1 && b.NQ.served === 2 && d.firstBar === a.firstBar && !d.barsBad, 'a second page: from memory too, the same first bar (' + JSON.stringify(b.NQ) + ')');
     await p2.close();
+    // a ChartBridge reconnect: the page subscribes again and is served from ChartBridge's memory; for the delta pane that is
+    // a later load of the same instrument, so its count (and "missed N s") carries on
+    await control(br.port, 'drop');
+    await p.waitForTimeout(300); await live(p);
+    await p.waitForFunction(() => { const D = window.liveData(); return !!D.delta && D.deltaCov && D.deltaCov.journal === true; }, null, { timeout: 10000 }).catch(() => {});
+    const d2 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, journal: !!(D.deltaCov && D.deltaCov.journal), legend: document.getElementById('lgDl') ? document.getElementById('lgDl').textContent : '' }; });
+    b = await books(br);
+    check(d2.on && d2.journal && b.NQ.asked === 1, 'a reconnect served from memory (NinjaTrader not asked) is a later load for the delta: its count carries on ("' + d2.legend + '")');
     // a 15s view from the same window (no load), bars from the first whole one, with VWAP
+    const subs0 = (await subscribes(p)).length;
     await p.click('#tfSeg [data-v="s15"]');
     await p.waitForTimeout(300);
     const s = await exact(p, br);
-    check((await subscribes(p)).length === 1 && s.bars > 100 && !s.barsBad && s.firstBar > s.first && s.firstBar - s.first <= 15 && s.vwBars === s.bars, '15s: no new load, bars from the first whole one (' + hm(s.firstBar) + ' ET), exact with VWAP' + (s.barsBad ? ': ' + s.barsBad : ''));
+    check((await subscribes(p)).length === subs0 && s.bars > 100 && !s.barsBad && s.firstBar > s.first && s.firstBar - s.first <= 15 && s.vwBars === s.bars, '15s: no new load, bars from the first whole one (' + hm(s.firstBar) + ' ET), exact with VWAP' + (s.barsBad ? ': ' + s.barsBad : ''));
     await hold(p, br, false);
     await ctx.close();
     // a 1m page: the profile from the table, no tick history
