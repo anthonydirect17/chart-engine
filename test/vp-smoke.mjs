@@ -6,7 +6,8 @@
 // (POC row in its color reaching VP_WIDTH of the plot width, value-area rows, nothing in the left half); the profile
 // holds exactly the trades the page got (every backfill and live trade counted independently in the page) for the
 // session and for RTH; Session and RTH differ and the legend follows; both choices survive a reload; a mounted chart's
-// documented API (setIndicatorOption) and a new pane with the profile off. Screenshots, labelled as sample data.
+// documented API (setIndicatorOption) and a new pane with the profile off; two tabs, where a stale tab's pick is saved
+// as it shows it (review S2). Screenshots, labelled as sample data.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -245,6 +246,26 @@ try {
   check(await host.evaluate(() => { const vp = window.__a.chart.getProfile(); return !!vp && vp.rth === true && vp.total > 0; }) && await host.evaluate(() => !window.__b.chart.getProfile()),
     'mounted main pane: RTH profile on; pane-2 unaffected');
   await host.close();
+
+  /* two tabs (review S2): a pick is saved as what the tab shows, also when the tab already shows it */
+  const pick = async (pg, v) => { await pg.click('#indBtn'); await pg.click('#indBody [data-act="gear"][data-id="vp"]'); await pg.click('#indBody [data-act="opt"][data-id="vp"][data-v="' + v + '"]'); await pg.keyboard.press('Escape'); await pg.waitForTimeout(300); };
+  const saved = pg => pg.evaluate(() => ({ opt: JSON.parse(localStorage.getItem('live-indicator-options-v1')), ind: localStorage.getItem('live-indicators-v2'), settings: localStorage.getItem('live-settings-v2') }));
+  await pick(p, 'rth');
+  const tabB = await openPage(ctx, `http://localhost:${br.port}/live/`);      // opened while RTH is saved
+  await pick(p, 'full');                                                        // tab A saves Session
+  await p.evaluate(() => { const o = JSON.parse(localStorage.getItem('live-indicator-options-v1')); o['pane-2'] = { vp: { session: 'rth' } }; localStorage.setItem('live-indicator-options-v1', JSON.stringify(o)); });
+  const before = await saved(p);
+  await tabB.click('#indBtn'); await tabB.click('#indBody [data-act="gear"][data-id="vp"]');
+  const b0 = await state(tabB);
+  check(before.opt.main.vp.session === 'full' && b0.rth === true && JSON.stringify(b0.pressed) === '["rth"]', 'two tabs: A saved Session; stale tab B still draws RTH, RTH pressed in its gear panel');
+  await tabB.click('#indBody [data-act="opt"][data-id="vp"][data-v="rth"]'); await tabB.keyboard.press('Escape'); await tabB.waitForTimeout(300);
+  const after = await saved(tabB), b1 = await state(tabB);
+  check(after.opt.main.vp.session === 'rth' && b1.rth === true && b1.total === b1.expect.rth, 'tab B clicks RTH, the one it shows: RTH saved and still drawn: ' + JSON.stringify(after.opt));
+  check(after.opt['pane-2'].vp.session === 'rth' && Object.keys(after.opt).sort().join() === 'main,pane-2' && after.ind === before.ind && after.settings === before.settings,
+    'read, merged, written: another pane\'s option and the other keys kept');
+  const tabC = await openPage(ctx, `http://localhost:${br.port}/live/`), c = await state(tabC);
+  check(c.on === true && c.rth === true && c.total === c.expect.rth, 'a new load draws what tab B showed: RTH, ' + c.total);
+  await tabB.close(); await tabC.close();
   await ctx.close(); br.kill();
 
   /* a first load on 1m: no tick history, so the profile counts live trades only, and says so */

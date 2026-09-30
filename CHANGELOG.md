@@ -104,8 +104,10 @@ Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile. The engin
 - **Off by default on every pane, added from the Indicators menu** (Volume group, with a +) as the indicator `vp`
   ("Volume profile", chip PROFILE, letter P), registered like the others: search finds it by vp, profile, poc, vah,
   val and value area; it gets a chip while the strip has room (with the main pane's five that makes six, a full
-  strip); Hide all, Restore and the two-tab rule cover it like the others. A main pane carried over from
-  `live-indicators-v1` never has it on.
+  strip); Hide all, Restore and the two-tab rule cover it like the others. The carry-over from `live-indicators-v1`
+  reads it like the others: a 1.5.3 save never has a `vp` key, so the profile starts off after upgrading from 1.5.3;
+  a save from the unreleased profile test build that had it on keeps it on (shown and pinned, the main pane's sixth
+  chip).
 - **Session or RTH** (Anthony): the full session from 18:00 ET, or RTH, 9:30:00.000 up to (not including)
   16:00:00.000 ET of the trading day (`VolumeProfile` option `rth`; the same window as the chart's RTH shading and
   sessionLevels; none on weekends and NYSE holidays, the IB's rule; the RTH profile empties at 18:00 and stays empty
@@ -116,7 +118,9 @@ Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile. The engin
   `setIndicatorOption('vp', 'session', 'rth')` on the handle `ChartLive.mount` returns (and read with
   `indicatorOptions('vp')`; live/EMBED.md; it returns false, never throws, for any name that is not an option,
   including inherited ones such as `toString`, and a pane id such as `__proto__` is stored as a plain key), and in the menu the Volume profile's gear panel: "Hours", Session or RTH (the
-  toolbar's segmented style at 11 px), with a line saying what the choice counts.
+  toolbar's segmented style at 11 px), with a line saying what the choice counts. A pick is always saved as what the
+  tab shows, on a fresh read of that pane's field, also when the tab already shows it: a second tab still showing RTH
+  after another tab saved Session saves RTH again, so the next load draws what it showed (review S2).
 - **Legend:** "POC 26,150.50 · VA 26,101.50 to 26,289.50" (the POC price in the gold) while the profile is on and has
   trades.
 - **Data:** built from the page's TickStore at `ready` (when on), when switched on and when Session / RTH changes,
@@ -140,12 +144,14 @@ Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile. The engin
   current values, not to a floor; on a stand-in canvas: only with the layer, drawn after the grid and
   before the volume bars and candles, rebuilt once per change and not per frame); `test/prefs.test.js` (the `vp`
   indicator and its option, per pane, refused values; inherited names and `__proto__`, `constructor` and `toString`
-  as pane ids, with Object.prototype untouched); `npm run smoke:vp` (NQ Range 40 on sample data at 13:00 ET:
+  as pane ids, with Object.prototype untouched; the carry-over of a v1 save without a `vp` key and with `vp` on,
+  under the 6-chip cap); `npm run smoke:vp` (NQ Range 40 on sample data at 13:00 ET:
   off by default, on from the menu, the POC row's pixels from the right edge at about 25% width, value-area and
   other rows at the edge, nothing in the left half; the profile equal to every trade the page received, for the
   session and for RTH, also after 2.5 s of live trades; Session and RTH differ in totals, legend and pixels; both
   choices after a reload; 5m keeps it; the POC bar at least 2 CSS px; a mounted pane's `setIndicatorOption` under
-  `desk:`, and false with no throw for inherited names; a 1m first load with its note). The live, embed, settings
+  `desk:`, and false with no throw for inherited names; two tabs: a stale tab's RTH saved again after another tab's
+  Session, the other keys kept, and a new load drawing RTH; a 1m first load with its note). The live, embed, settings
   and IB smokes count what is on the chart (the profile off).
 - **Performance** (`npm run smoke:perf`, NQ Range 40, 150 trades a second with bursts of 450, three loads of 10 s
   each, headless Chromium on the build box; the smoke now runs with the profile on, `PERF_SMOKE_VP=0` for off,

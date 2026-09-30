@@ -359,11 +359,11 @@ test('the menu lists only real indicators, in three groups; the volume profile i
   assert.equal(new Set(LP.INDICATORS.map(d => d.letter)).size, LP.INDICATORS.length, 'narrow chips: one letter each, all different');
 });
 
-test('the volume profile in the menu: off on every pane (also a main pane carried over from v1), added with a chip under the cap, covered by Hide all', () => {
+test('the volume profile in the menu: off on every pane (also a main pane carried over from a 1.5.3 save), added with a chip under the cap, covered by Hide all', () => {
   const P = LP.Pane;
   assert.equal(LP.create(mem()).pane('main').ind.vp.on, false);
   const v1 = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { vwap: false } } })).pane('main');
-  assert.deepEqual([v1.ind.vp.on, v1.ind.vp.pin], [false, false], 'never on the main pane\'s chart by the carry-over');
+  assert.deepEqual([v1.ind.vp.on, v1.ind.vp.pin], [false, false], 'a 1.5.3 save has no vp key: off after the carry-over');
   let st = P.toggle(LP.defaultPane('main'), 'vp');               // added: the sixth chip
   assert.deepEqual([st.ind.vp.on, st.ind.vp.shown, st.ind.vp.pin, P.pinned(st), P.pinFull(st)], [true, true, true, 6, true]);
   st = P.hideAll(st);
@@ -374,6 +374,29 @@ test('the volume profile in the menu: off on every pane (also a main pane carrie
   const ids = q => LP.searchIndicators(q).map(d => d.id);
   for (const q of ['vp', 'profile', 'poc', 'value area']) assert.ok(ids(q).includes('vp'), q);
   assert.deepEqual(ids('vah'), ['levels', 'vp']);
+});
+
+test('the volume profile carried over from live-indicators-v1: off from a 1.5.3 save, kept on from a save that had it on, under the 6-chip cap', () => {
+  const P = LP.Pane;
+  // (a) every 1.5.3 save: the five flags and no vp key, on the main pane and any other
+  const s153 = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': {
+    main: { volume: true, vwap: false, levels: true, fills: true, ib: true }, 'pane-2': { volume: true, vwap: true, levels: false, fills: false, ib: false } } }));
+  for (const pane of ['main', 'pane-2']) {
+    const st = s153.pane(pane);
+    assert.deepEqual([st.ind.vp.on, st.ind.vp.pin, P.drawn(st).vp], [false, false, false], pane + ': off, no chip, not drawn');
+  }
+  assert.equal(P.pinned(s153.pane('main')), 5, 'the main pane keeps its five chips');
+  // (b) a save from the unreleased profile test build with vp on: on, shown and pinned, as it was drawn
+  const on = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { vp: true }, 'pane-2': { vp: true } } }));
+  const main = on.pane('main');
+  assert.deepEqual(main.ind.vp, { on: true, shown: true, pin: true });
+  assert.equal(P.drawn(main).vp, true);
+  assert.deepEqual([P.pinned(main), P.pinFull(main), LP.PIN_MAX], [6, true, 6], 'six chips on the main pane: the strip is full, not over it');
+  const two = on.pane('pane-2');
+  assert.deepEqual([two.ind.vp, P.pinned(two), onIds(two)], [{ on: true, shown: true, pin: true }, 1, []], 'another pane: only the profile');
+  // with the main pane's explicit offs next to it: those stay hidden, the profile stays on
+  const mixed = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { vwap: false, vp: true } } })).pane('main');
+  assert.deepEqual([mixed.ind.vp, shownIds(mixed), P.pinned(mixed)], [{ on: true, shown: true, pin: true }, ['volume', 'levels', 'ib', 'fills'], 6]);
 });
 
 test('storage that throws or holds junk never breaks the page', () => {

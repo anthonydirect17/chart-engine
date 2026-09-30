@@ -159,7 +159,9 @@ function cleanPane(v, paneId) {
  * A pane saved by 1.4 to 1.5.3 (live-indicators-v1), carried over so every indicator draws exactly as before; an
  * explicit off stays off. The main pane listed all five as its own, so each stays on the chart: the ones that were
  * off are hidden (one click brings one back, as before) and all five are pinned. Any other pane started empty, so
- * only the ones that were on are on its chart (pinned); an off there is off, as on a new pane.
+ * only the ones that were on are on its chart (pinned); an off there is off, as on a new pane. The volume profile is
+ * read like the others: a 1.5.3 save never has a vp key, so it starts off after upgrading from 1.5.3; a save from the
+ * unreleased profile test build that had it on keeps it on (shown and pinned, the main pane's sixth chip).
  */
 function paneFromV1(v1, paneId) {
   const main = paneId === MAIN_PANE;
@@ -828,12 +830,14 @@ function start(container, opt, PAGE) {
   /*
    * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
    * Returns false for an option or value that does not exist. The volume profile is rebuilt from the store.
+   * Always saved, also when the tab already shows that value: another tab may have saved the other one since (review
+   * S2), and a click is saved as what this tab shows, on a fresh read (only this pane's field is written).
    */
   function setIndicatorOption(id, key, value) {
     if (!LP.indicatorOptionAllowed(id, key, value)) return false;   // own properties only: 'toString' is not an option
+    prefs.setIndicatorOption(PANE, id, key, value);
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
-      prefs.setIndicatorOption(PANE, id, key, value);
       if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
     }
     syncIndicators();
