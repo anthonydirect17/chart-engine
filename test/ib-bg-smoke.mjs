@@ -214,6 +214,9 @@ try {
         head: getComputedStyle(document.getElementById('lgName')).color, theme: window.liveChart.getTheme().bg, saved: JSON.parse(localStorage.getItem('live-colors-v1') || 'null') };
     });
     const rgb = h => { const c = U.parseColor(h); return 'rgb(' + c.r + ', ' + c.g + ', ' + c.b + ')'; };
+    /* the canvas is repainted on the next frame, so read it until it shows `hex`, up to 3 s (review 3 N5: fixed waits of
+       200 to 250 ms failed now and then on a busy box, on main too) */
+    const lookFor = async (p, hex) => { let l = await look(p); for (let k = 0; k < 30 && l.canvas !== hex; k++) { await p.waitForTimeout(100); l = await look(p); } return l; };
     const base = await look(a);
     check(base.theme === '#080B10' && base.canvas === '#080B10' && base.legend === 'rgba(8, 11, 16, 0.78)', 'default ground unchanged: ' + JSON.stringify(base));
     await a.screenshot({ path: path.join(SHOTS, 'bg-dark-default.png') });
@@ -273,8 +276,8 @@ try {
     check(await a.isVisible('.ce-grounds') && (await a.$$('.ce-ground')).length === 4, 'Colors panel: four background presets');
     await a.screenshot({ path: path.join(SHOTS, 'colors-panel-open.png') });
     for (const g of CE.BACKGROUNDS) {
-      await a.click(`.ce-ground[data-bg="${g.id}"]`); await a.waitForTimeout(250);
-      const l = await look(a);
+      await a.click(`.ce-ground[data-bg="${g.id}"]`);
+      const l = await lookFor(a, g.bg);
       const T = U.buildTheme({ bg: g.bg });
       check(l.theme === g.bg && l.canvas === g.bg && l.stage === rgb(g.bg) && l.saved.bg === g.bg && U.contrast(T.tagText, g.bg) >= 7,
         g.name + ' ground: canvas ' + l.canvas + ', stage ' + l.stage + ', saved ' + l.saved.bg + ', legend name ' + l.head);
@@ -284,16 +287,16 @@ try {
     }
     // any color with the picker (hex box): white, a mid-grey, a saturated red
     for (const [hex, name] of [['#FFFFFF', 'white'], ['#777777', 'midgrey'], ['#B0102A', 'red']]) {
-      await a.fill('.ce-theme-panel input[data-hex="bg"]', hex); await a.waitForTimeout(250);
-      const l = await look(a);
+      await a.fill('.ce-theme-panel input[data-hex="bg"]', hex);
+      const l = await lookFor(a, hex);
       check(l.canvas === hex && l.saved.bg === hex, 'picked ' + name + ' ' + hex + ': drawn and saved');
       await a.keyboard.press('Escape'); await a.mouse.move(700, 400); await a.waitForTimeout(200);
       await a.screenshot({ path: path.join(SHOTS, 'bg-picked-' + name + '.png') });
       await a.click('.ce-theme-btn');
     }
     // 3-digit shorthand is taken; junk is marked invalid and not applied; leaving the box puts the color back
-    await a.fill('.ce-theme-panel input[data-hex="bg"]', '#abc'); await a.waitForTimeout(200);
-    check((await look(a)).canvas === '#AABBCC', '#abc taken as #AABBCC');
+    await a.fill('.ce-theme-panel input[data-hex="bg"]', '#abc');
+    check((await lookFor(a, '#AABBCC')).canvas === '#AABBCC', '#abc taken as #AABBCC');
     await a.fill('.ce-theme-panel input[data-hex="bg"]', '#abcd'); await a.waitForTimeout(200);
     check(await a.getAttribute('.ce-theme-panel input[data-hex="bg"]', 'aria-invalid') === 'true' && (await look(a)).canvas === '#AABBCC', '#abcd marked invalid, not applied');
     await a.press('.ce-theme-panel input[data-hex="bg"]', 'Tab');
@@ -339,9 +342,12 @@ try {
     check(JSON.parse(await host.evaluate(() => localStorage.getItem('desk:live-colors-v1'))).bg === '#000000' && JSON.parse(await host.evaluate(() => localStorage.getItem('live-colors-v1'))).bg === '#F5F7FA',
       'embedded ground saved under desk:, the page\'s untouched');
     await host.close();
-    // reset puts the default ground back
-    await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape'); await a.waitForTimeout(200);
-    check((await look(a)).canvas === '#080B10', 'Reset to default: the dark ground again');
+    // reset puts the default ground back. The page is brought to the front first (the embed's tab was on top, and a
+    // background tab paints no frames), and the canvas is read until it repaints (lookFor)
+    await a.bringToFront();
+    await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape');
+    const reset = await lookFor(a, '#080B10');
+    check(reset.canvas === '#080B10', 'Reset to default: the dark ground again: ' + reset.canvas + ', saved ' + JSON.stringify(reset.saved));
     check(await a.evaluate(() => getComputedStyle(document.querySelector('.chart-live')).backgroundColor) === 'rgb(8, 11, 16)' && await a.evaluate(() => document.querySelector('.chart-live').style.getPropertyValue('--s2')) === '',
       'back on the dark ground the toolbar is the house style again');
     await ctx.close(); br.kill();

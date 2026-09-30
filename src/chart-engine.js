@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.6.0
+ * chart-engine 1.6.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -455,6 +455,14 @@ function levelLines(lv) {
 }
 
 /* ---------------------------------------------------------------- initial balance (1.5.3) */
+/** Good Friday of `year` as a day number: Easter Sunday (anonymous Gregorian algorithm) less two days. */
+function goodFriday(year) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d4 = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d4 - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const em = Math.floor((h + l - 7 * m + 114) / 31), ed = ((h + l - 7 * m + 114) % 31) + 1;
+  return Date.UTC(year, em - 1, ed) / 1000 / DAY - 2;
+}
 /*
  * US stock market (NYSE) full-day closures, for the Initial Balance: CME equity index futures still trade on most of
  * these days (to an early halt), but there is no 9:30 open, so there is no IB. Rules as the NYSE publishes them:
@@ -473,14 +481,9 @@ function nyseHolidays(year) {
   const nth = (m, wd, n) => { let d = D(m, 1); while (dow(d) !== wd) d++; return d + 7 * (n - 1); };
   const lastWd = (m, wd) => { let d = D(m + 1, 1) - 1; while (dow(d) !== wd) d--; return d; };
   const observed = d => dow(d) === 6 ? d - 1 : dow(d) === 0 ? d + 1 : d;
-  // Easter Sunday (anonymous Gregorian algorithm), then Good Friday
-  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d4 = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d4 - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const em = Math.floor((h + l - 7 * m + 114) / 31), ed = ((h + l - 7 * m + 114) % 31) + 1;
   const days = [
     dow(D(1, 1)) === 6 ? null : observed(D(1, 1)),
-    nth(1, 1, 3), nth(2, 1, 3), D(em, ed) - 2, lastWd(5, 1),
+    nth(1, 1, 3), nth(2, 1, 3), goodFriday(year), lastWd(5, 1),
     year >= 2022 ? observed(D(6, 19)) : null,
     observed(D(7, 4)), nth(9, 1, 1), nth(11, 4, 4), observed(D(12, 25)),
   ];
@@ -493,6 +496,10 @@ function rthDay(t) {
   const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay();
   return wd !== 0 && wd !== 6 && !nyseHolidays(date.getUTCFullYear()).has(day);
 }
+/** Whether trading day d (tradeDay's number: the calendar day the session ends on) has no stock market session. */
+function closedDay(d) { return !rthDay(d * DAY + 43200); }
+/** Whether a trading day strictly between days a and b has no stock market session (at most 10 days looked at). */
+function closedBetween(a, b) { for (let x = a + 1; x < b && x <= a + 10; x++) if (closedDay(x)) return true; return false; }
 /*
  * NYSE early closes (13:00 ET), by the NYSE's rules: the day after Thanksgiving; Christmas Eve when it is a Monday to
  * Thursday (on a Friday it is the observed Christmas holiday, on a weekend there is none); July 3 when it is a Monday
@@ -518,6 +525,44 @@ function rthClose(t) {
   if (!rthDay(t)) return null;
   const day = Math.floor(t / DAY);
   return nyseEarlyCloses(new Date(day * DAY * 1000).getUTCFullYear()).has(day) ? 46800 : 57600;
+}
+/*
+ * CME Globex equity index futures (NQ, MNQ, ES and so on), for the volume profile's loads (1.6.1, review 2 S5): Globex
+ * trades on most NYSE holidays, so "the stock market is closed" is not "CME is closed". The days with no Globex
+ * session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them (cmeClosures). On the
+ * other NYSE holidays (Martin Luther King Jr. Day, Presidents Day, Memorial Day, Juneteenth, Independence Day, Labor
+ * Day, Thanksgiving) Globex trades from 18:00 the evening before and halts at 13:00 ET; on an NYSE early close day
+ * it halts at 13:15 ET. Unscheduled changes are not known in advance and are not here.
+ */
+const cmeClosureCache = new Map();
+function cmeClosures(year) {
+  let set = cmeClosureCache.get(year);
+  if (set) return set;
+  const hol = nyseHolidays(year), D = (m, d) => Date.UTC(year, m - 1, d) / 1000 / DAY;
+  const days = [D(1, 1), D(1, 2), goodFriday(year), D(12, 24), D(12, 25), D(12, 26)].filter(d => hol.has(d));
+  set = new Set(days);
+  cmeClosureCache.set(year, set);
+  return set;
+}
+/** Whether trading day d (tradeDay's number, sessions from 18:00 ET) has a CME Globex session: Monday to Friday, not a CME closure. */
+function cmeSessionDay(d) {
+  const date = new Date(d * DAY * 1000), wd = date.getUTCDay();
+  return wd !== 0 && wd !== 6 && !cmeClosures(date.getUTCFullYear()).has(d);
+}
+/**
+ * Whether CME Globex equity index futures are closed at exchange wall-clock time t: the 17:00 to 18:00 ET break every
+ * day, Friday 17:00 to Sunday 18:00, a day with no Globex session (cmeClosures), and after the halt on an NYSE holiday
+ * (13:00 ET) or an NYSE early close (13:15 ET) until 18:00.
+ */
+function cmeClosed(t) {
+  const s = tod(t);
+  if (s >= 61200 && s < 64800) return true;
+  if (!cmeSessionDay(tradeDay(t, 64800))) return true;
+  const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay(), y = date.getUTCFullYear();
+  if (wd === 0 || wd === 6 || s >= 64800) return false;          // Sunday evening, or any evening's new session
+  if (nyseHolidays(y).has(day)) return s >= 46800;
+  if (nyseEarlyCloses(y).has(day)) return s >= 47700;
+  return false;
 }
 
 /**
@@ -1911,6 +1956,15 @@ function mountThemePanel(chart, host, options) {
  * the RTH profile empties at 18:00 and stays empty until 9:30. Trades outside the window change nothing but the
  * `outside` count (not `skipped`, which is for bad input), and do not change `version`.
  *
+ * Keep (option `keep: true`, Anthony's rulings of 2026-09-30; the page uses it): the profile keeps the last session
+ * it counted until the next session's first trade, so a Friday can be reviewed over the weekend. The full session: a
+ * trading day with no stock market session (closedDay: Saturday, Sunday, an NYSE holiday; the trading day runs from
+ * 18:00 ET the evening before) never empties it on the clock (advance does nothing); on a weekday evening the next
+ * session starts at 18:00 as in 1.6.0. With `rth`: the RTH profile stays through the weekday night, weekends and
+ * holidays until the next RTH trade (9:30 on the next day with a stock market session): trades outside the RTH window
+ * never move it and the clock never does (on Labor Day or Thanksgiving Globex trades, but there is no RTH: the RTH of
+ * the day before stays). Without `keep` (the default) the session moves as 1.6.0's.
+ *
  * Cost: add() is amortised O(1): most trades only add to a row, and a row outside the array grows it to twice
  * the span needed, so the copies add up to O(1) per trade (one add can copy the whole span; a new session
  * clears the old span once). poc() and valueArea() walk the rows once (a session of NQ is a few thousand rows)
@@ -1962,11 +2016,34 @@ class VolumeProfile {
     this.rth = !!o.rth;
     this.rthStart = o.rthStart === undefined ? 34200 : o.rthStart;
     this.rthEnd = o.rthEnd === undefined ? 57600 : o.rthEnd;
+    this.keep = !!o.keep;
     if (!(this.tick > 0 && isFinite(this.tick))) throw new RangeError('VolumeProfile: tick must be a positive number');
     if (!(Number.isInteger(this.rowTicks) && this.rowTicks >= 1)) throw new RangeError('VolumeProfile: rowTicks must be a whole number of ticks, 1 or more');
     VolumeProfile._share(this.valueAreaShare);
     this._vol = new Float64Array(0); this._base = 0;
     this.reset();
+  }
+  /**
+   * A profile of the last session with trades in `store` (the page's TickStore, or anything with length, time(i) and
+   * feed(builder, from, minT), oldest first), made with `opts` (1.6.1; with `keep: true` it is the one the page
+   * draws). It feeds from the start of the last trade's session; while that holds nothing (RTH before 9:30, a weekend
+   * or a holiday since) from one trading day earlier, at most 7 days back and not before the store's first trade.
+   * Empty when the store holds nothing that counts.
+   */
+  static fromStore(store, opts) {
+    let vp = new VolumeProfile(opts);
+    const n = store && store.length || 0;
+    if (!n) return vp;
+    const first = store.time(0);
+    let d = tradeDay(store.time(n - 1), vp.sessionStart);
+    for (let k = 0; ; k++, d--) {
+      const from = vp.startOfDay(d);
+      store.feed(vp, 0, from);
+      // look further back only while the day just tried has no stock market session, or for RTH (a kept profile's rule)
+      if (!vp.empty) return vp;
+      if (from <= first || k >= 7 || !(vp.keep && (vp.rth || closedDay(d)))) return new VolumeProfile(opts);   // nothing counts: empty, no day
+      vp = new VolumeProfile(opts);
+    }
   }
   static _share(p) {
     if (!(p > 0 && p <= 1)) throw new RangeError('VolumeProfile: the value area share must be above 0 and at most 1');
@@ -1996,8 +2073,9 @@ class VolumeProfile {
    * The time from which this profile needs every trade, for the trading day holding t: that session's start
    * (18:00 ET the evening before), or with `rth` that day's 9:30. For coverage notes (was the history long enough).
    */
-  startOf(t) {
-    const d = tradeDay(t, this.sessionStart);
+  startOf(t) { return this.startOfDay(tradeDay(t, this.sessionStart)); }
+  /** startOf for trading day d (as in `day`): the session held starts at startOfDay(profile.day). */
+  startOfDay(d) {
     if (this.rth) return d * DAY + this.rthStart;
     return this.sessionStart ? (d - 1) * DAY + this.sessionStart : d * DAY;
   }
@@ -2032,6 +2110,8 @@ class VolumeProfile {
     let fresh = false;
     if (d !== this.day) {
       if (this.day !== null && d < this.day) { this.skipped++; return false; }
+      // keep: an RTH profile outlives the Globex trades until the next RTH trade (the night, a weekend, a holiday)
+      if (this.keep && this.rth && this.day !== null && !this.inRth(t)) { this.outside++; return false; }
       this._clear(); this.day = d; fresh = true;
     }
     if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
@@ -2050,11 +2130,16 @@ class VolumeProfile {
   addAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.add(x[0], x[1], x[2]); } return this; }
   /**
    * Move to the session holding t with no trade (for example on the clock at 18:00 ET before the first trade of
-   * the new session). Returns true when the profile moved to that later session (it is then empty).
+   * the new session). Returns true when the profile moved to that later session (it is then empty). With `keep` it
+   * does nothing on a trading day with no stock market session (a weekend or an NYSE holiday), nor after one
+   * until a trade comes: the first trade of the next session moves it (add). On weekday evenings it moves at 18:00.
    */
   advance(t) {
     const d = tradeDay(t, this.sessionStart);
     if (!isFinite(d) || (this.day !== null && d <= this.day)) return false;
+    // keep: RTH never moves on the clock; the full session not on a weekend or a holiday, nor after one until the next
+    // session's first trade
+    if (this.keep && (this.rth || closedDay(d) || (this.day !== null && closedBetween(this.day, d)))) return false;
     this._clear(); this.day = d;
     return true;
   }
@@ -2151,7 +2236,7 @@ return {
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays, nyseEarlyCloses, rthClose,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
   },
   VolumeProfile,

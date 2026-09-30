@@ -13,6 +13,16 @@
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
 //   --tick-hours-max=3              serve at most this many hours of tick history, whatever the page asks
 //                                   (like a PC with little local tick data)
+//   --market-hours                  sample data on the real calendar (chart 1.6.1, for the weekend volume profile):
+//                                   the sample moved by whole weeks so its weekends fall on the real ones and nothing
+//                                   comes after the clock; no trades while CME Globex is closed (the engine's
+//                                   util.cmeClosed: Friday 17:00 to Sunday 18:00, the 17:00 break, New Year's Day,
+//                                   Good Friday and Christmas, and from 13:00 on the other NYSE holidays, the equity
+//                                   futures' halt); tick history counted back from the clock, as ChartBridge does
+//   --tick-shift-ms=137             every trade stamped this many ms later (history and live), as real trades are: a
+//                                   session's first trade at 18:00:00.137, not 18:00:00.000 (chart 1.6.1, review 2 S4)
+//   --version=0.3.5                 the version hello reports (default fake-0.3.2; fake-0.2.1 with --v1); the page
+//                                   reads how many hours of ticks ChartBridge serves from it (48 before 0.3.5)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
@@ -91,6 +101,10 @@ const OWN = 'http://localhost:' + PORT;
 
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
+const MARKET_HOURS = !!flag('market-hours');
+/* --market-hours: whether CME equity index futures are closed at exchange time t (the CME calendar, see the header). */
+const marketClosed = t => CE.util.cmeClosed(t);
+const TICK_SHIFT = (+flagValue('tick-shift-ms') || 0) / 1000;
 const INSTR = {
   MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2, scale: 1 },
   NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20, scale: 1 },
@@ -104,13 +118,14 @@ function makeData(rootSym) {
   const feed = SampleFeed.create({ seed: 20260929 + rootSym.length });
   const k = INSTR[rootSym].scale;
   const base = feed.base.slice(0, -1);
-  const shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
+  let shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
+  if (MARKET_HOURS) { const W = 7 * 86400; let k = Math.ceil(shift / W); if (base[0].t + k * W > etNow()) k--; shift = k * W; }
   const bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
-  return bars;
+  return MARKET_HOURS ? bars.filter(b => b.t <= Math.floor(etNow() / 60) * 60 && !marketClosed(b.t)) : bars;
 }
 function ticksFrom(bars, hours) {
-  const out = [], from = bars[bars.length - 1].t - hours * 3600;
+  const out = [], from = (MARKET_HOURS ? etNow() : bars[bars.length - 1].t) - hours * 3600;
   let seed = 7;
   const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
   const stepTicks = () => { if (!TICK_GAPS) return 1; const r = rnd(); return r < 0.8 ? 1 : r < 0.97 ? 2 + Math.floor(rnd() * 2) : 8 + Math.floor(rnd() * 9); };
@@ -125,9 +140,10 @@ function ticksFrom(bars, hours) {
       while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
-    const v = Math.max(1, Math.round(b.v / prices.length));
+    // the minute's volume shared out over its trades, so they add up to the bar's (at least 1 each), as NinjaTrader's do
+    const base = Math.floor(b.v / prices.length), extra = b.v - base * prices.length;
     prices.forEach((p, i) => {
-      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, v];
+      const row = [+(b.t + i * 59.9 / prices.length + TICK_SHIFT).toFixed(3), p, Math.max(1, base + (i < extra ? 1 : 0))];
       if (SIDES) { const prev = out.length ? out[out.length - 1] : undefined; row.push(...sideOf(p, prev && prev[1], prev && prev[3])); }
       out.push(row);
     });
@@ -244,12 +260,13 @@ function trade(r, p) {
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
   last[r] = p; lastSide[r] = s;
   const now = Date.now();
-  const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
+  const msg = { type: 'tick', root: r, t: +(etNow() + TICK_SHIFT).toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
   if (SIDES) { msg.s = s; msg.sm = sm; }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade
 }
 if (!LIVE_RATE) setInterval(() => {
+  if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
   for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 else {
@@ -344,7 +361,7 @@ server.on('upgrade', (req, sock) => {
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.2', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
+  const hello = { type: 'hello', version: flagValue('version') || (V1 ? 'fake-0.2.1' : 'fake-0.3.2'), now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
