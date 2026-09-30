@@ -10,6 +10,12 @@
 // Review round 1: a backfill cut short after 18:00 (The Desk's relay capping tickHours at 8, and NinjaTrader sending
 // less) is labelled with its exact start, never taken as the whole session (B1); a minute view opened before 18:00
 // counts the session whole from 18:00 (S1); showing the hidden pane reuses the delta kept meanwhile (S5).
+// Review round 2 and Anthony's 2-hour ruling (fake bridge with --cme-hours: nothing trades 17:00 to 18:00 or over the
+// weekend, and each minute's trades add up to its minute bar, as NinjaTrader's do): a 1m view at 19:30 asks 2 hours and
+// counts whole from 18:00, one at 22:00 is labelled "from 20:00"; the pane switched on in a 1m view loaded without it
+// fetches the 2 hours (the time orders wait is measured); scenario M, a Monday on Range, whole from the Sunday open by
+// NinjaTrader's minute history, and labelled with the true reason when that minute's volume differs; scenario C, the PC
+// clock 10 s behind the exchange, a 1m view with no tick backfill going live seconds before 18:00: labelled, never whole.
 // Screenshots on the dark and black grounds, cumulative and bar, and the old-bridge note, labelled as sample data.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -76,12 +82,12 @@ async function context(offset, tf, extra, opts) {
       if (!localStorage.getItem('live-range-v2')) localStorage.setItem('live-range-v2', JSON.stringify({ NQ: 40 }));
       ${extra || ''}
     } catch (e) {}
-    const relayHours = ${o.relayHours || 0}, cmeBreak = ${!!o.cmeBreak};
-    window.__asked = [];
-    if (relayHours) {
+    const relayHours = ${o.relayHours || 0}, cmeBreak = ${!!o.cmeBreak}, openVolPlus = ${o.openVolPlus || 0};
+    window.__asked = []; window.__subAt = [];
+    {
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function (x) {
-        try { const m = JSON.parse(x); if (m.type === 'subscribe') { window.__asked.push(m.tickHours); if (m.tickHours > relayHours) { m.tickHours = relayHours; x = JSON.stringify(m); } } } catch (e) {}
+        try { const m = JSON.parse(x); if (m.type === 'subscribe') { window.__asked.push(m.tickHours); window.__subAt.push(performance.now()); if (relayHours && m.tickHours > relayHours) { m.tickHours = relayHours; x = JSON.stringify(m); } } } catch (e) {}
         return send.call(this, x);
       };
     }
@@ -91,11 +97,15 @@ async function context(offset, tf, extra, opts) {
     const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
     Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
       d.set.call(this, ev => {
+        if (openVolPlus && typeof ev.data === 'string' && ev.data.startsWith('{"type":"history"')) {   // NinjaTrader's 18:00 minutes, this many contracts more
+          const m = JSON.parse(ev.data); for (const b of m.bars) if (((b[0] % 86400) + 86400) % 86400 === 64800) b[5] += openVolPlus; ev = { data: JSON.stringify(m) };
+        }
         if (cmeBreak && typeof ev.data === 'string') {
           if (ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); m.ticks = []; ev = { data: JSON.stringify(m) }; }
           else if (ev.data.startsWith('{"type":"tick"') && inBreak(JSON.parse(ev.data).t)) return;
         }
         if (typeof ev.data === 'string') {
+          if (ev.data.startsWith('{"type":"ready"')) window.__readyAt = Date.now() / 1000;   // the page's clock when it goes live
           if (ev.data.startsWith('{"type":"history"')) fresh = true;
           else if (ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') { if (fresh) { rec.length = 0; fresh = false; } for (const x of m.ticks) rec.push(x); } }
           else if (ev.data.startsWith('{"type":"tick"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') rec.push([m.t, m.p, m.v || 0, m.s, m.sm]); }
@@ -194,7 +204,9 @@ try {
   const barsTimes = await p.evaluate(() => { const b = new Set(window.liveChart.bars().map(x => x.t)); return window.liveChart.getDelta().bars.every(d => b.has(d.t)); });
   check(barsTimes, 'every delta candle sits on one of the chart\'s range bars');
   const fmt = v => U.fmtSigned(v, 0), last = s.delta.sessions[s.delta.sessions.length - 1];
-  check(s.legend === 'Delta ' + fmt(last.lastClose) && s.pane.title === 'Cumulative delta ' + fmt(last.lastClose), 'legend "' + s.legend + '", pane title "' + s.pane.title + '"');
+  // read together after a drawn frame, in one task (a live trade between two reads made this flaky, as review 2 N1)
+  const lt = await p.evaluate(() => new Promise(res => requestAnimationFrame(() => res({ legend: document.getElementById('lgDelta').textContent.trim(), title: window.liveChart.deltaPane().title, close: window.liveChart.getDelta().last.c }))));
+  check(lt.legend === 'Delta ' + fmt(lt.close) && lt.title === 'Cumulative delta ' + fmt(lt.close), 'legend "' + lt.legend + '", pane title "' + lt.title + '"');
   await shot(p, 'delta-cumulative-dark.png', 'Cumulative delta, dark ground');
 
   /* live trades: the store and the delta keep step, with no new core */
@@ -357,9 +369,10 @@ try {
     const b5 = await startBridge(o);
     const c5 = await context(o, 'm1');
     const q = await openPage(c5, `http://localhost:${b5.port}/live/`);
-    const st = await state(q);
-    check(st.delta && st.delta.sessions.every(x => x.partial) && /this view loads no tick history/.test(st.pane.title), '1m first load (no tick history): no cumulative from 18:00; "' + st.pane.title + '"');
-    await shot(q, 'delta-1m-no-tick-history.png', '1m: no tick history, labelled');
+    const st = await state(q), asked = await q.evaluate(() => window.__asked);
+    check(JSON.stringify(asked) === '[2]' && st.delta && st.delta.sessions.every(x => x.partial) && / from 1[01]:\d\d ET, not 18:00: this view loads 2 hours of ticks$/.test(st.pane.title),
+      '1m first load at 13:00 with the delta pane: asks ' + asked + ' hours of ticks (Anthony: 2), labelled: "' + st.pane.title + '"');
+    await shot(q, 'delta-1m-2-hours-13h.png', '1m at 13:00: 2 hours of ticks, labelled');
     await c5.close(); b5.kill();
   }
 
@@ -414,7 +427,9 @@ try {
       const st = await state(q), ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
       const r = await q.evaluate(() => ({ first: window.__trades.length ? window.__trades[0][0] : null, asked: window.__asked }));
       const late = r.first - (ses ? ses.start : 0);                 // 8 hours before the request: 18:05, give or take the page's load time
-      check(!!ses && ses.partial && ses.from > r.first && late >= 180 && late < 420 && ses.firstOpen === 0,
+      // from the first trade's minute at the earliest (review 2: when its trades add up to NinjaTrader's minute bar, the
+      // store is whole from that minute), never before it
+      check(!!ses && ses.partial && ses.from >= Math.floor(r.first / 60) * 60 && late >= 180 && late < 420 && ses.firstOpen === 0,
         label + ': the first trade at ' + U.fmtExact(r.first) + ' ET (asked ' + (r.asked.length ? r.asked.join() + ' hours, sent on as 8' : 'more than was sent') + '): the session counts from ' + (ses && U.fmtExact(ses.from)) + ', flagged partial');
       check(st.pane.title.endsWith('from ' + U.fmtExact(ses.from) + ' ET, not 18:00: the tick history starts later') && st.legend.startsWith('Delta from ' + U.fmtExact(ses.from)),
         label + ': said in the pane ("' + st.pane.title + '") and the legend ("' + st.legend + '"), never a plain "Cumulative delta"');
@@ -455,6 +470,119 @@ try {
     await c8.close(); b8.kill();
   }
 
+  /* ---------------- review 2 and Anthony's 2-hour ruling: CME hours (--cme-hours), each minute's trades adding up to its bar */
+  // The newest session as the page holds it and every trade received from `from` on, read in one task after a drawn frame
+  // (so the title is the frame's and no live trade lands between the reads).
+  const newest = (q, from) => q.evaluate(f => new Promise(res => requestAnimationFrame(() => {
+    const cd = window.liveChart.getDelta(), x = cd && cd.sessions.at(-1), fromT = f === null ? (x ? x.from : 0) : f;
+    let b = 0, sl = 0, n = 0, first = null;
+    for (const [t, , v, sd] of window.__trades) { if (first === null) first = t; if (t >= fromT) { n++; if (sd === 1) b += v; else if (sd === -1) sl += v; } }
+    res({ title: window.liveChart.deltaPane().title, ses: x && { start: x.start, from: x.from, partial: x.partial, buy: x.buy, sell: x.sell, n: x.trades, firstOpen: cd.bars[x.first].o, close: cd.bars[x.last].c },
+      got: { b, s: sl, n }, first, asked: window.__asked.slice(), readyAt: window.__readyAt });
+  })), from === undefined ? null : from);
+  const weekdayEve = bt => { const d = new Date(bt * 1000).getUTCDay(); return d >= 1 && d <= 4; };
+  {
+    /* a 1m view at 19:30: 2 hours back reach 17:30, before the 18:00 open, so the count is whole from 18:00 */
+    const o = offsetTo(19, 30, 0, weekdayEve);
+    const b = await startBridge(o, ['--cme-hours']);
+    const c = await context(o, 'm1');
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const r = await newest(q);
+    check(JSON.stringify(r.asked) === '[2]' && U.fmtExact(r.first) === '18:00', '1m at 19:30 (CME hours): asks ' + r.asked + ' hours of ticks; the first trade is the 18:00 open (' + U.fmtExact(r.first) + '), nothing in the break');
+    check(!!r.ses && !r.ses.partial && r.ses.from === r.ses.start && r.ses.start % 86400 === S18 && r.ses.firstOpen === 0 && r.ses.buy === r.got.b && r.ses.sell === r.got.s && r.ses.n === r.got.n && r.ses.close === r.ses.buy - r.ses.sell,
+      '1m at 19:30: the session counts whole from 18:00 (NinjaTrader\'s 18:00 minute adds up, the hour before it has no bar), every trade received counted: ' + JSON.stringify([r.ses, r.got]));
+    check(r.title === 'Cumulative delta ' + U.fmtSigned(r.ses.close, 0), 'no label: "' + r.title + '"');
+    await shot(q, 'delta-1m-1930-whole.png', '1m at 19:30: 2 hours of ticks, whole from 18:00');
+    await c.close(); b.kill();
+  }
+  {
+    /* a 1m view at 22:00: 2 hours back reach 20:00, so it is labelled "from 20:00" */
+    const o = offsetTo(22, 0, 0, weekdayEve);
+    const b = await startBridge(o, ['--cme-hours']);
+    const c = await context(o, 'm1');
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const r = await newest(q);
+    check(JSON.stringify(r.asked) === '[2]' && U.fmtExact(r.first) === '20:00', '1m at 22:00: asks ' + r.asked + ' hours; the first trade at ' + U.fmtExact(r.first));
+    check(!!r.ses && r.ses.partial && r.ses.from === r.ses.start + 2 * 3600 && r.ses.firstOpen === 0 && r.ses.buy === r.got.b && r.ses.sell === r.got.s && r.ses.n === r.got.n,
+      '1m at 22:00: counts from 20:00 (' + U.fmtExact(r.ses && r.ses.from) + '), from 0, every trade received from then: ' + JSON.stringify([r.ses, r.got]));
+    check(r.title.endsWith(' from 20:00 ET, not 18:00: this view loads 2 hours of ticks') && (await q.textContent('#lgDelta')).trim().startsWith('Delta from 20:00 '), 'labelled: "' + r.title + '"');
+    await shot(q, 'delta-1m-2200-from-2000.png', '1m at 22:00: labelled from 20:00');
+    await c.close(); b.kill();
+  }
+  {
+    /* the pane switched on in a 1m view loaded without it: one new subscribe for the 2 hours; orders wait while it loads */
+    const o = offsetTo(13, 0, 0, weekday);
+    const b = await startBridge(o);
+    const c = await context(o, 'm1', `if (!localStorage.getItem('live-indicators-v2')) localStorage.setItem('live-indicators-v2', JSON.stringify({ main: { ind: { delta: { on: false, shown: true, pin: false } } } }));`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const before = await q.evaluate(() => ({ asked: window.__asked.slice(), delta: !!window.liveChart.getDelta(), layer: window.liveChart.getLayers().delta }));
+    check(JSON.stringify(before.asked) === '[0]' && !before.delta && !before.layer, '1m with the delta pane off: asks no ticks (' + before.asked + '), no delta');
+    await q.evaluate(() => {                                       // when LOADING shows and goes (orders say "Still loading" meanwhile)
+      window.__pill = []; const el = document.getElementById('connPill');
+      new MutationObserver(() => window.__pill.push([el.textContent, performance.now()])).observe(el, { childList: true, characterData: true, subtree: true });
+    });
+    await menu(q); await q.click('#indBody .ind-cat[data-id="volume"]');
+    const clickAt = await q.evaluate(() => performance.now());
+    await q.click('#indBody [data-f="add:delta"]'); await q.keyboard.press('Escape');
+    await live(q);
+    const r = await q.evaluate(() => {
+      const p = window.__pill, from = p.find(x => x[0] === 'LOADING'), to = p.find(x => x[0] === 'LIVE' && from && x[1] >= from[1]);
+      return { asked: window.__asked.slice(), subAt: window.__subAt.at(-1), loading: from && to ? to[1] - from[1] : null, title: window.liveChart.deltaPane().title, delta: !!window.liveChart.getDelta() };
+    });
+    check(JSON.stringify(r.asked) === '[0,2]' && r.delta && / from 1[01]:\d\d ET, not 18:00: this view loads 2 hours of ticks$/.test(r.title) && r.subAt - clickAt < 1000,
+      'switched on: one subscribe for 2 hours at once (' + r.asked + '), the delta built and labelled: "' + r.title + '"');
+    check(r.loading !== null && r.loading < 5000, 'orders wait "Still loading" only while it loads: ' + (r.loading === null ? '?' : Math.round(r.loading) + ' ms') + ' on the fake bridge');
+    console.log('  info the reload for the 2 hours (fake bridge, 1m at 13:00): LOADING for ' + (r.loading === null ? '?' : Math.round(r.loading)) + ' ms');
+    await c.close(); b.kill();
+  }
+  {
+    /* scenario M (review 2 S2): a Monday at 10:00 on Range 40; nothing trades from Friday 17:00 to the Sunday 18:00 open */
+    const o = offsetTo(10, 0, 0, bt => new Date(bt * 1000).getUTCDay() === 1);
+    for (const plus of [0, 1]) {
+      const b = await startBridge(o, ['--cme-hours']);
+      const c = await context(o, 'range', '', plus ? { openVolPlus: plus } : null);
+      const q = await openPage(c, `http://localhost:${b.port}/live/`);
+      const r = await newest(q);
+      const sun = new Date((r.ses ? r.ses.start : 0) * 1000).getUTCDay();
+      if (!plus) {
+        check(sun === 0 && U.fmtExact(r.first) === '18:00' && r.asked.length === 1 && r.asked[0] >= 17, 'M: Monday 10:00 on Range, asks ' + r.asked + ' hours; the first trade is the Sunday 18:00 open (' + U.fmtExact(r.first) + ')');
+        check(!r.ses.partial && r.ses.from === r.ses.start && r.ses.firstOpen === 0 && r.ses.buy === r.got.b && r.ses.sell === r.got.s && r.ses.n === r.got.n && r.title === 'Cumulative delta ' + U.fmtSigned(r.ses.close, 0),
+          'M: the session is whole from the Sunday open, the open\'s first range bar counted (NinjaTrader\'s 18:00 minute adds up; no bar from Friday 17:00): "' + r.title + '" ' + JSON.stringify([r.ses, r.got]));
+        await shot(q, 'delta-monday-range-whole.png', 'Monday on Range: whole from the Sunday 18:00 open');
+      } else {
+        check(r.ses.partial && r.ses.from > r.ses.start && r.title.endsWith('ET, not 18:00: its first minute does not add up to NinjaTrader\'s minute bar'),
+          'M, NinjaTrader\'s 18:00 minute one contract more than the ticks: labelled with the true reason: "' + r.title + '"');
+      }
+      await c.close(); b.kill();
+    }
+  }
+  {
+    /* scenario C (review 2 S1): the PC's clock 10 s behind the exchange; a 1m view with no tick backfill goes live at
+       about 17:59:52 by the PC's clock, 18:00:02 by the exchange's: the trades of 18:00:00 to then never come */
+    let done = false;
+    for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+      const o = offsetTo(17, 59, 52, weekdayEve);
+      const b = await startBridge(o + 10, ['--cme-hours', '--pc-clock-offset=' + o]);
+      const c = await context(o, 'm1', '', { cmeBreak: true });
+      const q = await openPage(c, `http://localhost:${b.port}/live/`);
+      const liveAt = U.zoneSeconds((await q.evaluate(() => window.__readyAt)));
+      const s18 = Math.ceil(liveAt / 86400) * 86400 - 6 * 3600;
+      if (!(liveAt >= s18 - 10 && liveAt + 5 <= s18)) { console.log('  info C: live at ' + U.fmtExact(liveAt) + ' by the PC clock, outside 17:59:50 to 17:59:55; again'); await c.close(); b.kill(); continue; }
+      done = true;
+      const early = await newest(q);
+      check(early.title.includes('this PC\'s clock is 10 s behind the exchange\'s') && !/^Cumulative delta [+-]?\d[\d,]*$/.test(early.title), 'C: live at ' + U.fmtExact(liveAt) + ' by the PC clock (the old rule took it as live before 18:00): at once "' + early.title + '"');
+      const endAt = Date.now() + 90000;
+      let r = early;
+      while (Date.now() < endAt) { await q.waitForTimeout(1000); r = await newest(q); if (r.ses && r.ses.n > 20 && r.ses.start === s18) break; }
+      check(r.first > s18 + 0.5 && !!r.ses && r.ses.partial && r.ses.from === s18 + 60 && r.ses.firstOpen === 0 && r.ses.buy === r.got.b && r.ses.sell === r.got.s && r.ses.n === r.got.n,
+        'C: the first trade received at ' + U.fmtExact(r.first) + ' (the open\'s first seconds never came): counts from ' + U.fmtExact(r.ses && r.ses.from) + ', the first complete bar, every trade from it: ' + JSON.stringify([r.ses, r.got]));
+      check(r.title.endsWith(' from 18:01 ET, not 18:00: this PC\'s clock is 10 s behind the exchange\'s'), 'C: labelled: "' + r.title + '"');
+      await shot(q, 'delta-clock-behind.png', 'The PC clock 10 s behind: labelled');
+      await c.close(); b.kill();
+    }
+    check(done, 'C: the page went live in the window where the clock matters');
+  }
+
   /* ---------------- 18:00 ET: a new session starts at 0 (the clock set to 17:59:35 on a Monday to Thursday) */
   {
     const o = offsetTo(17, 59, 35, monToThu);
@@ -473,8 +601,9 @@ try {
     check(after.delta.sessions.length === before.delta.sessions.length + 1 && sN.start % 86400 === S18 && sN.start === s0.start + 86400, 'at 18:00 ET a new session: ' + U.fmtHM(sN.start) + ' (the one before from ' + U.fmtHM(s0.start) + ')');
     check(sN.firstOpen === 0 && sN.lastClose === sN.buy - sN.sell && sP.lastClose === sP.buy - sP.sell, 'it opens at 0; each session\'s last close is its own buys minus sells: ' + JSON.stringify([sP.lastClose, sN.firstOpen, sN.lastClose]));
     check(sameSums(after) && !sN.partial && after.cores === before.cores, 'the new session\'s totals equal the trades received, with no rebuild at the rollover (' + before.cores + ' then ' + after.cores + ' cores)');
-    const t = await q.evaluate(() => window.liveChart.deltaPane().title);
-    check(t === 'Cumulative delta ' + U.fmtSigned(sN.lastClose, 0), 'the pane shows the new session\'s value: "' + t + '"');
+    // the title and the value read together after a drawn frame, in one task, so no live trade lands between (review 2 N1)
+    const tv = await q.evaluate(() => new Promise(res => requestAnimationFrame(() => res({ title: window.liveChart.deltaPane().title, last: window.liveChart.getDelta().sessions.at(-1), close: window.liveChart.getDelta().last.c }))));
+    check(tv.title === 'Cumulative delta ' + U.fmtSigned(tv.close, 0) && tv.last.start === sN.start, 'the pane shows the new session\'s value: "' + tv.title + '" (' + tv.close + ')');
     await shot(q, 'delta-rollover-1800.png', 'The 18:00 ET session start (clock set to 17:59:35)');
     await c7.close(); b7.kill();
   }

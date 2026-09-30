@@ -37,12 +37,22 @@
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day)
+//   --pc-clock-offset=-45010        the clock of the PC ChartBridge runs on, as seconds off the real one (default: the
+//                                   exchange clock's, --clock-offset): each live tick's `rx` is read from it and `u` from
+//                                   the exchange clock (the data's time, a few ms before), so a PC clock 10 s behind the
+//                                   exchange is --pc-clock-offset=<clock offset - 10> (the page's own clock is the test's)
+//   --cme-hours                     the history and trades follow CME's hours on the exchange clock: no minute bar, tick or
+//                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data
+//                                   shifted to now otherwise trades through 18:00)
 //   --no-sides                      behave like ChartBridge 0.3.3 for trade sides: ticks as [t,p,v] and live ticks without
 //                                   s and sm (to check the page against an older add-on)
 // Trade sides (ChartBridge 0.3.4, nt8/PROTOCOL.md "Trade side"): every backfill trade is [t, p, v, s, sm] and every live
 // tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
 // quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
 // previous side by the tick rule (sm 3), the first is unknown (0, 0). Sample data, not a real classification.
+// Volumes (1.7.0, review 2): a minute's trades in the tick history add up to that minute's volume in the minute history,
+// as NinjaTrader's do (the delta pane proves a session's open from it); a minute with fewer contracts than trades gets its
+// volume raised to one a trade. Not with --tick-rate (its padded trades keep the older rounding).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -90,7 +100,18 @@ const pinReady = flagValue('test-pin') && !pin.isSet() ? pin.set(flagValue('test
 const OWN = 'http://localhost:' + PORT;
 
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
+const PC_CLOCK_OFFSET = flagValue('pc-clock-offset') !== '' ? +flagValue('pc-clock-offset') : CLOCK_OFFSET;
+const CME_HOURS = !!flag('cme-hours');
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
+/* CME closed (Globex equity futures) at exchange time t (New York wall clock as bar-time seconds): 17:00 to 18:00 every
+   day, Friday 17:00 to Sunday 18:00. */
+function cmeClosed(t) {
+  const d = new Date(t * 1000).getUTCDay(), s = ((t % 86400) + 86400) % 86400;
+  if (d === 6) return true;
+  if (d === 5 && s >= 61200) return true;
+  if (d === 0 && s < 64800) return true;
+  return s >= 61200 && s < 64800;
+}
 const INSTR = {
   MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2, scale: 1 },
   NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20, scale: 1 },
@@ -105,8 +126,11 @@ function makeData(rootSym) {
   const k = INSTR[rootSym].scale;
   const base = feed.base.slice(0, -1);
   const shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
-  const bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
+  let bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
+  if (CME_HOURS) bars = bars.filter(b => !cmeClosed(b.t));
+  // at least one contract a trade, so the ticks can add up to the minute (ticksFrom walks one tick at a time)
+  if (!TICK_RATE) for (const b of bars) { const steps = 1 + Math.round((Math.abs(b.o - (b.c >= b.o ? b.l : b.h)) + (b.h - b.l) + Math.abs(b.c - (b.c >= b.o ? b.h : b.l))) / 0.25); if (b.v < steps) b.v = steps; }
   return bars;
 }
 function ticksFrom(bars, hours) {
@@ -125,9 +149,9 @@ function ticksFrom(bars, hours) {
       while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
-    const v = Math.max(1, Math.round(b.v / prices.length));
+    const n = prices.length, v = Math.max(1, Math.round(b.v / n)), each = Math.floor(b.v / n), more = b.v - each * n;
     prices.forEach((p, i) => {
-      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, v];
+      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, TICK_RATE ? v : each + (i < more ? 1 : 0)];   // the minute's volume exactly (see the header)
       if (SIDES) { const prev = out.length ? out[out.length - 1] : undefined; row.push(...sideOf(p, prev && prev[1], prev && prev[3])); }
       out.push(row);
     });
@@ -241,10 +265,12 @@ function subscribe(c, m) {
 const last = {}, held = {}, lastSide = {};
 for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
 function trade(r, p) {
+  if (CME_HOURS && cmeClosed(etNow())) return;          // nothing trades while CME is closed
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
   last[r] = p; lastSide[r] = s;
   const now = Date.now();
-  const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
+  // u: the data's UTC time, on the exchange clock, 20 to 50 ms before ChartBridge's PC receives it (rx, on its clock)
+  const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now + CLOCK_OFFSET * 1000 - 20 - Math.random() * 30, rx: now + PC_CLOCK_OFFSET * 1000, p, v: 1 + Math.floor(Math.random() * 5) };
   if (SIDES) { msg.s = s; msg.sm = sm; }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade

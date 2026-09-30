@@ -191,6 +191,52 @@ test('TickStore: the side and method of every trade kept beside it (ChartBridge 
   assert.equal(big.sides.length, big.blocks.length);
 });
 
+test('TickStore: older trades put in front through _addBlockFront and _put keep their sides (the hook for live-first\'s prependAll, review 2)', () => {
+  // a prepend written the way the TickStore comment asks (front blocks in pairs, each trade through _put), after a trim
+  // left room in the first block and again with new blocks: every side stays with its trade
+  const prepend = (st, list) => {
+    const n = list.length;
+    if (n > st.start) { const add = Math.ceil((n - st.start) / 65536); for (let k = 0; k < add; k++) st._addBlockFront(); st.start += add * 65536; }
+    st.start -= n; st.length += n;
+    for (let i = 0; i < n; i++) { const x = list[i]; st._put(st.start + i, x[0], x[1], x[2], x[3], x[4]); }
+  };
+  const side = i => [1, -1, 0, undefined][i % 4];
+  const st = new BB.TickStore();
+  for (let i = 100000; i < 170000; i++) st.push(i, 1, 1, side(i), side(i) === undefined ? undefined : 2);
+  st.dropFirst(400);                                               // room for 400 in the first block
+  prepend(st, Array.from({ length: 400 }, (_, k) => [100000 + k, 1, 1, side(100000 + k), 2]));
+  prepend(st, Array.from({ length: 71000 }, (_, k) => [29000 + k, 1, 1, side(29000 + k), 2]));   // new blocks in front
+  assert.equal(st.blocks.length, st.sides.length, 'a side block beside every block');
+  for (let i = 0; i < st.length; i += 997) assert.deepEqual([st.time(i), st.side(i)], [29000 + i, side(29000 + i)], 'trade ' + i);
+  assert.deepEqual([st.time(st.length - 1), st.side(st.length - 1)], [169999, side(169999)]);
+});
+
+test('minuteCover: NinjaTrader\'s minute history proves a Monday\'s Sunday open and a minute\'s start; anything else proves nothing (review 2 S2)', () => {
+  const sun18 = et(2026, 9, 27, 18, 0), fri = et(2026, 9, 25, 16, 59);
+  const trades = (t0, n, v) => Array.from({ length: n }, (_, i) => [t0 + i * 0.5, 100, v]);
+  // the minute history: Friday up to the 17:00 close, then Sunday from 18:00; the ticks from the open, 60 trades of 2 in its first minute
+  const mins = (extra) => { const t = [fri - 60, fri, sun18, sun18 + 60].concat(extra || []).sort((a, b) => a - b); return { t, v: t.map(x => x === sun18 ? 120 : 50) }; };
+  const open = trades(sun18 + 0.25, 200, 2);                       // 120 trades in the first minute: 240 contracts
+  const m240 = { t: [fri - 60, fri, sun18, sun18 + 60], v: [50, 50, 240, 50] };
+  assert.deepEqual(BB.minuteCover(open, m240, S18), { from: sun18, code: 'open' }, 'the first minute adds up and the market was closed before it: whole from 18:00');
+  const st = new BB.TickStore(); st.pushAll(open.map(x => x.concat(1, 2)));
+  assert.deepEqual(BB.minuteCover(st, m240, S18), { from: sun18, code: 'open' }, 'the same from a TickStore');
+  assert.equal(BB.minuteCover(open, { t: m240.t, v: [50, 50, 238, 50] }, S18).code, 'volume', 'two contracts short: nothing proved');
+  assert.equal(BB.minuteCover(open, { t: [sun18 - 1800, sun18, sun18 + 60], v: [5, 240, 50] }, S18).code, 'closed', 'a bar at 17:30: the market was not closed, not whole');
+  assert.equal(BB.minuteCover(open, { t: [sun18 - 600, sun18, sun18 + 60], v: [5, 240, 50] }, S18).code, 'closed');
+  assert.equal(BB.minuteCover(open, { t: [sun18, sun18 + 60], v: [240, 50] }, S18).code, 'closed', 'a history that does not reach back past the closed hour proves nothing');
+  assert.equal(BB.minuteCover(open, { t: [fri, sun18 + 60], v: [50, 50] }, S18).code, 'bar', 'no 18:00 minute in the history');
+  assert.equal(mins().t.length, 4);
+  // mid-session: a store from 20:00:00.0 whose first minute adds up is whole from 20:00; one from 20:00:30 is not
+  const t20 = et(2026, 9, 29, 20, 0), m20 = { t: [t20 - 60, t20, t20 + 60], v: [10, 60, 10] };
+  assert.deepEqual(BB.minuteCover(trades(t20, 30, 2), m20, S18), { from: t20, code: 'minute' });
+  assert.equal(BB.minuteCover(trades(t20 + 30, 20, 2), m20, S18).code, 'volume', 'half the minute: its volume falls short');
+  assert.equal(BB.minuteCover([], m20, S18).code, 'empty');
+  assert.equal(BB.minutesBetween(m20, t20 - 3600, t20), true);
+  assert.equal(BB.minutesBetween(m20, t20 - 3600, t20 - 60), false);
+  assert.equal(BB.minutesBetween(null, 0, 1), false);
+});
+
 /* The page's path (live/live.js): the backfill into the store, the delta built from it at ready (with the range bars in
    one pass), then each live trade pushed to the store, added to the bar builder and to the delta with its bar. */
 function pagePath(view, trades, split) {
@@ -252,7 +298,8 @@ function stubChart(opts) {
     },
     set(t, k, v) { t[k] = v; return true; },
   });
-  const W = 1078, H = 626;
+  const W = 1078, H = 626, box = { width: W, height: H };      // box: the container's size, changed by resizeTo
+  let resized = null;
   const element = () => {
     const attrs = {};
     return {
@@ -261,7 +308,7 @@ function stubChart(opts) {
       addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
       appendChild(c) { children.push(c); return c; }, remove() {}, setAttribute(k, v) { attrs[k] = String(v); }, getAttribute: k => attrs[k], hasAttribute() { return false; },
       getContext: () => ctx, focus() {}, setPointerCapture() {},
-      getBoundingClientRect: () => ({ left: 0, top: 0, width: W, height: H, right: W, bottom: H }),
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: box.width, height: box.height, right: box.width, bottom: box.height }),
     };
   };
   let frameFn = null;
@@ -270,6 +317,7 @@ function stubChart(opts) {
   global.requestAnimationFrame = fn => { frameFn = fn; return 1; };
   global.cancelAnimationFrame = () => { frameFn = null; };
   global.Path2D = Path2D;
+  global.ResizeObserver = class { constructor(fn) { resized = fn; } observe() {} disconnect() {} };
   delete require.cache[require.resolve('../src/chart-engine.js')];
   const E = require('../src/chart-engine.js');
   const T0 = et(2026, 9, 29, 10, 0);
@@ -283,7 +331,8 @@ function stubChart(opts) {
   const frame = () => { ops.length = 0; const f = frameFn; frameFn = null; if (f) f(ts += 16); };
   const settle = () => { for (let i = 0; i < 60; i++) frame(); };
   const redraw = () => { chart.setLayers({}); frame(); };         // one frame drawn whatever changed
-  return { E, chart, ops, bars, cd, T0, W, H, frame, settle, redraw, canvas: children.find(c => c.getContext && c.handlers.pointermove), divider: children.find(c => c.className === 'ce-divider') };
+  const resizeTo = w => { box.width = w; resized([]); };
+  return { E, chart, ops, bars, cd, T0, W, H, frame, settle, redraw, resizeTo, canvas: children.find(c => c.getContext && c.handlers.pointermove), divider: children.find(c => c.className === 'ce-divider') };
 }
 const inPane = (r, pane) => r[1] >= pane.top - 0.5 && r[1] + r[3] <= pane.top + pane.height + 0.5;
 
@@ -432,6 +481,22 @@ test('chart: the closed candles are drawn from kept paths; a trade redraws the n
   settle();
   assert.ok(chart.deltaPane().hi > cd.last.h, 'the pane\'s scale fits the newest high: ' + chart.deltaPane().hi + ' > ' + cd.last.h);
   assert.equal(bars.length, 200);
+});
+
+test('chart: a width change that leaves the bars in view and their right edge as they were moves the kept candles too (review 2 S3)', () => {
+  // review 2's n4 cases: 800 to 803 and to 1000 px with every bar in view, and 800 to 803 with the view full
+  for (const [bars, w0, w1] of [[30, 800, 803], [30, 800, 1000], [200, 800, 803]]) {
+    const { chart, ops, cd, redraw, settle, resizeTo } = stubChart();
+    if (bars < 200) chart.setBars(chart.bars().slice(-bars));
+    chart.setDelta(cd); chart.setLayers({ delta: true });
+    resizeTo(w0); settle(); redraw();
+    const T = chart.colors();
+    const drawn = () => { const p = chart.deltaPane(); return JSON.stringify(ops.filter(o => o.op === 'fill' && o.path && (o.color === T.up || o.color === T.down) && o.path.rects.length && o.path.rects.every(r => inPane(r, p))).map(o => o.path.rects)); };
+    resizeTo(w1); settle(); redraw();
+    const kept = drawn();
+    chart.setDelta(cd); redraw();                                  // the same delta handed over again: every cache dropped
+    assert.equal(kept, drawn(), bars + ' bars, ' + w0 + ' to ' + w1 + ' px: the pane as drawn equals the pane drawn from scratch');
+  }
 });
 
 test('chart: the divider\'s band covers the gap and the top of the pane only, never the plot or the price axis; "Jump to live" sits above the pane (review N2, N3)', () => {

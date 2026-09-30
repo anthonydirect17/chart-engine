@@ -48,29 +48,56 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
 - **ChartBridge 0.3.3 or older** (trades without `s`): the pane is there (the layout does not change) and draws nothing
   but "Delta needs ChartBridge 0.3.4 on this PC"; the legend says the same, with no number. Whether a load has sides is
   read from its first trade; before any trade (a 1m view on a weekend), from hello's version. Never estimated.
-- **Coverage, honest by construction** (review B1, S1, S3): the cumulative is only right if the page has every trade
-  since 18:00, so it counts from 18:00 only when that is provable, never by a guess. The page holds every trade from
-  the earlier of two moments (`deltaCoveredFrom` in live/live.js): just after the store's first trade (the backfill is
-  one run up to ChartBridge's seam, then every live trade; another trade of the same instant or bar before it may be
-  missing), and the moment the page went live (the PC's clock at `ready`, plus 5 s for a PC clock behind the
-  exchange's), since every trade after it came in live. Once the page has dropped its oldest trades only the store
-  counts. A session is whole when that moment is at or before its 18:00 start: the backfill holds a trade from before
-  18:00 (Range views now ask one hour more, 10 to 34 hours, so the request reaches into the previous session's last
-  trading hour, before the 17:00 close, and a weekday load proves the session whole), or the page was live across 18:00
-  (a minute view opened at 17:59 or on Sunday afternoon counts the new session whole from its first bar, trade or no
-  trade in the break). Anything else, such as a backfill The Desk's relay capped at 8 hours or NinjaTrader sending less
-  than asked, is never taken as whole, even when it starts seconds after 18:00. A bar that started before that moment
-  is left out whole (blank, never a part of a bar), and a session that started before it counts from 0 on its first
-  complete bar and says so with that bar's exact start, seconds and tenths when not on the minute (`util.fmtExact`,
-  review N1): the pane's title reads "Cumulative delta +1,234 from 18:37:16.6 ET, not 18:00: the tick history starts
-  later" (or "this view loads no tick history", or "the oldest trades were dropped"), the legend "Delta from 18:37:16.6
-  +1,234", with a dashed line at that first bar; before the first complete bar, "starts with the next full bar". Bar
-  delta counts each complete bar the same way.
-- **Minute views** (review S2, Anthony keeps the label for now): a first load on 1m and longer asks for no tick history
-  (a fast load), so the cumulative starts with the first complete bar after the page went live, labelled. To load the
-  ticks back to 18:00 whenever the delta pane is on, set `DELTA_WANTS_SESSION_TICKS` to `true` in live/live.js (next to
-  `ticksWanted`, one line): the subscribe then asks `BB.sessionTickHours` (back past the session start, as for Range),
-  and switching the pane on reloads first when the ticks are missing.
+- **Coverage, honest by construction** (review B1, S1, S3; review 2 S1, S2): the cumulative is only right if the page
+  has every trade since 18:00, so it counts from 18:00 only when that is provable, never by a guess. The page holds
+  every trade from the earlier of two moments (`deltaCoverage` in live/live.js):
+  - **the store:** just after its first trade (the backfill is one run up to ChartBridge's seam, then every live trade;
+    another trade of the same instant or bar before it may be missing), or earlier when NinjaTrader's own minute
+    history proves it (`BB.minuteCover`, review 2 S2): when the store's trades in its first trade's minute add up to
+    NinjaTrader's volume for that minute, it holds every trade of that minute; and when that minute is 18:00 and the
+    minute history has no bar in the hour before it (the market was closed) and reaches back past that hour, the
+    session is whole from 18:00. That proves the Sunday 18:00 open on a Monday (Range asks one hour more, 10 to 34 hours,
+    but nothing trades from Friday 17:00 to Sunday 18:00, so no request reaches a trade before the open), a holiday
+    reopening, and a minute view's 2 hours at 19:30. A store holding a trade from before 18:00 is whole as before (on
+    Tuesday to Friday, Range's extra hour reaches the previous session's last trading hour). Once the page has dropped
+    its oldest trades only its first trade counts;
+  - **the moment the page went live** (this PC's clock at `ready`): every trade after it came in live, so a minute view
+    opened at 17:59 or on Sunday afternoon counts the new session whole, trade or no trade in the break. The moment
+    counts 5 s later (`LIVE_MARGIN`), or the PC clock's lag plus 2 s (`CLOCK_SLACK`) when that is more (review 2 S1):
+    every live tick carries the data's UTC time `u` and ChartBridge's receive time `rx` (nt8/PROTOCOL.md, tick), and
+    `u` minus this page's clock (or minus `rx`, whichever is more) is at most how far the data's clock is ahead of this
+    PC's, since no tick arrives before it happened. When a tick shows it ahead by more than the delta was built with
+    (in whole seconds), and that delta counted from the moment the page went live, the delta is built again at once
+    with the later, honest start, the one on screen kept until then, and labelled "this PC's clock is 10 s behind the
+    exchange's". Review 2's scenario C (the clock 10 s behind, a 1m view with no tick backfill going live at 17:59:53)
+    now reads "Cumulative delta +N from 18:01 ET, not 18:00: this PC's clock is 10 s behind the exchange's".
+
+  Anything else, such as a backfill The Desk's relay capped at 8 hours or NinjaTrader sending less than asked, is never
+  taken as whole, even when it starts seconds after 18:00. A bar that started before that moment is left out whole
+  (blank, never a part of a bar), and a session that started before it counts from 0 on its first complete bar and
+  says so with that bar's exact start, seconds and tenths when not on the minute (`util.fmtExact`, review N1), and the
+  true reason: the pane's title reads "Cumulative delta +1,234 from 18:05 ET, not 18:00: the tick history starts later"
+  (NinjaTrader's minutes traded where its ticks have none), or "this view loads 2 hours of ticks" (8 on 15s and 30s),
+  "this view loads no tick history", "no tick history came back", "this PC's clock is 10 s behind the exchange's", "the
+  oldest trades were dropped", "its first minute does not add up to NinjaTrader's minute bar", "NinjaTrader's minute
+  history does not confirm its first minute"; the legend "Delta from 18:05 +1,234", with a dashed line at that first
+  bar; before the first complete bar, "starts with the next full bar". Bar delta counts each complete bar the same way.
+  The proof rests on NinjaTrader's minute history coming apart from its tick history (the provider's minute data); a
+  minute whose volumes differ proves nothing, so a disagreement only ever adds a label.
+- **Minute views: 2 hours of ticks with the delta pane** (Anthony, 2026-09-30, replacing the `DELTA_WANTS_SESSION_TICKS`
+  switch): on 1m, 5m, 15m and 1h, while the delta pane is on the chart (shown or hidden, since its delta is kept while
+  hidden), the subscribe asks max(what the view asks, 2 hours) of ticks (`BB.timeTickHours`, `BB.DELTA_TICK_HOURS`), so
+  trading after hours has its delta. The cumulative still resets at 18:00 ET: when the 2 hours reach back past the
+  session start the count is whole from 18:00 (a 1m view at 19:30), otherwise labelled "from HH:MM" (at 22:00, "from
+  20:00 ET, not 18:00: this view loads 2 hours of ticks"). Seconds views ask 8 hours and Range its sessions as before;
+  with the pane off, or a ChartBridge that sends no sides, minute views ask none. Switching the pane on in a minute view
+  loaded without it fetches the 2 hours with one new subscribe (the only way ChartBridge sends ticks), during which
+  orders are refused with "Still loading" as on any load: 47 to 94 ms on the fake bridge; on the trading PC it is
+  ChartBridge's load time for 2 hours of trades and quotes (`loadMs` in `/diag`). Showing a hidden pane (chip, Restore)
+  never reloads. **Load cost** (`perf:live --view=m1`, the fake bridge at 15 trades a second, 150 live a second): the 2
+  hours are about 290,000 trades; the load went from 0.87 to 1.40 s (10:30 ET) and 0.88 to 1.51 s (20:00 ET), no long
+  task, no frame over 50 ms, the chart frame 1.08 to 1.24 ms and 1.34 to 1.46 ms, the heap about 6 to 8 MB more. A
+  15s or Range view switched to 1m keeps its ticks; 1m switched to 15s reloads for the 8 hours, as before.
 - **Unknown sides** (`s` 0, or none): the legend adds "· 37 unknown" (the session's unknown volume in contracts, dim)
   when there are any. The core also counts them in trades, those with no side at all, and the volume sided by the tick
   rule (`unknownTrades`, `missing`, `byRule`), for a later readout.
@@ -84,7 +111,12 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   store holds (ChartBridge 0.3.3's seam, not the page, keeps a trade from coming twice), and a new session at 18:00
   starts at 0 with its first trade. It is kept while the pane is on the chart, shown or hidden, so the chip shows it
   again at once (review S5); off the chart, there is no delta at all. The engine keeps the closed candles' paths and
-  the closed bars' value range between frames and draws only the newest candle and the axis each frame (review N4).
+  the closed bars' value range between frames and draws only the newest candle and the axis each frame (review N4);
+  the plot's width is in the key, so a resize that leaves the bars in view as they were moves the candles too (review
+  2 S3). A range build no longer scans the store for the session start on the main thread in one go: the chart's
+  rebuild hands its start over, and after a trim the scan runs in the slices (review 2 N2). A build started in a hidden
+  tab goes at Chrome's pace for hidden tabs (once a second, after 5 minutes once a minute) and finishes at once when the
+  tab is shown; nothing shows meanwhile (review 2 N3, accepted).
 - **Legend:** "Delta +12,345" (bull color above zero, bear below), "Bar delta +123", thousands separators.
 - Engine API: `setDelta(delta | null)`, `getDelta()`, layer `delta` (default false), `setDeltaView({ mode, ratio, note,
   reason })`, `deltaPane()` (`{ on, top, height, ratio, mode, note, title, lo, hi, plotHeight }`), `deltaToY(v)`,
@@ -93,7 +125,10 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   `addQuiet`, `bars`, `sessions` (`buy`, `sell`, `unknown`, `unknownTrades`, `missing`, `byRule`, `partial`, `from`),
   `at(t)`, `indexOf`, `lowerBound`, `sessionOf`, `startOf`, `version`, `uncovered`, `skipped`.
 - **The fake bridge** (tests only) sends sides like ChartBridge 0.3.4 (the same change as branch `bridge-side`, 0.3.4)
-  and `--no-sides` for 0.3.3; its hello says `fake-0.3.4` or `fake-0.3.3`. Its order handling is unchanged.
+  and `--no-sides` for 0.3.3; its hello says `fake-0.3.4` or `fake-0.3.3`. Review 2: a minute's trades add up to its
+  minute bar's volume, as NinjaTrader's do (not with `--tick-rate`); each live tick's `u` is on the exchange clock and
+  `rx` on the PC's (`--pc-clock-offset`, default the exchange clock's), so a PC clock behind the exchange can be tested;
+  `--cme-hours` keeps CME's hours (nothing from 17:00 to 18:00 ET or over the weekend). Its order handling is unchanged.
 - **Unchanged:** the order path (`live/order-ticket.js`, `live/pin.js`, `test/orders-smoke.mjs`,
   `test/order-ticket.test.js`, `test/fake-orders.mjs`, the fake bridge's order handling) and everything under `nt8/`,
   byte for byte. The pane covers nothing of the price chart: the position, working orders and stop and target lines stay
@@ -111,7 +146,7 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   main pane with no chip, the profile then the sixth chip, off on a new pane, search, show and hide, pin by hand and
   remove; a 1.6.0 save without the key, with six chips already, saved after Hide all and its Restore, an explicit off,
   junk; the 1.5.3 and 1.3 carry-overs; the Show option and the height per pane, fresh reads, limits, junk,
-  `__proto__`, per prefix); `test/bar-builder.test.js` (Range and the session asking one hour more, back before the
+  `__proto__`, per prefix); `test/bar-builder.test.js` (Range asking one hour more, back before the
   17:00 close). The 1.6.0 tests that count what is on the main pane count the delta pane too and still check what they
   checked; the chip strips are those of 1.6.0 again.
   `npm run smoke:delta` (NQ Range 40 on sample data at 13:00 ET: on by default under the chart at 20%, in the count,
@@ -120,12 +155,24 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   back, both after a reload; the black ground; 5m and 15s rebuilt once; the divider dragged, keyed (ArrowDown, End,
   Home, within the limits) and kept after a reload; the divider band and "Jump to live"; the chip, which shows it
   again at once with the same delta (review S5), Hide all and Restore, search, the x and the +; ChartBridge 0.3.3: the
-  pane empty, the note, no number; 15s with 2 hours of ticks labelled "from 11:00:15 ET, not 18:00"; a 1m first load
-  labelled; mounted panes: pane-2 off, added from its menu, `setIndicatorOption('delta', 'show', 'bar')` and its
+  pane empty, the note, no number; 15s with 2 hours of ticks labelled "from 11:00 ET, not 18:00" (the minute proven by
+  NinjaTrader's minute bar); the legend and title read in one task; mounted panes: pane-2 off, added from its menu, `setIndicatorOption('delta', 'show', 'bar')` and its
   height under `desk:`; review B1 at 02:05 ET on Range: The Desk's relay capping `tickHours` at 8 and NinjaTrader
   sending 8 of the 11 hours asked, each labelled partial from its exact start, never plain, and counting every trade
   from that start; review S1: 1m opened at 17:59:20 with nothing traded in the break counts the session whole from
-  18:00, every trade received; the clock at 17:59:35: at 18:00 a new session from 0 with no rebuild). The live
+  18:00, every trade received; the clock at 17:59:35: at 18:00 a new session from 0 with no rebuild, the title and the
+  value read in one task after a drawn frame (review 2 N1); review 2 and the 2-hour ruling, on CME hours: 1m at 13:00
+  asks 2 hours, labelled; 1m at 19:30 whole from 18:00, every trade counted, no label; 1m at 22:00 "from 20:00"; the
+  pane switched on in a 1m view loaded without it, one subscribe for 2 hours, the time orders wait measured; scenario M,
+  Monday 10:00 on Range, whole from the Sunday open, and with NinjaTrader's 18:00 minute one contract more, labelled
+  "its first minute does not add up"; scenario C, the PC clock 10 s behind, 1m with no tick backfill live at about
+  17:59:53, labelled "this PC's clock is 10 s behind the exchange's" at once and counting every trade from 18:01).
+  `test/delta.test.js` adds `BB.minuteCover` (the Monday open, a volume short, a bar in the closed hour, a history
+  that stops short, no 18:00 minute, a mid-session minute), a prepend through `_addBlockFront` and `_put` after a trim
+  and with new blocks (every side stays with its trade), and review 2's width cases (800 to 803 and 1000 px with every
+  bar in view, 800 to 803 with the view full: the pane as drawn equals the pane drawn from scratch);
+  `test/bar-builder.test.js` the 2-hour rule. `smoke:vp`'s 1m load turns the delta pane off to keep checking a load
+  with no ticks. The live
   (ChartBridge 0.2:
   the note), embed, settings, IB and volume profile smokes count the delta pane and check what they checked before.
 - **Performance** (`npm run smoke:perf`, NQ Range 40 at 01:30 ET, 1.82 million backfill trades, 150 trades a second
@@ -144,8 +191,7 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   without a delta handed to the chart) are identical in 78 of 78 frames recorded on a stand-in canvas (plot, levels, the
   profile, fills, orders and the position, drawings, the crosshair over the plot and both axes, a drag, the wheel, the
   black ground, a live update; 1078 by 626 at dpr 1, 1440 by 760 at dpr 2, 400 by 700 at dpr 3).
-- **Open for Anthony:** (1) Minute views keep the label for now (review S2); `DELTA_WANTS_SESSION_TICKS` loads the
-  ticks back to 18:00 instead (a slower load of the default view, and with 0.3.4 a quote history too). The 15s and 30s
+- **Open for Anthony:** (1) Settled: minute views load 2 hours of ticks with the delta pane (above). The 15s and 30s
   views ask for 8 hours, so late in the day they start partway too (labelled). (2) The candle colors: the pane uses the
   bull and bear candle colors, not the trade-side green and red (the house style keeps those for sides and P&L). (3) A
   range bar with no trade (a NinjaTrader-style phantom bar) has no delta candle; should it show a flat one at the
@@ -153,6 +199,14 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   The delta pane has no chip by default (review N5); pin it from the menu for one, or say if it should have the sixth.
 - **Merged with main** (ChartBridge 0.3.4, 7c28d55): `test/trade-sides.test.js` now checks that `pushAll` passes all
   five places of a backfill trade and that the store keeps the sides from both formats.
+- **For the live-first merge (PR #8, after this one; review 2's trial merge):** the TickStore's side bytes are added,
+  dropped and written only through `_addBlock`, `_addBlockFront` and `_put`, so live-first's `prependAll` puts its front
+  blocks in with `_addBlockFront` and writes each older trade with `_put` (its `[t, p, v, s, sm]`); keep this branch's
+  five-place `pushAll` and drop the three-place one. The page has `deltaHistoryLoading(on)` (the label "the history is
+  still loading" while the older history comes) and `deltaHistoryGrew(gapFrom)` (build the delta again from the whole
+  store when the last older chunk is in, the one on screen kept until then; `gapFrom`, the first recent trade's time when
+  ChartBridge reported `gapMs`, starts the count after it, labelled "the older history has a gap"). Both are unused on
+  this branch.
 
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
 
