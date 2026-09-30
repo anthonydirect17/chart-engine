@@ -106,14 +106,16 @@ Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged 
     told first, after every file's hash is checked again.
   - The notice's commands name the task's copy (README: Keep this PC up to date).
 
-## 1.6.1 (2026-09-30): the order account comes back after a reload or a reconnect, and the volume profile keeps the last session over weekends and holidays
+## 1.6.1 (2026-09-30): the order account comes back after a reload or a reconnect, and the volume profile keeps the last session
 
 Page and engine only; nt8/ is unchanged (review 2 S3). Run `nt8\install.ps1` again after pulling (it copies the page
-and engine files); **no NinjaTrader recompile, no F5**. Works with ChartBridge 0.3.2, 0.3.3 and 0.3.4 as they are;
-with those the weekend profile reaches back 48 hours (it says so, below), and the whole last session once ChartBridge
-0.3.5 (the live-first branch) serves more. The Desk gets it with the new `live/live.js`, `live/live.css` and
-`src/chart-engine.js` (`live/order-ticket.js` is byte-identical to 1.6.0). Two of Anthony's rulings of 2026-09-30,
-then three reviews (fixes marked "review", "review 2" and "review 3"). `live/COMPAT.json` (from main's updater):
+and engine files); **no NinjaTrader recompile, no F5**. Works with ChartBridge 0.3.2 to 0.3.4.1 as they are.
+**It loads no tick history beyond 1.6.0's** (Anthony, 2026-09-30, after ChartBridge's big loads froze NinjaTrader
+during RTH: "smoothness and low low low latency"): the whole session on minute views and the last session's profile
+after a weekend load come with chart 1.8.0's session volume-at-price table from ChartBridge 0.3.5. The Desk gets it
+with the new `live/live.js`, `live/live.css` and `src/chart-engine.js` (`live/order-ticket.js` is byte-identical to
+1.6.0). Two of Anthony's rulings of 2026-09-30 and his answers of the same day, then three reviews (fixes marked
+"review", "review 2" and "review 3"). `live/COMPAT.json` (from main's updater):
 page 1.6.1, `minChartBridge` 0.3.2 as before.
 
 ### The order account after a reload or a dropped connection (Anthony: "the account I was using", not Sim101)
@@ -193,6 +195,10 @@ page 1.6.1, `minChartBridge` 0.3.2 as before.
     instrument (or in NinjaTrader)." (review 2 S1; a 6 s status line before.)
   - 6 orders or fewer all go out at the click, so Armed going off right after drops none (review 2 N1). The account
     note keeps its full 8 s or 15 s whatever a batch does (review 2 N2).
+  - **A drag on an order in a Cancel all under way** (queued, or its cancel just sent) sends no change: Cancel all
+    wins and still cancels it (Anthony, 2026-09-30), so no change can cross its cancel. The line goes back and the
+    status line says "Not moved: order NT12 is in the Cancel all under way, which cancels it."; the cancel's own
+    "Cancelled ..." line follows.
 - **A pick while trading is off counts.** During a drop or the sign-in window the picker still switches the fills,
   and that account is also the one orders go to when trading comes back (if allowed), so the picker never jumps. Its
   tooltip says so.
@@ -206,51 +212,38 @@ page 1.6.1, `minChartBridge` 0.3.2 as before.
 - **The Desk's embed (`ChartLive.mount`) is unchanged:** it has no order account, its picker only picks fills, and
   it still follows picks from other charts and tabs with its prefix.
 
-### The volume profile over weekends and holidays (Anthony: keep the last session until the next session's first trade)
+### The volume profile keeps the last session (Anthony: keep it until the next session's first trade)
 
-- **Over weekends and NYSE holidays** the profile keeps the last session it counted until the next session's first
-  trade, so a Friday can be reviewed over the weekend. Session: Friday's session stays from Friday 17:00 through
-  18:00 and the weekend, until Sunday 18:00's first trade. RTH: Friday's RTH stays until Sunday 18:00's first trade;
-  on a holiday with Globex trading (Labor Day, Thanksgiving) the RTH of the day before stays through the holiday,
-  and Session shows the holiday's own Globex session. On weekday evenings nothing changed from 1.6.0 (review S4: the
-  ruling covers weekends and holidays): the profile moves to the new session at 18:00, and RTH is empty overnight
-  until 9:30. Whether RTH should also stay up through weekday nights is a question for Anthony.
-- **A load, a reload or a reconnect while CME Globex is closed** with the profile on asks ChartBridge for the last
-  session's ticks on every view (Range, seconds, minute and hour views), on top of what the view asks for (review B1:
-  1.6.1's first cut only worked on a page left open since Friday). "Closed" is the CME Globex calendar, not the
-  NYSE's (review 2 S5): the 17:00 to 18:00 ET break, Friday 17:00 to Sunday 18:00, the days with no Globex session
-  (New Year's Day, Good Friday, Christmas), and after the halt on the other NYSE holidays (13:00 ET) and on NYSE
-  early-close days (13:15 ET) until 18:00 (`util.cmeClosed`). Session asks back to the start of the last Globex
-  session (18:00 ET the evening before); RTH to the last stock market day's 9:30, by the NYSE calendar
-  (`VolumeProfile.closedFrom`). Switching the profile on, or Session / RTH, while closed loads them first.
-- **While Globex trades the page asks for exactly what 1.6.0 asked for**, holidays included: on Labor Day morning a
-  1m view loads no ticks, as on any weekday (the first cut asked 72 to 97 hours then). RTH on such a morning has no
-  session of its own and says "Volume profile (RTH): no stock market session today. The last one loads only while
-  Globex is halted: reload after 13:00 ET to see it."
-- **How far back ChartBridge serves goes by the version in its hello** (review 2 S3): 48 hours up to 0.3.4, 120 from
-  0.3.5; the page never asks for more than that. The longest reach is Sunday 17:59 after a Friday holiday: 97 hours
-  (96 h less a minute, rounded up, plus one). With 0.3.4 on a Sunday the profile shows what it got and says so, with
-  no install advice: the legend reads "(Fri from 12:00)" and the note "Volume profile from 12:00 ET: the tick
-  history does not reach back to 18:00 ET. This ChartBridge (0.3.4) serves 48 hours of ticks." In an embed (The
-  Desk's relay serves 8 hours) the note says only where the ticks start (review 2 S4). With no ticks of the last
-  session at all it shows none and a small note, never an error.
+- **The full session** keeps the last session it counted until the next session's first trade over weekends and NYSE
+  holidays, so a Friday can be reviewed over the weekend: Friday's session stays from Friday 17:00 through 18:00 and
+  the weekend, until Sunday 18:00's first trade. On a holiday with Globex trading (Labor Day, Thanksgiving) Session
+  shows the holiday's own Globex session. On weekday evenings it moves to the new session at 18:00 as in 1.6.0.
+- **RTH keeps today's RTH through the weekday night** until the next 9:30 open (Anthony's answer, 2026-09-30), and
+  over weekends and holidays until the next day with a stock market session: Globex trades and the clock never move
+  it; the next RTH trade does. 1.6.0 emptied it at 18:00.
+- **This holds for the ticks the page has.** 1.6.1 asks ChartBridge for exactly 1.6.0's tick history (`ticksWanted`
+  and `ticksMissing` as in 1.6.0; review B1's weekend window and review 2's version-based 120 hour cap are gone). So
+  the profile is kept on a page left open, and after a load, a reload or a reconnect it holds what the view's ticks
+  hold: on a Saturday a Range view shows "(Fri from 16:00)", and the note says where its ticks start; on a weekend,
+  a weekday morning or a holiday RTH says "Volume profile (RTH): the last RTH session is not in the tick history
+  this view loaded." (with "The next starts at 9:30 ET." before an open); a view with no tick history says it counts
+  the live trades (for RTH, "the RTH trades from now on" or "from the next 9:30 ET on"). Never advice to reload or
+  install: a reload would load the same. 1.8.0's session table fills these in.
 - **A session's first trade a few ms after 18:00:00.000** (or 9:30), with nothing traded before it (after a holiday
   halt or the break), no longer makes the profile "partial" (review 2 S4). The session counts as whole only when the
   ticks were asked from before its start and the 1-minute bars the page loaded agree (review 3 S3): no bar with
   volume between the start and the first tick's minute, and that minute's ticks hold its bar's volume (2% for
   rounding); with no bar to check against, only within 5 s of the start. Otherwise the legend and the note say where
-  the ticks start, to the second in the session's first minute ("(Mon from 18:00:46)"). The first cut allowed 3
-  minutes and called a session whole with up to 2.5 minutes of its open missing.
+  the ticks start, to the second in the session's first minute ("(Mon from 18:00:46)").
 - **Legend:** the session's day at the end, "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", in the quiet grey,
-  and "(Fri from 12:00)" when its ticks start after the session did; the tooltip names the date.
+  and "(Fri from 16:00)" when its ticks start after the session did; the tooltip names the date.
 - **The IB is unchanged** (none on weekends and NYSE holidays): it shares no code with the profile.
-- Engine: `VolumeProfile` option `keep` (over a trading day with no stock market session, `advance()` does nothing and
-  an RTH profile outlives the Globex trades; the next session's first trade moves it), `closedFrom(now)`,
-  `startOfDay(d)`, `VolumeProfile.fromStore(store, opts)` (looks back only over closed days), `util.closedDay(d)`,
-  and the CME calendar `util.cmeClosed(t)`, `util.cmeSessionDay(d)`, `util.cmeClosures(year)` (review 2 S5).
-  Without `keep` the engine counts as in 1.6.0.
-- **Overlap with the live-first branch** (minute charts loading ticks back to 18:00 while the market is open): both
-  change `ticksWanted` and `ticksMissing` in live.js. 1.6.1 only adds the market-closed request on top of the view's.
+- Engine: `VolumeProfile` option `keep` (the full session: over a trading day with no stock market session
+  `advance()` does nothing; RTH: never moved by the clock or by trades outside RTH; the next session's first trade,
+  or the next RTH trade, moves it), `startOfDay(d)`, `VolumeProfile.fromStore(store, opts)` (the last session with
+  trades in the store; RTH looks back to the last RTH in it), `util.closedDay(d)`, and the CME calendar
+  `util.cmeClosed(t)`, `util.cmeSessionDay(d)`, `util.cmeClosures(year)` (review 2 S5; the fake bridge's market
+  hours use it). Without `keep` the engine counts as in 1.6.0.
 
 ### Tests
 
@@ -262,11 +255,11 @@ page 1.6.1, `minChartBridge` 0.3.2 as before.
   account and an instrument switch, a second click, orders gone meanwhile, a Flatten, a drop, the account leaving
   the list, 3 orders with Armed off at once, the pace with other orders just sent, never over 8 in 1.1 s, nothing
   locked) and `test/vp-keep.test.js` (a Friday kept over the weekend, the switch at Sunday 18:00's first trade, RTH
-  over a weekend, weekday evenings as 1.6.0, Thanksgiving, Christmas, `keep` off unchanged, `fromStore` over a
-  weekend, Labor Day and Thanksgiving and not over a weekday night, `closedFrom` at 25 clocks, the CME calendar and
-  every minute of 2026 and 2027: null while Globex trades, at most 97 hours; nt8/ as on main, the page's cap by
-  version, no install advice). Review 3: the newest click first, the batch line's warning color, 6 a second, a
-  refused cancel sent again, Flatten sent again once after a rate refusal (and not after a switch: the note says so)).
+  over a weekend, the full session on weekday evenings as 1.6.0, RTH through the weekday night, Thanksgiving,
+  Christmas, `keep` off unchanged, `fromStore` over a weekend, Labor Day, Thanksgiving and a weekday night, the CME
+  calendar; `ticksWanted` and `ticksMissing` as 1.6.0's, nt8/ as on main, no install advice). Review 3: the newest
+  click first, the batch line's warning color, 6 a second, a refused cancel sent again, Flatten sent again once
+  after a rate refusal (and not after a switch: the note says so)); a drag on an order in a Cancel all sends nothing.
 - `test/fake-bridge.mjs --market-hours`: the sample on the real calendar (moved by whole weeks), no trades while CME is
   closed (`util.cmeClosed`), tick history counted back from the clock, as ChartBridge does. `--tick-shift-ms=137`
   stamps every trade that much later (a session's first trade at 18:00:00.137); `--version` sets hello's version. A
@@ -286,21 +279,20 @@ page 1.6.1, `minChartBridge` 0.3.2 as before.
   30 orders, Cancel all, then Sim101 picked and its own Cancel all: Sim101's 3 are the first sent after its click;
   at 390 px the batch line, in the warning color, and "Other accounts ... DEMO-EVAL: LONG 1" both whole); R23 (Cancel
   all, Buy, Sell and Flatten within 300 ms: none refused, flat; a made-up rate refusal of Flatten: sent once more).
-- `npm run smoke:vp`, new, all with the page's own subscribe (no hook on it): Saturday and Sunday 12:00 on Range, 15s,
-  1m and 15m, Session and RTH (Friday's profile, every Friday trade the page got) with ChartBridge 0.3.5; a reconnect
-  on each; ChartBridge 0.3.4 on Sunday (asks 48, "(Fri from 12:0x)" and its note, no install advice, a view switch
-  does not load again); Sunday 17:59:45 (kept over 18:00 on the clock, then Monday's session from the first trade);
-  Monday and Tuesday 08:00 (RTH empty until 9:30, as in 1.6.0); the most recent NYSE holiday with Globex trading at
-  12:00 (every view asks its own hours only, RTH says why it is empty) and at 14:00 after the halt (RTH keeps the
-  last RTH day, Session the holiday's own session) on Range and 1m; review 2's +137 ms case (the Saturday after a
-  Thursday holiday, and Tuesday 17:30 after a Monday holiday: the whole session, no "from 18:00"); The Desk's embed
-  through a relay serving 8 hours on Sunday (a neutral note); review 3: Monday 17:30 with the session's first 0, 1,
-  45 and 150 s missing from the tick history (whole with none missing, else "(Mon from 18:00:03)" and so on, with
-  the note). `npm run smoke:embed`: a pick saved by another tab still followed by both
+- `npm run smoke:vp`, new: Saturday and Sunday 12:00 on Range, 15s, 1m and 15m, Session and RTH (each asks 1.6.0's
+  hours, and the profile is none or the part the ticks hold, said plainly), and a reconnect; a page with Friday's ticks
+  (a test hook asks 72 hours, as a page left open since Friday) at Sunday 17:59:45: Friday kept over 18:00 on the
+  clock, then Session on Monday's from the first trade while RTH keeps Friday's; Tuesday 17:59:45, RTH: Tuesday's
+  RTH kept after Wednesday's first Globex trades; Monday and Tuesday 08:00 (1.6.0's hours, RTH's note); the most
+  recent NYSE holiday with Globex trading at 12:00 and 14:00 (1.6.0's hours, Session the holiday's own session, RTH's
+  note with no reload advice); the +137 ms first trade after a Monday holiday on Range (whole); Monday 17:30 on Range
+  with the session's first 0, 1, 45 and 150 s missing (whole with none missing, else "(Mon from 18:00:03)" and so
+  on, with the note); The Desk's embed through a relay serving 8 hours (a neutral note). `npm run smoke:embed`: a pick saved by another tab still followed by both
   mounted panes, and no account note or ring in the embed.
 - **Changed because the old behaviour changed:** `smoke:vp`'s two legend checks now expect the day, " (Tue)";
   `smoke:orders`' trading-off tooltip check now expects the new tooltip text; review 2 replaced the first cut's lock
-  checks (unit and smoke:orders) and its holiday and older-ChartBridge checks in smoke:vp; review 3 made smoke:ib's
+  checks (unit and smoke:orders) and its holiday and older-ChartBridge checks in smoke:vp, and 1.6.1's own weekend
+  loads went again with Anthony's answers of 2026-09-30; review 3 made smoke:ib's
   "Reset to default" check wait for the repaint with its tab in front (it failed now and then, on main too). No other
   existing check changed;
   `test/order-ticket.test.js` and `live/order-ticket.js` are untouched.

@@ -2,7 +2,7 @@
 // Volume profile kept after its session (1.6.1, Anthony's ruling 2026-09-30): the option `keep` holds the last
 // session with trades over weekends and NYSE holidays until the next session's first trade; on weekday evenings it
 // behaves as 1.6.0 (review S4). VolumeProfile.fromStore builds that profile from the page's TickStore, and
-// closedFrom says which ticks it needs while the market is closed. Without `keep` nothing changed (the 1.6.0 tests in
+// Without `keep` nothing changed (the 1.6.0 tests in
 // volume-profile.test.js and vp-draw.test.js still hold).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -54,37 +54,40 @@ test('keep: the next session\'s first trade (Sun 18:00, Monday\'s session) switc
   assert.equal(vp.total, 3);
 });
 
-test('keep with RTH: Friday\'s RTH stays over the weekend; Sunday 18:00\'s first trade starts Monday, empty until 9:30', () => {
+test('keep with RTH: Friday\'s RTH stays over the weekend and Sunday night, until Monday 9:30\'s first trade', () => {
   const vp = new VolumeProfile({ rth: true, keep: true });
   fill(vp, FRI_FROM, FRI_TO);
   const fri = vp.total, ver = vp.version;
   assert.equal(weekday(vp), 'Fri');
   assert.equal(vp.startOfDay(vp.day), et(2026, 9, 25, 9, 30));
-  for (const t of [et(2026, 9, 25, 18, 0), et(2026, 9, 26, 12, 0), et(2026, 9, 27, 18, 0, 30)]) assert.equal(vp.advance(t), false, 'kept at ' + U.fmtFull(t));
+  for (const t of [et(2026, 9, 25, 18, 0), et(2026, 9, 26, 12, 0), et(2026, 9, 27, 18, 0, 30), et(2026, 9, 28, 9, 30)]) assert.equal(vp.advance(t), false, 'kept at ' + U.fmtFull(t));
+  assert.equal(vp.add(et(2026, 9, 27, 18, 0, 1), 20500, 2), false, 'Monday\'s first Globex trade (outside RTH) does not move it');
   assert.equal(vp.total, fri);
   assert.equal(vp.version, ver);
-  assert.equal(vp.add(et(2026, 9, 27, 18, 0, 1), 20500, 2), true, 'the first trade of Monday\'s session (outside RTH) starts it');
+  assert.equal(weekday(vp), 'Fri');
+  assert.equal(vp.add(et(2026, 9, 28, 9, 30), 20600, 3), true, 'the first RTH trade starts Monday');
   assert.equal(weekday(vp), 'Mon');
-  assert.equal(vp.total, 0, 'empty overnight, as in 1.6.0 (the ruling covers weekends and holidays only)');
-  vp.add(et(2026, 9, 28, 9, 30), 20600, 3);
   assert.equal(vp.total, 3);
 });
-
-test('keep on weekday evenings is 1.6.0: advance at 18:00 empties it (Session and RTH), the overnight RTH is empty', () => {
-  for (const rth of [false, true]) {
-    const vp = fill(new VolumeProfile({ rth, keep: true }), et(2026, 9, 28, 18, 0), et(2026, 9, 29, 17, 0));   // Tuesday
-    assert.ok(vp.total > 0);
-    assert.equal(vp.advance(et(2026, 9, 29, 17, 59, 59)), false);
-    assert.equal(vp.advance(et(2026, 9, 29, 18, 0)), true, (rth ? 'RTH' : 'Session') + ': Wednesday\'s session on the clock');
-    assert.equal(vp.empty, true);
-    assert.equal(weekday(vp), 'Wed');
-  }
+test('keep on weekday evenings: the full session moves at 18:00 as in 1.6.0; RTH stays through the night until 9:30', () => {
+  const full = fill(new VolumeProfile({ keep: true }), et(2026, 9, 28, 18, 0), et(2026, 9, 29, 17, 0));   // Tuesday
+  assert.ok(full.total > 0);
+  assert.equal(full.advance(et(2026, 9, 29, 17, 59, 59)), false);
+  assert.equal(full.advance(et(2026, 9, 29, 18, 0)), true, 'Session: Wednesday\'s session on the clock');
+  assert.equal(full.empty, true);
+  assert.equal(weekday(full), 'Wed');
+  // RTH (Anthony 2026-09-30: today's RTH through the weekday night until the next 9:30 open)
   const rth = fill(new VolumeProfile({ rth: true, keep: true }), et(2026, 9, 28, 18, 0), et(2026, 9, 29, 17, 0));
-  assert.equal(rth.add(et(2026, 9, 29, 18, 0, 1), 20000, 1), true, 'an overnight trade on a weekday starts the next day');
-  assert.equal(rth.total, 0);
+  const tue = rth.total;
+  assert.equal(rth.advance(et(2026, 9, 29, 18, 0)), false, 'RTH: the clock moves nothing');
+  fill(rth, et(2026, 9, 29, 18, 0), et(2026, 9, 30, 9, 30));                   // Wednesday's Globex night
+  assert.equal(weekday(rth), 'Tue');
+  assert.equal(rth.total, tue, 'Tuesday\'s RTH all night');
+  rth.add(et(2026, 9, 30, 9, 30, 0.2), 20000, 4);
+  assert.equal(weekday(rth), 'Wed', 'Wednesday 9:30\'s first trade starts Wednesday');
+  assert.equal(rth.total, 4);
 });
-
-test('keep with RTH on an NYSE holiday: Thanksgiving keeps Wednesday\'s RTH; Thursday 18:00 starts Friday, empty until 9:30', () => {
+test('keep with RTH on an NYSE holiday: Thanksgiving keeps Wednesday\'s RTH until Friday 9:30', () => {
   const vp = new VolumeProfile({ rth: true, keep: true });
   fill(vp, et(2026, 11, 24, 18, 0), et(2026, 11, 25, 17, 0));                // Wednesday 25 Nov
   const wed = vp.total;
@@ -93,16 +96,15 @@ test('keep with RTH on an NYSE holiday: Thanksgiving keeps Wednesday\'s RTH; Thu
   assert.equal(vp.advance(et(2026, 11, 25, 18, 0)), false, 'Thanksgiving\'s trading day starts: kept');
   fill(vp, et(2026, 11, 25, 18, 0), et(2026, 11, 26, 13, 0));                // Globex on Thanksgiving to its early halt
   assert.equal(vp.total, wed, 'no RTH trade on the holiday: Wednesday stays');
-  assert.equal(weekday(vp), 'Wed');
-  assert.equal(vp.advance(et(2026, 11, 26, 18, 0)), false, 'after the holiday, kept until the next session\'s first trade');
-  vp.add(et(2026, 11, 26, 18, 0, 1), 20900, 5);                                // Friday's session begins (a weekday)
-  assert.equal(weekday(vp), 'Fri');
-  assert.equal(vp.total, 0, 'Friday overnight: empty until 9:30, as on any weekday');
+  assert.equal(vp.advance(et(2026, 11, 26, 18, 0)), false);
+  vp.add(et(2026, 11, 26, 18, 0, 1), 20900, 5);                                // Friday's Globex session begins
+  assert.equal(weekday(vp), 'Wed', 'still Wednesday\'s RTH through Friday\'s night');
+  assert.equal(vp.total, wed);
   vp.add(et(2026, 11, 27, 9, 30, 1), 20900, 5);
+  assert.equal(weekday(vp), 'Fri');
   vp.add(et(2026, 11, 27, 13, 5), 20901, 5);                                   // after the 13:00 early close: outside
   assert.equal(vp.total, 5);
 });
-
 test('keep, full session, on a CME holiday: Christmas Eve\'s session stays through Christmas and the weekend', () => {
   const vp = new VolumeProfile({ keep: true });
   fill(vp, et(2026, 12, 23, 18, 0), et(2026, 12, 24, 13, 15));               // Thu 24 Dec, early halt
@@ -124,7 +126,7 @@ test('without keep nothing changed: advance at 18:00 empties, an overnight RTH t
   assert.equal(rth.total, 0);
 });
 
-test('fromStore: the last session with trades; RTH looks back only over a weekend or a holiday', () => {
+test('fromStore: the last session with trades; RTH looks back to the last RTH in the store, the full session over a weekend or a holiday', () => {
   const opts = rth => ({ keep: true, rth });
   const store = fill(new BB.TickStore(), FRI_FROM, FRI_TO);                       // Thursday 18:00 to Friday 17:00
   const fri = VolumeProfile.fromStore(store, opts(false)), friRth = VolumeProfile.fromStore(store, opts(true));
@@ -137,7 +139,7 @@ test('fromStore: the last session with trades; RTH looks back only over a weeken
   const mon = VolumeProfile.fromStore(store, opts(false));
   assert.equal(weekday(mon), 'Mon', 'the full session: Monday\'s, from Sunday 18:00');
   assert.equal(mon.total, fill(new VolumeProfile(), et(2026, 9, 27, 18, 0), et(2026, 9, 28, 3, 0)).total);
-  assert.equal(VolumeProfile.fromStore(store, opts(true)).empty, true, 'RTH on Monday 3:00 (a weekday overnight): empty until 9:30, as in 1.6.0');
+  assert.equal(weekday(VolumeProfile.fromStore(store, opts(true))), 'Fri', 'RTH on Monday 3:00: Friday\'s, kept through the night until 9:30');
   // Labor Day 2026 (Monday 7 Sep): Friday's RTH over the weekend and the holiday, and the holiday's Globex session
   const ld = fill(new BB.TickStore(), et(2026, 9, 3, 18, 0), et(2026, 9, 4, 17, 0));
   fill(ld, et(2026, 9, 6, 18, 0), et(2026, 9, 7, 12, 0));
@@ -148,50 +150,10 @@ test('fromStore: the last session with trades; RTH looks back only over a weeken
   fill(tg, et(2026, 11, 25, 18, 0), et(2026, 11, 26, 13, 0));
   assert.equal(weekday(VolumeProfile.fromStore(tg, opts(true))), 'Wed');
   fill(tg, et(2026, 11, 26, 18, 0), et(2026, 11, 27, 8, 0));
-  assert.equal(VolumeProfile.fromStore(tg, opts(true)).empty, true);
+  assert.equal(weekday(VolumeProfile.fromStore(tg, opts(true))), 'Wed', 'Friday 8:00: Wednesday\'s RTH until Friday 9:30');
   assert.equal(weekday(VolumeProfile.fromStore(tg, opts(false))), 'Fri', 'the full session of Friday 27 Nov started Thursday 18:00');
 });
 
-test('closedFrom: which ticks a kept profile needs while CME Globex is closed (null while it trades, holidays included)', () => {
-  const s = new VolumeProfile({ keep: true }), r = new VolumeProfile({ keep: true, rth: true });
-  const cases = [
-    // [clock, Session from, RTH from]
-    [et(2026, 9, 29, 13, 0), null, null],                                           // Tuesday, open
-    [et(2026, 9, 29, 3, 0), null, null],                                            // a weekday overnight
-    [et(2026, 9, 29, 17, 30), et(2026, 9, 28, 18, 0), et(2026, 9, 29, 9, 30)],      // the daily break
-    [et(2026, 9, 25, 17, 30), et(2026, 9, 24, 18, 0), et(2026, 9, 25, 9, 30)],      // Friday after the close
-    [et(2026, 9, 26, 12, 0), et(2026, 9, 24, 18, 0), et(2026, 9, 25, 9, 30)],       // Saturday
-    [et(2026, 9, 27, 17, 59), et(2026, 9, 24, 18, 0), et(2026, 9, 25, 9, 30)],      // Sunday before 18:00
-    [et(2026, 9, 27, 18, 0), null, null],                                           // Sunday 18:00: Monday's session is open
-    // review 2 S5: Globex trades on Labor Day and Thanksgiving until 13:00 ET, so nothing more is asked then
-    [et(2026, 9, 7, 10, 0), null, null],                                            // Labor Day morning
-    [et(2026, 9, 7, 12, 59), null, null],
-    [et(2026, 9, 7, 13, 0), et(2026, 9, 6, 18, 0), et(2026, 9, 4, 9, 30)],          // Labor Day after the halt: the holiday's own session; RTH Friday's
-    [et(2026, 9, 7, 17, 59), et(2026, 9, 6, 18, 0), et(2026, 9, 4, 9, 30)],
-    [et(2026, 9, 7, 18, 0), null, null],                                            // Tuesday's session is open
-    [et(2026, 1, 19, 11, 0), null, null],                                           // Martin Luther King Jr. Day, trading
-    [et(2026, 11, 26, 12, 0), null, null],                                          // Thanksgiving, trading
-    [et(2026, 11, 26, 15, 0), et(2026, 11, 25, 18, 0), et(2026, 11, 25, 9, 30)],    // Thanksgiving after the halt
-    [et(2026, 11, 27, 14, 0), et(2026, 11, 26, 18, 0), et(2026, 11, 27, 9, 30)],    // the day after, past the 13:15 early close
-    [et(2026, 11, 27, 13, 0), null, null],                                          // before it
-    // the days with no Globex session at all: Good Friday, Christmas, New Year's Day
-    [et(2026, 4, 2, 20, 0), et(2026, 4, 1, 18, 0), et(2026, 4, 2, 9, 30)],          // Thursday evening before Good Friday: no session
-    [et(2026, 4, 3, 12, 0), et(2026, 4, 1, 18, 0), et(2026, 4, 2, 9, 30)],          // Good Friday
-    [et(2026, 12, 25, 12, 0), et(2026, 12, 23, 18, 0), et(2026, 12, 24, 9, 30)],    // Christmas on a Friday
-    [et(2026, 12, 27, 17, 59), et(2026, 12, 23, 18, 0), et(2026, 12, 24, 9, 30)],   // Sunday after it
-    [et(2026, 12, 27, 18, 0), null, null],
-    [et(2026, 1, 1, 12, 0), et(2025, 12, 30, 18, 0), et(2025, 12, 31, 9, 30)],      // New Year's Day
-    [et(2026, 1, 1, 18, 0), null, null],                                            // Friday's session is open
-  ];
-  for (const [t, sf, rf] of cases) {
-    assert.equal(s.closedFrom(t), sf, 'Session at ' + U.fmtFull(t));
-    assert.equal(r.closedFrom(t), rf, 'RTH at ' + U.fmtFull(t));
-  }
-  // the longest reach: Sunday 17:59 after a Friday holiday, 96 h less a minute: the page asks ceil + 1 = 97 hours
-  assert.equal(Math.ceil((et(2026, 12, 27, 17, 59) - s.closedFrom(et(2026, 12, 27, 17, 59))) / 3600) + 1, 97);
-  assert.equal(U.closedDay(Math.floor(et(2026, 9, 26, 12, 0) / 86400)), true);
-  assert.equal(U.closedDay(Math.floor(et(2026, 9, 28, 12, 0) / 86400)), false);
-});
 
 test('cmeClosed: the CME Globex calendar, not the NYSE one (review 2 S5)', () => {
   const iso = y => [...U.cmeClosures(y)].map(d => new Date(d * 86400000).toISOString().slice(0, 10)).sort();
@@ -203,15 +165,6 @@ test('cmeClosed: the CME Globex calendar, not the NYSE one (review 2 S5)', () =>
     et(2026, 12, 24, 13, 15), et(2026, 12, 24, 20, 0), et(2026, 12, 25, 12, 0), et(2026, 4, 3, 9, 30)];
   for (const t of open) assert.equal(U.cmeClosed(t), false, 'open at ' + U.fmtFull(t));
   for (const t of shut) assert.equal(U.cmeClosed(t), true, 'closed at ' + U.fmtFull(t));
-  // every minute of 2026 and 2027: while Globex trades closedFrom is null (the page asks for the view's ticks only)
-  const s = new VolumeProfile({ keep: true }), r = new VolumeProfile({ keep: true, rth: true });
-  let max = 0;
-  for (let t = et(2026, 1, 1, 0, 0); t < et(2028, 1, 1, 0, 0); t += 60) {
-    const a = s.closedFrom(t), b = r.closedFrom(t);
-    if (!U.cmeClosed(t)) { assert.equal(a, null); assert.equal(b, null); continue; }
-    max = Math.max(max, Math.ceil((t - a) / 3600) + 1, Math.ceil((t - b) / 3600) + 1);
-  }
-  assert.ok(max <= 97, 'the most asked is ' + max + ' hours');
 });
 
 test('fromStore: nothing that counts gives an empty profile, never an error', () => {
@@ -224,14 +177,13 @@ test('fromStore: nothing that counts gives an empty profile, never an error', ()
   assert.equal(vp.day, null);
 });
 
-test('the page asks for the last session while CME is closed, as much as ChartBridge serves by its version; nt8/ is unchanged', () => {
+test('1.6.1 loads no tick history beyond the view\'s: ticksWanted and ticksMissing as in 1.6.0; nt8/ as on main', () => {
   const fs = require('node:fs'), path = require('node:path');
   const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8');
-  assert.match(cs, /int tickHours = hm\.Success \? Math\.Max\(0, Math\.Min\(48, int\.Parse\(hm\.Groups\[1\]\.Value\)\)\) : ChartBridgeConfig\.DefaultTickHours;/, 'review 2 S3: 0.3.4 as on main');
+  assert.match(cs, /int tickHours = hm\.Success \? Math\.Max\(0, Math\.Min\(48, int\.Parse\(hm\.Groups\[1\]\.Value\)\)\) : ChartBridgeConfig\.DefaultTickHours;/);
   const js = fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(js, /const VP_CLOSED_HOURS = 120;/);
-  assert.match(js, /return n >= 3005 \? VP_CLOSED_HOURS : 48;/, 'from ChartBridge 0.3.5 on');
-  assert.match(js, /const ticksWanted = \(\) => Math\.min\(ticksWantedAll\(\), bridgeTickHours\(\)\);/);
-  assert.match(js, /bridgeVersion = typeof m\.version === 'string' \? m\.version : '';\n/);
-  assert.doesNotMatch(js, /install\.ps1 again/, 'no install advice on the page (review 2 S4)');
+  assert.match(js, /\n  const ticksWanted = \(\) => TF\[S\.tf\]\.mode === 'range' \? BB\.rangeTickHours\(etNow\(\), SESSION\) : TF\[S\.tf\]\.sec < 60 \? 8 : 0;\n/);
+  assert.match(js, /\n  const ticksMissing = \(\) => TF\[S\.tf\]\.mode === 'range' \? BB\.rangeNeedsReload\(D\.tickFrom, etNow\(\), SESSION, D\.trimmed\) : TF\[S\.tf\]\.sec < 60 && D\.tickHours === 0;\n/);
+  assert.doesNotMatch(js, /closedFrom|VP_CLOSED_HOURS|bridgeTickHours|tickCapped|install\.ps1 again/);
+  assert.equal(typeof new VolumeProfile({}).closedFrom, 'undefined');
 });

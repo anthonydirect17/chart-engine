@@ -1956,15 +1956,14 @@ function mountThemePanel(chart, host, options) {
  * the RTH profile empties at 18:00 and stays empty until 9:30. Trades outside the window change nothing but the
  * `outside` count (not `skipped`, which is for bad input), and do not change `version`.
  *
- * Keep (option `keep: true`, Anthony's ruling 2026-09-30; the page uses it): over weekends and NYSE holidays the
- * profile keeps the last session it counted until the next session's first trade, so a Friday can be reviewed over
- * the weekend. A trading day with no stock market session (closedDay: Saturday, Sunday, an NYSE holiday; the trading
- * day runs from 18:00 ET the evening before) never empties it on the clock (advance does nothing), and with `rth` its
- * trades outside the RTH window never empty it either (on Labor Day or Thanksgiving Globex trades, but there is no
- * RTH: the RTH of the day before stays). On a trading day with a stock market session nothing changes from the
- * default: the next session's first trade (Sunday 18:00, and every weekday 18:00) starts it, and with `rth` the RTH
- * profile is empty overnight until 9:30, as in 1.6.0 (Anthony's ruling covers weekends and holidays only). Without
- * `keep` (the default) the session moves as above. closedFrom(now) says which ticks a kept profile needs.
+ * Keep (option `keep: true`, Anthony's rulings of 2026-09-30; the page uses it): the profile keeps the last session
+ * it counted until the next session's first trade, so a Friday can be reviewed over the weekend. The full session: a
+ * trading day with no stock market session (closedDay: Saturday, Sunday, an NYSE holiday; the trading day runs from
+ * 18:00 ET the evening before) never empties it on the clock (advance does nothing); on a weekday evening the next
+ * session starts at 18:00 as in 1.6.0. With `rth`: the RTH profile stays through the weekday night, weekends and
+ * holidays until the next RTH trade (9:30 on the next day with a stock market session): trades outside the RTH window
+ * never move it and the clock never does (on Labor Day or Thanksgiving Globex trades, but there is no RTH: the RTH of
+ * the day before stays). Without `keep` (the default) the session moves as 1.6.0's.
  *
  * Cost: add() is amortised O(1): most trades only add to a row, and a row outside the array grows it to twice
  * the span needed, so the copies add up to O(1) per trade (one add can copy the whole span; a new session
@@ -2040,29 +2039,11 @@ class VolumeProfile {
     for (let k = 0; ; k++, d--) {
       const from = vp.startOfDay(d);
       store.feed(vp, 0, from);
-      // look further back only while the day just tried has no stock market session (a kept profile's rule)
-      if (!vp.empty || from <= first || k >= 7 || !(vp.keep && closedDay(d))) return vp;
+      // look further back only while the day just tried has no stock market session, or for RTH (a kept profile's rule)
+      if (!vp.empty) return vp;
+      if (from <= first || k >= 7 || !(vp.keep && (vp.rth || closedDay(d)))) return new VolumeProfile(opts);   // nothing counts: empty, no day
       vp = new VolumeProfile(opts);
     }
-  }
-  /**
-   * While CME Globex is closed (cmeClosed: the 17:00 to 18:00 ET break, Friday 17:00 to Sunday 18:00, a day with no
-   * Globex session, and after an NYSE holiday's 13:00 halt), the time from which a kept profile needs every trade:
-   * for the full session, the start (18:00 ET the evening before) of the last Globex session, by the CME calendar; with
-   * `rth`, 9:30 of the last day with a stock market session, by the NYSE calendar. Null while Globex trades, also on an
-   * NYSE holiday before its halt (1.6.1, review 2 S5: the page then loads ticks for the view only, never more).
-   * Pure: `now` is exchange wall-clock seconds.
-   */
-  closedFrom(now) {
-    if (!cmeClosed(now)) return null;
-    if (this.rth) {
-      let day = Math.floor(now / DAY);
-      for (let k = 0; k < 12; k++, day--) if (rthDay(day * DAY + 43200) && day * DAY + this.rthStart <= now) return day * DAY + this.rthStart;
-      return null;
-    }
-    let d = tradeDay(now, this.sessionStart);
-    for (let k = 0; k < 12 && !cmeSessionDay(d); k++) d--;
-    return this.startOfDay(d);
   }
   static _share(p) {
     if (!(p > 0 && p <= 1)) throw new RangeError('VolumeProfile: the value area share must be above 0 and at most 1');
@@ -2129,8 +2110,8 @@ class VolumeProfile {
     let fresh = false;
     if (d !== this.day) {
       if (this.day !== null && d < this.day) { this.skipped++; return false; }
-      // keep: an RTH profile outlives the Globex trades of a day with no stock market session (a holiday)
-      if (this.keep && this.rth && this.day !== null && closedDay(d) && !this.inRth(t)) { this.outside++; return false; }
+      // keep: an RTH profile outlives the Globex trades until the next RTH trade (the night, a weekend, a holiday)
+      if (this.keep && this.rth && this.day !== null && !this.inRth(t)) { this.outside++; return false; }
       this._clear(); this.day = d; fresh = true;
     }
     if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
@@ -2156,8 +2137,9 @@ class VolumeProfile {
   advance(t) {
     const d = tradeDay(t, this.sessionStart);
     if (!isFinite(d) || (this.day !== null && d <= this.day)) return false;
-    // keep: on a weekend or a holiday, and after one until the next session's first trade, the clock moves nothing
-    if (this.keep && (closedDay(d) || (this.day !== null && closedBetween(this.day, d)))) return false;
+    // keep: RTH never moves on the clock; the full session not on a weekend or a holiday, nor after one until the next
+    // session's first trade
+    if (this.keep && (this.rth || closedDay(d) || (this.day !== null && closedBetween(this.day, d)))) return false;
     this._clear(); this.day = d;
     return true;
   }

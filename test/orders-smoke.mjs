@@ -711,6 +711,24 @@ try {
       'review 3 S4: a Flatten refused for the rate is sent once more: ' + JSON.stringify(fl23));
     await armOff();
 
+    // Anthony 2026-09-30: a drag on an order still in a Cancel all sends no change; the Cancel all cancels it
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    const sentNow = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.id));
+    const queued = (await A.evaluate(() => window.liveChart.getOrders().map(o => ({ id: o.id, price: o.price })))).find(o => !sentNow.includes(o.id));
+    await settle(queued.price);
+    const hq = await handle(queued.id), bq = await A.locator('#chart canvas').boundingBox();
+    await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2); await A.mouse.down();
+    await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2 + 25, { steps: 5 }); await A.mouse.up();
+    await batchDone('the drag probe: all cancelled');
+    const dq = await A.evaluate(id => ({ changes: window.__sent.filter(m => m.type === 'change').length, cancels: window.__sent.filter(m => m.type === 'cancel' && m.id === id).length,
+      seen: window.__statusSeen.filter(t => /^Not moved/.test(t)) }), queued.id);
+    check(dq.changes === 0 && dq.cancels === 1 && dq.seen.includes('Not moved: order ' + queued.id + ' is in the Cancel all under way, which cancels it.') && await evalWorking() === 0,
+      'a drag on order ' + queued.id + ' while it waits in a Cancel all: no change sent, cancelled once, said so: ' + JSON.stringify(dq));
+    await armOff();
+
     // review 2 N1: a Cancel all of 3, and Armed off in the same task: all 3 are sent at the click
     await place(3);
     await onChart(3);

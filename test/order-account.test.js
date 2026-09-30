@@ -92,7 +92,7 @@ function cancelHarness(n, opts = {}) {
   const mk = $; for (const id of ['oCancel', 'unsentBar', 'unsentText']) mk(id).classList.o = mk(id);
   let counted = null;                                                    // live.js's send counts every order action (actionSent)
   const api = new Function('TR', 'D', 'OT', 'ws', 'send', 'later', 'flash', 'ready', '$', 'performance',
-    src + '\n  return { cancelAll, batchStop, unsentCheck, actionSent, sendFlatten, onRefused, get batch() { return batch; }, unsent };')(
+    src + '\n  return { cancelAll, batchStop, unsentCheck, actionSent, sendFlatten, onRefused, inCancelAll, get batch() { return batch; }, unsent };')(
     TR, D, OT, ws, m => { if (ws.readyState === 1) { sent.push(m.id); at.push(clock.t); counted(); } }, (fn, ms) => timers.push({ fn, ms }), (t, l) => flashes.push([t, l]),
     () => TR.armed && TR.enabled && ws.readyState === 1, $, { now: () => clock.t });
   counted = api.actionSent;
@@ -187,6 +187,18 @@ test('Cancel all: a second click sends nothing new, each send skips an order no 
   g.tick();
   assert.deepEqual(g.sent.slice(6), ['B1']);
   assert.ok(g.at[6] - g.at[0] >= 1100);
+});
+
+test('a drag on an order in a Cancel all under way sends no change: Cancel all wins (Anthony 2026-09-30)', () => {
+  const h = cancelHarness(10);
+  h.api.cancelAll();
+  assert.equal(h.api.inCancelAll('A1'), true, 'its cancel just went out');
+  assert.equal(h.api.inCancelAll('A9'), true, 'queued');
+  assert.equal(h.api.inCancelAll('X1'), false);
+  while (h.tick());
+  h.wait(5100);
+  assert.equal(h.api.inCancelAll('A9'), false, 'a while after its cancel went out');
+  assert.match(PAGE, /if \(notShown\(e\.id\)\) return;\n(\s+\/\*[^]*?\*\/\n)?\s+if \(inCancelAll\(e\.id\)\) \{ renderTrading\(\); flash\('Not moved: order ' \+ e\.id \+ ' is in the Cancel all under way, which cancels it\.', 'warn'\); return; \}\n\s+send\(\{ type: 'change'/);
 });
 
 test('Cancel all: the orders just sent count toward the pace, so ChartBridge never sees more than 10 a second', () => {
