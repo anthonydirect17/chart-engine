@@ -21,6 +21,7 @@
     "smoke:ib": "node test/ib-bg-smoke.mjs",
     "smoke:vp": "node test/vp-smoke.mjs",
     "smoke:live-first": "node test/live-first-smoke.mjs",
+    "smoke:update": "node test/update-notice-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "bridge": "node test/fake-bridge.mjs",
     "check:nt8": "sh nt8/check/check.sh",

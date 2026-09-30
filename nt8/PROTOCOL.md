@@ -382,13 +382,31 @@ reconnect probably raises no reset, and connection status events are not watched
 start and stop): after an outage over 60 s the old quote is stale; after a shorter one it can stand until the first new
 Bid and Ask updates.
 
-**Backfill** (tick charts, `tickHours` above 0). With the trades ChartBridge asks NinjaTrader for the historical
-Bid ticks and Ask ticks (three requests at once; the backfill goes out when all three are back, in any order; a quote
-request ending in the future that is refused or empty is asked once more ending now, like the trades).
+**Backfill** (tick charts, `tickHours` above 0).
 
-- The quote window is at most the last 24 hours (`QuoteHoursMax`), whatever the trades ask (a range view can ask up
-  to 48): 24 hours covers the whole current session, which a delta pane shows. Trades before it go by the tick rule
-  (`beforeQuotes`, and the `note` says the window is capped).
+**0.3.4.1: no Bid or Ask history by default.** On the trading PC the Bid and Ask requests of 0.3.4 (8 hours of each on a
+range chart, on every load and every reload) did not answer within 2.5 s and NinjaTrader froze several times a minute.
+Delta is used while trading, so the past does not need it. `quoteHours` in `config.txt` (0, 1 or 2; default 0; anything
+else is 0, with a line in the Output window) sets how many hours of Bid and Ask a tick chart asks for:
+
+- `quoteHours = 0` (default): no Bid or Ask request at all. The backfill goes out as soon as the trades are in (no quote
+  wait), every backfill trade by the tick rule (`sm` 3, or 0 for the first of a session), so a page can tell them from
+  measured sides (`sm` 2). Live trades keep their side from the live quote (`sm` 2 at or outside the quote), as before.
+  `/diag` `sides.<root>.lastLoad` has `quoteHours: 0` and the note `quotes not requested (quoteHours 0)`.
+- `quoteHours = 1` or `2`: the last 1 or 2 hours of Bid and Ask (at most the trades' own window), for a measured test.
+  NinjaTrader's help says a BarsRequest by date is widened to whole trading days, so NinjaTrader may still load the
+  day's Bid and Ask; ChartBridge only keeps the last 1 or 2 hours. Measure it on the PC before leaving it on.
+- NinjaTrader's help documents no way to cancel a BarsRequest once asked (`Request()`, and `Dispose()` when done). So a
+  reload never asks again while an earlier Bid or Ask request for the same instrument is still unanswered: that load's
+  trades go by the tick rule and the `note` says why; `/diag` `sides.<root>.quotesOutstanding` counts them. A request
+  that never answers keeps that instrument's quotes off until NinjaTrader restarts.
+
+With `quoteHours` 1 or 2, with the trades ChartBridge asks NinjaTrader for the historical Bid ticks and Ask ticks (three
+requests at once; the backfill goes out when all three are back, in any order; a quote request ending in the future that
+is refused or empty is asked once more ending now, like the trades).
+
+- The quote window is the last `quoteHours` hours, at most the trades' window (a range view can ask up to 48). Trades
+  before it go by the tick rule (`beforeQuotes`, and the `note` says the window is `quoteHours`).
 - Only time and price are kept, and only the rows that can change the answer: of a run of rows at one price (size
   changes) the first, plus one every 5 seconds, each with the time of the last row it stands for (`Seen`), so a
   quote's age, and so the 60 s stale test, is exactly what every row gives (review 2 N1; a harness case checks 12,000
@@ -611,9 +629,10 @@ update was stamped after them), `staleQuotes`, the latest `bid` and `ask`, `bidU
 and `eventQuoteSame`, `eventQuoteDiffers`, `eventQuoteNone`: whether the Last event's own Bid and Ask equal the latest
 updates) and `lastLoad` (null before the first tick chart load: `sub`, `atUtcMs`, `trades`, the four counts, `note`
 (in words when some trades could not use the quote history, else null), `bidTicks` and `askTicks` (rows NinjaTrader
-sent inside the quote window), `bidRowsKept` and `askRowsKept` (after dropping size-only rows), `quoteWindowHours`,
+sent inside the quote window), `bidRowsKept` and `askRowsKept` (after dropping size-only rows), `quoteHours` (the
+`config.txt` setting, 0.3.4.1), `quoteWindowHours` (the hours this load asked for; 0 when none),
 `quoteCopyMs` (ChartBridge's time copying and thinning them), `bidRequest` and `askRequest` (`ok`, `empty`, the error,
-or no answer in time), `quotesRetriedEndingNow`, `quotesTimedOut`, `quotesLoadMs` (subscribe to the later quote
+no answer in time, or not requested and why), `quotesRetriedEndingNow`, `quotesTimedOut`, `quotesLoadMs` (subscribe to the later quote
 answer), `firstTrade`, `lastTrade`, `firstBid`, `lastBid`, `firstAsk`, `lastAsk` (New York time), `quotedTrades`,
 `beforeQuotes`, `afterQuotes`, `staleQuotes`, `betweenQuotes` (quoted but between bid and ask: tick rule),
 `crossedQuotes`, `tieChanged` (trades the other tie rule would call differently, every trade counted), `sessionStarts`
@@ -621,7 +640,8 @@ answer), `firstTrade`, `lastTrade`, `firstBid`, `lastBid`, `firstAsk`, `lastAsk`
 `tradeResolutionMs`, `quoteResolutionMs`, `comparedAtMs`, and `stamps`: NinjaTrader's own bid and ask on the last 2,000
 backfill trades, `usable`, `likeFillIn` (Bid = Last and Ask = Last + 1 tick; equal to `usable` means filled in, not
 real), `missing`, and for usable stamps that put the trade at the bid or ask, `agree` and `disagree` with the side
-ChartBridge gave it, whatever its method).
+ChartBridge gave it, whatever its method), and (0.3.4.1) `quotesOutstanding`: Bid and Ask requests for that instrument
+NinjaTrader has not answered yet.
 
 ## Fills to The Desk (0.2.0, off by default)
 
