@@ -250,18 +250,18 @@ try {
     await page.keyboard.press('/');
     // add everything on pane B and pin it all, then make B narrow: letter chips, one line
     await page.fill('#paneB .ind-search input', '');
-    for (const cat of ['price', 'trades']) {
+    for (const cat of ['price', 'volume', 'trades']) {
       if (await page.getAttribute(`#paneB .ind-cat[data-id="${cat}"]`, 'aria-expanded') !== 'true') await page.click(`#paneB .ind-cat[data-id="${cat}"]`);
       while (await page.$('#paneB .ind-body [data-f^="add:"]')) await page.click('#paneB .ind-body [data-f^="add:"]');   // each add redraws the list
     }
     await page.keyboard.press('Escape');
-    check(await page.textContent('#paneB .ind-count') === '5/5' && await page.$$eval('#paneB .ind-chip', c => c.length) === 5, 'pane B: all five added, each with a chip');
+    check(await page.textContent('#paneB .ind-count') === '6/6' && await page.$$eval('#paneB .ind-chip', c => c.length) === 6, 'pane B: all six added (the volume profile too), each with a chip: the strip is full');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = '3 1 0'; });
     await page.waitForTimeout(300);
     const nb = await page.evaluate(() => { const s = document.querySelector('#paneB .ind-chips'), cs = [...s.querySelectorAll('.ind-chip')];
       return { w: Math.round(document.getElementById('paneB').getBoundingClientRect().width), narrow: s.classList.contains('is-narrow'), lines: new Set(cs.map(c => Math.round(c.getBoundingClientRect().top))).size, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1 }; });
     const na = await page.evaluate(() => document.querySelector('#paneA .ind-chips').classList.contains('is-narrow'));
-    check(nb.narrow && nb.lines === 1 && nb.text === 'VWLIF' && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
+    check(nb.narrow && nb.lines === 1 && nb.text === 'VWLIPF' && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
     await page.click('#paneB .ind-chip[data-id="levels"]');
     check(await page.evaluate(() => window.__b.chart.getLayers().levels === false && window.__a.chart.getLayers().levels === true), 'a letter chip hides Levels on its own pane only');
     await shot(page, 'embed-narrow-pane-chips.png');
@@ -272,7 +272,7 @@ try {
     await page.keyboard.press('Escape');
     // back to pane B's earlier set: Volume and VWAP only, not pinned
     await page.click('#paneB .ind-btn');
-    for (const id of ['levels', 'ib', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
+    for (const id of ['levels', 'ib', 'vp', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = ''; });
     check(await page.textContent('#paneB .ind-count') === '2/2', 'pane B back to Volume and VWAP');

@@ -22,6 +22,8 @@
  *   live-indicators-v2  { <paneId>: { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null } }
  *                       the Indicators menu per chart pane (1.6.0): on = on this chart, shown = drawn (hidden keeps it on
  *                       the chart), pin = a chip on the pane's strip; the last 5 used; what Hide all hid, for Restore
+ *   live-indicator-options-v1  { <paneId>: { vp: { session: 'full' | 'rth' } } } an indicator's own options, per pane
+ *                       (INDICATOR_OPTIONS, 1.6.0; the volume profile's hours)
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
  * The 1.3 keys live-settings-v1 and live-range-v1, and 1.4 to 1.5.3's live-indicators-v1 ({ <paneId>: { volume, vwap,
  * levels, fills, ib } }), are read once, when the new keys do not exist yet, and left in place.
@@ -54,28 +56,35 @@ const INDICATORS = [
     opt: 'Prior day high, low, close and value area; overnight high and low' },
   { id: 'ib', name: 'Initial balance', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
     opt: '1 hour, locks 10:30 ET' },
+  { id: 'vp', name: 'Volume profile', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
+    alias: 'vp volume profile poc vah val value area',
+    opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
   { id: 'fills', name: 'Fills', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
 ];
-/* Listed in the menu, tagged "coming" and not selectable until they exist (the volume profile branch). */
-const COMING = [
-  { id: 'profile', name: 'Volume profile', short: 'PROFILE', cat: 'volume', sw: 'var(--line-strong)', alias: 'vp volume profile poc', coming: true },
-];
+/* Listed in the menu, tagged "coming" and not selectable until they exist (none since the volume profile, 1.6.0). */
+const COMING = [];
 const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }];
 const IND_IDS = INDICATORS.map(x => x.id);
 const RECENT_MAX = 5;
 /* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
-   smoke test can lower it (there are only five indicators today). */
+   smoke test can lower it. */
 let api = null;
 const pinMax = () => (api ? api.PIN_MAX : 6);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true };
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false };   // the profile: off on every pane
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false };
+/*
+ * Options an indicator has besides on and off, each a list of allowed values with the default first (set in its gear
+ * panel). The volume profile: the full session from 18:00 ET, or RTH 9:30 to 16:00 ET, 13:00 on NYSE early closes
+ * (Anthony's ruling 2026-09-29).
+ */
+const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] } };
 const MAIN_PANE = 'main';
 
-const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1' };
+const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1' };
 const OLD = { settings: 'live-settings-v1', range: 'live-range-v1', indicators: 'live-indicators-v1' };
 
 /** A whole number of ticks from 1 to 400, or null when the text is not one (half typed, empty, 0, 4.5). */
@@ -98,6 +107,19 @@ function cleanIndicators(v, base) {
   return out;
 }
 
+const own = (o, k) => !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
+/* An indicator's options: the saved values that are allowed, the defaults for the rest ({} for an unknown id).
+   Only own properties count (review S5): 'toString' or '__proto__' is never an indicator, an option or a value. */
+function cleanIndicatorOptions(id, v) {
+  const spec = own(INDICATOR_OPTIONS, id) ? INDICATOR_OPTIONS[id] : {}, out = {};
+  for (const k of Object.keys(spec)) out[k] = own(v, k) && spec[k].includes(v[k]) ? v[k] : spec[k][0];
+  return out;
+}
+/** Whether `value` is an allowed value of option `key` of indicator `id` (own properties only). */
+function indicatorOptionAllowed(id, key, value) {
+  return own(INDICATOR_OPTIONS, id) && own(INDICATOR_OPTIONS[id], key) && INDICATOR_OPTIONS[id][key].includes(value);
+}
+
 /*
  * One pane's indicator state (1.6.0): { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null }.
  *   on      on this chart (listed under "On this chart"); off means it waits in its group with a + to add it
@@ -111,7 +133,7 @@ function cleanIndicators(v, base) {
 const isList = v => Array.isArray(v);
 function defaultPane(paneId) {
   const main = paneId === MAIN_PANE, ind = {};
-  for (const id of IND_IDS) ind[id] = { on: main, shown: true, pin: main };
+  for (const id of IND_IDS) { const on = main && DEFAULT_INDICATORS[id]; ind[id] = { on, shown: true, pin: on }; }
   return { ind, recent: [], restore: null };
 }
 function cleanIdList(v, max) {
@@ -143,7 +165,10 @@ function paneFromV1(v1, paneId) {
   const main = paneId === MAIN_PANE;
   const flags = cleanIndicators(v1, main ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
   const out = defaultPane(paneId);
-  for (const id of IND_IDS) out.ind[id] = main ? { on: true, shown: flags[id], pin: true } : { on: flags[id], shown: true, pin: flags[id] };
+  for (const id of IND_IDS) {
+    const listed = main && DEFAULT_INDICATORS[id];                 // the main pane's own five (never the volume profile)
+    out.ind[id] = listed ? { on: true, shown: flags[id], pin: true } : { on: flags[id], shown: true, pin: flags[id] };
+  }
   return out;
 }
 function copyPane(st) {
@@ -329,6 +354,23 @@ function create(storage) {
       all[paneId] = fn(cleanPane(all[paneId], paneId));
       return raw.set(KEYS.indicators, all);
     },
+    /** One indicator's options on one pane, e.g. indicatorOptions('main', 'vp') -> { session: 'full' }. */
+    indicatorOptions(paneId, id) {
+      const all = obj(KEYS.indicatorOptions), pane = own(all, paneId) ? all[paneId] : null;
+      return cleanIndicatorOptions(id, own(pane, id) ? pane[id] : null);
+    },
+    /** Set one option of one indicator on one pane (read fresh, only that field written); false when not allowed. */
+    setIndicatorOption(paneId, id, key, value) {
+      if (!indicatorOptionAllowed(id, key, value) || typeof paneId !== 'string' || !paneId) return false;
+      // fresh objects with no prototype, filled from own properties only: a pane id such as '__proto__' is a plain
+      // key here, never Object.prototype (review S5)
+      const all = Object.assign(Object.create(null), obj(KEYS.indicatorOptions));
+      const saved = own(all, paneId) && all[paneId] && typeof all[paneId] === 'object' && !Array.isArray(all[paneId]) ? all[paneId] : null;
+      const pane = Object.assign(Object.create(null), saved);
+      pane[id] = Object.assign(cleanIndicatorOptions(id, own(pane, id) ? pane[id] : null), { [key]: value });
+      all[paneId] = pane;
+      return raw.set(KEYS.indicatorOptions, all);
+    },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** Set one bracket field ('stop' or 'target', whole ticks 0 to 200) for one root; the other field is kept. */
     setBracketField(root, field, ticks) {
@@ -351,7 +393,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { create, debounce, parseRange, clampRange, cleanIndicators, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+api = { create, debounce, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -505,7 +547,7 @@ ${obar}
     <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
-      <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgFill"></span></div>
+      <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span></span><span id="${p}lgFill"></span></div>
     </div>
     <div class="notice" id="${p}notice" hidden>
       <h2 id="${p}noticeTitle">Waiting for ChartBridge</h2>
@@ -519,6 +561,7 @@ ${obar}
     <span id="${p}fps">-</span><span class="sep">·</span>
     <span id="${p}ticksSeen">0 ticks</span>
     <span class="ibnote" id="${p}ibNote" hidden></span>
+    <span class="ibnote" id="${p}vpNote" hidden></span>
     <span class="msg" id="${p}statusMsg"></span>
     <span class="ro" id="${p}statusRo">Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.</span>
   </footer>
@@ -579,7 +622,7 @@ function start(container, opt, PAGE) {
   /* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
-  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS) });   // layers: what is drawn
+  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp') } });   // layers: what is drawn
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   const saveSetting = k => prefs.setSetting(k, S[k]);
@@ -599,7 +642,7 @@ function start(container, opt, PAGE) {
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, trades: false },
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, trades: false },
     motion: GLIDE[S.glide], clock: etNow,
   });
 
@@ -607,7 +650,7 @@ function start(container, opt, PAGE) {
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
-    lv: [], ib: null, ibKey: '' };
+    lv: [], ib: null, ibKey: '', vp: null, liveFrom: null };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
@@ -633,6 +676,7 @@ function start(container, opt, PAGE) {
   function resetData(root) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
+    D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -720,6 +764,82 @@ function start(container, opt, PAGE) {
     el.textContent = text; el.hidden = !text;
   }
 
+  /*
+   * The volume profile (1.6.0; Anthony's ruling 2026-09-29): the 'vp' indicator, off by default, drawn
+   * by the engine at the right edge of the plot behind the candles, 1-tick rows, POC and 70% value area highlighted.
+   * The option S.options.vp.session picks the full session from 18:00 ET ('full') or RTH 9:30 to 16:00 ET ('rth').
+   * Built from the TickStore when the indicator is on at `ready`, when it is switched on, and when the option
+   * changes (the store holds every trade the page got: the backfill, then each live tick), then fed each live tick
+   * right after the store's push in onTick, so it holds exactly what the store holds (VolumeProfile in the engine
+   * has the notes, and the backfill seam that is not settled). It holds the trading day of the clock: the timer
+   * below moves it to the new session at 18:00 ET even before the first trade. It does not depend on the view, so
+   * changing bars keeps it. While it is off there is no profile at all.
+   * Views that load no tick history (1m and longer, when the page subscribed on one: tickHours 0) have only the
+   * live trades since `ready`, so the profile starts at the first live trade; a quiet note on the status line says
+   * so, and says when the tick history does not reach back to 18:00 (or 9:30 for RTH).
+   */
+  function vpBuild() {
+    D.vp = null;
+    if (S.layers.vp && D.ready) {
+      const now = etNow();
+      const vp = new CE.VolumeProfile({ tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth' });
+      D.ticks.feed(vp, 0, vp.startOf(now));
+      vp.advance(now);
+      D.vp = vp;
+    }
+    chart.setProfile(D.vp);
+    vpNote(); vpLegend();
+  }
+  /* The quiet note while the profile is on and cannot show the whole session (or RTH) for a reason. */
+  function vpNote() {
+    const el = $('vpNote'); if (!el) return;
+    let text = '';
+    if (S.layers.vp && D.ready && D.vp) {
+      const now = etNow(), need = D.vp.startOf(now), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
+      // every trade is known from here on: the tick backfill's start (later when NinjaTrader sent less than asked,
+      // or the page dropped its oldest ticks), or with no tick history (tickHours 0) the moment the page went live
+      const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
+      const coveredFrom = D.tickHours > 0 ? Math.max(D.tickFrom, D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
+      if (rth && !U.rthDay(need)) {
+        const wd = new Date(need * 1000).getUTCDay();
+        text = wd === 0 || wd === 6 ? '' : 'Volume profile (RTH): no stock market session on ' + U.fmtDate(need) + ' (NYSE holiday).';
+      } else if (rth && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
+      else if (coveredFrom > need) {
+        const at = U.fmtHM(Math.min(coveredFrom, now));
+        text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.'
+          : 'Volume profile from ' + at + ' ET: this view loads no tick history, so it counts the live trades from then on.';
+      }
+    }
+    if (el.textContent !== text) el.textContent = text;
+    el.hidden = !text;
+  }
+  /* "POC <price> · VA <val> to <vah>" in the legend while the profile is on and has trades; redone once per change. */
+  let vpLegendVer = -1;
+  function vpLegend() {
+    const el = $('lgVp'); if (!el) return;
+    const cols = S.layers.vp && D.vp ? D.vp.columns() : null;
+    el.hidden = !cols;
+    if (!cols || cols.version === vpLegendVer) return;
+    vpLegendVer = cols.version;
+    const va = D.vp.valueArea(), dp = precisionOf();
+    $('lgPoc').textContent = U.fmtPrice(D.vp.poc().price, dp); $('lgVal').textContent = U.fmtPrice(va.val, dp); $('lgVah').textContent = U.fmtPrice(va.vah, dp);
+    el.title = 'Volume profile, ' + (D.vp.rth ? 'RTH 9:30 to 16:00 ET' : 'full session from 18:00 ET') + ': point of control and 70% value area';
+  }
+  /*
+   * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
+   * Returns false for an option or value that does not exist. The volume profile is rebuilt from the store.
+   */
+  function setIndicatorOption(id, key, value) {
+    if (!LP.indicatorOptionAllowed(id, key, value)) return false;   // own properties only: 'toString' is not an option
+    if (S.options[id][key] !== value) {
+      S.options[id][key] = value;
+      prefs.setIndicatorOption(PANE, id, key, value);
+      if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
+    }
+    syncIndicators();
+    return true;
+  }
+
   function onReady() {
     // With ticks: 1m history up to the start of the current minute, and the forming minute rebuilt from
     // ticks. Without ticks: keep NinjaTrader's forming minute and let live ticks continue it.
@@ -734,7 +854,9 @@ function start(container, opt, PAGE) {
       D.ticks.feed(D.m1, 0, Math.max(cutoff, lastHist));
     }
     D.ready = true;
+    D.liveFrom = etNow();
     rebuild();
+    vpBuild();
     setConn('live');
     $('notice').hidden = true;
   }
@@ -743,6 +865,7 @@ function start(container, opt, PAGE) {
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
     D.ticks.push(t, p, v);                             // columns, not one array per trade (TickStore, bar-builder.js)
+    if (D.vp) D.vp.add(t, p, v);                       // the volume profile holds what the store holds (vpBuild)
     if (D.ticks.length > 2500000) { D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; }   // the first session left is partial now
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
@@ -1146,6 +1269,7 @@ function start(container, opt, PAGE) {
 
   let legendKey = '';
   chart.on('legend', e => {
+    vpLegend();
     const { bar: b, prev, forming } = e;
     const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap].join('|');
     if (key === legendKey) return;
@@ -1187,6 +1311,9 @@ function start(container, opt, PAGE) {
       const chrome = U.chromeColors(T);
       for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
       st.setProperty('--ib-sw', chrome ? U.markOnGround(CE.LEVEL_COLORS.ibHigh, T.bg, CE.FLOOR.text, T.to) : CE.LEVEL_COLORS.ibHigh);
+      // the volume profile: its menu swatch as the IB's (on the page chrome), the legend's POC on the chart ground
+      st.setProperty('--vp-sw', chrome ? U.markOnGround(CE.DEFAULT_THEME.vpPoc, T.bg, CE.FLOOR.text, T.to) : CE.DEFAULT_THEME.vpPoc);
+      st.setProperty('--vp-poc', T.vpPocText);
       legendKey = '';
     },
   });
@@ -1279,6 +1406,7 @@ function start(container, opt, PAGE) {
       S.layers[k] = drawn[k];
       if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
       if (k === 'ib') ibNote(D.ib);
+      if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
     }
     legendKey = '';
     syncIndicators();
@@ -1302,10 +1430,20 @@ function start(container, opt, PAGE) {
       : (on ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '') +
         `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
     const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
-    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div></div>` : '';
+    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}</div>` : '';
     return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
       `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-name">${name}</span>` +
       (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
+  }
+  /* An indicator's real options in its gear panel (LivePrefs INDICATOR_OPTIONS): today the volume profile's hours. */
+  const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } } } };
+  function optionsHtml(id) {
+    if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return '';
+    return Object.keys(LP.INDICATOR_OPTIONS[id]).map(k => {
+      const t = OPTION_TEXT[id][k], cur = S.options[id][k], lblId = p + 'indOpt-' + id + '-' + k;
+      const btns = LP.INDICATOR_OPTIONS[id][k].map(v => `<button type="button" data-act="opt" data-id="${id}" data-k="${k}" data-v="${v}" data-f="opt:${id}:${k}:${v}" aria-pressed="${v === cur}" title="${esc(t.values[v][1])}">${esc(t.values[v][0])}</button>`).join('');
+      return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
+    }).join('');
   }
   function renderMenu() {
     const body = $('indBody'), c = LP.Pane.counts(IS);
@@ -1434,7 +1572,9 @@ function start(container, opt, PAGE) {
     });
     panel.addEventListener('click', e => {
       const b = e.target.closest('button[data-act]');
-      if (b && panel.contains(b)) indAction(b.dataset.act, b.dataset.id);
+      if (!b || !panel.contains(b)) return;
+      if (b.dataset.act === 'opt') { M.note = ''; setIndicatorOption(b.dataset.id, b.dataset.k, b.dataset.v); return; }   // saved per pane, as it is
+      indAction(b.dataset.act, b.dataset.id);
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
@@ -1586,6 +1726,9 @@ function start(container, opt, PAGE) {
     // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
     // since the drop hide the IB (a 'gap') rather than leave a stale one up
     if (D.m1) updateIB(false);
+    // the volume profile moves to the new session at 18:00 ET on the clock, before its first trade
+    if (D.vp && D.vp.advance(etNow())) vpLegend();
+    vpNote(); vpLegend();
   }, 500);
 
   if (document.fonts && document.fonts.load) {
@@ -1610,7 +1753,7 @@ function start(container, opt, PAGE) {
     if (PAGE && window.liveChart === chart) delete window.liveChart;
     rootEl.remove();
   }
-  return { destroy, chart, element: rootEl, paneId: PANE };
+  return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}) };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX };

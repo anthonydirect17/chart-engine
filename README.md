@@ -242,6 +242,12 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `setBarSeconds(sec)` · `goLive()` · `reset()` · `isLive()` · `bars()` · `stats()` · `resize()` ·
 `destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)`
 
+Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
+trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only
+9:30:00 up to 16:00:00 ET. `setProfile(profile | null)` hands one to the chart, drawn while the `vp` layer is on
+(`setLayers({ vp: true })`, off by default) as bars from the right edge of the plot behind the candles; the chart
+redraws on its own when the profile changes.
+
 Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { pointValue })` ·
 `setOrderEditing(bool)` · `setOrderPreview(fn)` · `orderHandles()` · `priceToY(price)` · `yToPrice(y)` ·
 `on('orderMove', { id, price })` · `on('orderCancel', { id })` · `on('orderPlace', { price })`. The chart only
@@ -259,7 +265,8 @@ for live updates; `addSessionVwap(bars, sessionStart)`; `sessionLevels(bars, opt
 high/low/close, overnight high/low and the prior session's 70% value area; `levelLines(levels)` turns
 those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-hour Initial Balance (9:30 to
 10:30 ET) from 1-minute bars or trades, with its state (`before`, `forming`, `locked`, or why there is none), and
-`ibLines(ib)` turns it into lines; `rthDay(t)` and `nyseHolidays(year)` say which days have a regular session; plus
+`ibLines(ib)` turns it into lines; `rthDay(t)` and `nyseHolidays(year)` say which days have a regular session;
+`profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
 formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`).
 
 ## Colors

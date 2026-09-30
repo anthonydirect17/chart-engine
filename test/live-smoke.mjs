@@ -119,7 +119,7 @@ try {
   await page.fill('#indQ', 'ibh');
   if (JSON.stringify(await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) !== '["ib"]') fail('search "ibh"');
   await page.fill('#indQ', 'profile');
-  if (!(await page.isVisible('#indBody .ind-item.is-coming[data-id="profile"] .ind-tag')) || await page.$('#indBody [data-id="profile"] button')) fail('volume profile: listed, tagged coming, nothing to click');
+  if (!(await page.isVisible('#indBody [data-f="add:vp"]')) || await page.$('#indBody .ind-tag')) fail('volume profile (1.6.0): found by "profile", with a + to add it, no "coming" tag');
   await page.fill('#indQ', 'zzz');
   if (!/No match/.test(await page.textContent('#indBody'))) fail('no match label');
   await page.fill('#indQ', '');

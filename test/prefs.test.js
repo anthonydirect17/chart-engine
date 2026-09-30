@@ -15,7 +15,7 @@ test('defaults with empty storage: what the page showed before', () => {
   assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true });
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false });
 });
 
 test('range size is per root, and one write never undoes another tab', () => {
@@ -54,7 +54,7 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true });   // IB (1.5.3): the main pane default
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true, vp: false });   // IB (1.5.3): the main pane default
   // later changes to the old keys (an older page in another tab) are not read again
   s.setItem('live-range-v1', JSON.stringify({ NQ: 12 }));
   s.setItem('live-settings-v1', JSON.stringify({ root: 'ES' }));
@@ -65,7 +65,8 @@ test('1.3 keys are read once and carry over', () => {
 });
 
 const ALL = ['volume', 'vwap', 'levels', 'ib', 'fills'];
-const flags = on => Object.fromEntries(ALL.map(id => [id, on.includes(id)]));
+const IDS = LP.INDICATORS.map(d => d.id);                        // the five and the volume profile (off by default)
+const flags = on => Object.fromEntries(IDS.map(id => [id, on.includes(id)]));
 const onIds = st => ALL.filter(id => st.ind[id].on);
 const shownIds = st => ALL.filter(id => st.ind[id].on && st.ind[id].shown);
 const pinIds = st => ALL.filter(id => st.ind[id].pin);
@@ -85,9 +86,9 @@ test('indicators (1.6.0): the main pane starts with the five on, shown and pinne
 test('1.3 keys: the indicators chosen on 1.3 draw the same after the update (through live-indicators-v1)', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
-  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true });
+  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false });
   assert.deepEqual(p.indicators('pane-2'), flags([]));
-  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, ib: true } });   // left in place
+  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false } });   // left in place
 });
 
 test('migration from live-indicators-v1: on and off carried over exactly, an explicit off stays off', () => {
@@ -337,26 +338,42 @@ test('search matches names and short names', () => {
   assert.deepEqual(ids('vwap'), ['vwap']);
   for (const q of ['ib', 'ibh', 'ibl', 'initial', 'IB']) assert.deepEqual(ids(q), ['ib'], q);
   for (const q of ['pdh', 'pdl', 'onh', 'onl', 'levels', 'prior day']) assert.deepEqual(ids(q), ['levels'], q);
-  assert.deepEqual(ids('vol'), ['volume', 'profile']);
+  assert.deepEqual(ids('vol'), ['volume', 'vp']);
   assert.deepEqual(ids('volume bars'), ['volume']);
   assert.deepEqual(ids('fills'), ['fills']);
-  assert.deepEqual(ids('profile'), ['profile']);
-  assert.equal(LP.searchIndicators('profile')[0].coming, true);
+  assert.deepEqual(ids('profile'), ['vp']);
   assert.deepEqual(ids(''), []);
   assert.deepEqual(ids('   '), []);
   assert.deepEqual(ids('zzz'), []);
 });
 
-test('the menu lists only real indicators, in three groups, with the volume profile tagged coming', () => {
-  assert.deepEqual(LP.INDICATORS.map(d => d.id), ALL);
+test('the menu lists only real indicators, in three groups; the volume profile is one of them (1.6.0)', () => {
+  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'ib', 'vp', 'fills']);
   assert.deepEqual(LP.CATEGORIES.map(c => c.name), ['Price', 'Volume', 'Trades']);
   const byCat = c => LP.INDICATORS.concat(LP.COMING).filter(d => d.cat === c).map(d => d.name);
   assert.deepEqual(byCat('price'), ['VWAP', 'Levels', 'Initial balance']);
   assert.deepEqual(byCat('volume'), ['Volume bars', 'Volume profile']);
   assert.deepEqual(byCat('trades'), ['Fills']);
-  assert.ok(LP.COMING.every(d => d.coming));
+  assert.deepEqual(LP.COMING, []);
   for (const d of LP.INDICATORS) assert.ok(d.opt && d.short && d.letter.length === 1 && d.sw, d.id);
   assert.equal(new Set(LP.INDICATORS.map(d => d.letter)).size, LP.INDICATORS.length, 'narrow chips: one letter each, all different');
+});
+
+test('the volume profile in the menu: off on every pane (also a main pane carried over from v1), added with a chip under the cap, covered by Hide all', () => {
+  const P = LP.Pane;
+  assert.equal(LP.create(mem()).pane('main').ind.vp.on, false);
+  const v1 = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { vwap: false } } })).pane('main');
+  assert.deepEqual([v1.ind.vp.on, v1.ind.vp.pin], [false, false], 'never on the main pane\'s chart by the carry-over');
+  let st = P.toggle(LP.defaultPane('main'), 'vp');               // added: the sixth chip
+  assert.deepEqual([st.ind.vp.on, st.ind.vp.shown, st.ind.vp.pin, P.pinned(st), P.pinFull(st)], [true, true, true, 6, true]);
+  st = P.hideAll(st);
+  assert.equal(P.drawn(st).vp, false);
+  assert.ok(st.restore.includes('vp'));
+  st = P.hideAll(st);
+  assert.equal(P.drawn(st).vp, true);
+  const ids = q => LP.searchIndicators(q).map(d => d.id);
+  for (const q of ['vp', 'profile', 'poc', 'value area']) assert.ok(ids(q).includes('vp'), q);
+  assert.deepEqual(ids('vah'), ['levels', 'vp']);
 });
 
 test('storage that throws or holds junk never breaks the page', () => {
@@ -434,4 +451,60 @@ test('setBracketField: whole ticks 0 to 200 for stop or target on a known root o
   assert.equal(p.setBracketField('MNQ', 'stop', 40), true);
   for (const [r, k, v] of [['XX', 'stop', 4], ['MNQ', 'size', 4], ['MNQ', 'stop', 201], ['MNQ', 'stop', -1], ['MNQ', 'stop', 4.5], ['MNQ', 'stop', '4']]) assert.equal(p.setBracketField(r, k, v), false, [r, k, v].join(' '));
   assert.deepEqual(p.bracket('MNQ'), { stop: 40 });
+});
+
+test('volume profile (1.6.0): the vp indicator, off on every pane; its Session / RTH option saved per pane', () => {
+  assert.ok(LP.INDICATORS.some(x => x.id === 'vp' && x.name === 'Volume profile'));
+  assert.equal(LP.DEFAULT_INDICATORS.vp, false);
+  assert.equal(LP.NEW_PANE_INDICATORS.vp, false);
+  assert.deepEqual(LP.INDICATOR_OPTIONS.vp.session, ['full', 'rth']);
+  const s = mem();
+  const a = LP.create(s), b = LP.create(s);
+  assert.deepEqual(a.indicatorOptions('main', 'vp'), { session: 'full' }, 'the full session by default');
+  assert.deepEqual(a.indicatorOptions('main', 'nope'), {});
+  assert.equal(a.setIndicatorOption('main', 'vp', 'session', 'rth'), true);
+  assert.equal(b.setIndicatorOption('pane-2', 'vp', 'session', 'full'), true);   // another tab, another pane: both kept
+  assert.equal(a.setIndicatorOption('main', 'vp', 'session', 'eth'), false, 'an unknown value is refused');
+  assert.equal(a.setIndicatorOption('main', 'vp', 'rows', 4), false, 'an unknown option is refused');
+  assert.equal(a.setIndicatorOption('main', 'ib', 'session', 'rth'), false, 'an indicator without options');
+  assert.equal(a.setIndicatorOption('', 'vp', 'session', 'rth'), false);
+  const fresh = LP.create(s);
+  assert.deepEqual(fresh.indicatorOptions('main', 'vp'), { session: 'rth' });
+  assert.deepEqual(fresh.indicatorOptions('pane-2', 'vp'), { session: 'full' });
+  assert.deepEqual(s.dump('live-indicator-options-v1'), { main: { vp: { session: 'rth' } }, 'pane-2': { vp: { session: 'full' } } });
+  // junk in storage falls back to the default
+  const junk = mem({ 'live-indicator-options-v1': { main: { vp: { session: 'overnight' } }, x: 5 } });
+  assert.deepEqual(LP.create(junk).indicatorOptions('main', 'vp'), { session: 'full' });
+  assert.equal(LP.create(junk).setIndicatorOption('x', 'vp', 'session', 'rth'), true);
+  a.updatePane('main', st => LP.Pane.add(st, 'vp'));
+  assert.equal(LP.create(s).indicators('main').vp, true);
+  assert.equal(LP.create(s).indicators('pane-2').vp, false);
+});
+
+test('indicator options: inherited names are never options, and a pane id such as __proto__ pollutes nothing (review S5)', () => {
+  const s = mem();
+  const p = LP.create(s);
+  for (const [id, key, value] of [['vp', 'toString', 'x'], ['vp', 'constructor', 'keys'], ['vp', '__proto__', 'rth'], ['toString', 'session', 'rth'],
+    ['__proto__', 'session', 'rth'], ['constructor', 'name', 'Object'], ['vp', 'session', 'toString'], ['vp', 'session', 'hasOwnProperty']]) {
+    assert.equal(p.setIndicatorOption('main', id, key, value), false, id + '.' + key + ' = ' + value);
+    assert.equal(LP.indicatorOptionAllowed(id, key, value), false);
+  }
+  assert.deepEqual(p.indicatorOptions('main', 'toString'), {});
+  assert.deepEqual(p.indicatorOptions('main', '__proto__'), {});
+  for (const pane of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.equal(p.setIndicatorOption(pane, 'vp', 'session', 'rth'), true, pane);
+    assert.deepEqual(LP.create(s).indicatorOptions(pane, 'vp'), { session: 'rth' }, pane + ' read back');
+  }
+  assert.equal(Object.prototype.vp, undefined, 'Object.prototype untouched');
+  assert.equal({}.vp, undefined);
+  assert.deepEqual(LP.create(s).indicatorOptions('main', 'vp'), { session: 'full' }, 'main untouched');
+  const saved = JSON.parse(s.m.get('live-indicator-options-v1'));
+  assert.ok(Object.prototype.hasOwnProperty.call(saved, '__proto__') && saved.constructor.vp.session === 'rth', 'stored as plain keys: ' + s.m.get('live-indicator-options-v1'));
+  // a stored __proto__ key read back is a plain key too, and a new pane keeps it
+  const t = mem(); t.m.set('live-indicator-options-v1', '{"__proto__":{"vp":{"session":"rth"}}}');
+  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), { session: 'rth' });
+  assert.deepEqual(LP.create(t).indicatorOptions('main', 'vp'), { session: 'full' });
+  assert.equal(LP.create(t).setIndicatorOption('main', 'vp', 'session', 'rth'), true);
+  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), { session: 'rth' }, 'the other pane kept');
+  assert.equal(Object.prototype.vp, undefined);
 });
