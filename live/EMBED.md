@@ -60,15 +60,32 @@ marks that account's fills only (there is no "All accounts" any more). It lists 
 
 `mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`:
 `chart` is the chart-engine instance (for reading, such as `chart.bars()`), `element` the `.chart-live` element it
-created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (1.6.0); today there is one, the volume profile's hours: `pane.setIndicatorOption('vp', 'session', 'rth')` for RTH
-9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default). It returns false for an option or value
-that does not exist. `indicatorOptions('vp')` reads it back (`{ session: 'full' }`). The Volume profile's gear panel in the
-Indicators menu has the same Session / RTH switch.
+created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (1.6.0). There
+are two:
+
+| Call | What it does |
+|---|---|
+| `pane.setIndicatorOption('vp', 'session', 'rth')` | the volume profile's hours: `'rth'` for RTH 9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default) |
+| `pane.setIndicatorOption('delta', 'show', 'bar')` | the cumulative delta pane (1.7.0): `'bar'` for each bar's own buys minus sells around zero, `'cum'` for candles of the running cumulative from 18:00 ET (the default) |
+
+It returns false (and never throws) for an option or value that does not exist, including inherited names such as
+`toString`. `indicatorOptions('vp')` and `indicatorOptions('delta')` read them back (`{ session: 'full' }`,
+`{ show: 'cum' }`). The gear panels in the Indicators menu have the same switches (Hours: Session or RTH; Show:
+Cumulative or Bar delta).
+
+Cumulative delta (1.7.0): a pane under the chart with market buys minus market sells, on for `paneId` `'main'` and off
+for any other pane until added from its Indicators menu. The side of each trade comes from ChartBridge 0.3.4 (every
+trade carries `s`); with ChartBridge 0.3.3 or older the pane draws nothing and says "Delta needs ChartBridge 0.3.4 on
+this PC". A relay must pass the `s` and `sm` fields of `tick` messages and the fourth and fifth places of each `ticks`
+trade through unchanged. The pane starts at about 20% of the chart's height; the line above it can be dragged (or
+focused with Tab and moved with the up and down arrow keys, Page Up, Page Down, Home and End), and its height is saved
+per pane (`live-pane-heights-v1`). The divider is an element inside the chart; nothing new listens on `document` or
+`window`.
 
 | Option | Default | What it does |
 |---|---|---|
 | `wsUrl` | none, required | ChartBridge's WebSocket URL. A **function** is called again for **every** connect and reconnect, so it can hand out a fresh single-use relay ticket each time (`/api/live/ws?ticket=...`), or choose between `ws://localhost:8765/ws` and the relay. It may return a promise; a thrown error or a rejected promise counts as a failed connect and is retried. The query string is never shown on screen. |
-| `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Fills: on the chart, shown, pinned; and their options) and drawings. `'main'` starts with five on (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
+| `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Cumulative delta, Fills: on the chart, shown, pinned; and their options), the delta pane's height and drawings. `'main'` starts with the five and the cumulative delta pane on (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
@@ -141,7 +158,8 @@ Every storage key the chart uses is `storagePrefix + <the standalone page's key>
 | `live-settings-v2` | instrument, bars, glide, range mode | all charts with this prefix |
 | `live-range-v2` | range size per instrument | all charts with this prefix |
 | `live-indicators-v2` | `{ <paneId>: { ind: { <id>: { on, shown, pin } }, recent, restore } }` (1.6.0; carried over once from `live-indicators-v1`, left in place) | one entry per `paneId` |
-| `live-indicator-options-v1` | `{ <paneId>: { vp: { session: 'full' \| 'rth' } } }` (1.6.0) | one entry per `paneId` |
+| `live-indicator-options-v1` | `{ <paneId>: { vp: { session: 'full' \| 'rth' }, delta: { show: 'cum' \| 'bar' } } }` (1.6.0; `delta` 1.7.0) | one entry per `paneId` |
+| `live-pane-heights-v1` | `{ <paneId>: { delta: 0.2 } }` the delta pane's share of the chart height, 0.08 to 0.6 (1.7.0) | one entry per `paneId` |
 | `live-bracket-v1` | bracket ticks per instrument (trading only) | all charts with this prefix |
 | `live-account-v1` | the account picked, whose fills are marked (1.6.0; the 1.5 `live-fill-account-v1` is read once when it is missing, its "All accounts" meaning none picked) | all charts with this prefix |
 | `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |

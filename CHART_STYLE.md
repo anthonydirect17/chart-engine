@@ -8,9 +8,10 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.6.0 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
+- **Engine version:** 1.7.0 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
   default ground every color below is unchanged. 1.6.0 is the live page's Indicators menu "E2" and chip strip; the
-  chart itself draws exactly as in 1.5.3).
+  chart itself draws exactly as in 1.5.3. 1.7.0 adds the cumulative delta pane below the chart; with it off the chart
+  draws exactly as in 1.6.0).
 
 ## Colors
 
@@ -155,6 +156,30 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   weekends and NYSE holidays) choice. Candles over the rows read lower than on the bare ground (default: bear 1.99:1
   over the value area, 2.42:1 over the other rows); their floor there is open for Anthony. The legend adds "POC 26,150.50 · VA 26,101.50 to
   26,289.50", the POC price in the gold.
+- **Cumulative delta pane (1.7.0; Anthony's rulings 2026-09-30):** market buys minus market sells (contracts), each
+  trade's side from ChartBridge 0.3.4 (the page never works one out), in a pane **below** the plot, on the plot's own
+  bars (every bar type: seconds, minutes, hours, range), so it shares the x axis, scrolling, zoom and the crosshair (the
+  pointer over either draws the bar's line through both, the time tag and the legend follow it). Candles of the running
+  cumulative: open = the value at the bar's start (the previous bar's close in the session, 0 at 18:00 ET), high, low,
+  close = its extremes and last value in the bar, in the candle colors (bull `#4B9CD3` when close >= open, bear
+  `#6D28D9`), bodies and wicks as the price candles. The gear's **Show** option: Cumulative (default) or Bar delta, each
+  bar's own buys minus sells as a bar from a zero line (bull color at or above zero). It starts at 0 again at 18:00 ET.
+  Layout: the plot, a 4 px band (a 1 px `#18212C` line on each side), the pane, then the time axis; the pane starts at
+  20% of the chart height (plot plus pane plus band) and the band is the divider: drag it, or Tab to it and use the
+  arrow keys (2%), Page Up and Down (10%), Home and End; a 2 px `#B69CFF` line at 55% on hover, drag and focus. Kept
+  between 8% and 60%, and never under 48 px for the pane or 120 px for the plot. Inside the pane: the RTH shading, time
+  grid and session dividers as in the plot, value grid lines in the grid color, the zero line in the divider color, a
+  title at the top left on the legend ground ("CUMULATIVE DELTA" 600 10px Condensed caps in the axis text color, the
+  value in 500 11px mono, then "from 21:40 ET, not 18:00: ..." in 500 10px Condensed when the session counts from later);
+  on its axis round values (400 11px mono, "+10,000", "-5,000", "0") and the newest bar's value in a tag in the candle
+  color, the pointer's value in the crosshair tag. The value scale fits the candles in view (12% free at the top and
+  bottom), eased like the price scale. Numbers with thousands separators and a sign. Bars with no delta (before the page
+  has every trade, or with no trade) stay blank; a session that counts from later than 18:00 gets a dashed
+  `#8392A5` line at its first counted bar. With ChartBridge 0.3.3 or older only the title and "Delta needs ChartBridge
+  0.3.4 on this PC" (500 12px Condensed, centered) are drawn. Legend: "Delta +12,345" (bull color above zero, bear
+  below), "Bar delta +123" in bar mode, "Delta from 21:40 +1,234" for a later start, and "· 37 unknown" (the unknown
+  side volume of the session, dim) when there is any. On by default on the main pane; its own Indicators entry "Cumulative delta" (chip DELTA,
+  letter D) in the Volume group.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
@@ -218,11 +243,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     accent tint with a `#B69CFF` knob) that shows or hides and keeps everything, the swatch (12 by 3, grey when hidden),
     the name (13px), a pin (star, filled `#B69CFF` when pinned) for the chip strip, a gear opening the one settings panel
     open at a time (`#0F151D`, what the indicator does, read only, and its real options: the Volume profile's Hours,
-    Session or RTH, in the toolbar's segmented style at 11 px), and an x that takes it off the chart. Pins only on
+    Session or RTH, and the Cumulative delta's Show, Cumulative or Bar delta, in the toolbar's segmented style at 11 px), and an x that takes it off the chart. Pins only on
     these rows; group rows have the + and the gear.
   - The groups, folded, one open at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars, Volume
-    profile), Trades (Fills); a dashed + adds one. Then "Coming: cumulative delta,
-    time and sales".
+    profile, Cumulative delta), Trades (Fills); a dashed + adds one. Then "Coming: time and sales".
   - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything). Fills are included.
   - **The live trade always stays** (Anthony): hiding Fills (switch, chip or Hide all) hides past fills and trade
     marks, never the open trade: its entry fills stay marked, and the position line and label, working orders and
@@ -237,11 +261,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     while there is room; pinning onto a full strip is refused with a note in the menu. One click shows or hides. A chip
     is 30 px tall, mono 600 11px: shown = `#141C26` with a solid `#2A3645` border and its color line; hidden = no fill,
     a dashed border, grey text and a grey line. The strip always keeps room for six one-letter chips, and shows the
-    names only when that adds no toolbar line; otherwise each chip is one letter (V W L I F) over its line. So it never
+    names only when that adds no toolbar line; otherwise each chip is one letter (V W L I D F) over its line. So it never
     wraps and pinning or unpinning never moves the order bar or the chart.
-  - Saved per pane (`live-indicators-v2`). The main pane starts with the five on, shown and pinned (a pane saved by
-    1.4 to 1.5.3 keeps its choices: the ones that were off stay on its chart, hidden); a new pane starts with none on
-    (Anthony, 2026-09-29).
+  - Saved per pane (`live-indicators-v2`). The main pane starts with the five and the cumulative delta on, shown and
+    pinned (six chips; a pane saved by 1.4 to 1.5.3 keeps its choices: the ones that were off stay on its chart,
+    hidden; a main pane saved before 1.7.0 gets the delta on, with a chip while the strip has room); a new pane starts
+    with none on (Anthony, 2026-09-29).
 - **Account** (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker (600 13px
   mono in the head text color, 34 px tall, at least 150 px wide) is the only account control: orders go to it and the
   chart marks its fills only. With trading off it still works (the fills follow it; no order can be sent). With no
@@ -258,7 +283,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   older way. See `docs/RANGE_BARS.md`.
   The select that picks between them has a visible **Range style** label (the toolbar's `.glabel` style, like
   "Bars"), 1.5.1.
-- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.3 · chart 1.6.0" (1.5.1).
+- The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.4 · chart 1.7.0" (1.5.1).
 
 ## Honesty rules
 
