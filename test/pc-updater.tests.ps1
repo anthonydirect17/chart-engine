@@ -34,7 +34,12 @@ $script:RealMove = ${function:Move-FileAtomic}
 # A power loss (a laptop lid): from the crash point on, nothing more is written anywhere through the updater.
 $script:CrashAt = ''; $script:PowerLost = $false
 function Invoke-CrashPoint([string]$Name) { if ($script:CrashAt -and $script:CrashAt -eq $Name) { $script:PowerLost = $true; throw "SIMULATED POWER LOSS at $Name" } }
-function Move-FileAtomic([string]$Source, [string]$Dest) { if ($script:PowerLost) { throw 'power is off' }; & $script:RealMove $Source $Dest }
+$script:HoldLiveJs = $false      # ChartBridge holding www\live.js past the retry (the reviewer's p4_icb)
+function Move-FileAtomic([string]$Source, [string]$Dest) {
+  if ($script:PowerLost) { throw 'power is off' }
+  if ($script:HoldLiveJs -and $Dest -like '*www*live.js') { throw 'sharing violation (ChartBridge holds live.js)' }
+  & $script:RealMove $Source $Dest
+}
 # GitHub's API as the updater reads it: check runs and statuses for a commit (the real Get-CiState runs on these).
 function Get-RepoSlug { return 'owner/chart-engine' }
 function Invoke-GitHubJson([string]$Path) {
@@ -170,9 +175,19 @@ Test 'CI through the real GitHub reader: junk is unknown, an empty answer pendin
     Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'pending') 'a required job from another app does not count'
   } finally { Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue; ${function:Invoke-GitHubJson} = $keep }
 }
-Test 'git never asks anything from the hidden task' {
-  Assert ((Invoke-Git @('config', '--get', 'core.sshCommand')).out.Trim() -eq 'ssh -o BatchMode=yes') 'ssh in batch mode'
-  Assert ((Invoke-Git @('config', '--get', 'credential.interactive')).out.Trim() -eq 'never') 'no credential window'
+Test 'git never asks anything, never runs gc in the clone, and only reading subcommands can run' {
+  $keep = ${function:Invoke-Native}
+  $script:Seen = @()
+  function Invoke-Native([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec) { $script:Seen = $ArgList; return @{ code = 0; out = ''; err = '' } }
+  try { [void](Invoke-Git @('fetch', '--quiet', 'origin', 'main')) } finally { ${function:Invoke-Native} = $keep }
+  foreach ($o in @('credential.interactive=never', 'core.sshCommand=ssh -o BatchMode=yes', 'core.askPass=', 'gc.auto=0', 'maintenance.auto=false')) {
+    Assert ($script:Seen -contains $o) "git -c $o"
+  }
+  foreach ($bad in @('checkout', 'merge', 'pull', 'reset', 'config', 'gc', 'switch', 'stash', 'clean')) {
+    $threw = $false
+    try { [void](Invoke-Git @($bad, 'x')) } catch { $threw = $_.Exception.Message -match 'not allowed' }
+    Assert $threw "git $bad refused"
+  }
 }
 Test 'CI pending: no update, nothing written to www or AddOns' {
   $script:FakeCi = 'pending'; $script:FakeDiag = $null
@@ -346,9 +361,47 @@ Test 'the add-on copy refuses without -InstallChartBridge' {
   Assert $threw 'refused'
   Assert ((Get-AddOnsPrint) -eq $addOnsBefore) 'AddOns unchanged'
 }
-Test 'the task''s own copy of the updater: pinned, and changed only by register or -InstallChartBridge' {
-  $dest = Install-PinnedUpdater (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1') $c1 'register'
-  Assert ((Get-Hash $dest) -eq (Get-Hash (Join-Path (Join-Path $repoRoot 'nt8') 'update-pc.ps1'))) 'a copy of the updater'
+Test 'register pins the staged copy of the newest green main, checked against its git blob' {
+  $dest = Invoke-PinForTask '17:05'
+  $stage = Read-JsonFile (Join-Path $script:P.Staged 'stage.json')
+  $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
+  Assert ($pin['from'] -eq 'register' -and $pin['commit'] -eq $stage['commit'] -and $pin['blob'] -eq $stage['updaterBlob']) 'pinned.json: the staged commit and its blob'
+  Assert ((Get-BlobId $dest 'nt8/update-pc.ps1') -eq $pin['blob'] -and (Get-Hash $dest) -eq $pin['sha256'].ToUpperInvariant()) 'the file is that blob'
+  Assert ($pin['repo'] -eq $clone -and $pin['dailyAt'] -eq '17:05') 'the clone and the daily time'
+}
+Test 'register refuses an edited or branch updater when main cannot be staged; the same file as a green commit is fine' {
+  $keepSelf = $script:UpdaterSelf
+  $script:FakeCi = 'pending'
+  [void](Commit 'CI running' { Put (Get-LocalPath $src 'nt8/NOTES.txt') "docs 9`n" })
+  Remove-Dir $script:P.Staged
+  try {
+    $dest = Invoke-PinForTask '17:05'
+    Assert ((Read-JsonFile (Join-Path $script:P.Bin 'pinned.json'))['from'] -eq 'register') 'this file is the same as in a green commit: pinned'
+    $edited = Join-Path $tmpRoot 'edited-update-pc.ps1'
+    Put $edited ((Get-Text $keepSelf) + "`n# a local edit`n")
+    $script:UpdaterSelf = $edited
+    $threw = $false
+    try { [void](Invoke-PinForTask '17:05') } catch { $threw = $_.Exception.Message -match 'not the file of a commit seen green' }
+    Assert $threw 'an edited file is refused'
+    Assert ((Get-Hash $dest) -ne (Get-Hash $edited)) 'the pinned copy did not change'
+  } finally { $script:UpdaterSelf = $keepSelf; $script:FakeCi = 'success' }
+  [void](Run-Update)
+}
+Test 'the pinned copy checks itself at every run: a changed file does nothing' {
+  $keepSelf = $script:UpdaterSelf
+  $bin = Join-Path $script:P.Bin 'update-pc.ps1'
+  $script:UpdaterSelf = $bin
+  try {
+    Assert ($null -eq (Test-PinnedSelf)) 'as pinned'
+    $orig = Get-Text $bin
+    Put $bin ($orig + "`n# changed`n")
+    Assert ((Test-PinnedSelf) -match 'changed since it was pinned') 'changed: STOP'
+    Put $bin $orig
+  } finally { $script:UpdaterSelf = $keepSelf }
+  [void](Invoke-PinForTask '17:05')
+}
+Test 'the task''s own copy of the updater is changed only by register or -InstallChartBridge' {
+  $dest = Join-Path $script:P.Bin 'update-pc.ps1'
   Assert ((Read-JsonFile (Join-Path $script:P.Bin 'pinned.json'))['from'] -eq 'register') 'pinned.json'
   $before = Get-Hash $dest
   [void](Run-Update); [void](Run-Update)
@@ -375,7 +428,7 @@ Test '-InstallChartBridge (Anthony, flat) copies the staged add-on files; the pa
   Assert ((Read-State)['pendingPage']['needs'] -eq '0.3.9') 'the page waits for F5'
   Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq '0.3.9' -and -not (Get-UpdateJson)['chartBridge']['ready']) 'update.json: copied, waiting for F5'
   $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
-  Assert ($pin['from'] -eq '-InstallChartBridge' -and $pin['commit'] -eq $script:CbCommit) 'the task''s updater now comes from the staged commit'
+  Assert ($pin['commit'] -eq (Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['commit']) 'the task''s updater is the staged commit''s'
   Assert ((Get-Hash (Join-Path $script:P.Bin 'update-pc.ps1')) -eq (Get-Hash (Join-Path (Join-Path $script:P.Staged 'bin') 'update-pc.ps1'))) 'the staged updater'
   Assert ((Get-Hash $script:P.Config) -eq $configHash -and (Get-Hash (Join-Path $cbDir 'pin.txt')) -eq $pinHash) 'config.txt and pin.txt untouched'
 }
@@ -438,13 +491,14 @@ function Invoke-Cut([string]$At) {
   $script:CrashAt = ''; $script:PowerLost = $false
   return $out
 }
-function Assert-Whole([string]$Why) {
+function Assert-Whole([string]$Why, [switch]$NoPrevious) {
   $s = Read-State
   Assert (-not (Test-Path $script:P.Journal)) "$Why : the journal is gone"
   Assert ((Get-BuildId $script:P.Www @($s['page']['files'])) -eq $s['page']['build']) "$Why : www is exactly the recorded build"
   $m = (Get-Marks).Split('/')
   Assert ($m[0] -eq $m[1]) "$Why : live.js and chart-engine.js from the same commit ($(Get-Marks))"
   Assert ((Get-UpdateJson)['page']['build'] -eq $s['page']['build'] -and -not (Get-UpdateJson)['page']['state']) "$Why : update.json says that build"
+  if ($NoPrevious) { return }
   $pv = Read-JsonFile (Join-Path $script:P.Previous 'previous.json')
   $pm = (Get-Text (Get-LocalPath (Join-Path $script:P.Previous 'page') 'live.js')) -match 'MARK-(\d+)'
   $pa = if ($pm) { $Matches[1] } else { '0' }
@@ -505,11 +559,72 @@ Test 'cut off with neither the new nor the old files whole: STOP, and the page i
   Assert ($r.outcome -eq 'interrupted' -and $script:StopOutcomes -contains 'interrupted') $r.outcome
   Assert ((Get-UpdateJson)['page']['state'] -eq 'interrupted') 'update.json: interrupted'
   Assert-Code (Invoke-Rollback) 1 'rollback refuses too'
-  # Anthony's way out (the STOP text): install.ps1 while flat, then delete swap.json; here: the staged commit again
-  Remove-Item -LiteralPath $script:P.Journal -Force
+  Assert ($r.reason -match 'update-pc\.ps1 repair' -and $r.reason -notmatch 'install\.ps1') "the STOP points at repair: $($r.reason)"
+  # Anthony's way out: update-pc.ps1 repair (page files only). Staged and previous are spoiled: the clone's page files
+  $addOnsNow = Get-AddOnsPrint
+  Assert-Code (Invoke-Repair) 0 'repair'
+  Assert-Whole 'after the repair (from the clone)' -NoPrevious   # previous\ was spoiled on purpose; repair never writes it
+  Assert ((Get-AddOnsPrint) -eq $addOnsNow) 'repair never touches AddOns'
+  Assert-Code (Invoke-Repair) 0 'nothing more to repair'
   Remove-Dir $script:P.Staged
   Assert ((Run-Update).outcome -eq 'updated') 'installs again'
   Assert ((Get-Marks) -eq '300/300') 'whole'
+}
+Test 'repair after a cut-off install finishes it from staged (page files only)' {
+  [void](New-MarkCommit 310)
+  $out = Invoke-Cut 'file:3'
+  $addOnsNow = Get-AddOnsPrint
+  Assert-Code (Invoke-Repair) 0 'repair'
+  Assert-Whole 'after the repair'
+  Assert ((Get-Marks) -eq '310/310' -and (Get-AddOnsPrint) -eq $addOnsNow) "finished: $(Get-Marks)"
+}
+Test 'the finish after a cut-off drops files the new build no longer has' {
+  [void](Commit 'the page no longer has pin.css' {
+    $m = Get-Text (Get-LocalPath $src 'nt8/install-files.json')
+    Put (Get-LocalPath $src 'nt8/install-files.json') ($m -replace '\s*\{ "from": "live/pin.css", "to": "pin.css" \},', '')
+    Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* no pin.css */`n") })
+  Assert (Test-Path (Get-WwwFile 'pin.css')) 'pin.css there before'
+  $out = Invoke-Cut 'file:8'
+  $r = Run-Update
+  Assert ($r.recovered -eq 'finished') "$($r.outcome) / $($r.recovered)"
+  Assert (-not (Test-Path (Get-WwwFile 'pin.css'))) 'pin.css dropped'
+  Assert (Test-Path (Get-WwwFile 'anthony-notes.txt')) 'not a file this tool manages'
+  [void](Commit 'pin.css back' { Put (Get-LocalPath $src 'nt8/install-files.json') (Get-Text (Get-LocalPath $repoRoot 'nt8/install-files.json')) })
+  Assert ((Run-Update).outcome -eq 'updated') 'back'
+}
+Test '-InstallChartBridge after the .cs copy: a page that cannot be written now is not a STOP (the reviewer''s p4_icb)' {
+  $cb = Commit 'ChartBridge 0.4.0; the page works with 0.3.9' { Set-CbVersion '0.4.0'; Put (Get-LocalPath $src 'live/live.js') ((Get-Text (Get-LocalPath $src 'live/live.js')) + "`n/* p4 */`n") }
+  $script:FakeDiag = $null                                    # NinjaTrader closed (the last /diag said 0.3.9)
+  $script:HoldLiveJs = $true; $script:Yes = $true
+  try { $code = Invoke-InstallChartBridge } finally { $script:HoldLiveJs = $false; $script:Yes = $false }
+  Assert-Code $code 0 'OK: ChartBridge copied, press F5; the page follows'
+  $s = Read-State
+  Assert ($s['chartBridge']['installed']['version'] -eq '0.4.0' -and -not $s['chartBridge']['installed']['confirmed']) 'recorded at once'
+  Assert ((Get-Text (Join-Path $script:P.AddOns 'ChartBridge.cs')) -match 'Version = "0\.4\.0"') 'the .cs files are in'
+  Assert ($s['pendingPage']['commit'] -eq $cb -and (Get-Text $script:P.Log) -match 'the page could not be written now') 'the page follows (it was tried and failed)'
+  Assert ((Get-UpdateJson)['chartBridge']['copied'] -eq '0.4.0') 'the page says: copied, press F5'
+  Assert ((Read-JsonFile (Join-Path $script:P.Bin 'pinned.json'))['commit'] -eq $cb) 'the task''s updater followed'
+  $script:FakeDiag = '0.4.0'
+  $r = Run-Update
+  Assert ($r.outcome -match 'updated|up_to_date') "$($r.outcome) $($r.recovered)"
+  Assert ((Get-Text (Get-WwwFile 'live.js')) -match '/\* p4 \*/' -and -not (Test-Path $script:P.Journal)) 'the page followed after F5'
+  Assert (-not (Read-State).Contains('pendingPage')) 'nothing waits'
+}
+Test '-InstallChartBridge never pins an older updater than the pinned one' {
+  $stage = Read-JsonFile (Join-Path $script:P.Staged 'stage.json')
+  $newer = Commit 'a newer main, not staged here' { Put (Get-LocalPath $src 'nt8/NOTES.txt') "docs 10`n" }
+  [void](Invoke-Git @('fetch', '--quiet', 'origin', 'main'))
+  $pj = Join-Path $script:P.Bin 'pinned.json'
+  $pin = Read-JsonFile $pj; $keep = $pin['commit']; $pin['commit'] = $newer; Write-JsonAtomic $pj $pin
+  $note = Update-PinnedFromStage $stage
+  Assert ($note -match 'stays at' -and (Read-JsonFile $pj)['commit'] -eq $newer) "refused: $note"
+  $pin['commit'] = $keep; Write-JsonAtomic $pj $pin
+}
+Test 'status keeps what /diag said (a page waiting for F5 then follows on the next run)' {
+  $s = Read-State; $s['chartBridge']['diagVersion'] = '0.3.3'; Save-State $s
+  $script:FakeDiag = '0.4.0'
+  [void](Invoke-Status)
+  Assert ((Read-State)['chartBridge']['diagVersion'] -eq '0.4.0') 'saved'
 }
 Test 'the write order: the engine first, the libraries and styles, live.js, index.html last' {
   $o = Get-PageOrder @('index.html', 'live.js', 'live.css', 'bar-builder.js', 'src/chart-engine.js', 'update-notice.js', 'pin.css', 'order-ticket.js', 'pin.js')
@@ -589,6 +704,14 @@ if ($IsWin) {
       Assert ($logon.Delay -eq 'PT2M' -and $logon.UserId) "logon trigger for this user, delay $($logon.Delay)"
       Assert (-not $logon.Repetition.Interval) 'the sign-in check does not repeat'
       Assert ($t.Settings.ExecutionTimeLimit -eq 'PT30M') "time limit $($t.Settings.ExecutionTimeLimit)"
+      # a drifted daily time (time zone or DST dates unlike New York's) is moved back at the next run
+      $wrong = New-ScheduledTaskTrigger -Daily -At ([datetime]'2026-01-01 03:00')
+      Set-ScheduledTask -TaskName $TaskName -Trigger @(@($t.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' }) + @($wrong)) | Out-Null
+      Sync-DailyTrigger
+      $t2 = Get-ScheduledTask -TaskName $TaskName
+      $d2 = @($t2.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })[0]
+      Assert (([datetime]$d2.StartBoundary).ToString('HH:mm') -eq $want) "moved back to $want local: $($d2.StartBoundary)"
+      Assert (@($t2.Triggers).Count -eq 2 -and (Get-Text $script:P.Log) -match 'the daily check moved from 03:00') 'the sign-in trigger kept, and the move logged'
       Assert-Code (Invoke-Unregister) 0 'unregister OK'
       Assert (-not (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) 'gone'
     } finally {

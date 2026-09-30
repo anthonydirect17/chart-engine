@@ -4,8 +4,10 @@
  *
  * The updater writes update.json next to the page files. This page reads it when it opens and then about once a
  * minute (no cache) and compares:
- *   - the page build it started with: a newer build, or one installed after this page began loading, means new page
- *     files are on disk. The page keeps running the code it loaded, so an open trade is never disturbed; it only
+ *   - the page build it started with, and when the files were installed: a newer build, or an install finished after
+ *     this page began loading (on any read), means new page files are on disk. While update.json says 'installing'
+ *     the page says "Page files are being updated: do not reload yet" and takes no build from it; 'installing' for
+ *     over two minutes, or 'interrupted', means the install was cut off: "Page update cut off", never "reload". The page keeps running the code it loaded, so an open trade is never disturbed; it only
  *     says "Update ready: reload when flat".
  *   - ChartBridge: "ChartBridge x.y.z ready to install (flat, then F5)" when the updater has staged a newer one, and
  *     "ChartBridge x.y.z copied: press F5 when flat" once Anthony has copied it and not compiled it yet.
@@ -17,6 +19,7 @@
 (function () {
   'use strict';
   const POLL_MS = 60000, SLOW_MS = 600000;       // once a minute; every 10 minutes while there is no update.json
+  const STUCK_MS = 120000;                        // an install takes seconds; "installing" for 2 minutes means cut off
   const started = (performance && performance.timeOrigin) || Date.now();
   let base = null, timer = 0, el = null, pageNew = false, shown = { text: '', forms: [''], tip: '' };
 
@@ -52,17 +55,23 @@
   function messages(u) {
     const parts = [], tips = [];
     const page = u && u.page, cb = (u && u.chartBridge) || {};
-    if (page && page.state === 'interrupted') {
+    const st = (page && page.state) || '';
+    // 'installing' for over two minutes is not an install running now: the run was cut off (a power loss or a lid)
+    const cut = st === 'interrupted' || (st === 'installing' && Date.now() - (+page.installedAt || 0) > STUCK_MS);
+    if (cut) {
       parts.push(['Page update cut off: run update-pc.ps1 status', 'Page update cut off']);
-      tips.push('An install of new page files was cut off and could not be finished or undone. When flat, run nt8\\update-pc.ps1 status.');
+      tips.push('An install of new page files was cut off. Do not reload. When flat, run nt8\\update-pc.ps1 status (and repair if it says so).');
+    } else if (st === 'installing') {
+      // files are being replaced right now: not ready, and never the build this page started from
+      parts.push(['Page files are being updated: do not reload yet', 'Updating page files']);
+      tips.push('New page files are being written on this PC. This page keeps running what it loaded.');
     } else if (page && page.build) {
-      if (base === null) {
-        base = page.build;
-        // installed after this page began loading: what is running may be the old files (or a mix)
-        if (+page.installedAt > started) pageNew = true;
-      } else if (page.build !== base) pageNew = true;
+      // installed after this page began loading (on any read): what is running may be the old files, or a mix
+      if (+page.installedAt > started) pageNew = true;
+      if (base === null) base = page.build;
+      else if (page.build !== base) pageNew = true;
     }
-    if (pageNew && !(page && page.state === 'interrupted')) {   // never "reload" into a page that is cut off
+    if (pageNew && !cut && st !== 'installing') {   // never "reload" into a page that is being written or cut off
       parts.push(['Update ready: reload when flat', 'Update ready']);
       tips.push('New chart page files' + (page && page.version ? ' (' + page.version + ')' : '') + ' are installed on this PC. This page keeps running what it loaded; reload it when flat to use them.');
     }

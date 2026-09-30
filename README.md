@@ -138,9 +138,11 @@ new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git
   flat, then presses F5.
 - **Your clone is never moved.** The updater only fetches `main` and stages what it needs under `updater\staged\`; it
   never checks out, pulls or merges. Pull the clone yourself when you want to (that changes nothing the task runs).
-- **The task runs its own copy** of the updater, `updater\bin\update-pc.ps1`. That copy changes only when you run
-  `register` again (it copies the clone's file) or `-InstallChartBridge` (it copies the one from the staged, green
-  commit). A new commit on `main` never changes it by itself.
+- **The task runs its own copy** of the updater, `updater\bin\update-pc.ps1`: always the file of a commit on `main`
+  whose CI is green, checked byte for byte against that commit. It changes only when you run `register` again or
+  `-InstallChartBridge` (never to an older one), and every run checks it is still the file that was pinned (if not, it
+  does nothing and says so in the log). A new commit on `main` never changes it by itself. After setup, run everyday
+  commands with that copy too (below), so they are the same code the task runs.
 - **A cut-off install repairs itself.** If the PC loses power or sleeps while page files are being replaced, the next
   run finishes the install (or goes back to the previous page) before anything else, even when paused.
 - State and log: `Documents\NinjaTrader 8\ChartBridge\updater\` (`update.log`, `status.json`, `state.json`, the staged
@@ -169,9 +171,10 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 status
    ```
 
-   STOP "page folder is missing": this PC never had the live page. While flat, run
-   `powershell -ExecutionPolicy Bypass -File nt8\install.ps1`, press F5 in the NinjaScript Editor, then paste block 2
-   again. STOP "version is not known": start NinjaTrader (ChartBridge compiled), then paste block 2 again.
+   STOP "page folder is missing": this PC never had ChartBridge. While flat, with the NinjaScript Editor closed, run
+   `powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 -InstallChartBridge` (it asks first),
+   open the NinjaScript Editor and press F5, then paste block 2 again. STOP "version is not known": start NinjaTrader
+   (ChartBridge compiled), then paste block 2 again.
 
 3. A dry run (fetches `main`, asks GitHub for CI, changes nothing):
 
@@ -188,7 +191,10 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
 5. The scheduled task for this Windows user. It checks when you sign in and once a day at 5:05 PM New York time, while
    futures are closed (`-DailyAt 17:10` for another New York time). It prints that time on this PC's clock. If the PC
    is off or asleep at 5:05 PM, that day's check is skipped rather than run later in the trading day; the next sign-in
-   or the next day checks. If this PC's time zone changes, paste this block again to move the daily check.
+   or the next day checks. Every check works out 5:05 PM New York time again and moves the daily check if this PC's
+   clock drifted from it (a trip to another time zone, or DST dates that differ from New York's); the log says so.
+   Register pins the updater from the newest green commit on `main` (it fetches first); it refuses a file changed by
+   hand or from a branch.
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 register
@@ -197,6 +203,15 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    On Windows 11, if a console window stays open while the check runs, that is Windows Terminal being the default
    terminal; the window closes when the run ends.
 
+**Everyday commands, with the task's own copy.** Paste this once per PowerShell window, then use `$u` as below:
+
+```powershell
+$u = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1'
+if (Test-Path $u) { "OK: $u" } else { 'STOP: no pinned copy yet: do setup block 5 (register) first' }
+```
+
+For example `powershell -NoProfile -ExecutionPolicy Bypass -File $u status`. It knows the clone from its pinned.json.
+
 **What the notices mean.** On the chart page's status line, at the bottom (never over the order bar or the chart, and
 it never moves them; it never reloads anything):
 
@@ -204,8 +219,9 @@ it never moves them; it never reloads anything):
 - **ChartBridge x.y.z ready to install (flat, then F5)**: a new ChartBridge is staged. Nothing happens until Anthony
   installs it (below). A Windows notification says the same once, and so do `update.log` and `status.json`.
 - **ChartBridge x.y.z copied: press F5 when flat**: it was copied; it runs after F5 in the NinjaScript Editor.
-- **Page update cut off: run update-pc.ps1 status**: an install was cut off and could not repair itself (rare). Do not
-  reload; run `status` when flat.
+- **Page files are being updated: do not reload yet**: files are being replaced right now (a few seconds).
+- **Page update cut off: run update-pc.ps1 status**: an install was cut off (a power loss, a closed lid). Do not
+  reload. The next check repairs it by itself; when flat you can run `repair` (page files only, never ChartBridge).
 
 On a narrow window the notice is shortened ("Update ready"); hovering it shows the whole text.
 
@@ -213,7 +229,7 @@ On a narrow window the notice is shortened ("Update ready"); hovering it shows t
 as soon as a file changes):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 -InstallChartBridge
+powershell -NoProfile -ExecutionPolicy Bypass -File $u -InstallChartBridge
 ```
 
 It installs from `updater\staged\` (the green commit that was announced), never from the clone. It shows the staged
@@ -221,17 +237,20 @@ version and the one compiled here, asks once (type `y`), then writes the add-on 
 them back to back (the files it replaces are kept in `updater\previous-addons\`). Then it says: open the NinjaScript
 Editor and press **F5** while flat, then open `http://localhost:8765/diag` and check `"version"` shows the new one (or
 run `update-pc.ps1 status`), then reload the chart page. A page that needs the new ChartBridge waits until /diag shows
-it (the next check after F5, or run `update-pc.ps1 update`); a page that works with both installs at once.
+it: after F5, run `update` (or `status`, which notes the new version for the next check). A page that works with both
+installs at once; if it cannot be written right then, the ChartBridge part still counts and the page follows on the
+next update. `-InstallChartBridge` also moves the task's copy of the updater to that commit (never to an older one).
 
 **Pause, roll back, and the rest:**
 
-| Command (`powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 ...`) | What it does |
+| Command (`powershell -NoProfile -ExecutionPolicy Bypass -File $u ...`) | What it does |
 | --- | --- |
 | `status` | what is installed and waiting, and why (reads only) |
 | `check` | dry run: what `update` would do now |
 | `update` | the automatic path, by hand |
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
-| `pause` / `resume` | turns the automatic update off and on (off is never the default) |
+| `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files) |
+| `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 5:05 PM New York time |
 
 Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI

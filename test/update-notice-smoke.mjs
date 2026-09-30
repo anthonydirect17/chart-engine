@@ -31,8 +31,8 @@ for (const f of manifest.www) {
   fs.copyFileSync(path.join(root, f.from), dest);
 }
 const updateJson = path.join(serve, 'live', 'update.json');
-const writeUpdate = (build, installedAt, cb = {}) => fs.writeFileSync(updateJson, JSON.stringify({ schema: 1,
-  page: { version: '1.6.0', build, commit: 'c'.repeat(40), installedAt }, chartBridge: Object.assign({ compiled: '0.3.3', ready: null, copied: null }, cb) }, null, 2));
+const writeUpdate = (build, installedAt, cb = {}, state = '') => fs.writeFileSync(updateJson, JSON.stringify({ schema: 1,
+  page: { version: '1.6.0', build, commit: 'c'.repeat(40), installedAt, state }, chartBridge: Object.assign({ compiled: '0.3.3', ready: null, copied: null }, cb) }, null, 2));
 writeUpdate('build-a', 0);
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + serve, '--trading', '--trade-accounts=Sim101', '--pin-off', '--test-controls'],
@@ -140,8 +140,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 860 });
   const said = (await note(page)).said;
   check(/^Update ready: reload when flat · ChartBridge 0\.3\.4 ready to install \(flat, then F5\)$/.test(said), 'a screen reader gets the whole text once: ' + said);
-  writeUpdate('interrupted', Date.now());
-  fs.writeFileSync(updateJson, fs.readFileSync(updateJson, 'utf8').replace('"installedAt"', '"state": "interrupted", "installedAt"'));
+  writeUpdate('interrupted', Date.now(), {}, 'interrupted');
   await poll(page);
   const ni = await note(page);
   check(ni && /^Page update cut off/.test(ni.text) && !/reload/.test(ni.text), 'an install that was cut off and not repaired (no "reload"): ' + (ni && ni.text));
@@ -166,6 +165,30 @@ try {
   check(!overlap(b2.note, b2.obar) && !overlap(b2.note, b2.stage), '1024 px: the notice covers neither the order bar nor the chart');
   await during.screenshot({ path: path.join(out, 'update-notice-1024.png') });
   await during.close();
+
+  // the reviewer's 1a and 1b: a page that opens while an install runs (update.json already says "installing" the new
+  // build) is told to wait, never takes that build as its own, and is told "Update ready" once the install completes
+  writeUpdate('build-f', Date.now() - 2000, {}, 'installing');
+  const mid = await open(browser, 1440);
+  await poll(mid);
+  const m1 = await note(mid);
+  check(m1 && !m1.hidden && /^Page files are being updated: do not reload yet/.test(m1.text) && !/reload when flat/.test(m1.text), '1a. opened during an install: ' + (m1 && m1.text));
+  writeUpdate('build-f', Date.now(), {}, '');
+  await poll(mid);
+  const m2 = await note(mid);
+  check(m2 && m2.text === 'Update ready: reload when flat', '1b. the install completes (same build, new installedAt): ' + (m2 && m2.text));
+  // after a crash the journal stays open and update.json keeps "installing": after two minutes that is a cut-off
+  // install, for an open page and for a page opened now; never "Update ready" into a mixed page
+  writeUpdate('build-g', Date.now() - 10 * 60e3, {}, 'installing');
+  await poll(mid);
+  const m3 = await note(mid);
+  check(m3 && /^Page update cut off/.test(m3.text) && !/reload/.test(m3.text), '1c. an open page after a crash: ' + (m3 && m3.text));
+  await mid.close();
+  const late = await open(browser, 1440);
+  await poll(late);
+  const m4 = await note(late);
+  check(m4 && /^Page update cut off/.test(m4.text) && !/reload/.test(m4.text), '1d. a page opened after a crash: ' + (m4 && m4.text));
+  await late.close();
 
   // no update.json (a PC without the updater): no notice, no error
   fs.rmSync(updateJson);

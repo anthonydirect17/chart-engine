@@ -64,7 +64,7 @@ test('the automatic path never copies add-on files: only -InstallChartBridge, af
   const allow = [...src.matchAll(/\$script:AddOnWriteAllowed = \$true/g)];
   assert.strictEqual(allow.length, 1);
   assert.match(src.slice(src.lastIndexOf('function ', allow[0].index), src.lastIndexOf('function ', allow[0].index) + 40), /^function Invoke-InstallChartBridge/);
-  const body = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Pause'));
+  const body = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Repair'));
   assert.ok(body.indexOf('Read-Host') < body.indexOf('$script:AddOnWriteAllowed = $true'), 'asks first (unless -Yes)');
   assert.match(src, /function Install-AddOnFiles[\s\S]{0,80}if \(-not \$script:AddOnWriteAllowed\) \{ throw/);
   // the only place anything is written under AddOns is Install-AddOnFiles; Get-AddOnVersion only reads
@@ -73,7 +73,7 @@ test('the automatic path never copies add-on files: only -InstallChartBridge, af
   assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnVersion', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
   const reader = src.slice(src.indexOf('function Get-AddOnVersion'), src.indexOf('function Get-LowerVersion'));
   assert.ok(!/Copy-Item|Move-|Write|Set-Content|Remove-Item|Replace\(/.test(reader), 'Get-AddOnVersion only reads');
-  const inst = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Pause'));
+  const inst = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Repair'));
   assert.ok(!/Copy-Item|Move-FileAtomic/.test(inst.replace(/Install-AddOnFiles|Install-PinnedUpdater|Install-PageFiles/g, '')), '-InstallChartBridge writes AddOns only through Install-AddOnFiles');
 });
 
@@ -91,14 +91,29 @@ test('no PowerShell command strings (Norton on WORK blocks -EncodedCommand): scr
 
 test('the automatic path never moves Anthony\'s clone, and git never asks anything', () => {
   const src = code(updater);
-  const gitCalls = [...src.matchAll(/Invoke-Git @\('([a-z-]+)'/g)].map(m => m[1]);
-  assert.ok(gitCalls.length > 5);
-  for (const c of gitCalls) assert.ok(['fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'config'].includes(c), 'git ' + c);
-  assert.ok(!/\b(merge|checkout|pull|reset|stash|clean|switch)\b'/.test(src), 'no git command that moves the clone');
+  // one entry point with a runtime allow-list of subcommands that only read or fetch into refs/remotes
+  const allowed = eval('[' + /\$script:GitAllowed = @\(([^)]*)\)/.exec(src)[1] + ']');
+  assert.deepStrictEqual([...allowed].sort(), ['archive', 'cat-file', 'fetch', 'hash-object', 'ls-tree', 'merge-base', 'remote', 'rev-list', 'rev-parse', 'show', 'symbolic-ref'].sort());
+  assert.match(src, /if \(\$script:GitAllowed -notcontains \$ArgList\[0\]\) \{ throw/);
+  // every call, written @( or (@(, starts with a literal subcommand from that list; git runs nowhere else
+  const calls = [...src.matchAll(/Invoke-Git\s+\(?@\(\s*([^,)]+)/g)].map(m => m[1].trim());
+  assert.ok(calls.length >= 12, calls.join(','));
+  for (const c of calls) assert.ok(/^'[a-z-]+'$/.test(c) && allowed.includes(c.slice(1, -1)), 'Invoke-Git ' + c);
+  assert.strictEqual([...src.matchAll(/Invoke-Git\b/g)].length, calls.length + 1, 'no Invoke-Git call built from a variable');
+  assert.strictEqual([...src.matchAll(/Invoke-Native \$git\b/g)].length, 1, 'git runs only through Invoke-Git');
   for (const v of ["'GIT_TERMINAL_PROMPT'] = '0'", "'GCM_INTERACTIVE'] = 'never'", "'GIT_ASKPASS'] = ''", "'SSH_ASKPASS'] = ''", "'GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'"]) assert.ok(src.includes(v), v);
-  assert.match(src, /'-c', 'credential\.interactive=never', '-c', 'core\.sshCommand=ssh -o BatchMode=yes'/);
+  assert.match(src, /'-c', 'credential\.interactive=never', '-c', 'core\.sshCommand=ssh -o BatchMode=yes', '-c', 'core\.askPass=',\s*'-c', 'gc\.auto=0', '-c', 'maintenance\.auto=false'/);
   assert.match(src, /-WorkingDirectory \$script:P\.Bin/);
-  assert.match(src, /Install-PinnedUpdater \$script:UpdaterSelf \$head 'register'/);
+  assert.match(src, /\$src = Get-PinSource \$state/);
+});
+
+test('no message sends Anthony to install.ps1 (it copies .cs files without the prompt); recovery is update-pc.ps1 repair', () => {
+  const src = code(updater);
+  assert.ok(!/install\.ps1/i.test(src), 'update-pc.ps1 names install.ps1 outside comments');
+  assert.match(src, /update-pc\.ps1 repair/);
+  const readme = read('README.md');
+  const section = readme.slice(readme.indexOf('### Keep this PC up to date'), readme.indexOf('## Trading from the chart'));
+  assert.ok(!/install\.ps1/.test(section), 'the README section names install.ps1');
 });
 
 test('the schedule (Anthony, 2026-09-30): at sign-in and once a day at 17:05 New York time, nothing repeating, no late start', () => {

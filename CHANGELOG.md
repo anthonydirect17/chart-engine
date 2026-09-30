@@ -45,6 +45,16 @@ Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged 
   review's p2 downgrade case), no .cs file ever written to AddOns by the automatic path, `-InstallChartBridge`, the
   clone never moved, the pinned copy, and the scheduled task registered for real on the Windows runner (both
   triggers and the daily time). `npm run smoke:update`: the notice with an open position and the width sweep.
+- Second review round: a page that opens while files are written reads "Page files are being updated: do not reload
+  yet" and never takes that build as its own ("installing" for over two minutes reads as cut off, never "reload");
+  `-InstallChartBridge` records the copy at once, so a page that cannot be written then follows on the next update
+  instead of a STOP; `update-pc.ps1 repair` rewrites page files only (no message points at `install.ps1`, which also
+  copies .cs files); `register` pins the staged copy of the newest green main, or the running file only when it is a
+  green commit's blob, and every run from the pinned copy checks its sha256; git runs through one allow-listed entry
+  point with gc and maintenance off; the staged add-ons and updater are checked against the commit's blobs; the pinned
+  copy never goes back to an older commit; README runs everyday commands with the pinned copy; each run moves the
+  daily trigger back to 17:05 New York time if the PC's clock drifted; `status` keeps what /diag said; the finish
+  after a cut-off drops files the new build no longer has.
 - Review of the first version (independent): B1 (no journal, a mixed page kept as the rollback copy), B2 (the clone
   fast-forward), S1 to S7 and the cheap nits are fixed as above. Left as notes: N3 the 403/429 mapping is read, not
   tested (junk, empty and refused answers are tested); N11 with OneDrive Known Folder Move, `www` and `updater\` sync
