@@ -676,7 +676,10 @@ Test '-InstallChartBridge: an add-on file held past the retry puts back every fi
   [void](Run-Update)
   Assert ((Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['chartBridgeVersion'] -eq '0.4.1') 'staged 0.4.1'
   $before = Get-AddOnsPrint
-  $instBefore = ConvertTo-Json (Read-State)['chartBridge']['installed'] -Compress
+  # the record's fields, in a fixed order: a hashtable read back from JSON lists its keys in an order that depends on
+  # insertion order when their hashes collide (always the same on Windows PowerShell 5.1), so JSON text is not compared
+  $fields = { param($h) (@('version', 'commit', 'at', 'confirmed') | ForEach-Object { "$_=$(Get-Field $h $_)" }) -join ';' }
+  $instBefore = & $fields (Read-State)['chartBridge']['installed']
   [void](Get-Said)
   $script:HoldAddOn = 'ChartBridgeOrders.cs'; $script:Yes = $true
   try { $code = Invoke-InstallChartBridge } finally { $script:HoldAddOn = ''; $script:Yes = $false }
@@ -687,7 +690,10 @@ Test '-InstallChartBridge: an add-on file held past the retry puts back every fi
   Assert ((Get-AddOnsPrint) -eq $before) "AddOns exactly as before (every file's hash): $(Get-AddOnMarks)"
   Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns | Where-Object { $_.Name -like '*.upd-*' }).Count -eq 0) 'no temporary file left in AddOns'
   $s = Read-State
-  Assert ((ConvertTo-Json $s['chartBridge']['installed'] -Compress) -eq $instBefore -and -not $s['chartBridge'].Contains('mixed') -and -not $s['chartBridge'].Contains('copying')) 'nothing recorded: no copy, no mix'
+  $instNow = & $fields $s['chartBridge']['installed']
+  Assert ($instNow -eq $instBefore) "no copy recorded: installed was $instBefore, is $instNow"
+  Assert (-not $s['chartBridge'].Contains('mixed')) 'no mix recorded'
+  Assert (-not $s['chartBridge'].Contains('copying')) 'no copy left open'
   $u = Get-UpdateJson
   Assert (-not $u['chartBridge']['copied'] -and -not $u['chartBridge']['mixed'] -and $u['chartBridge']['ready'] -eq '0.4.1') 'the page still says: 0.4.1 ready'
   Assert ((Read-JsonFile $script:P.Status)['outcome'] -eq 'chartbridge_not_copied') 'status.json'
