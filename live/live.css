@@ -148,6 +148,7 @@
 .chart-live .lg2 .down { color: var(--down-text); }
 .chart-live .lg3 .vw { color: var(--vwap-sw); }
 .chart-live .lg3 .vpc { color: var(--vp-poc); }
+.chart-live .lg3 .vpday { color: var(--lg-dim); }   /* the session's day, "(Fri)" (1.6.1) */
 .chart-live .lg3 .buy { color: var(--lg-buy); text-shadow: var(--lg-buy-halo, none); }
 .chart-live .lg3 .sell { color: var(--lg-sell); text-shadow: var(--lg-sell-halo, none); }
 .chart-live .notice { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: min(460px, calc(100% - 40px)); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }
@@ -206,6 +207,23 @@
 .chart-live .olegs.over { color: var(--warn); }
 .chart-live .ostate { flex-basis: 100%; min-height: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; }   /* its own row, so the chart never jumps */
 .chart-live .ooff { font-size: 12px; color: var(--warn); }
+/* After trading comes on (a load, a PIN entry, a reconnect): which account orders go to, for a moment (1.6.1). The
+   note takes what is left of the state row and never wraps, so the chart never moves; the picker's ring is a shadow,
+   so nothing moves either. */
+.chart-live .acct-note { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--accent-soft); }
+.chart-live .acct-note:empty { display: none; }
+.chart-live .ostate { min-width: 0; }                 /* a one-line note is cut short, never wider than the bar */
+/* Other accounts on this instrument, by name (1.6.1, review S3): the warning color while one of them has a position.
+   It wraps on a narrow screen rather than being cut short (review 3 S2): a live trade on another account is never
+   hidden, even if the chart moves down a line. */
+.chart-live .oother { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.chart-live .oother:empty { display: none; }
+.chart-live .oother.live { color: var(--warn); }
+.chart-live .acct-note.warn { color: var(--warn); }
+.chart-live .acct-sel.acct-flash { --acct-ring: var(--accent-text); animation: acct-flash 1.2s ease-in-out 3; box-shadow: 0 0 0 2px var(--acct-ring); }
+.chart-live .acct-sel.acct-flash.warn { --acct-ring: var(--warn); }
+@keyframes acct-flash { 0%, 100% { box-shadow: 0 0 0 2px var(--acct-ring); } 50% { box-shadow: 0 0 0 5px var(--acct-ring); } }
+@media (prefers-reduced-motion: reduce) { .chart-live .acct-sel.acct-flash { animation: none; } }
 .chart-live .obar.armed { border-color: var(--warn); background: rgba(224, 180, 90, 0.07); box-shadow: 0 0 0 1px var(--warn) inset; }
 .chart-live .armed-note { font: 600 11px var(--cond); letter-spacing: .1em; text-transform: uppercase; color: var(--warn); }
 .chart-live.is-armed .stage { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
@@ -213,6 +231,10 @@
 .chart-live .alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--loss); border-radius: 12px; background: rgba(255, 122, 122, 0.12); color: var(--head); font-weight: 500; }
 .chart-live .alert-title { font: 700 11px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--loss); }
 .chart-live .alert-text { flex: 1 1 200px; white-space: pre-line; }
+.chart-live .alert.warn { border-color: var(--warn); background: rgba(224, 180, 90, 0.10); }   /* cancels not sent (1.6.1): stays until dismissed */
+.chart-live .alert.warn .alert-title { color: var(--warn); }
+.chart-live .acct-note.batch-note { flex: 1 1 auto; white-space: normal; overflow: visible; overflow-wrap: anywhere; color: var(--head); }   /* a Cancel all under way, whatever is shown (1.6.1); wraps, never cut short (review 3 S2) */
+.chart-live .acct-note.batch-note.away { color: var(--warn); }   /* its account or instrument is not the one shown */
 .chart-live select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 
 @media (max-width: 720px) {
