@@ -435,14 +435,14 @@ lane messages do not count (they go out first anyway). Also closed, as before: 5
 being sent has been stuck for over 2 seconds (a page that stopped reading), and over 5,000 order-lane messages waiting.
 Harness:
 
-- a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after 7.1 s, 5.0 s behind; one
-  taking 0.4 ms (2,500 a second) after 18 s, 5.0 s behind (0.3.3 closed both at 5,000 entries, about 1.7 s behind;
-  the second 0.3.4 round let them fall about 17 s behind);
+- a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after about 7 s, 5.0 s behind;
+  one taking 0.4 ms (2,500 a second) after 18 to 25 s (it falls behind by about 0.2 s a second), 5.0 s behind (0.3.3
+  closed both at 5,000 entries, about 1.7 s behind; the second 0.3.4 round let them fall about 17 s behind);
 - 20,000 held trades released after `ready` at the page's real pace (30 us a message; review 3 measured 26 to 31 us a
   live trade), with 3,000 live trades a second after it: not closed, every message in order (a slow page at 200 us a
   message with 1,500 a second is not closed either: the last of the release waits about 4 s);
 - a 48 hour load (130 chunks), then a 20,000-trade release and live trades: not closed at 3.5 ms a chunk (drained in
-  1.3 s) or at 50 ms a chunk (8.8 s; the oldest wait never over 1.2 s).
+  about 1.4 s) or at 50 ms a chunk (about 8.7 s; the oldest wait never over about 1 s).
 
 Memory (review 3 measured 350 bytes a queued trade): at most about 5 s of market data waits per page, about 15,000
 trades or 5 MB at 3,000 trades a second, plus a load's own `history` and `ticks` chunks while they go out (about
