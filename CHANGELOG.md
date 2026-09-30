@@ -2,7 +2,7 @@
 
 ## Unreleased (2026-09-30): keep each trading PC up to date (`nt8/update-pc.ps1`)
 
-Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged and ChartBridge stays 0.3.3.
+Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged (ChartBridge 0.3.4 as on main).
 - **`nt8/update-pc.ps1`**, Windows PowerShell 5.1 and git, no admin: `status`, `check` (dry run), `update` (the
   automatic path), `-InstallChartBridge`, `rollback`, `pause`, `resume`, `register`, `unregister`. The scheduled task
   runs `update` for the signed-in user when Anthony signs in (after 2 minutes; an at-startup trigger would need admin)
@@ -60,6 +60,90 @@ Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged 
   tested (junk, empty and refused answers are tested); N11 with OneDrive Known Folder Move, `www` and `updater\` sync
   and OneDrive can hold a file longer than the 3 s retry (the install then fails and is undone, never mixed); N12 a PC
   in another time zone drifts by the DST difference until `register` runs again.
+## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
+
+ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to
+work with it. **Needs a recompile:** run `nt8\install.ps1` again (only `ChartBridge.cs` changed), then compile in
+NinjaTrader (F5). The first step toward cumulative delta (buy volume minus sell volume); the delta pane comes later.
+Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
+- **The side of every trade, live and in the backfill** (`ChartBridgeSides`), by the rule Anthony approved: the
+  exchange's aggressor flag if there were one (NinjaTrader 8 gives an add-on none, so that code is reserved); else the
+  prevailing quote, at or above the ask a buy, at or below the bid a sell; else (between bid and ask, or no usable
+  quote) the tick rule: up a buy, down a sell, unchanged the previous trade's side (Lee-Ready, kept over NinjaTrader's
+  rule by Anthony on 2026-09-30). Each trade also says which method found its side, so the chart can show how much was
+  inferred.
+- **Wire format, additive:** a live `tick` gains `s` (1 buy, -1 sell, 0 unknown) and `sm` (0 none, 1 aggressor flag,
+  2 bid/ask, 3 tick rule); each backfill trade becomes `[t, p, v, s, sm]`, the first three in their places. The live
+  page reads `t, p, v` by name and by position, so it takes both unchanged (a node test feeds the new messages to its
+  bar builder). The Desk's relay passes both through unchanged (the review checked it).
+- **One tie rule, live and in the backfill** (review): the prevailing quote is the last bid and ask stamped strictly
+  before the trade, on NinjaTrader's times. A quote at the trade's own time is not used (the quote change a trade causes
+  shares its timestamp), a quote stamped after it never, and a quote over 60 s old is stale (tick rule, counted). Live
+  used to take the quote in arrival order, so a trade whose own quote update arrived first could be called a sell by
+  the quote; now a reload gives the same sides as the live chart, when NinjaTrader's live and historical times have the
+  same resolution (with coarser history, a quote and a trade inside one step can differ).
+- **The session** (Anthony, 2026-09-30; review 2): the tick rule starts over at 18:00 New York time (daylight saving
+  included), live, in the backfill and after the seam: the first trade of a session between the quotes, or with no
+  usable quote, is side 0.
+- **Resets and bad prices** (review 2): a market data event with `IsReset` (NinjaTrader: after a manual disconnect, for
+  its columns) is never a trade: the live quote is forgotten, nothing is sent, the first one is logged. A Last event at
+  price 0 or below is ignored. Neither reaches the order code's last price any more (a reset of type Last at price 0
+  could, making a long bracket's stop look passed for 2 s); the order code itself is unchanged.
+- **Backfill:** tick charts ask for NinjaTrader's historical Bid and Ask ticks with the trades (at the same time).
+  Review: only time and price are kept, size-only rows are dropped (the first row of each price and one every 5 s,
+  each with the time of the last row it stands for, so a quote's age is exact), nothing is copied for a load that
+  already went out, and the quote window is at most 24 hours (older trades: tick rule). Trades the quote history does
+  not cover (before it, over 5 s past its end, or a quote over 60 s old) go by the tick rule; with no bid/ask history
+  every trade does, and `/diag` and the Output window say so.
+- **The quotes do not hold the chart up** (review): they get at most 2.5 s after the trades are in (was 15 s), and no
+  wait at all when the trade request failed.
+- **Order traffic first** (reviews 1 and 2): `ready` and the held live trades released after it go into the page's
+  outbox as one entry, and order traffic (`order`, `orders`, `position`, `reject`, `trading`, fills, `status`, `pong`,
+  `hello`) has its own lane, sent at the next message boundary ahead of queued market data, each lane in order. An order
+  reply sent during a 20,000-trade release now arrives in under 1 ms (was up to 4 s).
+- **A page more than 5 s behind is reconnected** (review 3; Anthony: "just a reset"): when the oldest market data waiting
+  for a page has waited over 5 s, ChartBridge closes that page, which reconnects on its own without the PIN and reloads
+  (Armed off). One Output line gives the lag. A load's history and ticks chunks do not count as lag while they go out.
+  This replaces a limit of 5,000 waiting messages (0.3.3; it closed a page after a long release in a busy market) and
+  of 50,000 (the second 0.3.4 round; it let a slow page fall about 17 s behind). A page that stopped reading is still
+  closed after a 2 s stuck send with 5,000 waiting. `/diag` `pages` shows each page's queue and lag. Review 4: the time
+  spent sending the page's own bulk data (a load's chunks and the held trades released after `ready`) is not counted
+  as lag, so the reload after a close at 3,000 trades a second (about 90,000 held trades) does not close itself again;
+  a close always aborts the connection, so the page sees it and reconnects (a close between two sends used to leave it
+  connected, silent and Armed); and a load queues its chunks at most three ahead of the page, so a loading page holds
+  about 4 MB of them, not the whole load (Range 40 over 28 hours was about 295 MB).
+  The price of not counting the release (review 5): right after a load the chart can run behind by up to the release's
+  length plus 5 s before the rule acts (review 5 measured 4.4 to 14.3 s on healthy pages at 3,000 trades a second),
+  while trading stays enabled. Sending recent ticks first (the next step, branch live-first) is what shrinks the release.
+- **Sends never throw** (review 3): a message racing a page's Close is dropped quietly (it used to throw out of the loop
+  sending an order, position or fill update to every page, so the pages after it missed it); a failed send closes the
+  page so it reconnects.
+- **The seam (0.3.3) is unchanged:** the side takes no part in matching held live trades against the backfill, so a
+  trade the live and the history quote call differently is still sent once (with the backfill's side). Review: the
+  released trades' tick rule continues from that backfill copy, not from the dropped live twin.
+- **`/diag` `sides`:** per instrument, live counts by method, `liveTieChanged`, `quoteAfterTrade`, stale quotes, the
+  latest quote and whether NinjaTrader's own e.Bid/e.Ask on each trade match it; for the last load, counts by method,
+  the Bid and Ask history (rows sent and kept, window, copy time, first and last times, request result), trades before,
+  after, between the quotes and with a stale quote, `tieChanged`, the time resolutions, and NinjaTrader's own bid/ask
+  stamps on the last 2,000 trades (usable, like its fill-in, agreeing with ChartBridge's side).
+- **Unchanged:** orders, the PIN, network rules and fills (`ChartBridgeOrders.cs` and `ChartBridgePin.cs` untouched).
+- Research with sources: `nt8/PROTOCOL.md`, Trade side (NinjaTrader's help for MarketDataEventArgs, Order Flow
+  Cumulative Delta, historical Bid/Ask series and Tick Replay).
+- Tests: the Mono harness (`check/SidesHarness.cs`, run by `npm run check:orders`) checks the rules (at, above, at and
+  below the bid, between, no quote, one side, crossed, float noise, tick rule sequences with unchanged prices), the
+  live tagger (the trade's own update first, an update stamped after the trade, stale, reset, a burst of 800 updates at
+  one time), live and backfill giving the same sides on the same trades, the 18:00 ET session (the reopening print,
+  live, backfill and after the seam; the DST days), the as-of join (ties, no look-ahead, missing history, shorter
+  history at either end, a hole in the middle, whole-second quotes, NinjaTrader's stamps), the thinned quote series
+  (same sides as every row, also at the 60 s edge over 200 made-up histories; 1,000,000 rows copied in about 25 ms),
+  the two send lanes (an order reply during a 20,000-trade release at 20 and 200 us a message in under 1 ms; 1,500 and
+  3,000 live trades a second after `ready` without a close; lane order; a stuck page and a page 50,000 behind still
+  closed; Send after Close), resets and prices of 0 never reaching the order code, and whole loads through Subscribe
+  and the live handler (the quote requests, the answers in any order, refused, empty, shorter, never coming, a failed
+  trade request, the 24-hour window, a resubscribe during the quote wait, minute charts, the seam with sides that
+  disagree, 6,000 and 20,000 held trades released to a page draining at a socket's pace, `/diag`). The 0.3.3 seam
+  cases run unchanged. `test/trade-sides.test.js` checks the page's parsing and bar building with the new messages,
+  and the fake bridge, which now sends sides (`--no-sides` for the old format).
 
 ## 1.6.0 (2026-09-29): the Indicators menu "E2", a chip strip per pane, one account picker, and the volume profile
 
