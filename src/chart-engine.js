@@ -756,7 +756,7 @@ function create(container, options) {
      chart's height it asks for, a note drawn instead of anything else (the page's "Delta needs ChartBridge 0.3.4 on
      this PC"), and its own eased value scale. */
   let delta = null;
-  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null };
+  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tval: null, widths: new Map() };
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
      the rest with 'levels'. */
@@ -950,6 +950,13 @@ function create(container, options) {
     const n = last(); if (n < 0 || !delta || !delta.bars.length) return null;
     const from = Math.max(0, Math.floor(indexAt(0))), to = Math.min(n, Math.ceil(indexAt(plotW)));
     if (to < from) return null;
+    // worked out again only when the delta, the bars in view or the mode changed (not on every frame)
+    const key = delta.version + '|' + from + '|' + to + '|' + pane.mode + '|' + bars.length + '|' + bars[from].t;
+    if (pane.tkey === key) return pane.tval;
+    pane.tkey = key; pane.tval = paneTargetScan(from, to);
+    return pane.tval;
+  }
+  function paneTargetScan(from, to) {
     const db = delta.bars, bar = pane.mode === 'bar';
     let k = delta.lowerBound(bars[from].t), mn = Infinity, mx = -Infinity;
     for (let i = from; i <= to && k < db.length; i++) {
@@ -1209,9 +1216,15 @@ function create(container, options) {
       : pane.mode !== 'bar' && lses && lses.partial ? 'from ' + fmtHM(lses.from) + ' ET, not ' + fmtHM(o.session.start || 0) + why : '';
     pane.title = [title, val, since, pane.note].filter(Boolean).join(' ');
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-    ctx.font = '600 10px ' + T.fontCond; const w1 = ctx.measureText(title.toUpperCase()).width;
-    ctx.font = '500 11px ' + T.fontMono; const w2 = val ? ctx.measureText(val).width + 8 : 0;
-    ctx.font = '500 10px ' + T.fontCond; const w3 = since ? ctx.measureText(since).width + 8 : 0;
+    // text widths kept per font and text (the title and the start rarely change; the value's digits are few)
+    const width = (font, text) => {
+      const k = font + '|' + text;
+      let w = pane.widths.get(k);
+      if (w === undefined) { if (pane.widths.size > 400) pane.widths.clear(); ctx.font = font; w = ctx.measureText(text).width; pane.widths.set(k, w); }
+      return w;
+    };
+    const f1 = '600 10px ' + T.fontCond, f2 = '500 11px ' + T.fontMono, f3 = '500 10px ' + T.fontCond;
+    const w1 = width(f1, title.toUpperCase()), w2 = val ? width(f2, val) + 8 : 0, w3 = since ? width(f3, since) + 8 : 0;
     roundRect(6, top + 4, w1 + w2 + w3 + 12, 18, 4); ctx.fillStyle = T.legendBg; ctx.fill();
     ctx.font = '600 10px ' + T.fontCond; ctx.fillStyle = T.axisText; ctx.fillText(title.toUpperCase(), 12, top + 13.5);
     if (val) { ctx.font = '500 11px ' + T.fontMono; ctx.fillStyle = T.axisTextStrong; ctx.fillText(val, 12 + w1 + 8, top + 13.5); }
@@ -1953,6 +1966,7 @@ function create(container, options) {
       const had = paneOn();
       Object.assign(o.layers, partial || {});
       if (paneOn() !== had) { layout(); clampRight(); pane.init = false; }   // the delta pane came or went (1.7.0)
+      pane.widths.clear();                                         // a page redraws this way when its web fonts arrive
       dirty = true;
     },
     getLayers() { return Object.assign({}, o.layers); },
@@ -1967,7 +1981,7 @@ function create(container, options) {
      * The cumulative delta to draw (a ChartEngine.CumulativeDelta, or null), in the pane below the plot while the
      * 'delta' layer is on (1.7.0). The chart redraws when delta.version changes, so the caller only adds trades to it.
      */
-    setDelta(cd) { delta = cd && typeof cd.lowerBound === 'function' ? cd : null; pane.init = false; pane.ver = -1; dirty = true; },
+    setDelta(cd) { delta = cd && typeof cd.lowerBound === 'function' ? cd : null; pane.init = false; pane.ver = -1; pane.tkey = ''; dirty = true; },
     getDelta() { return delta; },
     /**
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
@@ -1988,7 +2002,7 @@ function create(container, options) {
     /** A delta value to y in the pane and back (CSS px from the top of the chart, as last drawn). */
     deltaToY(v) { return paneTop + (pane.hi - v) / ((pane.hi - pane.lo) || 1) * paneH; },
     /** Change colors, e.g. { up, down, vwap, bg }. The theme is built here, once per change. */
-    setTheme(partial) { themeSrc = Object.assign({}, themeSrc, partial || {}); T = buildTheme(themeSrc); themeBuilds++; shadeLevels(); legendKey = ''; dirty = true; },
+    setTheme(partial) { themeSrc = Object.assign({}, themeSrc, partial || {}); T = buildTheme(themeSrc); themeBuilds++; shadeLevels(); pane.widths.clear(); legendKey = ''; dirty = true; },
     /** The colors as chosen (not as moved to read on the ground; colors() has those). */
     getTheme() { const out = {}; for (const k in DEFAULT_THEME) out[k] = themeSrc[k]; return out; },
     /** Derived colors as drawn, e.g. upText / downText for legend text that stays readable, text2, legendBg, ground. */

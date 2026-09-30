@@ -938,10 +938,12 @@ function start(container, opt, PAGE) {
   /* "Delta +12,345" in the legend (the bar under the crosshair, else the newest), "Bar delta" in bar mode, the start
      when the session counts from later than 18:00, and the unknown sides (they add nothing) when there are any. */
   let legendBarT = null, deltaLegendKey = '';
+  /* Written only when it changes (a trade changes the value, rarely the rest), so the legend lays out no more than before. */
+  const put = (el, k, v) => { if (el[k] !== v) el[k] = v; };
   function deltaLegend(force) {
     const el = $('lgDelta'); if (!el) return;
     const cd = S.layers.delta ? D.delta : null, old = S.layers.delta && D.ready && bridgeSides() === false;
-    el.hidden = !cd && !old;
+    put(el, 'hidden', !cd && !old);
     if (old) {                                                     // no sides from this ChartBridge: say so, no number
       if (deltaLegendKey === 'old') return;
       deltaLegendKey = 'old';
@@ -956,18 +958,15 @@ function start(container, opt, PAGE) {
     const key = [cd.version, legendBarT, bar, v].join('|');
     if (!force && key === deltaLegendKey) return;
     deltaLegendKey = key;
-    $('lgDl').textContent = (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' from ' + U.fmtHM(ses.from) : '');
+    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' from ' + U.fmtHM(ses.from) : ''));
     const dv = $('lgDv');
-    dv.textContent = v === null ? '-' : U.fmtSigned(v, 0);
-    dv.className = 'dv' + (v > 0 ? ' up' : v < 0 ? ' down' : '');
+    put(dv, 'textContent', v === null ? '-' : U.fmtSigned(v, 0));
+    put(dv, 'className', 'dv' + (v > 0 ? ' up' : v < 0 ? ' down' : ''));
     const unk = ses ? ses.unknown : 0, du = $('lgDu');
-    du.hidden = !(unk > 0);
-    du.textContent = unk > 0 ? ' · ' + U.fmtPrice(unk, 0) + ' unknown' : '';
-    const known = ses ? ses.buy + ses.sell : 0;
-    el.title = (bar ? 'Bar delta: this bar\'s market buys minus market sells' : 'Cumulative delta: market buys minus market sells since ' + (ses && ses.partial ? U.fmtHM(ses.from) + ' ET, not 18:00: ' + deltaWhy() : '18:00 ET')) +
-      '. Sides from ChartBridge.' + (ses ? ' This session: buys ' + U.fmtPrice(ses.buy, 0) + ', sells ' + U.fmtPrice(ses.sell, 0) +
-      (unk > 0 ? ', unknown side ' + U.fmtPrice(unk, 0) + ' contracts in ' + U.fmtPrice(ses.unknownTrades, 0) + ' trades (they add nothing)' : '') +
-      (known > 0 ? '; ' + Math.round(ses.byRule / known * 100) + '% of the volume sided by the tick rule' : '') + '.' : '');
+    put(du, 'hidden', !(unk > 0));
+    put(du, 'textContent', unk > 0 ? ' · ' + U.fmtPrice(unk, 0) + ' unknown' : '');
+    put(el, 'title', (bar ? 'Bar delta: each bar\'s market buys minus market sells' : 'Cumulative delta: market buys minus market sells since ' +
+      (ses && ses.partial ? U.fmtHM(ses.from) + ' ET, not 18:00: ' + deltaWhy() : '18:00 ET')) + '. Sides from ChartBridge; unknown sides add nothing.');
   }
   /*
    * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
