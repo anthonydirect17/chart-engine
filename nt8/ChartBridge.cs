@@ -392,7 +392,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public DateTime[] Time;
         public double[] Open, High, Low, Close;
         public long[] Volume;
-        public double[] Bid, Ask;               // tick series only: NinjaTrader's bid and ask stamped on each trade (CopyTicks)
+        public double[] Bid, Ask;               // tick series only: NinjaTrader's bid and ask stamped on the trades from StampFrom on (CopyTicks)
+        public int StampFrom = -1;
 
         public static RawBars Copy(Bars bars, bool closeOnly)
         {
@@ -411,18 +412,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             return r;
         }
 
-        // A tick series (close, volume and time), plus the bid and ask NinjaTrader stamps on each trade (Bars.GetBid and
-        // GetAsk), kept for /diag only (0.3.4). A connection without them leaves Bid and Ask null.
+        // A tick series (close, volume and time), plus the bid and ask NinjaTrader stamps on its last StampSample trades
+        // (Bars.GetBid and GetAsk), a sample kept for /diag only (0.3.4), so NinjaTrader's answer thread does little extra
+        // work. A connection without them leaves Bid and Ask null.
+        public const int StampSample = 2000;
         public static RawBars CopyTicks(Bars bars)
         {
             RawBars r = Copy(bars, true);
             try
             {
-                double[] b = new double[r.Count], a = new double[r.Count];
-                for (int i = 0; i < r.Count; i++) { b[i] = bars.GetBid(i); a[i] = bars.GetAsk(i); }
-                r.Bid = b; r.Ask = a;
+                int from = Math.Max(0, r.Count - StampSample), m = r.Count - from;
+                double[] b = new double[m], a = new double[m];
+                for (int i = 0; i < m; i++) { b[i] = bars.GetBid(from + i); a[i] = bars.GetAsk(from + i); }
+                r.Bid = b; r.Ask = a; r.StampFrom = from;
             }
-            catch (Exception) { r.Bid = null; r.Ask = null; }
+            catch (Exception) { r.Bid = null; r.Ask = null; r.StampFrom = -1; }
             return r;
         }
 
@@ -455,6 +459,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double Price;
         public long Volume;
         public string Json;     // the "tick" message as it goes to the page
+        public int Side, Method;   // 0.3.4: its side and method as tagged live (in Json too); not part of the seam's match
     }
 
     // What one subscribe's seam did, for /diag.
@@ -641,12 +646,19 @@ namespace NinjaTrader.NinjaScript.AddOns
     //   2 (bidAsk): the prevailing quote. At or above the ask, a buy; at or below the bid, a sell. The quote must have
     //     both sides, above zero, bid below ask (a crossed or locked quote is not used).
     //   3 (tickRule): between bid and ask, or with no usable quote: above the previous trade's price a buy, below it a
-    //     sell, at the same price the previous trade's side.
+    //     sell, at the same price the previous trade's side (Lee-Ready; Anthony kept it over NinjaTrader's "same side
+    //     as the previous trade" for between-quote trades, 2026-09-30).
     //   0 (none): no usable quote and no previous trade (or the same price as an unclassified one): side 0.
     // Side: 1 buy, -1 sell, 0 unknown.
+    // The prevailing quote, live and in the backfill alike, is the last bid and the last ask stamped STRICTLY BEFORE the
+    // trade (the tie rule): a quote stamped at the trade's own time is not used, because a trade and the quote change it
+    // causes (the ask it lifted moving up, the bid stepping up to the traded price) share one timestamp, and taking that
+    // later quote can call a buy a sell. A quote stamped after the trade is never used. A quote older than QuoteMaxAge
+    // (60 s) before the trade is stale (a hole in the data, a disconnect): the tick rule, counted in /diag.
     public static class ChartBridgeSides
     {
         public const int None = 0, Aggressor = 1, BidAsk = 2, TickRule = 3;
+        public const long QuoteMaxAge = 60 * TimeSpan.TicksPerSecond;
 
         // Prices compared on a 0.000001 grid, so float noise (0.1 + 0.2 against 0.3) is the same price.
         public static long PriceKey(double p) { return (long)Math.Round(p * 1e6); }
@@ -685,31 +697,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const long QuoteEndSlack = 5 * TimeSpan.TicksPerSecond;
 
         // The tick backfill, each trade by the quote prevailing at its time: an as-of join on NinjaTrader's historical Bid
-        // and Ask ticks (the same window as the trades, oldest first). The prevailing bid is the last bid stamped strictly
-        // before the trade, likewise the ask. The tie rule: a quote stamped at the same time as the trade is not used,
-        // because a trade and the quote change it causes (the ask it lifted moving up, the bid stepping up to the traded
-        // price) share one timestamp, and taking that later quote can call a buy a sell. Times are compared at the coarser
-        // resolution of the trades and the quotes (1 ms, or whole seconds; ChartBridgeSeam.Resolution), so at whole seconds
-        // "the same time" is the same second. tieChanged in /diag counts the trades the other tie rule (a quote at the same
-        // time counts) would have called differently.
-        // Coverage: a trade is classified by the quote only when there is a bid and an ask before it and it is no more than
-        // QuoteEndSlack (5 s) past the end of the shorter of the two quote histories: a history that stops early would
-        // otherwise leave a stale quote in force for every later trade. (Within the slack a quiet quote is still taken as in
-        // force; the bid and ask histories carry size changes too, so a trade normally has a quote event within
-        // milliseconds.) Every other trade goes by the tick rule (beforeQuotes, afterQuotes in /diag). No quote history at
+        // and Ask ticks (QuoteSeries, oldest first), by the tie rule above. Times are compared at the coarser resolution of
+        // the trades and the quotes (1 ms, or whole seconds; ChartBridgeSeam.Resolution), so at whole seconds "the same
+        // time" is the same second. tieChanged in /diag counts the trades the other tie rule (a quote at the same time
+        // counts) would have called differently.
+        // Coverage: a trade is classified by the quote only when there is a bid and an ask before it, it is no more than
+        // QuoteEndSlack (5 s) past the end of the shorter of the two quote histories (a history that stops early would
+        // otherwise leave a stale quote in force), and neither quote is older than QuoteMaxAge (a hole in the middle).
+        // Every other trade goes by the tick rule (beforeQuotes, afterQuotes, staleQuotes in /diag). No quote history at
         // all, or only one side: every trade by the tick rule.
-        // stampBid/stampAsk (may be null): NinjaTrader's own bid and ask stamped on each historical trade (Bars.GetBid/GetAsk),
-        // only compared, for /diag. NinjaTrader's help says that with no bid/ask tied to the trades it fills them in as
-        // Bid = Last and Ask = Bid + 1 tick. A real sell at the bid with a one-tick spread looks the same, so one trade
-        // cannot tell; likeFillIn counts them, and likeFillIn equal to usable means the stamps were filled in.
-        public static BackfillSides ClassifyBackfill(DateTime[] tt, double[] tp, int n, DateTime[] bt, double[] bp, int nb, DateTime[] at, double[] ap, int na,
-                                                     double[] stampBid, double[] stampAsk, double tickSize)
+        // stampBid/stampAsk (may be null): NinjaTrader's own bid and ask stamped on the trades from stampFrom on
+        // (Bars.GetBid/GetAsk, a sample), only compared, for /diag. NinjaTrader's help says that with no bid/ask tied to
+        // the trades it fills them in as Bid = Last and Ask = Bid + 1 tick. A real sell at the bid with a one-tick spread
+        // looks the same, so one trade cannot tell; likeFillIn counts them, and likeFillIn equal to usable means the stamps
+        // were filled in.
+        public static BackfillSides ClassifyBackfill(DateTime[] tt, double[] tp, int n, IList<DateTime> bt, IList<double> bp, int nb, IList<DateTime> at, IList<double> ap, int na,
+                                                     double[] stampBid, double[] stampAsk, int stampFrom, double tickSize)
         {
             BackfillSides r = new BackfillSides();
             n = tt == null || tp == null ? 0 : Math.Max(0, Math.Min(n, Math.Min(tt.Length, tp.Length)));
-            nb = bt == null || bp == null ? 0 : Math.Max(0, Math.Min(nb, Math.Min(bt.Length, bp.Length)));
-            na = at == null || ap == null ? 0 : Math.Max(0, Math.Min(na, Math.Min(at.Length, ap.Length)));
-            r.Trades = n; r.BidTicks = nb; r.AskTicks = na;
+            nb = bt == null || bp == null ? 0 : Math.Max(0, Math.Min(nb, Math.Min(bt.Count, bp.Count)));
+            na = at == null || ap == null ? 0 : Math.Max(0, Math.Min(na, Math.Min(at.Count, ap.Count)));
+            r.Trades = n;
             r.Side = new sbyte[n]; r.Method = new byte[n];
             if (nb > 0) { r.HasBid = true; r.FirstBid = bt[0]; r.LastBid = bt[nb - 1]; }
             if (na > 0) { r.HasAsk = true; r.FirstAsk = at[0]; r.LastAsk = at[na - 1]; }
@@ -723,7 +732,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool quotes = nb > 0 && na > 0;
             long end = quotes ? Math.Min(Key(bt[nb - 1], unit), Key(at[na - 1], unit)) + QuoteEndSlack : long.MinValue;
             int ib = -1, ia = -1, ibi = -1, iai = -1;   // last bid/ask strictly before the trade; at or before it (for tieChanged)
-            bool stamps = stampBid != null && stampAsk != null && stampBid.Length >= n && stampAsk.Length >= n;
+            bool stamps = stampBid != null && stampAsk != null && stampFrom >= 0;
             bool hasPrev = false; double prevPrice = 0; int prevSide = 0;
             for (int i = 0; i < n; i++)
             {
@@ -736,24 +745,31 @@ namespace NinjaTrader.NinjaScript.AddOns
                 while (iai + 1 < na && Key(at[iai + 1], unit) <= k) iai++;
                 double p = tp[i];
                 int m, s;
-                if (ib >= 0 && ia >= 0 && k <= end)
+                bool inWindow = quotes && k <= end;
+                if (inWindow && ib >= 0 && ia >= 0 && k - Key(bt[ib], unit) <= QuoteMaxAge && k - Key(at[ia], unit) <= QuoteMaxAge)
                 {
                     r.Quoted++;
                     s = Classify(p, bp[ib], ap[ia], hasPrev, prevPrice, prevSide, out m);
                     if (m != BidAsk) { if (QuoteUsable(bp[ib], ap[ia])) r.BetweenQuotes++; else r.CrossedQuotes++; }
-                    int m2;
-                    if (Classify(p, bp[ibi], ap[iai], hasPrev, prevPrice, prevSide, out m2) != s) r.TieChanged++;
                 }
                 else
                 {
-                    if (quotes && k > end && ib >= 0 && ia >= 0) r.AfterQuotes++; else r.BeforeQuotes++;
+                    if (!inWindow || ib < 0 || ia < 0) { if (quotes && k > end && ib >= 0 && ia >= 0) r.AfterQuotes++; else r.BeforeQuotes++; }
+                    else r.StaleQuotes++;
                     s = ByTickRule(p, hasPrev, prevPrice, prevSide, out m);
                 }
+                // The other tie rule (a quote at the trade's own time counts), for tieChanged: every trade, covered or not.
+                int m2, s2;
+                if (inWindow && ibi >= 0 && iai >= 0 && k - Key(bt[ibi], unit) <= QuoteMaxAge && k - Key(at[iai], unit) <= QuoteMaxAge)
+                    s2 = Classify(p, bp[ibi], ap[iai], hasPrev, prevPrice, prevSide, out m2);
+                else s2 = ByTickRule(p, hasPrev, prevPrice, prevSide, out m2);
+                if (s2 != s) r.TieChanged++;
                 r.Side[i] = (sbyte)s; r.Method[i] = (byte)m; r.Counts[m]++;
                 hasPrev = true; prevPrice = p; prevSide = s;
-                if (stamps)
+                int j = i - stampFrom;
+                if (stamps && j >= 0 && j < stampBid.Length && j < stampAsk.Length)
                 {
-                    double sb = stampBid[i], sa = stampAsk[i];
+                    double sb = stampBid[j], sa = stampAsk[j];
                     if (!QuoteUsable(sb, sa)) r.StampMissing++;
                     else
                     {
@@ -761,11 +777,49 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (tickSize > 0 && PriceKey(sb) == PriceKey(p) && PriceKey(sa) == PriceKey(p + tickSize)) r.StampLikeFillIn++;
                         long pk = PriceKey(p);
                         int ss = pk >= PriceKey(sa) ? 1 : pk <= PriceKey(sb) ? -1 : 0;
-                        if (ss != 0 && m == BidAsk) { if (ss == s) r.StampAgree++; else r.StampDisagree++; }
+                        if (ss != 0 && s != 0) { if (ss == s) r.StampAgree++; else r.StampDisagree++; }
                     }
                 }
             }
             return r;
+        }
+    }
+
+    // A historical Bid or Ask series, as the join needs it (0.3.4): time and price only (no size), and only the rows that
+    // can matter. Size-only updates never change the prevailing quote, so of a run of rows at one price only the first
+    // is kept, plus one every HeartbeatTicks (5 s) so a quote's age is known to within 5 s (QuoteMaxAge), plus the very
+    // last row (the end of the history). Rows before From (the quote window's start) are skipped.
+    public class QuoteSeries
+    {
+        public const long HeartbeatTicks = 5 * TimeSpan.TicksPerSecond;
+        public readonly List<DateTime> Time = new List<DateTime>();
+        public readonly List<double> Price = new List<double>();
+        public int RawRows;                  // rows NinjaTrader sent inside the window
+        public int Count { get { return Time.Count; } }
+
+        public static QuoteSeries From(Bars bars, DateTime from)
+        {
+            QuoteSeries q = new QuoteSeries();
+            int n = bars.Count;
+            long lastKept = long.MinValue;
+            double lastPrice = double.NaN;
+            bool pendingLast = false;
+            DateTime tailTime = DateTime.MinValue; double tailPrice = 0;
+            for (int i = 0; i < n; i++)
+            {
+                DateTime t = bars.GetTime(i);
+                if (t < from) continue;
+                double p = bars.GetClose(i);
+                q.RawRows++;
+                if (q.Time.Count == 0 || ChartBridgeSides.PriceKey(p) != ChartBridgeSides.PriceKey(lastPrice) || t.Ticks - lastKept >= HeartbeatTicks)
+                {
+                    q.Time.Add(t); q.Price.Add(p);
+                    lastKept = t.Ticks; lastPrice = p; pendingLast = false;
+                }
+                else { pendingLast = true; tailTime = t; tailPrice = p; }
+            }
+            if (pendingLast) { q.Time.Add(tailTime); q.Price.Add(tailPrice); }
+            return q;
         }
     }
 
@@ -774,48 +828,131 @@ namespace NinjaTrader.NinjaScript.AddOns
     {
         public sbyte[] Side;                 // 1 buy, -1 sell, 0 unknown, per trade
         public byte[] Method;                // ChartBridgeSides.None, Aggressor, BidAsk, TickRule, per trade
-        public int Trades, BidTicks, AskTicks;
+        public int Trades;
         public readonly int[] Counts = new int[4];   // trades by method
         public bool HasTrades, HasBid, HasAsk;
         public DateTime FirstTrade, LastTrade, FirstBid, LastBid, FirstAsk, LastAsk;
-        public int Quoted;                   // trades with a bid and an ask before them, inside the quote history
-        public int BeforeQuotes, AfterQuotes;   // trades outside it (before its start, after its end): tick rule
+        public int Quoted;                   // trades with a fresh bid and ask before them, inside the quote history
+        public int BeforeQuotes, AfterQuotes, StaleQuotes;   // trades outside it (before its start, after its end) or with a stale quote: tick rule
         public int BetweenQuotes, CrossedQuotes;   // quoted trades that went by the tick rule: between bid and ask, or a crossed or locked quote
         public int TieChanged;               // trades the other tie rule (a quote at the trade's own time counts) would call differently
         public long TradeResolution, QuoteResolution, UnitTicks;   // DateTime ticks (10000 = 1 ms); 0 when there were none
-        public int StampUsable, StampLikeFillIn, StampMissing;   // NinjaTrader's stamps: a usable quote (of which like its fill-in), or none
-        public int StampAgree, StampDisagree;   // usable stamps that put the trade at the bid or ask, against the join's side (join by quote only)
+        public int StampUsable, StampLikeFillIn, StampMissing;   // NinjaTrader's stamps (a sample): a usable quote (of which like its fill-in), or none
+        public int StampAgree, StampDisagree;   // usable stamps that put the trade at the bid or ask, against the side ChartBridge gave it
     }
 
-    // One instrument's live trades. The quote is the last bid and the last ask NinjaTrader delivered before the trade (its
-    // Bid and Ask market data updates, in the order they arrive); the tick rule uses the previous live trade. Thread safe.
+    // One side (bid or ask) of the live quote: the recent updates with NinjaTrader's time for each, so the quote as of a
+    // trade can be read by time, not by arrival (quote updates can arrive before the trade that caused them). Keeps the
+    // last Size updates; of the older ones it keeps the latest-stamped and the latest stamped before that, so a burst of
+    // more than Size updates at one time still leaves the quote from before it. Not thread safe: LiveSideTagger locks.
+    public class LiveQuoteSide
+    {
+        public const int Size = 256;
+        private readonly DateTime[] time = new DateTime[Size];
+        private readonly double[] price = new double[Size];
+        private int count, head;             // head: where the next update goes
+        private bool hasBase, hasPrev; private DateTime baseTime, prevTime; private double basePrice, prevPrice;   // the latest evicted update, and the latest one stamped before it
+        public double Latest = double.NaN;   // the last update to arrive, whatever its time
+        public DateTime LatestTime;
+
+        public void Add(DateTime t, double p)
+        {
+            if (count == Size)
+            {
+                DateTime ot = time[head]; double op = price[head];
+                if (!hasBase) { hasBase = true; baseTime = ot; basePrice = op; }
+                else if (ot > baseTime) { hasPrev = true; prevTime = baseTime; prevPrice = basePrice; baseTime = ot; basePrice = op; }
+                else if (ot == baseTime) basePrice = op;
+                else if (!hasPrev || ot >= prevTime) { hasPrev = true; prevTime = ot; prevPrice = op; }
+            }
+            else count++;
+            time[head] = t; price[head] = p;
+            head = (head + 1) % Size;
+            Latest = p; LatestTime = t;
+        }
+
+        public void Clear() { count = 0; head = 0; hasBase = false; hasPrev = false; Latest = double.NaN; }
+
+        // The quote as of t: the update with the latest time before t (at or before t when inclusive); among updates with
+        // that same time, the one that arrived last.
+        public bool AsOf(DateTime t, bool inclusive, out double p, out DateTime at)
+        {
+            bool found = false; p = double.NaN; at = DateTime.MinValue;
+            if (hasPrev && (inclusive ? prevTime <= t : prevTime < t)) { found = true; p = prevPrice; at = prevTime; }
+            if (hasBase && (inclusive ? baseTime <= t : baseTime < t) && (!found || baseTime >= at)) { found = true; p = basePrice; at = baseTime; }
+            int start = (head - count + Size) % Size;
+            for (int k = 0; k < count; k++)
+            {
+                int i = (start + k) % Size;
+                DateTime ti = time[i];
+                if ((inclusive ? ti <= t : ti < t) && (!found || ti >= at)) { found = true; p = price[i]; at = ti; }
+            }
+            return found;
+        }
+    }
+
+    // One instrument's live trades, by the same tie rule as the backfill (strictly before the trade) so a chart reload
+    // gives the same sides. Also counts, for /diag: liveTieChanged (the other tie rule would call it differently, the live
+    // twin of the backfill's tieChanged), quoteAfterTrade (the latest update to arrive was stamped after the trade: the
+    // reorder the arrival order alone would have taken as the quote), staleQuotes, and whether the Last event's own
+    // e.Bid/e.Ask equal the latest updates. Thread safe.
     public class LiveSideTagger
     {
         private readonly object sync = new object();
-        private double bid = double.NaN, ask = double.NaN, lastPrice;
+        private readonly LiveQuoteSide bids = new LiveQuoteSide(), asks = new LiveQuoteSide();
+        private double lastPrice;
+        private DateTime lastTime;
         private bool hasLast;
         private int lastSide;
         private readonly long[] counts = new long[4];
-        private long bidUpdates, askUpdates, eventSame, eventDiffers, eventNone;
+        private long bidUpdates, askUpdates, eventSame, eventDiffers, eventNone, tieChanged, quoteAfterTrade, staleQuotes, resets;
 
-        public void NoteQuote(bool isBid, double price)
+        public void NoteQuote(bool isBid, double price, DateTime time)
         {
-            lock (sync) { if (isBid) { bid = price; bidUpdates++; } else { ask = price; askUpdates++; } }
+            lock (sync) { if (isBid) { bids.Add(time, price); bidUpdates++; } else { asks.Add(time, price); askUpdates++; } }
+        }
+
+        // NinjaTrader reset its market data (IsReset) or a connection dropped: the quote is unknown until new updates.
+        public void ClearQuote() { lock (sync) { bids.Clear(); asks.Clear(); resets++; } }
+
+        private bool Quote(DateTime t, bool inclusive, out double bid, out double ask)
+        {
+            DateTime bt, at;
+            bool ok = bids.AsOf(t, inclusive, out bid, out bt) & asks.AsOf(t, inclusive, out ask, out at);
+            return ok && (t - bt).Ticks <= ChartBridgeSides.QuoteMaxAge && (t - at).Ticks <= ChartBridgeSides.QuoteMaxAge;
         }
 
         // eventBid, eventAsk: the Last update's own Bid and Ask (MarketDataEventArgs), only compared, for /diag.
-        public int Tag(double price, double eventBid, double eventAsk, out int method)
+        public int Tag(double price, DateTime time, double eventBid, double eventAsk, out int method)
         {
             lock (sync)
             {
-                int s = ChartBridgeSides.Classify(price, bid, ask, hasLast, lastPrice, lastSide, out method);
+                double b, a, b2, a2;
+                bool q = Quote(time, false, out b, out a);
+                if (!q)
+                {
+                    double x, y; DateTime tx, ty;
+                    if (bids.AsOf(time, false, out x, out tx) && asks.AsOf(time, false, out y, out ty)) staleQuotes++;
+                }
+                int s = ChartBridgeSides.Classify(price, q ? b : double.NaN, q ? a : double.NaN, hasLast, lastPrice, lastSide, out method);
+                bool q2 = Quote(time, true, out b2, out a2);
+                int m2;
+                if (ChartBridgeSides.Classify(price, q2 ? b2 : double.NaN, q2 ? a2 : double.NaN, hasLast, lastPrice, lastSide, out m2) != s) tieChanged++;
+                if ((!double.IsNaN(bids.Latest) && bids.LatestTime > time) || (!double.IsNaN(asks.Latest) && asks.LatestTime > time)) quoteAfterTrade++;
                 counts[method]++;
                 if (!ChartBridgeSides.QuoteUsable(eventBid, eventAsk)) eventNone++;
-                else if (ChartBridgeSides.QuoteUsable(bid, ask) && ChartBridgeSides.PriceKey(eventBid) == ChartBridgeSides.PriceKey(bid) && ChartBridgeSides.PriceKey(eventAsk) == ChartBridgeSides.PriceKey(ask)) eventSame++;
+                else if (ChartBridgeSides.PriceKey(eventBid) == ChartBridgeSides.PriceKey(bids.Latest) && ChartBridgeSides.PriceKey(eventAsk) == ChartBridgeSides.PriceKey(asks.Latest)) eventSame++;
                 else eventDiffers++;
-                hasLast = true; lastPrice = price; lastSide = s;
+                hasLast = true; lastPrice = price; lastTime = time; lastSide = s;
                 return s;
             }
+        }
+
+        // After a load's seam (N3): the trade the tick rule continues from is the backfill's copy (or the last released
+        // one), whose side can differ from the dropped live twin's. Only when that trade is still the last one here.
+        public void FixLast(DateTime time, double price, int side)
+        {
+            lock (sync) { if (hasLast && lastTime == time && ChartBridgeSides.PriceKey(lastPrice) == ChartBridgeSides.PriceKey(price)) lastSide = side; }
         }
 
         public string DiagJson()
@@ -825,8 +962,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return "{\"trades\":" + (counts[0] + counts[1] + counts[2] + counts[3]) +
                     ",\"aggressor\":" + counts[ChartBridgeSides.Aggressor] + ",\"bidAsk\":" + counts[ChartBridgeSides.BidAsk] +
                     ",\"tickRule\":" + counts[ChartBridgeSides.TickRule] + ",\"none\":" + counts[ChartBridgeSides.None] +
-                    ",\"bid\":" + CbJson.Num(bid) + ",\"ask\":" + CbJson.Num(ask) +
-                    ",\"bidUpdates\":" + bidUpdates + ",\"askUpdates\":" + askUpdates +
+                    ",\"liveTieChanged\":" + tieChanged + ",\"quoteAfterTrade\":" + quoteAfterTrade + ",\"staleQuotes\":" + staleQuotes +
+                    ",\"bid\":" + CbJson.Num(bids.Latest) + ",\"ask\":" + CbJson.Num(asks.Latest) +
+                    ",\"bidUpdates\":" + bidUpdates + ",\"askUpdates\":" + askUpdates + ",\"quoteResets\":" + resets +
                     ",\"eventQuoteSame\":" + eventSame + ",\"eventQuoteDiffers\":" + eventDiffers + ",\"eventQuoteNone\":" + eventNone + "}";
             }
         }
@@ -844,7 +982,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public readonly Queue<double> Actions = new Queue<double>();   // recent order actions, for the rate limit
         public readonly List<SeamTick> Pending = new List<SeamTick>();   // live ticks held during backfill (lock it to read or write)
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
-        private readonly BlockingCollection<string> outbox = new BlockingCollection<string>(new ConcurrentQueue<string>(), 5000);
+        // Each entry is one message (a string), or since 0.3.4 several sent in order (a string[], SendAll).
+        private readonly BlockingCollection<object> outbox = new BlockingCollection<object>(new ConcurrentQueue<object>(), 5000);
         private readonly CancellationTokenSource cts = new CancellationTokenSource();
 
         public ChartBridgeClient(WebSocket socket, int id) { Socket = socket; Id = id; }
@@ -862,15 +1001,37 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // Several messages as ONE outbox entry, sent in this order, each its own WebSocket message (0.3.4): the held live
+        // trades released at "ready" take one place in the outbox whatever their number, so a busy load can never close a
+        // page that is keeping up. The outbox bound still closes a page that has 5,000 entries waiting.
+        public void SendAll(IList<string> msgs)
+        {
+            if (msgs == null || msgs.Count == 0) return;
+            if (Tap != null) foreach (string m in msgs) Tap(m);
+            if (cts.IsCancellationRequested) return;
+            string[] batch = new string[msgs.Count];
+            msgs.CopyTo(batch, 0);
+            if (!outbox.TryAdd(batch))
+            {
+                ChartBridgeServer.Log("Client " + Id + " is not keeping up; closing it.");
+                Close();
+            }
+        }
+
         public async Task SendLoop()
         {
             try
             {
-                foreach (string msg in outbox.GetConsumingEnumerable(cts.Token))
+                foreach (object item in outbox.GetConsumingEnumerable(cts.Token))
                 {
-                    if (Socket.State != WebSocketState.Open) break;
-                    byte[] bytes = Encoding.UTF8.GetBytes(msg);
-                    await Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cts.Token);
+                    string[] batch = item as string[];
+                    if (batch == null) batch = new string[] { (string)item };
+                    foreach (string msg in batch)
+                    {
+                        if (Socket.State != WebSocketState.Open) return;
+                        byte[] bytes = Encoding.UTF8.GetBytes(msg);
+                        await Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cts.Token);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -1486,12 +1647,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void OnMarketData(object sender, MarketDataEventArgs e)
         {
             MarketDataType type = e.MarketDataType;
-            if (type == MarketDataType.Bid || type == MarketDataType.Ask)
+            if (e.IsReset || type == MarketDataType.Bid || type == MarketDataType.Ask)
             {
-                // Bid and Ask updates only move the quote the next trades are classified by (0.3.4); nothing is sent.
-                try { SideTagger(RootOf(e.Instrument)).NoteQuote(type == MarketDataType.Bid, e.Price); }
+                // Bid and Ask updates only move the quote the next trades are classified by (0.3.4), with NinjaTrader's time
+                // for each; nothing is sent. A reset (NinjaTrader's IsReset, after a disconnect) forgets the quote.
+                try
+                {
+                    LiveSideTagger tagger = SideTagger(RootOf(e.Instrument));
+                    if (e.IsReset) tagger.ClearQuote();
+                    else tagger.NoteQuote(type == MarketDataType.Bid, e.Price, e.Time);
+                }
                 catch (Exception ex) { if (Interlocked.Exchange(ref quoteErrorLogged, 1) == 0) Log("quote error (logged once): " + ex.Message); }
-                return;
+                if (type != MarketDataType.Last) return;
             }
             if (type != MarketDataType.Last) return;
             try
@@ -1501,7 +1668,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string root = RootOf(e.Instrument);
                 ChartBridgeOrders.NoteLast(root, e.Price);
                 int method;
-                int side = SideTagger(root).Tag(e.Price, e.Bid, e.Ask, out method);
+                int side = SideTagger(root).Tag(e.Price, e.Time, e.Bid, e.Ask, out method);
                 string json = "{\"type\":\"tick\",\"root\":" + CbJson.Str(root) +
                     ",\"t\":" + CbJson.Num3(ChartBridgeTime.EtSeconds(utc)) +
                     ",\"u\":" + CbJson.Num3(ChartBridgeTime.UtcMs(utc)) +
@@ -1515,7 +1682,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else lock (c.Pending)
                     {
                         if (c.Ready) c.Send(json);
-                        else c.Pending.Add(new SeamTick { Time = e.Time, Price = e.Price, Volume = e.Volume, Json = json });   // NinjaTrader's time, as the backfill's
+                        else c.Pending.Add(new SeamTick { Time = e.Time, Price = e.Price, Volume = e.Volume, Json = json, Side = side, Method = method });   // NinjaTrader's time, as the backfill's
                     }
                 }
             }
@@ -1553,7 +1720,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             // trades; the backfill goes out once all three are in (Arrived), each trade tagged with its side.
             public int Waiting;                      // answers still to come (trades, bids, asks); under lock (L)
             public bool Proceeded, QuotesTimedOut;   // the backfill went out (Finish queued); it did not wait longer for quotes
-            public RawBars LastTicks, Bids, Asks;
+            public RawBars LastTicks;
+            public QuoteSeries Bids, Asks;
+            public DateTime QuoteFrom;               // the quote window's start (at most QuoteHoursMax back)
+            public double QuoteCopyMs;               // ChartBridge's time copying and thinning the two quote answers
+            public bool HasBackLast; public DateTime BackLastTime; public double BackLastPrice; public int BackLastSide;   // the backfill's last trade (N3)
             public string BidNote = "asked", AskNote = "asked";   // then ok, empty, the error, or no answer in time, for /diag
             public bool BidRetried, AskRetried;
             public double QuotesAnsweredMs = -1;     // ms from the subscribe to the later of the two quote answers
@@ -1674,7 +1845,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!Current(L)) return;   // a newer subscribe owns the client now
             if (L.TickHours > 0)
             {
-                lock (L) L.Waiting = 3;
+                lock (L) { L.Waiting = 3; L.QuoteFrom = L.NowNt.AddHours(-Math.Min(L.TickHours, QuoteHoursMax)); }
                 RequestTickHistory(L, true);
                 RequestQuotes(L, MarketDataType.Bid, true);
                 RequestQuotes(L, MarketDataType.Ask, true);
@@ -1760,24 +1931,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             bool isBid = type == MarketDataType.Bid;
             DateTime to = margin ? L.NowNt.AddMinutes(TickToMarginMinutes) : NowNt();
-            BarsRequest quotes = new BarsRequest(L.Inst, L.NowNt.AddHours(-L.TickHours), to);
+            BarsRequest quotes = new BarsRequest(L.Inst, L.QuoteFrom, to);
             quotes.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1, MarketDataType = type };
             quotes.TradingHours = L.Inst.MasterInstrument.TradingHours;
             quotes.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
-                RawBars raw = null;
-                bool again = false;
+                QuoteSeries raw = null;
+                bool again = false, wanted;
                 string note = "not loaded";
+                lock (L) wanted = !L.Proceeded;
                 try
                 {
                     if (code != ErrorCode.NoError)
                     {
                         note = "error: " + code + " " + message;
-                        if (Current(L) && margin) again = true;
+                        if (Current(L) && margin && wanted) again = true;
                     }
-                    else if (Current(L))
+                    else if (Current(L) && wanted)   // no copy for a load that already went out or was replaced
                     {
-                        raw = RawBars.Copy(req.Bars, true);
+                        Stopwatch sw = Stopwatch.StartNew();
+                        raw = QuoteSeries.From(req.Bars, L.QuoteFrom);
+                        sw.Stop();
+                        lock (L) L.QuoteCopyMs += sw.Elapsed.TotalMilliseconds;
                         note = raw.Count > 0 ? "ok" : "empty";
                         if (margin && raw.Count == 0) { again = true; raw = null; }
                     }
@@ -1803,9 +1978,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // One of the tick chart's three answers is in (a failed or stale one counts); after the last, the backfill goes out.
-        // The live trades stay held until then, so the quotes get at most QuoteWaitMs after the trades are in: past that
-        // the backfill goes out without them (tick rule; /diag says so) and a late answer is ignored.
-        public static int QuoteWaitMs = 15000;
+        // The live trades stay held until then, so the quotes get at most QuoteWaitMs (2.5 s) after the trades are in: past
+        // that the backfill goes out without them (tick rule; /diag says so) and a late answer is ignored. 2.5 s: the quotes
+        // are asked at the same time as the trades, so a quote history NinjaTrader already has comes back with them or
+        // soon after; a slow first download then costs one load's sides (tick rule, reported), not seconds more of a frozen
+        // chart and a longer hold. When the trade request failed there is nothing to classify and no wait at all.
+        public static int QuoteWaitMs = 2500;
+        // The quote window: at most the last 24 hours (a range view may ask up to 48 hours of trades). Older trades go by
+        // the tick rule (beforeQuotes). 24 hours covers the whole current session (18:00 to 17:00 ET), which the delta pane
+        // shows, and bounds the quote copy.
+        public const int QuoteHoursMax = 24;
 
         private static void Arrived(Load L, bool trades)
         {
@@ -1814,7 +1996,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 L.Waiting--;
                 if (L.Proceeded) return;
-                if (L.Waiting <= 0) { L.Proceeded = true; go = true; }
+                if (L.Waiting <= 0 || (trades && L.LastTicks == null)) { L.Proceeded = true; go = true; }   // no trades: no wait
                 else if (trades) wait = true;
             }
             if (go) { Proceed(L); return; }
@@ -1883,13 +2065,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The backfill's sides by the quote history (ChartBridgeSides.ClassifyBackfill), noted for /diag.
         private static BackfillSides ClassifyLoad(Load L, RawBars ticks)
         {
-            RawBars b, a;
+            QuoteSeries b, a;
             lock (L) { b = L.Bids; a = L.Asks; }
             BackfillSides r = ChartBridgeSides.ClassifyBackfill(ticks.Time, ticks.Close, ticks.Count,
-                b != null ? b.Time : null, b != null ? b.Close : null, b != null ? b.Count : 0,
-                a != null ? a.Time : null, a != null ? a.Close : null, a != null ? a.Count : 0,
-                ticks.Bid, ticks.Ask, L.Inst.MasterInstrument.TickSize);
-            NoteSides(L, r);
+                b != null ? b.Time : null, b != null ? b.Price : null, b != null ? b.Count : 0,
+                a != null ? a.Time : null, a != null ? a.Price : null, a != null ? a.Count : 0,
+                ticks.Bid, ticks.Ask, ticks.StampFrom, L.Inst.MasterInstrument.TickSize);
+            if (r.Trades > 0)
+                lock (L) { L.HasBackLast = true; L.BackLastTime = ticks.Time[r.Trades - 1]; L.BackLastPrice = ticks.Close[r.Trades - 1]; L.BackLastSide = r.Side[r.Trades - 1]; }
+            NoteSides(L, r, b, a);
             return r;
         }
 
@@ -1932,13 +2116,47 @@ namespace NinjaTrader.NinjaScript.AddOns
                 SeamResult r = seam != null
                     ? ChartBridgeSeam.Dedupe(seam.Time, seam.Close, seam.Volume, seam.Count, client.Pending, L.HeldAtAnswer)
                     : ChartBridgeSeam.Dedupe(null, null, null, 0, client.Pending);
-                client.Send("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
-                foreach (SeamTick h in r.Release) client.Send(h.Json);
+                // "ready" and the released trades go into the page's outbox as ONE entry (SendAll): a release of any size
+                // cannot fill the 5,000-message outbox and close the page (0.3.4; a busy load could before).
+                List<string> burst = new List<string>(r.Release.Count + 1);
+                burst.Add("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
+                foreach (SeamTick h in ContinueSides(L, r.Release)) burst.Add(h.Json);
+                client.SendAll(burst);
                 DateTime? firstHeld = client.Pending.Count > 0 ? client.Pending[0].Time : (DateTime?)null;
                 client.Pending.Clear();
                 client.Ready = true;
                 NoteSeam(L, r, seam != null, firstHeld);
             }
+        }
+
+        // N3: the released trades' tick rule continues from the backfill's copy of the seam trade, not from its dropped live
+        // twin (whose live side can differ). Trades classified by the quote keep their side; tick-rule ones are worked out
+        // again along the chain and their message rewritten. The live tagger then continues from the last of them.
+        private static List<SeamTick> ContinueSides(Load L, List<SeamTick> release)
+        {
+            bool has; DateTime lastTime; double lastPrice; int lastSide;
+            lock (L) { has = L.HasBackLast; lastTime = L.BackLastTime; lastPrice = L.BackLastPrice; lastSide = L.BackLastSide; }
+            if (!has) return release;
+            List<SeamTick> outList = new List<SeamTick>(release.Count);
+            foreach (SeamTick h0 in release)
+            {
+                SeamTick h = h0;
+                if (h.Method == ChartBridgeSides.None || h.Method == ChartBridgeSides.TickRule)
+                {
+                    int m;
+                    int s = ChartBridgeSides.ByTickRule(h.Price, true, lastPrice, lastSide, out m);
+                    if (s != h.Side || m != h.Method)
+                    {
+                        int cut = h.Json.LastIndexOf(",\"s\":", StringComparison.Ordinal);
+                        if (cut > 0) h.Json = h.Json.Substring(0, cut) + ",\"s\":" + s.ToString(CultureInfo.InvariantCulture) + ",\"sm\":" + m.ToString(CultureInfo.InvariantCulture) + "}";
+                        h.Side = s; h.Method = m;
+                    }
+                }
+                outList.Add(h);
+                lastTime = h.Time; lastPrice = h.Price; lastSide = h.Side;
+            }
+            SideTagger(L.Root).FixLast(lastTime, lastPrice, lastSide);
+            return outList;
         }
 
         // ---------------------------------------------------------- the seam in /diag (last 20 subscribes)
@@ -2004,16 +2222,19 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string MsOrNull(long ticks) { return ticks > 0 ? CbJson.Num((double)ticks / ChartBridgeSeam.Ms) : "null"; }
 
-        private static void NoteSides(Load L, BackfillSides r)
+        private static void NoteSides(Load L, BackfillSides r, QuoteSeries bq, QuoteSeries aq)
         {
-            string bidNote, askNote; bool bidRetried, askRetried, timedOut; double quotesMs;
-            lock (L) { bidNote = L.BidNote; askNote = L.AskNote; bidRetried = L.BidRetried; askRetried = L.AskRetried; quotesMs = L.QuotesAnsweredMs; timedOut = L.QuotesTimedOut; }
+            string bidNote, askNote; bool bidRetried, askRetried, timedOut; double quotesMs, copyMs;
+            lock (L) { bidNote = L.BidNote; askNote = L.AskNote; bidRetried = L.BidRetried; askRetried = L.AskRetried; quotesMs = L.QuotesAnsweredMs; timedOut = L.QuotesTimedOut; copyMs = L.QuoteCopyMs; }
+            int bidRows = bq != null ? bq.Count : 0, askRows = aq != null ? aq.Count : 0;
+            bool capped = L.TickHours > QuoteHoursMax;
             // In words, when some trades could not use the quote history (also in the Output window).
             string note = null;
-            if (r.Trades > 0 && (r.BidTicks == 0 || r.AskTicks == 0))
-                note = "no " + (r.BidTicks == 0 && r.AskTicks == 0 ? "bid or ask" : r.BidTicks == 0 ? "bid" : "ask") + " history came back (bid: " + bidNote + ", ask: " + askNote + "): every backfill trade went by the tick rule";
-            else if (r.BeforeQuotes > 0 || r.AfterQuotes > 0)
-                note = "the bid/ask history is shorter than the trades: " + r.BeforeQuotes + " trade(s) before it and " + r.AfterQuotes + " after it went by the tick rule";
+            if (r.Trades > 0 && (bidRows == 0 || askRows == 0))
+                note = "no " + (bidRows == 0 && askRows == 0 ? "bid or ask" : bidRows == 0 ? "bid" : "ask") + " history came back (bid: " + bidNote + ", ask: " + askNote + "): every backfill trade went by the tick rule";
+            else if (r.BeforeQuotes > 0 || r.AfterQuotes > 0 || r.StaleQuotes > 0)
+                note = "the bid/ask history does not cover every trade: " + r.BeforeQuotes + " trade(s) before it" + (capped ? " (quotes are kept for the last " + QuoteHoursMax + " hours)" : "") +
+                    ", " + r.AfterQuotes + " after it and " + r.StaleQuotes + " with a quote over " + (ChartBridgeSides.QuoteMaxAge / TimeSpan.TicksPerSecond) + " s old went by the tick rule";
             StringBuilder b = new StringBuilder("{");
             b.Append("\"sub\":").Append(L.Sub);
             b.Append(",\"atUtcMs\":").Append(CbJson.Num3(ChartBridgeTime.NowUtcMs()));
@@ -2023,7 +2244,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"tickRule\":").Append(r.Counts[ChartBridgeSides.TickRule]);
             b.Append(",\"none\":").Append(r.Counts[ChartBridgeSides.None]);
             b.Append(",\"note\":").Append(note != null ? CbJson.Str(note) : "null");
-            b.Append(",\"bidTicks\":").Append(r.BidTicks).Append(",\"askTicks\":").Append(r.AskTicks);
+            b.Append(",\"bidTicks\":").Append(bq != null ? bq.RawRows : 0).Append(",\"askTicks\":").Append(aq != null ? aq.RawRows : 0);
+            b.Append(",\"bidRowsKept\":").Append(bidRows).Append(",\"askRowsKept\":").Append(askRows);   // after dropping size-only updates
+            b.Append(",\"quoteWindowHours\":").Append(Math.Min(L.TickHours, QuoteHoursMax));
+            b.Append(",\"quoteCopyMs\":").Append(CbJson.Num3(copyMs));
             b.Append(",\"bidRequest\":").Append(CbJson.Str(bidNote)).Append(",\"askRequest\":").Append(CbJson.Str(askNote));
             b.Append(",\"quotesRetriedEndingNow\":").Append(bidRetried || askRetried ? "true" : "false");
             b.Append(",\"quotesTimedOut\":").Append(timedOut ? "true" : "false");
@@ -2035,7 +2259,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"firstAsk\":").Append(EtOrNull(r.HasAsk ? r.FirstAsk : (DateTime?)null));
             b.Append(",\"lastAsk\":").Append(EtOrNull(r.HasAsk ? r.LastAsk : (DateTime?)null));
             b.Append(",\"quotedTrades\":").Append(r.Quoted);
-            b.Append(",\"beforeQuotes\":").Append(r.BeforeQuotes).Append(",\"afterQuotes\":").Append(r.AfterQuotes);
+            b.Append(",\"beforeQuotes\":").Append(r.BeforeQuotes).Append(",\"afterQuotes\":").Append(r.AfterQuotes).Append(",\"staleQuotes\":").Append(r.StaleQuotes);
             b.Append(",\"betweenQuotes\":").Append(r.BetweenQuotes).Append(",\"crossedQuotes\":").Append(r.CrossedQuotes);
             b.Append(",\"tieChanged\":").Append(r.TieChanged);
             b.Append(",\"tradeResolutionMs\":").Append(MsOrNull(r.TradeResolution));

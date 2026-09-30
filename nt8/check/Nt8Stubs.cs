@@ -203,6 +203,7 @@ namespace NinjaTrader.Data
         public DateTime Time { get; set; }
         public double Bid { get; set; }
         public double Ask { get; set; }
+        public bool IsReset { get; set; }
     }
     public class MarketData
     {
