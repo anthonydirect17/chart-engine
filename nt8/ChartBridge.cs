@@ -2147,7 +2147,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // trades are in, every trade by the tick rule; live trades keep their side from the live quote.
                 int hours = QuoteWindowHours(ChartBridgeConfig.QuoteHours, L.TickHours);
                 string skipped = hours > 0 ? null : "not requested (quoteHours 0)";
-                if (hours > 0 && !BeginQuotes(L.Root)) { hours = 0; skipped = "not requested: an earlier bid/ask request for " + L.Root + " is still outstanding"; }
+                if (hours > 0 && !BeginQuotes(L.Root)) { hours = 0; skipped = "not requested: an earlier bid/ask request for " + L.Root + " is still outstanding"; Log(L.Root + " bid/ask history " + skipped + " (see /diag sides)"); }
                 lock (L)
                 {
                     L.QuoteHours = hours; L.QuotesSkipped = skipped;
@@ -2155,7 +2155,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (hours > 0) L.QuoteFrom = L.NowNt.AddHours(-hours);
                     else { L.BidNote = skipped; L.AskNote = skipped; }
                 }
-                RequestTickHistory(L, true);
+                try { RequestTickHistory(L, true); }
+                catch (Exception)
+                {
+                    if (hours > 0) QuotesNotAsked(L.Root);   // the quotes are never asked: free the gate
+                    throw;
+                }
                 if (hours > 0)
                 {
                     RequestQuotes(L, MarketDataType.Bid, true);
@@ -2335,6 +2340,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 int n;
                 if (QuotesOutstanding.TryGetValue(root, out n) && n > 0) QuotesOutstanding[root] = n - 1;
             }
+        }
+
+        // BeginQuotes took the gate but the load failed before either quote request was made (the trade request threw).
+        private static void QuotesNotAsked(string root)
+        {
+            lock (QuotesOutstanding) QuotesOutstanding[root] = 0;
         }
 
         private static int QuotesOutstandingFor(string root)
