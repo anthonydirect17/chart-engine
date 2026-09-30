@@ -125,7 +125,7 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 
 | Message | Fields and bounds |
 |---|---|
-| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
+| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `10` to `34` depending on the time of day (1.7.0: one hour more than the session start, so the backfill reaches into the previous session's last trading hour) (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
 | `ping` | `c` (the page clock). Allowed, but the chart does not send it today. |
 
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC

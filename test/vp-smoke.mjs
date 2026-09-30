@@ -162,11 +162,8 @@ try {
   await p.click('#indBody [data-act="gear"][data-id="vp"]');
   check(JSON.stringify((await state(p)).pressed) === '["full"]' && /Hours/.test(await p.textContent('#indBody .ind-set[data-id="vp"]')), 'its gear panel: the Session / RTH switch shows Session');
   await p.screenshot({ path: path.join(SHOTS, 'vp-indicators-menu.png') });
-  await p.click('#indBody [data-f="add:vp"]');
-  const addNote = await p.textContent('#indLive');
-  await p.keyboard.press('Escape');
-  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,ib,delta,fills' && /added without a chip/.test(addNote),
-    'added to a full strip (the delta pane is the main pane\'s sixth chip since 1.7.0): no chip, and the menu says so');
+  await p.click('#indBody [data-f="add:vp"]'); await p.keyboard.press('Escape');
+  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,ib,vp,fills', 'added: its chip on the strip (the sixth: full; the delta pane has none)');
   await p.mouse.move(10, 400); await p.waitForTimeout(600);
   const s1 = await state(p), px1 = await pixels(p);
   check(s1.on === true && s1.has === true && s1.rth === false, 'on: the chart has a session profile');

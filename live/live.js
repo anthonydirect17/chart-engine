@@ -91,9 +91,14 @@ const V1_LISTED = ['volume', 'vwap', 'levels', 'fills', 'ib'];
  * buys minus sells around zero ('bar') (Anthony's ruling 2026-09-30).
  */
 const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] }, delta: { show: ['cum', 'bar'] } };
-/* The delta pane's height (1.7.0), a share of the chart height, per pane: the default and the least and most kept
-   (the engine's PANE_RATIO, PANE_RATIO_MIN and PANE_RATIO_MAX; it also keeps both panes at least a few rows tall). */
-const PANE_HEIGHTS = { delta: { def: 0.2, min: 0.08, max: 0.6 } };
+/* The delta pane's height (1.7.0), a share of the chart height, per pane: the default and the least and most kept,
+   read from the engine (PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX; review N8), which also keeps both panes at least a
+   few rows tall. The engine loads before this file (live/EMBED.md); in Node it is required. */
+const ENGINE = typeof self !== 'undefined' && self.ChartEngine ? self.ChartEngine : require('../src/chart-engine.js');
+const PANE_HEIGHTS = { delta: { def: ENGINE.PANE_RATIO, min: ENGINE.PANE_RATIO_MIN, max: ENGINE.PANE_RATIO_MAX } };
+/* On by default without a chip (review N5): the main pane's strip keeps the five chips of 1.6.0, so an indicator added
+   (the volume profile) still gets the sixth; pinning the delta pane gives it one like any other. */
+const UNPINNED_BY_DEFAULT = ['delta'];
 const MAIN_PANE = 'main';
 
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
@@ -146,7 +151,7 @@ function indicatorOptionAllowed(id, key, value) {
 const isList = v => Array.isArray(v);
 function defaultPane(paneId) {
   const main = paneId === MAIN_PANE, ind = {};
-  for (const id of IND_IDS) { const on = main && DEFAULT_INDICATORS[id]; ind[id] = { on, shown: true, pin: on }; }
+  for (const id of IND_IDS) { const on = main && DEFAULT_INDICATORS[id]; ind[id] = { on, shown: true, pin: on && !UNPINNED_BY_DEFAULT.includes(id) }; }
   return { ind, recent: [], restore: null };
 }
 function cleanIdList(v, max) {
@@ -164,15 +169,17 @@ function cleanPane(v, paneId) {
     if (!x || typeof x !== 'object') continue;
     for (const f of ['on', 'shown', 'pin']) if (typeof x[f] === 'boolean') out.ind[id][f] = x[f];
   }
-  /* 1.7.0 (Anthony): a main pane saved before the delta pane existed has no delta key, so it gets the delta pane on
-     and shown, with a chip only while the strip has room (a 1.6.0 main pane with the profile pinned has six). An
-     explicit off (a saved delta entry) is kept as it is. */
-  if (paneId === MAIN_PANE && !(own(ind, 'delta') && ind.delta && typeof ind.delta === 'object')) {
-    out.ind.delta.pin = false;
-    out.ind.delta.pin = pinnedCount(out) < pinMax();
-  }
   out.recent = cleanIdList(v.recent, RECENT_MAX);
   out.restore = isList(v.restore) ? cleanIdList(v.restore) : null;
+  /* 1.7.0 (Anthony): a main pane saved before the delta pane existed has no delta key, so it gets the delta pane on,
+     with no chip (review N5). Saved after Hide all (nothing shown, a Restore mix kept), it comes back as it was: the
+     delta pane hidden with the rest, and Restore brings back the old mix with the delta pane (review N6). An explicit
+     entry (off, hidden, pinned) is kept as it is. */
+  if (paneId === MAIN_PANE && !(own(ind, 'delta') && ind.delta && typeof ind.delta === 'object')) {
+    const hiddenAll = !!out.restore && out.restore.length > 0 && !IND_IDS.some(id => id !== 'delta' && out.ind[id].on && out.ind[id].shown);
+    out.ind.delta = { on: true, shown: !hiddenAll, pin: false };
+    if (hiddenAll && !out.restore.includes('delta')) out.restore = out.restore.concat('delta');
+  }
   return out;
 }
 /*
@@ -182,8 +189,7 @@ function cleanPane(v, paneId) {
  * only the ones that were on are on its chart (pinned); an off there is off, as on a new pane. The volume profile is
  * read like the others: a 1.5.3 save never has a vp key, so it starts off after upgrading from 1.5.3; a save from the
  * unreleased profile test build that had it on keeps it on (shown and pinned, the main pane's sixth chip). The delta
- * pane (1.7.0) is on for the main pane, shown, with a chip while the strip has room (the sixth after a 1.5.3 save;
- * none after the profile test build's six); off on every other pane.
+ * pane (1.7.0) is on for the main pane, shown, with no chip (review N5); off on every other pane.
  */
 function paneFromV1(v1, paneId) {
   const main = paneId === MAIN_PANE;
@@ -193,8 +199,8 @@ function paneFromV1(v1, paneId) {
     const listed = main && V1_LISTED.includes(id);                 // the main pane's own five (never the volume profile)
     out.ind[id] = listed ? { on: true, shown: flags[id], pin: true } : { on: flags[id], shown: true, pin: flags[id] };
   }
-  /* 1.7.0: the main pane gets the delta pane on (Anthony), like a 1.6.0 save without it, and a chip while there is room */
-  if (main) { out.ind.delta = { on: true, shown: true, pin: false }; out.ind.delta.pin = pinnedCount(out) < pinMax(); }
+  /* 1.7.0: the main pane gets the delta pane on (Anthony), like a 1.6.0 save without it, with no chip (review N5) */
+  if (main) out.ind.delta = { on: true, shown: true, pin: false };
   return out;
 }
 function copyPane(st) {
@@ -697,8 +703,17 @@ function start(container, opt, PAGE) {
   let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
-  const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
-  const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
+  /*
+   * Minute and hour views load no tick history (a fast load), so their delta counts from the first complete bar after
+   * the page went live, labelled (review S2: Anthony keeps this for now). To load the ticks back to 18:00 whenever the
+   * delta pane is on, set DELTA_WANTS_SESSION_TICKS to true: ticksWanted, ticksMissing and the Indicators switch
+   * (applyIndicators) follow it.
+   */
+  const DELTA_WANTS_SESSION_TICKS = false;
+  const sessionTicks = () => DELTA_WANTS_SESSION_TICKS && IS.ind.delta.on;
+  const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : sessionTicks() ? BB.sessionTickHours(etNow(), SESSION) : 0;
+  const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed)
+    : TF[S.tf].sec < 60 ? D.tickHours === 0 : sessionTicks() && D.tickFrom > BB.sessionStartOf(etNow(), SESSION);
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -721,7 +736,7 @@ function start(container, opt, PAGE) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
-    D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);
+    deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -739,8 +754,6 @@ function start(container, opt, PAGE) {
   function rebuild() {
     if (!D.ready) return;
     const tf = TF[S.tf];
-    const cd = deltaNew();                                // the delta pane is rebuilt with the bars, from the same store
-    let cdFed = false;
     chart.setBarSeconds(tf.sec);
     if (tf.mode === 'time' && tf.sec >= 60) {
       D.cur = null;
@@ -750,9 +763,7 @@ function start(container, opt, PAGE) {
     } else {
       D.cur = tf.mode === 'range' ? rangeBuilder() : new BarBuilder({ mode: 'time', seconds: tf.sec, tick: D.tick, sessionStart: SESSION });
       const from = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
-      // range bars and the delta pane in one pass over the store, the delta told which bar each trade made (1.7.0)
-      if (cd && tf.mode === 'range') { D.ticks.feedSides(pairFeed(D.cur, cd), from); cdFed = true; }
-      else D.ticks.feed(D.cur, from);
+      D.ticks.feed(D.cur, from);
       const partial = tf.mode === 'range' ? BB.partialStart(D.ticks, from, SESSION) : null;
       if (partial !== null) setStatus('Range bars start at ' + U.fmtHM(partial) + ' ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from NinjaTrader\'s.', '');
       chart.setBars(D.cur.bars, { barSeconds: tf.sec });
@@ -760,8 +771,7 @@ function start(container, opt, PAGE) {
       else chart.setCountdown(null);
       if (!D.ticks.length) setStatus('No tick history came back from NinjaTrader, so ' + tf.label + ' bars start with the next live tick.', 'warn');
     }
-    if (cd && !cdFed) D.ticks.feedSides(cd, 0);
-    deltaSet(cd);
+    deltaStart();                                         // the delta pane, from the same store, in slices (review S5)
     updateLevels();
     applyMarkers();
     legendKey = '';
@@ -896,44 +906,66 @@ function start(container, opt, PAGE) {
     return m ? (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 3004 : null;
   }
   /*
-   * From when the page holds every trade, for the delta: with only live trades (no tick history, or none came back),
-   * from the first trade it gets ('first'; the bar holding it is left out, it may have started before). With a tick
-   * backfill, from the start asked for; later when the first trade came more than 10 minutes after it (NinjaTrader
-   * sent less) or the page dropped its oldest trades; but a first trade within 10 minutes after an 18:00 session start
-   * the request reached back past means nothing traded before it (the daily break, a weekend): from that start.
+   * From when the page provably holds every trade, for the delta (review B1, S1, S3: by construction, nothing guessed):
+   *   - the store's first trade t0: every trade from it on is held (the tick backfill is one run up to ChartBridge's
+   *     seam, then every live trade), but not another trade of the same instant, or of the same bar, before it: from
+   *     just after it. A session is whole only when the backfill reaches back past its 18:00 start (a trade stamped
+   *     before it is in the store). A backfill cut short (The Desk's relay caps tickHours at 8, or NinjaTrader sent
+   *     less) that starts minutes after 18:00 is not taken as the whole session;
+   *   - the moment the page went live (D.liveFrom, the PC's clock at `ready`, plus LIVE_MARGIN for a PC clock behind
+   *     the exchange's): every trade after it came in live, so a session that starts after it is whole, trade or no
+   *     trade before it (a minute view opened on Sunday afternoon or in the 17:00 to 18:00 break);
+   *   - whichever is earlier; once the page has dropped its oldest trades only the store counts (a rebuild has only it).
+   * A session that started before that moment counts from 0 on its first complete bar, labelled with that bar's exact
+   * start ("from 18:05:00.3 ET, not 18:00"), never silently.
    */
+  const LIVE_MARGIN = 5;
   function deltaCoveredFrom() {
-    if (!D.ticks.length) return 'first';
-    const t0 = D.ticks.time(0);
-    if (!(D.tickHours > 0)) return t0 + 1e-6;
-    if (D.trimmed) return t0;
-    const s0 = BB.sessionStartOf(t0, SESSION);
-    if (s0 >= D.tickFrom && t0 - s0 <= 600) return s0;
-    return t0 - 600 <= D.tickFrom ? D.tickFrom : t0;
+    const live = D.liveFrom === null ? Infinity : D.liveFrom + LIVE_MARGIN;
+    if (!D.ticks.length) return live;
+    const t0 = D.ticks.time(0) + 1e-6;
+    return D.trimmed ? t0 : Math.min(t0, live);
   }
   const rangeBuilder = () => new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION });
-  /* A new, empty delta core for the view; null when the pane is not shown or this ChartBridge sends no sides. */
-  function deltaNew() {
-    if (!S.layers.delta || !D.ready || bridgeSides() === false) return null;
-    const tf = TF[S.tf];
-    return new CE.CumulativeDelta({ sessionStart: SESSION, seconds: tf.mode === 'time' ? tf.sec : 0, coveredFrom: deltaCoveredFrom() });
-  }
+  /* The delta is kept while it is on the chart, shown or hidden (review S5: showing it again is then at once; a trade
+     costs O(1)); not when it is off the chart or this ChartBridge sends no sides. */
+  const deltaWanted = () => IS.ind.delta.on && D.ready && bridgeSides() !== false;
   /* Feeds a range bar builder and the delta core together: each trade goes to the delta with the bar it made. */
   const pairFeed = (builder, cd) => ({ addQuiet(t, p, v, s, sm) { builder.addQuiet(t, p, v); const b = builder.bars; cd.add(t, v, s, b[b.length - 1].t, sm); } });
-  /* The delta alone (shown, or the sides became known): time bars bucket by themselves; range bars need a builder, and
-     a new one fed the same trades from the same place makes the same bars as the chart's. */
-  function deltaBuild() {
-    const cd = deltaNew();
-    if (cd) {
-      if (TF[S.tf].mode === 'range') D.ticks.feedSides(pairFeed(rangeBuilder(), cd), BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION));
-      else D.ticks.feedSides(cd, 0);
-    }
-    deltaSet(cd);
+  /*
+   * Build the delta from the store in slices of at most DELTA_SLICE_MS, one task each, so no frame waits on it (review
+   * S5: 1.8 million trades took one 150 to 380 ms task). Time bars bucket by themselves; range bars go through a new
+   * builder fed the same trades from the same place, which makes the same bars as the chart's. Live trades keep going
+   * into the store meanwhile and the build reads on to its end; only then is the delta handed to the chart (never a
+   * half-built value shown as the current one) and fed trade by trade in onTick. A new load, bar type or trim starts over.
+   */
+  const DELTA_SLICE_MS = 8, DELTA_SLICE_TRADES = 20000;
+  let deltaJob = null;
+  function deltaStart() {
+    deltaJob = null;
+    if (!deltaWanted()) { deltaSet(null); return; }
+    const tf = TF[S.tf], range = tf.mode === 'range';
+    const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: deltaCoveredFrom() });
+    const job = deltaJob = { cd, feed: range ? pairFeed(rangeBuilder(), cd) : cd, i: range ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0 };
+    deltaSet(null);
+    const slice = () => {
+      if (destroyed || job !== deltaJob) return;
+      const t0 = performance.now();
+      do job.i = D.ticks.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
+      while (job.i < D.ticks.length && performance.now() - t0 < DELTA_SLICE_MS);
+      if (job.i < D.ticks.length) { later(slice, 0); return; }
+      deltaJob = null;
+      deltaSet(job.cd);
+    };
+    slice();                                                // a small store is done at once
   }
+  /* Off the chart: no delta at all. */
+  function deltaStop() { deltaJob = null; deltaSet(null); }
   function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); }
+  const deltaBuilding = () => deltaJob !== null;
   /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
      session may count from later than 18:00, for its title. */
-  const deltaWhy = () => D.tickHours > 0 ? 'the tick history starts later' : 'this view loads no tick history';
+  const deltaWhy = () => D.trimmed ? 'the oldest trades were dropped' : D.tickHours > 0 ? 'the tick history starts later' : 'this view loads no tick history';
   function deltaView() { chart.setDeltaView({ note: S.layers.delta && D.ready && bridgeSides() === false ? OLD_BRIDGE : '', reason: deltaWhy() }); }
   /* "Delta +12,345" in the legend (the bar under the crosshair, else the newest), "Bar delta" in bar mode, the start
      when the session counts from later than 18:00, and the unknown sides (they add nothing) when there are any. */
@@ -958,7 +990,7 @@ function start(container, opt, PAGE) {
     const key = [cd.version, legendBarT, bar, v].join('|');
     if (!force && key === deltaLegendKey) return;
     deltaLegendKey = key;
-    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' from ' + U.fmtHM(ses.from) : ''));
+    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' from ' + U.fmtExact(ses.from) : ''));
     const dv = $('lgDv');
     put(dv, 'textContent', v === null ? '-' : U.fmtSigned(v, 0));
     put(dv, 'className', 'dv' + (v > 0 ? ' up' : v < 0 ? ' down' : ''));
@@ -966,7 +998,7 @@ function start(container, opt, PAGE) {
     put(du, 'hidden', !(unk > 0));
     put(du, 'textContent', unk > 0 ? ' · ' + U.fmtPrice(unk, 0) + ' unknown' : '');
     put(el, 'title', (bar ? 'Bar delta: each bar\'s market buys minus market sells' : 'Cumulative delta: market buys minus market sells since ' +
-      (ses && ses.partial ? U.fmtHM(ses.from) + ' ET, not 18:00: ' + deltaWhy() : '18:00 ET')) + '. Sides from ChartBridge; unknown sides add nothing.');
+      (ses && ses.partial ? U.fmtExact(ses.from) + ' ET, not 18:00: ' + deltaWhy() : '18:00 ET')) + '. Sides from ChartBridge; unknown sides add nothing.');
   }
   /*
    * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
@@ -1016,9 +1048,12 @@ function start(container, opt, PAGE) {
     if (D.sides === null) {                            // the first trade of a load with no backfill says whether sides come
       const before = bridgeSides();
       D.sides = typeof m.s === 'number';
-      if (bridgeSides() !== before && S.layers.delta) { deltaBuild(); deltaFed = true; }   // built from the store, this trade in it
+      if (bridgeSides() !== before && IS.ind.delta.on) { deltaStart(); deltaFed = true; }   // built from the store, this trade in it
     }
-    if (D.ticks.length > 2500000) { D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; }   // the first session left is partial now
+    if (D.ticks.length > 2500000) {                      // the first session left is partial now
+      D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true;
+      if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store moved under a build: start it over
+    }
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
     const tf = TF[S.tf];
@@ -1568,8 +1603,12 @@ function start(container, opt, PAGE) {
       if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
       if (k === 'ib') ibNote(D.ib);
       if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
-      if (k === 'delta') deltaBuild();                             // likewise the delta pane (1.7.0)
     }
+    // the delta pane (1.7.0): kept while on the chart, shown or hidden, so the chip or the switch shows it at once
+    // (review S5); made when it comes onto the chart (with the ticks back to 18:00 first when DELTA_WANTS_SESSION_TICKS)
+    if (deltaWanted() && !D.delta && !deltaBuilding()) { if (sessionTicks() && ticksMissing()) subscribe(S.root); else deltaStart(); }
+    else if (!IS.ind.delta.on && (D.delta || deltaBuilding())) deltaStop();
+    else { deltaView(); deltaLegend(true); }
     legendKey = '';
     syncIndicators();
   }

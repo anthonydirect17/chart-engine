@@ -6,7 +6,10 @@
 // type change, never per trade; the Show option (Cumulative or Bar delta) from the gear and back, both after a reload;
 // the divider dragged and keyed, the height saved per pane; the chip and Hide all / Restore; ChartBridge 0.3.3 (no
 // sides): nothing drawn and the note; a history that starts after 18:00 labelled; a second pane off by default and
-// added from the menu, with setIndicatorOption under its prefix; the 18:00 ET rollover on a clock set to 17:59:30.
+// added from the menu, with setIndicatorOption under its prefix; the 18:00 ET rollover on a clock set to 17:59:35.
+// Review round 1: a backfill cut short after 18:00 (The Desk's relay capping tickHours at 8, and NinjaTrader sending
+// less) is labelled with its exact start, never taken as the whole session (B1); a minute view opened before 18:00
+// counts the session whole from 18:00 (S1); showing the hidden pane reuses the delta kept meanwhile (S5).
 // Screenshots on the dark and black grounds, cumulative and bar, and the old-bridge note, labelled as sample data.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -60,8 +63,11 @@ async function startBridge(offset, extra) {
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 /* The page's clock `offset` seconds off; NQ on `tf` on a first visit; every NQ trade the page receives recorded with its
-   side (the backfill again after each new subscribe); every CumulativeDelta the page makes counted. */
-async function context(offset, tf, extra) {
+   side (the backfill again after each new subscribe); every CumulativeDelta the page makes counted. `opts.relayHours`
+   caps the subscribe's tickHours on its way out, as The Desk's relay does (THEDESK_LIVE_RELAY_TICK_HOURS, default 8);
+   `opts.cmeBreak` drops the tick backfill and every trade stamped 17:00 to 18:00 ET, as a minute view on CME gets it. */
+async function context(offset, tf, extra, opts) {
+  const o = opts || {};
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 2 });
   await ctx.addInitScript(`(() => {
     const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000};
@@ -70,11 +76,25 @@ async function context(offset, tf, extra) {
       if (!localStorage.getItem('live-range-v2')) localStorage.setItem('live-range-v2', JSON.stringify({ NQ: 40 }));
       ${extra || ''}
     } catch (e) {}
+    const relayHours = ${o.relayHours || 0}, cmeBreak = ${!!o.cmeBreak};
+    window.__asked = [];
+    if (relayHours) {
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (x) {
+        try { const m = JSON.parse(x); if (m.type === 'subscribe') { window.__asked.push(m.tickHours); if (m.tickHours > relayHours) { m.tickHours = relayHours; x = JSON.stringify(m); } } } catch (e) {}
+        return send.call(this, x);
+      };
+    }
+    const inBreak = t => { const s = ((t % 86400) + 86400) % 86400; return s >= 61200 && s < 64800; };
     const rec = window.__trades = [];
     let fresh = false;
     const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
     Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
       d.set.call(this, ev => {
+        if (cmeBreak && typeof ev.data === 'string') {
+          if (ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); m.ticks = []; ev = { data: JSON.stringify(m) }; }
+          else if (ev.data.startsWith('{"type":"tick"') && inBreak(JSON.parse(ev.data).t)) return;
+        }
         if (typeof ev.data === 'string') {
           if (ev.data.startsWith('{"type":"history"')) fresh = true;
           else if (ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') { if (fresh) { rec.length = 0; fresh = false; } for (const x of m.ticks) rec.push(x); } }
@@ -94,7 +114,10 @@ async function context(offset, tf, extra) {
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   return ctx;
 }
-const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 30000 }).then(() => p.waitForTimeout(800));
+/* LIVE, and the delta built (it is built in slices after a load or a bar type change, review S5) or known absent. */
+const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 30000 })
+  .then(() => p.waitForFunction(() => { const c = window.liveChart; return !c || !c.getLayers().delta || !!c.getDelta() || !!c.deltaPane().note; }, null, { timeout: 20000 }))
+  .then(() => p.waitForTimeout(800));
 async function openPage(ctx, url) {
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
@@ -164,7 +187,7 @@ try {
   check(s.layer === true && s.pane.on && s.pane.top > s.pane.plotHeight && s.pane.height > 100, 'on by default on the main pane: a pane under the chart, ' + s.pane.height + ' px from y ' + s.pane.top + ' (the chart above ends at ' + s.pane.plotHeight + ')');
   const box = await p.locator('#chart canvas').boundingBox(), area = box.height - 26;
   check(Math.abs(s.pane.height / area - 0.2) < 0.01, 'about 20% of the chart area: ' + (s.pane.height / area * 100).toFixed(1) + '%');
-  check(s.count === '6/6' && s.chips === 'volume+,vwap+,levels+,ib+,delta+,fills+', 'in the Indicators count and the chip strip: ' + s.count + ' ' + s.chips);
+  check(s.count === '6/6' && s.chips === 'volume+,vwap+,levels+,ib+,fills+', 'in the Indicators count, with no chip (review N5: the strip keeps the 1.6.0 five, room for a sixth): ' + s.count + ' ' + s.chips);
   check(px.pane.up + px.pane.down > 200 && px.pane.up > 0 && px.pane.down > 0 && px.plot.up + px.plot.down > 1000, 'candles drawn in the pane in both candle colors: ' + JSON.stringify(px));
   check(sameSums(s), 'the delta equals every trade the page received, per session (buys, sells, unknown, trades, last close): ' + JSON.stringify(s.delta.sessions.map(x => [x.buy, x.sell, x.unknown, x.n, x.lastClose])));
   check(s.delta.sessions.every(x => !x.partial && x.firstOpen === 0), 'each session from 18:00 ET, opening at 0');
@@ -228,7 +251,7 @@ try {
   await p.click('#tfSeg >> text="5m"'); await live(p);
   s = await state(p);
   check(s.cores === coresA + 1 && sameSums(s) && s.delta.bars <= await p.evaluate(() => window.liveChart.bars().length), '5m: one rebuild from the store (' + (s.cores - coresA) + '), the same totals for the session held in full; the one before counts from ' +
-    s.delta.sessions.filter(x => x.partial).map(x => U.fmtHM(x.from)).join() + ' (the ticks kept start there)');
+    s.delta.sessions.filter(x => x.partial).map(x => U.fmtExact(x.from)).join() + ' (the ticks kept start there)');
   await p.click('#tfSeg >> text="15s"'); await live(p);
   s = await state(p);
   const barMatch = await p.evaluate(() => { const b = new Set(window.liveChart.bars().map(x => x.t)); return window.liveChart.getDelta().bars.every(d => b.has(d.t)); });
@@ -238,7 +261,9 @@ try {
   /* the divider: a drag, then the keys; saved per pane, kept after a reload */
   s = await state(p);
   const div = await p.locator('#chart .ce-divider').boundingBox();
-  check(!!div && Math.abs(div.y + div.height / 2 - (box.y + s.pane.plotHeight + 2)) <= 2, 'the divider sits between the chart and the pane');
+  check(!!div && Math.abs(div.y - (box.y + s.pane.plotHeight)) <= 1 && div.y + div.height <= box.y + s.pane.top + 6.5 && div.x + div.width <= box.x + box.width - 78 + 1,
+    'the divider\'s band: from where the plot ends, into the pane by at most 6 px, not over the price axis (review N2): ' + JSON.stringify(div));
+  check(await p.evaluate(() => { const b = document.querySelector('#chart .ce-live'); return getComputedStyle(b).bottom; }) === Math.round(box.height - s.pane.plotHeight + 12) + 'px', '"Jump to live" sits above the pane (review N3)');
   await p.mouse.move(div.x + 300, div.y + div.height / 2); await p.mouse.down();
   await p.mouse.move(div.x + 300, div.y + div.height / 2 - 120, { steps: 6 }); await p.mouse.up();
   await p.waitForTimeout(300);
@@ -260,14 +285,20 @@ try {
   check(Math.abs(back.pane.ratio - set.pane.ratio) < 0.001 && Math.abs(back.pane.height - set.pane.height) <= 1, 'the height kept after a reload: ' + back.pane.ratio + ' (' + back.pane.height + ' px)');
   check(JSON.stringify(Object.keys(await saved(p, 'live-pane-heights-v1'))) === '["main"]', 'saved under the main pane only');
 
-  /* the chip, and Hide all / Restore */
+  /* the chip (pinned first: none by default, review N5), and Hide all / Restore */
+  await menu(p); await p.click('#indBody [data-act="pin"][data-id="delta"]'); await p.keyboard.press('Escape');
+  check((await state(p)).chips === 'volume+,vwap+,levels+,ib+,delta+,fills+', 'pinned from the menu: its chip, the sixth');
+  const coresShown = (await state(p)).cores;
   await p.click('#indChips .ind-chip[data-id="delta"]'); await p.waitForTimeout(300);
   s = await state(p);
   check(!s.layer && !s.pane.on && s.pane.plotHeight === area && s.chips.includes('delta-') && s.legend === null, 'the chip hides it: no pane, the chart takes the height back, the chip dashed');
   check((await saved(p, 'live-indicators-v2')).main.ind.delta.shown === false, 'hidden and saved, still on the chart');
-  await p.click('#indChips .ind-chip[data-id="delta"]'); await p.waitForTimeout(400);
+  await p.waitForTimeout(1500);                                                  // live trades meanwhile: the hidden delta keeps them
+  const shownAt = await p.evaluate(() => { document.querySelector('#indChips .ind-chip[data-id="delta"]').click(); return !!window.liveChart.getDelta() && window.liveChart.getLayers().delta; });
+  await p.waitForTimeout(400);
   s = await state(p);
-  check(s.layer && s.pane.on && sameSums(s) && Math.abs(s.pane.ratio - set.pane.ratio) < 0.001, 'the chip shows it again: rebuilt from the store, the same height');
+  check(shownAt && s.cores === coresShown && s.layer && s.pane.on && sameSums(s) && Math.abs(s.pane.ratio - set.pane.ratio) < 0.001,
+    'the chip shows it again at once: the same delta, kept while hidden (no new one: ' + coresShown + ' then ' + s.cores + '), still equal to every trade received, the same height (review S5)');
   await menu(p); await p.click('#indHideAll');
   s = await state(p);
   check(!s.layer && !s.pane.on && s.count === '0/6', 'Hide all hides the pane too: ' + s.count);
@@ -312,9 +343,9 @@ try {
     const c4 = await context(o, 's15');
     const q = await openPage(c4, `http://localhost:${b4.port}/live/`);
     const st = await state(q), ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
-    check(!!ses && ses.partial && ses.from > ses.start + 3600 && ses.firstOpen === 0, '15s with 2 hours of ticks: the session counts from ' + (ses && U.fmtHM(ses.from)) + ', flagged as partial');
-    check(st.pane.title.endsWith('from ' + U.fmtHM(ses.from) + ' ET, not 18:00: the tick history starts later') && st.legend.startsWith('Delta from ' + U.fmtHM(ses.from)), 'said in the pane ("' + st.pane.title + '") and the legend ("' + st.legend + '")');
-    check(st.delta.covered > ses.start && ses.from >= st.delta.covered && ses.from - st.delta.covered < 15, 'it counts from the first 15 s bar that starts once the page has every trade (from ' + U.fmtHM(st.delta.covered) + ')');
+    check(!!ses && ses.partial && ses.from > ses.start + 3600 && ses.firstOpen === 0, '15s with 2 hours of ticks: the session counts from ' + (ses && U.fmtExact(ses.from)) + ', flagged as partial');
+    check(st.pane.title.endsWith('from ' + U.fmtExact(ses.from) + ' ET, not 18:00: the tick history starts later') && st.legend.startsWith('Delta from ' + U.fmtExact(ses.from)), 'said in the pane ("' + st.pane.title + '") and the legend ("' + st.legend + '")');
+    check(st.delta.covered > ses.start && ses.from >= st.delta.covered && ses.from - st.delta.covered <= 15, 'it counts from the first 15 s bar that starts once the page has every trade (from ' + U.fmtExact(st.delta.covered) + ')');
     await shot(q, 'delta-partial-history-15s.png', 'Delta from a later start, labelled');
     await q.click('#tfSeg >> text="1m"'); await live(q);
     const m1 = await state(q);
@@ -370,6 +401,52 @@ try {
     check(hs.desk && Object.keys(hs.desk).join() === 'pane-2' && hs.desk['pane-2'].delta === hs.ratio && hs.page === null, 'pane-2\'s height saved under desk: for pane-2: ' + JSON.stringify(hs));
     await host.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
     await c6.close(); b6.kill();
+  }
+
+  /* ---------------- a backfill cut short after 18:00 (review B1): labelled with its exact start, never the whole session */
+  {
+    const tueToFri = bt => { const d = new Date(bt * 1000).getUTCDay(); return d >= 2 && d <= 5; };
+    const partialFrom = async (label, bridgeFlags, opts) => {
+      const o = offsetTo(2, 5, 0, tueToFri);                       // 02:05 ET: Range asks 11 hours, a cap of 8 starts at 18:05
+      const bc = await startBridge(o, bridgeFlags);
+      const cc = await context(o, 'range', '', opts);
+      const q = await openPage(cc, `http://localhost:${bc.port}/live/`);
+      const st = await state(q), ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
+      const r = await q.evaluate(() => ({ first: window.__trades.length ? window.__trades[0][0] : null, asked: window.__asked }));
+      const late = r.first - (ses ? ses.start : 0);                 // 8 hours before the request: 18:05, give or take the page's load time
+      check(!!ses && ses.partial && ses.from > r.first && late >= 180 && late < 420 && ses.firstOpen === 0,
+        label + ': the first trade at ' + U.fmtExact(r.first) + ' ET (asked ' + (r.asked.length ? r.asked.join() + ' hours, sent on as 8' : 'more than was sent') + '): the session counts from ' + (ses && U.fmtExact(ses.from)) + ', flagged partial');
+      check(st.pane.title.endsWith('from ' + U.fmtExact(ses.from) + ' ET, not 18:00: the tick history starts later') && st.legend.startsWith('Delta from ' + U.fmtExact(ses.from)),
+        label + ': said in the pane ("' + st.pane.title + '") and the legend ("' + st.legend + '"), never a plain "Cumulative delta"');
+      const inFrom = await q.evaluate(f => { let b = 0, s = 0; for (const [t, , v, sd] of window.__trades) if (t >= f) { if (sd === 1) b += v; else if (sd === -1) s += v; } return [b, s]; }, ses.from);
+      check(inFrom[0] === ses.buy && inFrom[1] === ses.sell, label + ': what it counts is every trade from that start: ' + JSON.stringify([inFrom, [ses.buy, ses.sell]]));
+      await shot(q, 'delta-cut-short-' + (opts ? 'relay' : 'ninjatrader') + '.png', label + ': labelled from ' + U.fmtExact(ses.from));
+      await cc.close(); bc.kill();
+    };
+    await partialFrom('The Desk\'s relay capping tickHours at 8', [], { relayHours: 8 });
+    await partialFrom('NinjaTrader sending 8 hours of the 11 asked', ['--tick-hours-max=8'], null);
+  }
+
+  /* ---------------- a minute view opened before 18:00 (review S1): the session is whole from 18:00 */
+  {
+    const o = offsetTo(17, 59, 20, monToThu);
+    const b8 = await startBridge(o);
+    const c8 = await context(o, 'm1', '', { cmeBreak: true });      // no tick backfill (minute view), nothing trades 17:00 to 18:00
+    const q = await openPage(c8, `http://localhost:${b8.port}/live/`);
+    const endAt = Date.now() + 50000;
+    let st = await state(q);
+    while (Date.now() < endAt) {
+      await q.waitForTimeout(1000);
+      st = await state(q);
+      const x = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
+      if (x && x.n > 20 && x.start % 86400 === S18 && (await q.evaluate(() => Date.now() / 1000)) % 60 > 5) break;
+    }
+    const ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
+    const r = await q.evaluate(() => { let b = 0, s = 0, n = 0, first = null; for (const [t, , v, sd] of window.__trades) { if (first === null) first = t; n++; if (sd === 1) b += v; else if (sd === -1) s += v; } return { b, s, n, first }; });
+    check(!!ses && !ses.partial && ses.from - ses.start < 60 && ses.firstOpen === 0 && U.fmtHM(r.first) === '18:00', '1m opened at 17:59:20 (first trade the 18:00 open, ' + U.fmtExact(r.first) + '): the session is whole, from its first bar at ' + (ses && U.fmtExact(ses.from)) + ', opening at 0');
+    check(ses && ses.buy === r.b && ses.sell === r.s && ses.n === r.n && !/not 18:00/.test(st.pane.title), 'every trade received counted, the open\'s bar too (' + r.n + ' trades); "' + st.pane.title + '"');
+    await shot(q, 'delta-1m-opened-before-1800.png', '1m opened at 17:59:20: whole from 18:00');
+    await c8.close(); b8.kill();
   }
 
   /* ---------------- 18:00 ET: a new session starts at 0 (the clock set to 17:59:35 on a Monday to Thursday) */

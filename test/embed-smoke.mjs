@@ -201,7 +201,7 @@ try {
   check(layers[0].volume && !layers[0].vwap && layers[0].levels && layers[1].volume && layers[1].vwap && !layers[1].levels, 'indicator choices stay per pane: ' + JSON.stringify(layers));
   // pane A (main): the five and the delta pane (1.7.0) less VWAP (hidden, still on its chart); pane B (new): the two added
   check(await page.textContent('#paneA .ind-count') === '5/6' && await page.textContent('#paneB .ind-count') === '2/2' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane: ' + await page.textContent('#paneA .ind-count') + ' ' + await page.textContent('#paneB .ind-count'));
-  check(await page.$$eval('#paneB .ind-chip', c => c.map(x => x.dataset.id).join()) === 'volume,vwap' && await page.$$eval('#paneA .ind-chip', c => c.length) === 6, 'chips: pane A\'s six (the delta pane\'s too), pane B\'s two added ones (added ones get a chip)');
+  check(await page.$$eval('#paneB .ind-chip', c => c.map(x => x.dataset.id).join()) === 'volume,vwap' && await page.$$eval('#paneA .ind-chip', c => c.length) === 5, 'chips: pane A\'s five (the delta pane on, with no chip), pane B\'s two added ones (added ones get a chip)');
   check(await page.evaluate(() => window.__a.chart.deltaPane().on && !window.__b.chart.deltaPane().on), 'the delta pane on the main pane only (1.7.0)');
   // one account picker (1.6.0): no order bar in a mounted chart, so a compact picker in its toolbar drives the fills
   {

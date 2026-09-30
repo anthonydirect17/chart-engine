@@ -196,7 +196,7 @@ class BarBuilder {
 
 /*
  * TickStore: the page's trades [t, p, v] kept in columns of 64-bit floats, in blocks of 65,536, instead of one small
- * array per trade. The range view holds up to 33 hours of ticks (about 2 million on a busy NQ day): as arrays that
+ * array per trade. The range view holds up to 34 hours of ticks (about 2 million on a busy NQ day): as arrays that
  * was about 2 million objects (some 150 MB of JavaScript heap) for the garbage collector to walk and move, and the
  * page's frames waited on it. Blocks live outside that heap, are never copied as the store grows, and the oldest
  * are dropped whole when the page trims its history.
@@ -302,10 +302,14 @@ function rangeHistoryFrom(now, s) {
   const cur = sessionStartOf(now, s);
   return now - cur < YOUNG_SESSION ? cur - DAY : cur;
 }
-function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 1); }
-/* The tickHours that reach back to this session's start (1.7.0: for minute views when the delta pane loads a whole
-   session's ticks; off today, see DELTA_WANTS_SESSION_TICKS in live.js). */
-function sessionTickHours(now, s) { return Math.min(48, Math.ceil((now - sessionStartOf(now, s)) / 3600) + 1); }
+/* One hour more than the session start needs (1.7.0): the request then starts before 17:00 ET, in the previous
+   session's last trading hour, not in the 17:00 to 18:00 break, so the backfill holds a trade from before 18:00 and the
+   delta pane can prove the session whole (live.js, deltaCoveredFrom). Without it every weekday load was "from 18:00:00.4". */
+function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 2); }
+/* The tickHours that reach back past this session's start into the previous session's last trading hour, as for
+   range bars (1.7.0: for minute views when the delta pane loads a whole session's ticks; off today, see
+   DELTA_WANTS_SESSION_TICKS in live.js). */
+function sessionTickHours(now, s) { return Math.min(48, Math.ceil((now - sessionStartOf(now, s)) / 3600) + 2); }
 function rangeStartIndex(ticks, from, s) {
   for (let i = 0; i < ticks.length; i++) if (sessionStartOf(timeAt(ticks, i), s) >= from) return i;
   return 0;

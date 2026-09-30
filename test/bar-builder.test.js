@@ -186,9 +186,13 @@ test('range backfill reaches a session start: this one, or the one before while 
   assert.equal(BB.sessionStartOf(et(10, 0, 0), S), et(18, 0, 0) - 86400);
   assert.equal(BB.sessionStartOf(et(18, 0, 0), S), et(18, 0, 0));
   assert.equal(BB.rangeHistoryFrom(et(15, 0, 0), S), et(18, 0, 0) - 86400);     // 21 h old: this session
-  assert.equal(BB.rangeTickHours(et(15, 0, 0), S), 22);
+  assert.equal(BB.rangeTickHours(et(15, 0, 0), S), 23);   // 1.7.0: one hour more, into the previous session
   assert.equal(BB.rangeHistoryFrom(et(20, 0, 0), S), et(18, 0, 0) - 86400);     // 2 h old: the day before too
-  assert.equal(BB.rangeTickHours(et(20, 0, 0), S), 27);
+  assert.equal(BB.rangeTickHours(et(20, 0, 0), S), 28);
+  // 1.7.0: back past this session's start into the previous session's last trading hour (before the 17:00 close)
+  assert.equal(BB.sessionTickHours(et(15, 0, 0), S), 23);
+  assert.equal(BB.sessionTickHours(et(20, 0, 0), S), 4);
+  assert.ok(et(20, 0, 0) - BB.sessionTickHours(et(20, 0, 0), S) * 3600 <= et(17, 0, 0) - 3600);
   assert.equal(BB.rangeStartIndex([[et(17, 0, 0)], [et(18, 0, 0)], [et(18, 0, 1)]], et(18, 0, 0), S), 1);
   assert.equal(BB.rangeStartIndex([[et(17, 0, 0)], [et(17, 0, 1)]], et(18, 0, 0), S), 0);   // no session start covered
 });
