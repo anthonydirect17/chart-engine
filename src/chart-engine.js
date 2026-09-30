@@ -493,6 +493,10 @@ function rthDay(t) {
   const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay();
   return wd !== 0 && wd !== 6 && !nyseHolidays(date.getUTCFullYear()).has(day);
 }
+/** Whether trading day d (tradeDay's number: the calendar day the session ends on) has no stock market session. */
+function closedDay(d) { return !rthDay(d * DAY + 43200); }
+/** Whether a trading day strictly between days a and b has no stock market session (at most 10 days looked at). */
+function closedBetween(a, b) { for (let x = a + 1; x < b && x <= a + 10; x++) if (closedDay(x)) return true; return false; }
 /*
  * NYSE early closes (13:00 ET), by the NYSE's rules: the day after Thanksgiving; Christmas Eve when it is a Monday to
  * Thursday (on a Friday it is the observed Christmas holiday, on a weekend there is none); July 3 when it is a Monday
@@ -1911,12 +1915,15 @@ function mountThemePanel(chart, host, options) {
  * the RTH profile empties at 18:00 and stays empty until 9:30. Trades outside the window change nothing but the
  * `outside` count (not `skipped`, which is for bad input), and do not change `version`.
  *
- * Keep (option `keep: true`, Anthony's ruling 2026-09-30; the page uses it): the profile keeps the last session it
- * counted after that session ends, over the 17:00 ET close, the 18:00 start, weekends and holidays, until the first
- * trade counted in a later session, so a Friday can be reviewed over the weekend. With `rth` only a trade inside the
- * RTH window counts, so the overnight trades never empty it: the day's RTH stays up until the next 9:30 with a
- * stock market session (a holiday keeps the day before). advance() does nothing with `keep`. Without `keep` (the
- * default) the session moves as above.
+ * Keep (option `keep: true`, Anthony's ruling 2026-09-30; the page uses it): over weekends and NYSE holidays the
+ * profile keeps the last session it counted until the next session's first trade, so a Friday can be reviewed over
+ * the weekend. A trading day with no stock market session (closedDay: Saturday, Sunday, an NYSE holiday; the trading
+ * day runs from 18:00 ET the evening before) never empties it on the clock (advance does nothing), and with `rth` its
+ * trades outside the RTH window never empty it either (on Labor Day or Thanksgiving Globex trades, but there is no
+ * RTH: the RTH of the day before stays). On a trading day with a stock market session nothing changes from the
+ * default: the next session's first trade (Sunday 18:00, and every weekday 18:00) starts it, and with `rth` the RTH
+ * profile is empty overnight until 9:30, as in 1.6.0 (Anthony's ruling covers weekends and holidays only). Without
+ * `keep` (the default) the session moves as above. closedFrom(now) says which ticks a kept profile needs.
  *
  * Cost: add() is amortised O(1): most trades only add to a row, and a row outside the array grows it to twice
  * the span needed, so the copies add up to O(1) per trade (one add can copy the whole span; a new session
@@ -1988,12 +1995,27 @@ class VolumeProfile {
     const n = store && store.length || 0;
     if (!n) return vp;
     const first = store.time(0);
-    for (let t = store.time(n - 1), k = 0; ; t -= DAY, k++) {
-      const from = vp.startOf(t);
+    let d = tradeDay(store.time(n - 1), vp.sessionStart);
+    for (let k = 0; ; k++, d--) {
+      const from = vp.startOfDay(d);
       store.feed(vp, 0, from);
-      if (!vp.empty || from <= first || k >= 7) return vp;
+      // look further back only while the day just tried has no stock market session (a kept profile's rule)
+      if (!vp.empty || from <= first || k >= 7 || !(vp.keep && closedDay(d))) return vp;
       vp = new VolumeProfile(opts);
     }
+  }
+  /**
+   * While the market is closed (the 17:00 to 18:00 ET break, and a trading day with no stock market session: a
+   * weekend or an NYSE holiday), the time from which a kept profile needs every trade: the start of the last trading
+   * day with a stock market session (its 18:00 ET the evening before, or its 9:30 with `rth`). Null while the market
+   * is open (1.6.1: the page then loads ticks for the view only). Pure: `now` is exchange wall-clock seconds.
+   */
+  closedFrom(now) {
+    let d = tradeDay(now, this.sessionStart);
+    const s = tod(now);
+    if (!closedDay(d) && !(s >= this.sessionStart - 3600 && s < this.sessionStart)) return null;
+    for (let k = 0; k < 10 && closedDay(d); k++) d--;
+    return this.startOfDay(d);
   }
   static _share(p) {
     if (!(p > 0 && p <= 1)) throw new RangeError('VolumeProfile: the value area share must be above 0 and at most 1');
@@ -2058,17 +2080,13 @@ class VolumeProfile {
         !isFinite(t) || !isFinite(price) || !(v > 0 && v < Infinity)) { this.skipped++; return false; }
     const d = tradeDay(t, this.sessionStart);
     let fresh = false;
-    if (this.keep) {                                     // only a trade that counts moves it to a later session
+    if (d !== this.day) {
       if (this.day !== null && d < this.day) { this.skipped++; return false; }
-      if (this.rth && !this.inRth(t)) { this.outside++; return false; }
-      if (d !== this.day) { this._clear(); this.day = d; fresh = true; }
-    } else {
-      if (d !== this.day) {
-        if (this.day !== null && d < this.day) { this.skipped++; return false; }
-        this._clear(); this.day = d; fresh = true;
-      }
-      if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
+      // keep: an RTH profile outlives the Globex trades of a day with no stock market session (a holiday)
+      if (this.keep && this.rth && this.day !== null && closedDay(d) && !this.inRth(t)) { this.outside++; return false; }
+      this._clear(); this.day = d; fresh = true;
     }
+    if (this.rth && !this.inRth(t)) { this.outside++; return fresh; }
     const r = this._row(price);
     if ((r < this._base || r >= this._base + this._vol.length) && !this._grow(r)) { this.skipped++; return fresh; }
     this._vol[r - this._base] += v;
@@ -2085,12 +2103,14 @@ class VolumeProfile {
   /**
    * Move to the session holding t with no trade (for example on the clock at 18:00 ET before the first trade of
    * the new session). Returns true when the profile moved to that later session (it is then empty). With `keep` it
-   * does nothing and returns false: a kept profile moves only with the first trade counted in a later session.
+   * does nothing on a trading day with no stock market session (a weekend or an NYSE holiday), nor after one
+   * until a trade comes: the first trade of the next session moves it (add). On weekday evenings it moves at 18:00.
    */
   advance(t) {
-    if (this.keep) return false;
     const d = tradeDay(t, this.sessionStart);
     if (!isFinite(d) || (this.day !== null && d <= this.day)) return false;
+    // keep: on a weekend or a holiday, and after one until the next session's first trade, the clock moves nothing
+    if (this.keep && (closedDay(d) || (this.day !== null && closedBetween(this.day, d)))) return false;
     this._clear(); this.day = d;
     return true;
   }
@@ -2187,7 +2207,7 @@ return {
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays, nyseEarlyCloses, rthClose,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
   },
   VolumeProfile,

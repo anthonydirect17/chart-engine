@@ -671,8 +671,21 @@ function start(container, opt, PAGE) {
     lv: [], ib: null, ibKey: '', vp: null, liveFrom: null };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
-  const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
-  const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
+  const viewTicksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
+  const viewTicksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
+  /* While the market is closed (the 17:00 to 18:00 ET break, weekends, NYSE holidays) with the volume profile on, every
+     view also asks for the ticks of the last session, so the profile it keeps survives a load, a reload and a
+     reconnect (1.6.1, Anthony's ruling 2026-09-30; review B1): from 18:00 ET before the last day with a stock market
+     session, or its 9:30 for RTH (VolumeProfile.closedFrom). Sunday 17:59 after a Friday holiday reaches back 96
+     hours; ChartBridge serves up to VP_CLOSED_HOURS (1.6.1's nt8/ChartBridge.cs; an older one stops at 48 and the
+     profile then says where its ticks start). While the market is open nothing changes here. */
+  const VP_CLOSED_HOURS = 120;
+  const vpClosedFrom = () => S.layers.vp ? new CE.VolumeProfile({ sessionStart: SESSION, rth: S.options.vp.session === 'rth', keep: true }).closedFrom(etNow()) : null;
+  const ticksWanted = () => {
+    const from = vpClosedFrom();
+    return Math.max(viewTicksWanted(), from === null ? 0 : Math.min(VP_CLOSED_HOURS, Math.ceil((etNow() - from) / 3600) + 1));
+  };
+  const ticksMissing = () => { const from = vpClosedFrom(); return viewTicksMissing() || (from !== null && D.tickFrom > from); };
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -817,26 +830,32 @@ function start(container, opt, PAGE) {
     chart.setProfile(D.vp);
     vpNote(); vpLegend();
   }
+  /* What the profile holds against what its session needs: the session held (kept after it ends), or while there is
+     none yet the clock's; and from when every trade is known: the tick backfill's start (later when NinjaTrader sent
+     less than asked, or the page dropped its oldest ticks; earlier when it sent more), or with no tick history
+     (tickHours 0) the moment the page went live. */
+  function vpCover() {
+    const now = etNow(), held = !D.vp.empty, need = D.vp.day !== null ? D.vp.startOfDay(D.vp.day) : D.vp.startOf(now);
+    const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
+    const coveredFrom = D.tickHours > 0 ? Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
+    return { now, held, need, coveredFrom, partial: held && coveredFrom > need };
+  }
+  /* An older ChartBridge serves at most 48 hours of ticks: say so when the page asked for more (the market closed). */
+  const vpOldBridge = () => D.tickHours > 48 ? ' ChartBridge older than chart 1.6.1\'s serves at most 48 hours of ticks: run nt8\\install.ps1 again and compile.' : '';
   /* The quiet note while the profile is on and cannot show the whole session (or RTH) for a reason. */
   function vpNote() {
     const el = $('vpNote'); if (!el) return;
     let text = '';
     if (S.layers.vp && D.ready && D.vp) {
-      // the session held (kept after it ends), or while there is none yet the clock's
-      const now = etNow(), held = D.vp.day !== null, need = held ? D.vp.startOfDay(D.vp.day) : D.vp.startOf(now), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
-      // every trade is known from here on: the tick backfill's start (later when NinjaTrader sent less than asked,
-      // or the page dropped its oldest ticks; earlier when it sent more), or with no tick history (tickHours 0) the
-      // moment the page went live
-      const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
-      const coveredFrom = D.tickHours > 0 ? Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
+      const { now, held, need, coveredFrom, partial } = vpCover(), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
       if (!held) {                                     // nothing counted yet: a small note, never an error
         if (rth && U.rthDay(need) && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
         else if (D.tickHours === 0) text = 'Volume profile from ' + U.fmtHM(Math.min(coveredFrom, now)) + ' ET: this view loads no tick history, so it counts the live trades from then on.';
-        else text = 'Volume profile' + (rth ? ' (RTH)' : '') + ': no trades of the last session in the tick history this view loaded.';
+        else text = 'Volume profile' + (rth ? ' (RTH)' : '') + ': no trades of the last session in the tick history this view loaded.' + vpOldBridge();
       }
-      else if (coveredFrom > need) {                   // the session held is only partly in the tick history
+      else if (partial) {                              // the session held is only partly in the tick history
         const at = U.fmtHM(Math.min(coveredFrom, now));
-        text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.'
+        text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.' + vpOldBridge()
           : 'Volume profile from ' + at + ' ET: this view loads no tick history, so it counts the live trades from then on.';
       }
     }
@@ -853,7 +872,9 @@ function start(container, opt, PAGE) {
     vpLegendVer = cols.version;
     const va = D.vp.valueArea(), dp = precisionOf(), day = D.vp.day * 86400;
     $('lgPoc').textContent = U.fmtPrice(D.vp.poc().price, dp); $('lgVal').textContent = U.fmtPrice(va.val, dp); $('lgVah').textContent = U.fmtPrice(va.vah, dp);
-    $('lgVpDay').textContent = ' (' + U.fmtDay(day).split(' ')[0] + ')';   // the session's trading day: "(Fri)"
+    // the session's trading day, "(Fri)", and "(Fri from 16:00)" when the ticks start after the session did (review B1)
+    const cover = vpCover();
+    $('lgVpDay').textContent = ' (' + U.fmtDay(day).split(' ')[0] + (cover.partial ? ' from ' + U.fmtHM(Math.min(cover.coveredFrom, cover.now)) : '') + ')';
     el.title = 'Volume profile of ' + U.fmtDate(day) + ', ' + (D.vp.rth ? 'RTH 9:30 to 16:00 ET' : 'full session from 18:00 ET the day before') +
       ': point of control and 70% value area. Kept after the session ends until the next session\'s first trade.';
   }
@@ -868,7 +889,7 @@ function start(container, opt, PAGE) {
     prefs.setIndicatorOption(PANE, id, key, value);
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
-      if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
+      if (id === 'vp') { vpLegendVer = -1; if (ticksMissing()) subscribe(S.root); else vpBuild(); }
     }
     syncIndicators();
     return true;
@@ -1461,7 +1482,7 @@ function start(container, opt, PAGE) {
       S.layers[k] = drawn[k];
       if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
       if (k === 'ib') ibNote(D.ib);
-      if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
+      if (k === 'vp') { if (ticksMissing()) subscribe(S.root); else vpBuild(); }   // built from the tick store when shown (the last session's ticks fetched first while the market is closed), dropped when not
     }
     legendKey = '';
     syncIndicators();
@@ -1785,7 +1806,9 @@ function start(container, opt, PAGE) {
     // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
     // since the drop hide the IB (a 'gap') rather than leave a stale one up
     if (D.m1) updateIB(false);
-    // the volume profile keeps its session until the next session's first trade (1.6.1): nothing moves it on the clock
+    // the volume profile moves to the new session at 18:00 ET on the clock on weekday evenings; over a weekend or a
+    // holiday it keeps the last session until the next session's first trade (1.6.1, the engine's keep)
+    if (D.vp && D.vp.advance(etNow())) vpLegend();
     vpNote(); vpLegend();
   }, 500);
 

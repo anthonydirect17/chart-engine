@@ -13,6 +13,11 @@
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
 //   --tick-hours-max=3              serve at most this many hours of tick history, whatever the page asks
 //                                   (like a PC with little local tick data)
+//   --market-hours                  sample data on the real calendar (chart 1.6.1, for the weekend volume profile):
+//                                   the sample moved by whole weeks so its weekends fall on the real ones and nothing
+//                                   comes after the clock; no trades while CME is closed (Friday 17:00 to Sunday 18:00,
+//                                   the 17:00 break, and from 13:00 on an NYSE holiday, the equity futures' early
+//                                   halt); tick history counted back from the clock, as ChartBridge does
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
@@ -77,6 +82,13 @@ const OWN = 'http://localhost:' + PORT;
 
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
+const MARKET_HOURS = !!flag('market-hours');
+/* --market-hours: whether CME equity index futures are closed at exchange time t (sample calendar, see the header). */
+function marketClosed(t) {
+  const wd = new Date(t * 1000).getUTCDay(), s = CE.util.tod(t);
+  if (wd === 6 || (wd === 5 && s >= 61200) || (wd === 0 && s < 64800) || (s >= 61200 && s < 64800)) return true;
+  return !CE.util.rthDay(t) && s >= 46800 && s < 64800;
+}
 const INSTR = {
   MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2, scale: 1 },
   NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20, scale: 1 },
@@ -90,13 +102,14 @@ function makeData(rootSym) {
   const feed = SampleFeed.create({ seed: 20260929 + rootSym.length });
   const k = INSTR[rootSym].scale;
   const base = feed.base.slice(0, -1);
-  const shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
+  let shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
+  if (MARKET_HOURS) { const W = 7 * 86400; let k = Math.ceil(shift / W); if (base[0].t + k * W > etNow()) k--; shift = k * W; }
   const bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
-  return bars;
+  return MARKET_HOURS ? bars.filter(b => b.t <= Math.floor(etNow() / 60) * 60 && !marketClosed(b.t)) : bars;
 }
 function ticksFrom(bars, hours) {
-  const out = [], from = bars[bars.length - 1].t - hours * 3600;
+  const out = [], from = (MARKET_HOURS ? etNow() : bars[bars.length - 1].t) - hours * 3600;
   let seed = 7;
   const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
   const stepTicks = () => { if (!TICK_GAPS) return 1; const r = rnd(); return r < 0.8 ? 1 : r < 0.97 ? 2 + Math.floor(rnd() * 2) : 8 + Math.floor(rnd() * 9); };
@@ -230,6 +243,7 @@ function trade(r, p) {
   desk.tick(r, p);                        // the matching engine sees every trade
 }
 if (!LIVE_RATE) setInterval(() => {
+  if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
   for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 else {

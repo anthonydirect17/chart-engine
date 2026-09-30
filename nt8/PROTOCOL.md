@@ -266,6 +266,11 @@ it, or when the rebuilt minute has less volume than NinjaTrader's (the trades la
 `/diag` shows both volumes (`ntTailVolume`, `rebuiltTailVolume`). They cannot settle the boundary rule on their
 own: the rebuilt minute also has the trades after NinjaTrader's answer, so it is usually larger either way.
 
+**How far back (chart 1.6.1).** `tickHours` is capped at 120 (48 before chart 1.6.1's `ChartBridge.cs`; a
+recompile). The page asks for more than 48 only while the market is closed (the 17:00 to 18:00 ET break, a weekend,
+an NYSE holiday) with the volume profile on, to load the last session's trades: Sunday 17:59 after a Friday holiday
+needs 96 hours, most of them with no trades. An older ChartBridge serves 48 and the page says where its ticks start.
+
 **Live check of the minute boundary (a recipe).** On the trading PC, in a busy session:
 
 1. Pick a closed minute M (start S, end E = S + 60 s) with a trade stamped exactly at S (hh:mm:00.000) or at E.
