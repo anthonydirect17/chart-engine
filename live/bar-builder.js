@@ -218,17 +218,30 @@ const codeMethod = c => c ? Math.floor((c - 1) / 3) : 0;
 class TickStore {
   constructor() { this.clear(); }
   clear() { this.blocks = []; this.sides = []; this.start = 0; this.length = 0; }
+  /*
+   * The block pair and the slot writer every way in goes through (review 2, merge planning): a trade's columns and its
+   * side byte always live at the same slot j (the store's start plus its index) of `blocks` and `sides`, so a block is
+   * only ever added or dropped with its side block. _addBlock appends a pair, _addBlockFront puts one in front (for a
+   * prepend of older trades: live-first's `prependAll` must add its front blocks with it and write each trade with
+   * `_put`, never `blocks` alone, or the sides shift against the trades), and _put writes one trade and its side.
+   */
+  _addBlock() { this.blocks.push(new Float64Array(BLOCK * 3)); this.sides.push(new Uint8Array(BLOCK)); }
+  _addBlockFront() { this.blocks.unshift(new Float64Array(BLOCK * 3)); this.sides.unshift(new Uint8Array(BLOCK)); }
+  _put(j, t, p, v, s, sm) {
+    const b = this.blocks[j >>> SHIFT], k = (j & MASK) * 3;
+    b[k] = t; b[k + 1] = p; b[k + 2] = v || 0;
+    this.sides[j >>> SHIFT][j & MASK] = sideCode(s, sm);
+  }
   /** Add one trade at the end; s and sm (ChartBridge 0.3.4) are left out for a trade that has none. */
   push(t, p, v, s, sm) {
     const j = this.start + this.length;
-    let b = this.blocks[j >>> SHIFT];
-    if (!b) { b = new Float64Array(BLOCK * 3); this.blocks.push(b); this.sides.push(new Uint8Array(BLOCK)); }
-    const k = (j & MASK) * 3;
-    b[k] = t; b[k + 1] = p; b[k + 2] = v || 0;
-    this.sides[j >>> SHIFT][j & MASK] = sideCode(s, sm);
+    if (!this.blocks[j >>> SHIFT]) this._addBlock();
+    this._put(j, t, p, v, s, sm);
     this.length++;
   }
-  /** Add trades as ChartBridge sends them, [[t, p, v], ...] or since 0.3.4 [[t, p, v, s, sm], ...]. */
+  /** Add trades as ChartBridge sends them, [[t, p, v], ...] or since 0.3.4 [[t, p, v, s, sm], ...]. The only pushAll:
+      a merge must keep this five-place one (a second, three-place pushAll defined after it would win silently and drop
+      every backfill side; review 2's trial merge). */
   pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2], x[3], x[4]); } }
   _get(i, f) { const j = i + this.start; return this.blocks[j >>> SHIFT][(j & MASK) * 3 + f]; }
   time(i) { return this._get(i, 0); }
@@ -306,10 +319,14 @@ function rangeHistoryFrom(now, s) {
    session's last trading hour, not in the 17:00 to 18:00 break, so the backfill holds a trade from before 18:00 and the
    delta pane can prove the session whole (live.js, deltaCoveredFrom). Without it every weekday load was "from 18:00:00.4". */
 function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 2); }
-/* The tickHours that reach back past this session's start into the previous session's last trading hour, as for
-   range bars (1.7.0: for minute views when the delta pane loads a whole session's ticks; off today, see
-   DELTA_WANTS_SESSION_TICKS in live.js). */
-function sessionTickHours(now, s) { return Math.min(48, Math.ceil((now - sessionStartOf(now, s)) / 3600) + 2); }
+/*
+ * The tickHours a time view asks for (1.7.0, Anthony's ruling 2026-09-30): seconds bars are built from ticks (8 hours);
+ * minute and hour views need none for their bars, but with the delta pane on they ask DELTA_TICK_HOURS (2), so trading
+ * after hours has its delta: max(what the view asks, 2 hours). The cumulative still resets at 18:00 ET; when the 2 hours
+ * do not reach back to the session start, the page labels it "from HH:MM" (live.js, deltaCoverage).
+ */
+const DELTA_TICK_HOURS = 2;
+function timeTickHours(seconds, delta) { return Math.max(seconds < 60 ? 8 : 0, delta ? DELTA_TICK_HOURS : 0); }
 function rangeStartIndex(ticks, from, s) {
   for (let i = 0; i < ticks.length; i++) if (sessionStartOf(timeAt(ticks, i), s) >= from) return i;
   return 0;
@@ -334,5 +351,49 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, sessionTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+/*
+ * minuteCover (1.7.0, review 2 S2): from when a TickStore provably holds every trade, by NinjaTrader's own minute history,
+ * which comes apart from its tick history. `minutes` is { t, v }: NinjaTrader's complete history minutes (start times and
+ * volumes, oldest first; never the forming minute, which ChartBridge may rebuild from the same ticks).
+ *   - m, the minute of the store's first trade: when the store's trades in [m, m + 60) add up to that minute's volume
+ *     exactly, the store holds every trade of it (none before the first one is missing), so it is whole from m;
+ *   - when m is its session's start (18:00 ET) and, in addition, the minute history holds no bar in the hour before it
+ *     (the 17:00 to 18:00 break, a weekend or a holiday: the market was closed) and reaches back past that hour, the
+ *     session is whole from its start. A Monday's session opening Sunday 18:00 is proved this way, and so is a minute
+ *     view's 2 hours of ticks at 19:30; without the closed hour the proof does not count a session whole.
+ * Returns { from, code }: `from` the time from which the store is whole (null when nothing is proved), `code` 'open'
+ * (the session is whole), 'minute' (from m), 'bar' (no complete history minute at m), 'volume' (the volumes differ),
+ * 'closed' (m is 18:00 but the history shows trades in the hour before it, or does not reach back past it), 'empty'.
+ */
+function minuteCover(ticks, minutes, s) {
+  const n = ticks.length;
+  if (!n || !minutes || !minutes.t.length) return { from: null, code: 'empty' };
+  const t0 = timeAt(ticks, 0), m = Math.floor(t0 / 60) * 60, mt = minutes.t;
+  let lo = 0, hi = mt.length;                                  // the first minute at or after m
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (mt[mid] < m) lo = mid + 1; else hi = mid; }
+  if (lo >= mt.length || mt[lo] !== m || !(minutes.v[lo] > 0)) return { from: null, code: 'bar' };
+  let vol = 0;
+  for (let i = 0; i < n; i++) {
+    const t = timeAt(ticks, i);
+    if (t >= m + 60) break;
+    if (t >= m) vol += typeof ticks.volume === 'function' ? ticks.volume(i) : ticks[i][2] || 0;
+  }
+  if (vol !== minutes.v[lo]) return { from: null, code: 'volume' };
+  const start = sessionStartOf(t0, s);
+  if (m !== start) return { from: m, code: 'minute' };
+  // the minute before the open: none in the hour before it, and the history reaches back past that hour
+  const prev = lo - 1;
+  if (prev < 0 || mt[prev] >= start - 3600) return { from: null, code: 'closed' };
+  return { from: start, code: 'open' };
+}
+/* Whether NinjaTrader's minute history has a bar starting in [from, to): trades the tick history should have held. */
+function minutesBetween(minutes, from, to) {
+  if (!minutes || !(from < to)) return false;
+  const mt = minutes.t;
+  let lo = 0, hi = mt.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (mt[mid] < from) lo = mid + 1; else hi = mid; }
+  return lo < mt.length && mt[lo] < to;
+}
+
+return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, DELTA_TICK_HOURS, timeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, minuteCover, minutesBetween };
 });
