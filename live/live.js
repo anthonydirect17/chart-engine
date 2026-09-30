@@ -692,7 +692,7 @@ function start(container, opt, PAGE) {
   const ticksWanted = () => viewTicksWanted();
   const ticksMissing = () => viewTicksMissing();
   /* The last price seen per instrument, kept across loads: click-to-place orders work while a view loads (1.8.0). */
-  const lastSeen = {};
+  const lastSeen = {};                                   // root -> { p, at }: a price older than LAST_SEEN_MS is not used
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -820,8 +820,16 @@ function start(container, opt, PAGE) {
   }
   function rangeNote() {
     const el = $('rangeNote'); if (!el) return;
-    const text = D.ready && D.sync && D.sync.bar < 0
+    let text = D.ready && D.sync && D.sync.bar < 0
       ? 'Range bars start where they are proven to match NinjaTrader\'s: after a swing of more than the range each way, or at the next 18:00 ET session.' : '';
+    // review 3 S-C: the VWAP of a served-window view never goes silently: after a feed drop it is kept (the table's sums and
+    // the page's trades) and says what it misses; with no table from 18:00 it is not drawn and says why
+    const T = D.table;
+    if (!text && D.ready && D.window && tickView() && S.layers.vwap && T && T.day === U.tradeDay(etNow(), SESSION)) {
+      if (T.drop && T.coveredFrom <= T.from + 1) text = 'VWAP and ' + (TF[S.tf].mode === 'range' ? 'range bars after ' + U.fmtHM(T.drop.at) + ' ET miss' : 'bars miss') + ' the trades while the data connection was down (' + U.fmtHM(T.drop.at) + ' ET).';
+      else if (!T.whole) text = /^(wanted|queued|asked|failed once)/.test(T.backfill) ? 'VWAP: shown once ChartBridge has loaded this session from 18:00 ET (building).'
+        : 'VWAP not shown: ChartBridge has this session\'s trades only since ' + U.fmtHM(T.coveredFrom) + ' ET.';
+    }
     if (el.textContent !== text) el.textContent = text;
     el.hidden = !text;
   }
@@ -830,7 +838,7 @@ function start(container, opt, PAGE) {
      plus those in [at, from). null while the table is not whole, or unknown. Whole ticks, so the sums are exact. */
   function vwapSeed(from) {
     const T = D.table;
-    if (!T || !T.whole) return null;
+    if (!T || !(T.whole || (T.drop && T.coveredFrom <= T.from + 1))) return null;   // after a feed drop: every trade seen (the note says what is missing)
     let pv = T.pvTicks, vol = T.vol;
     const lo = Math.min(from, T.at), hi = Math.min(Math.max(from, T.at), D.ticks.length), sign = from < T.at ? -1 : 1;
     for (let i = lo; i < hi; i++) {
@@ -933,7 +941,6 @@ function start(container, opt, PAGE) {
       const tv = vpFromTable(opts);
       if (tv && !tv.vp.empty && !(vp.day !== null && vp.day > tv.vp.day)) { vp = tv.vp; D.vpTable = tv.table; }
       D.vp = vp;
-      D.vp = vp;
     }
     chart.setProfile(D.vp);
     vpNote(); vpLegend();
@@ -974,6 +981,9 @@ function start(container, opt, PAGE) {
     const fromText = partial && hm === U.fmtHM(need) ? hm + ':' + String(Math.floor(U.tod(t) % 60)).padStart(2, '0') : hm;
     return { now, held, need, coveredFrom, partial, fromText };
   }
+  /* The end of the trading the profile counts (review 3 S-B: a drop after it misses nothing): the RTH close (16:00, 13:00 on
+     an early close) for RTH, else 17:00 ET, the session's close. */
+  const vpEnd = need => D.vp && D.vp.rth ? Math.floor(need / 86400) * 86400 + (U.rthClose(need) || 57600) : need + 23 * 3600;
   let openChecked = { key: '', whole: false };
   function openWhole(need, t0) {
     const key = need + '|' + t0 + '|' + D.hist.length;
@@ -1004,7 +1014,7 @@ function start(container, opt, PAGE) {
       }
       else if (!held) text = D.tickHours === 0 ? 'Volume profile from ' + U.fmtHM(Math.min(coveredFrom, now)) + ' ET: this view loads no tick history, so it counts the live trades from then on.'
         : 'Volume profile: no trades of the last session in the tick history this view loaded.';
-      else if (D.vpTable && D.vpTable.drop && D.vpTable.drop.at >= need) text = 'Volume profile missing trades: the data connection dropped at ' + U.fmtHM(D.vpTable.drop.at) + ' ET, and the trades while it was down are not in it.';
+      else if (D.vpTable && D.vpTable.drop && D.vpTable.drop.at >= need && D.vpTable.drop.at < vpEnd(need)) text = 'Volume profile missing trades: the data connection was down at ' + U.fmtHM(D.vpTable.drop.at) + ' ET, and the trades while it was down are not in it.';
       else if (partial && D.vpTable) {                 // 1.8.0: ChartBridge's table: its one backfill still to come (building), or none (since)
         const T = D.vpTable, building = /^(wanted|queued|asked|failed once)/.test(T.backfill);
         text = building ? 'Volume profile building, from ' + fromText + ' ET: ChartBridge started after ' + from + ' ET and loads the session once, in the background.'
@@ -1066,7 +1076,7 @@ function start(container, opt, PAGE) {
     }
     D.ready = true;
     D.liveFrom = etNow();
-    if (D.m1.last) lastSeen[D.root] = D.m1.last.c;
+    if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: nowMs() };
     rebuild();
     vpBuild();
     setConn('live');
@@ -1074,7 +1084,7 @@ function start(container, opt, PAGE) {
   }
 
   function onTick(m) {
-    if (m.root === D.root) lastSeen[m.root] = m.p;       // the last price, also while a view loads (click-to-place, review N4)
+    if (m.root === D.root) lastSeen[m.root] = { p: m.p, at: nowMs() };   // ChartBridge holds live trades during a load: this is the price when it began
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
     D.ticks.push(t, p, v);                             // columns, not one array per trade (TickStore, bar-builder.js)
@@ -1421,7 +1431,12 @@ function start(container, opt, PAGE) {
   }
 
   /* The last price: the chart's, or while a view loads the last one seen for the instrument (1.8.0: orders keep working). */
-  const lastPrice = () => (D.m1 && D.m1.last ? D.m1.last.c : lastSeen[D.root] !== undefined ? lastSeen[D.root] : null);
+  const LAST_SEEN_MS = 10000;                           // review 3 N-2: an older price (another instrument's visit, a long load) is unknown
+  const lastPrice = () => {
+    if (D.m1 && D.m1.last) return D.m1.last.c;
+    const x = lastSeen[D.root];
+    return x && nowMs() - x.at < LAST_SEEN_MS ? x.p : null;
+  };
   const capNow = () => OT.maxQtyFor(TR, D.root);
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
 

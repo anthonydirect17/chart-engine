@@ -52,7 +52,8 @@ bar proven to be NinjaTrader's own (a session start, or a swing of more than the
 never offset bars before it, and once drawn they stay all day. The volume profile comes from ChartBridge's table of the
 session's volume at each price, fed by the live trades, on every view: exact from 18:00 ET. When ChartBridge starts
 after 18:00 it loads the session once, at start, one instrument at a time (`profileRoots`), and the profile says "Volume
-profile building, from HH:MM ET" until then. ChartBridge sends NinjaTrader one tick request at a time. Orders and Flatten
+profile building, from HH:MM ET" until then. A NinjaScript compile (F5) restarts ChartBridge, so a compile during the
+session counts as such a start: the session is loaded once more. ChartBridge sends NinjaTrader one tick request at a time. Orders and Flatten
 work during any load. With ChartBridge 0.3.4 or older the chart loads as before.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per

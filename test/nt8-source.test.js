@@ -546,11 +546,17 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   const askw = bodyOf(code, 'private static void AskWindow(');
   assert.match(askw, /new BarsRequest\(inst, count\)/);
   assert.match(askw, /GateEnqueue\(j\);/);
-  assert.match(bodyOf(code, 'private static void OnWindowAnswer('), /round < 2\)/);
+  // review 3 S-D: the second ask decided on the callback and queued before the gate goes on (windows before backfills)
+  assert.match(askw, /round < 2;/);
+  assert.match(askw, /if \(again\) AskWindow\(book, inst, gen, Math\.Min\(WindowMaxTicks, count \* 3\), round \+ 1\);\s*done\(\);/);
+  // review 3 X1: a given-up request stays outstanding: nothing else goes; its late answer is dropped, not copied
+  assert.match(askw, /if \(ask\.TimedOut\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} GateUnstuck\("window " \+ book\.Root\); return; \}/);
+  assert.match(bodyOf(code, 'private static void RunBackfill('), /if \(ask\.TimedOut\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} GateUnstuck\(/);
   assert.ok(!/RequestQuotes/.test(serve + askw + bodyOf(code, 'private static void OnWindowAnswer(') + bodyOf(code, 'private static void FinishWindow(')), 'no quote request for a window');
   // one tick request to NinjaTrader at a time: windows first, a backfill only with nothing else out (no minute tail either)
   const next = bodyOf(code, 'private static GateJob GateNext(');
-  assert.match(next, /if \(GateBackfills\.Count == 0 \|\| backfillStuck \|\| tailsOut > 0\) return null;/);
+  assert.match(next, /if \(gateStuck != null\) return null;/);
+  assert.match(next, /if \(GateBackfills\.Count == 0 \|\| tailsOut > 0\) return null;/);
   assert.match(bodyOf(code, 'private static void RequestTicks('), /if \(!BeginTail\(\)\)/);
   // on NinjaTrader's callback thread only the copy (timed); the rest on a worker
   for (const f of ['private static void AskWindow(', 'private static void RunBackfill(']) {

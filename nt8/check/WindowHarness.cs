@@ -68,7 +68,7 @@ public static class WindowHarness
     }
     static void Feed(RootBook book, IEnumerable<Trade> trades, DateTime listeningUtc)
     {
-        foreach (Trade x in trades) lock (book.Sync) book.OnTrade(x.T, x.P, x.V, EtSec(x.T), listeningUtc, 0, DateTime.MinValue, true);
+        foreach (Trade x in trades) lock (book.Sync) book.OnTrade(x.T, x.P, x.V, EtSec(x.T), listeningUtc, listeningUtc, 0, DateTime.MinValue, true);
     }
 
     // ------------------------------------------------------------ the table against every trade
@@ -146,7 +146,7 @@ public static class WindowHarness
         Check(RootBook.ParseLast(text, book.Last.StartEt + 5 * 86400) == null, "nit: a saved session more than 4 days old is not used (a stale file)");
         // A late trade of a finished session (NinjaTrader delivering it after 18:00) changes no table.
         long v0 = book.Table.Volume, l0 = book.Last.Volume;
-        lock (book.Sync) book.OnTrade(fri[fri.Count - 1].T, 1, 7, EtSec(fri[fri.Count - 1].T), listening, 0, DateTime.MinValue, true);
+        lock (book.Sync) book.OnTrade(fri[fri.Count - 1].T, 1, 7, EtSec(fri[fri.Count - 1].T), listening, listening, 0, DateTime.MinValue, true);
         Check(book.Table.Volume == v0 && book.Last.Volume == l0 && book.LateTrades == 1, "a late trade of the session before is counted as late, in no table");
     }
 
@@ -182,7 +182,7 @@ public static class WindowHarness
     static void WholeRule()
     {
         DateTime s0 = Et(2026, 9, 29, 18, 0, 0.02);
-        Func<DateTime, DateTime, RootBook> first = (listening, t) => { RootBook b = new RootBook("MNQ", 0.25); lock (b.Sync) b.OnTrade(t, 20000, 1, EtSec(t), listening, 0, t, true); return b; };
+        Func<DateTime, DateTime, RootBook> first = (listening, t) => { RootBook b = new RootBook("MNQ", 0.25); lock (b.Sync) b.OnTrade(t, 20000, 1, EtSec(t), listening, listening, 0, t, true); return b; };
         RootBook a = first(ChartBridgeTime.ToUtc(s0).AddMinutes(-30), s0);
         RootBook b2 = first(ChartBridgeTime.ToUtc(s0).AddHours(3), s0.AddHours(3));
         RootBook c = first(ChartBridgeTime.ToUtc(s0).AddMinutes(-30), s0.AddMinutes(15));
@@ -190,21 +190,27 @@ public static class WindowHarness
         Check(a.Table.Whole && a.BackfillLive == null && a.BackfillState == "none", "whole: ChartBridge listening before 18:00 and the session's first trade at the start");
         Check(!b2.Table.Whole && b2.BackfillLive != null && b2.BackfillState == "wanted" && Math.Abs(b2.Table.CoveredFromEt - EtSec(s0.AddHours(3))) < 0.001,
             "not whole: ChartBridge started mid-session; the table counts from its first live trade and one backfill is wanted");
-        Check(!c.Table.Whole && c.BackfillState == "wanted", "not whole: the first trade 15 minutes after 18:00 (the feed was down across the start)");
+        Check(c.Table.Whole && c.BackfillState == "none", "review 3 S-A: whole though the first trade comes 15 minutes after 18:00 (ChartBridge and the feed were up before it): no backfill");
         Check(!d.Table.Whole, "not whole: not yet listening to market data");
         RootBook e = first(ChartBridgeTime.ToUtc(s0).AddMinutes(-30), s0.AddSeconds(45)), f = first(ChartBridgeTime.ToUtc(s0).AddMinutes(-30), s0.AddSeconds(90));
-        Check(e.Table.Whole && !f.Table.Whole, "whole only when the first trade comes within a minute of 18:00 (45 s: whole; 90 s: not)");
+        Check(e.Table.Whole && f.Table.Whole, "whole however late the first trade (45 s, 90 s)");
+        // the feed down across 18:00 (ChartBridge running): not whole, says so, and no backfill (only a start after 18:00 has one)
+        RootBook fd = new RootBook("MNQ", 0.25);
+        DateTime listen = ChartBridgeTime.ToUtc(s0).AddMinutes(-30), upAt = ChartBridgeTime.ToUtc(s0).AddMinutes(4);
+        lock (fd.Sync) fd.OnTrade(s0.AddMinutes(4), 20000, 1, EtSec(s0.AddMinutes(4)), listen, upAt, 0, s0.AddMinutes(4), true);
+        Check(!fd.Table.Whole && fd.Table.Dropped && fd.BackfillLive == null && fd.BackfillState.StartsWith("none (the feed was down"),
+            "review 3 S-A: the feed down across 18:00 with ChartBridge running: not whole, marked as a drop at the start, no backfill (" + fd.BackfillState + ")");
         RootBook g = new RootBook("MES", 0.25);
-        lock (g.Sync) g.OnTrade(s0.AddHours(3), 5000, 1, EtSec(s0.AddHours(3)), ChartBridgeTime.ToUtc(s0).AddHours(3), 0, s0.AddHours(3), false);
+        lock (g.Sync) g.OnTrade(s0.AddHours(3), 5000, 1, EtSec(s0.AddHours(3)), ChartBridgeTime.ToUtc(s0).AddHours(3), ChartBridgeTime.ToUtc(s0).AddHours(3), 0, s0.AddHours(3), false);
         Check(!g.Table.Whole && g.BackfillLive == null && g.BackfillState == "none (not in profileRoots)", "an instrument not in profileRoots: no backfill, the table counts from its first live trade (" + g.BackfillState + ")");
         // S7: a trade far older than the clock (NinjaTrader's snapshot of the last trade when market data starts) opens no table
         RootBook h = new RootBook("MNQ", 0.25);
         DateTime fri = Et(2026, 9, 25, 16, 59, 58);
-        lock (h.Sync) h.OnTrade(fri, 20000, 1, EtSec(fri), ChartBridgeTime.ToUtc(fri).AddHours(40), 0, fri.AddHours(40), true);
+        lock (h.Sync) h.OnTrade(fri, 20000, 1, EtSec(fri), ChartBridgeTime.ToUtc(fri).AddHours(40), ChartBridgeTime.ToUtc(fri).AddHours(40), 0, fri.AddHours(40), true);
         Check(h.Table == null && h.StaleTrades == 1 && h.BackfillState == "none", "S7: a stale last trade at start (Friday 16:59:58 seen on Sunday) opens no session and wants no backfill");
         // S1: a backfill that waits too long stops keeping live trades
         RootBook k = first(ChartBridgeTime.ToUtc(s0).AddHours(3), s0.AddHours(3));
-        lock (k.Sync) for (int i = 0; i < RootBook.LiveCap + 10; i++) k.OnTrade(s0.AddHours(3).AddMilliseconds(i), 20000, 1, EtSec(s0.AddHours(3)), ChartBridgeTime.ToUtc(s0).AddHours(3), 0, DateTime.MinValue, true);
+        lock (k.Sync) for (int i = 0; i < RootBook.LiveCap + 10; i++) k.OnTrade(s0.AddHours(3).AddMilliseconds(i), 20000, 1, EtSec(s0.AddHours(3)), ChartBridgeTime.ToUtc(s0).AddHours(3), ChartBridgeTime.ToUtc(s0).AddHours(3), 0, DateTime.MinValue, true);
         Check(k.BackfillLive == null && k.BackfillState.StartsWith("abandoned"), "S1: the live trades kept for a backfill are bounded (" + RootBook.LiveCap.ToString("N0", CultureInfo.InvariantCulture) + "); past it the backfill is abandoned and nothing more is kept");
     }
 
@@ -384,7 +390,7 @@ public static class WindowHarness
         client = NewClient(88, sent);
         Func<BarsRequest, bool> was = BarsRequest.AutoAnswer;
         BarsRequest.AutoAnswer = null;
-        int gapWas = ChartBridgeServer.BackfillGapMs, startWas = ChartBridgeServer.BackfillStartMs, retryWas = ChartBridgeServer.BackfillRetryMs, toWas = ChartBridgeServer.BackfillTimeoutMs, wretryWas = ChartBridgeServer.WindowRetryMs;
+        int gapWas = ChartBridgeServer.BackfillGapMs, startWas = ChartBridgeServer.BackfillStartMs, retryWas = ChartBridgeServer.BackfillRetryMs, toWas = ChartBridgeServer.BackfillTimeoutMs, wretryWas = ChartBridgeServer.WindowRetryMs, wtoWas = ChartBridgeServer.WindowTimeoutMs;
         ChartBridgeServer.ByDateTickLoads = false;
         ChartBridgeServer.ClockForHarness = () => simNow;
         Priv("WatchFeed");
@@ -393,6 +399,9 @@ public static class WindowHarness
             ChartBridgeServer.BackfillGapMs = 0; ChartBridgeServer.BackfillRetryMs = 300; ChartBridgeServer.WindowRetryMs = 400;
             MidSession();
             BackfillWaitsAndRetries();
+            GateAfterTimeout();
+            BackfillOrderAndRound2();
+            ClosedMarketDrop();
             Windows();
             WindowSingleFlight();
             FeedDrop();
@@ -400,7 +409,7 @@ public static class WindowHarness
         finally
         {
             ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillGapMs = gapWas; ChartBridgeServer.BackfillStartMs = startWas; ChartBridgeServer.BackfillRetryMs = retryWas;
-            ChartBridgeServer.BackfillTimeoutMs = toWas; ChartBridgeServer.WindowRetryMs = wretryWas;
+            ChartBridgeServer.BackfillTimeoutMs = toWas; ChartBridgeServer.WindowRetryMs = wretryWas; ChartBridgeServer.WindowTimeoutMs = wtoWas;
             ChartBridgeServer.ClockForHarness = null; ChartBridgeServer.ByDateTickLoads = true;
             Priv("UnwatchFeed");
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
@@ -506,24 +515,144 @@ public static class WindowHarness
         RootBook book = ChartBridgeServer.BookOf("MNQ", inst);
         string state; bool live; lock (book.Sync) { state = book.BackfillState; live = book.BackfillLive != null; }
         Check(TradesAsked(m0, ByDate) == 2 && state.StartsWith("failed: ") && !live, "B1, S1: then given up with a note (\"" + state + "\"), no third ask, and no live trades kept for it");
-        // A backfill NinjaTrader never answers: given up after its time limit, nothing kept, and the gate goes on to windows.
+        // A backfill NinjaTrader does not answer in time: given up, nothing kept; it stays outstanding (X1), so a page's window
+        // is not asked beside it (the page goes live without one); its late answer is dropped and the gate goes on.
         ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0));
         ChartBridgeServer.BackfillStartMs = 0; ChartBridgeServer.BackfillTimeoutMs = 300;
         simNow = t0;
         int m1 = MadeCount();
         Live(tape, 0, 50);
-        WaitFor(() => Find(m1, r => IsTrades(r) && ByDate(r)) != null);
+        BarsRequest late = null;
+        WaitFor(() => (late = Find(m1, r => IsTrades(r) && ByDate(r))) != null);
         Thread.Sleep(600);
         book = ChartBridgeServer.BookOf("MNQ", inst);
         lock (book.Sync) { state = book.BackfillState; live = book.BackfillLive != null; }
         Sub(client, "502", 2, true);
         AnswerMinutes(m1);
+        Check(state.StartsWith("timed out") && !live && WaitFor(() => Ready(Sent(), "502"), 3000) && TradesAsked(m1, ByCount) == 0,
+            "B1, X1: a backfill with no answer is given up after its time limit (\"" + state + "\"), nothing kept; while it is still out no window goes beside it (the page goes live without one)");
+        if (late != null) late.Answer(Answer(tape, 0, 50), ErrorCode.NoError);
+        Sub(client, "503", 2, true);
+        AnswerMinutes(m1);
         BarsRequest wr = null;
-        Check(state.StartsWith("timed out") && !live && WaitFor(() => (wr = Find(m1, r => IsTrades(r) && ByCount(r))) != null, 3000),
-            "B1: a backfill with no answer is given up after its time limit (\"" + state + "\"), nothing kept; the next window request still goes");
+        Check(WaitFor(() => (wr = Find(m1, r => IsTrades(r) && ByCount(r))) != null, 3000), "X1: once NinjaTrader answers it (the answer dropped), the next window goes");
         if (wr != null) wr.Answer(Answer(tape, 0, 50), ErrorCode.NoError);
-        WaitFor(() => Ready(Sent(), "502"));
+        WaitFor(() => Ready(Sent(), "503"));
         ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillTimeoutMs = 300000; ChartBridgeServer.WindowFirstGuess = 200000;
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+    }
+
+    static void LiveOn(Instrument i, List<Trade> tape, int from, int to)
+    {
+        for (int k = from; k < to; k++)
+        {
+            simNow = tape[k].T;
+            Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = i, MarketDataType = MarketDataType.Last, Price = tape[k].P, Volume = tape[k].V, Time = tape[k].T });
+        }
+    }
+    static readonly Instrument NqInst = new Instrument { FullName = "NQ 12-26", MasterInstrument = new MasterInstrument { Name = "NQ", TickSize = 0.25, PointValue = 20 } };
+    static readonly Instrument EsInst = new Instrument { FullName = "ES 12-26", MasterInstrument = new MasterInstrument { Name = "ES", TickSize = 0.25, PointValue = 50 } };
+    static string RootOfReq(BarsRequest r) { return r.Instrument != null && r.Instrument.MasterInstrument != null ? r.Instrument.MasterInstrument.Name : "?"; }
+
+    // X1 (review 3, the reviewer's "wintimeout"): a window NinjaTrader does not answer in time is given up, but it stays
+    // outstanding: no backfill and no second window go out beside it, and its late answer is dropped without a copy.
+    static void GateAfterTimeout()
+    {
+        DateTime t0 = SimBase.AddMinutes(-30);
+        List<Trade> tape = Walk(t0, 6000, 81, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-1));   // a start after 18:00: a backfill is wanted
+        ChartBridgeServer.BackfillOn = true; ChartBridgeServer.BackfillStartMs = 0;
+        ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 50000;
+        lock (sent) sent.Clear();
+        int m0 = MadeCount();
+        Sub(client, "801", 2, true);                     // the page first: its window goes out, then the backfill is wanted
+        AnswerMinutes(m0);
+        BarsRequest w = null;
+        WaitFor(() => (w = Find(m0, r => IsTrades(r) && ByCount(r))) != null);
+        Live(tape, 0, 500);
+        Check(WaitFor(() => Ready(Sent(), "801"), 3000) && Sent().Any(x => x.Contains("Tick history failed")), "X1: a window with no answer in time: the page goes live without it, and says so");
+        Thread.Sleep(ChartBridgeServer.WindowRetryMs + 100);
+        Sub(client, "802", 2, true); AnswerMinutes(m0);
+        WaitFor(() => Ready(Sent(), "802"), 3000);
+        Live(tape, 500, 800);
+        Thread.Sleep(300);
+        Check(w != null && TradesAsked(m0, ByDate) == 0 && TradesAsked(m0, ByCount) == 1 && Books().Contains("\"stuck\":\"window MNQ\""),
+            "X1: while it is still at NinjaTrader, no backfill goes out and no second window, not even for a reload after the retry delay (/diag gate stuck)");
+        if (w == null) return;
+        RootBook book = ChartBridgeServer.BookOf("MNQ", inst);
+        w.Answer(Answer(tape, 0, 800), ErrorCode.NoError);   // the late answer
+        double cb; lock (book.Sync) cb = book.WindowCallbackMs;
+        BarsRequest bf = null;
+        Check(cb < 0 && !Books().Contains("\"stuck\":\"window") && WaitFor(() => (bf = Find(m0, r => IsTrades(r) && ByDate(r))) != null, 3000),
+            "X1: its late answer is dropped at once (not copied: no callback time), and then the queued backfill goes");
+        if (bf != null) bf.Answer(Answer(tape, 0, 800), ErrorCode.NoError);
+        WaitFor(() => Books().Contains("\"state\":\"done\""), 3000);
+        ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000;
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+    }
+
+    // S-E: the backfills wait for the feed to be up a while (BackfillStartMs from the first live trade) and go in profileRoots
+    // order (MNQ, NQ, ES), whatever order the first trades came in. S-D: a window's second ask goes before a queued backfill.
+    static void BackfillOrderAndRound2()
+    {
+        DateTime t0 = SimBase.AddMinutes(-20);
+        List<Trade> es = Walk(t0, 50, 91, 100), nq = Walk(t0.AddSeconds(1), 50, 92, 100), mnq = Walk(t0.AddSeconds(2), 3000, 93, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-1));
+        ChartBridgeServer.BackfillOn = true; ChartBridgeServer.BackfillStartMs = 60000;
+        lock (sent) sent.Clear();
+        int m0 = MadeCount();
+        LiveOn(EsInst, es, 0, 5); LiveOn(NqInst, nq, 0, 5); LiveOn(inst, mnq, 0, 5);
+        LiveOn(inst, mnq, 5, 300);                        // 30 s: not yet
+        Thread.Sleep(300);
+        Check(TradesAsked(m0, ByDate) == 0, "S-E: no backfill in the first minute after the feed came up");
+        LiveOn(inst, mnq, 300, 1100);                     // past a minute (about 80 ms a trade)
+        List<string> order = new List<string>();
+        for (int k = 0; k < 3; k++)
+        {
+            BarsRequest r = null;
+            if (!WaitFor(() => (r = Made(m0).Where(x => IsTrades(x) && ByDate(x)).Skip(k).FirstOrDefault()) != null, 3000)) break;
+            order.Add(RootOfReq(r));
+            List<Trade> tp = RootOfReq(r) == "MNQ" ? mnq.Take(1100).ToList() : RootOfReq(r) == "NQ" ? nq.Take(5).ToList() : es.Take(5).ToList();
+            r.Answer(Answer(tp, 0, tp.Count), ErrorCode.NoError);
+        }
+        Check(string.Join(",", order.ToArray()) == "MNQ,NQ,ES", "S-E: then the backfills one at a time in profileRoots order: " + string.Join(", ", order.ToArray()) + " (the first trades came ES, NQ, MNQ)");
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-1));
+        ChartBridgeServer.BackfillStartMs = 0; ChartBridgeServer.WindowFirstGuess = 1000;
+        simNow = t0;
+        int m1 = MadeCount();
+        Sub(client, "811", 2, true); AnswerMinutes(m1);
+        BarsRequest w1 = null;
+        WaitFor(() => (w1 = Find(m1, r => IsTrades(r) && ByCount(r))) != null);
+        LiveOn(inst, mnq, 0, 2000);                       // the backfill is now wanted and queued
+        if (w1 != null) w1.Answer(Answer(mnq, 2000 - w1.BarsBack, 2000), ErrorCode.NoError);   // full and short: a second ask
+        WaitFor(() => Made(m1).Count(IsTrades) >= 2, 3000);
+        List<BarsRequest> ts = Made(m1).Where(IsTrades).ToList();
+        Check(ts.Count >= 2 && ByCount(ts[0]) && ByCount(ts[1]) && ts[1].BarsBack == 3000, "S-D: a window's second ask goes before the queued backfill (" + string.Join(", ", ts.Select(r => ByDate(r) ? "by date" : r.BarsBack.ToString(CultureInfo.InvariantCulture)).ToArray()) + ")");
+        if (ts.Count >= 2) ts[1].Answer(Answer(mnq, 0, 2000), ErrorCode.NoError);
+        BarsRequest bf = null;
+        if (WaitFor(() => (bf = Find(m1, r => IsTrades(r) && ByDate(r))) != null, 3000)) bf.Answer(Answer(mnq, 0, 2000), ErrorCode.NoError);
+        Thread.Sleep(200);
+        ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowFirstGuess = 200000;
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+    }
+
+    // S-B: a feed drop while the market is closed (a Saturday, the 17:00 to 18:00 break) misses no trade: nothing is marked.
+    static void ClosedMarketDrop()
+    {
+        DateTime fri = Et(2026, 9, 25, 15, 0, 0);
+        List<Trade> tape = Walk(fri, 3000, 95, 300);
+        simNow = fri;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(Et(2026, 9, 24, 12, 0, 0)));   // listening since Thursday noon: whole
+        Live(tape, 0, 3000);
+        RootBook book = ChartBridgeServer.BookOf("MNQ", inst);
+        simNow = Et(2026, 9, 26, 11, 0, 0);               // Saturday
+        Priv("FeedDropped", null, "a test drop on Saturday");
+        simNow = Et(2026, 9, 29, 17, 30, 0);              // a Tuesday in the break
+        Priv("FeedDropped", null, "a test drop in the break");
+        bool whole; lock (book.Sync) whole = book.Table.Whole && !book.Table.Dropped;
+        Check(whole, "S-B: a feed drop on a Saturday or in the 17:00 to 18:00 break marks nothing (no trade was missed)");
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
     }
 
@@ -691,9 +820,9 @@ public static class WindowHarness
         Connection.FirePrice(new Connection { Status = ConnectionStatus.Connected }, ConnectionStatus.Connected, ConnectionStatus.ConnectionLost);
         Thread.Sleep(100);
         string prof = Sent().LastOrDefault(x => x.StartsWith("{\"type\":\"profile\""));
-        bool whole, cache; lock (book.Sync) { whole = book.Table.Whole; cache = book.Cache != null; }
-        Check(!whole && !cache && prof != null && prof.Contains("\"drop\":{") && prof.Contains("\"whole\":false") && Books().Contains("\"drop\":\"the data connection went ConnectionLost"),
-            "S2: a feed drop: the table is not whole, the served window is dropped, and the live page gets the profile with the drop");
+        bool whole, cache; lock (book.Sync) { whole = book.Table.Whole; cache = book.CacheGap; }
+        Check(!whole && cache && prof != null && prof.Contains("\"drop\":{") && prof.Contains("\"whole\":false") && Books().Contains("\"drop\":\"the data connection went ConnectionLost"),
+            "S2: a feed drop: the table is not whole, the served window is marked as missing it, and the live page gets the profile with the drop");
         Live(tape, 11000, 11500);                         // back, with a gap of trades never seen
         int m1 = MadeCount();
         Sub(client, "702", 2, true);
@@ -706,6 +835,14 @@ public static class WindowHarness
         int r2 = l.FindIndex(x => x.StartsWith("{\"type\":\"ready\"") && x.Contains(SubOf("702")));
         string p2 = l.Take(r2).LastOrDefault(x => x.StartsWith("{\"type\":\"profile\""));
         Check(p2 != null && p2.Contains("\"whole\":false") && p2.Contains("\"drop\":{"), "S2: and a reload's profile still says not whole, with the drop (never whole again this session)");
+        // S-G: another drop right after: the next load gets the served window (with the gap), not a new request
+        Connection.FirePrice(new Connection { Status = ConnectionStatus.Connected }, ConnectionStatus.Connected, ConnectionStatus.ConnectionLost);
+        Thread.Sleep(100);
+        Live(tape, 11600, 11700);
+        int m2 = MadeCount();
+        Sub(client, "703", 2, true);
+        AnswerMinutes(m2);
+        Check(WaitFor(() => Ready(Sent(), "703")) && TradesAsked(m2, r => true) == 0, "S-G: a second drop within 10 minutes: the next load is served the window with its gap, no new request");
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
     }
 

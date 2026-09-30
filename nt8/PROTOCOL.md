@@ -541,8 +541,11 @@ kept past the session.
 through one gate: one request out at a time, windows first. A backfill starts only with nothing else out: no window request,
 no other backfill, no minute chart's last-trades request (20,000 by count, for its forming minute); and a minute chart does not
 make that request while a backfill is out (its forming minute stays as NinjaTrader sent it). A request NinjaTrader does not
-answer in time (a window 120 s, a backfill 5 min) is given up; a backfill given up that way keeps every later backfill out
-until NinjaTrader does answer it. The minute history of each load (a small by-date request of 1-minute bars) is not gated.
+answer in time (a window 120 s, a backfill 5 min) is given up for the pages waiting on it, but it stays outstanding: nothing
+else goes out until NinjaTrader answers it (no window, no backfill, no minute chart's last-trades request; tick charts that
+load meanwhile go live with no trades), and its late answer is dropped at once, not copied. The minute history of each load
+(a small by-date request of 1-minute bars) is not gated; minute charts' last-trades requests are not gated against each
+other or against a window (each is 20,000 trades).
 
 **The served window.** Every subscribe with `tickHours` above 0 (a Range or seconds chart, with or without `liveFirst`: a 1.6.x
 page or The Desk's relay gets it too; 0.3.5 never runs 0.3.4's by-date tick load) gets the last `rangeHours` of trades
@@ -553,8 +556,9 @@ request per instrument at a time: loads that come while it is out (a second page
 wait for the same answer. The answer is kept whatever load is current: cut at `rangeHours`, joined to the live trades since
 the ask by the 0.3.3 seam, it is the instrument's served window, kept in ChartBridge's memory and extended by every live
 trade. Every later load of that instrument gets its trades from there, from the same first trade, and NinjaTrader is not
-asked again. It is dropped at the next session (the first trade after 18:00 ET), at a feed drop (below), and after the
-session ends (a Friday window does not wait in memory for Sunday). When a window fails (an error, no answer in time, or its
+asked again. It is dropped at the next session (the first trade after 18:00 ET) and after the session ends (a Friday window
+does not wait in memory for Sunday, so a weekend Range load asks NinjaTrader again, for a small window). After a feed drop
+(below) it is kept with its gap, and asked again at a load at most once in 10 minutes per instrument. When a window fails (an error, no answer in time, or its
 live trades could not be joined), the loads waiting go live with no trades ("Tick history failed", charts start from live
 trades), and no load asks again for 60 s. Its trades are `[t, p, v]` (no side: the delta pane counts live trades from the
 page's open). A late-day reload sends the whole window: from the first window's start (say 6:30) to now.
@@ -562,12 +566,16 @@ page's open). A late-day reload sends the whole window: from the first window's 
 **The session table.** ChartBridge keeps, per instrument, the volume at each price of the current session (from 18:00 ET),
 per half hour of New York time (9:30, 13:00 and 16:00 are half hour edges, so RTH, and an NYSE early close, are whole rows),
 fed by every live trade (OnMarketData Last) under the instrument's lock. A trade more than 2 minutes off the clock
-never opens a session (NinjaTrader can replay the last trade when market data starts). The table is whole when ChartBridge
-was listening before the session started and its first trade came within a minute of 18:00. Otherwise (ChartBridge started
-after 18:00) it holds the live trades from its first one (`coveredFrom`), and for an instrument in `profileRoots` (config,
-default `MNQ, NQ, ES, MES`) ONE backfill of the session is run: queued at the instrument's first live trade (the feed is up),
-started no sooner than 20 s after market data started, through the gate, one instrument at a time in `profileRoots` order,
-once per session, never for a page load, and not while the market is closed. It asks NinjaTrader for the session so far **by
+never opens a session (NinjaTrader can replay the last trade when market data starts; a PC clock that far off the feed
+opens none, `/diag` `staleTrades`). The table is whole when ChartBridge was listening before the session started and the
+feed was up from before it, however late the first trade comes. When ChartBridge was running but the feed was down at the
+start (a drop not back by 18:00), the table counts from its first live trade and says the feed was down; no backfill. When
+ChartBridge started after 18:00 (NinjaTrader started, or the add-on recompiled, mid-session) it holds the live trades from
+its first one (`coveredFrom`), and for an instrument in `profileRoots` (config, default `MNQ, NQ, ES, MES`) ONE backfill of
+the session is run: only then, never at a later 18:00. The backfills start once the feed has been up for a minute (from the
+first live trade after market data started) and no page is loading, through the gate, one instrument at a time in
+`profileRoots` order (MNQ, NQ, ES, MES, whatever order their first trades came in), once per session, never for a page load,
+and not while the market is closed. It asks NinjaTrader for the session so far **by
 date**, from its 18:00 start. NinjaTrader's help says a by-date request covers whole trading days from 12:00 AM, so the answer
 also holds the hours before 18:00 (back to midnight the day before); NinjaTrader loads them and ChartBridge copies them, then
 leaves them out. On NinjaTrader's callback thread only that copy is done (timed: `callbackMs` in `/diag`); the rest runs on a
@@ -582,9 +590,13 @@ used when more than 4 days old), for the weekend's "last session" profile and a 
 trades is written to disk.
 
 **A feed drop.** When a data connection's price feed goes from Connected to anything else (NinjaTrader's
-`Connection.ConnectionStatusUpdate`), or a market data reset arrives, every table it touches is marked not whole for the
-rest of the session (`drop` in the message: the time and why), its served window is dropped (the next load asks NinjaTrader,
-whose history fills the gap), and live pages get the profile again. A later backfill does not make it whole.
+`Connection.ConnectionStatusUpdate`; any connection's, so one that feeds nothing charted here counts too), or a market data
+reset arrives, while the market is open, every table it touches is marked not whole for the rest of the session (`drop` in
+the message: the time and why), its served window is kept with the gap (asked again at a load at most once in 10 minutes),
+and live pages get the profile again. A later backfill does not make it whole. A drop while the market is closed (a
+weekend, the 17:00 to 18:00 break) misses no trade and marks nothing; the page also shows the drop only when it fell inside
+the trading its profile counts (RTH for an RTH profile). Range and seconds views keep their VWAP after a drop (the table's
+sums plus the page's trades) and say what it misses.
 
 **The `profile` message.** Sent right before `ready` to a subscribe with `profile: true` (any view): `session` is the table
 exactly up to the last trade the page has (the held live trades released after `ready` are taken off, the page adds them

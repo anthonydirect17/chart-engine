@@ -477,7 +477,7 @@ const server = http.createServer((req, res) => {
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
     else if (p === '/test/feed-drop') {
       dropAt = +etNow().toFixed(3);
-      for (const x of Object.values(books)) x.window = null;
+      for (const x of Object.values(books)) if (x.window && !x.gapAsked) { x.window = null; x.gapAsked = true; }   // asked again once (ChartBridge: at most once in 10 minutes)
       for (const c of clients) if (c.ready && c.profile && tapes[c.root]) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
     }
     else if (p === '/test/tape') {

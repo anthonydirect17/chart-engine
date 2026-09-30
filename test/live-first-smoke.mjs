@@ -276,7 +276,9 @@ try {
     const dn = await p.evaluate(() => document.getElementById('vpNote').textContent);
     await p.reload(); await live(p);
     const dn2 = await p.evaluate(() => document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent);
-    check(/^Volume profile missing trades: the data connection dropped at \d+:\d\d ET/.test(dn) && dn2 === dn, 'a feed drop: "' + dn + '", and the same after a reload (never whole again)');
+    check(/^Volume profile missing trades: the data connection was down at \d+:\d\d ET/.test(dn) && dn2 === dn, 'a feed drop: "' + dn + '", and the same after a reload (never whole again)');
+    const vwn = await p.evaluate(() => ({ note: document.getElementById('rangeNote').hidden ? '' : document.getElementById('rangeNote').textContent, vw: document.getElementById('lgVw').textContent }));
+    check(/^VWAP and range bars after \d+:\d\d ET miss the trades while the data connection was down/.test(vwn.note) && vwn.vw !== '-', 'review 3 S-C: after the drop the range VWAP stays (' + vwn.vw + ') and says what it misses: "' + vwn.note + '"');
     await ctx.close();
     br.kill();
   }

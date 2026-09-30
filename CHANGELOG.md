@@ -15,19 +15,23 @@ never ask for quotes).
 - **The served window** (nt8/PROTOCOL.md, Served window and session table): ChartBridge's `hello` lists
   `features: ["liveFirst", "profile"]`; a Range or seconds chart then subscribes with `liveFirst` and gets the last
   `rangeHours` of trades (config.txt, default 2), asked of NinjaTrader **by count** (a request by date returns whole
-  trading days), sized from the live trade rate and asked again (at most three rounds) when the answer does not reach back
+  trading days), sized from the live trade rate and asked once more, larger (two asks at most), when the answer does not reach back
   far enough. ChartBridge keeps that window, extended by every live trade, in memory for the session: a reload, a second
   page or a view switch gets its trades from there, from the same first trade, and NinjaTrader is not asked again. Dropped
   at the next 18:00 ET session; never written to disk.
-- **One tick request to NinjaTrader at a time** (review 2 B1, B2): served windows first; a session backfill only with
+- **One tick request to NinjaTrader at a time** (review 2 B1, B2; review 3 X1: also after a timeout, a request given up
+  stays outstanding until NinjaTrader answers, nothing goes beside it, and its late answer is dropped uncopied): served
+  windows first, a window's second ask ahead of any backfill (review 3 S-D); a session backfill only with
   nothing else out (no window, no other backfill, no minute chart's last-trades request, which also waits while a backfill
   is out). A window request is shared by every load of that instrument that comes while it is out, kept whatever load is
   current, asked at most twice (the second time larger), and after a failure not asked again for 60 s. Every tick
   subscribe gets the served window, with or without `liveFirst` (a 1.6.x page, The Desk's relay): 0.3.5 never runs 0.3.4's
   by-date tick load (review 2 S6).
 - **The session table:** per instrument, the session's volume at each price per half hour of New York time, fed by the live
-  trades. When ChartBridge starts after 18:00, ONE backfill of the session per instrument in `profileRoots` (config, default
-  MNQ, NQ, ES, MES, in that order): queued at its first live trade, at least 20 s after market data starts, one at a time,
+  trades. Whole when ChartBridge and the feed were up before 18:00, however late the first trade (review 3 S-A). When
+  ChartBridge starts after 18:00 (NinjaTrader started, or the add-on recompiled), and only then, ONE backfill of the session
+  per instrument in `profileRoots` (config, default MNQ, NQ, ES, MES, in that order whatever order their first trades come
+  in): once the feed has been up a minute and no page is loading (review 3 S-E), one at a time,
   once per session, never for a page load, never while the market is closed. It asks by date from 18:00; NinjaTrader's help
   says a by-date request covers whole days from midnight, so the answer also holds the previous day's hours before 18:00,
   which are copied and then left out. On NinjaTrader's callback thread only the copy (timed, `/diag` `callbackMs`); the rest
@@ -36,9 +40,13 @@ never ask for quotes).
   18:00 a new table starts; the finished one is kept (one small file per instrument, `profile-MNQ.txt`, not used when over 4
   days old) for the weekend's "last session" profile and a later weekly profile. A trade more than 2 minutes off the clock
   never opens a session (review 2 S7).
-- **A feed drop** (review 2 S2): when a price feed goes from Connected to anything else, or a market data reset arrives, the
-  table is not whole for the rest of the session ("Volume profile missing trades: the data connection dropped at HH:MM ET"),
-  the served window is dropped (the next load asks NinjaTrader again), and live pages get the profile again.
+- **A feed drop** (review 2 S2): when a price feed goes from Connected to anything else, or a market data reset arrives, while
+  the market is open, the table is not whole for the rest of the session ("Volume profile missing trades: the data
+  connection was down at HH:MM ET"), the served window keeps the gap and is asked again at a load at most once in 10
+  minutes (review 3 S-G), and live pages get the profile again. A drop while the market is closed marks nothing, and the page
+  shows a drop only inside the trading its profile counts (review 3 S-B). Range and seconds views keep their VWAP (the
+  table's sums plus the page's trades) and say what it misses; with no table from 18:00 they say why there is none (review
+  3 S-C). A feed down across 18:00 with ChartBridge running: the table counts from the first trade and says so, no backfill.
 - **No formatting under the market data lock** (review 2 S4): the `profile` message, the saved file and its read are made
   from copies with no lock held.
 - **The `profile` message:** the table before `ready` (exactly up to the page's last trade), again when the backfill makes

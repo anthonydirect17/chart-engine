@@ -186,12 +186,13 @@ namespace NinjaTrader.Data
         public static readonly List<BarsRequest> Made = new List<BarsRequest>();
         public DateTime From, To;
         public int BarsBack = -1;
+        public NinjaTrader.Cbi.Instrument Instrument;
         public Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> Callback;
         public bool Answered;
         // Harness hook: when set and it returns true for a request, it has answered that request itself (inside Request).
         public static Func<BarsRequest, bool> AutoAnswer;
-        public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { From = from; To = to; lock (Made) Made.Add(this); }
-        public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { BarsBack = barsBack; lock (Made) Made.Add(this); }
+        public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { Instrument = i; From = from; To = to; lock (Made) Made.Add(this); }
+        public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { Instrument = i; BarsBack = barsBack; lock (Made) Made.Add(this); }
         public BarsPeriod BarsPeriod { get; set; }
         public TradingHours TradingHours { get; set; }
         public Bars Bars { get; set; }
