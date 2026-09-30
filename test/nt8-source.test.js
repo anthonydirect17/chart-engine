@@ -203,9 +203,11 @@ test('the main file routes order messages only to ChartBridgeOrders, and ships b
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
   assert.match(code, /ChartBridgeOrders\.UnwatchConnections\(\);/);
   assert.ok(!/Access-Control-Allow-Origin/.test(code + ocode), 'no CORS headers anywhere');
+  // nt8/install.ps1 (and the updater, nt8/update-pc.ps1) copy what nt8/install-files.json lists
   const install = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install.ps1'), 'utf8');
-  assert.match(install, /ChartBridgeOrders\.cs/);
-  assert.match(install, /'nt8\\ChartBridgePin\.cs'/);
+  assert.match(install, /nt8\\install-files\.json/);
+  const addons = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons;
+  assert.ok(addons.includes('nt8/ChartBridgeOrders.cs') && addons.includes('nt8/ChartBridgePin.cs'));
   const check = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'check.sh'), 'utf8');
   assert.match(check, /ChartBridgeOrders\.cs ChartBridgePin\.cs/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
@@ -479,8 +481,8 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
 
 // ---- 0.3.4: the side of every trade (behaviour: nt8/check/SidesHarness.cs under Mono, test/trade-sides.test.js)
 test('0.3.4: every trade carries its side, additively, and the seam match ignores it', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.4 for NinjaTrader 8/);
-  assert.match(code, /public const string Version = "0\.3\.4";/);
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.4\.1 for NinjaTrader 8/);
+  assert.match(code, /public const string Version = "0\.3\.4\.1";/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   // Bid and Ask updates only move the quote: nothing is sent or held for them
   const quote = md.slice(0, md.indexOf('if (type != MarketDataType.Last) return;') + 45);
@@ -515,13 +517,49 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.ok(md2.indexOf('if (e.IsReset)') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'IsReset handled before NoteLast');
   assert.match(md2, /if \(e\.IsReset\)[\s\S]*?ClearQuote\(\);[\s\S]*?return;\s*\}/);
   assert.ok(md2.indexOf('if (!(e.Price > 0)) return;') >= 0 && md2.indexOf('if (!(e.Price > 0)) return;') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'price checked before NoteLast');
-  // tick charts ask for Bid and Ask ticks of the same window; minute charts do not
+  // tick charts ask for Bid and Ask ticks (0.3.4.1: only with quoteHours 1 or 2, see below); minute charts do not
   const rt = bodyOf(code, 'private static void RequestTicks(');
-  assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, true\);\s*RequestQuotes\(L, MarketDataType\.Ask, true\);/);
+  assert.match(rt, /if \(hours > 0\)\s*\{\s*RequestQuotes\(L, MarketDataType\.Bid, true\);\s*RequestQuotes\(L, MarketDataType\.Ask, true\);\s*\}/);
   assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /new BarsRequest\(L\.Inst, L\.QuoteFrom, to\)/);
-  assert.match(rt, /L\.QuoteFrom = L\.NowNt\.AddHours\(-Math\.Min\(L\.TickHours, QuoteHoursMax\)\);/);
+  assert.match(rt, /if \(hours > 0\) L\.QuoteFrom = L\.NowNt\.AddHours\(-hours\);/);
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"sides\\":"\)\.Append\(SidesJson\(\)\);/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
   assert.match(orders, /check\/SidesHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /SidesHarness\.Run\(Check\);/);
+});
+
+// ---- 0.3.4.1: quoteHours (behaviour: nt8/check/SidesHarness.cs, QuoteHoursCases, under Mono)
+test('0.3.4.1: no historical Bid or Ask request unless quoteHours (config.txt) is 1 or 2', () => {
+  // the setting: default 0, read with the other config.txt keys, reset on every read, 0, 1 or 2 only (else 0, logged)
+  assert.match(code, /public static int QuoteHours = 0;/);
+  const load = bodyOf(code, 'public static void Load()');
+  assert.match(load, /AllowOrigins = new List<string>\(\);\s*QuoteHours = 0;/);
+  assert.match(load, /else if \(key == "quoteHours"\) QuoteHours = ParseQuoteHours\(val\);/);
+  const parse = bodyOf(code, 'public static int ParseQuoteHours(');
+  assert.match(parse, /if \(int\.TryParse\(val, out n\) && n >= 0 && n <= 2\) return n;/);
+  assert.match(parse, /ChartBridgeServer\.Log\("config\.txt: quoteHours = "[^\n]*\);\s*return 0;/);
+  // the window: quoteHours, at most the trades' window; 0 asks for nothing
+  const win = bodyOf(code, 'public static int QuoteWindowHours(');
+  assert.match(win, /if \(quoteHours <= 0 \|\| tickHours <= 0\) return 0;\s*return Math\.Min\(Math\.Min\(quoteHours, tickHours\), QuoteHoursMax\);/);
+  // the load: RequestQuotes is called only from RequestTicks (and its own retry), only when hours > 0, which needs the
+  // setting and no request for this instrument still outstanding; with none the load waits only for the trades
+  const rt = bodyOf(code, 'private static void RequestTicks(');
+  assert.match(rt, /int hours = QuoteWindowHours\(ChartBridgeConfig\.QuoteHours, L\.TickHours\);/);
+  assert.match(rt, /if \(hours > 0 && !BeginQuotes\(L\.Root\)\) \{ hours = 0;/);
+  assert.match(rt, /L\.Waiting = hours > 0 \? 3 : 1;/);
+  assert.equal((code.match(/RequestQuotes\(L, /g) || []).length, 3, 'RequestQuotes: Bid and Ask in RequestTicks, plus the one retry');
+  assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /RequestQuotes\(L, type, false\);/);
+  // outstanding requests are counted down exactly where an answer is final (never on the retry)
+  assert.equal((code.match(/QuoteAnswered\(L\.Root\);/g) || []).length, 2);
+  const once = bodyOf(code, 'private static void RequestQuotesOnce(');
+  assert.ok(once.indexOf('RequestQuotes(L, type, false);') < once.indexOf('QuoteAnswered(L.Root);'), 'the retry returns before the count down');
+  // /diag: sides.lastLoad says the setting, the hours asked and, at 0, the plain note; outstanding requests per root
+  const notes = bodyOf(code, 'private static void NoteSides(');
+  assert.match(notes, /"quotes not requested \(quoteHours 0\)"/);
+  assert.match(notes, /b\.Append\(",\\"quoteHours\\":"\)\.Append\(ChartBridgeConfig\.QuoteHours\);/);
+  assert.match(notes, /b\.Append\(",\\"quoteWindowHours\\":"\)\.Append\(quoteHours\);/);
+  assert.match(notes, /if \(note != null && skipped == null\) Log\(/);
+  assert.match(bodyOf(code, 'private static string SidesJson()'), /\.Append\(",\\"quotesOutstanding\\":"\)\.Append\(QuotesOutstandingFor\(root\)\)/);
+  const harness = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'SidesHarness.cs'), 'utf8');
+  assert.match(harness, /QuoteHoursParse\(\); QuoteHoursZero\(\); QuoteHoursWindow\(\); QuoteHoursOutstanding\(\);/);
 });

@@ -1,0 +1,9 @@
+{
+  "about": "The oldest ChartBridge each page version works with. nt8/update-pc.ps1 installs a page automatically only when the ChartBridge compiled on the PC is this version or newer. Keep it with the CHANGELOG: every release that needs a newer ChartBridge raises minChartBridge (and adds a line to history), and page follows package.json.",
+  "page": "1.7.0",
+  "minChartBridge": "0.3.2",
+  "history": [
+    { "page": "1.7.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.7.0: the delta pane needs ChartBridge 0.3.4 for its sides (older: the pane shows a note, nothing else changes); 0.3.4.1 recommended (no historical quote requests)" },
+    { "page": "1.6.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.6.0: works with ChartBridge 0.3.2 and 0.3.3, no recompile" }
+  ]
+}

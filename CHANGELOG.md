@@ -180,6 +180,10 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   The delta pane has no chip by default (review N5); pin it from the menu for one, or say if it should have the sixth.
 - **Merged with main** (ChartBridge 0.3.4, 7c28d55): `test/trade-sides.test.js` now checks that `pushAll` passes all
   five places of a backfill trade and that the store keeps the sides from both formats.
+- **Merged with main again** (e6f035e: the per-PC updater and ChartBridge 0.3.4.1, config.txt `quoteHours`, default 0):
+  `live/COMPAT.json` now says page 1.7.0, still working with ChartBridge 0.3.2 and later (the delta pane shows its note
+  before 0.3.4; 0.3.4.1 recommended). The fake bridge keeps `--quote-hours` as the stand-in for 0.3.4.1 in the tests:
+  main's fake bridge does not model it.
 - **For the live-first merge (PR #8, after this one; review 2's trial merge):** the TickStore's side bytes are added,
   dropped and written only through `_addBlock`, `_addBlockFront` and `_put`, so live-first's `prependAll` puts its front
   blocks in with `_addBlockFront` and writes each older trade with `_put` (its `[t, p, v, s, sm]`); keep this branch's
@@ -189,11 +193,118 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   `gapFrom`, the first recent trade's time when ChartBridge reported `gapMs`, keeps the count from starting before it.
   Unused on this branch.
 
+## ChartBridge 0.3.4.1 (2026-09-30): no historical quote requests by default
+
+ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged. **Needs a recompile:** run
+`nt8\install.ps1` again, then compile in NinjaTrader (F5).
+- **Why:** on the trading PC NinjaTrader froze several times a minute with 0.3.4. Every tick chart load and every
+  reload (including the page's reload after a 5 s lag reset) asked NinjaTrader for 8 hours (up to 24) of historical Bid
+  and Ask ticks next to the trades. They did not answer within 2.5 s, so they most likely kept running inside
+  NinjaTrader while the next reload asked again. Those quotes only label past trades as buys or sells for cumulative
+  delta, which the chart does not show yet, and delta is a tool used while trading.
+- **Now, by default, no Bid or Ask history is asked for at all.** The tick backfill goes out as soon as the trades are
+  in (no 2.5 s quote wait). Past trades get their side by the tick rule, and say so (`sm` 3), so a page can tell them
+  from measured sides. Live trades keep their side from the live bid and ask, as before (that costs nothing extra).
+- **New setting `quoteHours`** in `config.txt`: `0` (default), `1` or `2`. With 1 or 2 a tick chart asks for only the
+  last 1 or 2 hours of Bid and Ask (at most its tick window), for a measured test later. Anything else is 0, with a
+  line in the Output window. NinjaTrader's help documents no way to cancel a request once asked, so a reload never asks
+  again while an earlier Bid or Ask request for the same instrument is still unanswered (that load goes by the tick
+  rule and `/diag` says why).
+- **`/diag`:** `sides.<root>.lastLoad` has `quoteHours`, `quoteWindowHours` (hours asked, 0 when none) and, at 0, the
+  note `quotes not requested (quoteHours 0)`; `sides.<root>.quotesOutstanding` counts unanswered Bid and Ask requests.
+  The other counters are unchanged.
+- The order code (`ChartBridgeOrders.cs`) and the PIN (`ChartBridgePin.cs`) are unchanged.
+
+## Unreleased (2026-09-30): keep each trading PC up to date (`nt8/update-pc.ps1`)
+
+Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged (ChartBridge 0.3.4 as on main).
+- **`nt8/update-pc.ps1`**, Windows PowerShell 5.1 and git, no admin: `status`, `check` (dry run), `update` (the
+  automatic path), `-InstallChartBridge`, `rollback`, `pause`, `resume`, `register`, `unregister`. The scheduled task
+  runs `update` for the signed-in user when Anthony signs in (after 2 minutes; an at-startup trigger would need admin)
+  and once a day at 17:05 New York time (`-DailyAt`), converted to the PC's clock when registering: futures are closed
+  from 17:00 to 18:00 ET, so no check lands while Anthony trades (Anthony's ruling). A missed daily run is not started
+  later (no StartWhenAvailable: it could land in the trading day); the sign-in check covers a PC that was off. Never
+  two runs at once, 30 minutes at most. The task runs its own copy, `updater\bin\update-pc.ps1`, which changes only
+  when Anthony runs `register` or `-InstallChartBridge`; the automatic path never moves the clone (it fetches and
+  stages from git objects), so a newer ChartBridge.cs never appears where `install.ps1` copies from. git never asks
+  anything (no terminal, Credential Manager or askpass window; ssh in batch mode). README: "Keep this PC up to date".
+- **The page updates by itself**, only from the newest commit on `main` whose CI is green on ubuntu-latest and
+  windows-latest (read from GitHub without a token, as The Desk's updater does), and only when the ChartBridge compiled
+  on the PC is at least the page's `minChartBridge` in **`live/COMPAT.json`** (new). The compiled version comes from
+  `/diag` when ChartBridge runs (the newest observation, a downgrade too, with a warning in the log), otherwise from
+  what the tool recorded and never above the Version in `AddOns\ChartBridge.cs`; unknown means no update, and the log
+  says why. Files are staged, then written into `www` one by one through a temporary file and an atomic replace, the
+  engine first and index.html last. A journal (`updater\swap.json`) is written first: a run cut off by a power loss
+  or a closed lid is finished, or undone to the previous page, at the start of the next run, before pause and every
+  other gate. The previous page, kept for `rollback`, is only ever copied from a `www` that is exactly the installed
+  build, so it is never a mix.
+- **ChartBridge never installs by itself**: a new one is staged under `updater\staged\`, announced (page, Windows
+  notification, log, `status.json`), and copied into `bin\Custom\AddOns` only by `-InstallChartBridge`, which Anthony
+  runs while flat, with the NinjaScript Editor closed, before pressing F5. It installs from `staged\` (the announced
+  green commit), shows both versions before asking, writes all three files to temporary names and then replaces them
+  back to back. A page that needs the new ChartBridge waits until `/diag` shows it (COMPAT decides).
+- **"Update ready: reload when flat"** (`live/update-notice.js`, loaded by `live/index.html` only): the page reads
+  `update.json` (written by the updater into `www`: versions and a build id only) about once a minute and says so on
+  the status line; also "ChartBridge x.y.z ready to install (flat, then F5)". It never reloads, never covers the order
+  bar or the chart, and never moves them: it takes no room of its own on the status line (checked from 700 to 1920
+  px). A screen reader hears the whole text once; polling survives an error. "Page update cut off: run update-pc.ps1
+  status" if an install could not repair itself.
+- **`nt8/install-files.json`**: the one list of what is installed; `nt8/install.ps1` now reads it (same files as before,
+  plus `update-notice.js`).
+- **COMPAT.json in practice**: a release whose page needs a newer ChartBridge raises `minChartBridge` and adds a
+  `history` line; `page` follows `package.json` (a test holds both, and that `minChartBridge` is never above the
+  ChartBridge in the same commit).
+- Tests: `test/pc-updater.tests.ps1` (run by `npm test` through `test/pc-updater.test.js` with Windows PowerShell 5.1 on
+  Windows and pwsh elsewhere): the CI gate, the ChartBridge compatibility gate, unknown version, staging and the file
+  swap, a power loss at every step of an install (the review's p1 case too), rollback, pause, the version rules (the
+  review's p2 downgrade case), no .cs file ever written to AddOns by the automatic path, `-InstallChartBridge`, the
+  clone never moved, the pinned copy, and the scheduled task registered for real on the Windows runner (both
+  triggers and the daily time). `npm run smoke:update`: the notice with an open position and the width sweep.
+- Second review round: a page that opens while files are written reads "Page files are being updated: do not reload
+  yet" and never takes that build as its own ("installing" for over two minutes reads as cut off, never "reload");
+  `-InstallChartBridge` records the copy at once, so a page that cannot be written then follows on the next update
+  instead of a STOP; `update-pc.ps1 repair` rewrites page files only (no message points at `install.ps1`, which also
+  copies .cs files); `register` pins the staged copy of the newest green main, or the running file only when it is a
+  green commit's blob, and every run from the pinned copy checks its sha256; git runs through one allow-listed entry
+  point with gc and maintenance off; the staged add-ons and updater are checked against the commit's blobs; the pinned
+  copy never goes back to an older commit; README runs everyday commands with the pinned copy; each run moves the
+  daily trigger back to 17:05 New York time if the PC's clock drifted; `status` keeps what /diag said; the finish
+  after a cut-off drops files the new build no longer has.
+- Review of the first version (independent): B1 (no journal, a mixed page kept as the rollback copy), B2 (the clone
+  fast-forward), S1 to S7 and the cheap nits are fixed as above. Left as notes: N3 the 403/429 mapping is read, not
+  tested (junk, empty and refused answers are tested); N11 with OneDrive Known Folder Move, `www` and `updater\` sync
+  and OneDrive can hold a file longer than the 3 s retry (the install then fails and is undone, never mixed). N12 (a
+  PC in another time zone drifting by the DST difference until `register` ran again) is fixed: every run moves the
+  daily trigger back to 17:05 New York time (second round), and the trigger is kept on the PC's own clock (third
+  round).
+- Third review round:
+  - `-InstallChartBridge` is all or nothing. If one add-on file is held past the retry (the NinjaScript Editor,
+    antivirus, OneDrive), every file already replaced is put back from the backup and checked by hash, and it says
+    nothing changed. If the put-back fails too, or a power loss cuts the copy (it is recorded in `state.json` before
+    the first replace), it says "DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report"
+    on the console, in `update.log`, in `status.json` and on the page, until AddOns holds one whole set again.
+  - The daily trigger's StartBoundary is written as local wall-clock time with no UTC offset.
+    New-ScheduledTaskTrigger wrote the offset of the day, which keeps a trigger on UTC: registered in summer, it
+    would have run at 4:05 PM New York time all winter. The drift check reads the wall-clock time from the string and
+    treats an offset as drift. A failed move is recorded and shown by `status`, and `register` warns when run from
+    an elevated window. README: a one-line check of StartBoundary.
+  - The pinned copy stops when its `pinned.json` is missing, and its STOP reaches `status.json` and the page
+    ("Updater stopped").
+  - `register`'s offline fallback never pins an older updater than the pinned one.
+  - `repair` writes the clone's page only when its COMPAT allows the ChartBridge here, or says plainly it could not
+    check, and names the clone's branch and commit.
+  - git's `symbolic-ref`, `remote` and `hash-object` are allowed only in their reading forms.
+  - `status` takes the lock before it reads `state.json`.
+  - A run cut off right after saving `state.json` leaves the page reading "installed", never "cut off": the page is
+    told first, after every file's hash is checked again.
+  - The notice's commands name the task's copy (README: Keep this PC up to date).
+
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
 
 ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to
-work with it. **Needs a recompile:** run `nt8\install.ps1` again (only `ChartBridge.cs` changed), then compile in
-NinjaTrader (F5). The first step toward cumulative delta (buy volume minus sell volume); the delta pane comes later.
+work with it. **Needs a recompile:** while flat, run `update-pc.ps1 -InstallChartBridge` (README: Keep this PC up to
+date; it copies the files of the green commit on main, and only `ChartBridge.cs` changed), then compile in NinjaTrader
+(F5). The first step toward cumulative delta (buy volume minus sell volume); the delta pane comes later.
 Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
 - **The side of every trade, live and in the backfill** (`ChartBridgeSides`), by the rule Anthony approved: the
   exchange's aggressor flag if there were one (NinjaTrader 8 gives an add-on none, so that code is reserved); else the
