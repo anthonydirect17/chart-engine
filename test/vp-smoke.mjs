@@ -121,7 +121,9 @@ const pixels = p => p.evaluate(() => {
     const y = Math.round(chart.priceToY(vp.poc().price) * dpr);
     let first = null, last = null, n = 0;
     for (let yy = y - 2; yy <= y + 2; yy++) for (let px = 0; px < right; px++) if (is(px, yy, want.poc)) { n++; first = first === null ? px : Math.min(first, px); last = last === null ? px : Math.max(last, px); }
-    Object.assign(out, { pocFirst: first, pocLast: last, pocN: n });
+    let tall = 0;                                                     // the POC bar's height at the right edge
+    for (let yy = y - 8; yy <= y + 8; yy++) if (is(right - 3, yy, want.poc)) tall++;
+    Object.assign(out, { pocFirst: first, pocLast: last, pocN: n, pocH: tall, dpr });
   }
   // the right-edge column: which profile colors appear, top to bottom, and any profile color in the plot's left half
   const col = { poc: 0, value: 0, row: 0 };
@@ -168,6 +170,7 @@ try {
   check(px1.pocN > 20 && px1.pocLast >= px1.right - 2 && px1.pocFirst >= px1.right - px1.maxW - 3 && px1.pocFirst <= px1.right - px1.maxW * 0.5,
     'POC row drawn from the right edge, about ' + CE.VP_WIDTH * 100 + '% of the plot wide: device x ' + px1.pocFirst + ' to ' + px1.pocLast + ' (edge ' + px1.right + ', full width ' + Math.round(px1.maxW) + ')');
   check(px1.column.value > 10 && px1.column.row > 10 && px1.column.poc > 0, 'right edge column: value-area rows, other rows and the POC: ' + JSON.stringify(px1.column));
+  check(px1.pocH >= Math.round(CE.VP_POC_MIN * px1.dpr), 'the POC bar is at least ' + CE.VP_POC_MIN + ' CSS px tall: ' + px1.pocH + ' device px at dpr ' + px1.dpr);
   check(px1.left === 0, 'nothing of the profile in the left half of the plot');
   check(s1.note === '', 'no note: the Range tick history reaches back to 18:00');
   await label(p, 'SAMPLE DATA (fake bridge), not market data. Volume profile: Session');
@@ -218,6 +221,15 @@ try {
   await host.waitForFunction(() => [...document.querySelectorAll('[id$="-connPill"]')].every(x => x.textContent === 'LIVE'), null, { timeout: 30000 });
   await host.waitForTimeout(600);
   check(await host.evaluate(() => !window.__a.chart.getLayers().vp && !window.__b.chart.getLayers().vp && window.__a.indicatorOptions('vp').session === 'full'), 'mounted panes: profile off, Session');
+  // review S5: inherited names are not options; the call returns false and throws nothing
+  const inherited = await host.evaluate(() => {
+    const out = [];
+    for (const args of [['vp', 'toString', 'x'], ['vp', 'constructor', 'keys'], ['vp', '__proto__', 'rth'], ['toString', 'session', 'rth'], ['__proto__', 'session', 'rth'], ['vp', 'session', 'toString']]) {
+      try { out.push(window.__a.setIndicatorOption(...args)); } catch (e) { out.push('threw ' + e.message); }
+    }
+    return { out, proto: Object.prototype.vp === undefined && Object.prototype.session === undefined, opts: window.__a.indicatorOptions('toString') };
+  });
+  check(inherited.out.every(x => x === false) && inherited.proto && JSON.stringify(inherited.opts) === '{}', 'setIndicatorOption with inherited names returns false, pollutes nothing: ' + JSON.stringify(inherited));
   const api = await host.evaluate(() => ({ bad: window.__a.setIndicatorOption('vp', 'session', 'eth'), good: window.__a.setIndicatorOption('vp', 'session', 'rth'), now: window.__a.indicatorOptions('vp'),
     saved: JSON.parse(localStorage.getItem('desk:live-indicator-options-v1')), page: JSON.parse(localStorage.getItem('live-indicator-options-v1')) }));
   check(api.bad === false && api.good === true && api.now.session === 'rth' && api.saved.main.vp.session === 'rth' && api.page.main.vp.session === 'full',

@@ -81,11 +81,17 @@ function cleanIndicators(v, base) {
   return out;
 }
 
-/* An indicator's options: the saved values that are allowed, the defaults for the rest ({} for an unknown id). */
+const own = (o, k) => !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
+/* An indicator's options: the saved values that are allowed, the defaults for the rest ({} for an unknown id).
+   Only own properties count (review S5): 'toString' or '__proto__' is never an indicator, an option or a value. */
 function cleanIndicatorOptions(id, v) {
-  const spec = Object.prototype.hasOwnProperty.call(INDICATOR_OPTIONS, id) ? INDICATOR_OPTIONS[id] : {}, out = {};
-  for (const k of Object.keys(spec)) out[k] = v && typeof v === 'object' && spec[k].includes(v[k]) ? v[k] : spec[k][0];
+  const spec = own(INDICATOR_OPTIONS, id) ? INDICATOR_OPTIONS[id] : {}, out = {};
+  for (const k of Object.keys(spec)) out[k] = own(v, k) && spec[k].includes(v[k]) ? v[k] : spec[k][0];
   return out;
+}
+/** Whether `value` is an allowed value of option `key` of indicator `id` (own properties only). */
+function indicatorOptionAllowed(id, key, value) {
+  return own(INDICATOR_OPTIONS, id) && own(INDICATOR_OPTIONS[id], key) && INDICATOR_OPTIONS[id][key].includes(value);
 }
 
 function create(storage) {
@@ -147,16 +153,18 @@ function create(storage) {
     },
     /** One indicator's options on one pane, e.g. indicatorOptions('main', 'vp') -> { session: 'full' }. */
     indicatorOptions(paneId, id) {
-      const pane = obj(KEYS.indicatorOptions)[paneId];
-      return cleanIndicatorOptions(id, pane && typeof pane === 'object' ? pane[id] : null);
+      const all = obj(KEYS.indicatorOptions), pane = own(all, paneId) ? all[paneId] : null;
+      return cleanIndicatorOptions(id, own(pane, id) ? pane[id] : null);
     },
     /** Set one option of one indicator on one pane (read fresh, only that field written); false when not allowed. */
     setIndicatorOption(paneId, id, key, value) {
-      const spec = Object.prototype.hasOwnProperty.call(INDICATOR_OPTIONS, id) ? INDICATOR_OPTIONS[id] : null;
-      if (!spec || !Object.prototype.hasOwnProperty.call(spec, key) || !spec[key].includes(value) || typeof paneId !== 'string' || !paneId) return false;
-      const all = obj(KEYS.indicatorOptions);
-      const pane = all[paneId] && typeof all[paneId] === 'object' && !Array.isArray(all[paneId]) ? all[paneId] : {};
-      pane[id] = Object.assign(cleanIndicatorOptions(id, pane[id]), { [key]: value });
+      if (!indicatorOptionAllowed(id, key, value) || typeof paneId !== 'string' || !paneId) return false;
+      // fresh objects with no prototype, filled from own properties only: a pane id such as '__proto__' is a plain
+      // key here, never Object.prototype (review S5)
+      const all = Object.assign(Object.create(null), obj(KEYS.indicatorOptions));
+      const saved = own(all, paneId) && all[paneId] && typeof all[paneId] === 'object' && !Array.isArray(all[paneId]) ? all[paneId] : null;
+      const pane = Object.assign(Object.create(null), saved);
+      pane[id] = Object.assign(cleanIndicatorOptions(id, own(pane, id) ? pane[id] : null), { [key]: value });
       all[paneId] = pane;
       return raw.set(KEYS.indicatorOptions, all);
     },
@@ -182,7 +190,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-return { create, debounce, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, DEFAULT_RANGE, INDICATORS, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, INDICATOR_OPTIONS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+return { create, debounce, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, DEFAULT_RANGE, INDICATORS, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, INDICATOR_OPTIONS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 });
 
 
@@ -591,8 +599,7 @@ function start(container, opt, PAGE) {
    * Returns false for an option or value that does not exist. The volume profile is rebuilt from the store.
    */
   function setIndicatorOption(id, key, value) {
-    const spec = LP.INDICATOR_OPTIONS[id];
-    if (!spec || !spec[key] || !spec[key].includes(value)) return false;
+    if (!LP.indicatorOptionAllowed(id, key, value)) return false;   // own properties only: 'toString' is not an option
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
       prefs.setIndicatorOption(PANE, id, key, value);
@@ -1247,7 +1254,7 @@ function start(container, opt, PAGE) {
     if (PAGE && window.liveChart === chart) delete window.liveChart;
     rootEl.remove();
   }
-  return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, S.options[id] || {}) };
+  return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}) };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX };

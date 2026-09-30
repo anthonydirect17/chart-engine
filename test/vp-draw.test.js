@@ -64,16 +64,46 @@ test('RTH on DST dates: the window is New York wall clock (from UTC through zone
   }
 });
 
-test('RTH: nothing counts on a weekend or an NYSE holiday (the IB rule); early-close days count as usual', () => {
+test('RTH: nothing counts on a weekend or an NYSE holiday (the IB rule)', () => {
   const sat = new VolumeProfile({ rth: true });
   sat.add(et(2026, 10, 3, 11, 0), 100, 1);                                 // Saturday
   assert.equal(sat.total, 0);
   const labor = new VolumeProfile({ rth: true });
   labor.add(et(2026, 9, 7, 11, 0), 100, 1);                                // Labor Day 2026 (Globex trades, no 9:30 open)
   assert.equal(labor.total, 0);
-  const blackFriday = new VolumeProfile({ rth: true });
-  blackFriday.add(et(2026, 11, 27, 11, 0), 100, 1);                        // the day after Thanksgiving: an early close
-  assert.equal(blackFriday.total, 1);
+});
+
+test('RTH on NYSE early-close days ends at the 13:00 close: 12:59:59.999 in, 13:00:00.000 out', () => {
+  const days = [[2026, 11, 27], [2026, 12, 24], [2024, 7, 3], [2024, 11, 29], [2024, 12, 24], [2025, 7, 3], [2023, 7, 3]];
+  for (const [y, mo, d] of days) {
+    const vp = new VolumeProfile({ rth: true }), at = (h, mi, s) => et(y, mo, d, h, mi, s);
+    vp.add(at(9, 30, 0), 100, 1); vp.add(at(12, 59, 59.999), 101, 2); vp.add(at(13, 0, 0), 102, 4); vp.add(at(13, 10, 0), 103, 8);
+    assert.equal(vp.total, 3, y + '-' + mo + '-' + d);
+    assert.equal(vp.outside, 2);
+    assert.equal(U.rthClose(at(11, 0)), 46800);
+  }
+  // an ordinary day, and the days next to the early closes, run to 16:00
+  for (const [y, mo, d] of [[2026, 9, 29], [2026, 11, 25], [2026, 12, 23], [2026, 7, 2], [2025, 12, 26]]) {
+    const vp = new VolumeProfile({ rth: true });
+    vp.add(et(y, mo, d, 15, 59, 59.999), 100, 1);
+    assert.equal(vp.total, 1, y + '-' + mo + '-' + d);
+    assert.equal(U.rthClose(et(y, mo, d, 11, 0)), 57600);
+  }
+  assert.equal(U.rthClose(et(2026, 10, 3, 11, 0)), null, 'Saturday');
+  assert.equal(U.rthClose(et(2026, 11, 26, 11, 0)), null, 'Thanksgiving');
+});
+
+test('NYSE early closes by year: the day after Thanksgiving, Christmas Eve and July 3 on a Monday to Thursday', () => {
+  const iso = y => [...U.nyseEarlyCloses(y)].map(d => new Date(d * 86400000).toISOString().slice(0, 10)).sort();
+  assert.deepEqual(iso(2019), ['2019-07-03', '2019-11-29', '2019-12-24']);
+  assert.deepEqual(iso(2020), ['2020-11-27', '2020-12-24']);          // July 3 2020 was the observed holiday
+  assert.deepEqual(iso(2021), ['2021-11-26']);                        // Dec 24 2021 was the observed Christmas
+  assert.deepEqual(iso(2022), ['2022-11-25']);
+  assert.deepEqual(iso(2023), ['2023-07-03', '2023-11-24']);          // Dec 24 2023 was a Sunday
+  assert.deepEqual(iso(2024), ['2024-07-03', '2024-11-29', '2024-12-24']);
+  assert.deepEqual(iso(2025), ['2025-07-03', '2025-11-28', '2025-12-24']);
+  assert.deepEqual(iso(2026), ['2026-11-27', '2026-12-24']);          // July 3 2026 is the observed Independence Day
+  for (const y of [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027]) for (const d of U.nyseEarlyCloses(y)) assert.ok(U.rthDay(d * 86400), 'an early close is a session day');
 });
 
 test('startOf(t): 18:00 the evening before for the session, 9:30 of the day for RTH', () => {
@@ -164,10 +194,30 @@ test('geometry: rows of a pixel or less share it, taking the largest volume and 
   // 100 points on 40 px: 10 ticks to a pixel; each pixel bar is as long as its largest row
   const S = rectsOf(c, { lo: 1000, hi: 1100, plotW: 1000, plotH: 40, dpr: 1 });
   assert.ok(S.length <= 41, 'about one bar per pixel row: ' + S.length);
-  for (let i = 1; i < S.length; i++) assert.ok(S[i].y >= S[i - 1].y + S[i - 1].h, 'no overlap');
+  // no overlap, but for the POC bar, which is at least 2 px and drawn over its neighbours
+  for (let i = 1; i < S.length; i++) if (S[i].kind !== 2 && S[i - 1].kind !== 2) assert.ok(S[i].y >= S[i - 1].y + S[i - 1].h, 'no overlap');
   assert.equal(S.filter(r => r.kind === 2).length, 1);
   assert.equal(S.find(r => r.kind === 2).w, 250);
   assert.ok(S.some(r => r.kind === 1) && S.some(r => r.kind === 0));
+});
+
+test('geometry: the POC bar is at least VP_POC_MIN (2) CSS px tall, centred on its row; other rows keep their height', () => {
+  assert.equal(CE.VP_POC_MIN, 2);
+  const vol = new Float64Array(400);
+  for (let i = 0; i < 400; i++) vol[i] = 1 + (i % 7);
+  vol[123] = 100;
+  const c = { low: 1000, step: 0.25, tick: 0.25, volumes: vol, max: 100, poc: 123, vaLow: 100, vaHigh: 200 };
+  for (const dpr of [1, 2, 3]) {
+    // 1 device px per tick: the POC row alone would be 1 px
+    const R = rectsOf(c, { lo: 1000, hi: 1100, plotW: 1000, plotH: 400 / dpr, dpr });
+    const poc = R.find(r => r.kind === 2), rowY = (1100 - (1000 + 123 * 0.25)) * 4;   // the row's centre, device px
+    assert.equal(poc.h, Math.round(2 * dpr), 'dpr ' + dpr + ': POC height');
+    assert.ok(Math.abs(poc.y + poc.h / 2 - rowY) <= 1, 'dpr ' + dpr + ': centred on its row (' + (poc.y + poc.h / 2) + ' vs ' + rowY + ')');
+    assert.ok(R.filter(r => r.kind !== 2).every(r => r.h === 1), 'dpr ' + dpr + ': the other rows stay 1 px');
+  }
+  // a POC row already taller than 2 CSS px keeps its own height (with the 1 px gap)
+  const T = rectsOf({ low: 100, step: 0.25, tick: 0.25, volumes: Float64Array.from([1, 5, 1]), max: 5, poc: 1, vaLow: 1, vaHigh: 1 }, Object.assign({ lo: 99, hi: 103 }, flat));
+  assert.equal(T.find(r => r.kind === 2).h, 24);
 });
 
 test('geometry: only rows in view, none for volume 0, nothing for an empty or flat view', () => {
@@ -200,9 +250,40 @@ test('theme: on the default ground the profile colors are the chosen ones; on ev
       bg + ' POC reads on the value-area rows: ' + U.contrast(T.vpPoc, T.vpValue).toFixed(2));
     // text moves the theme's way (T.to), so on a mid-grey it reads at what that end allows, like the axis text
     assert.ok(U.contrast(T.vpPocText, bg) >= Math.min(4.5, U.contrast(T.to, bg)) - 0.02, bg + ' legend POC text reads: ' + U.contrast(T.vpPocText, bg).toFixed(2));
-    assert.ok(U.contrast(T.up, T.vpValue) >= 1.8 && U.contrast(T.down, T.vpValue) >= 1.5 || T.ground !== 'default', bg + ' candles still show on the value area');
   }
-  assert.ok(U.contrast(D.down, D.vpValue) >= 1.95 && U.contrast(D.up, D.vpValue) >= 4.5, 'default ground: bear candles about 2:1 on the value area, bull 4.5:1');
+});
+
+/* Candles and VWAP over the profile rows (review S3): measured and reported, not held to a floor. The candle floor
+   (2.5:1, FLOOR.candle) is against the bare ground, and buildTheme keeps it there; over the profile's rows the ratios
+   are lower, and what floor they should keep is Anthony's call. The bounds below are the current code's measured
+   minimums over these grounds and presets (a guard against a change making it worse unnoticed), not a floor. */
+test('theme: candle and VWAP contrast over the profile rows, measured on every preset and odd ground', t => {
+  const grounds = CE.BACKGROUNDS.map(b => b.bg).concat(['#FFFFFF', '#777777', '#B0102A', '#123456', '#E8E0C8']);
+  const rows = [], min = {};
+  for (const bg of grounds) for (const pr of [null].concat(CE.PRESETS)) {
+    const T = U.buildTheme(Object.assign({ bg }, pr ? { up: pr.up, down: pr.down } : {}));
+    const r = {
+      upBare: U.contrast(T.up, bg), downBare: U.contrast(T.down, bg),
+      upRow: U.contrast(T.up, T.vpRow), downRow: U.contrast(T.down, T.vpRow),
+      upVA: U.contrast(T.up, T.vpValue), downVA: U.contrast(T.down, T.vpValue), vwapVA: U.contrast(T.vwap, T.vpValue),
+    };
+    rows.push(bg + ' ' + (pr ? pr.id : 'default') + ': ' + Object.entries(r).map(([k, v]) => k + ' ' + v.toFixed(2)).join(', '));
+    for (const k in r) if (!(k in min) || r[k] < min[k].v) min[k] = { v: r[k], at: bg + ' ' + (pr ? pr.id : 'default') };
+    // guaranteed by buildTheme: the bare-ground candle floor (or the best a mid-grey allows, as in theme.test.js)
+    const cap = Math.min(U.contrast('#FFFFFF', bg), U.contrast('#000000', bg)) >= CE.FLOOR.candle ? CE.FLOOR.candle : Math.min(CE.FLOOR.candle, CE.PAIR.split);
+    assert.ok(r.upBare >= cap - 0.02 && r.downBare >= cap - 0.02, bg + ' candles on the bare ground');
+  }
+  for (const line of rows) t.diagnostic(line);
+  t.diagnostic('minimums: ' + Object.entries(min).map(([k, m]) => k + ' ' + m.v.toFixed(2) + ' (' + m.at + ')').join(', '));
+  // the current code's measured minimums (not a floor; see above)
+  assert.ok(min.upVA.v >= 1.85 && min.downVA.v >= 1.75, 'candles over the value-area rows: ' + min.upVA.v.toFixed(2) + ' / ' + min.downVA.v.toFixed(2));
+  assert.ok(min.upRow.v >= 2.15 && min.downRow.v >= 2.15, 'candles over the other rows: ' + min.upRow.v.toFixed(2) + ' / ' + min.downRow.v.toFixed(2));
+  assert.ok(min.vwapVA.v >= 2.25, 'VWAP over the value-area rows: ' + min.vwapVA.v.toFixed(2));
+  // the default ground and palette, as the CHANGELOG states them
+  const D = U.buildTheme();
+  assert.equal(U.contrast(D.down, D.vpValue).toFixed(2), '1.99', 'default: bear over the value area');
+  assert.equal(U.contrast(D.up, D.vpValue).toFixed(2), '4.70', 'default: bull over the value area');
+  assert.equal(U.contrast(D.down, D.vpRow).toFixed(2), '2.42', 'default: bear over the other rows');
 });
 
 /* ---- the chart on a stand-in canvas */

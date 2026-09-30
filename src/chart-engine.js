@@ -493,6 +493,32 @@ function rthDay(t) {
   const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay();
   return wd !== 0 && wd !== 6 && !nyseHolidays(date.getUTCFullYear()).has(day);
 }
+/*
+ * NYSE early closes (13:00 ET), by the NYSE's rules: the day after Thanksgiving; Christmas Eve when it is a Monday to
+ * Thursday (on a Friday it is the observed Christmas holiday, on a weekend there is none); July 3 when it is a Monday
+ * to Thursday (on a Friday it is the observed Independence Day). For example 2024: Jul 3, Nov 29, Dec 24; 2026:
+ * Nov 27, Dec 24. Unscheduled early closes are not known in advance and are not here. (Unreleased, volume profile.)
+ */
+const earlyCloseCache = new Map();
+function nyseEarlyCloses(year) {
+  let set = earlyCloseCache.get(year);
+  if (set) return set;
+  const D = (m, d) => Date.UTC(year, m - 1, d) / 1000 / DAY;
+  const dow = day => new Date(day * DAY * 1000).getUTCDay();
+  let thanks = D(11, 1); while (dow(thanks) !== 4) thanks++; thanks += 21;
+  const days = [thanks + 1];
+  for (const d of [D(7, 3), D(12, 24)]) if (dow(d) >= 1 && dow(d) <= 4) days.push(d);
+  set = new Set(days);
+  earlyCloseCache.set(year, set);
+  return set;
+}
+/** The stock market's close on the calendar day holding `t`, in seconds after midnight ET: 57600 (16:00), 46800 (13:00)
+    on an NYSE early-close day, or null when there is no regular session (a weekend or an NYSE holiday). */
+function rthClose(t) {
+  if (!rthDay(t)) return null;
+  const day = Math.floor(t / DAY);
+  return nyseEarlyCloses(new Date(day * DAY * 1000).getUTCFullYear()).has(day) ? 46800 : 57600;
+}
 
 /**
  * Today's Initial Balance: the high and low of the first hour of regular trading, 9:30:00 up to (not including)
@@ -581,6 +607,9 @@ function ibLines(ib) {
 /* The volume profile's width (Anthony's ruling 2026-09-29 leaves the size to us): the largest row (the POC) reaches
    this share of the plot width, measured from the plot's right edge; every other row is scaled to it. */
 const VP_WIDTH = 0.25;
+/* The POC bar's least height in CSS px (review): a 1-tick row can be under a pixel, and a hairline POC read as a level
+   line. Centred on its row; it may cover a part of the rows next to it, and is drawn after them. */
+const VP_POC_MIN = 2;
 /**
  * The rectangles of a volume profile, in device pixels: horizontal bars anchored to the right edge of the plot.
  * `c` is VolumeProfile.columns(); `v` is the view { lo, hi (prices at the bottom and top of the plot), plotW, plotH
@@ -589,7 +618,8 @@ const VP_WIDTH = 0.25;
  * A row is the height of its price span (a 1-tick row covers price - tick/2 to price + tick/2, like the axis), rounded
  * to whole device pixels; a gap of one pixel separates rows 4 px or taller. Rows thinner than a pixel share it: the
  * bar there is as long as the largest of them and takes the strongest kind (POC, then value area), so the POC always
- * shows. Rows of volume 0 draw nothing. Returns the number of bars.
+ * shows, and the POC bar is at least VP_POC_MIN CSS px tall, centred on its row. Rows of volume 0 draw nothing.
+ * Returns the number of bars.
  */
 function profileRects(c, v, emit) {
   if (!c || !(c.max > 0) || !(v.hi > v.lo) || !(v.plotH > 0)) return 0;
@@ -598,10 +628,13 @@ function profileRects(c, v, emit) {
   const base = c.low - c.tick / 2;                                  // the bottom edge of row 0
   const i0 = Math.max(0, Math.floor((v.lo - base) / c.step) - 1), i1 = Math.min(n - 1, Math.ceil((v.hi - base) / c.step));
   let count = 0, py = 0, ph = 0, pv = 0, pk = 0, open = false;
+  const pocH = Math.max(1, Math.round(VP_POC_MIN * dpr));
   const flush = () => {
     if (!open || !(pv > 0)) return;
     const w = Math.max(1, Math.round(pv / c.max * maxW));
-    emit(pk, right - w, py, w, ph >= 4 ? ph - 1 : ph); count++;
+    let y = py, h = ph >= 4 ? ph - 1 : ph;
+    if (pk === 2 && h < pocH) { y = Math.round(py + ph / 2 - pocH / 2); h = pocH; }   // the POC never thinner than 2 CSS px
+    emit(pk, right - w, y, w, h); count++;
   };
   for (let i = i1; i >= i0; i--) {
     let top = Math.round((v.hi - (base + (i + 1) * c.step)) * k), bot = Math.round((v.hi - (base + i * c.step)) * k);
@@ -1868,7 +1901,9 @@ function mountThemePanel(chart, host, options) {
  *
  * RTH (option `rth: true`, Anthony's ruling 2026-09-29): only trades inside the regular session of the trading day
  * count, from rthStart (9:30:00.000 ET) up to, not including, rthEnd (16:00:00.000 ET), the same window as the
- * chart's RTH shading and sessionLevels. A trade at 9:29:59.999 or at 16:00:00.000 is out. Times are New York wall
+ * chart's RTH shading and sessionLevels. A trade at 9:29:59.999 or at 16:00:00.000 is out. On an NYSE early-close
+ * day (rthClose: the day after Thanksgiving, Christmas Eve, July 3) the window ends at the stock market's 13:00
+ * close instead (CME equity index futures trade on to 13:15; those 15 minutes are out). Times are New York wall
  * clock already (ChartBridge converts them), so DST needs nothing here. On a day with no stock market session (a
  * weekend, an NYSE holiday: rthDay, the IB's rule) nothing counts. The session still moves at 18:00 as above, so
  * the RTH profile empties at 18:00 and stays empty until 9:30. Trades outside the window change nothing but the
@@ -1901,7 +1936,7 @@ function mountThemePanel(chart, host, options) {
  * again. The profile then holds exactly what the store holds. That is only as good as the store: ChartBridge
  * cuts the backfill by time and the held live ticks by arrival, so a trade near that seam can come in both and
  * be counted twice (the range bars and the forming minute bar too). Trades carry no id, so the page cannot tell;
- * this is not settled and is being handled in ChartBridge, apart from this code.
+ * ChartBridge 0.3.3 settles this seam on its side (nt8/PROTOCOL.md, Backfill and live), with no change here.
  *
  * Open questions for Anthony (the code does one thing today; none of it is settled):
  *   - POC tie-break: closest to the middle of the profile, then the lower (above).
@@ -1946,8 +1981,15 @@ class VolumeProfile {
   /** Changes with every trade taken, every reset and every move to a new session (not on a trade left out). */
   get version() { return this._ver; }
   get empty() { return this.trades === 0; }
-  /** Whether trade time t is inside the RTH window (9:30:00.000 up to 16:00:00.000 ET on a day with a session). */
-  inRth(t) { const s = tod(t); return s >= this.rthStart && s < this.rthEnd && rthDay(t); }
+  /** Whether trade time t is inside the RTH window (9:30:00.000 up to 16:00:00.000 ET, 13:00:00.000 on an NYSE
+      early-close day, on a day with a session). The day's close is looked up once per calendar day. */
+  inRth(t) {
+    const s = tod(t);
+    if (s < this.rthStart || s >= this.rthEnd) return false;
+    const day = Math.floor(t / DAY);
+    if (this._rthDay !== day) { this._rthDay = day; this._rthClose = rthClose(t); }
+    return this._rthClose !== null && s < this._rthClose;
+  }
   /**
    * The time from which this profile needs every trade, for the trading day holding t: that session's start
    * (18:00 ET the evening before), or with `rth` that day's 9:30. For coverage notes (was the history long enough).
@@ -2103,11 +2145,11 @@ class VolumeProfile {
 }
 
 return {
-  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH, VP_WIDTH,
+  VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH, VP_WIDTH, VP_POC_MIN,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
   },
   VolumeProfile,

@@ -9,21 +9,29 @@ ChartBridge unchanged).
   and the 70% value area highlighted. The POC row is 25% of the plot width (`VP_WIDTH`), every other row in
   proportion. Colors are theme values (`vpRow` `#141C26`, `vpValue` `#212C3B`, `vpPoc` the value-level gold
   `#E0B45A`); on another ground the rows are mixed from the ground (7% and 14% toward the ink) and the POC moves
-  until it reads at 3:1 on the value-area rows, built once per theme change like the rest. On the default ground bear
-  candles keep about 2:1 over the value-area rows (2.77:1 on the bare ground), bull candles 4.7:1. Rows thinner than a
-  device pixel share it (the longest bar there, the POC always shown). The bars are laid out by `util.profileRects`
-  once per change of the profile, the view or the size, kept as rectangle lists and filled with `fillRect` each
-  frame; the profile's own rows are read once per version (`VolumeProfile.columns()`, cached), never per frame.
+  until it reads at 3:1 on the value-area rows, built once per theme change like the rest. Candles over the rows read
+  lower than on the bare ground: on the default ground bear 1.99:1 over the value-area rows and 2.42:1 over the
+  others (2.77:1 on the bare ground), bull 4.70:1; the lowest over the presets and odd grounds tested is 1.76:1 (bear
+  on Blue-grey); what floor they should keep is open for Anthony. Rows thinner than a device pixel share it (the
+  longest bar there, the POC always shown), and the POC bar is at least 2 CSS px tall (`VP_POC_MIN`), centred on its
+  row (review; it was a 1 device px hairline at 1-tick rows). The bars are laid out by `util.profileRects` once per
+  change of the profile, the view or the size, kept as rectangle lists and filled with `fillRect`; the profile's rows
+  are read once per version (`VolumeProfile.columns()`, cached). While trades flow the profile changes with nearly
+  every frame, so in practice that is a rebuild per frame (about 700 in a 10 s busy window), costing well under a
+  millisecond; with no trade and no view change nothing is rebuilt.
 - **Off by default, on from the Indicators menu** as the indicator `vp` ("Volume profile"), registered like the
   others (`INDICATORS`, the main and new pane defaults, one checkbox row), so the new menu picks it up. The count
   reads out of 6.
 - **Session or RTH** (Anthony): the full session from 18:00 ET, or RTH, 9:30:00.000 up to (not including)
   16:00:00.000 ET of the trading day (`VolumeProfile` option `rth`; the same window as the chart's RTH shading and
   sessionLevels; none on weekends and NYSE holidays, the IB's rule; the RTH profile empties at 18:00 and stays empty
-  until 9:30). There was no option mechanism for indicators, so there is one now: `LivePrefs.INDICATOR_OPTIONS`
+  until 9:30). On NYSE early-close days (the day after Thanksgiving, Christmas Eve and July 3 when they fall Monday to
+  Thursday; `util.nyseEarlyCloses`, `util.rthClose`) RTH ends at the 13:00 close, not 16:00 (review); the chart's RTH
+  shading still runs to 16:00 on those days. There was no option mechanism for indicators, so there is one now: `LivePrefs.INDICATOR_OPTIONS`
   (`{ vp: { session: ['full', 'rth'] } }`), saved per pane in `live-indicator-options-v1`, set with
   `setIndicatorOption('vp', 'session', 'rth')` on the handle `ChartLive.mount` returns (and read with
-  `indicatorOptions('vp')`; live/EMBED.md), and for now a small Session / RTH switch in the Volume profile row of the
+  `indicatorOptions('vp')`; live/EMBED.md; it returns false, never throws, for any name that is not an option,
+  including inherited ones such as `toString`, and a pane id such as `__proto__` is stored as a plain key), and for now a small Session / RTH switch in the Volume profile row of the
   existing Indicators panel, a temporary control until the new menu.
 - **Legend:** "POC 26,150.50 · VA 26,101.50 to 26,289.50" (the POC price in the gold) while the profile is on and has
   trades.
@@ -36,28 +44,44 @@ ChartBridge unchanged).
   history does not reach back to 18:00 (9:30 for RTH), for example the 8 hours of the 15s and 30s views late in the
   day, and "Volume profile (RTH) starts at 9:30 ET." before the open. ChartBridge is unchanged.
 - Engine API: `setProfile(profile | null)`, `getProfile()`, layer `vp` (default false), `stats().profileBuilds`,
-  `VP_WIDTH`, `util.profileRects`; `VolumeProfile`: option `rth` (with `rthStart`, `rthEnd`), `inRth(t)`,
+  `VP_WIDTH`, `VP_POC_MIN`, `util.profileRects`, `util.nyseEarlyCloses`, `util.rthClose`; `VolumeProfile`: option `rth` (with `rthStart`, `rthEnd`), `inRth(t)`,
   `startOf(t)`, `outside` (trades outside the RTH window, not counted in `skipped`), `columns()`; theme keys `vpRow`,
   `vpValue`, `vpPoc` and the derived `vpPocText`.
 - Tests: `test/vp-draw.test.js` (RTH edges at 9:30:00.000 and 16:00:00.000, the overnight, four DST dates through
-  `zoneSeconds`, a weekend, Labor Day, an early close, RTH from the TickStore against a hand filter; `columns()` and
-  its cache; the geometry: right edge, POC width, row heights and gaps, sub-pixel rows, rows in view only, volume 0;
-  the colors on the presets and odd grounds; on a stand-in canvas: only with the layer, drawn after the grid and
+  `zoneSeconds`, a weekend, Labor Day, seven early-close days (12:59:59.999 in, 13:00:00.000 out) and the days next
+  to them, the early-close calendar 2019 to 2026, RTH from the TickStore against a hand filter; `columns()` and its
+  cache; the geometry: right edge, POC width, the POC's 2 CSS px at dpr 1, 2 and 3, row heights and gaps, sub-pixel
+  rows, rows in view only, volume 0; the colors on the presets and odd grounds; candle and VWAP contrast over the
+  rows on every ground and preset, measured and reported (`--test-reporter=tap` shows the table), held only to the
+  current values, not to a floor; on a stand-in canvas: only with the layer, drawn after the grid and
   before the volume bars and candles, rebuilt once per change and not per frame); `test/prefs.test.js` (the `vp`
-  indicator and its option, per pane, refused values); `npm run smoke:vp` (NQ Range 40 on sample data at 13:00 ET:
+  indicator and its option, per pane, refused values; inherited names and `__proto__`, `constructor` and `toString`
+  as pane ids, with Object.prototype untouched); `npm run smoke:vp` (NQ Range 40 on sample data at 13:00 ET:
   off by default, on from the menu, the POC row's pixels from the right edge at about 25% width, value-area and
   other rows at the edge, nothing in the left half; the profile equal to every trade the page received, for the
   session and for RTH, also after 2.5 s of live trades; Session and RTH differ in totals, legend and pixels; both
-  choices after a reload; 5m keeps it; a mounted pane's `setIndicatorOption` under `desk:`; a 1m first load with its
-  note). `npm run smoke:perf` now runs with the profile on (`PERF_SMOKE_VP=0` for off, `=rth` for RTH): 0 frames
-  over 50 ms in all loads, as without it. The live, embed, settings and IB smokes count six indicators.
+  choices after a reload; 5m keeps it; the POC bar at least 2 CSS px; a mounted pane's `setIndicatorOption` under
+  `desk:`, and false with no throw for inherited names; a 1m first load with its note). The live, embed, settings
+  and IB smokes count six indicators.
+- **Performance** (`npm run smoke:perf`, NQ Range 40, 150 trades a second with bursts of 450, three loads of 10 s
+  each, headless Chromium on the build box; the smoke now runs with the profile on, `PERF_SMOKE_VP=0` for off,
+  `=rth` for RTH at 13:30 ET). Frames over 50 ms per load, and the chart's own frame time:
+  - 01:30 ET (1.81 million backfill trades), profile off: 0, 0, 0; 0.91 to 1.05 ms.
+  - 01:30 ET, profile on (Session, 476,800 contracts): 0, 0, 0; 0.95 to 1.06 ms.
+  - 13:30 ET (1.11 million trades at 17 a second), profile off: 0, 0, 0; 0.93 to 0.95 ms.
+  - 13:30 ET, profile on (RTH, 410,500 contracts): 0, 0, 0; 0.98 to 1.12 ms.
+  The difference is within this box's run-to-run noise: the review's own profile-off run had 3 frames over 50 ms in
+  one load and a slower frame than its profile-on run. A first cut that drew the bars as Path2D paths had 1 frame
+  over 50 ms in two of three loads; filling rectangles removed that. Not measured in the smoke: building the profile
+  from the store when it is switched on or Session / RTH changes is one task of about 40 to 70 ms for 1.8 million
+  trades on this box (the review's figure), longer on a slower PC.
 - **Open for Anthony:** (1) the profile holds the trading day of the clock, so over a weekend and in RTH mode from
   18:00 to the next 9:30 it is empty (like the IB): should it keep the last session (or the day's RTH) up instead?
-  (2) RTH counts nothing on NYSE holidays (Globex trades to an early halt) and counts as usual on early-close days;
-  right? (3) Minute views loaded without tick history start the profile at the first live trade: should the page ask
+  (2) RTH counts nothing on NYSE holidays (Globex trades to an early halt); right? (3) Minute views loaded without tick history start the profile at the first live trade: should the page ask
   ChartBridge for ticks back to 18:00 whenever the profile is on (a slower load), or keep the note? The 15s and 30s
   views ask for 8 hours, so late in the day they start partway too. (4) The 25% width and the colors are my picks.
-  (5) The legend line does not say Session or RTH (its tooltip does): add a tag?
+  (5) The legend line does not say Session or RTH (its tooltip does): add a tag? (6) The POC shares the gold of the
+  prior day's VAH and VAL lines: keep it, or a different gold? (7) The candle floor over the profile rows (above).
 - **Volume profile, the compute core** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`). A session volume profile from trades (t, price, size): rows at the tick (NQ 0.25) with optional grouping of N ticks
   per row, all in whole ticks; total volume; POC (ties go to the row closest to the middle of the profile, then the
   lower); value area high and low for a set share (default 70%) by the CBOT method (from the POC, add the larger of

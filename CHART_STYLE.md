@@ -149,8 +149,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   (7% and 14%) and the POC moves until it reads at 3:1 on the value-area rows. Each row is its price span tall
   (price minus half a tick to plus half a tick) in whole device pixels, with a 1 px gap once rows are 4 px or taller;
   rows thinner than a pixel share it, the bar as long as the largest of them and the POC winning, so it always
-  shows. Off by default; the Indicators menu turns it on per pane, with a Session (from 18:00 ET) or RTH (9:30:00 up
-  to 16:00:00 ET, none on weekends and NYSE holidays) choice. The legend adds "POC 26,150.50 · VA 26,101.50 to
+  shows; the POC bar is at least 2 CSS px tall, centred on its row. Off by default; the Indicators menu turns it on
+  per pane, with a Session (from 18:00 ET) or RTH (9:30:00 up to 16:00:00 ET, 13:00 on NYSE early-close days, none on
+  weekends and NYSE holidays) choice. Candles over the rows read lower than on the bare ground (default: bear 1.99:1
+  over the value area, 2.42:1 over the other rows); their floor there is open for Anthony. The legend adds "POC 26,150.50 · VA 26,101.50 to
   26,289.50", the POC price in the gold.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in

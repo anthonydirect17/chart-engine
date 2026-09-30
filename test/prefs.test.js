@@ -210,3 +210,31 @@ test('volume profile (unreleased): the vp indicator, off on every pane; its Sess
   assert.equal(LP.create(s).indicators('main').vp, true);
   assert.equal(LP.create(s).indicators('pane-2').vp, false);
 });
+
+test('indicator options: inherited names are never options, and a pane id such as __proto__ pollutes nothing (review S5)', () => {
+  const s = mem();
+  const p = LP.create(s);
+  for (const [id, key, value] of [['vp', 'toString', 'x'], ['vp', 'constructor', 'keys'], ['vp', '__proto__', 'rth'], ['toString', 'session', 'rth'],
+    ['__proto__', 'session', 'rth'], ['constructor', 'name', 'Object'], ['vp', 'session', 'toString'], ['vp', 'session', 'hasOwnProperty']]) {
+    assert.equal(p.setIndicatorOption('main', id, key, value), false, id + '.' + key + ' = ' + value);
+    assert.equal(LP.indicatorOptionAllowed(id, key, value), false);
+  }
+  assert.deepEqual(p.indicatorOptions('main', 'toString'), {});
+  assert.deepEqual(p.indicatorOptions('main', '__proto__'), {});
+  for (const pane of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    assert.equal(p.setIndicatorOption(pane, 'vp', 'session', 'rth'), true, pane);
+    assert.deepEqual(LP.create(s).indicatorOptions(pane, 'vp'), { session: 'rth' }, pane + ' read back');
+  }
+  assert.equal(Object.prototype.vp, undefined, 'Object.prototype untouched');
+  assert.equal({}.vp, undefined);
+  assert.deepEqual(LP.create(s).indicatorOptions('main', 'vp'), { session: 'full' }, 'main untouched');
+  const saved = JSON.parse(s.m.get('live-indicator-options-v1'));
+  assert.ok(Object.prototype.hasOwnProperty.call(saved, '__proto__') && saved.constructor.vp.session === 'rth', 'stored as plain keys: ' + s.m.get('live-indicator-options-v1'));
+  // a stored __proto__ key read back is a plain key too, and a new pane keeps it
+  const t = mem(); t.m.set('live-indicator-options-v1', '{"__proto__":{"vp":{"session":"rth"}}}');
+  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), { session: 'rth' });
+  assert.deepEqual(LP.create(t).indicatorOptions('main', 'vp'), { session: 'full' });
+  assert.equal(LP.create(t).setIndicatorOption('main', 'vp', 'session', 'rth'), true);
+  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), { session: 'rth' }, 'the other pane kept');
+  assert.equal(Object.prototype.vp, undefined);
+});
