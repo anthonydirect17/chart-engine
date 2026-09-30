@@ -135,8 +135,12 @@ public static class SeamHarness
     }
     static List<string> Sent() { lock (sent) return sent.ToList(); }
     static bool WaitFor(Func<bool> ok) { for (int i = 0; i < 300 && !ok(); i++) Thread.Sleep(10); return ok(); }
-    static BarsRequest Req(int i) { lock (BarsRequest.Made) return BarsRequest.Made.Count > i ? BarsRequest.Made[i] : null; }
-    static int Reqs() { lock (BarsRequest.Made) return BarsRequest.Made.Count; }
+    // Since 0.3.4 a tick chart also asks for historical Bid and Ask ticks. Req and Reqs count only the minute and trade
+    // requests, so the 0.3.3 cases read as before; the quote requests are answered by QuoteAnswer (SidesHarness.cs).
+    static bool IsQuote(BarsRequest r) { return r.BarsPeriod != null && r.BarsPeriod.MarketDataType != MarketDataType.Last; }
+    static List<BarsRequest> TradeReqs() { lock (BarsRequest.Made) return BarsRequest.Made.Where(r => !IsQuote(r)).ToList(); }
+    static BarsRequest Req(int i) { List<BarsRequest> l = TradeReqs(); return l.Count > i ? l[i] : null; }
+    static int Reqs() { return TradeReqs().Count; }
     static Bars Minutes(params double[][] rows) { Bars b = new Bars(); foreach (double[] r in rows) b.Add(At(r[0]), r[1], r[2], r[3], r[4], (long)r[5]); return b; }
     static Bars Ticks(params double[][] rows) { Bars b = new Bars(); foreach (double[] r in rows) b.Add(At(r[0]), r[1], r[1], r[1], r[1], (long)r[2]); return b; }
     static int Index(List<string> l, string has) { return l.FindIndex(s => s.Contains(has)); }
@@ -155,9 +159,11 @@ public static class SeamHarness
         client = new ChartBridgeClient(null, 77);
         client.Tap = s => { lock (sent) sent.Add(s); };
         clients[77] = client;
-        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); }
+        BarsRequest.AutoAnswer = SidesHarness.QuoteAnswer;   // no quote history unless a case sets one
+        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); }
         finally
         {
+            BarsRequest.AutoAnswer = null;
             ChartBridgeClient gone; clients.TryRemove(77, out gone);
             if (was != null) instruments["MNQ"] = was; else instruments.Remove("MNQ");
         }
@@ -196,6 +202,7 @@ public static class SeamHarness
             "load: after ready only the held trades not in the backfill, in order (" + after.Count + " sent)");
         Live(1.4, 21441.25, 1);
         Check(Sent().Last().Contains("\"p\":21441.25") && client.Ready, "load: then live trades go straight out");
+        WaitFor(() => Seams() != "[]");   // MarkReady notes the seam just after it marks the page ready (the test can get there first)
         string seams = Seams();
         Check(seams.Contains("\"held\":3") && seams.Contains("\"droppedAsDuplicate\":1") && seams.Contains("\"released\":2") && seams.Contains("\"lastBackfillTick\":\"2026-09-29 ")
               && seams.Contains("\"tickToAheadMin\":60") && seams.Contains("\"minuteTailRebuilt\":1") && seams.Contains("\"resolutionMs\":1") && seams.Contains("\"overlapMs\":0"),

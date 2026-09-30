@@ -5,6 +5,8 @@ talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on 
 **Read only by default.** Nothing in v1 can place, change or cancel an order. Order entry (v2, ChartBridge
 0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
 ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
+Since 0.3.4 every trade, live and in the backfill, carries its side (buy or sell) and how it was found; see
+"Trade side" below.
 
 ## Network access (0.3.1)
 
@@ -188,9 +190,9 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 |---|---|---|
 | `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
-| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, `done` (bool) | after `history`, the current session's trades, chunked |
+| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
-| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v` | every trade, live |
+| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page |
@@ -315,8 +317,203 @@ another id. The live page does not send it yet (a follow-up in `live/`).
 - Until the page uses `sub`, a stale chunk already queued when the page resubscribed can still mix in.
 - Pre-existing: each page has an outbox of 5,000 messages; a page that does not keep up is closed. The held
   trades are released into it in one burst, so a very long load in a very busy market could reach that bound.
+  Fixed in 0.3.4: the release is one outbox entry (see Trade side).
 
 The page needs no change to work with 0.3.3: it takes history, ticks and live trades as before, and ignores `sub`.
+
+## Trade side (0.3.4)
+
+For cumulative delta every trade carries its side: a market buy (the aggressor lifted the ask) or a market sell
+(the aggressor hit the bid). Delta is buy volume minus sell volume.
+
+| field | values |
+|---|---|
+| `s` | `1` buy, `-1` sell, `0` unknown |
+| `sm` | how it was found: `0` none (unknown), `1` the exchange's aggressor flag, `2` bid/ask, `3` tick rule |
+
+On a live `tick` they are two more fields; in `ticks` each trade is `[t, p, v, s, sm]`, the first three unchanged
+in place, so a page that reads only `t, p, v` (the live page up to chart 1.5.3) works as before. A trade from an
+older ChartBridge has neither: treat it as unknown.
+
+**The rule** (Anthony, 2026-09-29), in order:
+
+1. The exchange's aggressor flag (`sm` 1). NinjaTrader 8 gives an add-on none (MarketDataEventArgs has Ask, Bid,
+   Instrument, IsReset, MarketDataType, Price, Time and Volume only), so code 1 is reserved and not sent today.
+2. The prevailing quote (`sm` 2): at or above the ask a buy, at or below the bid a sell. The quote needs both sides,
+   above zero, bid below ask; a crossed or locked quote is not used.
+3. The tick rule (`sm` 3), for a trade between bid and ask or with no usable quote: above the previous trade's price
+   a buy, below it a sell, at the same price the previous trade's side (Lee-Ready). Anthony kept this over
+   NinjaTrader's rule for between-quote trades (the previous trade's side whatever the price), 2026-09-30.
+4. No usable quote and no previous trade (or an unchanged price after an unknown one): `s` 0, `sm` 0.
+
+**The session** (Anthony, 2026-09-30): nothing carries across the 17:00 to 18:00 ET break (or a weekend). At 18:00
+New York time (daylight saving included, the page's session start too) the tick rule starts over: the first trade of
+a session between the quotes, or with no usable quote, is `s` 0. This holds live, in the backfill (`sessionStarts` in
+`/diag` counts the boundaries it crossed) and for the held trades released after a load's seam.
+
+Prices are compared on a 0.000001 grid (float noise is the same price).
+
+**The prevailing quote, live and in the backfill alike**, is the last bid and the last ask stamped **strictly
+before** the trade, on NinjaTrader's own times for them. The tie rule: a quote stamped at the trade's own time is not
+used, because a trade and the quote change it causes (the ask it lifted moving up, the bid stepping up to the traded
+price) share one timestamp, and taking that later quote calls a buy a sell. A quote stamped after the trade is never
+used. A quote with no update for over 60 seconds before the trade (`QuoteMaxAge`: a hole in the data, a disconnect) is
+stale: the tick rule, counted (`staleQuotes`). Both paths follow one rule, so a reload gives the same sides as the live
+chart did **when NinjaTrader's live and historical times have the same resolution** (a harness case checks it). They
+may not: the backfill compares at the coarser of its trades' and quotes' resolution (whole seconds, say, or the 4 ms
+grid reported for NinjaTrader's historical data), while live uses the live stamps as they come. Then a quote and a
+trade inside one step are a tie in the backfill (the older quote is used) but ordered live, and the two can differ
+on such trades; `/diag` shows both resolutions.
+
+**Live.** ChartBridge keeps the recent Bid and Ask updates with NinjaTrader's time for each (the last 256 a side,
+plus, of the older ones, the latest stamped and the latest stamped before that, so a burst at one time still leaves
+the quote from before it), and reads the quote as of each trade's time, not by arrival: NinjaTrader can deliver a
+trade's own quote updates before the trade (the review's case, and a forum report of updates stamped .413 delivered
+before a trade stamped .412). One edge is left (review 2 N3): more than 256 updates stamped after a trade, in two or
+more distinct later stamps, delivered before that trade, push out the quote from before it; the trade then has no
+quote (the tick rule, or side 0), and `quoteAfterTrade` counts it. The tick rule uses the previous live trade of that
+instrument. Quotes are followed from the moment ChartBridge starts, so the first trades after a start can go by the
+tick rule. The held trades of a load are tagged when they arrive, like any live trade.
+
+**Resets and bad prices.** NinjaTrader's help describes `IsReset` as "a UI reset is needed after a manual disconnect",
+meant for its market data columns. A market data event with `IsReset` is never a trade here, whatever its type and
+price: ChartBridge only forgets the live quote, sends nothing, and logs the first one (with its type and price) once.
+A Last event with a price of 0 or below is ignored too (review 3 N5: that would also drop a real trade at 0 or below,
+such as a calendar spread, should such an instrument ever be added to `roots`); neither reaches the order code's last
+price (review 2 S2: a reset of type Last at price 0 used to, which for 2 s would make a long bracket's stop look
+already passed). An automatic
+reconnect probably raises no reset, and connection status events are not watched here (that would touch the server's
+start and stop): after an outage over 60 s the old quote is stale; after a shorter one it can stand until the first new
+Bid and Ask updates.
+
+**Backfill** (tick charts, `tickHours` above 0). With the trades ChartBridge asks NinjaTrader for the historical
+Bid ticks and Ask ticks (three requests at once; the backfill goes out when all three are back, in any order; a quote
+request ending in the future that is refused or empty is asked once more ending now, like the trades).
+
+- The quote window is at most the last 24 hours (`QuoteHoursMax`), whatever the trades ask (a range view can ask up
+  to 48): 24 hours covers the whole current session, which a delta pane shows. Trades before it go by the tick rule
+  (`beforeQuotes`, and the `note` says the window is capped).
+- Only time and price are kept, and only the rows that can change the answer: of a run of rows at one price (size
+  changes) the first, plus one every 5 seconds, each with the time of the last row it stands for (`Seen`), so a
+  quote's age, and so the 60 s stale test, is exactly what every row gives (review 2 N1; a harness case checks 12,000
+  trades on 200 made-up histories around the 60 s edge). A load that already went out or was replaced is not copied at
+  all.
+- Each trade then takes the last bid and ask stamped strictly before it (the rule above), compared at the coarser
+  resolution of the trades and the quotes (1 ms, or whole seconds, as the seam judges it), so at whole seconds "the
+  same time" is the same second.
+- A trade goes by the tick rule instead when the quote history does not cover it: no bid or no ask before it
+  (`beforeQuotes`), more than 5 seconds after the end of the shorter of the two histories (`afterQuotes`), or a quote
+  over 60 seconds old (`staleQuotes`, a hole in the middle). No quote history at all (or only one side): every
+  backfill trade by the tick rule, said in `/diag` (`note`) and in the Output window.
+- The live trades stay held until the backfill goes out, so the quotes get at most 2.5 seconds after the trades are in
+  (`QuoteWaitMs`). They are asked at the same time as the trades, so a quote history NinjaTrader already has comes
+  back with them or soon after; a slow first download costs that load's sides (the tick rule, `quotesTimedOut`), not a
+  longer frozen chart. A late answer is ignored. When the trade request failed there is nothing to classify and no
+  wait at all.
+- Minute and hour charts get no tick backfill and ask for no quotes.
+
+**Two send lanes to the page, and when a page is closed** (review 2 S1). The page's WebSocket carries market data and
+order traffic, and a load's release (`ready` and the held trades after it, one outbox entry) can take seconds to
+drain at the page's pace. So ChartBridge sends in two lanes:
+
+- **Order lane:** `hello`, `trading`, `orders`, `order`, `position`, `reject`, `exec`, `execs`, `status`, `pong`.
+  Checked before every message ChartBridge sends, so such a message goes out at the next message boundary (one
+  market data message at most is in flight), ahead of market data queued before it.
+- **Data lane:** `history`, `ticks`, `ready`, `tick`, and any other type: first in, first out, as before.
+
+The guarantee: order within each lane is kept, and a data message never goes out ahead of an order-lane message sent
+before it. An order-lane message can go out ahead of data sent before it. That is safe for the page: order, position,
+trading, reject and fill messages stand on their own (fills carry their own time, and the page already takes them
+before any history on connect, and order messages before `ready` after signing in); the page places orders only after
+`ready`, so a reply to one of its orders always follows the `ready` it saw; `status` is a line of text. Harness (the
+review's shape, a page taking 20 or 200 us a message): an order reply sent during a 20,000-trade release arrives in
+under 1 ms (0.3.3 and the first 0.3.4 round: 0.45 s and 4.1 s, when the page was not closed first).
+
+**A page more than 5 s behind is reconnected** (review 3; Anthony: "just a reset"). ChartBridge closes a page's
+connection when the oldest market data waiting for it has waited more than 5 seconds; the page then reconnects on its
+own (without asking for the PIN again, as after any drop), signs in again and reloads, so it shows live data again and
+Armed is off. The Output window says so once, with the lag: "Client N is not keeping up: 5.0 s behind; closing it (the
+page reconnects and reloads)." A close always ends the connection itself (the socket is aborted), so the page sees it
+and reconnects, whenever it lands (review 4 B2: a close between two sends used to leave the page connected, silent and
+Armed).
+
+How the wait is counted (review 4 B1): each waiting entry's time since it was queued, minus the time ChartBridge spent
+meanwhile sending the page's own bulk data: a load's `history` and `ticks` chunks, and the held trades released after
+`ready`. Those go out back to back at the page's pace and none of them is late; after a lag close at 3,000 trades a
+second the reload holds the load's seconds times the rate (about 90,000 trades for a 30 s load), and counting that
+release as lag would close the page again on every reload. A live backlog still ages during every other send, and only
+bulk sends that have finished are credited, so a page frozen in the middle of one still ages. **The price of that
+credit** (review 5 S1): right after a load, the live trades queued behind the release are as late as the release is
+long, and that is not counted, so the chart can run behind by up to the length of the release plus 5 s before the rule
+acts, not 5 s, while trading stays enabled. Review 5 measured, at 3,000 trades a second: healthy pages 4.4 to 14.3 s
+behind right after a load, never closed; a page slower than the market closed only 37.6 s after `ready`; with repeated
+loads a slow page reached 17.2 s behind before its close. What shrinks the release is sending recent ticks first (the
+next step, branch live-first); this branch changes no page code. Order lane messages do not count (they go out first
+anyway). Also closed, as before: 5,000 entries waiting while the message being sent has been stuck for over 2 seconds
+(a page that stopped reading), and over 5,000 order-lane messages waiting. The age is checked when something is queued
+for the page (and while a load waits to queue its next chunk), so a page with nothing new waiting is not closed; order
+replies stuck behind a stuck send with no market data waiting are closed only by the 5,000-entry rule (review 4 N3).
+Harness (Mono; times vary run to run):
+
+- a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after about 7 s, 5.0 s behind,
+  also right after a load; one taking 0.4 ms (2,500 a second) after about 15 to 28 s (it falls behind by about 0.2 s a
+  second), 5.0 s behind (0.3.3 closed both at 5,000 entries, about 1.7 s behind; the second 0.3.4 round let them fall
+  about 17 s behind);
+- the reload at 3,000 trades a second in review 4's model (230 chunks at 3.5 ms, a 250 ms page freeze on `ready`), with
+  90,000 or 130,000 held trades released at 42 or 84 us a message and 3,000 live trades a second behind: never closed,
+  everything delivered, the oldest live wait 0.7 to 2.0 s (the third round closed three of these four 5.2 to 5.4 s after
+  `ready`, and would have again on every reload);
+- a 48 hour load (130 chunks), then a release and live trades: not closed at 3.5 ms or 50 ms a chunk.
+
+Memory. A 20,000-trade `ticks` chunk is about 1.1 to 1.3 MB as a .NET string (600 KB on the wire). Since review 4
+(S1) a load makes and queues its chunks at most three ahead of the page (`BulkWindow`): the loading thread waits for
+room before making the next one, so a loading page holds about 4 MB of chunks, not the whole load (before: a 48 hour
+backfill about 166 MB, Anthony's Range 40 over 28 hours, 4.6 million trades, about 295 MB per loading page, several
+pages reloading together about 0.9 GB). Harness, a 600,000-trade load through the real subscribe, four runs: at 3.5 ms
+a chunk (Chromium's measured pace) about one chunk ever waited either way (making a chunk takes longer on Mono) and
+"ready" reached the page after 2.7 to 5.0 s either way; at 300 ms a chunk (a page slower than ChartBridge makes the
+chunks) the old way had 17 to 23 of the 30 chunks waiting at once (18 to 25 MB), the window 3 (3 MB), and "ready" came
+after 9.3 to 9.8 s either way: the window does not slow a load. Market data
+(review 3 measured 350 bytes a queued trade): at most about 5 s waits per page, about 15,000 trades or 5 MB at 3,000
+trades a second. The held trades of a loading page (in `Pending`) are about 350 bytes each: 90,000 are about 31 MB for
+the seconds of the load. An entry is not a message: the release after `ready` and each chunk count as one. There is no
+limit on the number of pages (each open tab, The Desk's relay, each embed is one).
+
+A Send that races a page's Close (a tab closing while NinjaTrader sends an order update to every page) drops the
+message quietly instead of throwing out of the loop that sends it to the other pages (review 3 S2). A send that fails
+closes the page and ends its connection, so it reconnects instead of staying connected and silent (review 3 N1, review 4
+B2). A load's own warnings
+("Minute history failed", "Tick history failed", "No instrument") go in the data lane, after that load's history, as in
+0.3.3 (review 3 N3). `pong` goes in the order lane, so it measures the round trip to ChartBridge and not the market data
+waiting in front of it (review 3 N4).
+
+**The seam is unchanged.** The side takes no part in matching held live trades against the backfill (price, volume
+and time, as in 0.3.3). A trade in both keeps the backfill's side. The released trades' tick rule then continues from
+the backfill's copy of the seam trade, not from its dropped live twin (whose side can differ): tick-rule trades among
+them are worked out again (starting over at 18:00 ET), and the live stream continues from the last of them. The live
+tagger is one per instrument, shared by every page (review 2 N4): a second page's load moves the tick-rule continuation
+that a page already live on that instrument sees, toward what a reload would give. Only the side of an unchanged or
+between-quote trade can change, and only at that moment.
+
+**Differences from NinjaTrader's own Order Flow Cumulative Delta** (its help page): in Bid Ask mode a trade between
+bid and ask gets the previous trade's side (here: the tick rule, Anthony's choice; they differ only on between-quote
+trades that changed price, counted in `/diag` `betweenQuotes`), and historically it uses the bid and ask NinjaTrader
+stamps on each trade, not separate Bid and Ask series. NinjaTrader's help says the historical Bid/Ask series "would not
+be equivalent to the bid/ask at a specific time a trade went off", and that with no bid/ask tied to the trades it
+fills the stamps in as Bid = Last and Ask = Bid + 1 tick. So `/diag` also reads the stamps on the last 2,000 backfill
+trades (see below) to show whether they are real on this connection; switching the backfill to them is a later
+decision (they are NinjaTrader's arrival-order quote, so they could share the reorder the tie rule avoids).
+
+**Live checks** (the trading PC): compare a minute's delta with NinjaTrader's Order Flow Cumulative Delta (Bid Ask,
+Bar period) where available; read `/diag` `sides` for `liveTieChanged`, `quoteAfterTrade`, `tieChanged`,
+`eventQuoteDiffers`, the stamps, the two resolutions, and the quote rows and load time.
+
+**Still open.** How often a trade's own quote update comes first on Tradovate: `liveTieChanged` counts the trades the
+other tie rule would call differently, `quoteAfterTrade` the ones whose latest update was stamped after them. The tie
+rule is exact when the stamps are fine-grained; with coarse stamps (whole seconds, or the 4 ms grid reported for
+NinjaTrader's historical data) excluding the trade's own step uses an older quote, which the model in the review shows
+can be wrong more often, so the two resolutions in `/diag` matter. Real bid/ask tick counts and memory on Tradovate are
+unknown until the live PC reads `bidTicks`, `bidRowsKept` and `quoteCopyMs`.
 
 ## Delay readout
 
@@ -343,7 +540,9 @@ JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": b
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`, `setAside`, `rejectedByDesk`); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
+`lastError`, `setAside`, `rejectedByDesk`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
+(entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
+waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
 `client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held
 trades against, all released), `backfillTicks`, `lastBackfillTick`, `firstHeldTick` and `firstReleasedTick` (New York
 time, `yyyy-MM-dd HH:mm:ss.fff`, or null), `overlapMs` (`lastBackfillTick` minus `firstHeldTick`: 0 or more means the
@@ -359,6 +558,24 @@ trades; 0 when NinjaTrader's was kept, -1 when there was none), `ntTailVolume` a
 NinjaTrader's and rebuilt from trades; null when not compared); and `accounts`: one row per watched account with `name`, `connection` (status),
 `executions`, `orders`, `positions` (counts NinjaTrader holds) and `fillEvents`, `orderEvents`,
 `positionEvents` (events seen). Account names are in this local page; never copy them into reports.
+`sides` (0.3.4, see Trade side): one entry per instrument with `live` (null before its first quote or trade:
+`trades`, `aggressor`, `bidAsk`, `tickRule`, `none` counts since the start, `liveTieChanged` (trades the other tie rule,
+a quote at the trade's own time counts, would call differently), `quoteAfterTrade` (trades whose latest-arrived
+update was stamped after them), `staleQuotes`, the latest `bid` and `ask`, `bidUpdates`, `askUpdates`, `quoteResets`,
+and `eventQuoteSame`, `eventQuoteDiffers`, `eventQuoteNone`: whether the Last event's own Bid and Ask equal the latest
+updates) and `lastLoad` (null before the first tick chart load: `sub`, `atUtcMs`, `trades`, the four counts, `note`
+(in words when some trades could not use the quote history, else null), `bidTicks` and `askTicks` (rows NinjaTrader
+sent inside the quote window), `bidRowsKept` and `askRowsKept` (after dropping size-only rows), `quoteWindowHours`,
+`quoteCopyMs` (ChartBridge's time copying and thinning them), `bidRequest` and `askRequest` (`ok`, `empty`, the error,
+or no answer in time), `quotesRetriedEndingNow`, `quotesTimedOut`, `quotesLoadMs` (subscribe to the later quote
+answer), `firstTrade`, `lastTrade`, `firstBid`, `lastBid`, `firstAsk`, `lastAsk` (New York time), `quotedTrades`,
+`beforeQuotes`, `afterQuotes`, `staleQuotes`, `betweenQuotes` (quoted but between bid and ask: tick rule),
+`crossedQuotes`, `tieChanged` (trades the other tie rule would call differently, every trade counted), `sessionStarts`
+(18:00 ET boundaries inside the backfill, where the tick rule started over),
+`tradeResolutionMs`, `quoteResolutionMs`, `comparedAtMs`, and `stamps`: NinjaTrader's own bid and ask on the last 2,000
+backfill trades, `usable`, `likeFillIn` (Bid = Last and Ask = Last + 1 tick; equal to `usable` means filled in, not
+real), `missing`, and for usable stamps that put the trade at the bid or ask, `agree` and `disagree` with the side
+ChartBridge gave it, whatever its method).
 
 ## Fills to The Desk (0.2.0, off by default)
 
