@@ -9,7 +9,8 @@
   -InstallChartBridge. The automatic path never moves the clone: it fetches, and stages from git objects.
 
   Commands:
-    status                what is installed, what is waiting, and why (reads only; asks ChartBridge's /diag)
+    status                what is installed, what is waiting, and why (asks ChartBridge's /diag and saves the
+                          version it reports in state.json; never writes a page or ChartBridge file)
     check                 dry run: fetches main and says what `update` would do; changes nothing
     update                the automatic path (the scheduled task runs this): installs the newest commit on main
                           whose CI is green on ubuntu-latest and windows-latest, only when its page works with the
@@ -68,6 +69,7 @@ $script:VersionFile = 'update.json'          # the one file the updater writes i
 $script:LogMaxBytes = 1000000
 $script:LogKeep = 3
 $script:AddOnWriteAllowed = $false             # only Invoke-InstallChartBridge sets it, after Anthony confirms
+$script:UpdaterStopped = $false                # the pinned copy failed its own check (Test-PinnedSelf)
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 # A page target: plain names joined by /, no .., no drive, no trailing dot or space (Windows trims those)
 $script:TargetPattern = '^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)*$'
@@ -270,8 +272,31 @@ function Get-GitExe {
 # refs/remotes, are allowed: nothing here can move Anthony's clone (no checkout, merge, pull, reset ...).
 $script:GitAllowed = @('fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'merge-base', 'hash-object', 'ls-tree')
 
+# Three allowed subcommands also have a writing form, so their whole argument list is checked: symbolic-ref reads
+# one ref (a second name would write it, -d deletes it), remote only runs get-url, hash-object never writes (-w).
+function Test-GitArgs([string[]]$ArgList) {
+  $sub = $ArgList[0]
+  if ($script:GitAllowed -notcontains $sub) { return "git $sub is not allowed in update-pc.ps1" }
+  $rest = @($ArgList | Select-Object -Skip 1)
+  if ($sub -eq 'symbolic-ref') {
+    $names = @($rest | Where-Object { $_ -notmatch '^-' })
+    $flags = @($rest | Where-Object { $_ -match '^-' })
+    if ($names.Count -ne 1 -or @($flags | Where-Object { @('-q', '--quiet', '--short') -notcontains $_ }).Count) { return "git symbolic-ref is allowed only as a read (symbolic-ref -q --short <ref>), not '$($rest -join ' ')'" }
+  }
+  if ($sub -eq 'remote') {
+    if ($rest.Count -ne 2 -or $rest[0] -ne 'get-url' -or $rest[1] -match '^-') { return "git remote is allowed only as 'remote get-url <name>', not '$($rest -join ' ')'" }
+  }
+  if ($sub -eq 'hash-object') {
+    $dd = [array]::IndexOf([string[]]$rest, '--')
+    $opts = @(); if ($dd -ge 0) { $opts = @($rest | Select-Object -First $dd) }
+    if ($dd -lt 0 -or $rest.Count -le $dd + 1 -or @($opts | Where-Object { $_ -notmatch '^--path=' -and $_ -ne '--no-filters' }).Count) { return "git hash-object is allowed only as 'hash-object [--path=<p>] -- <file>' (never -w), not '$($rest -join ' ')'" }
+  }
+  return $null
+}
+
 function Invoke-Git([string[]]$ArgList, [int]$TimeoutSec = 120) {
-  if ($script:GitAllowed -notcontains $ArgList[0]) { throw "git $($ArgList[0]) is not allowed in update-pc.ps1" }
+  $refused = Test-GitArgs $ArgList
+  if ($refused) { throw $refused }
   $git = Get-GitExe
   if (-not $git) { return @{ code = -1; out = ''; err = 'git is not on PATH' } }
   # never a prompt or a window; never a gc or maintenance run started in Anthony's clone by a fetch
@@ -723,12 +748,17 @@ function Invoke-Swap($State, $Target, $Back, [string]$Then, [string]$Skip) {
 
 function Complete-Swap($State, $J, [string]$How) {
   $t = $J['target']
-  $State['page'] = @{ commit = $t['commit']; version = $t['version']; build = $t['build']; files = @($t['files']); installedAt = (Get-NowMs); how = $How }
+  $page = @{ commit = $t['commit']; version = $t['version']; build = $t['build']; files = @($t['files']); installedAt = (Get-NowMs); how = $How }
+  # every file's hash checked again: only a www that is exactly the new build is called installed. The page is told
+  # before state.json is saved, so a run cut off from here on leaves "installed" (which the files are), never a
+  # stale "installing" that reads as "cut off"; the next run closes the journal.
+  if ((Get-BuildId $script:P.Www @($t['files'])) -ne $t['build']) { throw "www is not the build $($t['build']) after the copy; not recorded as installed" }
+  try { Write-UpdatePage $page '' } catch { Write-Log "update.json could not be written now ($($_.Exception.Message)); the end of this run writes it" 'WARN' }
+  $State['page'] = $page
   if ($J['skip']) { $State['skipCommit'] = $J['skip'] }
   Save-State $State
   Invoke-CrashPoint 'after-state'
   if ($J['then'] -eq 'promote' -and (Test-Path "$($script:P.PrevNext).tmp")) { Complete-PageCopy "$($script:P.PrevNext).tmp" $script:P.Previous }
-  Write-UpdatePage $State['page'] ''
   Remove-Item -LiteralPath $script:P.Journal -Force
 }
 
@@ -823,7 +853,10 @@ function Get-ChartBridgeNotice($State, $Compiled) {
   $cv = ConvertTo-VersionOrNull ([string]$Compiled.version)
   if ($sv -and $cv -and (ConvertTo-VersionOrNull $sv) -gt $cv -and $sv -ne $copied) { $ready = $sv }
   if ($copied -and $cv -and (ConvertTo-VersionOrNull $copied) -le $cv) { $copied = $null }
-  return @{ compiled = $Compiled.version; compiledFrom = $Compiled.source; staged = $sv; ready = $ready; copied = $copied }
+  # AddOns holds a mix of new and old ChartBridge files: that alone is said (never "press F5", never "ready")
+  $mixed = $null
+  if (Get-Field $cbs 'mixed') { $mixed = $true; $copied = $null; $ready = $null }
+  return @{ compiled = $Compiled.version; compiledFrom = $Compiled.source; staged = $sv; ready = $ready; copied = $copied; mixed = $mixed }
 }
 
 # www\update.json: the page polls it about once a minute. Versions and a build id only (www is served).
@@ -835,13 +868,15 @@ function Write-UpdateDoc($Page, [string]$PageState, $CbPart) {
   if ($null -eq $CbPart) {
     $cur = Read-JsonFile $path
     $CbPart = Get-Field $cur 'chartBridge' @{}
-    $CbPart = [ordered]@{ compiled = (Get-Field $CbPart 'compiled'); ready = (Get-Field $CbPart 'ready'); copied = (Get-Field $CbPart 'copied') }
+    $CbPart = [ordered]@{ compiled = (Get-Field $CbPart 'compiled'); ready = (Get-Field $CbPart 'ready'); copied = (Get-Field $CbPart 'copied'); mixed = (Get-Field $CbPart 'mixed') }
   }
   $doc = [ordered]@{
     schema = 1
     page = [ordered]@{ version = (Get-Field $Page 'version'); build = (Get-Field $Page 'build'); commit = (Get-Field $Page 'commit'); installedAt = (Get-Field $Page 'installedAt' 0); state = $PageState }
     chartBridge = $CbPart
+    updater = $null
   }
+  if ($script:UpdaterStopped -or (Get-PinnedProblem)) { $doc['updater'] = [ordered]@{ stopped = $true } }   # no path or reason: www is served
   $text = ConvertTo-Json -InputObject $doc -Depth 6
   if ((Test-Path -LiteralPath $path) -and ([IO.File]::ReadAllText($path, $script:Utf8) -eq $text)) { return }
   Write-TextAtomic $path $text
@@ -850,12 +885,16 @@ function Write-UpdateDoc($Page, [string]$PageState, $CbPart) {
 function Write-UpdatePage($Page, [string]$PageState) { Write-UpdateDoc $Page $PageState $null }
 
 function Write-UpdateJson($State, $Notice) {
-  $cb = [ordered]@{ compiled = $Notice.compiled; ready = $Notice.ready; copied = $Notice.copied }
+  $cb = [ordered]@{ compiled = $Notice.compiled; ready = $Notice.ready; copied = $Notice.copied; mixed = $Notice.mixed }
   # while a swap is open (cut off, or failed and not undone) the page part says so, never "installed"
   $j = Read-JsonFile $script:P.Journal
   if ($j) {
     $t = $j['target']
-    Write-UpdateDoc @{ version = $t['version']; build = $t['build']; commit = $t['commit']; installedAt = (Get-Field $j 'startedAt' 0) } 'installing' $cb
+    # the files' hashes decide: a www that is already whole is said to be installed, not "installing" (cut off)
+    $whole = $false
+    try { $whole = (Get-BuildId $script:P.Www @($t['files'])) -eq $t['build'] } catch { }
+    $st = 'installing'; if ($whole) { $st = '' }
+    Write-UpdateDoc @{ version = $t['version']; build = $t['build']; commit = $t['commit']; installedAt = (Get-Field $j 'startedAt' 0) } $st $cb
     return
   }
   Write-UpdateDoc $State['page'] '' $cb
@@ -875,7 +914,13 @@ function Write-Status($State, $Result, $Notice) {
     skipCommit = (Get-Field $State 'skipCommit')
     pendingPage = (Get-Field $State 'pendingPage')
     interrupted = (Test-Path $script:P.Journal)
+    alert = $null
+    updater = $null
+    dailyTrigger = (Get-Field $State 'dailyTrigger')
   }
+  if ($Notice.mixed) { $doc['alert'] = $script:MixedStop }
+  $pp = Get-PinnedProblem
+  if ($pp) { $doc['updater'] = [ordered]@{ stopped = $true; reason = $pp } }
   Write-JsonAtomic $script:P.Status $doc
 }
 
@@ -908,9 +953,14 @@ function Test-Preflight([switch]$NoWwwOk) {
 
 # The automatic path never moves Anthony's clone (a checkout would put a newer, unannounced ChartBridge.cs where
 # nt8\install.ps1 copies from). It fetches origin/main and stages from git objects only.
-function Get-CloneNote {
+function Get-CloneBranch {
   $b = Invoke-Git @('symbolic-ref', '-q', '--short', 'HEAD') 30
-  $branch = 'a detached HEAD'; if ($b.code -eq 0 -and $b.out.Trim()) { $branch = $b.out.Trim() }
+  if ($b.code -eq 0 -and $b.out.Trim()) { return $b.out.Trim() }
+  return 'a detached HEAD'
+}
+
+function Get-CloneNote {
+  $branch = Get-CloneBranch
   $n = Invoke-Git @('rev-list', '--count', "HEAD..refs/remotes/$($script:Remote)/$($script:Branch)") 30
   $behind = ''; if ($n.code -eq 0 -and $n.out.Trim() -ne '0') { $behind = ", $($n.out.Trim()) commits behind origin/main (git pull when you want; the task does not use the clone's files)" }
   return "on $branch$behind"
@@ -995,13 +1045,14 @@ function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
   return $r
 }
 
-$script:StopOutcomes = @('blocked', 'fetch_failed', 'ci_unknown', 'stage_failed', 'cb_unknown', 'install_failed', 'interrupted')
+$script:StopOutcomes = @('blocked', 'fetch_failed', 'ci_unknown', 'stage_failed', 'cb_unknown', 'install_failed', 'interrupted', 'chartbridge_not_copied', 'chartbridge_mixed')
 
 function Complete-Run($State, $Result) {
   $lvl = 'INFO'; if ($script:StopOutcomes -contains $Result.outcome) { $lvl = 'WARN' }
   if ($Result.recovered) { $Result.reason = "(an interrupted page install was $($Result.recovered) first) " + $Result.reason }
   Write-Log "$($Result.outcome): $($Result.reason)" $lvl
   if ($null -eq $Result.compiled) { $Result.compiled = @{ version = $null; source = 'none'; detail = 'not asked' } }
+  Update-MixedAddOns $State
   $notice = Get-ChartBridgeNotice $State $Result.compiled
   if ($notice.ready -and (Get-Field $State['chartBridge'] 'toastedFor') -ne $notice.ready) {
     $msg = "ChartBridge $($notice.ready) is ready to install. When flat: update-pc.ps1 -InstallChartBridge, then F5 in the NinjaScript Editor."
@@ -1033,11 +1084,11 @@ function Write-Verdict([bool]$Ok, [string]$Text) {
 function Invoke-Update([switch]$DryRun) {
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }      # before anything is written (no NinjaTrader folder: nothing)
-  if (-not $DryRun) { Sync-DailyTrigger }
   $lock = Enter-Lock
   if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
   try {
     $state = Read-State
+    if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger) }
     $r = Invoke-Pass -DryRun:$DryRun -State $state
     if ($DryRun) {
       if (Test-Path $script:P.Journal) { Write-Host 'check: a page install was cut off; the next update finishes or undoes it before anything else' }
@@ -1050,14 +1101,25 @@ function Invoke-Update([switch]$DryRun) {
 }
 
 function Invoke-Status {
-  $state = Read-State
-  $c = Get-CompiledChartBridge $state
-  if ($c.source -eq 'diag' -and (Test-Path $script:P.Dir)) {
-    # keep what /diag said, so a page waiting for F5 installs on the next run even if NinjaTrader is closed then
-    $lock = Enter-Lock
-    if ($lock) { try { $s2 = Read-State; $s2['chartBridge'] = $state['chartBridge']; Save-State $s2 } finally { $lock.Dispose() } }
-  }
+  # status saves what /diag reports (so a page waiting for F5 installs on the next run even if NinjaTrader is closed
+  # then): the lock first, then state.json, so a run finishing at the same moment never loses its own changes
+  $lock = $null; $saved = 'no updater folder yet'
+  if (Test-Path $script:P.Dir) { $lock = Enter-Lock; if (-not $lock) { $saved = 'another run is working: what /diag said is not saved this time' } }
+  try {
+    $state = Read-State
+    $c = Get-CompiledChartBridge $state
+    if ($lock) { Update-MixedAddOns $state; Save-State $state; $saved = '' }
+  } finally { if ($lock) { $lock.Dispose() } }
   $n = Get-ChartBridgeNotice $state $c
+  $mx = Get-Field $state['chartBridge'] 'mixed'
+  if ($mx) {
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+    Write-Host "!!  $($script:MixedStop)"
+    Write-Host "!!  -InstallChartBridge $(Get-Field $mx 'version') failed half way ($(Get-Field $mx 'error'))."
+    Write-Host "!!  Changed from before: $(@(Get-Field $mx 'changed' @()) -join ', '). The files as they were: $(Get-Field $mx 'backup')"
+    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+  }
+  if ($saved) { Write-Host "note:         $saved" }
   $pg = $state['page']
   Write-Host "clone:        $($script:P.Repo) ($(Get-CloneNote))"
   Write-Host "page folder:  $($script:P.Www)"
@@ -1075,8 +1137,16 @@ function Invoke-Status {
   if (Get-Field $lr 'at') { Write-Host "last run:     $(Get-Field $lr 'outcome'): $(Get-Field $lr 'reason')" }
   if (Get-Field $state 'skipCommit') { Write-Host "skipping:     $(Get-Short (Get-Field $state 'skipCommit')) (rolled back by hand)" }
   if (Get-Field $state 'pendingPage') { Write-Host "page waiting: $(Get-Field $state['pendingPage'] 'version') for ChartBridge $(Get-Field $state['pendingPage'] 'needs') (installs on the first run after F5)" }
-  if (Test-Path $script:P.Journal) { Write-Host 'interrupted:  a page install was cut off; the next update finishes or undoes it first (or, when flat: update-pc.ps1 repair, page files only)' }
+  if (Test-Path $script:P.Journal) {
+    $j = Read-JsonFile $script:P.Journal
+    $whole = $false
+    try { $whole = $j -and (Get-BuildId $script:P.Www @($j['target']['files'])) -eq $j['target']['build'] } catch { }
+    if ($whole) { Write-Host 'journal:      a page install stopped after every file was written (the hashes match): the page is whole; the next update closes the journal' }
+    else { Write-Host 'interrupted:  a page install was cut off; the next update finishes or undoes it first (or, when flat: update-pc.ps1 repair, page files only)' }
+  }
   $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
+  $pp = Get-PinnedProblem
+  if ($pp) { Write-Host "task stopped: $pp; the task does nothing until you run register again from the clone" }
   if ($pin) {
     $binFile = Join-Path $script:P.Bin 'update-pc.ps1'
     $okPin = (Test-Path $binFile) -and (Get-FileSha256 $binFile) -eq (Get-Field $pin 'sha256')
@@ -1095,8 +1165,27 @@ function Invoke-Status {
   $task = $null
   if ($env:OS -eq 'Windows_NT') { $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
   Write-Host "task:         $(if ($task) { "$TaskName ($($task.State))" } else { 'not registered (update-pc.ps1 register)' })"
+  if ($task) {
+    $want = ''
+    try { $want = (ConvertFrom-NewYorkTime ([string](Get-Field $pin 'dailyAt' '17:05'))).ToString('HH:mm') } catch { }
+    foreach ($d in @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })) {
+      $sb = Read-StartBoundary ([string]$d.StartBoundary)
+      $note = ''
+      if ($sb.offset) { $note = ' KEPT ON UTC (StartBoundary has an offset): the next run moves it' }
+      elseif ($want -and $sb.hhmm -ne $want) { $note = ' DRIFTED: the next run moves it' }
+      Write-Host "daily check:  $($sb.hhmm) on this PC's clock, wanted $want ($(Get-Field $pin 'dailyAt' '17:05') New York time; StartBoundary $($d.StartBoundary))$note"
+    }
+  }
+  $dt = Get-Field $state 'dailyTrigger'
+  if ($dt -and -not (Get-Field $dt 'ok' $true)) {
+    $since = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $dt 'failingSince' 0)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')
+    $last = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $dt 'failedAt' 0)).ToLocalTime().ToString('yyyy-MM-dd HH:mm')
+    Write-Host "daily check:  the last move FAILED at $last (failing since $since): $(Get-Field $dt 'error'). If the task was registered from an elevated window, run register again from a normal (not elevated) PowerShell window"
+  }
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }
+  if ($mx) { return (Write-Verdict $false $script:MixedStop) }
+  if ($pp) { return (Write-Verdict $false "the task's updater is stopped: $pp. Run update-pc.ps1 register from the clone") }
   if (-not $c.version) { return (Write-Verdict $false "ChartBridge's version is not known: open NinjaTrader so ChartBridge runs, then run status again") }
   return (Write-Verdict $true "ChartBridge $($c.version) ($($c.source))")
 }
@@ -1136,25 +1225,127 @@ function Invoke-Rollback {
   } finally { $lock.Dispose() }
 }
 
-function Install-AddOnFiles($Stage) {
+# The sha256 of each named file in AddOns, or 'missing' (read only).
+function Get-AddOnHashes([string[]]$Names) {
+  $h = @{}
+  foreach ($n in $Names) {
+    $f = Join-Path $script:P.AddOns $n
+    if (Test-Path -LiteralPath $f) { $h[$n] = Get-FileSha256 $f } else { $h[$n] = 'missing' }
+  }
+  return $h
+}
+
+function Test-SameHashes($A, $B) {
+  if (-not ($A -is [System.Collections.IDictionary]) -or -not ($B -is [System.Collections.IDictionary]) -or $A.Count -ne $B.Count) { return $false }
+  foreach ($k in @($A.Keys)) { if (-not $B.Contains($k) -or [string]$A[$k] -ne [string]$B[$k]) { return $false } }
+  return $true
+}
+
+# Copy the staged add-on files into AddOns. All or nothing: if any step fails (a file held past the retry by the
+# NinjaScript Editor, antivirus or OneDrive), every file already replaced is put back from the backup, so AddOns is
+# exactly as before and the next F5 never compiles a mix of new and old ChartBridge files. Returns
+#   @{ ok = $true; backup }                                   all files replaced
+#   @{ ok = $false; backup; error; mixed = @() }              nothing changed (AddOns checked against its hashes)
+#   @{ ok = $false; backup; error; mixed = @(names); ... }    the restore failed too: AddOns holds a mix
+function Install-AddOnFiles($Stage, $State) {
   if (-not $script:AddOnWriteAllowed) { throw 'refused: add-on (.cs) files are only copied by update-pc.ps1 -InstallChartBridge, after Anthony confirms he is flat' }
   if (-not (Test-Path $script:P.AddOns)) { New-Item -ItemType Directory -Force -Path $script:P.AddOns | Out-Null }
   $names = @(Get-Field $Stage 'addonFiles' @())
-  $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-  $backup = Join-Path $script:P.PrevAddOns $stamp
-  New-Item -ItemType Directory -Force -Path $backup | Out-Null
-  foreach ($n in $names) {
-    $cur = Join-Path $script:P.AddOns $n
-    if (Test-Path -LiteralPath $cur) { Copy-Item -LiteralPath $cur -Destination (Join-Path $backup $n) -Force }
+  $before = Get-AddOnHashes $names
+  $keep = [string](Get-Field (Get-Field $State['chartBridge'] 'mixed') 'backup' '')
+  $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff'))
+  for ($i = 2; Test-Path -LiteralPath $backup; $i++) { $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff') + "-$i") }
+  $replaced = New-Object System.Collections.ArrayList
+  $sums = Get-Field $Stage 'sha256' @{}
+  $after = @{}
+  foreach ($n in $names) { $after[$n] = [string](Get-Field $sums "addons/$n" '') }
+  try {
+    New-Item -ItemType Directory -Force -Path $backup | Out-Null
+    foreach ($n in $names) {
+      $cur = Join-Path $script:P.AddOns $n
+      if (Test-Path -LiteralPath $cur) { Copy-Item -LiteralPath $cur -Destination (Join-Path $backup $n) -Force }
+    }
+    foreach ($n in $names) {
+      if ($before[$n] -ne 'missing' -and (Get-FileSha256 (Join-Path $backup $n)) -ne $before[$n]) { throw "the backup of $n does not match the file in AddOns" }
+    }
+    # the last three backups, and always the one a recorded mix points to
+    Get-ChildItem -Directory $script:P.PrevAddOns | Where-Object { $_.FullName -ne $keep } | Sort-Object Name -Descending | Select-Object -Skip 3 | ForEach-Object { Remove-Dir $_.FullName }
+    # all new files first under names NinjaTrader does not compile (.upd-tmp), then the replaces back to back
+    foreach ($n in $names) {
+      Copy-Item -LiteralPath (Join-Path (Join-Path $script:P.Staged 'addons') $n) -Destination (Join-Path $script:P.AddOns "$n.upd-tmp") -Force
+    }
+    # recorded before the first replace: a run cut off in the middle (a power loss) is found by the next run, which
+    # compares AddOns with the set before and the set after (Update-MixedAddOns)
+    $State['chartBridge']['copying'] = @{ at = (Get-NowMs); version = [string](Get-Field $Stage 'chartBridgeVersion'); commit = (Get-Field $Stage 'commit'); files = $names; before = $before; after = $after; backup = $backup }
+    Save-State $State
+    foreach ($n in $names) {
+      Move-FileAtomic (Join-Path $script:P.AddOns "$n.upd-tmp") (Join-Path $script:P.AddOns $n)
+      [void]$replaced.Add($n)
+      Invoke-CrashPoint "addon:$($replaced.Count)"
+    }
+    return @{ ok = $true; backup = $backup; after = $after }
+  } catch {
+    $err = $_.Exception.Message
+    Write-Log "-InstallChartBridge: the add-on copy failed after $($replaced.Count) of $($names.Count) files ($err); putting back: $(@($replaced) -join ', ')" 'ERROR'
+    $notBack = @()
+    foreach ($n in @($replaced)) {
+      $dest = Join-Path $script:P.AddOns $n
+      try {
+        if ($before[$n] -eq 'missing') { Remove-Item -LiteralPath $dest -Force }     # it was not there before
+        else {
+          Copy-Item -LiteralPath (Join-Path $backup $n) -Destination "$dest.upd-restore" -Force
+          Move-FileAtomic "$dest.upd-restore" $dest
+        }
+      } catch { $notBack += $n; Write-Log "-InstallChartBridge: $n could not be put back ($($_.Exception.Message))" 'ERROR' }
+    }
+    foreach ($n in $names) {
+      foreach ($x in @("$n.upd-tmp", "$n.upd-restore")) {
+        $f = Join-Path $script:P.AddOns $x
+        try { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } } catch { }
+      }
+    }
+    # AddOns is called unchanged only when every file has its hash from before
+    $now = $null
+    try { $now = Get-AddOnHashes $names } catch { }
+    $mixed = @()
+    foreach ($n in $names) { if ($null -eq $now -or [string]$now[$n] -ne [string]$before[$n]) { $mixed += $n } }
+    return @{ ok = $false; backup = $backup; error = $err; mixed = $mixed; before = $before; after = $after; notBack = $notBack }
   }
-  Get-ChildItem -Directory $script:P.PrevAddOns | Sort-Object Name -Descending | Select-Object -Skip 3 | ForEach-Object { Remove-Dir $_.FullName }
-  # all new files first under names NinjaTrader does not compile (.upd-tmp), then the replaces back to back
-  foreach ($n in $names) {
-    Copy-Item -LiteralPath (Join-Path (Join-Path $script:P.Staged 'addons') $n) -Destination (Join-Path $script:P.AddOns "$n.upd-tmp") -Force
-  }
-  foreach ($n in $names) { Move-FileAtomic (Join-Path $script:P.AddOns "$n.upd-tmp") (Join-Path $script:P.AddOns $n) }
-  return $backup
 }
+
+# A mix of new and old ChartBridge files recorded by -InstallChartBridge is cleared once AddOns holds one whole set
+# again: every file as before the copy (put back by hand from the backup), or every file of the staged commit.
+function Update-MixedAddOns($State) {
+  $cp = Get-Field $State['chartBridge'] 'copying'
+  if ($cp) {
+    # an -InstallChartBridge was cut off during its replaces (it clears this record itself when it ends)
+    $State['chartBridge'].Remove('copying')
+    $now = Get-AddOnHashes @(Get-Field $cp 'files' @())
+    $changed = @(@(Get-Field $cp 'files' @()) | Where-Object { [string]$now[$_] -ne [string](Get-Field (Get-Field $cp 'before') $_) })
+    if ($changed.Count -and -not (Test-SameHashes $now (Get-Field $cp 'after')) -and -not (Get-Field $State['chartBridge'] 'mixed')) {
+      $cp['changed'] = $changed; $cp['error'] = 'the copy was cut off (a power loss or a closed window?)'
+      $State['chartBridge']['mixed'] = $cp
+      Write-Log "STOP: $($script:MixedStop). An -InstallChartBridge of ChartBridge $(Get-Field $cp 'version') was cut off half way: $($changed -join ', ') changed. The files as they were: $(Get-Field $cp 'backup')" 'ERROR'
+    } elseif ($changed.Count -and (Test-SameHashes $now (Get-Field $cp 'after'))) {
+      $State['chartBridge']['installed'] = @{ version = (Get-Field $cp 'version'); commit = (Get-Field $cp 'commit'); at = (Get-NowMs); confirmed = $false }
+      Write-Log "an -InstallChartBridge of ChartBridge $(Get-Field $cp 'version') was cut off after its last replace: all files are in; press F5 when flat" 'WARN'
+    }
+  }
+  $mx = Get-Field $State['chartBridge'] 'mixed'
+  if (-not $mx) { return }
+  $names = @(Get-Field $mx 'files' @())
+  $now = Get-AddOnHashes $names
+  if (Test-SameHashes $now (Get-Field $mx 'before')) {
+    $State['chartBridge'].Remove('mixed')
+    Write-Log 'the ChartBridge files in AddOns are whole again (all as before -InstallChartBridge)'
+  } elseif (Test-SameHashes $now (Get-Field $mx 'after')) {
+    $State['chartBridge'].Remove('mixed')
+    $State['chartBridge']['installed'] = @{ version = (Get-Field $mx 'version'); commit = (Get-Field $mx 'commit'); at = (Get-NowMs); confirmed = $false }
+    Write-Log "the ChartBridge files in AddOns are whole again (all of ChartBridge $(Get-Field $mx 'version'))"
+  }
+}
+
+$script:MixedStop = 'DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report'
 
 function Invoke-InstallChartBridge {
   $pre = Test-Preflight -NoWwwOk
@@ -1186,7 +1377,11 @@ function Invoke-InstallChartBridge {
       if ($answer -ne 'y') { return (Write-Verdict $false 'nothing changed') }
     }
     $script:AddOnWriteAllowed = $true
-    try { $backup = Install-AddOnFiles $stage } finally { $script:AddOnWriteAllowed = $false }
+    try { $copy = Install-AddOnFiles $stage $state } finally { $script:AddOnWriteAllowed = $false }
+    if ($state['chartBridge'].Contains('copying')) { $state['chartBridge'].Remove('copying') }
+    if (-not $copy.ok) { return (Complete-AddOnFailure $state $stage $copy $r $compiled) }
+    $backup = $copy.backup
+    if (Get-Field $state['chartBridge'] 'mixed') { $state['chartBridge'].Remove('mixed'); Write-Log 'the ChartBridge files in AddOns are one whole set again' }
     # recorded at once: whatever happens next, the notice, status and the F5 bookkeeping know the files were replaced
     $state['chartBridge']['installed'] = @{ version = $sv; commit = (Get-Field $stage 'commit'); at = (Get-NowMs); confirmed = $false }
     $state['chartBridge']['toastedFor'] = $sv
@@ -1231,6 +1426,39 @@ function Invoke-InstallChartBridge {
   } finally { $lock.Dispose() }
 }
 
+# -InstallChartBridge could not copy every add-on file. Nothing changed (every replaced file was put back): say so and
+# stop. The put-back failed too: AddOns holds new and old ChartBridge files, and the next F5 would compile that mix on
+# the order path. That is recorded, and said on the console, in update.log, status.json and on the page, until
+# AddOns holds one whole set again.
+function Complete-AddOnFailure($State, $Stage, $Copy, $Pass, $Compiled) {
+  $sv = [string](Get-Field $Stage 'chartBridgeVersion')
+  $r2 = New-Result
+  $r2.target = $Pass.target; $r2.compiled = $Compiled
+  $old = Get-Field $State['chartBridge'] 'mixed'
+  if (@($Copy.mixed).Count -eq 0) {
+    $r2.outcome = 'chartbridge_not_copied'
+    $r2.reason = "ChartBridge $sv was not copied and nothing changed in AddOns (every file put back): $($Copy.error). Close the NinjaScript Editor (and anything else holding the file), then run update-pc.ps1 -InstallChartBridge again"
+    if ($old) { $r2.reason = "$($script:MixedStop). AddOns still holds the mix from before; this copy of ChartBridge $sv failed too ($($Copy.error)) and changed nothing" }
+    [void](Complete-Run $State $r2)
+    return (Write-Verdict $false $r2.reason)
+  }
+  $after = $Copy.after
+  $before = $Copy.before; $backup = $Copy.backup
+  if ($old) { $before = Get-Field $old 'before'; $backup = [string](Get-Field $old 'backup') }   # the set before the first failed copy
+  $State['chartBridge']['mixed'] = @{ at = (Get-NowMs); version = $sv; commit = (Get-Field $Stage 'commit'); files = @(Get-Field $Stage 'addonFiles' @()); before = $before; after = $after; backup = $backup; changed = @($Copy.mixed); error = $Copy.error }
+  $r2.outcome = 'chartbridge_mixed'
+  $r2.reason = "$($script:MixedStop). The copy of ChartBridge $sv failed ($($Copy.error)) and the old files could not all be put back: $(@($Copy.mixed) -join ', ') differ from before. The files as they were before are in $backup"
+  Write-Log "STOP: $($r2.reason)" 'ERROR'
+  [void](Complete-Run $State $r2)
+  Write-Host ''
+  Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+  Write-Host "!!  $($script:MixedStop)"
+  Write-Host "!!  Changed from before: $(@($Copy.mixed) -join ', '). The files as they were: $backup"
+  Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+  Write-Host ''
+  return (Write-Verdict $false $r2.reason)
+}
+
 # update-pc.ps1 repair (page files only, never ChartBridge): finish or undo a cut-off install; if neither is possible,
 # write a whole page from staged\ (when it works with the ChartBridge here), else previous\, else the clone's page
 # files (the www part of its install-files.json only), through the same journaled swap.
@@ -1256,10 +1484,21 @@ function Invoke-Repair {
     if (-not $target -and $prev -and @(Get-Field $prev 'files' @()).Count -and (Get-BuildId (Join-Path $script:P.Previous 'page') @(Get-Field $prev 'files' @())) -eq (Get-Field $prev 'build')) {
       $target = @{ source = (Join-Path $script:P.Previous 'page'); build = (Get-Field $prev 'build'); files = @(Get-Field $prev 'files' @()); commit = (Get-Field $prev 'commit'); version = (Get-Field $prev 'version'); from = 'previous' }
     }
+    $compatNote = ''
     if (-not $target) {
-      # the clone's page files, laid out as www in a folder of our own (its add-on files are never read)
+      # the clone's page files, laid out as www in a folder of our own (its add-on files are never read), only when its
+      # page works with the ChartBridge compiled here (live/COMPAT.json, the same check as the staged page)
       $m = Read-JsonFile (Join-Path (Join-Path $script:P.Repo 'nt8') 'install-files.json')
       Test-Manifest $m
+      $head = (Invoke-Git @('rev-parse', 'HEAD') 30).out.Trim()
+      $cloneAt = "the clone ($(Get-CloneBranch) at $(Get-Short $head))"
+      $min = [string](Get-Field (Read-JsonFile (Join-Path (Join-Path $script:P.Repo 'live') 'COMPAT.json')) 'minChartBridge' '')
+      if (-not (ConvertTo-VersionOrNull $min)) { return (Write-Verdict $false "nothing written: staged\ and previous\ cannot be used, and $cloneAt has no readable live/COMPAT.json, so its page cannot be checked against ChartBridge") }
+      if ($cv -and $cv -lt (ConvertTo-VersionOrNull $min)) {
+        return (Write-Verdict $false "nothing written: staged\ and previous\ cannot be used, and the page in $cloneAt needs ChartBridge $min; this PC has $($compiled.version). Put the clone on main (git checkout main, git pull), or install ChartBridge first (-InstallChartBridge, F5), then run repair again")
+      }
+      if ($cv) { $compatNote = " It needs ChartBridge $min; this PC has $($compiled.version): checked." }
+      else { $compatNote = " NOT checked against ChartBridge: its version here is not known ($($compiled.detail)); this page needs $min. Open NinjaTrader and run update-pc.ps1 status before you reload." }
       $tmp = Join-Path $script:P.Dir 'repair-page'
       Remove-Dir $tmp
       $files = @()
@@ -1269,8 +1508,7 @@ function Invoke-Repair {
         Copy-Item -LiteralPath (Get-LocalPath $script:P.Repo ([string]$w['from'])) -Destination $to -Force
         $files += [string]$w['to']
       }
-      $head = (Invoke-Git @('rev-parse', 'HEAD') 30).out.Trim()
-      $target = @{ source = $tmp; build = (Get-BuildId $tmp $files); files = $files; commit = $head; version = ''; from = 'the clone' }
+      $target = @{ source = $tmp; build = (Get-BuildId $tmp $files); files = $files; commit = $head; version = ''; from = $cloneAt }
     }
     Write-Log "repair: writing the page from $($target.from) (build $($target.build))$(if ($err) { " after: $err" })" 'WARN'
     Invoke-Swap $state $target $null '' ''
@@ -1279,7 +1517,7 @@ function Invoke-Repair {
     $r.outcome = 'repaired'; $r.reason = "page files written from $($target.from) (build $($target.build)); ChartBridge untouched"
     $r.compiled = $compiled
     [void](Complete-Run $state $r)
-    return (Write-Verdict $true "$($r.reason). Reload the page when flat.")
+    return (Write-Verdict $true "$($r.reason).$compatNote Reload the page when flat.")
   } finally { $lock.Dispose() }
 }
 
@@ -1347,44 +1585,131 @@ function Get-PinSource($State) {
     return @{ file = (Join-Path (Join-Path $script:P.Staged 'bin') 'update-pc.ps1'); commit = [string](Get-Field $stage 'commit'); blob = [string](Get-Field $stage 'updaterBlob'); note = "the staged copy of $(Get-Short (Get-Field $stage 'commit')) (green on main)" }
   }
   $mine = Get-BlobId $script:UpdaterSelf $script:SelfPath
+  $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
+  if ($mine -and $mine -eq [string](Get-Field $pin 'blob' '') -and (Get-Field $pin 'commit')) {
+    return @{ file = $script:UpdaterSelf; commit = [string](Get-Field $pin 'commit'); blob = $mine; note = "this file, the same as the pinned $(Get-Short (Get-Field $pin 'commit'))" }
+  }
   foreach ($c in @($State['ciGreen'])) {
     if (-not $c) { continue }
     $b = (Get-CommitBlobs $c @($script:SelfPath))[$script:SelfPath]
-    if ($b -and $b -eq $mine) { return @{ file = $script:UpdaterSelf; commit = $c; blob = $b; note = "this file, the same as in $(Get-Short $c) (green on main)" } }
+    if ($b -and $b -eq $mine) {
+      # never back to an older updater than the one pinned (the same rule as -InstallChartBridge)
+      $pc = [string](Get-Field $pin 'commit' '')
+      if ($pc -and $pc -ne $c) {
+        $mb = Invoke-Git @('merge-base', '--is-ancestor', $pc, $c) 30
+        if ($mb.code -ne 0) { throw "nothing pinned: main could not be staged ($($r.outcome): $($r.reason)), and this update-pc.ps1 is the file of $(Get-Short $c), which is not newer than the pinned $(Get-Short $pc). The task keeps $(Get-Short $pc); run register again when main can be fetched" }
+      }
+      return @{ file = $script:UpdaterSelf; commit = $c; blob = $b; note = "this file, the same as in $(Get-Short $c) (green on main)" }
+    }
   }
   throw "nothing to pin: main could not be staged ($($r.outcome): $($r.reason)), and this update-pc.ps1 is not the file of a commit seen green on main (a branch or a local edit?)"
 }
 
-# The pinned copy checks itself at every run: a changed file does nothing and says STOP in the log.
-function Test-PinnedSelf {
-  $pinFile = Join-Path (Split-Path -Parent $script:UpdaterSelf) 'pinned.json'
-  if (-not (Test-Path $pinFile)) { return $null }
-  $pin = Read-JsonFile $pinFile
-  if ((Get-FileSha256 $script:UpdaterSelf) -ne (Get-Field $pin 'sha256')) {
-    return "the task's updater $($script:UpdaterSelf) changed since it was pinned; nothing done. Run update-pc.ps1 register from the clone to pin a checked copy again"
-  }
+# Is the scheduled task's copy (updater\bin\update-pc.ps1) still the file that was pinned? $null when it is, or when no
+# copy is pinned on this PC. update.json and status.json carry the answer, so a task that stops is seen on the page.
+function Get-PinnedProblem {
+  $bin = Join-Path $script:P.Bin 'update-pc.ps1'
+  $pj = Join-Path $script:P.Bin 'pinned.json'
+  if (-not (Test-Path -LiteralPath $bin)) { return $null }
+  if (-not (Test-Path -LiteralPath $pj)) { return "the task's updater $bin has no pinned.json next to it" }
+  $want = [string](Get-Field (Read-JsonFile $pj) 'sha256' '')
+  if (-not $want) { return "$pj cannot be read" }
+  if ((Get-FileSha256 $bin) -ne $want) { return "the task's updater $bin changed since it was pinned" }
   return $null
 }
 
+# The pinned copy checks itself at every run: a changed file, or one without its pinned.json, does nothing and says
+# STOP (update.log, status.json and the page).
+function Test-PinnedSelf {
+  $self = [IO.Path]::GetFullPath($script:UpdaterSelf)
+  $dir = Split-Path -Parent $self
+  $isPinned = ($self -eq [IO.Path]::GetFullPath((Join-Path $script:P.Bin 'update-pc.ps1'))) -or
+    ((Split-Path -Leaf $dir) -eq 'bin' -and (Split-Path -Leaf (Split-Path -Parent $dir)) -eq 'updater')
+  if (-not $isPinned) { return $null }
+  $fix = 'nothing done. Run update-pc.ps1 register from the clone to pin a checked copy again'
+  $pinFile = Join-Path $dir 'pinned.json'
+  if (-not (Test-Path -LiteralPath $pinFile)) { return "the task's updater $self has no pinned.json next to it; $fix" }
+  $pin = Read-JsonFile $pinFile
+  if ((Get-FileSha256 $self) -ne (Get-Field $pin 'sha256')) { return "the task's updater $self changed since it was pinned; $fix" }
+  return $null
+}
+
+# The self-check said STOP: status.json and update.json say so too (the page shows "Updater stopped").
+function Write-StopRecord([string]$Text) {
+  try {
+    if (-not (Test-Path $script:P.Dir)) { return }
+    $lock = Enter-Lock
+    if (-not $lock) { return }
+    try {
+      $st = Read-JsonFile $script:P.Status
+      if (-not ($st -is [System.Collections.IDictionary])) { $st = @{} }
+      $st['schema'] = 1; $st['updatedAt'] = Get-NowMs; $st['outcome'] = 'updater_stopped'; $st['reason'] = $Text
+      $st['updater'] = [ordered]@{ stopped = $true; reason = $Text }
+      Write-JsonAtomic $script:P.Status $st
+      $cur = Read-JsonFile (Join-Path $script:P.Www $script:VersionFile)
+      $pg = Get-Field $cur 'page' @{}
+      $script:UpdaterStopped = $true
+      Write-UpdateDoc $pg ([string](Get-Field $pg 'state' '')) $null
+    } finally { $lock.Dispose() }
+  } catch { Write-Log "the STOP could not be written to status.json or update.json ($($_.Exception.Message))" 'WARN' }
+}
+
+# The daily trigger. New-ScheduledTaskTrigger -At writes StartBoundary with this PC's UTC offset of that day (for
+# example 2026-09-30T17:05:00-04:00), and Task Scheduler then keeps the trigger on UTC ("Synchronize across time
+# zones"): registered in summer, it would run at 16:05 New York time all winter, while futures trade. So StartBoundary
+# is written as local wall-clock time with no offset (2026-09-30T17:05:00): Task Scheduler then runs it at 17:05 on
+# this PC's clock every day, across DST.
+function New-DailyTrigger([datetime]$Local) {
+  $t = New-ScheduledTaskTrigger -Daily -At $Local
+  $t.StartBoundary = $Local.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+  return $t
+}
+
+# The wall-clock HH:mm of a StartBoundary string, and whether it carries a UTC offset (Z or +hh:mm): read from the
+# string itself, never converted through the offset it holds (that would hide a trigger kept on UTC).
+function Read-StartBoundary([string]$Text) {
+  $m = [regex]::Match("$Text".Trim(), '^\d{4}-\d\d-\d\dT(\d\d):(\d\d)(:\d\d(\.\d+)?)?(Z|[+-]\d\d:\d\d)?$')
+  if (-not $m.Success) { return @{ ok = $false; hhmm = ''; offset = $false } }
+  return @{ ok = $true; hhmm = "$($m.Groups[1].Value):$($m.Groups[2].Value)"; offset = [bool]$m.Groups[5].Success }
+}
+
 # The daily check is a local time on this PC. At every run (sign-in and daily), 17:05 New York is worked out again for
-# today, and the trigger is moved when it drifted (a time zone change, or DST dates that differ from New York's).
+# today, and the trigger is moved when it drifted (a time zone change, DST dates that differ from New York's, or a
+# StartBoundary kept on UTC). Returns what it found, for state.json and status: a failure (a task registered from an
+# elevated window cannot be changed by the task's own run: access denied) is recorded, not only logged.
 function Sync-DailyTrigger {
-  if ($env:OS -ne 'Windows_NT') { return }
+  if ($env:OS -ne 'Windows_NT') { return $null }
+  $res = @{ at = (Get-NowMs); ok = $true; have = ''; want = ''; error = '' }
   try {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if (-not $task) { return }
+    if (-not $task) { return $null }
     $daily = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' })
     $others = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -ne 'MSFT_TaskDailyTrigger' })
-    if ($daily.Count -ne 1) { return }
+    if ($daily.Count -ne 1) { return $null }
     $pin = Read-JsonFile (Join-Path $script:P.Bin 'pinned.json')
     $at = [string](Get-Field $pin 'dailyAt' '17:05')
     $want = ConvertFrom-NewYorkTime $at
-    $have = ([datetime]$daily[0].StartBoundary).ToString('HH:mm')
-    if ($have -eq $want.ToString('HH:mm')) { return }
-    $new = New-ScheduledTaskTrigger -Daily -At $want
-    Set-ScheduledTask -TaskName $TaskName -Trigger (@($others) + @($new)) | Out-Null
-    Write-Log "the daily check moved from $have to $($want.ToString('HH:mm')) on this PC's clock ($at New York time)" 'WARN'
-  } catch { Write-Log "the daily check time could not be checked ($($_.Exception.Message))" 'WARN' }
+    $sb = Read-StartBoundary ([string]$daily[0].StartBoundary)
+    $res.have = $sb.hhmm; $res.want = $want.ToString('HH:mm')
+    if ($sb.ok -and -not $sb.offset -and $sb.hhmm -eq $res.want) { return $res }
+    $why = ''; if ($sb.offset) { $why = ' (it was kept on UTC: StartBoundary had a UTC offset)' }
+    Set-ScheduledTask -TaskName $TaskName -Trigger (@($others) + @(New-DailyTrigger $want)) | Out-Null
+    Write-Log "the daily check moved from $($sb.hhmm) to $($res.want) on this PC's clock ($at New York time)$why" 'WARN'
+    $res.have = $res.want
+  } catch {
+    $res.ok = $false; $res.error = $_.Exception.Message
+    Write-Log "the daily check time could not be checked or moved ($($res.error)); if the task was registered from an elevated window, run update-pc.ps1 register again from a normal (not elevated) PowerShell window" 'WARN'
+  }
+  return $res
+}
+
+# What the last check of the daily trigger found, in state.json: failedAt stays until a check succeeds again.
+function Save-TriggerCheck($State, $Res) {
+  if ($null -eq $Res) { return }
+  $prev = Get-Field $State 'dailyTrigger' @{}
+  $d = @{ checkedAt = $Res.at; ok = $Res.ok; have = $Res.have; want = $Res.want }
+  if (-not $Res.ok) { $d['failedAt'] = $Res.at; $d['error'] = $Res.error; $d['failingSince'] = (Get-Field $prev 'failingSince' $Res.at) }
+  $State['dailyTrigger'] = $d
 }
 
 # HH:mm New York time on a given day, as this PC's local time (DST on both sides, on that day).
@@ -1419,14 +1744,16 @@ function Invoke-Register {
   if ($env:OS -ne 'Windows_NT') { return (Write-Verdict $false 'register works on Windows only') }
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }
-  $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $user = $id.Name
+  $elevated = (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
   try { $pinned = Invoke-PinForTask $DailyAt } catch { return (Write-Verdict $false "not registered: $($_.Exception.Message)") }
   $action = New-ScheduledTaskAction -Execute $ps -Argument (Get-TaskArguments $pinned $script:P.Repo) -WorkingDirectory $script:P.Bin
   $logon = New-ScheduledTaskTrigger -AtLogOn -User $user
   $logon.Delay = 'PT2M'
   $local = ConvertFrom-NewYorkTime $DailyAt
-  $daily = New-ScheduledTaskTrigger -Daily -At $local
+  $daily = New-DailyTrigger $local
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
@@ -1435,6 +1762,11 @@ function Invoke-Register {
   $t = Get-ScheduledTask -TaskName $TaskName
   $when = "at sign-in (after 2 minutes) and daily at $DailyAt New York time, $($local.ToString('HH:mm')) on this PC's clock"
   Write-Log "registered the scheduled task '$TaskName': $when"
+  if ($elevated) {
+    $warn = "this window is elevated (Run as administrator). The task's own run (not elevated) may then be refused when it moves the daily check for DST or a time zone change, every day. Run update-pc.ps1 register again from a normal (not elevated) PowerShell window"
+    Write-Log "register: $warn" 'WARN'
+    Write-Host "WARNING: $warn."
+  }
   Write-Host "The task runs $pinned (a copy; it changes only when you run register again or -InstallChartBridge)."
   Write-Host "Each run works out $DailyAt New York time again and moves the daily check if this PC's clock drifted from it (time zone or DST)."
   return (Write-Verdict ($null -ne $t) "scheduled task '$TaskName' registered: $when ($($t.State))")
@@ -1457,7 +1789,7 @@ function Invoke-Main {
   $cmd = $Command
   if ($InstallChartBridge) { $cmd = 'install-chartbridge' }
   $bad = Test-PinnedSelf
-  if ($bad) { Write-Log "STOP: $bad" 'ERROR'; return (Write-Verdict $false $bad) }
+  if ($bad) { Write-Log "STOP: $bad" 'ERROR'; Write-StopRecord $bad; return (Write-Verdict $false $bad) }
   try {
     switch ($cmd) {
       'repair' { return (Invoke-Repair) }

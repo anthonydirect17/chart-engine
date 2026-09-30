@@ -70,9 +70,15 @@ test('the automatic path never copies add-on files: only -InstallChartBridge, af
   // the only place anything is written under AddOns is Install-AddOnFiles; Get-AddOnVersion only reads
   const fnOf = i => src.slice(src.lastIndexOf('function ', i), src.lastIndexOf('function ', i) + 40).split(/[\s(]/)[1];
   const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => fnOf(m.index));
-  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnVersion', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
+  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
   const reader = src.slice(src.indexOf('function Get-AddOnVersion'), src.indexOf('function Get-LowerVersion'));
   assert.ok(!/Copy-Item|Move-|Write|Set-Content|Remove-Item|Replace\(/.test(reader), 'Get-AddOnVersion only reads');
+  const hashes = src.slice(src.indexOf('function Get-AddOnHashes'), src.indexOf('function Test-SameHashes'));
+  assert.ok(hashes.length > 0 && !/Copy-Item|Move-|Write|Set-Content|Remove-Item|Replace\(/.test(hashes), 'Get-AddOnHashes only reads');
+  // all or nothing: a failed replace puts back every file already replaced, and a mix is never left unsaid
+  const copy = src.slice(src.indexOf('function Install-AddOnFiles'), src.indexOf('function Update-MixedAddOns'));
+  assert.match(copy, /\$State\['chartBridge'\]\['copying'\] = [\s\S]*Save-State \$State[\s\S]*foreach \(\$n in \$names\) \{\s*Move-FileAtomic/, 'the copy is recorded before the first replace');
+  assert.match(copy, /\} catch \{[\s\S]*foreach \(\$n in @\(\$replaced\)\)[\s\S]*Move-FileAtomic "\$dest\.upd-restore" \$dest/, 'a failure puts the replaced files back');
   const inst = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Repair'));
   assert.ok(!/Copy-Item|Move-FileAtomic/.test(inst.replace(/Install-AddOnFiles|Install-PinnedUpdater|Install-PageFiles/g, '')), '-InstallChartBridge writes AddOns only through Install-AddOnFiles');
 });
@@ -94,7 +100,10 @@ test('the automatic path never moves Anthony\'s clone, and git never asks anythi
   // one entry point with a runtime allow-list of subcommands that only read or fetch into refs/remotes
   const allowed = eval('[' + /\$script:GitAllowed = @\(([^)]*)\)/.exec(src)[1] + ']');
   assert.deepStrictEqual([...allowed].sort(), ['archive', 'cat-file', 'fetch', 'hash-object', 'ls-tree', 'merge-base', 'remote', 'rev-list', 'rev-parse', 'show', 'symbolic-ref'].sort());
-  assert.match(src, /if \(\$script:GitAllowed -notcontains \$ArgList\[0\]\) \{ throw/);
+  assert.match(src, /\$refused = Test-GitArgs \$ArgList\s+if \(\$refused\) \{ throw \$refused \}/);
+  assert.match(src, /if \(\$script:GitAllowed -notcontains \$sub\) \{ return/);
+  // the three subcommands with a writing form are checked in full
+  for (const sub of ['symbolic-ref', 'remote', 'hash-object']) assert.match(src, new RegExp("if \\(\\$sub -eq '" + sub + "'\\) \\{"), sub);
   // every call, written @( or (@(, starts with a literal subcommand from that list; git runs nowhere else
   const calls = [...src.matchAll(/Invoke-Git\s+\(?@\(\s*([^,)]+)/g)].map(m => m[1].trim());
   assert.ok(calls.length >= 12, calls.join(','));
@@ -121,7 +130,10 @@ test('the schedule (Anthony, 2026-09-30): at sign-in and once a day at 17:05 New
   assert.match(src, /\[string\]\$DailyAt = '17:05'/);
   assert.match(src, /New-ScheduledTaskTrigger -AtLogOn -User \$user/);
   assert.match(src, /\$logon\.Delay = 'PT2M'/);
-  assert.match(src, /New-ScheduledTaskTrigger -Daily -At \$local/);
+  assert.match(src, /\$daily = New-DailyTrigger \$local/);
+  // local wall-clock time with no UTC offset: Task Scheduler then keeps 17:05 on this PC's clock across DST
+  assert.match(src, /function New-DailyTrigger[\s\S]{0,120}New-ScheduledTaskTrigger -Daily -At \$Local\s+\$t\.StartBoundary = \$Local\.ToString\('yyyy-MM-ddTHH:mm:ss'/);
+  assert.strictEqual([...src.matchAll(/New-ScheduledTaskTrigger -Daily/g)].length, 1, 'every daily trigger is made by New-DailyTrigger');
   assert.match(src, /-Trigger @\(\$logon, \$daily\)/);
   assert.ok(!/RepetitionInterval|StartWhenAvailable|\$Hours/.test(src), 'no repetition, no late start of a missed run');
   assert.match(src, /-MultipleInstances IgnoreNew/);
@@ -174,7 +186,7 @@ test('the PowerShell tests (test/pc-updater.tests.ps1)', t => {
   const out = (r.stdout || '') + (r.stderr || '');
   const summary = /pc-updater: (\d+) passed, (\d+) failed, (\d+) skipped/.exec(out);
   t.diagnostic(summary ? summary[0] + ' (' + ps + ')' : 'no summary');
-  for (const line of out.split(/\r?\n/).filter(l => /^OK: scheduled task/.test(l))) t.diagnostic(line.trim());
+  for (const line of out.split(/\r?\n/).filter(l => /^OK: scheduled task|^pc-updater (dst|xml):/.test(l))) t.diagnostic(line.trim());
   assert.ok(summary, 'the PowerShell tests ran to the end:\n' + out.slice(-4000));
   assert.strictEqual(+summary[2], 0, out.split('\n').filter(l => /FAIL/.test(l)).join('\n'));
   assert.ok(+summary[1] >= 25, 'ran them all');

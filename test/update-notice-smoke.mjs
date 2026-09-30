@@ -31,8 +31,8 @@ for (const f of manifest.www) {
   fs.copyFileSync(path.join(root, f.from), dest);
 }
 const updateJson = path.join(serve, 'live', 'update.json');
-const writeUpdate = (build, installedAt, cb = {}, state = '') => fs.writeFileSync(updateJson, JSON.stringify({ schema: 1,
-  page: { version: '1.6.0', build, commit: 'c'.repeat(40), installedAt, state }, chartBridge: Object.assign({ compiled: '0.3.3', ready: null, copied: null }, cb) }, null, 2));
+const writeUpdate = (build, installedAt, cb = {}, state = '', extra = {}) => fs.writeFileSync(updateJson, JSON.stringify(Object.assign({ schema: 1,
+  page: { version: '1.6.0', build, commit: 'c'.repeat(40), installedAt, state }, chartBridge: Object.assign({ compiled: '0.3.3', ready: null, copied: null, mixed: null }, cb), updater: null }, extra), null, 2));
 writeUpdate('build-a', 0);
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + serve, '--trading', '--trade-accounts=Sim101', '--pin-off', '--test-controls'],
@@ -189,6 +189,43 @@ try {
   const m4 = await note(late);
   check(m4 && /^Page update cut off/.test(m4.text) && !/reload/.test(m4.text), '1d. a page opened after a crash: ' + (m4 && m4.text));
   await late.close();
+
+  // review 3: an -InstallChartBridge that failed half way and could not put the old files back, and a scheduled task
+  // whose copy failed its own check. Each is said first, in the warning colour, never with "F5 when flat" or "ready",
+  // and the notice still never moves the chart or the status line
+  writeUpdate('build-h', Date.now() - 60000, { mixed: true, ready: '0.3.9', copied: null });
+  const mx = await open(browser, 1440);
+  await poll(mx);
+  const x1 = await note(mx);
+  const x1said = x1 && x1.said;
+  check(x1 && !x1.hidden && /^DO NOT press F5: ChartBridge files are mixed\. Run update-pc\.ps1 status and report$/.test(x1said) && /^DO NOT press F5/.test(x1.text), 'mixed ChartBridge files: ' + x1said + ' (shown: ' + (x1 && x1.text) + ')');
+  check(!/F5 when flat|ready|reload/.test(x1said), 'nothing about F5, ready or reload while the files are mixed');
+  check(await mx.evaluate(() => document.getElementById('updNote').classList.contains('upd-stop')), 'the warning colour');
+  let xmoved = [];
+  for (let w = 700; w <= 1920; w += 40) {
+    await mx.setViewportSize({ width: w, height: 860 });
+    await mx.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const m = await mx.evaluate(() => {
+      const n = document.getElementById('updNote'), stage = document.querySelector('.stage'), foot = n.closest('footer.status');
+      const box = () => { const s = stage.getBoundingClientRect(), f = foot.getBoundingClientRect(); return [Math.round(s.top), Math.round(s.height), Math.round(f.height)].join(','); };
+      n.hidden = true; const off = box(); n.hidden = false; const on = box();
+      return { off, on };
+    });
+    if (m.off !== m.on) xmoved.push(w + ': ' + m.off + ' -> ' + m.on);
+  }
+  check(xmoved.length === 0, 'the mixed notice, 700 to 1920 px in 40 px steps: the chart and the status line never move' + (xmoved.length ? ' (' + xmoved.join('; ') + ')' : ''));
+  await mx.setViewportSize({ width: 1440, height: 860 });
+  await mx.screenshot({ path: path.join(out, 'update-notice-1440-mixed.png'), clip: { x: 0, y: 760, width: 1440, height: 100 } });
+  writeUpdate('build-h', Date.now() - 60000, {}, '', { updater: { stopped: true } });
+  await poll(mx);
+  const x2 = await note(mx);
+  check(x2 && !x2.hidden && /^Updater stopped: run update-pc\.ps1 status/.test(x2.said) && await mx.evaluate(() => document.getElementById('updNote').classList.contains('upd-stop')), 'the task\'s updater stopped: ' + (x2 && x2.said));
+  check(/README: Keep this PC up to date/.test(await mx.getAttribute('#updNote', 'title')), 'the tooltip names the task\'s copy (README)');
+  writeUpdate('build-h', Date.now() - 60000, {}, '');
+  await poll(mx);
+  const x3 = await note(mx);
+  check(x3 && x3.hidden && !(await mx.evaluate(() => document.getElementById('updNote').classList.contains('upd-stop'))), 'both cleared: nothing shown');
+  await mx.close();
 
   // no update.json (a PC without the updater): no notice, no error
   fs.rmSync(updateJson);

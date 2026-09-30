@@ -165,7 +165,9 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
        else { 'STOP: the clone is not on main with nt8\update-pc.ps1' } } }
    ```
 
-2. What this PC has now (reads only; it asks ChartBridge's `/diag` for the version compiled here):
+2. What this PC has now. It asks ChartBridge's `/diag` for the version compiled here and saves what /diag reports
+   (in `updater\state.json`, so a page waiting for F5 follows on the next check); it never writes a page or
+   ChartBridge file:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 status
@@ -194,11 +196,16 @@ Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line
    or the next day checks. Every check works out 5:05 PM New York time again and moves the daily check if this PC's
    clock drifted from it (a trip to another time zone, or DST dates that differ from New York's); the log says so.
    Register pins the updater from the newest green commit on `main` (it fetches first); it refuses a file changed by
-   hand or from a branch.
+   hand or from a branch, and never goes back to an older updater than the one pinned. Run it from a normal
+   PowerShell window, not as administrator: the task's own run may not be allowed to move the daily check of a task
+   registered from an elevated window (register warns, and `status` shows when a move failed).
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 register
    ```
+
+   To check the daily time is kept on this PC's clock (a time with no ending such as `-04:00` or `Z`, for example
+   `2026-09-30T17:05:00`): `(Get-ScheduledTask 'ChartEngine Updater').Triggers | Select StartBoundary`
 
    On Windows 11, if a console window stays open while the check runs, that is Windows Terminal being the default
    terminal; the window closes when the run ends.
@@ -222,6 +229,13 @@ it never moves them; it never reloads anything):
 - **Page files are being updated: do not reload yet**: files are being replaced right now (a few seconds).
 - **Page update cut off: run update-pc.ps1 status**: an install was cut off (a power loss, a closed lid). Do not
   reload. The next check repairs it by itself; when flat you can run `repair` (page files only, never ChartBridge).
+- **DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report**: `-InstallChartBridge`
+  failed half way (a file held by the NinjaScript Editor, antivirus or OneDrive, or a power loss) and the old files
+  could not all be put back, so `bin\Custom\AddOns` holds new and old ChartBridge files. Do not compile. `status`
+  says which files changed and where the old ones are kept; the notice goes once AddOns holds one whole set again
+  (the old files put back, or `-InstallChartBridge` run again with nothing holding the files).
+- **Updater stopped: run update-pc.ps1 status**: the task's copy of the updater failed its own check (changed, or its
+  `pinned.json` is gone), so the scheduled check does nothing. Run `register` again from the clone.
 
 On a narrow window the notice is shortened ("Update ready"); hovering it shows the whole text.
 
@@ -234,7 +248,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $u -InstallChartBridge
 
 It installs from `updater\staged\` (the green commit that was announced), never from the clone. It shows the staged
 version and the one compiled here, asks once (type `y`), then writes the add-on files next to the old ones and replaces
-them back to back (the files it replaces are kept in `updater\previous-addons\`). Then it says: open the NinjaScript
+them back to back (the files it replaces are kept in `updater\previous-addons\`). All or nothing: if one file cannot
+be replaced (the NinjaScript Editor, antivirus or OneDrive holds it), every file already replaced is put back and it
+says nothing changed; close what holds the file and run it again. If the put-back fails too, it says **DO NOT press
+F5** (above). Then it says: open the NinjaScript
 Editor and press **F5** while flat, then open `http://localhost:8765/diag` and check `"version"` shows the new one (or
 run `update-pc.ps1 status`), then reload the chart page. A page that needs the new ChartBridge waits until /diag shows
 it: after F5, run `update` (or `status`, which notes the new version for the next check). A page that works with both
@@ -245,11 +262,11 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 
 | Command (`powershell -NoProfile -ExecutionPolicy Bypass -File $u ...`) | What it does |
 | --- | --- |
-| `status` | what is installed and waiting, and why (reads only) |
+| `status` | what is installed and waiting, and why; it saves what /diag reports (the version compiled here) in `updater\state.json`, and never writes a page or ChartBridge file |
 | `check` | dry run: what `update` would do now |
 | `update` | the automatic path, by hand |
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
-| `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files) |
+| `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files; the clone's only when its `live/COMPAT.json` allows the ChartBridge compiled here, or it says plainly that it could not check) |
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 5:05 PM New York time |
 

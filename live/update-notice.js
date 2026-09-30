@@ -14,7 +14,10 @@
  * It never reloads the page, never opens anything, and sits on the status line at the bottom: it never covers the
  * order bar, the chart or anything of the live trade, and never moves them (it takes no room of its own on the line;
  * a smoke sweeps 700 to 1920 px). Nothing is sent anywhere. When an install was cut off and could not be finished,
- * it says so ("Page update cut off: run update-pc.ps1 status").
+ * it says so ("Page update cut off: run update-pc.ps1 status"). Two stops come first and in the warning colour: "DO NOT
+ * press F5: ChartBridge files are mixed" (an -InstallChartBridge that failed half way and could not put the old
+ * files back) and "Updater stopped" (the scheduled task's copy failed its own check). Commands name the task's copy
+ * of update-pc.ps1 (README: Keep this PC up to date).
  */
 (function () {
   'use strict';
@@ -32,6 +35,7 @@
     // (text-indent puts the gap back inside it). A long text ends in "...", and a shorter form is picked when it fits.
     s.textContent = '.chart-live .status .upd-note { flex: 1 1 0; min-width: 0; margin-left: -16px; text-indent: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); font-family: var(--sans); }' +
       '.chart-live .status .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
+      '.chart-live .status .upd-note.upd-stop { color: var(--warn); font-weight: 600; }' +
       '.chart-live .status .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }';
     document.head.appendChild(s);
   }
@@ -58,9 +62,21 @@
     const st = (page && page.state) || '';
     // 'installing' for over two minutes is not an install running now: the run was cut off (a power loss or a lid)
     const cut = st === 'interrupted' || (st === 'installing' && Date.now() - (+page.installedAt || 0) > STUCK_MS);
+    const cmd = 'update-pc.ps1 (the task\'s copy, README: Keep this PC up to date)';
+    let stop = false;
+    if (cb.mixed) {
+      stop = true;
+      parts.push(['DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report', 'DO NOT press F5: ChartBridge files mixed']);
+      tips.push('Installing ChartBridge failed half way and the old files could not all be put back: AddOns holds new and old ChartBridge files. Do not press F5 and do not compile. Run ' + cmd + ' status and report what it says.');
+    }
+    if (u && u.updater && u.updater.stopped) {
+      stop = true;
+      parts.push(['Updater stopped: run update-pc.ps1 status', 'Updater stopped']);
+      tips.push('The scheduled update did nothing: its copy of update-pc.ps1 failed its own check. Run ' + cmd + ' status; it says how to register again.');
+    }
     if (cut) {
       parts.push(['Page update cut off: run update-pc.ps1 status', 'Page update cut off']);
-      tips.push('An install of new page files was cut off. Do not reload. When flat, run nt8\\update-pc.ps1 status (and repair if it says so).');
+      tips.push('An install of new page files was cut off. Do not reload. When flat, run ' + cmd + ' status (and repair if it says so).');
     } else if (st === 'installing') {
       // files are being replaced right now: not ready, and never the build this page started from
       parts.push(['Page files are being updated: do not reload yet', 'Updating page files']);
@@ -75,17 +91,19 @@
       parts.push(['Update ready: reload when flat', 'Update ready']);
       tips.push('New chart page files' + (page && page.version ? ' (' + page.version + ')' : '') + ' are installed on this PC. This page keeps running what it loaded; reload it when flat to use them.');
     }
-    if (cb.copied) {
+    if (cb.mixed) {
+      // nothing about F5 or a ChartBridge to install while the files are mixed
+    } else if (cb.copied) {
       parts.push(['ChartBridge ' + cb.copied + ' copied: press F5 when flat', 'ChartBridge ' + cb.copied + ': F5 when flat']);
       tips.push('NinjaTrader > New > NinjaScript Editor > F5 while flat, then check /diag shows ' + cb.copied + '.');
     } else if (cb.ready) {
       parts.push(['ChartBridge ' + cb.ready + ' ready to install (flat, then F5)', 'ChartBridge ' + cb.ready + ' ready']);
-      tips.push('When flat: nt8\\update-pc.ps1 -InstallChartBridge, then F5 in the NinjaScript Editor. Nothing installs by itself.');
+      tips.push('When flat: ' + cmd + ' -InstallChartBridge, then F5 in the NinjaScript Editor. Nothing installs by itself.');
     }
     // the whole text first, then shorter forms, the page's part first: the one that fits the status line is shown
     const forms = [];
     for (let n = 0; n <= parts.length; n++) forms.push(parts.map((p, i) => p[i < n ? 1 : 0]).join(' · '));
-    return { text: forms[0], forms, tip: tips.join('\n') };
+    return { text: forms[0], forms, tip: tips.join('\n'), stop };
   }
 
   function show(m) {
@@ -95,6 +113,7 @@
     const vis = node.firstChild, sr = node.lastChild;
     node.title = [m.text, m.tip].filter(Boolean).join('\n');
     node.hidden = !m.text;
+    node.classList.toggle('upd-stop', !!m.stop);
     if (sr.textContent !== m.text) sr.textContent = m.text;
     // a narrow window: a shorter form when the whole text does not fit in the room the status line has left
     for (const f of m.forms || [m.text]) { if (vis.textContent !== f) vis.textContent = f; if (node.hidden || node.scrollWidth <= node.clientWidth + 1) break; }

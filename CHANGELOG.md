@@ -58,13 +58,38 @@ Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged 
 - Review of the first version (independent): B1 (no journal, a mixed page kept as the rollback copy), B2 (the clone
   fast-forward), S1 to S7 and the cheap nits are fixed as above. Left as notes: N3 the 403/429 mapping is read, not
   tested (junk, empty and refused answers are tested); N11 with OneDrive Known Folder Move, `www` and `updater\` sync
-  and OneDrive can hold a file longer than the 3 s retry (the install then fails and is undone, never mixed); N12 a PC
-  in another time zone drifts by the DST difference until `register` runs again.
+  and OneDrive can hold a file longer than the 3 s retry (the install then fails and is undone, never mixed). N12 (a
+  PC in another time zone drifting by the DST difference until `register` ran again) is fixed: every run moves the
+  daily trigger back to 17:05 New York time (second round), and the trigger is kept on the PC's own clock (third
+  round).
+- Third review round:
+  - `-InstallChartBridge` is all or nothing. If one add-on file is held past the retry (the NinjaScript Editor,
+    antivirus, OneDrive), every file already replaced is put back from the backup and checked by hash, and it says
+    nothing changed. If the put-back fails too, or a power loss cuts the copy (it is recorded in `state.json` before
+    the first replace), it says "DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report"
+    on the console, in `update.log`, in `status.json` and on the page, until AddOns holds one whole set again.
+  - The daily trigger's StartBoundary is written as local wall-clock time with no UTC offset.
+    New-ScheduledTaskTrigger wrote the offset of the day, which keeps a trigger on UTC: registered in summer, it
+    would have run at 4:05 PM New York time all winter. The drift check reads the wall-clock time from the string and
+    treats an offset as drift. A failed move is recorded and shown by `status`, and `register` warns when run from
+    an elevated window. README: a one-line check of StartBoundary.
+  - The pinned copy stops when its `pinned.json` is missing, and its STOP reaches `status.json` and the page
+    ("Updater stopped").
+  - `register`'s offline fallback never pins an older updater than the pinned one.
+  - `repair` writes the clone's page only when its COMPAT allows the ChartBridge here, or says plainly it could not
+    check, and names the clone's branch and commit.
+  - git's `symbolic-ref`, `remote` and `hash-object` are allowed only in their reading forms.
+  - `status` takes the lock before it reads `state.json`.
+  - A run cut off right after saving `state.json` leaves the page reading "installed", never "cut off": the page is
+    told first, after every file's hash is checked again.
+  - The notice's commands name the task's copy (README: Keep this PC up to date).
+
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
 
 ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to
-work with it. **Needs a recompile:** run `nt8\install.ps1` again (only `ChartBridge.cs` changed), then compile in
-NinjaTrader (F5). The first step toward cumulative delta (buy volume minus sell volume); the delta pane comes later.
+work with it. **Needs a recompile:** while flat, run `update-pc.ps1 -InstallChartBridge` (README: Keep this PC up to
+date; it copies the files of the green commit on main, and only `ChartBridge.cs` changed), then compile in NinjaTrader
+(F5). The first step toward cumulative delta (buy volume minus sell volume); the delta pane comes later.
 Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
 - **The side of every trade, live and in the backfill** (`ChartBridgeSides`), by the rule Anthony approved: the
   exchange's aggressor flag if there were one (NinjaTrader 8 gives an add-on none, so that code is reserved); else the
