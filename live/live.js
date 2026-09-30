@@ -700,11 +700,9 @@ function start(container, opt, PAGE) {
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
     lv: [], ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
-    // the delta pane's window (1.7.0): the number of tick backfill trades (the store's trades before the first live one),
-    // how far the data's clock runs ahead of this PC's (seconds, a lower bound from the live ticks, and the whole seconds
-    // the current delta was built with), the window the current delta was built with ({ from, by, why }), and for
-    // live-first (PR #8) the first recent trade after a reported gap
-    backfill: 0, ahead: -Infinity, aheadUsed: 0, deltaCov: null, historyGapFrom: null };
+    // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
+    // window the current delta was built with ({ from, by, why, journal })
+    backfill: 0, deltaCov: null };
   let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
@@ -733,7 +731,7 @@ function start(container, opt, PAGE) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
-    D.backfill = 0; D.ahead = -Infinity; D.aheadUsed = 0; D.deltaCov = null; D.historyGapFrom = null;
+    D.backfill = 0; D.deltaCov = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
@@ -918,25 +916,74 @@ function start(container, opt, PAGE) {
    *     in the break counts the new session from 18:00. That moment counts LIVE_MARGIN (5 s) later, or the PC clock's lag
    *     behind the data's plus CLOCK_SLACK (2 s) when that is more: each live tick's `u` (the data's UTC time) minus this
    *     page's clock, or minus `rx`, is at most that lag, and a tick showing more lag than the delta was built with
-   *     builds it again with the later start (onTick). Labelled "since HH:MM ET (page opened)";
-   *   - after a trim, not before the store's first trade; live-first (PR #8): not before the first recent trade after a
-   *     reported history gap.
-   * Bars that started before the window are left out whole; each session counts from 0 at 18:00 ET, or from its first
-   * complete bar in the window.
+   *     builds it again with the later start (onTick). Labelled "since HH:MM ET (page opened)", or with no bracket for a
+   *     count that began with a switch of instrument;
+   *   - after a trim, not before the store's first trade.
+   * The count (K below) then lives across every later load of the same instrument (round 5, review 4 B1).
+   * Bars that started before the window are left out whole (on 5m and longer, the trades of the bar holding the start
+   * count by their own time, round 5 S1); each session counts from 0 at 18:00 ET.
    */
   const LIVE_MARGIN = 5, CLOCK_SLACK = 2;
-  const liveLate = () => Math.max(LIVE_MARGIN, D.aheadUsed + CLOCK_SLACK);
-  function deltaCoverage() {
+  let clockAhead = -Infinity, clockAheadUsed = 0;         // the data's clock ahead of this PC's (s): measured, and in whole seconds as used
+  const liveLate = () => Math.max(LIVE_MARGIN, clockAheadUsed + CLOCK_SLACK);
+  /*
+   * The count (round 5, review 4 B1: "losing the count because the page reconnected is wrong"): the trades counted since
+   * the count began, per instrument, kept outside the store that every load (resetData) replaces. It begins at the first
+   * `ready` of an instrument (the page's opening, or a switch of instrument) with the window above and the backfill's
+   * measured trades in it, then takes every live trade of that instrument, also those that arrive while a later load of
+   * it is on its way. A later load of the same instrument (a ChartBridge reconnect, a view that needs more ticks) builds
+   * the delta from it, so the count and its "since ... (page opened)" stay as they were. Its trades are dropped at each
+   * 18:00 ET (the count starts again at 0 there anyway), and the oldest 500,000 when it passes 2.5 million, like the
+   * store: at most one session of one instrument. A switch of instrument starts a new count. Trades that came in neither
+   * live nor with a measured side (while a reconnect was down, or held by ChartBridge during a reload and sent only in
+   * the new backfill with tick-rule sides) are not in it, by the measured-sides rule.
+   */
+  const K = { root: null, opened: false, started: false, load: 0, open: false, openWhy: '', liveFrom: null, firstT: null, fixedFrom: -Infinity,
+    floor: -Infinity, trimmed: false, day: null, trades: new BB.TickStore() };
+  let loadSeq = 0;
+  function countReset(root) {
+    K.root = root; K.started = false; K.trades = new BB.TickStore(); K.day = null; K.firstT = null; K.floor = -Infinity; K.trimmed = false;
+    K.openWhy = K.opened ? '' : 'page opened';         // "(page opened)" only for the page's first instrument
+    K.opened = true;
+  }
+  /* The window from this load's store (the count's first load, or before it begins). */
+  function storeCoverage() {
     const live = D.liveFrom === null ? Infinity : D.liveFrom + liveLate();
     const n = D.ticks.length, k = D.ticks.firstMeasured(0, Math.min(D.backfill, n));
     let cov;
     if (k < Math.min(D.backfill, n)) cov = { from: D.ticks.time(k) + 1e-6, index: k, by: 'store', why: '' };   // the backfill's measured window
     else {                                                                    // none: from the page's opening
       const b = Math.min(D.backfill, n), first = b < n ? D.ticks.time(b) + 1e-6 : Infinity;
-      cov = live < first ? { from: live, index: b, by: 'live', why: 'page opened' } : { from: first, index: b, by: 'first', why: 'page opened' };
+      cov = live < first ? { from: live, index: b, by: 'live', why: K.openWhy } : { from: first, index: b, by: 'first', why: K.openWhy };
     }
-    const floor = Math.max(D.trimmed && n ? D.ticks.time(0) + 1e-6 : -Infinity, D.historyGapFrom !== null ? D.historyGapFrom + 1e-6 : -Infinity);
-    if (floor > cov.from) cov = { from: floor, index: cov.index, by: 'store', why: '' };
+    if (D.trimmed && n && D.ticks.time(0) + 1e-6 > cov.from) cov = { from: D.ticks.time(0) + 1e-6, index: cov.index, by: 'store', why: '' };
+    return cov;
+  }
+  /* The count begins (onReady, before the first build): its window, and the backfill's measured trades in it. */
+  function countStart() {
+    const cov = storeCoverage();
+    K.started = true; K.load = loadSeq; K.open = cov.by !== 'store'; K.liveFrom = D.liveFrom; K.fixedFrom = cov.from;
+    for (let i = cov.index; i < D.ticks.length; i++) K.trades.push(D.ticks.time(i), D.ticks.price(i), D.ticks.volume(i), D.ticks.side(i), D.ticks.method(i));
+    if (K.trades.length) K.day = U.tradeDay(K.trades.time(K.trades.length - 1), SESSION);
+  }
+  /* A live trade of the count's instrument; true when the count's trades were dropped (a new session, or the cap). */
+  function countAdd(m) {
+    const t = m.t, day = U.tradeDay(t, SESSION);
+    let dropped = false;
+    if (K.day !== null && day > K.day && K.trades.length) { K.trades = new BB.TickStore(); dropped = true; }   // 18:00 ET: a new session from 0
+    if (K.day === null || day > K.day) K.day = day;
+    if (K.firstT === null) K.firstT = t;
+    K.trades.push(t, m.p, m.v || 0, m.s, m.sm);
+    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.floor = K.trades.time(0) + 1e-6; K.trimmed = true; dropped = true; }
+    return dropped;
+  }
+  /* The window a build counts from: the count's, when it began on an earlier load of this instrument, else this store's. */
+  function deltaCoverage() {
+    if (!(K.started && K.root === D.root && K.load !== loadSeq)) return storeCoverage();
+    const live = K.liveFrom + liveLate(), first = K.firstT !== null ? K.firstT + 1e-6 : Infinity;
+    let cov = !K.open ? { from: K.fixedFrom, by: 'store', why: '' } : live < first ? { from: live, by: 'live', why: K.openWhy } : { from: first, by: 'first', why: K.openWhy };
+    if (K.floor > cov.from) cov = { from: K.floor, by: 'store', why: '' };
+    cov.journal = true; cov.index = 0;
     return cov;
   }
   const rangeBuilder = () => new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION });
@@ -971,12 +1018,21 @@ function start(container, opt, PAGE) {
     if (!deltaWanted()) { deltaSet(null); return; }
     const tf = TF[S.tf], range = tf.mode === 'range';
     const cov = deltaCoverage();
-    const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: cov.from });
-    // counted from the window's first trade by its place in the store (never a backfill trade before it, whatever its
-    // time); range bars are still built from their session's start, the trades before the window only into the bars
-    const builder = range ? rangeBuilder() : null;
-    const job = deltaJob = { cd, cov, feed: range ? pairFeed(builder, cd) : cd, pre: range ? { addQuiet: (t, p, v) => builder.addQuiet(t, p, v) } : null,
-      i: range ? (o.rangeFrom === undefined ? null : o.rangeFrom) : cov.index, scan: 0, from: D.tickFrom };
+    const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: cov.from, byTime: !range && tf.sec >= 300 });
+    let job;
+    if (cov.journal) {
+      // from the count (a later load of the same instrument): its trades on this load's bars, a range trade on the chart's
+      // range bar holding its time (range bars are built from this load's store)
+      const bars = () => D.cur ? D.cur.bars : [];
+      const barAt = t => { const b = bars(); let lo = 0, hi = b.length - 1, r = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (b[mid].t <= t) { r = mid; lo = mid + 1; } else hi = mid - 1; } return r < 0 ? t : b[r].t; };
+      job = deltaJob = { cd, cov, store: K.trades, feed: range ? { addQuiet: (t, p, v, s2, sm) => cd.add(t, v, s2, barAt(t), sm) } : cd, pre: null, i: 0 };
+    } else {
+      // counted from the window's first trade by its place in the store (never a backfill trade before it, whatever its
+      // time); range bars are still built from their session's start, the trades before the window only into the bars
+      const builder = range ? rangeBuilder() : null;
+      job = deltaJob = { cd, cov, store: D.ticks, feed: range ? pairFeed(builder, cd) : cd, pre: range ? { addQuiet: (t, p, v) => builder.addQuiet(t, p, v) } : null,
+        i: range ? (o.rangeFrom === undefined ? null : o.rangeFrom) : cov.index, scan: 0, from: D.tickFrom };
+    }
     if (!o.keep || !D.delta) deltaSet(null);
     const slice = () => {
       if (destroyed || job !== deltaJob) return;
@@ -989,31 +1045,17 @@ function start(container, opt, PAGE) {
         if (j < n && BB.sessionStartOf(D.ticks.time(j), SESSION) < job.from) { later(slice, 0); return; }
         job.i = j < n ? j : 0;                              // no session start covered: from the first trade, as the chart
       }
-      do job.i = job.i < job.cov.index ? D.ticks.feedSides(job.pre, job.i, null, Math.min(job.cov.index, job.i + DELTA_SLICE_TRADES))
-        : D.ticks.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
-      while (job.i < D.ticks.length && performance.now() - t0 < DELTA_SLICE_MS);
-      if (job.i < D.ticks.length) { later(slice, 0); return; }
+      const st = job.store;
+      do job.i = job.i < job.cov.index ? st.feedSides(job.pre, job.i, null, Math.min(job.cov.index, job.i + DELTA_SLICE_TRADES))
+        : st.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
+      while (job.i < st.length && performance.now() - t0 < DELTA_SLICE_MS);
+      if (job.i < st.length) { later(slice, 0); return; }
       deltaJob = null;
       D.deltaCov = job.cov;
       deltaSet(job.cd);
     };
     slice();                                                // a small store is done at once
   }
-  /*
-   * The hook for live-first (PR #8), not called on this branch. The live-first load puts the recent trades in the store
-   * first and the older history in front of them later (TickStore.prependAll). While it loads, the delta counts from the
-   * recent window's first measured trade, labelled with that time, which is true. deltaHistoryGrew(added, gapFrom) when
-   * the last older chunk is in (beside exactRebuild): `added` older trades were put in front (backfill, so they may widen
-   * the measured window), and the delta is built again from the whole store, the one shown kept until then; gapFrom is
-   * the time of the first recent trade when ChartBridge reported a gap (gapMs) between the older history and it, else
-   * null, and the count then never starts before it.
-   */
-  function deltaHistoryGrew(added, gapFrom) {
-    D.backfill += Math.max(0, added | 0);
-    D.historyGapFrom = typeof gapFrom === 'number' && isFinite(gapFrom) ? gapFrom : null;
-    deltaStart({ keep: true });
-  }
-  void deltaHistoryGrew;
   /* Off the chart: no delta at all. */
   function deltaStop() { deltaJob = null; deltaSet(null); }
   function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); }
@@ -1089,6 +1131,7 @@ function start(container, opt, PAGE) {
     D.ready = true;
     D.liveFrom = etNow();
     D.backfill = D.ticks.length;
+    if (!K.started || K.root !== D.root) countStart();   // the count begins with this instrument's first load (round 5)
     rebuild();
     vpBuild();
     setConn('live');
@@ -1096,6 +1139,8 @@ function start(container, opt, PAGE) {
   }
 
   function onTick(m) {
+    // the count takes every live trade of its instrument, also one that arrives while a later load of it is on its way
+    const countDropped = K.started && m.root === K.root && countAdd(m);
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
     D.ticks.push(t, p, v, m.s, m.sm);                  // columns, not one array per trade (TickStore, bar-builder.js); the side since 1.7.0
@@ -1108,19 +1153,26 @@ function start(container, opt, PAGE) {
     }
     if (D.ticks.length > 2500000) {                      // the first session left is partial now
       D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; D.backfill = Math.max(0, D.backfill - 500000);
-      if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store moved under a build: start it over
+      if (deltaBuilding() && !deltaJob.cov.journal) { deltaStart(); deltaFed = true; }   // the store moved under a build: start it over
     }
+    if (countDropped && deltaBuilding() && deltaJob.cov.journal) { deltaStart(); deltaFed = true; }   // the count moved under a build
     // how far the data's clock runs ahead of this PC's (review 2 S1): when it is more than the delta was built with and
     // that delta counted from the moment the page went live, build it again with the later start (it holds this trade)
     const ahead = typeof m.u === 'number' && isFinite(m.u) ? Math.max(m.u - Date.now(), typeof m.rx === 'number' && isFinite(m.rx) ? m.u - m.rx : -Infinity) / 1000 : -Infinity;
-    if (ahead > D.ahead) {
-      D.ahead = ahead;
-      if (ahead > D.aheadUsed) {
+    if (ahead > clockAhead) {
+      clockAhead = ahead;
+      if (ahead > clockAheadUsed) {
         const before = liveLate();
-        D.aheadUsed = Math.ceil(ahead);                  // whole seconds, so a creeping measure rebuilds rarely
+        clockAheadUsed = Math.ceil(ahead);               // whole seconds, so a creeping measure rebuilds rarely
         const cov = deltaJob ? deltaJob.cov : D.delta ? D.deltaCov : null;
         if (liveLate() > before && cov && cov.by === 'live') { deltaStart({ keep: true }); deltaFed = true; }
       }
+    }
+    // the first live trade after a build that counted from the moment the page went live (plus its margin): every trade
+    // from just after it is held, so count from there, a few seconds earlier (round 5: on 5m and longer they show)
+    if (!deltaFed) {
+      const cov = deltaJob ? deltaJob.cov : D.delta ? D.deltaCov : null;
+      if (cov && cov.by === 'live' && t + 1e-6 < cov.from) { deltaStart({ keep: true }); deltaFed = true; }
     }
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
@@ -1266,6 +1318,8 @@ function start(container, opt, PAGE) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   }
   function subscribe(root) {
+    loadSeq++;
+    if (root !== K.root) countReset(root);             // a new instrument: a new count; the same one keeps its count (round 5)
     resetData(root);
     setConn('loading');
     D.tickHours = ticksWanted();

@@ -2511,11 +2511,12 @@ class VolumeProfile {
  * no `barT`, trades are bucketed by `seconds` like the page's time bars (the bar of floor(t / seconds) * seconds, a
  * late trade folded into the newest bar). Range bars must pass `barT`: only the builder knows where a range bar starts.
  *
- * Coverage: the cumulative value is only honest from a moment on which the page has every trade (`coveredFrom`, the
- * start of the tick history, or 'first': from the first trade the core is given, for a page with only live trades).
+ * Coverage: the cumulative value is only honest from a moment on which the page has every trade (`coveredFrom`).
  * Trades of a bar that started before it are left out (counted in `uncovered`), so a bar is either complete or not
  * there, and a session that started before it begins at 0 on its first complete bar: `partial` on its session, with
- * `from`, the time it counts from (the chart then says "Cumulative delta +1,234 since 21:40 ET").
+ * `from`, the time it counts from (the chart then says "Cumulative delta +1,234 since 21:40 ET"). With `byTime`
+ * (the page's 5m and longer views, round 5), the bar holding `coveredFrom` is not left out: its trades count from
+ * `coveredFrom` by their own time, it opens at 0, and the session's `from` is `coveredFrom` itself.
  *
  * Fed like the volume profile: at `ready` from the page's TickStore (TickStore.feedSides, or with a range bar builder
  * beside it), then each live trade right after the store's push, so it holds exactly what the store holds. `add` is
@@ -2526,7 +2527,8 @@ class CumulativeDelta {
     const o = opts || {};
     this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
     this.seconds = o.seconds > 0 ? o.seconds : 0;
-    this.coveredFrom = o.coveredFrom === 'first' ? null : typeof o.coveredFrom === 'number' && !isNaN(o.coveredFrom) ? o.coveredFrom : -Infinity;
+    this.coveredFrom = typeof o.coveredFrom === 'number' && !isNaN(o.coveredFrom) ? o.coveredFrom : -Infinity;
+    this.byTime = !!o.byTime;
     this.reset();
   }
   /** Forget every trade. */
@@ -2552,11 +2554,10 @@ class CumulativeDelta {
    */
   add(t, v, s, barT, sm) {
     if (typeof t !== 'number' || !isFinite(t) || typeof v !== 'number' || !(v > 0 && v < Infinity)) { this.skipped++; return false; }
-    if (this.coveredFrom === null) this.coveredFrom = t + 1e-6;   // 'first': from just after this trade (its own bar may lack earlier trades)
     const last = this.bars.length ? this.bars[this.bars.length - 1] : null;
     let bt = typeof barT === 'number' && isFinite(barT) ? barT : this.seconds ? Math.floor(t / this.seconds) * this.seconds : t;
     if (last && bt < last.t) bt = last.t;                  // a late trade folds into the newest bar, as the bar builders do
-    if (bt < this.coveredFrom) { this.uncovered++; return false; }
+    if (bt < this.coveredFrom && !(this.byTime && t >= this.coveredFrom)) { this.uncovered++; return false; }
     let bar = last;
     if (!bar || bt > bar.t) {
       const day = tradeDay(bt, this.sessionStart);
@@ -2564,7 +2565,7 @@ class CumulativeDelta {
       if (ses && day < ses.day) { this.skipped++; return false; }
       if (!ses || day !== ses.day) {
         const start = this.startOf(bt);
-        ses = { day, start, from: bt, partial: this.coveredFrom > start, buy: 0, sell: 0, unknown: 0, unknownTrades: 0, missing: 0, byRule: 0, trades: 0,
+        ses = { day, start, from: bt < this.coveredFrom ? this.coveredFrom : bt, partial: this.coveredFrom > start, buy: 0, sell: 0, unknown: 0, unknownTrades: 0, missing: 0, byRule: 0, trades: 0,
           first: this.bars.length, last: this.bars.length };
         this.sessions.push(ses);
         this._cum = 0;

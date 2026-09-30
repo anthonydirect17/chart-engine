@@ -15,6 +15,8 @@
 // labelled "since HH:MM ET (page opened)", and with quoteHours 1 from its quote window, "since HH:MM ET"; a 1m view asks no
 // ticks; the pane switched on in a 1m view never reloads; review 2's scenario C (the PC clock 10 s behind the exchange, a
 // 1m view going live seconds before 18:00 with nothing traded in the break) is labelled, never a count from 18:00.
+// Round 5 (review 4): a 1h view counts at once from the page's opening; a reload for more ticks (5m to 15s) and a ChartBridge
+// reconnect keep the count and its "(page opened)"; another instrument starts a new count.
 // Screenshots on the dark and black grounds, cumulative and bar, and the old-bridge note, labelled as sample data.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -91,7 +93,7 @@ async function context(offset, tf, extra, opts) {
       };
     }
     const inBreak = t => { const s = ((t % 86400) + 86400) % 86400; return s >= 61200 && s < 64800; };
-    const rec = window.__trades = [];
+    const rec = window.__trades = [], liveRec = window.__live = [];   // __live: every NQ live trade, never reset (round 5)
     let fresh = false;
     const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
     Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
@@ -104,7 +106,7 @@ async function context(offset, tf, extra, opts) {
           if (ev.data.startsWith('{"type":"ready"')) window.__readyAt = Date.now() / 1000;   // the page's clock when it goes live
           if (ev.data.startsWith('{"type":"history"')) fresh = true;
           else if (ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') { if (fresh) { rec.length = 0; fresh = false; } for (const x of m.ticks) rec.push(x); if (m.ticks.length) window.__backfillEnd = m.ticks[m.ticks.length - 1][0]; } }
-          else if (ev.data.startsWith('{"type":"tick"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') rec.push([m.t, m.p, m.v || 0, m.s, m.sm]); }
+          else if (ev.data.startsWith('{"type":"tick"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') { rec.push([m.t, m.p, m.v || 0, m.s, m.sm]); liveRec.push([m.t, m.p, m.v || 0, m.s, m.sm]); } }
         }
         return fn(ev);
       });
@@ -515,6 +517,50 @@ try {
     const r = await q.evaluate(() => ({ asked: window.__asked.slice(), pill: window.__pill.slice(), now: document.getElementById('connPill').textContent, title: window.liveChart.deltaPane().title, delta: !!window.liveChart.getDelta() }));
     check(JSON.stringify(r.asked) === '[0]' && r.pill.length === 0 && r.now === 'LIVE' && r.delta && /starts with the next full bar$| since 13:0\d ET \(page opened\)$/.test(r.title),
       'switched on: no new subscribe (' + r.asked + '), never LOADING (so no "Still loading" for orders), the delta from the page\'s opening: "' + r.title + '"');
+    await c.close(); b.kill();
+  }
+  {
+    /* round 5 (review 4 S1): 1h, no tick backfill: the page-open bar counts its trades from the start, by their own time */
+    const o = offsetTo(13, 0, 0, weekday);
+    const b = await startBridge(o);
+    const c = await context(o, 'h1');
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    await q.waitForTimeout(3000);
+    const r = await newest(q);
+    check(!!r.ses && r.ses.partial && r.ses.n > 5 && r.ses.firstOpen === 0 && r.ses.buy === r.got.b && r.ses.sell === r.got.s && r.ses.n === r.got.n && r.ses.from - r.ses.start > 19 * 3600 - 1,
+      '1h: counting at once from ' + U.fmtExact(r.ses && r.ses.from) + ', not from the next full bar at 14:00; every live trade from then: ' + JSON.stringify([r.ses, r.got]));
+    check(r.title.endsWith(' since ' + U.fmtExact(r.ses.from) + ' ET (page opened)'), '1h: "' + r.title + '"');
+    await c.close(); b.kill();
+  }
+  {
+    /* round 5 (review 4 B1): a reload for more ticks, and a ChartBridge reconnect, keep the count; another instrument starts a new one */
+    const o = offsetTo(13, 0, 0, weekday);
+    const b = await startBridge(o, ['--quote-hours=0']);
+    const c = await context(o, 'm5');
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    await q.waitForTimeout(3000);
+    // the count as drawn, and every live trade received from its start (the recorder here is never reset)
+    const kept = () => q.evaluate(() => new Promise(res => requestAnimationFrame(() => {
+      const cd = window.liveChart.getDelta(), x = cd && cd.sessions.at(-1);
+      let bb = 0, ss = 0, n = 0; if (x) for (const [t, , v, sd] of window.__live) if (t >= x.from) { n++; if (sd === 1) bb += v; else if (sd === -1) ss += v; }
+      res({ title: window.liveChart.deltaPane().title, asked: window.__asked.slice(), ses: x && { from: x.from, partial: x.partial, buy: x.buy, sell: x.sell, n: x.trades }, got: { b: bb, s: ss, n } });
+    })));
+    const a = await kept();
+    check(!!a.ses && a.ses.n > 5 && a.ses.buy === a.got.b && a.ses.sell === a.got.s && / \(page opened\)$/.test(a.title), '5m: counting since the page opened: "' + a.title + '", ' + a.ses.n + ' trades');
+    await q.click('#tfSeg >> text="15s"'); await live(q);
+    let r1 = await kept();                                         // 15 s bars: the count shows from its first full 15 s bar
+    for (const until = Date.now() + 40000; Date.now() < until && !(r1.ses && r1.ses.n > a.ses.n); ) { await q.waitForTimeout(1000); r1 = await kept(); }
+    check(JSON.stringify(r1.asked) === '[0,8]' && !!r1.ses && r1.ses.from >= a.ses.from && r1.ses.from - a.ses.from <= 15 && r1.ses.n > a.ses.n && r1.ses.buy === r1.got.b && r1.ses.sell === r1.got.s && r1.ses.n === r1.got.n && / \(page opened\)$/.test(r1.title),
+      'to 15s, a reload for 8 hours of ticks: the same count (from ' + U.fmtExact(r1.ses.from) + ', the first full 15 s bar of it), every live trade of both loads, still "(page opened)": "' + r1.title + '"');
+    await fetch(`http://localhost:${b.port}/test/drop`, { method: 'POST' });
+    await q.waitForFunction(() => document.getElementById('connPill').textContent !== 'LIVE', null, { timeout: 10000 }).catch(() => {});
+    await live(q); await q.waitForTimeout(1500);
+    const r2 = await kept();
+    check(!!r2.ses && r2.ses.from === r1.ses.from && r2.ses.n > r1.ses.n && r2.ses.buy === r2.got.b && r2.ses.sell === r2.got.s && r2.ses.n === r2.got.n && / \(page opened\)$/.test(r2.title),
+      'a ChartBridge reconnect: the same count, every live trade received before and after it: "' + r2.title + '" ' + JSON.stringify([r2.ses, r2.got]));
+    await q.click('#symSeg >> text="ES"'); await live(q); await q.waitForTimeout(2500);
+    const es = await q.evaluate(() => window.liveChart.deltaPane().title);
+    check(/ since \d\d:\d\d(:\d\d(\.\d)?)? ET$|starts with the next full bar$/.test(es) && !/page opened/.test(es), 'another instrument: a new count, "since" with no "(page opened)": "' + es + '"');
     await c.close(); b.kill();
   }
   {

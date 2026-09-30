@@ -157,12 +157,16 @@ test('core: coverage: bars that started before the page had every trade are left
   const full = new CE.CumulativeDelta({ seconds: 60, coveredFrom: T });
   full.add(T + 1, 1, 1);
   assert.equal(full.session.partial, false);
-  // 'first' (a page with only live trades): the first trade's own bar is left out, the next counts from 0
-  const live = new CE.CumulativeDelta({ seconds: 60, coveredFrom: 'first' });
-  assert.equal(live.coveredFrom, null);
-  live.add(T + 3600 + 30, 5, 1); live.add(T + 3600 + 50, 5, 1); live.add(T + 3660, 2, -1); live.add(T + 3700, 1, 1);
-  assert.deepEqual(live.bars.map(brief), [[T + 3660, 0, 0, -2, -1, 1, 2, 0]]);
-  assert.deepEqual([live.uncovered, live.session.partial, U.fmtHM(live.session.from)], [2, true, '19:01']);
+  // byTime (round 5, 5m and longer): the bar holding coveredFrom counts its trades from coveredFrom by their own time,
+  // opens at 0, and the session counts from coveredFrom itself
+  const C5 = T + 3600 + 37.5;                                      // 19:00:37.5, inside the 19:00 5m bar
+  const h = new CE.CumulativeDelta({ seconds: 300, coveredFrom: C5, byTime: true });
+  h.add(T + 3600 + 10, 5, 1); h.add(T + 3600 + 40, 3, 1); h.add(T + 3600 + 30, 9, -1); h.add(T + 3600 + 90, 2, -1); h.add(T + 3900 + 1, 4, 1);
+  assert.deepEqual(h.bars.map(brief), [[T + 3600, 0, 3, 0, 1, 3, 2, 0], [T + 3900, 1, 5, 1, 5, 4, 0, 0]], 'the 19:00 bar from 19:00:37.5 (a late trade before it left out), then the next bar whole');
+  assert.deepEqual([h.uncovered, h.session.partial, U.fmtExact(h.session.from)], [2, true, '19:00:37.5']);
+  const noTime = new CE.CumulativeDelta({ seconds: 300, coveredFrom: C5 });
+  noTime.add(T + 3600 + 40, 3, 1); noTime.add(T + 3900 + 1, 4, 1);
+  assert.deepEqual([noTime.bars.length, noTime.bars[0].t, noTime.uncovered], [1, T + 3900, 1], 'without byTime the bar is left out whole, as before');
   // range bars pass their bar's start: a bar that started before the cover is left out whole
   const rb = new CE.CumulativeDelta({ coveredFrom: C });
   rb.add(C + 1, 1, 1, C - 5); rb.add(C + 2, 1, 1, C - 5); rb.add(C + 3, 1, -1, C + 3);

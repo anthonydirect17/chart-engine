@@ -180,7 +180,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   has every trade, or with no trade) stay blank; a session that counts from later than 18:00 gets a dashed
   `#8392A5` line at its first counted bar. With ChartBridge 0.3.3 or older only the title and "Delta needs ChartBridge
   0.3.4 on this PC" (500 12px Condensed, centered) are drawn. Legend: "Delta +12,345" (bull color above zero, bear
-  below), "Bar delta +123" in bar mode, "Delta from 18:37:16.6 +1,234" for a later start, and "· 37 unknown" (the unknown
+  below), "Bar delta +123" in bar mode, "Delta since 18:37:16.6 +1,234" for a later start, and "· 37 unknown" (the unknown
   side volume of the session, dim) when there is any. On by default on the main pane, without a chip (pin it from the
   menu for one); its own Indicators entry "Cumulative delta" (chip DELTA, letter D) in the Volume group.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
