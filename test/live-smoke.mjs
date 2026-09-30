@@ -15,6 +15,16 @@ const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs
 await new Promise(r => bridge.stdout.once('data', r));
 const errors = [];
 const fail = m => errors.push(m);
+const isLive = () => document.getElementById('connPill')?.textContent === 'LIVE';
+/* One account picker (1.6.0, Anthony): with no order bar (ChartBridge 0.2 here) it sits in the toolbar. */
+async function pickFillAccount(page, value) { await page.selectOption('#acctPick', value); }
+/* The fills marked are always the picker's account's, and nobody else's (review B1). */
+async function fillsMatchPicker(page) {
+  const r = await page.evaluate(() => ({ pick: document.getElementById('acctPick').value, visible: !document.getElementById('acctWrap').hidden,
+    accounts: [...new Set(window.liveChart.getMarkers().map(m => m.account))] }));
+  if (!r.visible || r.accounts.some(a => a !== r.pick)) fail('fills marked are not the visible picker\'s account: ' + JSON.stringify(r));
+  return r;
+}
 let browser = null;
 try {
   browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -31,20 +41,23 @@ try {
   if (!/Last fill (BUY|SELL)/.test(legend)) fail('legend missing last fill: ' + legend);
   await page.screenshot({ path: path.join(out, 'live-1m.png') });
 
-  // account dropdown: accounts with fills first, then the rest; picking one filters the fill marks and is remembered
-  const opts = await page.$$eval('#fillAcct option', os => os.map(o => o.value + '=' + o.textContent));
-  if (JSON.stringify(opts) !== JSON.stringify(['=All accounts', 'DEMO-EVAL=DEMO-EVAL', 'Sim101=Sim101', 'DEMO-EMPTY=DEMO-EMPTY (no fills yet)'])) fail('account options: ' + JSON.stringify(opts));
-  await page.selectOption('#fillAcct', 'DEMO-EVAL'); await page.waitForTimeout(300);
+  // the account picker (toolbar, no order bar): accounts with fills first, no "All accounts"; the fills follow it
+  const opts = await page.$$eval('#acctPick option', os => os.map(o => o.value + '=' + o.textContent));
+  if (JSON.stringify(opts) !== JSON.stringify(['DEMO-EVAL=DEMO-EVAL', 'Sim101=Sim101', 'DEMO-EMPTY=DEMO-EMPTY (no fills yet)'])) fail('account options: ' + JSON.stringify(opts));
+  if (await page.inputValue('#acctPick') !== 'Sim101' || (await fillsMatchPicker(page)).accounts.join() !== 'Sim101') fail('first run: Sim101 and its fills');
+  await pickFillAccount(page, 'DEMO-EVAL'); await page.waitForTimeout(300);
   let fillText = await page.textContent('#lgFill');
-  if (!/DEMO-EVAL/.test(fillText)) fail('last fill not from the chosen account: ' + fillText);
-  await page.selectOption('#fillAcct', 'DEMO-EMPTY'); await page.waitForTimeout(300);
+  if (!/DEMO-EVAL/.test(fillText) || (await fillsMatchPicker(page)).accounts.join() !== 'DEMO-EVAL') fail('fills not from the chosen account: ' + fillText);
+  await page.screenshot({ path: path.join(out, 'live-account-picker.png'), clip: { x: 0, y: 0, width: 1440, height: 200 } });
+  await pickFillAccount(page, 'DEMO-EMPTY'); await page.waitForTimeout(300);
   fillText = await page.textContent('#lgFill');
-  if (fillText.trim() !== '') fail('fills shown for an account with none: ' + fillText);
+  if (fillText.trim() !== '' || (await fillsMatchPicker(page)).accounts.length) fail('fills shown for an account with none: ' + fillText);
   await page.reload();
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(500);
-  if (await page.inputValue('#fillAcct') !== 'DEMO-EMPTY') fail('account choice not remembered');
-  await page.selectOption('#fillAcct', ''); await page.waitForTimeout(300);
+  if (await page.inputValue('#acctPick') !== 'DEMO-EMPTY') fail('account choice not remembered');
+  await pickFillAccount(page, 'Sim101'); await page.waitForTimeout(300);
+  await fillsMatchPicker(page);
   const diag = await page.evaluate(async () => (await fetch('/diag')).json());
   if (!Array.isArray(diag.accounts) || diag.accounts.length !== 3 || typeof diag.clockOffsetMs !== 'number') fail('diag shape: ' + JSON.stringify(diag).slice(0, 200));
 
@@ -78,37 +91,132 @@ try {
   if (await page.inputValue('#rangeMode') !== 'traded' || await page.inputValue('#rangeTicks') !== '12') fail('range mode or size not remembered: ' + await page.inputValue('#rangeMode') + ' ' + await page.inputValue('#rangeTicks'));
   await page.selectOption('#rangeMode', 'nt'); await page.waitForTimeout(300);
 
-  // indicator menu: one control, keyboard and pointer, saved for the pane
-  if (await page.textContent('#indCount') !== '5/5') fail('indicators on at first run (the 1.3 four and IB 1h, 1.5.3): ' + await page.textContent('#indCount'));
+  // Indicators menu (1.6.0, Anthony's "E2"): search, switch, pin, chips, Hide all and Restore, remove and add, "/" key
+  const L = () => page.evaluate(() => window.liveChart.getLayers());
+  const count = () => page.textContent('#indCount');
+  const chips = () => page.$$eval('#indChips .ind-chip', bs => bs.map(b => b.dataset.id + (b.getAttribute('aria-pressed') === 'true' ? '+' : '-')));
+  if (await count() !== '5/5') fail('indicators on at first run (the 1.3 four and IB, 1.5.3): ' + await count());
   if (!(await page.isHidden('#indPanel'))) fail('indicator menu open at load');
+  if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap+', 'levels+', 'ib+', 'fills+'])) fail('chip strip at first run: ' + JSON.stringify(await chips()));
   await page.focus('#indBtn'); await page.keyboard.press('Enter');
   if (await page.isHidden('#indPanel') || await page.getAttribute('#indBtn', 'aria-expanded') !== 'true') fail('Enter did not open the indicator menu');
-  if (await page.evaluate(() => document.activeElement.dataset.layer) !== 'volume') fail('focus not on the first indicator');
-  await page.keyboard.press('Space');
-  if (await page.evaluate(() => window.liveChart.getLayers().volume) !== false) fail('Space did not turn volume off');
-  await page.keyboard.press('Tab'); await page.keyboard.press('Space'); await page.waitForTimeout(400);   // VWAP off
-  if (!(await page.isHidden('#lgVwWrap'))) fail('VWAP legend still shown with VWAP off');
+  if (await page.evaluate(() => document.activeElement.id) !== 'indQ') fail('focus not on the search box when the menu opens');
+  const onRows = await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id));
+  if (JSON.stringify(onRows) !== JSON.stringify(['volume', 'vwap', 'levels', 'ib', 'fills'])) fail('On this chart rows: ' + JSON.stringify(onRows));
+  if (await page.$$eval('#indBody .ind-cat', els => els.map(e => e.textContent.replace(/\d+$/, '').trim()).join(',')) !== 'Price,Volume,Trades') fail('groups');
+  if (!/Coming: cumulative delta, time and sales/.test(await page.textContent('#indBody'))) fail('coming line missing');
+  // search: short names, then Enter acts on the first match
+  await page.keyboard.type('pdh');
+  let found = await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id));
+  if (JSON.stringify(found) !== '["levels"]') fail('search "pdh": ' + JSON.stringify(found));
+  await page.keyboard.press('Enter');
+  if ((await L()).levels !== true || await count() !== '5/5') fail('Enter on a shown match must not hide it: ' + await count());
+  await page.click('#indBody [data-f="sw:levels"]');
+  if ((await L()).levels !== false || await count() !== '4/5') fail('the Levels switch did not hide Levels: ' + await count());
+  await page.focus('#indQ'); await page.keyboard.press('Enter');
+  if ((await L()).levels !== true) fail('Enter on a hidden match shows it');
+  await page.click('#indBody [data-f="sw:levels"]');
+  await page.fill('#indQ', 'ibh');
+  if (JSON.stringify(await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) !== '["ib"]') fail('search "ibh"');
+  await page.fill('#indQ', 'profile');
+  if (!(await page.isVisible('#indBody [data-f="add:vp"]')) || await page.$('#indBody .ind-tag')) fail('volume profile (1.6.0): found by "profile", with a + to add it, no "coming" tag');
+  await page.fill('#indQ', 'zzz');
+  if (!/No match/.test(await page.textContent('#indBody'))) fail('no match label');
+  await page.fill('#indQ', '');
+  // the switch by keyboard: Space hides Volume, focus stays on the switch
+  await page.focus('#indBody [data-f="sw:volume"]'); await page.keyboard.press('Space');
+  if ((await L()).volume !== false || await page.evaluate(() => document.activeElement.dataset.f) !== 'sw:volume') fail('Space on the Volume switch');
+  if (await page.getAttribute('#indBody [data-f="sw:volume"]', 'aria-pressed') !== 'false' || await page.getAttribute('#indBody [data-f="sw:volume"]', 'aria-label') !== 'Show Volume bars') fail('switch aria-pressed and label after hiding');
+  const recent = await page.$$eval('#indBody .ind-rec', bs => bs.map(b => b.textContent));
+  if (JSON.stringify(recent) !== '["VOL","LEVELS"]') fail('Recent: ' + JSON.stringify(recent));
+  // one settings panel at a time
+  await page.click('#indBody [data-act="gear"][data-id="ib"]');
+  await page.click('#indBody [data-act="gear"][data-id="vwap"]');
+  if (await page.$$eval('#indBody .ind-set', els => els.map(e => e.dataset.id).join()) !== 'vwap') fail('more than one settings panel open');
+  await page.click('#indBody [data-act="gear"][data-id="ib"]');
+  if (!/1 hour, locks 10:30 ET/.test(await page.textContent('#indBody .ind-set[data-id="ib"]'))) fail('IB settings text');
   await page.screenshot({ path: path.join(out, 'live-indicators-open.png') });
   await page.keyboard.press('Escape');
   if (!(await page.isHidden('#indPanel'))) fail('Escape did not close the indicator menu');
   if (await page.evaluate(() => document.activeElement.id) !== 'indBtn') fail('focus not back on the Indicators button');
-  if (await page.textContent('#indCount') !== '3/5') fail('count after two off: ' + await page.textContent('#indCount'));
+  if (await count() !== '3/5') fail('count after two hidden: ' + await count());
+  if (JSON.stringify(await chips()) !== JSON.stringify(['volume-', 'vwap+', 'levels-', 'ib+', 'fills+'])) fail('chips after two hidden: ' + JSON.stringify(await chips()));
+  const chipLook = await page.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(b => getComputedStyle(b).borderTopStyle + ' ' + getComputedStyle(b.querySelector('.sw')).backgroundColor));
+  if (!/^dashed/.test(chipLook[0]) || !/^solid/.test(chipLook[1]) || chipLook[0].split(' ').slice(1).join(' ') === chipLook[1].split(' ').slice(1).join(' ')) fail('hidden and shown chips must differ by more than color: ' + JSON.stringify(chipLook));
+  // a chip: one click shows or hides
+  await page.click('#indChips .ind-chip[data-id="vwap"]'); await page.waitForTimeout(300);
+  if ((await L()).vwap !== false || !(await page.isHidden('#lgVwWrap'))) fail('VWAP chip did not hide VWAP (and its legend)');
+  await page.click('#indChips .ind-chip[data-id="volume"]');
+  if ((await L()).volume !== true) fail('Volume chip did not show Volume');
+  // Hide all, then Restore brings back the same mix (not everything)
   await page.click('#indBtn');
-  await page.click('#indPanel input[data-layer="fills"]');
-  if ((await page.textContent('#lgFill')).trim() !== '') fail('fills still marked with Fills off');
+  if (await page.textContent('#indHideAll') !== 'Hide all (3)') fail('hide all label: ' + await page.textContent('#indHideAll'));
+  await page.click('#indHideAll');
+  let lay = await L();
+  if (lay.volume || lay.vwap || lay.levels || lay.ib || await count() !== '0/5' || await page.textContent('#indHideAll') !== 'Restore') fail('Hide all: ' + JSON.stringify(lay) + ' ' + await count());
+  if ((await page.textContent('#lgFill')).trim() !== '') fail('fills still marked after Hide all');
+  await page.screenshot({ path: path.join(out, 'live-indicators-hidden-all.png') });
+  await page.click('#indHideAll');
+  lay = await L();
+  if (!lay.volume || lay.vwap || lay.levels || !lay.ib || await count() !== '3/5') fail('Restore did not bring back the same mix: ' + JSON.stringify(lay) + ' ' + await count());
+  // pin: off takes the chip away; x takes Fills off the chart; + in its group adds it back
+  await page.click('#indBody [data-act="pin"][data-id="levels"]');
+  if (await page.$('#indChips .ind-chip[data-id="levels"]')) fail('unpinned Levels still on the chip strip');
+  await page.click('#indBody [data-act="remove"][data-id="fills"]');
+  if (await count() !== '2/4' || await page.$('#indBody [data-f="sw:fills"]') || (await page.textContent('#lgFill')).trim() !== '') fail('x did not take Fills off: ' + await count());
+  await page.click('#indBody .ind-cat[data-id="trades"]');
+  await page.click('#indBody .ind-cat[data-id="price"]');
+  if (await page.getAttribute('#indBody .ind-cat[data-id="trades"]', 'aria-expanded') !== 'false') fail('two groups open at once');
+  await page.click('#indBody .ind-cat[data-id="trades"]');
+  await page.click('#indBody [data-f="add:fills"]');
+  if (await count() !== '3/5' || (await page.textContent('#lgFill')).trim() === '' || await page.evaluate(() => document.activeElement.dataset.f) !== 'sw:fills') fail('+ did not add Fills back (focus on its switch): ' + await count() + ' ' + await page.evaluate(() => document.activeElement.outerHTML.slice(0, 80)));
   await page.mouse.click(700, 600);                                                     // outside: closes
   if (!(await page.isHidden('#indPanel'))) fail('outside click did not close the indicator menu');
-  await page.reload();
-  await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
-  await page.waitForTimeout(400);
-  const layers = await page.evaluate(() => window.liveChart.getLayers());
-  if (layers.volume !== false || layers.vwap !== false || layers.levels !== true) fail('indicators not remembered: ' + JSON.stringify(layers));
-  const savedInd = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v1')));
-  if (!savedInd || !savedInd.main || savedInd.main.fills !== false) fail('indicators not saved under the pane id: ' + JSON.stringify(savedInd));
-  await page.click('#indBtn');
-  for (const k of ['volume', 'vwap', 'fills']) await page.click(`#indPanel input[data-layer="${k}"]`);
+  // "/" opens the menu of the chart under the mouse, never while typing in a box
+  await page.mouse.move(500, 500); await page.focus('#chart'); await page.keyboard.press('/');
+  if (await page.isHidden('#indPanel') || await page.evaluate(() => document.activeElement.id) !== 'indQ') fail('"/" did not open the menu with focus in search');
+  await page.keyboard.type('fills');
   await page.keyboard.press('Escape');
-  if (await page.textContent('#indCount') !== '5/5') fail('indicators back on: ' + await page.textContent('#indCount'));
+  if (await page.evaluate(() => document.activeElement.id) !== 'chart') fail('Escape after "/" did not return focus to the chart');
+  await page.click('#indBtn');
+  if (await page.inputValue('#indQ') !== '' || !/On this chart/i.test(await page.textContent('#indBody'))) fail('the menu reopened filtered to the last search');
+  await page.keyboard.press('Escape');
+  await page.focus('#rangeTicks'); await page.keyboard.press('/');
+  if (!(await page.isHidden('#indPanel'))) fail('"/" typed in the range box opened the menu');
+  await page.focus('#chart');
+  // saved for the pane: everything comes back after a reload
+  const before = await page.evaluate(() => localStorage.getItem('live-indicators-v2'));
+  await page.reload();
+  await page.waitForFunction(isLive, null, { timeout: 15000 });
+  await page.waitForTimeout(400);
+  const layers = await L();
+  if (!layers.volume || layers.vwap || layers.levels || !layers.ib) fail('indicators not remembered: ' + JSON.stringify(layers));
+  if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap-', 'ib+', 'fills+'])) fail('chips after a reload: ' + JSON.stringify(await chips()));
+  const savedInd = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2')));
+  if (!savedInd || !savedInd.main || savedInd.main.ind.vwap.shown !== false || savedInd.main.ind.levels.pin !== false || JSON.stringify(await page.evaluate(() => localStorage.getItem('live-indicators-v2'))) !== JSON.stringify(before)) fail('indicators not saved under the pane id: ' + JSON.stringify(savedInd));
+  if (await page.evaluate(() => localStorage.getItem('live-indicators-v1')) !== null) fail('live-indicators-v1 written by 1.6.0');
+  await page.click('#indBtn');
+  for (const k of ['vwap', 'levels']) await page.click(`#indBody [data-f="sw:${k}"]`);
+  await page.click('#indBody [data-act="pin"][data-id="levels"]');
+  await page.keyboard.press('Escape');
+  if (await count() !== '5/5' || (await chips()).length !== 5) fail('indicators back on: ' + await count());
+  // the chip strip holds 6 (Anthony); five indicators exist today, so the cap is lowered here to show the rule
+  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 4; });
+  await page.click('#indBtn');
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // unpin: 4 chips, the strip is full
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // pin again: refused, with a note
+  if (!/holds 4/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="vwap"]') || await page.getAttribute('#indBody [data-act="pin"][data-id="vwap"]', 'aria-pressed') !== 'false') fail('pinning onto a full strip was not refused with a note');
+  if (!/holds 4/.test(await page.textContent('#indLive'))) fail('the note is not announced');
+  await page.click('#indBody [data-act="remove"][data-id="fills"]');                // 3 chips: room for VWAP again
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // 4: full
+  await page.click('#indBody .ind-cat[data-id="trades"]'); await page.click('#indBody [data-f="add:fills"]');
+  if (!/Fills added without a chip/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="fills"]')) fail('an indicator added to a full strip got a chip');
+  await page.screenshot({ path: path.join(out, 'live-indicators-strip-full.png') });
+  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 6; });
+  await page.click('#indBody [data-act="pin"][data-id="fills"]');
+  if (await page.$('#indBody [data-act="pin"][data-id="profile"]') || await page.$$eval('#indBody .ind-cat ~ .ind-item [data-act="pin"]', b => b.length)) fail('a pin on a row that is not on the chart');
+  await page.keyboard.press('Escape');
+  if ((await chips()).length !== 5) fail('five chips again: ' + JSON.stringify(await chips()));
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();
@@ -165,6 +273,13 @@ try {
   await phone.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways');
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
+  const phoneChips = await phone.evaluate(() => { const s = document.getElementById('indChips'), cs = [...s.querySelectorAll('.ind-chip')];
+    return { narrow: s.classList.contains('is-narrow'), tops: [...new Set(cs.map(c => Math.round(c.getBoundingClientRect().top)))].length, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1, n: cs.length }; });
+  if (!phoneChips.narrow || phoneChips.tops !== 1 || phoneChips.text !== 'VWLIF' || !phoneChips.fits || phoneChips.n !== 5) fail('phone: chips should be one letter each, on one line: ' + JSON.stringify(phoneChips));
+  await phone.click('#indChips .ind-chip[data-id="levels"]');
+  if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: letter chip did not hide Levels');
+  await phone.screenshot({ path: path.join(out, 'live-phone-chips.png') });
+  await phone.click('#indChips .ind-chip[data-id="levels"]');
   await phone.click('#indBtn');
   const pb = await phone.locator('#indPanel').boundingBox();
   if (!pb || pb.x < 0 || pb.x + pb.width > 400) fail('phone: indicator menu off screen ' + JSON.stringify(pb));

@@ -183,20 +183,39 @@ try {
   check(await page.evaluate(() => window.__a.chart.bars().length > 100 && window.__b.chart.bars().length > 100), 'mount again works, and the second pane has bars');
   let layers = await page.evaluate(() => [window.__a.chart.getLayers(), window.__b.chart.getLayers()]);
   check(layers[0].volume && layers[0].vwap && !layers[1].volume && !layers[1].vwap, 'main pane starts with the usual set, a new pane with none: ' + JSON.stringify(layers));
-  // pane A: VWAP off; pane B: Volume and VWAP on
+  // pane A: VWAP hidden with its switch; pane B (a new pane): Volume and VWAP added, from search and from a group
   await page.click('#paneA .ind-btn');
-  await page.click('#paneA .ind-panel input[data-layer="vwap"]');
+  check(await page.evaluate(() => document.activeElement.matches('#paneA .ind-search input')), 'menu opens with focus in its search box');
+  await page.click('#paneA .ind-panel [data-f="sw:vwap"]');
   await page.keyboard.press('Escape');
   await page.click('#paneB .ind-btn');
   check(await page.evaluate(() => document.querySelector('#paneA .ind-panel').hidden), 'opening pane B\'s menu closes pane A\'s');
-  await page.click('#paneB .ind-panel input[data-layer="volume"]');
-  await page.click('#paneB .ind-panel input[data-layer="vwap"]');
+  check(/Nothing on this chart yet/.test(await page.textContent('#paneB .ind-body')) && await page.textContent('#paneB .ind-count') === '0/0', 'a new pane starts with nothing on its chart');
+  await page.keyboard.type('vol'); await page.keyboard.press('Enter');                          // the first match: Volume bars
+  await page.fill('#paneB .ind-search input', '');
+  await page.click('#paneB .ind-panel .ind-cat[data-id="price"]');
+  await page.click('#paneB .ind-panel [data-f="add:vwap"]');
   await page.mouse.click(700, 20);
   check(await page.evaluate(() => document.querySelector('#paneB .ind-panel').hidden), 'a click outside closes pane B\'s menu');
   layers = await page.evaluate(() => [window.__a.chart.getLayers(), window.__b.chart.getLayers()]);
   check(layers[0].volume && !layers[0].vwap && layers[0].levels && layers[1].volume && layers[1].vwap && !layers[1].levels, 'indicator choices stay per pane: ' + JSON.stringify(layers));
-  // pane A (main): the four less VWAP, plus IB 1h on by default (1.5.3); pane B (new): IB 1h off like the rest
-  check(await page.textContent('#paneA .ind-count') === '4/5' && await page.textContent('#paneB .ind-count') === '2/5' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane');
+  // pane A (main): the five less VWAP (hidden, still on its chart); pane B (new): the two added
+  check(await page.textContent('#paneA .ind-count') === '4/5' && await page.textContent('#paneB .ind-count') === '2/2' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane: ' + await page.textContent('#paneA .ind-count') + ' ' + await page.textContent('#paneB .ind-count'));
+  check(await page.$$eval('#paneB .ind-chip', c => c.map(x => x.dataset.id).join()) === 'volume,vwap' && await page.$$eval('#paneA .ind-chip', c => c.length) === 5, 'chips: pane A\'s five, pane B\'s two added ones (added ones get a chip)');
+  // one account picker (1.6.0): no order bar in a mounted chart, so a compact picker in its toolbar drives the fills
+  {
+    const acct = pane => page.evaluate(id => { const sel = document.querySelector('#' + id + ' [id$="-acctPick"]'), ch = window[id === 'paneA' ? '__a' : '__b'].chart;
+      return { visible: !!sel && !sel.closest('[hidden]'), value: sel && sel.value, options: sel ? [...sel.options].map(o => o.value) : [], marks: [...new Set(ch.getMarkers().map(m => m.account))] }; }, pane);
+    let a = await acct('paneA');
+    check(a.visible && JSON.stringify(a.options) === '["DEMO-EVAL","Sim101","DEMO-EMPTY"]' && a.marks.every(x => x === a.value), 'embed: a compact account picker in the toolbar, no "All accounts", the fills are its account\'s: ' + JSON.stringify(a));
+    await page.selectOption('#paneA [id$="-acctPick"]', 'DEMO-EVAL'); await page.waitForTimeout(200);
+    a = await acct('paneA');
+    check(a.value === 'DEMO-EVAL' && a.marks.join() === 'DEMO-EVAL' && /DEMO-EVAL/.test(await page.textContent('#paneA [id$="-lgFill"]')), 'embed: switching the account switches the fills: ' + JSON.stringify(a));
+    check(await page.evaluate(() => localStorage.getItem('desk:live-account-v1')) === '"DEMO-EVAL"' && await page.evaluate(() => localStorage.getItem('live-account-v1')) === null, 'embed: the account is saved under the prefix only');
+    const b = await acct('paneB');
+    check(b.value === 'DEMO-EVAL' && b.marks.every(x => x === 'DEMO-EVAL'), 'embed: the other pane with the same prefix follows the pick at once (review 2, N6): ' + JSON.stringify(b));
+    await shot(page, 'embed-account-picker.png');
+  }
   // B on ES at 5m, A stays MNQ 1m
   await page.click('#paneB [role="group"][aria-label="Instrument"] >> text="ES"');
   await page.click('#paneB .seg >> text="5m"');
@@ -211,8 +230,53 @@ try {
   await page.keyboard.press('End');
   await page.waitForTimeout(600);
   await shot(page, 'embed-two-panes.png');
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('desk:live-indicators-v1')));
-  check(saved && saved.main && saved['pane-2'] && saved.main.vwap === false && saved.main.fills === true && saved['pane-2'].vwap === true && saved['pane-2'].levels === false && saved['pane-2'].fills === false, 'saved per pane id under the prefix: ' + JSON.stringify(saved));
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('desk:live-indicators-v2')));
+  check(saved && saved.main && saved['pane-2'] && saved.main.ind.vwap.shown === false && saved.main.ind.fills.on === true && saved['pane-2'].ind.vwap.on === true && saved['pane-2'].ind.levels.on === false && saved['pane-2'].ind.fills.on === false, 'saved per pane id under the prefix: ' + JSON.stringify(saved));
+  // "/" opens the menu of the pane under the mouse, and only that one
+  {
+    const bb = await page.locator('#paneB canvas').boundingBox();
+    await page.evaluate(() => document.activeElement.blur());          // nothing focused: the pane under the mouse
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2);
+    await page.keyboard.press('/');
+    check(!(await page.evaluate(() => document.querySelector('#paneB .ind-panel').hidden)) && await page.evaluate(() => document.querySelector('#paneA .ind-panel').hidden) && await page.evaluate(() => document.activeElement.matches('#paneB .ind-search input')), '"/" opens the menu of the pane under the mouse (B), not A\'s');
+    await page.keyboard.press('Escape');
+    // the focus on the host's own control (a host dialog button, say): "/" leaves it alone, whatever the mouse is over
+    await page.evaluate(() => { const b = document.createElement('button'); b.id = 'hostBtn'; b.textContent = 'Host'; document.querySelector('.host-bar').appendChild(b); b.focus(); });
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2 + 5);
+    await page.keyboard.press('/');
+    check(await page.evaluate(() => document.querySelector('#paneB .ind-panel').hidden && document.querySelector('#paneA .ind-panel').hidden && document.activeElement.id === 'hostBtn'), '"/" does nothing while a host control has the focus');
+    await page.evaluate(() => document.getElementById('hostBtn').remove());
+    await page.focus('#paneB .chart-box');
+    await page.keyboard.press('/');
+    // add everything on pane B and pin it all, then make B narrow: letter chips, one line
+    await page.fill('#paneB .ind-search input', '');
+    for (const cat of ['price', 'volume', 'trades']) {
+      if (await page.getAttribute(`#paneB .ind-cat[data-id="${cat}"]`, 'aria-expanded') !== 'true') await page.click(`#paneB .ind-cat[data-id="${cat}"]`);
+      while (await page.$('#paneB .ind-body [data-f^="add:"]')) await page.click('#paneB .ind-body [data-f^="add:"]');   // each add redraws the list
+    }
+    await page.keyboard.press('Escape');
+    check(await page.textContent('#paneB .ind-count') === '6/6' && await page.$$eval('#paneB .ind-chip', c => c.length) === 6, 'pane B: all six added (the volume profile too), each with a chip: the strip is full');
+    await page.evaluate(() => { document.getElementById('paneA').style.flex = '3 1 0'; });
+    await page.waitForTimeout(300);
+    const nb = await page.evaluate(() => { const s = document.querySelector('#paneB .ind-chips'), cs = [...s.querySelectorAll('.ind-chip')];
+      return { w: Math.round(document.getElementById('paneB').getBoundingClientRect().width), narrow: s.classList.contains('is-narrow'), lines: new Set(cs.map(c => Math.round(c.getBoundingClientRect().top))).size, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1 }; });
+    const na = await page.evaluate(() => document.querySelector('#paneA .ind-chips').classList.contains('is-narrow'));
+    check(nb.narrow && nb.lines === 1 && nb.text === 'VWLIPF' && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
+    await page.click('#paneB .ind-chip[data-id="levels"]');
+    check(await page.evaluate(() => window.__b.chart.getLayers().levels === false && window.__a.chart.getLayers().levels === true), 'a letter chip hides Levels on its own pane only');
+    await shot(page, 'embed-narrow-pane-chips.png');
+    await page.click('#paneB .ind-btn');
+    const pb = await page.locator('#paneB .ind-panel').boundingBox(), paneBox = await page.locator('#paneB').boundingBox();
+    check(pb.x >= paneBox.x - 1 && pb.x + pb.width <= paneBox.x + paneBox.width + 1, 'the menu stays inside a narrow pane: ' + JSON.stringify([pb.x, pb.width, paneBox.x, paneBox.width]));
+    await shot(page, 'embed-narrow-pane-menu.png');
+    await page.keyboard.press('Escape');
+    // back to pane B's earlier set: Volume and VWAP only, not pinned
+    await page.click('#paneB .ind-btn');
+    for (const id of ['levels', 'ib', 'vp', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { document.getElementById('paneA').style.flex = ''; });
+    check(await page.textContent('#paneB .ind-count') === '2/2', 'pane B back to Volume and VWAP');
+  }
   // take both down and mount again: each pane gets its own choices back
   await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
   await page.evaluate(() => {
@@ -277,7 +341,7 @@ try {
     await sa.waitForTimeout(300);                                // but its controls and storage work the same offline
     await sa.click('#symSeg >> text="NQ"'); await sa.click('#tfSeg >> text="Range"');
     await sa.fill('#rangeTicks', '40'); await sa.press('#rangeTicks', 'Enter');
-    await sa.click('#indBtn'); await sa.click('#indPanel input[data-layer="levels"]'); await sa.keyboard.press('Escape');
+    await sa.click('#indBtn'); await sa.click('#indPanel [data-f="sw:levels"]'); await sa.keyboard.press('Escape');
     await sa.waitForTimeout(300);
     // the embedded chart (prefix desk:) still starts as it was left, on its own keys
     await page.evaluate(() => { window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, paneId: 'main', storagePrefix: 'desk:' }); });
@@ -296,7 +360,7 @@ try {
     const keys = await page.evaluate(() => Object.keys(localStorage).sort());
     const embedKeys = keys.filter(k => k.startsWith('desk:'));
     const standaloneKeys = keys.filter(k => !k.startsWith('desk:'));
-    check(embedKeys.includes('desk:live-settings-v2') && embedKeys.includes('desk:live-indicators-v1') && embedKeys.includes('desk:live-colors-v1'), 'embedded keys carry the prefix: ' + embedKeys.join(','));
+    check(embedKeys.includes('desk:live-settings-v2') && embedKeys.includes('desk:live-indicators-v2') && embedKeys.includes('desk:live-colors-v1'), 'embedded keys carry the prefix: ' + embedKeys.join(','));
     check(standaloneKeys.length > 0 && standaloneKeys.every(k => /^live-/.test(k)), 'standalone keys are unprefixed: ' + standaloneKeys.join(','));
     const deskSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('desk:live-settings-v2')));
     check(deskSettings.root === 'MES', 'embedded instrument saved under the prefix: ' + JSON.stringify(deskSettings));
@@ -312,12 +376,23 @@ try {
     p2.on('pageerror', e => fail('v1 pageerror: ' + e.message));
     await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await p2.goto(`http://localhost:${PORT + 1}/test/embed-host.html`);
-    await p2.evaluate(port => { localStorage.clear(); document.getElementById('paneB').hidden = true; window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws' }); }, PORT + 1);
+    await p2.evaluate(port => {
+      localStorage.clear();
+      // saved by 1.5.3 under this prefix: carried over once to live-indicators-v2 (1.6.0), VWAP's explicit off kept
+      localStorage.setItem(ChartLive.EMBED_PREFIX + 'live-account-v1', JSON.stringify('GONE-ACCT'));   // an account ChartBridge no longer lists
+      localStorage.setItem(ChartLive.EMBED_PREFIX + 'live-indicators-v1', JSON.stringify({ main: { volume: true, vwap: false, levels: true, fills: true, ib: true } }));
+      document.getElementById('paneB').hidden = true; window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws' });
+    }, PORT + 1);
     await p2.waitForFunction(() => { const el = document.querySelector('#paneA .pill[id$="-connPill"]'); return el && el.textContent === 'LIVE'; }, null, { timeout: 15000 });
     await p2.click('#paneA .seg >> text="5m"'); await p2.waitForTimeout(300);
     const keys = await p2.evaluate(() => Object.keys(localStorage)), prefix = await p2.evaluate(() => ChartLive.EMBED_PREFIX);
     check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'string wsUrl on ChartBridge 0.2 works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
     check(await p2.evaluate(() => { try { ChartLive.mount(document.getElementById('paneB'), {}); return false; } catch (e) { return /wsUrl/.test(e.message); } }), 'mount without wsUrl throws');
+    const gone = await p2.evaluate(() => { const sel = document.querySelector('#paneA [id$="-acctPick"]'); return { value: sel.value, text: sel.selectedOptions[0].textContent, marks: window.__a.chart.getMarkers().length }; });
+    check(gone.value === 'GONE-ACCT' && gone.text === 'GONE-ACCT (no longer listed)' && gone.marks === 0, 'a saved account ChartBridge no longer lists is shown plainly, with no fills: ' + JSON.stringify(gone));
+    const mig = await p2.evaluate(() => ({ layers: window.__a.chart.getLayers(), count: document.querySelector('#paneA .ind-count').textContent, v2: JSON.parse(localStorage.getItem(ChartLive.EMBED_PREFIX + 'live-indicators-v2')), plain: localStorage.getItem('live-indicators-v2') }));
+    check(mig.layers.vwap === false && mig.layers.volume === true && mig.count === '4/5' && mig.v2 && mig.v2.main.ind.vwap.on === true && mig.v2.main.ind.vwap.shown === false && mig.plain === null,
+      'a 1.5.3 embed\'s indicators carried over under its own prefix, VWAP still off: ' + JSON.stringify(mig));
     // phone width: no sideways scroll
     await p2.setViewportSize({ width: 400, height: 820 });
     await p2.waitForTimeout(400);

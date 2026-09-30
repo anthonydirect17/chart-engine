@@ -159,3 +159,20 @@ test('legSummary: MIT, LIT and other kinds are not counted, and the summary says
   assert.equal(r.targets, 0);
   assert.equal(r.text, 'stops cover 1 of 1, targets cover 0 of 1 · 2 other orders (MIT, LIT) not counted');
 });
+
+test('openEntryFills (1.6.0): the fills of the trade still open, so hiding Fills never hides the live trade', () => {
+  const f = (t, side, qty) => ({ t, side, qty, price: 100 + t });
+  const ids = list => list.map(x => x.t);
+  assert.deepEqual(ids(OT.openEntryFills([])), []);
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2)])), [1]);
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2), f(2, 'sell', 2)])), [], 'flat: nothing open');
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2), f(2, 'sell', 2), f(3, 'sell', 1), f(4, 'sell', 1)])), [3, 4], 'the next trade only');
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 1), f(2, 'buy', 1), f(3, 'sell', 1)])), [1, 2], 'scaled out: the entries stay');
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 1), f(2, 'sell', 3)])), [2], 'turned over: the reversing fill opens the new trade');
+  assert.deepEqual(ids(OT.openEntryFills([f(2, 'sell', 2), f(1, 'buy', 2)])), [], 'sorted by time first');
+  // the position ChartBridge reports is the check
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2)], 2)), [1]);
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2)], 0)), [], 'reported flat');
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2)], -1)), [], 'the other side: fills missing, show none');
+  assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 0), { t: 2, side: 'x', qty: 1 }, null])), []);
+});

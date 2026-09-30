@@ -68,6 +68,17 @@ try {
   await until(() => page.evaluate(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled), 'trading enabled after auth');
   check(JSON.stringify(await page.$$eval('#oAcct option', os => os.map(o => o.value))) === '["Sim101","DEMO-EVAL"]', 'trade accounts');
   check(await page.inputValue('#oAcct') === 'Sim101', 'default account Sim101');
+  // one account picker (1.6.0): the order bar's, larger; no toolbar picker beside it; the chart marks its fills only
+  const marks = p => p.evaluate(() => window.liveChart.getMarkers().map(m => m.side + m.qty + '@' + m.price));
+  const markAccounts = p => p.evaluate(() => document.getElementById('lgFill').textContent.split(' · ').pop());
+  check(await page.isHidden('#acctWrap') && await page.evaluate(() => document.getElementById('oAcct').classList.contains('acct-main')), 'one account picker: the order bar\'s');
+  check(await markAccounts(page) === 'Sim101' && (await marks(page)).length === 2, 'fills follow the order account (Sim101): ' + JSON.stringify(await marks(page)));
+  await page.selectOption('#oAcct', 'DEMO-EVAL'); await page.waitForTimeout(200);
+  check(await markAccounts(page) === 'DEMO-EVAL' && (await marks(page)).length === 2, 'switching the account switches the fills (DEMO-EVAL)');
+  check(await page.evaluate(() => localStorage.getItem('live-account-v1')) === '"DEMO-EVAL"', 'account choice saved');
+  await shot(page, 'orders-1440-account-picker.png');
+  await page.selectOption('#oAcct', 'Sim101'); await page.waitForTimeout(200);
+  check(await markAccounts(page) === 'Sim101', 'back to Sim101');
   check(await page.getAttribute('#oQty', 'max') === '5', 'qty max 5');
   check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after load');
   check(/Trading through ChartBridge/.test(await page.textContent('#statusRo')), 'footer says trading');
@@ -106,6 +117,27 @@ try {
   box = await page.locator('#chart canvas').boundingBox();
   check(Math.abs(box.y - box0.y) < 1 && Math.abs(box.height - box0.height) < 1, 'the chart did not move when the position changed');
   await shot(page, 'orders-1440-bracket.png');
+
+  // the live trade always stays (1.6.0, Anthony): Hide all and the Fills switch hide past fills, never the open
+  // position, its entry fill, the working stop and target or the position line
+  {
+    const live = () => page.evaluate(() => ({ pos: window.liveChart.getPosition(), orders: window.liveChart.getOrders().length, marks: window.liveChart.getMarkers().map(m => m.side + m.qty) }));
+    const before = await live();
+    check(before.marks.length === 3 && before.marks.includes('buy2'), 'past fills and the entry marked: ' + JSON.stringify(before.marks));
+    await page.click('#indBtn'); await page.click('#indHideAll'); await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    let after = await live();
+    const layers = await page.evaluate(() => window.liveChart.getLayers());
+    check(!layers.volume && !layers.vwap && !layers.levels && !layers.ib, 'Hide all hid the indicators');
+    check(after.pos && after.pos.qty === 2 && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Hide all keeps the open position, both legs and its entry fill, and drops the past fills: ' + JSON.stringify(after));
+    await shot(page, 'orders-1440-hide-all-open-position.png');
+    await page.click('#indBtn'); await page.click('#indHideAll'); await page.keyboard.press('Escape');   // Restore
+    await page.click('#indChips .ind-chip[data-id="fills"]');                                           // the Fills chip alone
+    after = await live();
+    check(after.pos && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Fills hidden: the entry fill, position and legs stay: ' + JSON.stringify(after));
+    await page.click('#indChips .ind-chip[data-id="fills"]');
+    check((await live()).marks.length === 3, 'Fills shown again');
+  }
 
   // drag the target label up; the live tag follows; release sends change
   box = await cbox();
@@ -302,7 +334,16 @@ try {
   await until(() => off.evaluate(() => !document.getElementById('obar').hidden), 'disabled bar visible');
   check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent('#oOff')), 'reason shown: ' + await off.textContent('#oOff'));
   const enabled = await off.$$eval('#obar button, #obar input, #obar select', els => els.filter(e => !e.disabled).map(e => e.id));
-  check(enabled.length === 0, 'controls enabled while trading is off: ' + enabled.join(','));
+  check(JSON.stringify(enabled) === '["oAcct"]', 'while trading is off only the account picker works: ' + enabled.join(','));
+  check(/^Trading is off: this only picks whose fills/.test(await off.getAttribute('#oAcct', 'title')), 'trading off: the picker says it only picks the fills: ' + await off.getAttribute('#oAcct', 'title'));
+  // trading off: the picker still switches whose fills are marked (the accounts ChartBridge knows)
+  check(await off.isHidden('#acctWrap') && await off.inputValue('#oAcct') === 'Sim101' && /Sim101/.test(await off.textContent('#lgFill')), 'trading off: Sim101 picked, its fills marked');
+  await off.selectOption('#oAcct', 'DEMO-EVAL'); await off.waitForTimeout(200);
+  check(/DEMO-EVAL/.test(await off.textContent('#lgFill')), 'trading off: the account switches and the fills follow');
+  await shot(off, 'orders-1440-trading-off-account.png');
+  await off.reload(); await unlockIfAsked(off); await off.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+  await off.waitForTimeout(400);
+  check(await off.inputValue('#oAcct') === 'DEMO-EVAL', 'trading off: the account is remembered');
   check(/^Read only/.test(await off.textContent('#statusRo')), 'footer read only');
   await shot(off, 'orders-1440-trading-off.png');
   const offPhone = await open(browser, PORT + 1, 400, 860);
@@ -330,6 +371,30 @@ try {
   }
   await host.close();
 
+  /* ---------------- hello with no accounts, then the sign-in turns trading on: the picker works (review 2, S1) */
+  await startBridge(PORT + 4, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--no-hello-accounts', '--test-pin=' + TEST_PIN]);
+  {
+    const na = await open(browser, PORT + 4, 1440);
+    await until(() => na.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading on after an empty hello');
+    const r = await na.evaluate(() => ({ disabled: document.getElementById('oAcct').disabled, options: [...document.getElementById('oAcct').options].map(o => o.value), title: document.getElementById('oAcct').title, toolbar: document.getElementById('acctWrap').hidden }));
+    check(!r.disabled && JSON.stringify(r.options) === '["Sim101","DEMO-EVAL"]' && /^Orders go to this account/.test(r.title) && r.toolbar, 'empty hello, then trading: the order bar picker is enabled with the trade accounts: ' + JSON.stringify(r));
+    await na.selectOption('#oAcct', 'DEMO-EVAL');
+    check(await na.inputValue('#oAcct') === 'DEMO-EVAL', 'and the order account can be changed');
+    await na.close();
+  }
+  /* ---------------- connecting (no hello yet): the trading page shows no toolbar picker, so the toolbar never jumps (review 2, N4) */
+  {
+    const cn = await browser.newPage({ viewport: { width: 1680, height: 860 } });
+    await cn.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+    await cn.addInitScript(() => { window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} }; });   // never connects
+    await cn.goto(`http://localhost:${PORT + 4}/live/`);
+    await unlockIfAsked(cn);
+    await cn.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'CONNECTING', null, { timeout: 15000 });
+    await cn.waitForTimeout(300);
+    check(await cn.isHidden('#acctWrap'), 'trading page while connecting: no toolbar account picker');
+    await cn.close();
+  }
+
   /* ---------------- ChartBridge 0.2 (protocol v1): read only exactly as before */
   await startBridge(PORT + 2, ['--v1']);
   const v1 = await open(browser, PORT + 2, 1440);
@@ -337,6 +402,7 @@ try {
   check(await v1.isHidden('#obar'), 'no order bar with ChartBridge 0.2');
   check(await v1.textContent('#statusRo') === 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.', 'v1 footer');
   check(/Last fill (BUY|SELL)/.test(await v1.textContent('#legend')), 'v1 fills still shown');
+  check(await v1.isVisible('#acctPick') && JSON.stringify(await v1.$$eval('#acctPick option', os => os.map(o => o.value))) === '["DEMO-EVAL","Sim101","DEMO-EMPTY"]', 'no order bar: the compact account picker in the toolbar, no "All accounts"');
   await shot(v1, 'orders-1440-v1-read-only.png');
   await v1.close();
 } finally {
