@@ -152,7 +152,7 @@ then two reviews (fixes marked "review" and "review 2").
   the named other account; a dropped connection; the note cleared on Armed on and on trading lost; a pick while
   trading is off ("picked while trading was off"); the title and the pill at 1440 and 400 px. Review 2: a Cancel
   all of 10 (nothing locked, the state row counting down, every cancel for DEMO-EVAL); R15 an instrument switch
-  300 ms into 20 (Armed off but usable, arm and Flatten on NQ at once, all 20 cancelled); R16 a drop 300 ms in (8
+  300 ms into 30 (Armed off but usable, arm and Flatten on NQ at once, all 30 cancelled); R16 a drop 300 ms in (8
   sent, the note naming DEMO-EVAL MNQ and 12 still up after the reconnect and 7 s, gone once they are cancelled);
   R17 DEMO-EVAL leaving the list (the note says why, the fallback note keeps its 15 s, Dismiss); R18 Flatten 300 ms
   in (flat, nothing working, no cancel after it, no reject); R19 a second Cancel all (20 cancels in all, at most 8 in

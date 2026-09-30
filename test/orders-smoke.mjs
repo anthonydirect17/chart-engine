@@ -550,24 +550,25 @@ try {
     let cs = await sentOf('cancel');
     check(cs.length === 10 && cs.every(x => x.acct === 'DEMO-EVAL'), '1.6.1 ten cancels, all DEMO-EVAL: ' + cs.map(x => x.acct).join());
 
-    // R15: an instrument switch 300 ms into a batch of 20: Armed goes off but stays usable, Flatten works at once, and
-    // all 20 cancels Anthony asked for go out (1.6.1 before review 2: 8 of 20, Armed locked about 1.8 s)
-    await place(20);
-    await onChart(20);
+    // R15: an instrument switch 300 ms into a batch of 30 (about 4 s of cancels, so it still runs on a slow box): Armed
+    // goes off but stays usable, Flatten works at once, and all the cancels Anthony asked for go out (1.6.1 before
+    // review 2, with 20: 8 sent, Armed locked about 1.8 s)
+    await place(30);
+    await onChart(30);
     await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
     await armOn(); await A.click('#cancelAllBtn');
     await A.waitForTimeout(300);
     await A.click('#symSeg button[data-v="NQ"]');
     bb = await bar();
     const armedAfter = await A.getAttribute('#armBtn', 'aria-checked');
-    check(armedAfter === 'false' && !bb.arm && /^Cancelling on DEMO-EVAL MNQ: 12 left/.test(bb.batch), 'R15: after the switch Armed is off and not locked, the state row still names DEMO-EVAL MNQ: ' + JSON.stringify(bb));
+    check(armedAfter === 'false' && !bb.arm && /^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(bb.batch), 'R15: after the switch Armed is off and not locked, the state row still names DEMO-EVAL MNQ: ' + JSON.stringify(bb));
     await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 NQ loaded', 8000);
     await A.click('#armBtn'); await A.click('#flattenBtn');
     const fl15 = await sentOf('flatten');
     check(fl15.length === 1 && fl15[0].account === 'DEMO-EVAL' && fl15[0].root === 'NQ', 'R15: arm and Flatten on NQ right after the switch: ' + JSON.stringify(fl15));
     await until(async () => await evalWorking() === 0, 'R15 every MNQ order cancelled', 8000);
     cs = await sentOf('cancel');
-    check(cs.length === 20 && cs.every(x => x.acct === 'DEMO-EVAL') && await evalWorking() === 0, 'R15: all 20 cancels sent by id, 0 DEMO-EVAL MNQ orders working: ' + cs.length);
+    check(cs.length === 30 && cs.every(x => x.acct === 'DEMO-EVAL') && await evalWorking() === 0, 'R15: all 30 cancels sent by id, 0 DEMO-EVAL MNQ orders working: ' + cs.length);
     await until(async () => (await bar()).batch === '', 'R15 the batch note gone', 5000);
     await armOff();
     await A.click('#symSeg button[data-v="MNQ"]');
