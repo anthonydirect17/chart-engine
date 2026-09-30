@@ -94,7 +94,7 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   20:00 ET, not 18:00: this view loads 2 hours of ticks"). Seconds views ask 8 hours and Range its sessions as before;
   with the pane off, or a ChartBridge that sends no sides, minute views ask none. Switching the pane on in a minute view
   loaded without it fetches the 2 hours with one new subscribe (the only way ChartBridge sends ticks), during which
-  orders are refused with "Still loading" as on any load: 47 to 94 ms on the fake bridge; on the trading PC it is
+  orders are refused with "Still loading" as on any load: 47 to 152 ms on the fake bridge (8 runs); on the trading PC it is
   ChartBridge's load time for 2 hours of trades and quotes (`loadMs` in `/diag`). Showing a hidden pane (chip, Restore)
   never reloads. **Load cost** (`perf:live --view=m1`, the fake bridge at 15 trades a second, 150 live a second): the 2
   hours are about 290,000 trades; the load went from 0.87 to 1.40 s (10:30 ET) and 0.88 to 1.51 s (20:00 ET), no long
