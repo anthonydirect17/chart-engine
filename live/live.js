@@ -1078,7 +1078,7 @@ function start(container, opt, PAGE) {
     const t = m.t, day = U.tradeDay(t, SESSION);
     let dropped = false;
     if (K.day !== null && day > K.day && (K.trades.length || K.base)) { K.trades = new BB.TickStore(); K.base = null; dropped = true; }   // 18:00 ET: a new session from 0
-    if (K.day !== null && day > K.day) K.missed = 0;
+    if (K.day !== null && day > K.day && K.missed) { K.missed = 0; deltaView(); }   // the new session's title drops the old gap
     if (K.day === null || day > K.day) K.day = day;
     if (K.firstT === null) K.firstT = t;
     if (K.gap && D.ready && D.root === K.root) {         // the first trade of the new load
