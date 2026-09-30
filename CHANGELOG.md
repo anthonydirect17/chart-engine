@@ -1,5 +1,27 @@
 # Changelog
 
+## ChartBridge 0.3.4.1 (2026-09-30): no historical quote requests by default
+
+ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged. **Needs a recompile:** run
+`nt8\install.ps1` again, then compile in NinjaTrader (F5).
+- **Why:** on the trading PC NinjaTrader froze several times a minute with 0.3.4. Every tick chart load and every
+  reload (including the page's reload after a 5 s lag reset) asked NinjaTrader for 8 hours (up to 24) of historical Bid
+  and Ask ticks next to the trades. They did not answer within 2.5 s, so they most likely kept running inside
+  NinjaTrader while the next reload asked again. Those quotes only label past trades as buys or sells for cumulative
+  delta, which the chart does not show yet, and delta is a tool used while trading.
+- **Now, by default, no Bid or Ask history is asked for at all.** The tick backfill goes out as soon as the trades are
+  in (no 2.5 s quote wait). Past trades get their side by the tick rule, and say so (`sm` 3), so a page can tell them
+  from measured sides. Live trades keep their side from the live bid and ask, as before (that costs nothing extra).
+- **New setting `quoteHours`** in `config.txt`: `0` (default), `1` or `2`. With 1 or 2 a tick chart asks for only the
+  last 1 or 2 hours of Bid and Ask (at most its tick window), for a measured test later. Anything else is 0, with a
+  line in the Output window. NinjaTrader's help documents no way to cancel a request once asked, so a reload never asks
+  again while an earlier Bid or Ask request for the same instrument is still unanswered (that load goes by the tick
+  rule and `/diag` says why).
+- **`/diag`:** `sides.<root>.lastLoad` has `quoteHours`, `quoteWindowHours` (hours asked, 0 when none) and, at 0, the
+  note `quotes not requested (quoteHours 0)`; `sides.<root>.quotesOutstanding` counts unanswered Bid and Ask requests.
+  The other counters are unchanged.
+- The order code (`ChartBridgeOrders.cs`) and the PIN (`ChartBridgePin.cs`) are unchanged.
+
 ## Unreleased (2026-09-30): keep each trading PC up to date (`nt8/update-pc.ps1`)
 
 Approved by Anthony on 2026-09-30. Page and tooling only; nt8/*.cs is unchanged (ChartBridge 0.3.4 as on main).

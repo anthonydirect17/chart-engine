@@ -41,7 +41,14 @@ public static class SidesHarness
         return true;
     }
 
-    static void Reset() { NextBid = null; NextAsk = null; NextCode = ErrorCode.NoError; Manual = false; }
+    // 0.3.4.1: Reset also forgets any Bid/Ask request a case left unanswered (ChartBridgeServer.QuotesOutstanding), so one
+    // case's never-answered stand-in request does not hold the next case's quotes off.
+    static void Reset()
+    {
+        NextBid = null; NextAsk = null; NextCode = ErrorCode.NoError; Manual = false;
+        var q = (Dictionary<string, int>)typeof(ChartBridgeServer).GetField("QuotesOutstanding", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        lock (q) q.Clear();
+    }
 
     // ------------------------------------------------------------ pure rules
     static string C(double p, double bid, double ask, bool hasPrev, double prev, int prevSide)
@@ -337,8 +344,18 @@ public static class SidesHarness
     public static void Load(Action<bool, string> check, ChartBridgeClient c, Instrument i, List<string> s)
     {
         Check = check; client = c; inst = i; sent = s;
-        try { LoadTick(); LoadSeamDisagree(); LoadOrder(); LoadRefused(); LoadMissing(); LoadMinute(); LoadTimeout(); LoadNoTrades(); LoadWindow(); LoadOutbox(); LoadReset(); LoadMemory(); }
-        finally { Reset(); }
+        // 0.3.4.1: the Bid and Ask history is asked only with quoteHours 1 or 2 in config.txt (default 0). The 0.3.4 cases
+        // below test the quote path, so they run with quoteHours 2 (their made-up data is from the last 10 minutes); the
+        // 0.3.4.1 cases then set it themselves, and it goes back to the default.
+        int was = ChartBridgeConfig.QuoteHours;
+        try
+        {
+            ChartBridgeConfig.QuoteHours = 2;
+            LoadTick(); LoadSeamDisagree(); LoadOrder(); LoadRefused(); LoadMissing(); LoadMinute(); LoadTimeout(); LoadNoTrades(); LoadWindow(); LoadOutbox(); LoadReset();
+            QuoteHoursCases();
+            LoadMemory();
+        }
+        finally { ChartBridgeConfig.QuoteHours = was; Reset(); }
     }
 
     public static void Run(Action<bool, string> check)
@@ -864,8 +881,8 @@ public static class SidesHarness
         minutes.Answer(Minutes(new[] { 0.0, 100, 100, 100, 100, 5 }, new[] { 60.0, 100, 100.5, 100, 100.5, 7 }), ErrorCode.NoError);
         BarsRequest last = Kind(m0, MarketDataType.Last, 1), bid = Kind(m0, MarketDataType.Bid, 0), ask = Kind(m0, MarketDataType.Ask, 0);
         Check(last != null && bid != null && ask != null && bid.Answered && ask.Answered, "load: a tick chart asks for Bid and Ask ticks with the trades");
-        Check(bid != null && last != null && bid.From == last.From && bid.To == last.To && ask.From == last.From && ask.To == last.To
-              && bid.BarsPeriod.BarsPeriodType == BarsPeriodType.Tick && bid.BarsPeriod.Value == 1, "load: the quote requests cover the trades' window, 1 tick");
+        Check(bid != null && last != null && Math.Abs((bid.From - last.From).TotalHours - 6) < 0.001 && bid.To == last.To && ask.From == bid.From && ask.To == last.To
+              && bid.BarsPeriod.BarsPeriodType == BarsPeriodType.Tick && bid.BarsPeriod.Value == 1, "load: the quote requests cover the last quoteHours (2) of the trades' 8-hour window, to the same end, 1 tick");
         Check(Index(Sent(), "\"type\":\"ticks\"") < 0, "load: nothing goes out before the trades are in");
         last.Answer(Rows(new[] { -30.0, 100, 3 }, new[] { 0.5, 100.5, 2 }, new[] { 0.7, 100.25, 1 }, new[] { 1.0, 100.5, 4 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "load: ready is sent");
@@ -968,7 +985,7 @@ public static class SidesHarness
         Kind(m0, MarketDataType.Last, 1).Answer(Rows(new[] { 0.05, 100, 1 }, new[] { 1.0, 100, 1 }, new[] { 8.0, 100.25, 1 }, new[] { 9.0, 100.25, 1 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "shorter: ready is sent");
         string d = Diag();
-        Check(d.Contains("\"quotedTrades\":1") && d.Contains("\"beforeQuotes\":1") && d.Contains("\"afterQuotes\":2") && d.Contains("\"note\":\"the bid/ask history does not cover every trade: 1 trade(s) before it, 2 after it and 0 with a quote over 60 s old went by the tick rule\""),
+        Check(d.Contains("\"quotedTrades\":1") && d.Contains("\"beforeQuotes\":1") && d.Contains("\"afterQuotes\":2") && d.Contains("\"note\":\"the bid/ask history does not cover every trade: 1 trade(s) before it (quotes are asked for the last 2 hours, quoteHours in config.txt), 2 after it and 0 with a quote over 60 s old went by the tick rule\""),
             "shorter: trades outside the quote history counted and named in /diag (" + Snip(d) + ")");
         Check(NinjaTrader.Code.Output.Lines.Any(x => x.Contains("MNQ trade sides: the bid/ask history does not cover every trade")), "shorter: and a line in the Output window");
         Reset();
@@ -1055,8 +1072,9 @@ public static class SidesHarness
 
     static void LoadWindow()
     {
-        // S2: the quote window is at most QuoteHoursMax (24 h) back, whatever the trades ask (a range view up to 48 h); trades
-        // before it go by the tick rule. And a resubscribe while the quotes load: the old load sends nothing more.
+        // S2: the quote window is at most quoteHours back (2 here; 0.3.4.1, was 24 h), whatever the trades ask (a range view
+        // up to 48 h); trades before it go by the tick rule. And a resubscribe while the quotes load: the old load sends
+        // nothing more.
         Reset();
         Manual = true;
         lock (sent) sent.Clear();
@@ -1064,8 +1082,8 @@ public static class SidesHarness
         Priv("Subscribe", client, "MNQ", 5, 40);
         Made(m0)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
         BarsRequest last = Kind(m0, MarketDataType.Last, 1), bid = Kind(m0, MarketDataType.Bid, 0);
-        Check(last != null && bid != null && Math.Abs((bid.From - last.From).TotalHours - 16) < 0.01,
-            "window: a 40-hour trade request gets a 24-hour quote request (" + (bid != null && last != null ? (bid.From - last.From).TotalHours.ToString("0.##") : "?") + " h later start)");
+        Check(last != null && bid != null && Math.Abs((bid.From - last.From).TotalHours - 38) < 0.01,
+            "window: a 40-hour trade request gets a 2-hour quote request with quoteHours 2 (" + (bid != null && last != null ? (bid.From - last.From).TotalHours.ToString("0.##") : "?") + " h later start)");
         last.Answer(Rows(new[] { 1.0, 100, 1 }), ErrorCode.NoError);
         Priv("Subscribe", client, "MNQ", 5, 8);    // the page resubscribes while the quotes load
         int n = Sent().Count;
@@ -1184,6 +1202,191 @@ public static class SidesHarness
         BarsRequest last = Made(m0).Skip(1).FirstOrDefault();
         if (last != null) last.Answer(Rows(new[] { 1.0, 100, 1 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "minute chart: ready is sent");
+    }
+    // ------------------------------------------------------------ 0.3.4.1: quoteHours
+    // The Bid and Ask history froze NinjaTrader on the trading PC (0.3.4: 8 to 24 hours of it on every load and reload).
+    // quoteHours in config.txt: 0 (default) asks for none, 1 or 2 ask for that many hours (at most the trades' window).
+    // On a page of their own (id 78, its own message list): the harness's page 77 has no send loop, so after 5 s of cases
+    // its oldest queued message makes it "behind" and it is closed (the 5 s rule), which would cut these loads short.
+    static void QuoteHoursCases()
+    {
+        var clients = (System.Collections.Concurrent.ConcurrentDictionary<int, ChartBridgeClient>)typeof(ChartBridgeServer).GetField("Clients", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        ChartBridgeClient was = client; List<string> wasSent = sent;
+        List<string> own = new List<string>();
+        ChartBridgeClient c78 = new ChartBridgeClient(null, 78);
+        c78.Tap = x => { lock (own) own.Add(x); };
+        clients[78] = c78;
+        client = c78; sent = own;
+        try { QuoteHoursParse(); QuoteHoursZero(); QuoteHoursWindow(); QuoteHoursOutstanding(); }
+        finally { ChartBridgeClient gone; clients.TryRemove(78, out gone); c78.Close(); client = was; sent = wasSent; }
+    }
+
+    static void QuoteHoursParse()
+    {
+        int lines; lock (NinjaTrader.Code.Output.Lines) lines = NinjaTrader.Code.Output.Lines.Count;
+        Check(ChartBridgeConfig.ParseQuoteHours("0") == 0 && ChartBridgeConfig.ParseQuoteHours("1") == 1 && ChartBridgeConfig.ParseQuoteHours("2") == 2,
+            "quoteHours: 0, 1 and 2 are taken as they are");
+        bool bad = true;
+        foreach (string v in new[] { "3", "-1", "24", "8", "abc", "1.5", "", "true" }) bad &= ChartBridgeConfig.ParseQuoteHours(v) == 0;
+        List<string> said; lock (NinjaTrader.Code.Output.Lines) said = NinjaTrader.Code.Output.Lines.Skip(lines).ToList();
+        Check(bad && said.Count == 8 && said.Contains("ChartBridge: config.txt: quoteHours = 3 is not 0, 1 or 2; using 0 (no bid/ask history is asked)")
+              && said.Any(x => x.Contains("quoteHours = abc is not 0, 1 or 2; using 0")),
+            "quoteHours: anything else (3, -1, 24, 8, abc, 1.5, empty, true) is 0, each with a line in the Output window (" + (said.Count > 0 ? said[0] : "none") + ")");
+        Check(ChartBridgeServer.QuoteWindowHours(0, 8) == 0 && ChartBridgeServer.QuoteWindowHours(1, 8) == 1 && ChartBridgeServer.QuoteWindowHours(2, 8) == 2
+              && ChartBridgeServer.QuoteWindowHours(2, 48) == 2 && ChartBridgeServer.QuoteWindowHours(2, 1) == 1 && ChartBridgeServer.QuoteWindowHours(1, 1) == 1
+              && ChartBridgeServer.QuoteWindowHours(2, 0) == 0 && ChartBridgeServer.QuoteWindowHours(1, 0) == 0,
+            "quoteHours: the quote window is quoteHours, clamped to the trades' window; none at 0 or without a tick window");
+    }
+
+    static void QuoteHoursZero()
+    {
+        // quoteHours 0 (the default): no Bid or Ask request, on the load or on reloads; the backfill goes out as soon as the
+        // trades are in (no QuoteWaitMs hold, here 5 s); every backfill trade by the tick rule (sm 3, or 0 for the first);
+        // live trades still by the live quote (sm 2).
+        Reset();
+        ChartBridgeConfig.QuoteHours = 0;
+        int was = ChartBridgeServer.QuoteWaitMs;
+        ChartBridgeServer.QuoteWaitMs = 5000;
+        try
+        {
+            lock (sent) sent.Clear();
+            int lines; lock (NinjaTrader.Code.Output.Lines) lines = NinjaTrader.Code.Output.Lines.Count;
+            int m0 = MadeCount();
+            Priv("Subscribe", client, "MNQ", 5, 8);
+            Quote(1.1, 100, 100.25);
+            Trade(1.2, 100.25, 3);                     // held during the load: at the live ask, a buy by the quote
+            Made(m0)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+            Check(Kind(m0, MarketDataType.Last, 1) != null && Kind(m0, MarketDataType.Bid, 0) == null && Kind(m0, MarketDataType.Ask, 0) == null,
+                "quoteHours 0: a tick chart asks for its trades and no Bid or Ask history");
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            Kind(m0, MarketDataType.Last, 1).Answer(Rows(new[] { 0.5, 100, 1 }, new[] { 0.8, 100.25, 1 }, new[] { 1.0, 100, 2 }), ErrorCode.NoError);
+            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && sw.ElapsedMilliseconds < 1000,
+                "quoteHours 0: ready as soon as the trades are in, no quote wait (" + sw.ElapsedMilliseconds + " ms, QuoteWaitMs 5000)");
+            Thread.Sleep(30);
+            List<string> l = Sent();
+            string ticks = l[Index(l, "\"type\":\"ticks\"")];
+            Check(ticks.Contains(",100,1,0,0]") && ticks.Contains(",100.25,1,1,3]") && ticks.Contains(",100,2,-1,3]") && !ticks.Contains(",2]"),
+                "quoteHours 0: backfill trades by the tick rule, sm honest (3, or 0 for the first) (" + ticks + ")");
+            List<string> after = l.Skip(Index(l, "\"type\":\"ready\"") + 1).ToList();
+            Check(after.Count == 1 && after[0].EndsWith("\"p\":100.25,\"v\":3,\"s\":1,\"sm\":2}"), "quoteHours 0: a live trade keeps its side from the live quote (" + string.Join(" ", after) + ")");
+            string d = Diag();
+            Check(d.Contains("\"note\":\"quotes not requested (quoteHours 0)\"") && d.Contains("\"quoteHours\":0,\"quoteWindowHours\":0")
+                  && d.Contains("\"bidRequest\":\"not requested (quoteHours 0)\",\"askRequest\":\"not requested (quoteHours 0)\"")
+                  && d.Contains("\"quotesTimedOut\":false") && d.Contains("\"bidTicks\":0,\"askTicks\":0") && d.Contains("\"tickRule\":2,\"none\":1")
+                  && d.Contains("\"quotesOutstanding\":0"),
+                "quoteHours 0: /diag sides.lastLoad says quoteHours 0 and \"quotes not requested (quoteHours 0)\", other counters kept (" + Snip(d) + ")");
+            bool quiet; lock (NinjaTrader.Code.Output.Lines) quiet = !NinjaTrader.Code.Output.Lines.Skip(lines).Any(x => x.Contains("trade sides"));
+            Check(quiet, "quoteHours 0: no Output window line on every load for it");
+            // Reloads (as after a 5 s lag reset): still no Bid or Ask request.
+            int m1 = MadeCount();
+            for (int k = 0; k < 5; k++)
+            {
+                int mk = MadeCount();
+                Priv("Subscribe", client, "MNQ", 5, 8);
+                Made(mk)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+                BarsRequest lt = Kind(mk, MarketDataType.Last, 1);
+                if (lt != null) lt.Answer(Rows(new[] { 1.0, 100, 1 }), ErrorCode.NoError);
+            }
+            Check(Made(m1).Count == 10 && Kind(m1, MarketDataType.Bid, 0) == null && Kind(m1, MarketDataType.Ask, 0) == null,
+                "quoteHours 0: five reloads ask for minutes and trades only (" + Made(m1).Count + " requests)");
+            // 48-hour range view: still none.
+            int m2 = MadeCount();
+            Priv("Subscribe", client, "MNQ", 5, 48);
+            Made(m2)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+            Check(Kind(m2, MarketDataType.Bid, 0) == null && Kind(m2, MarketDataType.Ask, 0) == null, "quoteHours 0: a 48-hour tick window asks for no quotes either");
+            BarsRequest l2 = Kind(m2, MarketDataType.Last, 1);
+            if (l2 != null) l2.Answer(Rows(new[] { 1.0, 100, 1 }), ErrorCode.NoError);
+            Check(WaitFor(() => Sent().Any(x => x.Contains("\"type\":\"ready\"") && x.Contains("\"sub\":" + client.SubscribeSeq))), "quoteHours 0: the 48-hour load is ready");
+        }
+        finally { ChartBridgeServer.QuoteWaitMs = was; Reset(); }
+    }
+
+    static void QuoteHoursWindow()
+    {
+        // quoteHours 1 and 2: only that many hours of Bid and Ask, ending where the trades end; clamped to the trades' window.
+        foreach (int[] c in new[] { new[] { 1, 8, 1 }, new[] { 2, 8, 2 }, new[] { 2, 1, 1 }, new[] { 1, 48, 1 } })
+        {
+            Reset();
+            ChartBridgeConfig.QuoteHours = c[0];
+            NextBid = Rows(R(-40, 100), R(0.4, 100));
+            NextAsk = Rows(R(-40, 100.25), R(0.4, 100.25));
+            lock (sent) sent.Clear();
+            int m0 = MadeCount();
+            Priv("Subscribe", client, "MNQ", 5, c[1]);
+            Made(m0)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+            BarsRequest last = Kind(m0, MarketDataType.Last, 1), bid = Kind(m0, MarketDataType.Bid, 0), ask = Kind(m0, MarketDataType.Ask, 0);
+            double h = bid != null && last != null ? (last.To - bid.From).TotalHours - ChartBridgeServer.TickToMarginMinutes / 60.0 : -1;
+            Check(last != null && bid != null && ask != null && Math.Abs(h - c[2]) < 0.001 && ask.From == bid.From && bid.To == last.To && Kind(m0, MarketDataType.Bid, 1) == null,
+                "quoteHours " + c[0] + ", " + c[1] + "-hour tick window: one Bid and one Ask request for the last " + c[2] + " hour(s) (" + h.ToString("0.###") + ")");
+            if (last != null) last.Answer(Rows(new[] { 1.0, 100.25, 1 }), ErrorCode.NoError);
+            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Sent().Any(x => x.Contains(",100.25,1,1,2]")), "quoteHours " + c[0] + ": the trade is sided by the quote history (sm 2)");
+            string d = Diag();
+            Check(d.Contains("\"quoteHours\":" + c[0] + ",\"quoteWindowHours\":" + c[2]) && d.Contains("\"bidRequest\":\"ok\"") && d.Contains("\"quotesOutstanding\":0"),
+                "quoteHours " + c[0] + ": /diag says the setting and the hours asked (" + Snip(d) + ")");
+        }
+        ChartBridgeConfig.QuoteHours = 0;
+        Reset();
+    }
+
+    static void QuoteHoursOutstanding()
+    {
+        // A load whose quotes have not answered went out without them (QuoteWaitMs); a reload (a 5 s lag reset) must not ask
+        // again while they are outstanding. Once both have answered (late, unused), the next load asks again.
+        Reset();
+        Manual = true;
+        ChartBridgeConfig.QuoteHours = 2;
+        int was = ChartBridgeServer.QuoteWaitMs;
+        ChartBridgeServer.QuoteWaitMs = 150;
+        try
+        {
+            lock (sent) sent.Clear();
+            int m0 = MadeCount();
+            Priv("Subscribe", client, "MNQ", 5, 8);
+            Made(m0)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+            BarsRequest bid = Kind(m0, MarketDataType.Bid, 0), ask = Kind(m0, MarketDataType.Ask, 0);
+            Kind(m0, MarketDataType.Last, 1).Answer(Rows(new[] { 1.0, 100, 1 }), ErrorCode.NoError);
+            Check(bid != null && ask != null && WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Diag().Contains("\"quotesTimedOut\":true") && Diag().Contains("\"quotesOutstanding\":2"),
+                "outstanding: the load goes out without its unanswered quotes; /diag counts 2 outstanding");
+            for (int k = 0; k < 3; k++)
+            {
+                lock (sent) sent.Clear();
+                int mk = MadeCount();
+                System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                Priv("Subscribe", client, "MNQ", 5, 8);
+                Made(mk)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+                Check(Kind(mk, MarketDataType.Bid, 0) == null && Kind(mk, MarketDataType.Ask, 0) == null, "outstanding: reload " + (k + 1) + " asks for no Bid or Ask while the first ones are unanswered");
+                Kind(mk, MarketDataType.Last, 1).Answer(Rows(new[] { 1.0, 100, 1 }, new[] { 1.5, 100.25, 1 }), ErrorCode.NoError);
+                Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Sent().Any(x => x.Contains(",100.25,1,1,3]")), "outstanding: reload " + (k + 1) + " goes out at once, by the tick rule");
+                if (k == 0)
+                {
+                    string d = Diag();
+                    Check(d.Contains("\"note\":\"quotes not requested: an earlier bid/ask request for MNQ is still outstanding (every backfill trade went by the tick rule)\"")
+                          && d.Contains("\"quoteHours\":2,\"quoteWindowHours\":0") && d.Contains("\"quotesTimedOut\":false"),
+                        "outstanding: /diag says why no quotes were asked (" + Snip(d) + ")");
+                }
+                if (k == 1) bid.Answer(Rows(new[] { 0.5, 100 }), ErrorCode.NoError);   // one answers late: still one outstanding
+            }
+            Check(Diag().Contains("\"quotesOutstanding\":1"), "outstanding: a late answer counts down (1 left)");
+            int m8 = MadeCount();
+            ask.Answer(new Bars(), ErrorCode.Panic);   // the other answers late, refused: not asked again (the load is long gone)
+            int m9 = MadeCount();
+            Check(Diag().Contains("\"quotesOutstanding\":0") && m9 == m8, "outstanding: both answered: none outstanding, no retry for a load that went out");
+            lock (sent) sent.Clear();
+            Priv("Subscribe", client, "MNQ", 5, 8);
+            Made(m9)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+            BarsRequest b2 = Kind(m9, MarketDataType.Bid, 0), a2 = Kind(m9, MarketDataType.Ask, 0);
+            Check(b2 != null && a2 != null, "outstanding: the next load asks for quotes again");
+            // A refused request ending in the future is retried ending now; the retry is still the same outstanding request.
+            b2.Answer(new Bars(), ErrorCode.Panic);
+            BarsRequest b3 = Kind(m9, MarketDataType.Bid, 1);
+            Check(b3 != null && Diag().Contains("\"quotesOutstanding\":2"), "outstanding: a retry keeps the bid counted until it answers");
+            if (b3 != null) b3.Answer(Rows(new[] { 0.5, 100 }), ErrorCode.NoError);
+            a2.Answer(Rows(new[] { 0.5, 100.25 }), ErrorCode.NoError);
+            Kind(m9, MarketDataType.Last, 1).Answer(Rows(new[] { 1.0, 100.25, 1 }), ErrorCode.NoError);
+            Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Diag().Contains("\"quotesOutstanding\":0") && Sent().Any(x => x.Contains(",100.25,1,1,2]")),
+                "outstanding: all answered, the load is sided by the quotes, none outstanding");
+        }
+        finally { ChartBridgeServer.QuoteWaitMs = was; ChartBridgeConfig.QuoteHours = 0; Reset(); }
     }
 }
 
