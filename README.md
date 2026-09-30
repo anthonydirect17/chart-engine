@@ -57,7 +57,8 @@ after 18:00 it loads the session once, at start, one instrument at a time (`prof
 profile building, from HH:MM ET" until then. A NinjaScript compile (F5) restarts ChartBridge, so a compile during the
 session counts as such a start: the session is loaded once more. The Range and seconds windows and these session loads go
 to NinjaTrader one at a time; a minute chart's last-trades request (as in 0.3.3) is not queued behind them. If NinjaTrader
-never answers one of them, ChartBridge asks for no more tick history (no window, no session load, no minute chart's last
+never answers one of them (or answers at the time limit but its copy does not finish within 30 s more), ChartBridge
+asks for no more tick history (no window, no session load, no minute chart's last
 trades) until NinjaTrader answers it or restarts: meanwhile Range and seconds charts open from ChartBridge's memory or start
 from live trades, and say why. Orders and Flatten work during any load. With ChartBridge 0.3.4 or older the chart loads as before.
 

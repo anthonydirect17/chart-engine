@@ -1115,6 +1115,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public List<SeamTick> BackfillLive;          // live trades since the table began, while its backfill is to come
         public bool LastChanged;
         public string BackfillState = "none";
+        public string BackfillWaitWas;               // review 5 S1: the state a waiting backfill goes back to once the gate is free
         public double BackfillAskedMs = -1, BackfillMs = -1, BackfillCallbackMs = -1; public int BackfillTrades = -1, BackfillReleased = -1, BackfillAsks; public string BackfillFirst, BackfillLast;
         // The served window being asked of NinjaTrader (one request per instrument at a time, B2): the loads waiting for it,
         // the live trades since it was asked (for its seam), and when the last one failed (no re-ask for a minute).
@@ -1961,7 +1962,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Clients.Clear();
                 foreach (MarketData md in Feeds) { try { md.Update -= OnMarketData; } catch (Exception) { } }
                 Feeds.Clear();
-                lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); gateStuck = null; gateStuckSinceMs = -1; }   // nothing carries over to the next start (review 3 N-9)
+                StopGate();   // nothing carries over to the next start (review 3 N-9); the worker ends, the retries' timers go (review 5 N6)
                 lock (Books) Books.Clear();
                 Unwatch();
                 ChartBridgeOrders.UnwatchConnections();
@@ -3084,7 +3085,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // On NinjaTrader's thread only the copy (its Bars are its own) and a count; everything else on a worker. An answer
                     // given up (X1) is dropped at once, not copied. A full answer that does not reach back rangeHours is not copied
                     // either: the second, larger ask is queued before the gate goes on (review 3 S-D: ahead of any backfill).
-                    if (!Claim(j)) { try { req.Dispose(); } catch (Exception) { } GateUnstuck("window " + book.Root); return; }   // review 4 S1: timed out first
+                    if (!Claim(j)) { try { req.Dispose(); } catch (Exception) { } if (LateAnswer(j)) GateUnstuck("window " + book.Root); return; }   // review 4 S1: timed out first
                     Stopwatch sw = Stopwatch.StartNew();
                     RawBars raw = null; string error = null; int held = 0; bool again = false;
                     try
@@ -3210,20 +3211,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         // tick request goes out until NinjaTrader answers it (or restarts), and that late answer is dropped at once, not
         // copied. Meanwhile nothing waits on it (review 4 B1, S2): a window load goes live at once with the reason, and a
         // queued backfill says it waits.
-        // State (review 4 S1): 0 out, 1 answered, 2 timed out; claimed once with Interlocked, so an answer and a timeout never both
-        // act, and an answer that loses to the timeout still frees the gate (GateUnstuck).
-        private class GateJob { public string Kind, Root; public RootBook Book; public Action<Action> Start; public Action OnTimeout; public Action<string> OnStuck; public int TimeoutMs; public int State; }
+        // State (review 4 S1): 0 out, 1 answered, 2 timing out (the worker is marking the gate stuck), 3 timed out; claimed once
+        // with Interlocked, so an answer and a timeout never both act, and an answer that loses to the timeout still frees the
+        // gate (GateUnstuck), but only once the gate is marked: an answer during the marking (4) leaves that to the worker, so it
+        // never frees the gate before the worker marks it stuck. 5: answered, but its copy outlasted AnswerCopyMs, so treated as
+        // timed out; 6: that copy ended, the gate freed (review 5 N2).
+        private class GateJob { public string Kind, Root; public RootBook Book; public Action<Action> Start; public Action OnTimeout; public Action<string> OnStuck; public int TimeoutMs; public int State; public CancellationToken Stop; }
         private static bool Claim(GateJob j) { return Interlocked.CompareExchange(ref j.State, 1, 0) == 0; }
+        // An answer that lost to the timeout: true when the gate is already marked stuck, so the caller frees it (GateUnstuck).
+        private static bool LateAnswer(GateJob j) { return Interlocked.CompareExchange(ref j.State, 4, 2) != 2; }
         // The note for a load (and the log) while a request is stuck: what it turns off, and until when.
         private static string StuckNote(string what) { return "NinjaTrader has not answered an earlier tick request (" + what + ") yet; tick history is not asked for until it does or NinjaTrader restarts"; }
         private static double gateStuckSinceMs = -1;
         private static readonly object GateLock = new object();
         private static readonly List<GateJob> GateWindows = new List<GateJob>(), GateBackfills = new List<GateJob>();
         private static bool gateRunning;
+        private static Task gateTask;                 // the worker, stopped and joined by Stop (review 5 N6)
+        private static CancellationTokenSource gateStop = new CancellationTokenSource();   // cancels the worker's waits and the backfill retries' timers
         private static string gateNow;                // the request outstanding now, for /diag and the minute charts
         private static string gateStuck;              // a request given up but not answered yet: nothing else goes out (X1)
         private static int tailsOut;                  // minute charts' last-trades requests outstanding
         public static int WindowTimeoutMs = 120000, BackfillTimeoutMs = 300000, BackfillGapMs = 3000, BackfillStartMs = 60000, BackfillRetryMs = 60000;
+        public static int AnswerCopyMs = 30000;   // review 5 N2: an answer that claimed its request at the limit has this long to finish its copy
         public static bool BackfillOn = true;         // the harness turns it off for the cases that do not test it
 
         private static void GateEnqueue(GateJob j)
@@ -3244,8 +3253,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (gateRunning || (GateWindows.Count == 0 && GateBackfills.Count == 0)) return;
                 gateRunning = true;
+                CancellationToken stop = gateStop.Token;
+                gateTask = Task.Run(() => GateWorker(stop));
             }
-            Task.Run(() => GateWorker());
+        }
+        // Stop(): the worker leaves its wait and ends (joined for at most 5 s), and the backfill retries' timers are cancelled, so
+        // nothing of the gate runs on after ChartBridge stops (review 5 N6). The harness calls it too before it exits.
+        public static void StopGate()
+        {
+            Task worker; CancellationTokenSource stop;
+            lock (GateLock)
+            {
+                GateWindows.Clear(); GateBackfills.Clear(); gateStuck = null; gateStuckSinceMs = -1; gateNow = null;
+                worker = gateTask; gateTask = null; gateRunning = false;
+                stop = gateStop; gateStop = new CancellationTokenSource();
+            }
+            try { stop.Cancel(); } catch (Exception) { }
+            try { if (worker != null && !worker.Wait(5000)) Log("the tick request worker did not end within 5 s of the stop"); } catch (Exception) { }
         }
 
         // Under GateLock: the next request to send, or null. wait: when null, whether to look again soon (a backfill waiting
@@ -3272,42 +3296,63 @@ namespace NinjaTrader.NinjaScript.AddOns
             return j;
         }
 
-        private static void GateWorker()
+        private static void GateWorker(CancellationToken stop)
+        {
+            try { GateLoop(stop); }
+            catch (OperationCanceledException) { }   // stopped (StopGate): it has already reset the gate
+        }
+        private static void GateLoop(CancellationToken stop)
         {
             while (true)
             {
                 GateJob j; bool wait;
                 lock (GateLock)
                 {
+                    if (stop.IsCancellationRequested) return;   // stopped: StopGate reset the gate, a new worker may run
                     j = GateNext(out wait);
                     if (j == null && !wait) { gateRunning = false; return; }   // a kick starts it again
                     if (j != null) gateNow = j.Kind + " " + j.Root;
                 }
-                if (j == null) { Thread.Sleep(200); continue; }
+                if (j == null) { stop.WaitHandle.WaitOne(200); continue; }
                 ManualResetEventSlim done = new ManualResetEventSlim(false);
-                try { j.Start(() => done.Set()); }
+                j.Stop = stop;   // the stop of the worker that sent it: a backfill's retry is cancelled with it (N6)
+                GateJob jj = j;
+                // State 5: the worker gave up waiting on this answer's copy (below); the copy that ends after that frees the gate.
+                try { j.Start(() => { done.Set(); if (Interlocked.CompareExchange(ref jj.State, 6, 5) == 5) GateUnstuck(jj.Kind + " " + jj.Root); }); }
                 catch (Exception ex) { Log(j.Kind + " request error (" + j.Root + "): " + ex.Message); done.Set(); }
-                bool answered = done.Wait(j.TimeoutMs);
+                bool answered = done.Wait(j.TimeoutMs, stop);
                 if (!answered && Interlocked.CompareExchange(ref j.State, 2, 0) == 0)
                 {
-                    // Still at NinjaTrader: nothing else goes until it answers (X1). Windows queued behind it are answered now
-                    // (their loads go live with no trades and a note, review 4 B1); queued backfills say they wait (S2).
-                    string what = j.Kind + " " + j.Root;
-                    List<GateJob> windows, backfills;
-                    lock (GateLock)
-                    {
-                        gateStuck = what; gateStuckSinceMs = ChartBridgeTime.NowUtcMs();
-                        windows = new List<GateJob>(GateWindows); GateWindows.Clear();
-                        backfills = new List<GateJob>(GateBackfills);
-                    }
-                    try { j.OnTimeout(); } catch (Exception ex) { Log("request timeout error: " + ex.Message); }
-                    Log(StuckNote(what));
-                    foreach (GateJob w in windows.Concat(backfills)) { try { if (w.OnStuck != null) w.OnStuck(what); } catch (Exception ex) { Log("request stuck error: " + ex.Message); } }
+                    GateTimedOut(j);
+                    if (Interlocked.CompareExchange(ref j.State, 3, 2) != 2) GateUnstuck(j.Kind + " " + j.Root);   // answered while it was being marked
                 }
-                else if (!answered) done.Wait();   // the answer claimed it at the limit: its copy is finishing
-                lock (GateLock) gateNow = null;
-                if (j.Kind == "backfill" && answered && BackfillGapMs > 0) Thread.Sleep(BackfillGapMs);
+                else if (!answered && !done.Wait(AnswerCopyMs, stop))
+                {
+                    // The answer claimed it at the limit, but its copy has not ended (review 5 N2): shown as stuck, not hung silently.
+                    Log(j.Kind + " " + j.Root + ": NinjaTrader answered at the time limit, but the answer was not copied within " + (AnswerCopyMs / 1000) + " s more; treated as unanswered");
+                    GateTimedOut(j);
+                    Interlocked.Exchange(ref j.State, 5);
+                    if (done.IsSet && Interlocked.CompareExchange(ref j.State, 6, 5) == 5) GateUnstuck(j.Kind + " " + j.Root);   // it ended meanwhile
+                }
+                lock (GateLock) { if (stop.IsCancellationRequested) return; gateNow = null; }
+                if (j.Kind == "backfill" && answered && BackfillGapMs > 0) stop.WaitHandle.WaitOne(BackfillGapMs);
             }
+        }
+        // A request not answered in time: still at NinjaTrader, so nothing else goes until it answers (X1). Windows queued behind
+        // it are answered now (their loads go live with no trades and a note, review 4 B1); queued backfills say they wait (S2).
+        private static void GateTimedOut(GateJob j)
+        {
+            string what = j.Kind + " " + j.Root;
+            List<GateJob> windows, backfills;
+            lock (GateLock)
+            {
+                gateStuck = what; gateStuckSinceMs = ChartBridgeTime.NowUtcMs();
+                windows = new List<GateJob>(GateWindows); GateWindows.Clear();
+                backfills = new List<GateJob>(GateBackfills);
+            }
+            try { j.OnTimeout(); } catch (Exception ex) { Log("request timeout error: " + ex.Message); }
+            Log(StuckNote(what));
+            foreach (GateJob w in windows.Concat(backfills)) { try { if (w.OnStuck != null) w.OnStuck(what); } catch (Exception ex) { Log("request stuck error: " + ex.Message); } }
         }
         // A given-up request answered at last: its answer is dropped at once (not copied), and the gate goes on.
         private static void GateUnstuck(string what)
@@ -3315,18 +3360,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<GateJob> backfills;
             lock (GateLock) { gateStuck = null; gateStuckSinceMs = -1; backfills = new List<GateJob>(GateBackfills); }
             Log(what + ": NinjaTrader answered after it was given up; not used. Tick requests go out again");
-            foreach (GateJob b in backfills) BackfillWaits(b.Book, null);   // back to "queued"; they run as usual
+            foreach (GateJob b in backfills) BackfillWaits(b.Book, null);   // back to the state they had; they run as usual
             GateKick();
         }
-        // A queued backfill's label while the gate is stuck (review 4 S2): it waits, it is not "building"; null: queued again.
+        // A queued backfill's label while the gate is stuck (review 4 S2; a queued retry too, review 5 S1): it waits, it is not
+        // "building"; null: back to the state it had (queued, or failed once and asked again).
         private static void BackfillWaits(RootBook book, string what)
         {
             if (book == null) return;
             bool changed = false;
             lock (book.Sync)
             {
-                if (what != null && book.BackfillState == "queued") { book.BackfillState = "waiting: NinjaTrader has not answered an earlier tick request (" + what + ")"; changed = true; }
-                else if (what == null && book.BackfillState.StartsWith("waiting:", StringComparison.Ordinal)) { book.BackfillState = "queued"; changed = true; }
+                bool waits = book.BackfillState == "queued" || book.BackfillState.StartsWith("failed once", StringComparison.Ordinal);   // review 5 S1: a retry too
+                if (what != null && waits) { book.BackfillWaitWas = book.BackfillState; book.BackfillState = "waiting: NinjaTrader has not answered an earlier tick request (" + what + ")"; changed = true; }
+                else if (what == null && book.BackfillState.StartsWith("waiting:", StringComparison.Ordinal)) { book.BackfillState = book.BackfillWaitWas ?? "queued"; book.BackfillWaitWas = null; changed = true; }
             }
             if (changed) Task.Run(() => PushProfile(book));
         }
@@ -3438,7 +3485,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // NinjaTrader's thread only the copy; the rest on a worker. On an error or an empty answer it is asked once more after
         // BackfillRetryMs, then given up with a note. The live trades since the table began are joined to its answer by the
         // 0.3.3 seam.
-        private class BackfillAsk { public bool Retry; }
+        private class BackfillAsk { public bool Retry; public CancellationToken Stop; }
         private static void QueueBackfill(RootBook book, Instrument inst, bool retry)
         {
             if (!BackfillOn) return;
@@ -3456,6 +3503,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void RunBackfill(RootBook book, Instrument inst, BackfillAsk ask, GateJob j, Action done)
         {
+            ask.Stop = j.Stop;
             SessionTable table;
             lock (book.Sync)
             {
@@ -3470,7 +3518,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             req0.TradingHours = inst.MasterInstrument.TradingHours;
             req0.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
-                if (!Claim(j)) { try { req.Dispose(); } catch (Exception) { } GateUnstuck(book.Root + " session backfill"); return; }   // timed out first: dropped at once, not copied
+                if (!Claim(j)) { try { req.Dispose(); } catch (Exception) { } if (LateAnswer(j)) GateUnstuck(book.Root + " session backfill"); return; }   // timed out first: dropped at once, not copied
                 Stopwatch sw = Stopwatch.StartNew();
                 RawBars raw = null; int held = 0; string error = null;
                 try
@@ -3521,7 +3569,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                         else { book.BackfillState = "failed: " + why; book.BackfillLive = null; }   // S1: nothing more is kept for it
                     }
                     Log(book.Root + " session backfill failed (" + why + ")" + (retry ? "; asked once more in " + (BackfillRetryMs / 1000) + " s" : "; given up: the volume profile counts from the first live trade"));
-                    if (retry) Task.Delay(BackfillRetryMs).ContinueWith(delegate { QueueBackfill(book, inst, true); }, TaskScheduler.Default);
+                    if (retry)
+                    {
+                        // The token of the worker that sent the ask, not the current one: a failure handled after a stop schedules
+                        // nothing (StopGate cancels it, and the retry's timer with it; review 5 N6).
+                        Task.Delay(BackfillRetryMs, ask.Stop).ContinueWith(delegate { QueueBackfill(book, inst, true); }, CancellationToken.None, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+                    }
                     return;
                 }
                 lock (book.Sync)

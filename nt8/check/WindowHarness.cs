@@ -398,6 +398,11 @@ public static class WindowHarness
         bool hadNq = named.ContainsKey("NQ"), hadEs = named.ContainsKey("ES");
         if (!hadNq) named["NQ"] = NqInst;
         if (!hadEs) named["ES"] = EsInst;
+        // Every stand-in page's SendLoop holds a pool thread while it waits on its queue, and the reconnect storm opens 10 at
+        // once: with Mono's slow thread injection the gate's worker could start seconds late (the storm case failed 2 runs in
+        // 11, and on cb6f127 too under load). Enough threads up front, as on a PC with a few pages; set back after.
+        int minWorkers, minIo; ThreadPool.GetMinThreads(out minWorkers, out minIo);
+        ThreadPool.SetMinThreads(Math.Max(minWorkers, 64), minIo);
         try
         {
             ChartBridgeServer.BackfillGapMs = 0; ChartBridgeServer.BackfillRetryMs = 300; ChartBridgeServer.WindowRetryMs = 400;
@@ -408,6 +413,10 @@ public static class WindowHarness
             WindowCap();
             TimeoutRace();
             Counts();
+            RetryStuck();
+            CopyNeverEnds();
+            AnsweredWhileMarking();
+            StopEndsGate();
             BackfillOrderAndRound2();
             ClosedMarketDrop();
             Windows();
@@ -422,6 +431,8 @@ public static class WindowHarness
             Priv("UnwatchFeed");
             if (!hadNq) named.Remove("NQ");
             if (!hadEs) named.Remove("ES");
+            ChartBridgeServer.StopGate();   // review 5 N6: the gate's worker ends and its retry timers go before the process exits
+            ThreadPool.SetMinThreads(minWorkers, minIo);
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
             BarsRequest.AutoAnswer = was;
             DropClient(client);
@@ -825,6 +836,182 @@ public static class WindowHarness
         {
             DropClient(a); DropClient(b); foreach (ChartBridgeClient c in storm) DropClient(c);
             ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowFirstGuess = 200000; ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 5 S1 (the reviewer's "retrystuck"): a backfill that failed once, whose retry is queued while another request is
+    // stuck, says it waits (not "building"); once NinjaTrader answers the stuck one its retry state is back and the retry runs.
+    static void RetryStuck()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> mnq = Walk(t0, 50, 141, 100), nq = Walk(t0, 50, 142, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0));   // a mid-session start: both want their backfill
+        int retryWas = ChartBridgeServer.BackfillRetryMs, toWas = ChartBridgeServer.BackfillTimeoutMs;
+        ChartBridgeServer.BackfillOn = true; ChartBridgeServer.BackfillStartMs = 0; ChartBridgeServer.BackfillTimeoutMs = 300; ChartBridgeServer.BackfillRetryMs = 800;
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, mnq, 0, 20); LiveOn(NqInst, nq, 0, 20);
+            BarsRequest first = null, other = null;
+            if (!WaitFor(() => (first = Find(m0, r => IsTrades(r) && ByDate(r))) != null, 3000)) { Check(false, "review 5 S1: no backfill went out"); return; }
+            string root = RootOfReq(first);
+            RootBook fb = ChartBridgeServer.BookOf(root, root == "NQ" ? NqInst : inst);
+            first.Answer(null, ErrorCode.Panic);                                                     // fails once: asked again in 0.8 s
+            WaitFor(() => (other = Made(m0).FirstOrDefault(r => IsTrades(r) && ByDate(r) && RootOfReq(r) != root)) != null, 3000);   // never answered: stuck
+            string st = "";
+            bool waits = WaitFor(() => { lock (fb.Sync) st = fb.BackfillState; return st.StartsWith("waiting: NinjaTrader has not answered an earlier tick request (backfill ", StringComparison.Ordinal); }, 4000);
+            Check(other != null && waits && TradesAsked(m0, ByDate) == 2 && Books().Contains("\"backfillsQueued\":1"),
+                "review 5 S1: a backfill that failed once, its retry queued behind a stuck request, says it waits (\"" + st + "\"), not building");
+            if (other == null) return;
+            ChartBridgeServer.BackfillStartMs = int.MaxValue;   // holds the retry at the gate for a moment, so its state can be read
+            other.Answer(new Bars(), ErrorCode.NoError);                                             // at last: dropped, the gate goes on
+            BarsRequest again = null;
+            bool back = WaitFor(() => { lock (fb.Sync) st = fb.BackfillState; return st.StartsWith("failed once", StringComparison.Ordinal); }, 3000);
+            ChartBridgeServer.BackfillStartMs = 0;
+            Check(back && WaitFor(() => (again = Made(m0).Where(r => IsTrades(r) && ByDate(r) && RootOfReq(r) == root).Skip(1).FirstOrDefault()) != null, 3000),
+                "review 5 S1: once NinjaTrader answers, its retry state is back (\"" + st + "\") and the retry goes out");
+            List<Trade> tp = root == "NQ" ? nq : mnq;
+            if (again != null) again.Answer(Answer(tp, 0, 20), ErrorCode.NoError);
+            Check(WaitFor(() => { lock (fb.Sync) return fb.BackfillState == "done"; }, 3000), "review 5 S1: and the retry loads the session");
+        }
+        finally
+        {
+            ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillRetryMs = retryWas; ChartBridgeServer.BackfillTimeoutMs = toWas;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 5 N2: an answer that claims its request but whose copy never ends. After the time limit plus AnswerCopyMs the
+    // gate shows it stuck (one log line), its page goes live, and a load meanwhile says why; when the copy ends at last the
+    // gate is free again and the next window goes.
+    static void CopyNeverEnds()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> tape = Walk(t0, 100, 151, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        int copyWas = ChartBridgeServer.AnswerCopyMs, wtoWas = ChartBridgeServer.WindowTimeoutMs;
+        ChartBridgeServer.AnswerCopyMs = 300; ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 1000;
+        List<string> sa = new List<string>(), sb = new List<string>();
+        ChartBridgeClient a = NewClient(971, sa), b = NewClient(972, sb);
+        Bars held = Answer(tape, 0, 50);
+        held.Hold = new System.Threading.ManualResetEventSlim(false);
+        System.Threading.Tasks.Task copying = null;
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, tape, 0, 50); LiveOn(NqInst, Walk(t0, 20, 152, 100), 0, 20);
+            SubOn(a, "MNQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest w = null;
+            if (!WaitFor(() => (w = Find(m0, IsWin)) != null)) { Check(false, "review 5 N2: no window went out"); return; }
+            copying = System.Threading.Tasks.Task.Run(() => w.Answer(held, ErrorCode.NoError));   // claims it at once; the copy never ends
+            Check(WaitFor(() => Gate().Contains("\"stuck\":\"window MNQ\""), 3000) && WaitFor(() => { lock (sa) return Ready(sa, "1"); }, 3000),
+                "review 5 N2: an answer whose copy never ends: after the limit plus AnswerCopyMs the gate shows it stuck (not hung silently), and its page goes live");
+            SubOn(b, "NQ", "1", 2); AnswerMinutes(m0);
+            Check(WaitFor(() => { lock (sb) return Ready(sb, "1") && sb.Any(x => x.Contains("has not answered an earlier tick request (window MNQ)")); }, 3000) && Made(m0).Count(IsWin) == 1,
+                "review 5 N2: a load meanwhile goes live at once and says why (no request beside it)");
+            held.Hold.Set();
+            if (copying != null) copying.Wait(3000);
+            Check(WaitFor(() => Gate().Contains("\"stuck\":null"), 3000), "review 5 N2: when the copy ends at last, the gate is free again");
+            SubOn(b, "NQ", "2", 2); AnswerMinutes(m0);
+            BarsRequest w2 = null;
+            Check(WaitFor(() => (w2 = Made(m0).Where(IsWin).Skip(1).FirstOrDefault()) != null, 3000), "review 5 N2: and the next window goes");
+            if (w2 != null) w2.Answer(Answer(Walk(t0, 20, 152, 100), 0, 20), ErrorCode.NoError);
+            WaitFor(() => { lock (sb) return Ready(sb, "2"); });
+        }
+        finally
+        {
+            held.Hold.Set();
+            DropClient(a); DropClient(b);
+            ChartBridgeServer.AnswerCopyMs = copyWas; ChartBridgeServer.WindowTimeoutMs = wtoWas; ChartBridgeServer.WindowFirstGuess = 200000;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 5 (its race2 probe, 1 run in 36 under load): the late answer came between the worker's timeout claim and its
+    // marking the gate stuck, freed the gate before it was marked, and the gate stayed stuck for good. Here the answer comes
+    // while the worker marks it (from the window's failure line, on the worker's thread): the gate must end free and the next
+    // window go.
+    static void AnsweredWhileMarking()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> tape = Walk(t0, 100, 171, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        int wtoWas = ChartBridgeServer.WindowTimeoutMs;
+        ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 1000;
+        List<string> sa = new List<string>(), sb = new List<string>();
+        ChartBridgeClient a = NewClient(981, sa), b = NewClient(982, sb);
+        BarsRequest w = null; bool answeredIn = false;
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, tape, 0, 50); LiveOn(NqInst, Walk(t0, 20, 172, 100), 0, 20);
+            NinjaTrader.Code.Output.OnLine = line =>
+            {
+                if (w == null || !line.Contains("MNQ tick window failed (no answer from NinjaTrader")) return;
+                BarsRequest ww = w; w = null;
+                ww.Answer(Answer(tape, 0, 50), ErrorCode.NoError);   // late, while the worker is marking the gate stuck
+                answeredIn = true;
+            };
+            SubOn(a, "MNQ", "1", 2); AnswerMinutes(m0);
+            if (!WaitFor(() => (w = Find(m0, IsWin)) != null)) { Check(false, "review 5: no window went out"); return; }
+            bool answered = WaitFor(() => answeredIn, 3000);
+            NinjaTrader.Code.Output.OnLine = null;
+            Check(answered && WaitFor(() => Gate().Contains("\"stuck\":null"), 3000) && WaitFor(() => { lock (sa) return Ready(sa, "1"); }, 3000),
+                "review 5: an answer that comes while the worker marks the gate stuck frees it once marked (not before), and its page is answered once");
+            SubOn(b, "NQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest w2 = null;
+            Check(WaitFor(() => (w2 = Made(m0).Where(IsWin).Skip(1).FirstOrDefault()) != null, 3000), "review 5: and the next window goes");
+            if (w2 != null) w2.Answer(Answer(Walk(t0, 20, 172, 100), 0, 20), ErrorCode.NoError);
+            WaitFor(() => { lock (sb) return Ready(sb, "1"); });
+            Thread.Sleep(100);
+            lock (sa) Check(sa.Count(x => x.StartsWith("{\"type\":\"ready\"")) == 1, "review 5: the MNQ page got one ready");
+        }
+        finally
+        {
+            NinjaTrader.Code.Output.OnLine = null;
+            DropClient(a); DropClient(b);
+            ChartBridgeServer.WindowTimeoutMs = wtoWas; ChartBridgeServer.WindowFirstGuess = 200000;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 5 N6: stopping ends the gate's worker while it waits on a request (limit 5 min), within its bound, and cancels a
+    // backfill retry still to come (its timer), so nothing of the gate runs on after a stop or at the process's exit. A failure
+    // answered after the stop schedules no retry either (it once took the token made for the next start).
+    static void StopEndsGate()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> mnq = Walk(t0, 50, 161, 100), nq = Walk(t0, 50, 162, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0));
+        int retryWas = ChartBridgeServer.BackfillRetryMs, toWas = ChartBridgeServer.BackfillTimeoutMs;
+        ChartBridgeServer.BackfillOn = true; ChartBridgeServer.BackfillStartMs = 0; ChartBridgeServer.BackfillTimeoutMs = 300000; ChartBridgeServer.BackfillRetryMs = 600;
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, mnq, 0, 20); LiveOn(NqInst, nq, 0, 20);
+            BarsRequest first = null, other = null;
+            if (!WaitFor(() => (first = Find(m0, r => IsTrades(r) && ByDate(r))) != null, 3000)) { Check(false, "review 5 N6: no backfill went out"); return; }
+            first.Answer(null, ErrorCode.Panic);                                                     // fails once: its retry is due in 0.6 s
+            WaitFor(() => (other = Made(m0).Where(r => IsTrades(r) && ByDate(r)).Skip(1).FirstOrDefault()) != null, 3000);   // the worker waits on it
+            System.Threading.Tasks.Task worker = (System.Threading.Tasks.Task)typeof(ChartBridgeServer).GetField("gateTask", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+            bool running = worker != null && !worker.IsCompleted;
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            ChartBridgeServer.StopGate();
+            long ms = sw.ElapsedMilliseconds;
+            int made = MadeCount();
+            if (other != null) other.Answer(null, ErrorCode.Panic);                                 // fails after the stop: no retry
+            Thread.Sleep(1500);
+            Check(other != null && running && worker.IsCompleted && ms < 5000 && MadeCount() == made && Gate().Contains("\"now\":null") && Gate().Contains("\"backfillsQueued\":0"),
+                "review 5 N6: a stop ends the gate's worker waiting on a request (" + ms + " ms, bound 5 s), cancels the backfill retry still to come, and a failure answered after it schedules none (" + (MadeCount() - made) + " requests after)");
+        }
+        finally
+        {
+            ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillRetryMs = retryWas; ChartBridgeServer.BackfillTimeoutMs = toWas;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
         }
     }
 

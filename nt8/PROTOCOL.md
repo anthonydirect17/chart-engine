@@ -552,10 +552,14 @@ no backfill, no minute chart's last-trades request. Meanwhile nothing waits on i
 gets the served window from ChartBridge's memory when there is one (with its gap, if a feed drop left one), else goes live
 at once with no trades and "Tick history failed: NinjaTrader has not answered an earlier tick request (the request) yet;
 tick history is not asked for until it does or NinjaTrader restarts", and its live trades are not held for a request that
-will not be made. A queued backfill waits and says so (the page: "loading this session waits for NinjaTrader, which has not
-answered an earlier tick request"), not "building"; it runs as usual once NinjaTrader answers. Minute charts load as usual.
+will not be made. A queued backfill (a first ask, or a retry after one failure) waits and says so (the page: "loading this
+session waits for NinjaTrader, which has not answered an earlier tick request"), not "building"; once NinjaTrader answers,
+its state is back ("queued", or for a retry "failed once (...), asked again in 60 s") and it runs as usual. An answer that
+claimed its request at the time limit has 30 s more to finish its copy; past that it counts as unanswered (one Output line)
+until the copy ends. Minute charts load as usual.
 Orders and Flatten are never affected. `/diag` `gate.stuck` names the request, `stuckSinceUtcMs` says since when, and a
-waiting backfill's `state` starts "waiting:".
+waiting backfill's `state` starts "waiting:". Stopping ChartBridge (a compile, or closing NinjaTrader) clears the stuck
+request, ends the gate's worker (waited for at most 5 s) and cancels any backfill retry still to come.
 
 **The served window.** Every subscribe with `tickHours` above 0 (a Range or seconds chart, with or without `liveFirst`: a 1.6.x
 page or The Desk's relay gets it too; 0.3.5 never runs 0.3.4's by-date tick load) gets the last `rangeHours` of trades

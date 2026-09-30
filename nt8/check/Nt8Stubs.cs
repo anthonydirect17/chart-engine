@@ -23,7 +23,8 @@ namespace NinjaTrader.Code
     public static class Output
     {
         public static readonly List<string> Lines = new List<string>();
-        public static void Process(string s, NinjaTrader.NinjaScript.PrintTo t) { lock (Lines) Lines.Add(s); Console.WriteLine(s); }
+        public static Action<string> OnLine;   // the harness: sees each line on the thread that writes it
+        public static void Process(string s, NinjaTrader.NinjaScript.PrintTo t) { lock (Lines) Lines.Add(s); Console.WriteLine(s); Action<string> h = OnLine; if (h != null) h(s); }
     }
 }
 namespace NinjaTrader.Core
@@ -174,7 +175,8 @@ namespace NinjaTrader.Data
         public double GetHigh(int i) { return Ohlc[i][1]; }
         public double GetLow(int i) { return Ohlc[i][2]; }
         public double GetClose(int i) { return Ohlc[i][3]; }
-        public long GetVolume(int i) { return Volumes[i]; }
+        public System.Threading.ManualResetEventSlim Hold;   // the harness: a copy that does not end until it is set
+        public long GetVolume(int i) { if (Hold != null) Hold.Wait(); return Volumes[i]; }
         // The bid and ask stamped on each trade of a tick series (0 when the harness sets none).
         public readonly List<double> Bids = new List<double>(), Asks = new List<double>();
         public double GetBid(int i) { return i < Bids.Count ? Bids[i] : 0; }

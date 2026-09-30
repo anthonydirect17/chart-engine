@@ -35,9 +35,16 @@ never ask for quotes).
   restarts. Nothing waits on it: a Range or seconds load, queued or new, gets the served window from memory when there is
   one (with its gap, if a feed drop left one; the gap is asked again only when the ask can go out), else goes live at once
   with no trades and says NinjaTrader has not answered an earlier request; its live trades are not held. Queued backfills
-  say they wait (the profile and VWAP notes, `/diag` state "waiting: ..."), not "building", and run as usual once it
-  answers. An answer and the time limit are decided once (Interlocked), so an answer at the limit never leaves it stuck.
-  `/diag` `gate.stuck` and `stuckSinceUtcMs`. Stopping ChartBridge clears it and the instruments' tables.
+  say they wait (the profile and VWAP notes, `/diag` state "waiting: ..."), not "building", a queued retry too, and run as
+  usual once it answers, a retry with its "failed once" state back (review 5 S1). An answer and the time limit are decided
+  once (Interlocked), so an answer at the limit never leaves it stuck (a late answer that comes while the time limit is
+  being acted on frees the gate once it is marked stuck, not before: review 5's race2 probe caught one run in 36 left
+  stuck for good); an answer that claimed it at the limit has 30 s more
+  to finish its copy, then it is treated as unanswered (one Output line, `gate.stuck` set) until the copy ends (review 5 N2).
+  `/diag` `gate.stuck` and `stuckSinceUtcMs`. Stopping ChartBridge clears it and the instruments' tables, ends the gate's
+  worker (waited for at most 5 s) and cancels any backfill retry still to come (a failure answered after the stop
+  schedules none), so no timer or wait of the gate outlives it
+  (review 5 N6: one harness run in 12 exited with code 1 after ALL PASSED, when Mono's timer thread was aborted at exit).
 - **The session table:** per instrument, the session's volume at each price per half hour of New York time, fed by the live
   trades. Whole when ChartBridge and the feed were up before 18:00, however late the first trade (review 3 S-A). When
   ChartBridge starts after 18:00 (NinjaTrader started, or the add-on recompiled), and only then, ONE backfill of the session
@@ -106,7 +113,9 @@ never ask for quotes).
   no re-ask right after a failure, a feed drop, the text format; review 4's probes: a window queued behind a stuck request,
   later loads while stuck, a gapped window while stuck, backfills waiting then running, a minute page and its last trades
   beside a window, the 500,000 trade cap, an answer racing the time limit (1.5 million trades at 240 to 305 ms of a 300 ms
-  limit), and the requests counted for a mid-session start with two Range pages and a reconnect storm; all on a simulated
+  limit), and the requests counted for a mid-session start with two Range pages and a reconnect storm; review 5's: a retry
+  queued behind a stuck request, an answer whose copy never ends, an answer while the gate is being marked stuck, and a
+  stop while a request is out and a retry is to come; all on a simulated
   clock (review 2 N7). `test/live-first.test.js`:
   `RangeSync` on 240 made-up histories, the VWAP seed, the trim, the profile from rows equal to the profile from every trade
   (Session and RTH, an early close, both DST changes), and the fake bridge's protocol against its tape.
