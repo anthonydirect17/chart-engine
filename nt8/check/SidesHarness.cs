@@ -168,6 +168,12 @@ public static class SidesHarness
             asks == null ? null : asks.Select(x => At(x[0])).ToArray(), asks == null ? null : asks.Select(x => x[1]).ToArray(), asks == null ? 0 : asks.Length,
             null, null, 0, 0.25);
     }
+    static QuoteSeries Thin(double[][] rows) { Bars b = new Bars(); foreach (double[] x in rows) b.Add(At(x[0]), x[1], x[1], x[1], x[1], 1); return QuoteSeries.From(b, DateTime.MinValue); }
+    static BackfillSides JQ(double[][] trades, QuoteSeries bq, QuoteSeries aq)
+    {
+        return ChartBridgeSides.ClassifyBackfill(trades.Select(x => At(x[0])).ToArray(), trades.Select(x => x[1]).ToArray(), trades.Length,
+            bq.Time, bq.Price, bq.Seen, bq.Count, aq.Time, aq.Price, aq.Seen, aq.Count, null, null, 0, 0.25);
+    }
     static string Out(BackfillSides r) { return string.Join(" ", Enumerable.Range(0, r.Trades).Select(i => r.Side[i] + "/" + r.Method[i])); }
     static double[] R(double t, double p) { return new double[] { t, p }; }
 
@@ -242,8 +248,9 @@ public static class SidesHarness
         double[][] rows = { R(0, 100), R(0.1, 100), R(0.2, 100), R(0.3, 100.25), R(0.4, 100.25), R(6, 100.25), R(7, 100.25), R(12.5, 100.25), R(13, 100), R(13.2, 100) };
         foreach (double[] x in rows) raw.Add(At(x[0]), x[1], x[1], x[1], x[1], 7);
         QuoteSeries qs = QuoteSeries.From(raw, At(-1));
-        Check(string.Join(" ", qs.Time.Select(x => ((x - T0).TotalSeconds).ToString("0.#"))) == "0 0.3 6 12.5 13 13.2" && qs.RawRows == 10,
-            "quotes: size-only rows dropped; first of each price, a 5 s heartbeat and the last row kept (" + string.Join(" ", qs.Time.Select(x => ((x - T0).TotalSeconds).ToString("0.#"))) + ")");
+        string kept = string.Join(" ", qs.Time.Select(x => ((x - T0).TotalSeconds).ToString("0.#"))), seen = string.Join(" ", qs.Seen.Select(x => ((x - T0).TotalSeconds).ToString("0.#")));
+        Check(kept == "0 0.3 6 12.5 13" && seen == "0.2 0.4 7 12.5 13.2" && qs.RawRows == 10,
+            "quotes: size-only rows dropped (first of each price and a 5 s heartbeat kept), each kept row remembers its last update (kept " + kept + ", seen " + seen + ")");
         Check(QuoteSeries.From(raw, At(0.25)).RawRows == 7 && QuoteSeries.From(raw, At(0.25)).Time[0] == At(0.3), "quotes: rows before the quote window are skipped");
         // The same sides from the thinned series as from every row.
         double[][] full = Enumerable.Range(0, 400).Select(i => R(i * 0.05, 100 + (i / 7 % 3) * 0.25)).ToArray();
@@ -253,8 +260,37 @@ public static class SidesHarness
         foreach (double[] x in full) fb.Add(At(x[0]), x[1], x[1], x[1], x[1], 3);
         foreach (double[] x in fullA) fa.Add(At(x[0]), x[1], x[1], x[1], x[1], 3);
         QuoteSeries tb = QuoteSeries.From(fb, At(-1)), ta = QuoteSeries.From(fa, At(-1));
-        BackfillSides thin = ChartBridgeSides.ClassifyBackfill(tq.Select(x => At(x[0])).ToArray(), tq.Select(x => x[1]).ToArray(), tq.Length, tb.Time, tb.Price, tb.Count, ta.Time, ta.Price, ta.Count, null, null, 0, 0.25);
+        BackfillSides thin = JQ(tq, tb, ta);
         Check(Out(thin) == Out(J(tq, full, fullA)) && tb.Count < full.Length / 3, "quotes: the thinned series gives the same sides as every row (" + tb.Count + " of " + full.Length + " rows kept)");
+        // Review 2 N1: the thinned series must not move a quote's age at the 60 s stale edge. Bid 100 at 0 s and a size-only
+        // update at 4 s (dropped), the bid moves at 70 s; a trade at 63 s at the bid, up-tick: every row says fresh (a sell by
+        // the quote); the kept row alone said stale (a buy by the tick rule). With Seen it is the same.
+        double[][] nb = { R(0, 100), R(4, 100), R(70, 100.25) }, na = { R(0, 100.25), R(4, 100.25), R(70, 100.5) };
+        double[][] nt2 = { R(1, 99.75), R(63, 100) };
+        Check(Out(JQ(nt2, Thin(nb), Thin(na))) == Out(J(nt2, nb, na)) && Out(J(nt2, nb, na)) == "-1/2 -1/2",
+            "quotes, N1: at the 60 s edge the thinned series gives the same sides as every row (" + Out(JQ(nt2, Thin(nb), Thin(na))) + ")");
+        // And over many made-up histories with gaps around 60 s, size-only runs and trades at every distance: never a different side.
+        int diffs = 0, tradesChecked = 0;
+        for (int seed = 1; seed <= 200; seed++)
+        {
+            Random rnd = new Random(seed);
+            List<double[]> hb = new List<double[]>(), ha = new List<double[]>(), ht = new List<double[]>();
+            double t = 0, bid = 100;
+            for (int i = 0; i < 60; i++)
+            {
+                double gap = rnd.Next(4) == 0 ? 50 + rnd.NextDouble() * 20 : rnd.NextDouble() * 6;   // often near 60 s
+                t += Math.Round(gap, 3);
+                if (rnd.Next(3) == 0) bid += (rnd.Next(2) == 0 ? -0.25 : 0.25);
+                hb.Add(R(t, bid)); ha.Add(R(t, bid + 0.25));
+                double tx = t + Math.Round(rnd.NextDouble() * 70, 3);
+                ht.Add(R(tx, bid + (rnd.Next(3) - 1) * 0.25));
+            }
+            double[][] trs = ht.OrderBy(x => x[0]).ToArray();
+            string a = Out(JQ(trs, Thin(hb.ToArray()), Thin(ha.ToArray()))), b = Out(J(trs, hb.ToArray(), ha.ToArray()));
+            tradesChecked += trs.Length;
+            if (a != b) diffs++;
+        }
+        Check(diffs == 0, "quotes, N1: 200 made-up histories (" + tradesChecked + " trades) around the 60 s edge: thinned and every row agree on every side (" + diffs + " differ)");
         // Cost of the copy on NinjaTrader's answer thread: 1,000,000 Bid rows (about 1 in 6 changes price).
         Bars big = new Bars();
         for (int i = 0; i < 1000000; i++) { double px = 100 + (i / 6 % 8) * 0.25; big.Add(At(i * 0.0288), px, px, px, px, 1 + i % 5); }
@@ -301,16 +337,206 @@ public static class SidesHarness
     public static void Load(Action<bool, string> check, ChartBridgeClient c, Instrument i, List<string> s)
     {
         Check = check; client = c; inst = i; sent = s;
-        try { LoadTick(); LoadSeamDisagree(); LoadOrder(); LoadRefused(); LoadMissing(); LoadMinute(); LoadTimeout(); LoadNoTrades(); LoadWindow(); LoadOutbox(); }
+        try { LoadTick(); LoadSeamDisagree(); LoadOrder(); LoadRefused(); LoadMissing(); LoadMinute(); LoadTimeout(); LoadNoTrades(); LoadWindow(); LoadOutbox(); LoadReset(); }
         finally { Reset(); }
     }
 
     public static void Run(Action<bool, string> check)
     {
         Check = check;
+        typeof(ChartBridgeTime).GetField("et", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
         Pure();
         Live();
         Join();
+        Session();
+        Lanes();
+    }
+
+    // ------------------------------------------------------------ the 18:00 ET session (Anthony's ruling, 2026-09-30)
+    // NinjaTrader time for a New York wall clock time (the stand-in's NinjaTrader zone is the PC's).
+    static DateTime Et(int y, int mo, int d, int h, int mi, double sec)
+    {
+        DateTime wall = new DateTime(y, mo, d, h, mi, 0, DateTimeKind.Unspecified).AddTicks((long)Math.Round(sec * TimeSpan.TicksPerSecond));
+        return DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(TimeZoneInfo.ConvertTimeToUtc(wall, ChartBridgeTime.Eastern), NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo), DateTimeKind.Unspecified);
+    }
+
+    static void Session()
+    {
+        // The review's reopen print: 100.25 at 16:59:59 ET (a buy at the ask), then the 18:00:00 reopening print at 101 with
+        // no fresh quote. Nothing carries across the break: side 0, live, in the backfill, and in the seam continuation.
+        DateTime close = Et(2026, 9, 29, 16, 59, 59), open = Et(2026, 9, 29, 18, 0, 0);
+        LiveSideTagger t = new LiveSideTagger();
+        t.NoteQuote(true, 100, close.AddSeconds(-1)); t.NoteQuote(false, 100.25, close.AddSeconds(-1));
+        int m1, m2;
+        int s1 = t.Tag(100.25, close, 0, 0, out m1), s2 = t.Tag(101, open, 0, 0, out m2);
+        int m3; int s3 = t.Tag(101.25, open.AddSeconds(1), 0, 0, out m3);
+        Check(s1 == 1 && m1 == Q && s2 == 0 && m2 == N && s3 == 1 && m3 == TR,
+            "session, live: the 18:00 ET reopening print with no fresh quote is side 0 (not a buy against the previous session); the next up-tick a buy (" + s2 + "/" + m2 + ", " + s3 + "/" + m3 + ")");
+        BackfillSides r = ChartBridgeSides.ClassifyBackfill(new[] { close, open, open.AddSeconds(1) }, new[] { 100.25, 101.0, 101.25 }, 3,
+            new List<DateTime> { close.AddSeconds(-1) }, new List<double> { 100 }, 1, new List<DateTime> { close.AddSeconds(-1) }, new List<double> { 100.25 }, 1, null, null, 0, 0.25);
+        Check(Out(r) == "1/2 0/0 1/3" && r.SessionStarts == 1, "session, backfill: the same (" + Out(r) + "), live and backfill agree");
+        List<SeamTick> rel = new List<SeamTick> {
+            new SeamTick { Time = open, Price = 101, Volume = 1, Side = 1, Method = TR, Json = "{\"type\":\"tick\",\"p\":101,\"s\":1,\"sm\":3}" },
+            new SeamTick { Time = open.AddSeconds(1), Price = 101, Volume = 1, Side = 1, Method = TR, Json = "{\"type\":\"tick\",\"p\":101,\"s\":1,\"sm\":3}" } };
+        DateTime et2; double ep; int es;
+        List<SeamTick> cont = ChartBridgeSides.ContinueTickRule(rel, close, 100.25, 1, out et2, out ep, out es);
+        Check(cont[0].Side == 0 && cont[0].Method == N && cont[0].Json.EndsWith("\"s\":0,\"sm\":0}") && cont[1].Side == 0 && es == 0,
+            "session, seam: released trades after the break start over too (" + cont[0].Json + " " + cont[1].Json + ")");
+        cont = ChartBridgeSides.ContinueTickRule(rel, open.AddSeconds(-0.5 + 0.5), 100.5, -1, out et2, out ep, out es);
+        Check(cont[0].Side == 1 && cont[1].Side == 1, "session, seam: within one session the chain continues (up from 100.5: a buy)");
+
+        // DST: the boundary is 18:00 New York time on the day, whatever the offset.
+        foreach (int[] d in new[] { new[] { 2026, 3, 8 }, new[] { 2026, 11, 1 }, new[] { 2026, 3, 9 }, new[] { 2026, 11, 2 } })
+        {
+            SessionClock c = new SessionClock();
+            bool a = c.NewSession(Et(d[0], d[1], d[2], 17, 59, 59.999)), b = c.NewSession(Et(d[0], d[1], d[2], 18, 0, 0)), again = c.NewSession(Et(d[0], d[1], d[2], 23, 0, 0));
+            Check(!a && b && !again, "session, DST: " + d[0] + "-" + d[1] + "-" + d[2] + " 17:59:59.999 ET and 18:00:00 ET are different sessions, 23:00 the same as 18:00");
+        }
+        DateTime st, en;
+        SessionClock.Bounds(Et(2026, 3, 8, 12, 0, 0), out st, out en);
+        Check(Math.Abs((en - st).TotalHours - 23) < 0.001 && st == Et(2026, 3, 7, 18, 0, 0), "session, DST: the session holding the spring-forward (2026-03-08) is 23 hours, from 18:00 ET the day before");
+        SessionClock.Bounds(Et(2026, 11, 1, 12, 0, 0), out st, out en);
+        Check(Math.Abs((en - st).TotalHours - 25) < 0.001 && en == Et(2026, 11, 1, 18, 0, 0), "session, DST: the session holding the fall-back (2026-11-01) is 25 hours, to 18:00 ET that day");
+        SessionClock w = new SessionClock();
+        Check(!w.NewSession(Et(2026, 10, 2, 16, 59, 0)) && w.NewSession(Et(2026, 10, 4, 18, 0, 1)), "session: Friday's close and Sunday's 18:00 open are different sessions (a weekend)");
+    }
+
+    // ------------------------------------------------------------ the page's two send lanes (review 2 S1)
+    class TimedSocket : System.Net.WebSockets.WebSocket
+    {
+        public double Us; public volatile bool Hang;
+        public readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
+        public readonly List<string> Got = new List<string>();
+        public readonly List<long> At = new List<long>();
+        public TimedSocket(double us) { Us = us; }
+        public override System.Net.WebSockets.WebSocketCloseStatus? CloseStatus { get { return null; } }
+        public override string CloseStatusDescription { get { return null; } }
+        public override System.Net.WebSockets.WebSocketState State { get { return System.Net.WebSockets.WebSocketState.Open; } }
+        public override string SubProtocol { get { return null; } }
+        public override void Abort() { }
+        public override System.Threading.Tasks.Task CloseAsync(System.Net.WebSockets.WebSocketCloseStatus s, string d, CancellationToken c) { return System.Threading.Tasks.Task.FromResult(0); }
+        public override System.Threading.Tasks.Task CloseOutputAsync(System.Net.WebSockets.WebSocketCloseStatus s, string d, CancellationToken c) { return System.Threading.Tasks.Task.FromResult(0); }
+        public override void Dispose() { }
+        public override System.Threading.Tasks.Task<System.Net.WebSockets.WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> b, CancellationToken c) { return new System.Threading.Tasks.TaskCompletionSource<System.Net.WebSockets.WebSocketReceiveResult>().Task; }
+        public override System.Threading.Tasks.Task SendAsync(ArraySegment<byte> b, System.Net.WebSockets.WebSocketMessageType t, bool end, CancellationToken c)
+        {
+            if (Hang) return new System.Threading.Tasks.TaskCompletionSource<int>().Task;   // a page that stopped reading
+            c.ThrowIfCancellationRequested();
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew(); while (sw.Elapsed.TotalMilliseconds < Us / 1000.0) { }
+            string text = System.Text.Encoding.UTF8.GetString(b.Array, b.Offset, b.Count);
+            lock (Got) { Got.Add(text); At.Add(Clock.ElapsedTicks); }
+            return System.Threading.Tasks.Task.FromResult(0);
+        }
+        public int Count { get { lock (Got) return Got.Count; } }
+        public double MsAt(string has) { lock (Got) { int i = Got.FindIndex(x => x.Contains(has)); return i < 0 ? -1 : At[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency; } }
+    }
+    static int laneId = 70000;
+    static bool ClosedLog(int id) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Any(x => x.Contains("Client " + id + " is not keeping up")); }
+    static string LaneTick(int i) { return "{\"type\":\"tick\",\"root\":\"MNQ\",\"t\":1.000,\"u\":1.000,\"rx\":1.000,\"p\":20000.25,\"v\":1,\"s\":1,\"sm\":2,\"i\":" + i + "}"; }
+
+    // held: trades released at ready (SendAll); us: the page's time per message; rate: live trades a second after ready for
+    // secs; replyAtMs: when an order reply is sent after ready. Returns (closed, reply delay ms, delivered, live delivered in order).
+    static string Race(int held, double us, int rate, double secs, double replyAtMs, out bool closed, out double replyMs)
+    {
+        TimedSocket sock = new TimedSocket(us);
+        int id = Interlocked.Increment(ref laneId);
+        ChartBridgeClient c = new ChartBridgeClient(sock, id);
+        System.Threading.Tasks.Task loop = System.Threading.Tasks.Task.Run(() => c.SendLoop());
+        List<string> burst = new List<string> { "{\"type\":\"ready\",\"root\":\"MNQ\",\"sub\":1}" };
+        for (int i = 0; i < held; i++) burst.Add(LaneTick(i));
+        System.Diagnostics.Stopwatch clock = sock.Clock;
+        double t0 = clock.Elapsed.TotalMilliseconds;
+        c.SendAll(burst);
+        int liveSent = 0;
+        System.Threading.Tasks.Task live = System.Threading.Tasks.Task.Run(() =>
+        {
+            long n = (long)(rate * secs);
+            for (long k = 0; k < n; k++)
+            {
+                double due = t0 + k * 1000.0 / rate;
+                while (clock.Elapsed.TotalMilliseconds < due) Thread.SpinWait(20);
+                c.Send(LaneTick(1000000 + (int)k)); liveSent++;
+            }
+        });
+        while (clock.Elapsed.TotalMilliseconds < t0 + replyAtMs) Thread.SpinWait(20);
+        double sentAt = clock.Elapsed.TotalMilliseconds;
+        c.Send("{\"type\":\"order\",\"id\":\"x\",\"state\":\"working\"}");
+        live.Wait();
+        int want = held + 2 + liveSent;
+        for (int i = 0; i < 3000 && sock.Count < want && !ClosedLog(id); i++) Thread.Sleep(5);
+        closed = ClosedLog(id);
+        double got = sock.MsAt("\"type\":\"order\"");
+        replyMs = got < 0 ? -1 : got - sentAt;
+        List<string> all; lock (sock.Got) all = sock.Got.ToList();
+        List<int> ids = all.Where(x => x.Contains("\"i\":")).Select(x => int.Parse(x.Substring(x.IndexOf("\"i\":") + 4).TrimEnd('}'))).ToList();
+        bool inOrder = ids.Zip(ids.Skip(1), (a, b) => a < b).All(x => x);
+        c.Close();
+        try { loop.Wait(2000); } catch (Exception) { }
+        return "held " + held + ", " + us + " us/message, live " + rate + "/s: closed " + closed + ", reply after " + replyMs.ToString("0.0") + " ms, delivered " + all.Count + " of " + want + ", data in order " + inOrder;
+    }
+
+    static void Lanes()
+    {
+        bool closed; double reply;
+        // The review's rows: an order reply sent during a 20,000-trade release reaches the page within a few ms.
+        foreach (double us in new[] { 20.0, 200.0 })
+        {
+            string r = Race(20000, us, 0, 0, 5, out closed, out reply);
+            Console.WriteLine("     (" + r + ")");
+            Check(!closed && reply >= 0 && reply < 10, "lanes: an order reply sent 5 ms into a 20,000-trade release at " + us + " us a message arrives " + reply.ToString("0.0") + " ms later (at the next message boundary)");
+        }
+        // Live trades keep coming after ready while the release drains; the page keeps up in steady state.
+        foreach (int rate in new[] { 1500, 3000 })
+        {
+            string r = Race(20000, 200, rate, 5, 4500, out closed, out reply);
+            Console.WriteLine("     (" + r + ")");
+            Check(!closed && reply >= 0 && reply < 10 && r.Contains("data in order True"),
+                "lanes: 20,000 released at 200 us a message with " + rate + " live trades/s after ready: not closed, every data message in order, the order reply " + reply.ToString("0.0") + " ms");
+        }
+        // Order within and across lanes: data never goes ahead of an order-lane message sent before it; each lane is FIFO.
+        TimedSocket s = new TimedSocket(50);
+        ChartBridgeClient c = new ChartBridgeClient(s, Interlocked.Increment(ref laneId));
+        List<string> tapped = new List<string>();
+        c.Tap = x => tapped.Add(x);
+        for (int i = 0; i < 200; i++) c.Send(LaneTick(i));
+        c.Send("{\"type\":\"order\",\"id\":\"a\"}"); c.Send("{\"type\":\"exec\",\"id\":\"b\"}"); c.Send("{\"type\":\"position\",\"id\":\"c\"}");
+        c.Send(LaneTick(200));
+        System.Threading.Tasks.Task lp = System.Threading.Tasks.Task.Run(() => c.SendLoop());
+        for (int i = 0; i < 400 && s.Count < 204; i++) Thread.Sleep(5);
+        List<string> got; lock (s.Got) got = s.Got.ToList();
+        int ia = got.FindIndex(x => x.Contains("\"id\":\"a\"")), ib = got.FindIndex(x => x.Contains("\"id\":\"b\"")), ic = got.FindIndex(x => x.Contains("\"id\":\"c\"")), i200 = got.FindIndex(x => x.Contains("\"i\":200}"));
+        Check(got.Count == 204 && ia <= 1 && ib == ia + 1 && ic == ib + 1 && i200 == 203 && tapped.Count == 204,
+            "lanes: order-lane messages go out first, in their own order (order, exec, position at " + ia + ", " + ib + ", " + ic + "); the data sent after them comes after them (" + i200 + "); Tap saw every message in call order");
+        // Send and Close unchanged: after Close, Send does nothing (Tap still sees it, as before).
+        c.Close();
+        int before = s.Count;
+        c.Send("{\"type\":\"order\",\"id\":\"late\"}"); c.Send(LaneTick(999));
+        Thread.Sleep(30);
+        Check(s.Count == before && tapped.Count == 206, "lanes: after Close nothing more is sent (Send returns quietly, as before)");
+        try { lp.Wait(1000); } catch (Exception) { }
+        foreach (string x in new[] { "{\"type\":\"hello\"", "{\"type\":\"trading\"", "{\"type\":\"orders\"", "{\"type\":\"order\"", "{\"type\":\"position\"", "{\"type\":\"reject\"", "{\"type\":\"exec\"", "{\"type\":\"execs\"", "{\"type\":\"status\"", "{\"type\":\"pong\"" })
+            Check(ChartBridgeClient.OrderLane(x + ",\"x\":1}"), "lanes: " + x.Substring(9) + " is in the order lane");
+        foreach (string x in new[] { "{\"type\":\"tick\"", "{\"type\":\"ticks\"", "{\"type\":\"history\"", "{\"type\":\"ready\"", "{\"type\":\"orderx\"", "not json" })
+            Check(!ChartBridgeClient.OrderLane(x + ",\"x\":1}"), "lanes: " + x + " is market data (FIFO as before)");
+
+        // A page that stopped reading is still closed: 5,000 waiting while one send has been stuck for over 2 s.
+        TimedSocket hung = new TimedSocket(0) { Hang = true };
+        int hid = Interlocked.Increment(ref laneId);
+        ChartBridgeClient hc = new ChartBridgeClient(hung, hid);
+        System.Threading.Tasks.Task hl = System.Threading.Tasks.Task.Run(() => hc.SendLoop());
+        for (int i = 0; i < 5100; i++) hc.Send(LaneTick(i));
+        Check(!ClosedLog(hid), "lanes: a stuck page is not closed before its send has hung for 2 s");
+        Thread.Sleep(2300);
+        hc.Send(LaneTick(-1));
+        Check(ClosedLog(hid), "lanes: a page whose send has hung over 2 s with 5,000 waiting is closed, not keeping up");
+        // A page that is draining but slower than the traffic for good is closed at 50,000 waiting.
+        TimedSocket slow = new TimedSocket(300);
+        int sid = Interlocked.Increment(ref laneId);
+        ChartBridgeClient sc = new ChartBridgeClient(slow, sid);
+        System.Threading.Tasks.Task sl = System.Threading.Tasks.Task.Run(() => sc.SendLoop());
+        for (int i = 0; i < 52000; i++) sc.Send(LaneTick(i));   // about 50 ms; the page drains about 170 meanwhile
+        Check(ClosedLog(sid), "lanes: a draining page that falls 50,000 messages behind is closed");
+        hc.Close(); sc.Close();
     }
 
     static void LoadTick()
@@ -601,6 +827,41 @@ public static class SidesHarness
             }
             finally { ChartBridgeClient gone; clients.TryRemove(id, out gone); c.Close(); }
         }
+        Reset();
+    }
+
+    // Review 2 S2: a reset event (IsReset), whatever its type and price, and a Last event without a real price never reach the
+    // order code's last price (ChartBridgeOrders.NoteLast) or the page. The order code itself is unchanged.
+    static double OrdersLast()
+    {
+        var f = typeof(ChartBridgeOrders).GetField("Last", BindingFlags.NonPublic | BindingFlags.Static);
+        var d = (System.Collections.IDictionary)f.GetValue(null);
+        lock (d) return d.Contains("MNQ") ? ((double[])d["MNQ"])[0] : double.NaN;
+    }
+
+    static void LoadReset()
+    {
+        Reset();
+        lock (sent) sent.Clear();
+        int m0 = MadeCount();
+        Priv("Subscribe", client, "MNQ", 5, 0);
+        Made(m0)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+        BarsRequest lt = Made(m0).Skip(1).FirstOrDefault();
+        if (lt != null) lt.Answer(Rows(new[] { 1.0, 25000, 1 }), ErrorCode.NoError);
+        WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0);
+        Trade(2.0, 25000.25, 1);
+        int n = Sent().Count;
+        Check(OrdersLast() == 25000.25, "reset: a real trade reaches the order code's last price");
+        foreach (MarketDataType ty in new[] { MarketDataType.Last, MarketDataType.Bid, MarketDataType.Ask, MarketDataType.DailyVolume })
+            Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = inst, MarketDataType = ty, Price = 0, Volume = 0, Time = At(2.5), IsReset = true });
+        Check(OrdersLast() == 25000.25 && Sent().Count == n, "reset: IsReset events (Last, Bid, Ask, other, price 0) never reach the order code's last price or the page");
+        Check(Diag().Contains("\"quoteResets\":") && NinjaTrader.Code.Output.Lines.Count(x => x.Contains("market data reset (IsReset) on MNQ: type Last, price 0")) == 1
+              && NinjaTrader.Code.Output.Lines.Count(x => x.Contains("market data reset (IsReset)")) == 1, "reset: the first reset is logged once, with its type and price");
+        Trade(3.0, 0, 5);
+        Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = inst, MarketDataType = MarketDataType.Last, Price = -1, Volume = 1, Time = At(3.1) });
+        Check(OrdersLast() == 25000.25 && Sent().Count == n, "reset: a Last event at price 0 or below is not a trade: not to the order code, not to the page");
+        Trade(4.0, 25000.5, 1);
+        Check(OrdersLast() == 25000.5 && Sent().Count == n + 1, "reset: the next real trade goes through as usual");
         Reset();
     }
 

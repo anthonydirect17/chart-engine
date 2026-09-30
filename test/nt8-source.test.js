@@ -498,7 +498,16 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   // review S1: the quote wait is short, none without trades; the release is one outbox entry
   assert.match(code, /public static int QuoteWaitMs = 2500;/);
   assert.match(code, /if \(L\.Waiting <= 0 \|\| \(trades && L\.LastTicks == null\)\)/);
-  assert.match(code, /private readonly BlockingCollection<object> outbox = new BlockingCollection<object>\(new ConcurrentQueue<object>\(\), 5000\);/);
+  // review 2 S1: two lanes; order traffic ahead of queued market data; a draining page is not closed at 5,000
+  assert.match(code, /private readonly BlockingCollection<object> outbox = new BlockingCollection<object>\(new ConcurrentQueue<object>\(\), HardCap\);/);
+  assert.match(code, /public const int SoftCap = 5000, HardCap = 50000;/);
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" \};/);
+  assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) return false;/);
+  // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
+  const md2 = bodyOf(code, 'private static void OnMarketData(');
+  assert.ok(md2.indexOf('if (e.IsReset)') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'IsReset handled before NoteLast');
+  assert.match(md2, /if \(e\.IsReset\)[\s\S]*?ClearQuote\(\);[\s\S]*?return;\s*\}/);
+  assert.ok(md2.indexOf('if (!(e.Price > 0)) return;') >= 0 && md2.indexOf('if (!(e.Price > 0)) return;') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'price checked before NoteLast');
   // tick charts ask for Bid and Ask ticks of the same window; minute charts do not
   const rt = bodyOf(code, 'private static void RequestTicks(');
   assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, true\);\s*RequestQuotes\(L, MarketDataType\.Ask, true\);/);
