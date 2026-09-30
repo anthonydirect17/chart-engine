@@ -215,6 +215,17 @@ try {
     check(await page.evaluate(() => localStorage.getItem('desk:live-account-v1')) === '"DEMO-EVAL"' && await page.evaluate(() => localStorage.getItem('live-account-v1')) === null, 'embed: the account is saved under the prefix only');
     const b = await acct('paneB');
     check(b.value === 'DEMO-EVAL' && b.marks.every(x => x === 'DEMO-EVAL'), 'embed: the other pane with the same prefix follows the pick at once (review 2, N6): ' + JSON.stringify(b));
+    // 1.6.1: the embed is unchanged. It still follows a pick saved by another tab with its prefix (only the trading
+    // page stopped doing that), and it has no order account, no account note and no highlight.
+    const tab2 = await ctx.newPage();
+    await tab2.goto(`http://localhost:${PORT}/test/embed-host.html`);
+    await tab2.evaluate(() => localStorage.setItem('desk:live-account-v1', JSON.stringify('Sim101')));
+    check(!!await until(async () => (await acct('paneA')).value === 'Sim101' && (await acct('paneB')).value === 'Sim101', 'embed: both panes follow another tab\'s pick'), 'embed: both panes follow a pick another tab saved (as in 1.6.0)');
+    check((await acct('paneA')).marks.every(x => x === 'Sim101'), 'embed: and the fills follow');
+    await tab2.evaluate(() => localStorage.setItem('desk:live-account-v1', JSON.stringify('DEMO-EVAL')));
+    await until(async () => (await acct('paneA')).value === 'DEMO-EVAL' && (await acct('paneB')).value === 'DEMO-EVAL', 'embed: back to DEMO-EVAL');
+    await tab2.close();
+    check(await page.evaluate(() => !document.querySelector('[id$="-oAcctNote"], [id$="-oAcct"], .acct-flash')), 'embed: no order account picker, no account note, no highlight');
     await shot(page, 'embed-account-picker.png');
   }
   // B on ES at 5m, A stays MNQ 1m

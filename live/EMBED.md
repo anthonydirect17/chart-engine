@@ -56,7 +56,9 @@ and pin indicators like the standalone page (nothing is sent to ChartBridge for 
 
 Account (1.6.0): a mounted chart has no order bar, so a compact **Account** picker sits in its toolbar; the chart
 marks that account's fills only (there is no "All accounts" any more). It lists the accounts ChartBridge names in
-`hello` and any with fills, those with fills first, and remembers the choice per prefix (`live-account-v1`).
+`hello` and any with fills, those with fills first, and remembers the choice per prefix (`live-account-v1`). A
+mounted chart still follows a pick made by another chart or tab with its prefix (1.6.1 changes this only on the
+trading page, where each tab keeps its own order account).
 
 `mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`:
 `chart` is the chart-engine instance (for reading, such as `chart.bars()`), `element` the `.chart-live` element it
@@ -81,6 +83,11 @@ trade through unchanged. The pane starts at about 20% of the chart's height; the
 focused with Tab and moved with the up and down arrow keys, Page Up, Page Down, Home and End), and its height is saved
 per pane (`live-pane-heights-v1`). The divider is an element inside the chart; nothing new listens on `document` or
 `window`.
+
+The volume profile keeps the last session until the next session's first trade (legend "(Fri)"; RTH through the
+weekday night until the next 9:30), for the ticks the chart has (1.6.1): it asks for no more tick history than 1.6.0,
+so after a weekend load it shows what the view's ticks hold, with a quiet note. The Desk's relay clamps `tickHours` to
+`THEDESK_LIVE_RELAY_TICK_HOURS` (default 8) as before.
 
 | Option | Default | What it does |
 |---|---|---|
