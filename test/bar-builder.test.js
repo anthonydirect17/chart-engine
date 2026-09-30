@@ -186,14 +186,9 @@ test('range backfill reaches a session start: this one, or the one before while 
   assert.equal(BB.sessionStartOf(et(10, 0, 0), S), et(18, 0, 0) - 86400);
   assert.equal(BB.sessionStartOf(et(18, 0, 0), S), et(18, 0, 0));
   assert.equal(BB.rangeHistoryFrom(et(15, 0, 0), S), et(18, 0, 0) - 86400);     // 21 h old: this session
-  assert.equal(BB.rangeTickHours(et(15, 0, 0), S), 23);   // 1.7.0: one hour more, into the previous session
+  assert.equal(BB.rangeTickHours(et(15, 0, 0), S), 22);
   assert.equal(BB.rangeHistoryFrom(et(20, 0, 0), S), et(18, 0, 0) - 86400);     // 2 h old: the day before too
-  assert.equal(BB.rangeTickHours(et(20, 0, 0), S), 28);
-  // 1.7.0 (Anthony, 2026-09-30): a time view asks max(what it asks, 2 hours) with the delta pane on
-  assert.equal(BB.DELTA_TICK_HOURS, 2);
-  assert.deepEqual([60, 300, 900, 3600].map(s => BB.timeTickHours(s, true)), [2, 2, 2, 2], 'minute and hour views with the delta pane: 2 hours');
-  assert.deepEqual([60, 300, 900, 3600].map(s => BB.timeTickHours(s, false)), [0, 0, 0, 0], 'without it: none, as before');
-  assert.deepEqual([15, 30].map(s => [BB.timeTickHours(s, true), BB.timeTickHours(s, false)]), [[8, 8], [8, 8]], 'seconds views: 8 hours either way');
+  assert.equal(BB.rangeTickHours(et(20, 0, 0), S), 27);
   assert.equal(BB.rangeStartIndex([[et(17, 0, 0)], [et(18, 0, 0)], [et(18, 0, 1)]], et(18, 0, 0), S), 1);
   assert.equal(BB.rangeStartIndex([[et(17, 0, 0)], [et(17, 0, 1)]], et(18, 0, 0), S), 0);   // no session start covered
 });

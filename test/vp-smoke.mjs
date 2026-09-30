@@ -276,8 +276,7 @@ try {
     await ctx2.addInitScript(() => {
       try {
         localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' }));
-        // the delta pane off: with it a minute view asks 2 hours of ticks (1.7.0), and this checks a load with none
-        localStorage.setItem('live-indicators-v2', JSON.stringify({ main: { ind: { vp: { on: true, shown: true, pin: true }, delta: { on: false, shown: true, pin: false } } } }));
+        localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } }));
       } catch (e) {}
     });
     const q = await openPage(ctx2, `http://localhost:${br2.port}/live/`);

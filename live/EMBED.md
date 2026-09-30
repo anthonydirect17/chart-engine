@@ -125,14 +125,15 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 
 | Message | Fields and bounds |
 |---|---|
-| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `10` to `34` depending on the time of day (1.7.0: one hour more than the session start, so the backfill reaches into the previous session's last trading hour) (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
+| `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
 | `ping` | `c` (the page clock). Allowed, but the chart does not send it today. |
 
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC
 that has little tick history: Range bars start where the ticks start, and the status line says "Range bars start
 at <time> ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from
-NinjaTrader's." The delta pane (1.7.0) then counts that session from its first complete bar and labels it with the
-exact start ("from 18:05:00.3 ET, not 18:00"); it never takes a capped backfill as the whole session. A relay that refuses the subscribe leaves the chart on LOADING (no `history` or `ready` arrives).
+NinjaTrader's." The delta pane (1.7.0) counts only trades whose side was measured (live trades, and backfill trades in
+ChartBridge's quote window), so a capped backfill changes it only when that window reaches past the cap; it labels a
+session counted from later than 18:00 with the start ("since 18:05 ET"). A relay that refuses the subscribe leaves the chart on LOADING (no `history` or `ready` arrives).
 
 ## Read-only guarantee
 

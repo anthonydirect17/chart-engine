@@ -252,6 +252,21 @@ class TickStore {
   side(i) { return codeSide(this._code(i)); }
   /** How its side was found: 0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule. */
   method(i) { return codeMethod(this._code(i)); }
+  /**
+   * The index of the first trade in [from, to) whose side was measured (1.7.0, round 4): method 1 (the aggressor flag) or
+   * 2 (the prevailing bid or ask), never the tick rule. ChartBridge 0.3.4.1 asks NinjaTrader for historical quotes only
+   * for its last `quoteHours` of the backfill (0 by default: none), and the trades before that get tick-rule sides, so
+   * the backfill's measured window starts here. Returns `to` when there is none. Reads the side bytes directly.
+   */
+  firstMeasured(from, to) {
+    const stop = Math.min(this.length, to === undefined ? this.length : to);
+    for (let i = Math.max(0, from || 0); i < stop;) {
+      const j = i + this.start, sd = this.sides[j >>> SHIFT];
+      const end = Math.min(stop, i + BLOCK - (j & MASK));
+      for (let m = j & MASK; i < end; i++, m++) { const c = sd[m]; if (c >= 4 && c <= 9) return i; }   // codes 1 + (s + 1) + 3 * sm, sm 1 or 2
+    }
+    return stop;
+  }
   /** The trade at i as [t, p, v] (a new array; for tests and rare use, not in loops). */
   at(i) { return i >= 0 && i < this.length ? [this._get(i, 0), this._get(i, 1), this._get(i, 2)] : undefined; }
   /** Drop the oldest n trades. */
@@ -315,18 +330,7 @@ function rangeHistoryFrom(now, s) {
   const cur = sessionStartOf(now, s);
   return now - cur < YOUNG_SESSION ? cur - DAY : cur;
 }
-/* One hour more than the session start needs (1.7.0): the request then starts before 17:00 ET, in the previous
-   session's last trading hour, not in the 17:00 to 18:00 break, so the backfill holds a trade from before 18:00 and the
-   delta pane can prove the session whole (live.js, deltaCoveredFrom). Without it every weekday load was "from 18:00:00.4". */
-function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 2); }
-/*
- * The tickHours a time view asks for (1.7.0, Anthony's ruling 2026-09-30): seconds bars are built from ticks (8 hours);
- * minute and hour views need none for their bars, but with the delta pane on they ask DELTA_TICK_HOURS (2), so trading
- * after hours has its delta: max(what the view asks, 2 hours). The cumulative still resets at 18:00 ET; when the 2 hours
- * do not reach back to the session start, the page labels it "from HH:MM" (live.js, deltaCoverage).
- */
-const DELTA_TICK_HOURS = 2;
-function timeTickHours(seconds, delta) { return Math.max(seconds < 60 ? 8 : 0, delta ? DELTA_TICK_HOURS : 0); }
+function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 1); }
 function rangeStartIndex(ticks, from, s) {
   for (let i = 0; i < ticks.length; i++) if (sessionStartOf(timeAt(ticks, i), s) >= from) return i;
   return 0;
@@ -351,49 +355,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-/*
- * minuteCover (1.7.0, review 2 S2): from when a TickStore provably holds every trade, by NinjaTrader's own minute history,
- * which comes apart from its tick history. `minutes` is { t, v }: NinjaTrader's complete history minutes (start times and
- * volumes, oldest first; never the forming minute, which ChartBridge may rebuild from the same ticks).
- *   - m, the minute of the store's first trade: when the store's trades in [m, m + 60) add up to that minute's volume
- *     exactly, the store holds every trade of it (none before the first one is missing), so it is whole from m;
- *   - when m is its session's start (18:00 ET) and, in addition, the minute history holds no bar in the hour before it
- *     (the 17:00 to 18:00 break, a weekend or a holiday: the market was closed) and reaches back past that hour, the
- *     session is whole from its start. A Monday's session opening Sunday 18:00 is proved this way, and so is a minute
- *     view's 2 hours of ticks at 19:30; without the closed hour the proof does not count a session whole.
- * Returns { from, code }: `from` the time from which the store is whole (null when nothing is proved), `code` 'open'
- * (the session is whole), 'minute' (from m), 'bar' (no complete history minute at m), 'volume' (the volumes differ),
- * 'closed' (m is 18:00 but the history shows trades in the hour before it, or does not reach back past it), 'empty'.
- */
-function minuteCover(ticks, minutes, s) {
-  const n = ticks.length;
-  if (!n || !minutes || !minutes.t.length) return { from: null, code: 'empty' };
-  const t0 = timeAt(ticks, 0), m = Math.floor(t0 / 60) * 60, mt = minutes.t;
-  let lo = 0, hi = mt.length;                                  // the first minute at or after m
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (mt[mid] < m) lo = mid + 1; else hi = mid; }
-  if (lo >= mt.length || mt[lo] !== m || !(minutes.v[lo] > 0)) return { from: null, code: 'bar' };
-  let vol = 0;
-  for (let i = 0; i < n; i++) {
-    const t = timeAt(ticks, i);
-    if (t >= m + 60) break;
-    if (t >= m) vol += typeof ticks.volume === 'function' ? ticks.volume(i) : ticks[i][2] || 0;
-  }
-  if (vol !== minutes.v[lo]) return { from: null, code: 'volume' };
-  const start = sessionStartOf(t0, s);
-  if (m !== start) return { from: m, code: 'minute' };
-  // the minute before the open: none in the hour before it, and the history reaches back past that hour
-  const prev = lo - 1;
-  if (prev < 0 || mt[prev] >= start - 3600) return { from: null, code: 'closed' };
-  return { from: start, code: 'open' };
-}
-/* Whether NinjaTrader's minute history has a bar starting in [from, to): trades the tick history should have held. */
-function minutesBetween(minutes, from, to) {
-  if (!minutes || !(from < to)) return false;
-  const mt = minutes.t;
-  let lo = 0, hi = mt.length;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (mt[mid] < from) lo = mid + 1; else hi = mid; }
-  return lo < mt.length && mt[lo] < to;
-}
-
-return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, DELTA_TICK_HOURS, timeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, minuteCover, minutesBetween };
+return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
 });

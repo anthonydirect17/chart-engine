@@ -172,7 +172,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   while it is shown. Kept between 8% and 60%, and never under 48 px for the pane or 120 px for the plot. Inside the pane: the RTH shading, time
   grid and session dividers as in the plot, value grid lines in the grid color, the zero line in the divider color, a
   title at the top left on the legend ground ("CUMULATIVE DELTA" 600 10px Condensed caps in the axis text color, the
-  value in 500 11px mono, then "from 18:37:16.6 ET, not 18:00: ..." in 500 10px Condensed when the session counts from later: the first counted
+  value in 500 11px mono, then "since 10:04 ET (page opened)" in 500 10px Condensed when the session counts from later than 18:00: the first counted
   bar's exact start, HH:MM on the minute, else HH:MM:SS, and tenths when not on the second);
   on its axis round values (400 11px mono, "+10,000", "-5,000", "0") and the newest bar's value in a tag in the candle
   color, the pointer's value in the crosshair tag. The value scale fits the candles in view (12% free at the top and

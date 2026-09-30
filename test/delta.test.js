@@ -211,30 +211,21 @@ test('TickStore: older trades put in front through _addBlockFront and _put keep 
   assert.deepEqual([st.time(st.length - 1), st.side(st.length - 1)], [169999, side(169999)]);
 });
 
-test('minuteCover: NinjaTrader\'s minute history proves a Monday\'s Sunday open and a minute\'s start; anything else proves nothing (review 2 S2)', () => {
-  const sun18 = et(2026, 9, 27, 18, 0), fri = et(2026, 9, 25, 16, 59);
-  const trades = (t0, n, v) => Array.from({ length: n }, (_, i) => [t0 + i * 0.5, 100, v]);
-  // the minute history: Friday up to the 17:00 close, then Sunday from 18:00; the ticks from the open, 60 trades of 2 in its first minute
-  const mins = (extra) => { const t = [fri - 60, fri, sun18, sun18 + 60].concat(extra || []).sort((a, b) => a - b); return { t, v: t.map(x => x === sun18 ? 120 : 50) }; };
-  const open = trades(sun18 + 0.25, 200, 2);                       // 120 trades in the first minute: 240 contracts
-  const m240 = { t: [fri - 60, fri, sun18, sun18 + 60], v: [50, 50, 240, 50] };
-  assert.deepEqual(BB.minuteCover(open, m240, S18), { from: sun18, code: 'open' }, 'the first minute adds up and the market was closed before it: whole from 18:00');
-  const st = new BB.TickStore(); st.pushAll(open.map(x => x.concat(1, 2)));
-  assert.deepEqual(BB.minuteCover(st, m240, S18), { from: sun18, code: 'open' }, 'the same from a TickStore');
-  assert.equal(BB.minuteCover(open, { t: m240.t, v: [50, 50, 238, 50] }, S18).code, 'volume', 'two contracts short: nothing proved');
-  assert.equal(BB.minuteCover(open, { t: [sun18 - 1800, sun18, sun18 + 60], v: [5, 240, 50] }, S18).code, 'closed', 'a bar at 17:30: the market was not closed, not whole');
-  assert.equal(BB.minuteCover(open, { t: [sun18 - 600, sun18, sun18 + 60], v: [5, 240, 50] }, S18).code, 'closed');
-  assert.equal(BB.minuteCover(open, { t: [sun18, sun18 + 60], v: [240, 50] }, S18).code, 'closed', 'a history that does not reach back past the closed hour proves nothing');
-  assert.equal(BB.minuteCover(open, { t: [fri, sun18 + 60], v: [50, 50] }, S18).code, 'bar', 'no 18:00 minute in the history');
-  assert.equal(mins().t.length, 4);
-  // mid-session: a store from 20:00:00.0 whose first minute adds up is whole from 20:00; one from 20:00:30 is not
-  const t20 = et(2026, 9, 29, 20, 0), m20 = { t: [t20 - 60, t20, t20 + 60], v: [10, 60, 10] };
-  assert.deepEqual(BB.minuteCover(trades(t20, 30, 2), m20, S18), { from: t20, code: 'minute' });
-  assert.equal(BB.minuteCover(trades(t20 + 30, 20, 2), m20, S18).code, 'volume', 'half the minute: its volume falls short');
-  assert.equal(BB.minuteCover([], m20, S18).code, 'empty');
-  assert.equal(BB.minutesBetween(m20, t20 - 3600, t20), true);
-  assert.equal(BB.minutesBetween(m20, t20 - 3600, t20 - 60), false);
-  assert.equal(BB.minutesBetween(null, 0, 1), false);
+test('TickStore.firstMeasured: the first trade whose side came from the quote or the aggressor flag, never the tick rule (round 4)', () => {
+  const st = new BB.TickStore();
+  // ChartBridge 0.3.4.1 with quoteHours 1: tick-rule sides (sm 3) before its quote window, measured ones (sm 2) in it
+  for (let i = 0; i < 140000; i++) st.push(i, 100, 1, i % 2 ? 1 : -1, i <= 100000 ? 3 : i % 7 === 0 ? 3 : 2);
+  assert.equal(st.firstMeasured(0), 100001, 'the quote window starts at its first measured trade (100,000 has sm 3)');
+  assert.equal(st.firstMeasured(0, 90000), 90000, 'none in the range: its end');
+  assert.equal(st.firstMeasured(120000), 120000);
+  assert.equal(st.firstMeasured(119994), 119995, 'a tick-rule trade between the quotes is skipped');
+  st.dropFirst(70000);
+  assert.equal(st.firstMeasured(0), 30001, 'after a trim, by index as before');
+  const none = new BB.TickStore();
+  none.pushAll([[1, 1, 1, 0, 0], [2, 1, 1, 1, 3], [3, 1, 1], [4, 1, 1, -1, 3]]);
+  assert.equal(none.firstMeasured(0), 4, 'quoteHours 0: no measured trade in the backfill (unknown, tick rule, no side)');
+  const agg = new BB.TickStore(); agg.pushAll([[1, 1, 1, 1, 3], [2, 1, 1, -1, 1]]);
+  assert.equal(agg.firstMeasured(0), 1, 'the aggressor flag (sm 1) is measured');
 });
 
 /* The page's path (live/live.js): the backfill into the store, the delta built from it at ready (with the range bars in

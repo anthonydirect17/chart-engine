@@ -50,9 +50,10 @@
 // tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
 // quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
 // previous side by the tick rule (sm 3), the first is unknown (0, 0). Sample data, not a real classification.
-// Volumes (1.7.0, review 2): a minute's trades in the tick history add up to that minute's volume in the minute history,
-// as NinjaTrader's do (the delta pane proves a session's open from it); a minute with fewer contracts than trades gets its
-// volume raised to one a trade. Not with --tick-rate (its padded trades keep the older rounding).
+// --quote-hours=N (ChartBridge 0.3.4.1's config.txt quoteHours): only the backfill's last N hours have measured sides
+// (sm 2); every trade before them gets a tick-rule side (sm 3), as when NinjaTrader is asked for no historical quotes
+// there. 0 is 0.3.4.1's default (no measured side in the backfill); without the flag, every backfill trade is measured
+// like 0.3.4's (its quote history covered the whole window).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -102,6 +103,7 @@ const OWN = 'http://localhost:' + PORT;
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
 const PC_CLOCK_OFFSET = flagValue('pc-clock-offset') !== '' ? +flagValue('pc-clock-offset') : CLOCK_OFFSET;
 const CME_HOURS = !!flag('cme-hours');
+const QUOTE_HOURS = flagValue('quote-hours') !== '' ? +flagValue('quote-hours') : null;
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
 /* CME closed (Globex equity futures) at exchange time t (New York wall clock as bar-time seconds): 17:00 to 18:00 every
    day, Friday 17:00 to Sunday 18:00. */
@@ -129,12 +131,12 @@ function makeData(rootSym) {
   let bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
   if (CME_HOURS) bars = bars.filter(b => !cmeClosed(b.t));
-  // at least one contract a trade, so the ticks can add up to the minute (ticksFrom walks one tick at a time)
-  if (!TICK_RATE) for (const b of bars) { const steps = 1 + Math.round((Math.abs(b.o - (b.c >= b.o ? b.l : b.h)) + (b.h - b.l) + Math.abs(b.c - (b.c >= b.o ? b.h : b.l))) / 0.25); if (b.v < steps) b.v = steps; }
   return bars;
 }
 function ticksFrom(bars, hours) {
   const out = [], from = bars[bars.length - 1].t - hours * 3600;
+  const quoteFrom = QUOTE_HOURS === null ? -Infinity : bars[bars.length - 1].t + 60 - QUOTE_HOURS * 3600;
+  const nowT = etNow();                                  // no trade after now (the forming minute's walk used to run on to :59.9)
   let seed = 7;
   const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
   const stepTicks = () => { if (!TICK_GAPS) return 1; const r = rnd(); return r < 0.8 ? 1 : r < 0.97 ? 2 + Math.floor(rnd() * 2) : 8 + Math.floor(rnd() * 9); };
@@ -149,10 +151,15 @@ function ticksFrom(bars, hours) {
       while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
-    const n = prices.length, v = Math.max(1, Math.round(b.v / n)), each = Math.floor(b.v / n), more = b.v - each * n;
+    const v = Math.max(1, Math.round(b.v / prices.length));
     prices.forEach((p, i) => {
-      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, TICK_RATE ? v : each + (i < more ? 1 : 0)];   // the minute's volume exactly (see the header)
-      if (SIDES) { const prev = out.length ? out[out.length - 1] : undefined; row.push(...sideOf(p, prev && prev[1], prev && prev[3])); }
+      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, v];
+      if (row[0] > nowT) return;
+      if (SIDES) {
+        const prev = out.length ? out[out.length - 1] : undefined, sd = sideOf(p, prev && prev[1], prev && prev[3]);
+        if (sd[1] === 2 && row[0] < quoteFrom) sd[1] = 3;          // before the quote window: the same side, by the tick rule
+        row.push(...sd);
+      }
       out.push(row);
     });
   }
@@ -253,8 +260,10 @@ function subscribe(c, m) {
     send(c, { type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length });
   }
   const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours), key = r + '|' + hours;
-  const ticks = TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
-  for (let i = 0; i < ticks.length || i === 0; i += 20000) {
+  // tickHours 0 (minute views): no tick backfill at all, as ChartBridge (its seam trades are never sent; 1.7.0 round 4:
+  // the fake used to send the forming minute's trades)
+  const ticks = m.tickHours === 0 ? null : TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
+  for (let i = 0; ticks && (i < ticks.length || i === 0); i += 20000) {
     send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
     if (!ticks.length) break;
   }

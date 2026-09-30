@@ -1253,9 +1253,10 @@ function create(container, options) {
     const lses = lb ? delta.sessionOf(lb) : null;
     const title = pane.mode === 'bar' ? 'Bar delta' : 'Cumulative delta';
     const val = !show ? '' : lb ? fmtSigned(pane.mode === 'bar' ? lb.c - lb.o : lb.c, 0) : '-';
-    const why = pane.reason ? ': ' + pane.reason : '';
-    const since = !show ? '' : !delta.bars.length ? 'starts with the next full bar' + why
-      : pane.mode !== 'bar' && lses && lses.partial ? 'from ' + fmtExact(lses.from) + ' ET, not ' + fmtHM(o.session.start || 0) + why : '';
+    // a session counted from later than its start (1.7.0, round 4): "since 10:04 ET", and "(page opened)" when the page's
+    // opening is why (setDeltaView reason)
+    const since = !show ? '' : !delta.bars.length ? 'starts with the next full bar'
+      : pane.mode !== 'bar' && lses && lses.partial ? 'since ' + fmtExact(lses.from) + ' ET' + (pane.reason ? ' (' + pane.reason + ')' : '') : '';
     pane.title = [title, val, since, pane.note].filter(Boolean).join(' ');
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     // text widths kept per font and text (the title and the start rarely change; the value's digits are few)
@@ -2029,8 +2030,8 @@ function create(container, options) {
     /**
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
      * share of the chart's height, PANE_RATIO_MIN to PANE_RATIO_MAX; about 20% by default), note (drawn instead of any
-     * delta, '' for none), reason (why a session may count from later than its start, added to the title after "from
-     * 21:40 ET, not 18:00") }. Only the fields given change.
+     * delta, '' for none), reason (why a session counts from later than its start, in brackets after "since 21:40 ET",
+     * for example 'page opened') }. Only the fields given change.
      */
     setDeltaView(v) {
       if (!v) return;
@@ -2514,7 +2515,7 @@ class VolumeProfile {
  * start of the tick history, or 'first': from the first trade the core is given, for a page with only live trades).
  * Trades of a bar that started before it are left out (counted in `uncovered`), so a bar is either complete or not
  * there, and a session that started before it begins at 0 on its first complete bar: `partial` on its session, with
- * `from`, the time it counts from (the chart then says "Cumulative from 21:40 ET, not 18:00").
+ * `from`, the time it counts from (the chart then says "Cumulative delta +1,234 since 21:40 ET").
  *
  * Fed like the volume profile: at `ready` from the page's TickStore (TickStore.feedSides, or with a range bar builder
  * beside it), then each live trade right after the store's push, so it holds exactly what the store holds. `add` is

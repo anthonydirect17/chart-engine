@@ -700,27 +700,17 @@ function start(container, opt, PAGE) {
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
     lv: [], ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
-    // the delta pane's coverage (1.7.0, review 2): NinjaTrader's complete history minutes { t, v } (minuteCover), the
-    // number of tick backfill trades (the store's trades before the first live one), how far
-    // the data's clock runs ahead of this PC's (seconds, a lower bound from the live ticks, and the whole seconds the
-    // current delta was built with), the coverage the current delta was built with ({ from, by, why }), and two hooks
-    // for live-first (PR #8): the older history still loading, and the first recent trade after a reported gap
-    minutes: null, backfill: 0, ahead: -Infinity, aheadUsed: 0, deltaCov: null, historyLoading: false, historyGapFrom: null };
+    // the delta pane's window (1.7.0): the number of tick backfill trades (the store's trades before the first live one),
+    // how far the data's clock runs ahead of this PC's (seconds, a lower bound from the live ticks, and the whole seconds
+    // the current delta was built with), the window the current delta was built with ({ from, by, why }), and for
+    // live-first (PR #8) the first recent trade after a reported gap
+    backfill: 0, ahead: -Infinity, aheadUsed: 0, deltaCov: null, historyGapFrom: null };
   let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
-  /*
-   * Minute and hour views need no tick history for their bars (a fast load). With the delta pane on the chart (shown or
-   * hidden: its delta is kept while hidden, review S5) they ask for 2 hours of ticks (Anthony, 2026-09-30:
-   * max(what the view asks, 2 hours), BB.timeTickHours), so after-hours trading has its delta. The cumulative still
-   * resets at 18:00 ET: whole from 18:00 when the 2 hours reach back past the session start (proved by the ticks and
-   * NinjaTrader's minute history, deltaCoverage), else labelled "from HH:MM". Not asked of a ChartBridge that sends no
-   * sides (no delta there). Seconds views ask 8 hours as before, Range its sessions.
-   */
-  const deltaTicks = () => IS.ind.delta.on && bridgeSides() !== false;
-  const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : BB.timeTickHours(TF[S.tf].sec, deltaTicks());
-  const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed)
-    : D.tickHours < BB.timeTickHours(TF[S.tf].sec, deltaTicks());
+  // The delta pane loads nothing of its own (Anthony, round 4): every view asks for the ticks it asked for before 1.7.0.
+  const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
+  const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -743,7 +733,7 @@ function start(container, opt, PAGE) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
-    D.minutes = null; D.backfill = 0; D.ahead = -Infinity; D.aheadUsed = 0; D.deltaCov = null; D.historyLoading = false; D.historyGapFrom = null;
+    D.backfill = 0; D.ahead = -Infinity; D.aheadUsed = 0; D.deltaCov = null; D.historyGapFrom = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
@@ -903,8 +893,9 @@ function start(container, opt, PAGE) {
    * the trades the store holds and the bars the chart shows, with no rebuild per trade. Hidden, there is no core.
    * ChartBridge 0.3.3 or older sends no sides: the pane draws nothing but "Delta needs ChartBridge 0.3.4 on this PC".
    * Whether a load has sides is read from its first trade (backfill or live); before any trade, from hello's version.
-   * The cumulative is honest only from the moment the page has every trade (deltaCoverage): a session that started
-   * before it counts from its first complete bar, and the pane's title and the legend say from when (and the pane why).
+   * It counts only trades with a measured side, from the start of that window (deltaCoverage): a session that started
+   * before it counts from its first complete bar, and the pane's title and the legend say since when ("since 10:04 ET
+   * (page opened)").
    * Nothing is added to the status line, so the chart's height stays as in 1.6.0 on every view.
    */
   const OLD_BRIDGE = 'Delta needs ChartBridge 0.3.4 on this PC';
@@ -915,49 +906,38 @@ function start(container, opt, PAGE) {
     return m ? (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 3004 : null;
   }
   /*
-   * From when the page provably holds every trade, for the delta (review B1, S1, S3; review 2 S1, S2: by construction,
-   * nothing guessed), and why it is later than a session's 18:00 start when it is:
-   *   - the store: just after its first trade t0 (the tick backfill is one run up to ChartBridge's seam, then every live
-   *     trade; another trade of the same instant, or of the same bar, before it may be missing), or earlier when
-   *     NinjaTrader's own minute history proves it (BB.minuteCover): the store's trades in t0's minute add up to that
-   *     minute's volume, so it is whole from that minute; and when that minute is 18:00 and the hour before it has no
-   *     minute bar (the market was closed: a Monday's Sunday open, a holiday, a minute view's 2 hours at 19:30), whole
-   *     from the session start. A store with a trade from before 18:00 is whole as before. Once the page has dropped its
-   *     oldest trades only its first trade counts. live-first (PR #8): after a reported history gap, only from the first
-   *     recent trade (D.historyGapFrom);
-   *   - the moment the page went live (D.liveFrom, this PC's clock at `ready`): every trade after it came in live, so a
-   *     session that starts after it is whole, trade or no trade before it (a minute view opened on Sunday afternoon or in
-   *     the 17:00 to 18:00 break). This PC's clock can run behind the data's: every live tick carries the data's UTC time
-   *     `u` and ChartBridge's receive time `rx` (PROTOCOL, tick), so D.ahead is how far the data's clock is ahead of this
-   *     page's (u minus this page's clock at receipt, or u minus rx, whichever is more: each is at most the true offset,
-   *     since a tick is never received before it happened). The moment counts LIVE_MARGIN (5 s) later, or the offset
-   *     plus CLOCK_SLACK (2 s, for the delivery time) when that is more; when a live tick shows the offset larger than
-   *     the delta was built with, the delta is built again with the later, honest start (onTick), and the label says
-   *     the PC's clock is behind;
-   *   - whichever is earlier.
-   * A session that started before that moment counts from 0 on its first complete bar, labelled with that bar's exact
-   * start ("from 18:05:00.3 ET, not 18:00") and the reason, never silently.
+   * The delta's window (1.7.0; Anthony, round 4: "Delta is a tool I use WHILE trading, not for historical look backs"):
+   * only trades whose side was measured count. Those are the live trades, and the backfill trades inside ChartBridge's
+   * quote window: ChartBridge 0.3.4.1 asks NinjaTrader for historical quotes only for its last `quoteHours` of the
+   * backfill (0 by default), and gives every trade before that a tick-rule side (`sm` 3), which is never counted. So:
+   *   - the backfill's measured window starts at its first trade with a measured side (`sm` 1 or 2,
+   *     TickStore.firstMeasured); from just after it every trade is held (the backfill is one run up to ChartBridge's
+   *     seam, then every live trade) and counted, labelled "since HH:MM ET";
+   *   - with none (quoteHours 0, the default), the window opens with the page: from just after the first live trade, or
+   *     from the moment the page went live (this PC's clock at `ready`) when that is earlier, so a page open across 18:00
+   *     in the break counts the new session from 18:00. That moment counts LIVE_MARGIN (5 s) later, or the PC clock's lag
+   *     behind the data's plus CLOCK_SLACK (2 s) when that is more: each live tick's `u` (the data's UTC time) minus this
+   *     page's clock, or minus `rx`, is at most that lag, and a tick showing more lag than the delta was built with
+   *     builds it again with the later start (onTick). Labelled "since HH:MM ET (page opened)";
+   *   - after a trim, not before the store's first trade; live-first (PR #8): not before the first recent trade after a
+   *     reported history gap.
+   * Bars that started before the window are left out whole; each session counts from 0 at 18:00 ET, or from its first
+   * complete bar in the window.
    */
   const LIVE_MARGIN = 5, CLOCK_SLACK = 2;
   const liveLate = () => Math.max(LIVE_MARGIN, D.aheadUsed + CLOCK_SLACK);
   function deltaCoverage() {
     const live = D.liveFrom === null ? Infinity : D.liveFrom + liveLate();
-    const liveWhy = D.aheadUsed + CLOCK_SLACK > LIVE_MARGIN ? 'this PC\'s clock is ' + D.aheadUsed + ' s behind the exchange\'s'
-      : D.tickHours > 0 ? 'no tick history came back' : 'this view loads no tick history';
-    if (!D.ticks.length) return { from: live, by: 'live', why: liveWhy };
-    const t0 = D.ticks.time(0);
-    if (!D.backfill && !D.trimmed) return live < t0 + 1e-6 ? { from: live, by: 'live', why: liveWhy } : { from: t0 + 1e-6, by: 'store', why: liveWhy };   // live trades only
-    if (D.trimmed) return { from: t0 + 1e-6, by: 'store', why: 'the oldest trades were dropped' };
-    const proof = BB.minuteCover(D.ticks, D.minutes, SESSION);
-    let from = proof.from !== null ? Math.min(proof.from, t0 + 1e-6) : t0 + 1e-6, why;
-    if (D.historyGapFrom !== null && D.historyGapFrom + 1e-6 > from) {
-      from = D.historyGapFrom + 1e-6; why = 'the older history has a gap';
-    } else if (BB.minutesBetween(D.minutes, D.tickFrom, Math.floor(t0 / 60) * 60)) why = 'the tick history starts later';   // NinjaTrader's minutes traded where its ticks have none
-    else if (D.tickHours > 0 && D.tickFrom >= BB.sessionStartOf(from, SESSION)) why = 'this view loads ' + D.tickHours + ' hours of ticks';
-    else if (D.tickHours === 0) why = liveWhy;
-    else if (proof.code === 'volume') why = 'its first minute does not add up to NinjaTrader\'s minute bar';
-    else why = 'NinjaTrader\'s minute history does not confirm its first minute';
-    return live < from ? { from: live, by: 'live', why: liveWhy } : { from, by: 'store', why };
+    const n = D.ticks.length, k = D.ticks.firstMeasured(0, Math.min(D.backfill, n));
+    let cov;
+    if (k < Math.min(D.backfill, n)) cov = { from: D.ticks.time(k) + 1e-6, index: k, by: 'store', why: '' };   // the backfill's measured window
+    else {                                                                    // none: from the page's opening
+      const b = Math.min(D.backfill, n), first = b < n ? D.ticks.time(b) + 1e-6 : Infinity;
+      cov = live < first ? { from: live, index: b, by: 'live', why: 'page opened' } : { from: first, index: b, by: 'first', why: 'page opened' };
+    }
+    const floor = Math.max(D.trimmed && n ? D.ticks.time(0) + 1e-6 : -Infinity, D.historyGapFrom !== null ? D.historyGapFrom + 1e-6 : -Infinity);
+    if (floor > cov.from) cov = { from: floor, index: cov.index, by: 'store', why: '' };
+    return cov;
   }
   const rangeBuilder = () => new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION });
   /* The delta is kept while it is on the chart, shown or hidden (review S5: showing it again is then at once; a trade
@@ -992,7 +972,11 @@ function start(container, opt, PAGE) {
     const tf = TF[S.tf], range = tf.mode === 'range';
     const cov = deltaCoverage();
     const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: cov.from });
-    const job = deltaJob = { cd, cov, feed: range ? pairFeed(rangeBuilder(), cd) : cd, i: range ? (o.rangeFrom === undefined ? null : o.rangeFrom) : 0, scan: 0, from: D.tickFrom };
+    // counted from the window's first trade by its place in the store (never a backfill trade before it, whatever its
+    // time); range bars are still built from their session's start, the trades before the window only into the bars
+    const builder = range ? rangeBuilder() : null;
+    const job = deltaJob = { cd, cov, feed: range ? pairFeed(builder, cd) : cd, pre: range ? { addQuiet: (t, p, v) => builder.addQuiet(t, p, v) } : null,
+      i: range ? (o.rangeFrom === undefined ? null : o.rangeFrom) : cov.index, scan: 0, from: D.tickFrom };
     if (!o.keep || !D.delta) deltaSet(null);
     const slice = () => {
       if (destroyed || job !== deltaJob) return;
@@ -1005,7 +989,8 @@ function start(container, opt, PAGE) {
         if (j < n && BB.sessionStartOf(D.ticks.time(j), SESSION) < job.from) { later(slice, 0); return; }
         job.i = j < n ? j : 0;                              // no session start covered: from the first trade, as the chart
       }
-      do job.i = D.ticks.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
+      do job.i = job.i < job.cov.index ? D.ticks.feedSides(job.pre, job.i, null, Math.min(job.cov.index, job.i + DELTA_SLICE_TRADES))
+        : D.ticks.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
       while (job.i < D.ticks.length && performance.now() - t0 < DELTA_SLICE_MS);
       if (job.i < D.ticks.length) { later(slice, 0); return; }
       deltaJob = null;
@@ -1015,27 +1000,27 @@ function start(container, opt, PAGE) {
     slice();                                                // a small store is done at once
   }
   /*
-   * Hooks for live-first (PR #8), not called on this branch. The live-first load puts the recent trades in the store
-   * first and the older history in front of them later (TickStore.prependAll):
-   *   - deltaHistoryLoading(true) when the recent window is in and the older history is still coming: the delta is built
-   *     on the recent window and labelled "the history is still loading" (deltaWhy), not "the tick history starts later";
-   *   - deltaHistoryGrew(gapFrom) when the last older chunk is in (beside exactRebuild): the delta is built again from the
-   *     whole store, the one shown kept until then; gapFrom is the time of the first recent trade when ChartBridge
-   *     reported a gap (gapMs) between the older history and it, else null, and the count then starts after it.
+   * The hook for live-first (PR #8), not called on this branch. The live-first load puts the recent trades in the store
+   * first and the older history in front of them later (TickStore.prependAll). While it loads, the delta counts from the
+   * recent window's first measured trade, labelled with that time, which is true. deltaHistoryGrew(added, gapFrom) when
+   * the last older chunk is in (beside exactRebuild): `added` older trades were put in front (backfill, so they may widen
+   * the measured window), and the delta is built again from the whole store, the one shown kept until then; gapFrom is
+   * the time of the first recent trade when ChartBridge reported a gap (gapMs) between the older history and it, else
+   * null, and the count then never starts before it.
    */
-  function deltaHistoryLoading(on) { D.historyLoading = !!on; deltaView(); deltaLegend(true); }
-  function deltaHistoryGrew(gapFrom) {
-    D.historyLoading = false; D.historyGapFrom = typeof gapFrom === 'number' && isFinite(gapFrom) ? gapFrom : null;
+  function deltaHistoryGrew(added, gapFrom) {
+    D.backfill += Math.max(0, added | 0);
+    D.historyGapFrom = typeof gapFrom === 'number' && isFinite(gapFrom) ? gapFrom : null;
     deltaStart({ keep: true });
   }
-  void deltaHistoryLoading; void deltaHistoryGrew;
+  void deltaHistoryGrew;
   /* Off the chart: no delta at all. */
   function deltaStop() { deltaJob = null; deltaSet(null); }
   function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); }
   const deltaBuilding = () => deltaJob !== null;
   /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
      session may count from later than 18:00, for its title. */
-  const deltaWhy = () => D.historyLoading ? 'the history is still loading' : D.deltaCov ? D.deltaCov.why : '';
+  const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
   function deltaView() { chart.setDeltaView({ note: S.layers.delta && D.ready && bridgeSides() === false ? OLD_BRIDGE : '', reason: deltaWhy() }); }
   /* "Delta +12,345" in the legend (the bar under the crosshair, else the newest), "Bar delta" in bar mode, the start
      when the session counts from later than 18:00, and the unknown sides (they add nothing) when there are any. */
@@ -1060,7 +1045,7 @@ function start(container, opt, PAGE) {
     const key = [cd.version, legendBarT, bar, v].join('|');
     if (!force && key === deltaLegendKey) return;
     deltaLegendKey = key;
-    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' from ' + U.fmtExact(ses.from) : ''));
+    put($('lgDl'), 'textContent', (bar ? 'Bar delta' : 'Delta') + (!bar && ses && ses.partial ? ' since ' + U.fmtExact(ses.from) : ''));
     const dv = $('lgDv');
     put(dv, 'textContent', v === null ? '-' : U.fmtSigned(v, 0));
     put(dv, 'className', 'dv' + (v > 0 ? ' up' : v < 0 ? ' down' : ''));
@@ -1068,7 +1053,7 @@ function start(container, opt, PAGE) {
     put(du, 'hidden', !(unk > 0));
     put(du, 'textContent', unk > 0 ? ' · ' + U.fmtPrice(unk, 0) + ' unknown' : '');
     put(el, 'title', (bar ? 'Bar delta: each bar\'s market buys minus market sells' : 'Cumulative delta: market buys minus market sells since ' +
-      (ses && ses.partial ? U.fmtExact(ses.from) + ' ET, not 18:00: ' + deltaWhy() : '18:00 ET')) + '. Sides from ChartBridge; unknown sides add nothing.');
+      (ses && ses.partial ? U.fmtExact(ses.from) + ' ET' + (deltaWhy() ? ' (' + deltaWhy() + ')' : '') : '18:00 ET')) + '. Sides from ChartBridge; unknown sides add nothing.');
   }
   /*
    * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
@@ -1095,12 +1080,6 @@ function start(container, opt, PAGE) {
     const seen = new Map();
     for (const b of D.hist) if (b.t < cutoff) seen.set(b.t, b);
     const hist = [...seen.values()].sort((a, b) => a.t - b.t);
-    // NinjaTrader's complete minutes for the delta's coverage proof (BB.minuteCover): the history as sent, without the
-    // forming minute (its last bar, which ChartBridge may rebuild from the same ticks) and nothing from the ticks
-    let formT = -Infinity;
-    for (const b of D.hist) if (b.t > formT) formT = b.t;
-    const done = hist.filter(b => b.t < formT);
-    D.minutes = { t: Float64Array.from(done, b => b.t), v: Float64Array.from(done, b => b.v || 0) };
     D.m1 = new BarBuilder({ mode: 'time', seconds: 60, tick: D.tick, sessionStart: SESSION });
     D.m1.seed(hist);
     if (D.tickHours > 0) {
@@ -1128,7 +1107,7 @@ function start(container, opt, PAGE) {
       if (bridgeSides() !== before && IS.ind.delta.on) { deltaStart(); deltaFed = true; }   // built from the store, this trade in it
     }
     if (D.ticks.length > 2500000) {                      // the first session left is partial now
-      D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true;
+      D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; D.backfill = Math.max(0, D.backfill - 500000);
       if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store moved under a build: start it over
     }
     // how far the data's clock runs ahead of this PC's (review 2 S1): when it is more than the delta was built with and
@@ -1694,9 +1673,8 @@ function start(container, opt, PAGE) {
       if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
     }
     // the delta pane (1.7.0): kept while on the chart, shown or hidden, so the chip or the switch shows it at once
-    // (review S5); made when it comes onto the chart. On a minute view loaded without it (no ticks), the 2 hours of
-    // ticks are fetched first: a new subscribe, so orders wait "Still loading" until its `ready` (the PR gives the time)
-    if (deltaWanted() && !D.delta && !deltaBuilding()) { if (TF[S.tf].mode === 'time' && ticksMissing()) subscribe(S.root); else deltaStart(); }
+    // (review S5); made from the store when it comes onto the chart, never with a reload (round 4)
+    if (deltaWanted() && !D.delta && !deltaBuilding()) deltaStart();
     else if (!IS.ind.delta.on && (D.delta || deltaBuilding())) deltaStop();
     else { deltaView(); deltaLegend(true); }
     legendKey = '';
