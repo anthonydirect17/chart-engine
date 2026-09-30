@@ -481,7 +481,7 @@ function markup(p, o) {
       <button type="button" class="btn" id="${p}flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
       <button type="button" class="btn" id="${p}cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
-    <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
+    <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
   </section></div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
@@ -699,9 +699,17 @@ function start(container, opt, PAGE) {
      this PC; the 1.5 fills choice is never an order account, so the trading page does not read it. Each trading tab
      keeps its own account while open: a pick in another tab is saved (the next load starts on it) but never changes
      this tab (followAccount). Armed is never saved: it is off after every load and every reconnect. */
+  /* The account this trading tab was on survives a reload of that tab (sessionStorage, review S1): a reload comes back
+     on it, a new tab on the last one picked on this PC. Written by every pick in this tab, never by a fallback. */
+  const tabStore = (() => { if (!TRADING) return null; try { return prefixedStorage(window.sessionStorage, PREFIX); } catch (e) { return null; } })();
+  const TAB_KEY = 'live-account-tab-v1';
+  const tabAccount = () => { try { const v = tabStore && JSON.parse(tabStore.getItem(TAB_KEY)); return typeof v === 'string' && v ? v : ''; } catch (e) { return ''; } };
+  const saveTabAccount = v => { try { if (tabStore) tabStore.setItem(TAB_KEY, JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
+  const restored = { account: '', from: '' };                  // what a load started on, for the note: 'tab' or 'pc'
   let viewAccount = (() => {
+    if (TRADING && tabAccount()) { restored.account = tabAccount(); restored.from = 'tab'; return restored.account; }
     const v = store.get('live-account-v1', null);
-    if (typeof v === 'string' && v) return v;
+    if (typeof v === 'string' && v) { if (TRADING) { restored.account = v; restored.from = 'pc'; } return v; }
     if (TRADING) return '';
     const old = store.get('live-fill-account-v1', '');
     return typeof old === 'string' ? old : '';
@@ -979,6 +987,7 @@ function start(container, opt, PAGE) {
   function pickViewAccount(v) {
     viewAccount = v;
     store.set('live-account-v1', v);
+    if (TRADING) { saveTabAccount(v); if (TR.v2) clearAccountNote(); }   // the note named the account before (review S2)
     syncAccounts();
     for (const peer of accountPeers) if (peer.prefix === PREFIX && peer.follow !== followAccount) peer.follow(v);
   }
@@ -1116,6 +1125,7 @@ function start(container, opt, PAGE) {
   const TR = {
     v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
+    cancelling: 0,                       // a batched Cancel all under way (its number): the picker and Armed are locked
     account: '', side: 'buy',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
@@ -1178,13 +1188,16 @@ function start(container, opt, PAGE) {
   }
   /* Trading came on, or the account in use is no longer allowed: say which account orders go to and make the picker
      stand out for a moment (1.6.1, Anthony trades account to account). The picker already shows it (syncAccounts). */
-  let sessionsOn = 0, noteSeq = 0;
+  let sessionsOn = 0, noteSeq = 0, lastOrderAccount = '';
   function accountNote(pick, cameOn) {
     const sel = $('oAcct'), el = $('oAcctNote'), seq = ++noteSeq;
     const first = cameOn && ++sessionsOn === 1;
+    // the account before: what the load started on, or the order account before trading went off (review N3)
+    const before = first ? restored.account : lastOrderAccount;
     const text = pick.missed ? 'Last account ' + pick.missed + ' not available, on ' + pick.account + '.'
-      : first ? 'On ' + pick.account + (viewAccount && store.get('live-account-v1', null) === pick.account ? ', the last account picked' : '') + '. Armed is off.'
-      : 'Still on ' + pick.account + '. Armed is off.';
+      : before && pick.account !== before ? 'On ' + pick.account + ' (picked while trading was off). Armed is off.'
+      : !first ? 'Still on ' + pick.account + '. Armed is off.'
+      : 'On ' + pick.account + (!before ? '' : restored.from === 'tab' ? ', the account this tab was on' : ', the last account picked') + '. Armed is off.';
     el.textContent = text; el.title = text; el.classList.toggle('warn', !!pick.missed);
     sel.classList.remove('acct-flash', 'warn'); void sel.offsetWidth;   // restart the highlight
     sel.classList.add('acct-flash'); sel.classList.toggle('warn', !!pick.missed);
@@ -1196,7 +1209,10 @@ function start(container, opt, PAGE) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
+    if (TR.account) lastOrderAccount = TR.account;
     TR.account = '';                                               // the tab's account stays in viewAccount (syncAccounts)
+    TR.cancelling = 0;                                             // a Cancel all under way stops (Armed goes off)
+    clearAccountNote();                                            // it named an account and "Armed is off" (review S2)
     setArmed(false); renderTrading(); syncAccounts();
   }
   function onOrder(o) {
@@ -1220,7 +1236,7 @@ function start(container, opt, PAGE) {
     if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
     if (!D.ready || !TR.account) { flash('Still loading: nothing was sent.', 'warn'); return false; }
-    if ($('oAcct').value !== TR.account) { flash('The account shown is not the order account: nothing was sent.', 'error'); syncAccounts(); return false; }
+    if ($('oAcct').value !== TR.account) { syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
   function sendOrder(side, kind, price) {
@@ -1246,10 +1262,22 @@ function start(container, opt, PAGE) {
     const ids = OT.cancelAllIds([...TR.orders.values()], TR.account, D.root, pos ? pos.qty : 0);
     const keptNote = ids.kept ? ' Kept ' + ids.kept + ' order' + (ids.kept > 1 ? 's' : '') + ' protecting the open position (cancel those one by one, or Flatten).' : '';
     if (!ids.length) { flash('Nothing to cancel on ' + TR.account + ' ' + D.root + '.' + keptNote, ''); return; }
-    ids.forEach((id, i) => later(() => { if (TR.armed) send({ type: 'cancel', id }); }, Math.floor(i / 8) * 1100));
+    /* More than 8 go out in batches 1.1 s apart: until the last one is sent the account picker and the Armed switch are
+       locked, so a late cancel never goes out while another account is shown (review N1). Flatten is never locked. */
+    const acct = TR.account, seq = ++cancelSeq, batched = ids.length > 8;
+    let unsent = 0;
+    if (batched) { TR.cancelling = seq; clearAccountNote(); $('oAcctNote').textContent = 'Cancelling... ' + acct + ' and Armed are locked until the last cancel is sent.'; renderTrading(); syncAccounts(); }
+    ids.forEach((id, i) => later(() => {
+      if (TR.armed && TR.account === acct) send({ type: 'cancel', id }); else unsent++;
+      if (i === ids.length - 1 && batched) {
+        if (TR.cancelling === seq) { TR.cancelling = 0; $('oAcctNote').textContent = ''; renderTrading(); syncAccounts(); }
+        if (unsent) flash(unsent + ' of ' + ids.length + ' cancels were not sent: Armed went off or the connection dropped. Check the working orders.', 'warn');
+      }
+    }, Math.floor(i / 8) * 1100));
     flash('Cancelling ' + ids.length + ' order' + (ids.length > 1 ? 's' : '') + ' on ' + TR.account + ' ' + D.root + '.' + keptNote, '');
   }
 
+  let cancelSeq = 0;
   function setArmed(on) {
     if (!TRADING) return;
     const v = !!on && TR.enabled;
@@ -1260,7 +1288,6 @@ function start(container, opt, PAGE) {
     $('obar').classList.toggle('armed', v);
     rootEl.classList.toggle('is-armed', v);
     $('armPill').hidden = !v;
-    if (PAGE) document.title = v ? 'ARMED · Live Chart' : 'Live Chart';
     chart.setOrderEditing(v);
     renderTrading();
   }
@@ -1268,14 +1295,17 @@ function start(container, opt, PAGE) {
     const sel = $('oAcct');
     sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
     sel.value = TR.account;
-    sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1)
+    sel.disabled = !TR.accounts.length || !!TR.cancelling;         // enabled again after a trading-off spell with no accounts (review 2, S1); locked during a batched Cancel all
   }
   /* Order bar, order lines, position line; also run on every instrument switch and order message. */
   function renderTrading() {
     if (!TRADING || !TR.v2) return;
     const bar = $('obar'); bar.hidden = false;
     const on = TR.enabled, root = D.root || S.root, cap = OT.maxQtyFor(TR, root);
-    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on;   // the account picker works with trading off too (it drives the fills)
+    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on || (el === $('armBtn') && !!TR.cancelling);   // the account picker works with trading off too (it drives the fills); Armed is locked during a batched Cancel all
+    // the tab title and the ARMED pill name the account (review S5): two tabs on two accounts are by design now
+    if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
+    $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
     const q = $('oQty'); q.max = String(cap);
     if (!q.value) q.value = '1';
     for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
@@ -1315,10 +1345,15 @@ function start(container, opt, PAGE) {
     legsEl.classList.toggle('over', !!legs && legs.level === 'warn');
     legsEl.title = legs ? legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working' +
       (legs.stopsShort ? '. Stops cover less than the position.' : legs.level === 'warn' ? '. More than the position: if it all fills, the position reverses.' : '') : '';
-    let n = 0, p = 0;
-    for (const o of TR.orders.values()) if (o.root === root && o.account !== TR.account && OT.isWorking(o)) n++;
-    for (const [k, v] of TR.positions) if (v.qty && k.endsWith('|' + root) && !k.startsWith(TR.account + '|')) p++;
-    other.textContent = n || p ? 'Other accounts on ' + root + ': ' + [n ? n + ' order' + (n > 1 ? 's' : '') : '', p ? p + ' position' + (p > 1 ? 's' : '') : ''].filter(Boolean).join(', ') : '';
+    /* Other accounts on this instrument, by name (review S3): a live trade on another account is never only a count.
+       In the warning color while one has a position; on one line (cut short, the whole text in its tooltip). */
+    const others = new Map(), of = a => others.get(a) || others.set(a, { pos: 0, n: 0 }).get(a);
+    for (const [k, v] of TR.positions) { const a = k.slice(0, k.lastIndexOf('|')); if (v.qty && k.endsWith('|' + root) && a !== TR.account) of(a).pos = v.qty; }
+    for (const o of TR.orders.values()) if (o.root === root && o.account !== TR.account && OT.isWorking(o)) of(o.account).n++;
+    const parts = [...others].map(([a, x]) => a + ': ' + [x.pos ? (x.pos > 0 ? 'LONG ' : 'SHORT ') + Math.abs(x.pos) : '', x.n ? x.n + ' order' + (x.n > 1 ? 's' : '') : ''].filter(Boolean).join(', '));
+    other.textContent = parts.length ? 'Other accounts on ' + root + ': ' + parts.join(' · ') : '';
+    other.title = other.textContent;
+    other.classList.toggle('live', [...others.values()].some(x => x.pos));
   }
 
   /* ---------------- UI */
@@ -1718,6 +1753,7 @@ function start(container, opt, PAGE) {
       if (FRAMED) { flash(FRAMED_REASON, 'error'); return; }
       if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return; }
       setArmed(!TR.armed);
+      if (TR.armed) clearAccountNote();                            // it said "Armed is off" (review S2)
       flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
     });
     $('oAcct').addEventListener('change', e => {
@@ -1726,7 +1762,7 @@ function start(container, opt, PAGE) {
       clearAccountNote();
       if (TR.armed) { setArmed(false); flash('Armed turned off: the account changed.', 'warn'); }
       renderTrading();
-      viewAccount = TR.account; store.set('live-account-v1', TR.account);
+      viewAccount = TR.account; store.set('live-account-v1', TR.account); saveTabAccount(TR.account);
       applyMarkers();
     });
     $('oQty').addEventListener('change', () => {
@@ -1766,7 +1802,7 @@ function start(container, opt, PAGE) {
     /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
     chart.setOrderPreview(previewAt);
     chart.on('orderPlace', e => sendOrder(TR.side, OT.placeKind(TR.side, e.price, lastPrice()), e.price));
-    const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash('Not sent: that order is not on ' + TR.account + '.', 'error'); renderTrading(); return true; };
+    const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash(o ? 'Not sent: that order is not on ' + TR.account + '.' : 'Not sent: that order is no longer working.', o ? 'error' : 'warn'); renderTrading(); return true; };
     chart.on('orderMove', e => {
       if (!ready()) { renderTrading(); return; }
       if (notShown(e.id)) return;

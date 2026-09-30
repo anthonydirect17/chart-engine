@@ -48,7 +48,7 @@ test('live.js: every order path sends for TR.account, and only after ready() che
   assert.match(PAGE, /send\(\{ type: 'flatten', account: TR\.account, root: D\.root \}\)/);
   // ready(): the picker must show TR.account, else nothing is sent
   const ready = PAGE.slice(PAGE.indexOf('function ready()'), PAGE.indexOf('function sendOrder('));
-  assert.match(ready, /if \(\$\('oAcct'\)\.value !== TR\.account\) \{[^\n]*nothing was sent[^\n]*return false; \}/);
+  assert.match(ready, /if \(\$\('oAcct'\)\.value !== TR\.account\) \{ syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);
   // every path goes through ready(): sendOrder (Buy, Sell, click-trade, Shift+click), cancelAll, Flatten, move, cancel
   assert.match(PAGE.slice(PAGE.indexOf('function sendOrder('), PAGE.indexOf('function workingHere(')), /^\s+if \(!ready\(\)\) return;/m);
   assert.match(PAGE.slice(PAGE.indexOf('function cancelAll('), PAGE.indexOf('function setArmed(')), /^\s+if \(!ready\(\)\) return;/m);
@@ -68,7 +68,21 @@ test('live.js: TR.account is set only from orderAccount, the picker, or cleared;
   // the trading page never follows another tab's pick (each tab keeps its own account while open)
   assert.match(PAGE, /function followAccount\(v\) \{\n\s+if \(TRADING \|\| /);
   // the 1.5 fills choice is never an order account
-  assert.match(PAGE, /if \(typeof v === 'string' && v\) return v;\n\s+if \(TRADING\) return '';\n\s+const old = store\.get\('live-fill-account-v1'/);
+  assert.match(PAGE, /if \(typeof v === 'string' && v\) \{ if \(TRADING\) \{ restored\.account = v; restored\.from = 'pc'; \} return v; \}\n\s+if \(TRADING\) return '';\n\s+const old = store\.get\('live-fill-account-v1'/);
+  // review S1: a reload restores this tab's account (sessionStorage) first, the PC-wide last pick only for a new tab
+  assert.match(PAGE, /if \(TRADING && tabAccount\(\)\) \{ restored\.account = tabAccount\(\); restored\.from = 'tab'; return restored\.account; \}\n\s+const v = store\.get\('live-account-v1', null\);/);
+  assert.match(PAGE, /prefixedStorage\(window\.sessionStorage, PREFIX\)/);
+  assert.equal((PAGE.match(/saveTabAccount\(/g) || []).length, 2, 'called on the two kinds of pick, never on a fallback');
+});
+
+test('live.js: a batched Cancel all locks the picker and Armed until its last cancel is sent, and sends only for its account (review N1)', () => {
+  const ca = PAGE.slice(PAGE.indexOf('function cancelAll('), PAGE.indexOf('function setArmed('));
+  assert.match(ca, /const acct = TR\.account, seq = \+\+cancelSeq, batched = ids\.length > 8;/);
+  assert.match(ca, /if \(TR\.armed && TR\.account === acct\) send\(\{ type: 'cancel', id \}\); else unsent\+\+;/);
+  assert.match(PAGE, /sel\.disabled = !TR\.accounts\.length \|\| !!TR\.cancelling;/);
+  assert.match(PAGE, /el\.disabled = !on \|\| \(el === \$\('armBtn'\) && !!TR\.cancelling\);/);
+  const fl = PAGE.slice(PAGE.indexOf("$('flattenBtn').addEventListener"), PAGE.indexOf("$('cancelAllBtn').addEventListener"));
+  assert.doesNotMatch(fl, /cancelling/, 'Flatten is never blocked by it');
 });
 
 test('order-ticket.js is unchanged by 1.6.1 (defaultAccount stays for anything else that uses it)', () => {
