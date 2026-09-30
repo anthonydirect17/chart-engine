@@ -55,9 +55,9 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   whose side was measured: every live trade, and the backfill from its first trade whose side came from the quote or
   the aggressor flag (`sm` 2 or 1, `TickStore.firstMeasured`) on. With quoteHours 0 that is the page's opening. The
   window (`deltaCoverage` in live/live.js), counted by the trades' places in the store, never by their times:
-  - **the backfill's measured window:** from just after its first measured trade; every trade after it is held (the
+  - **the backfill's measured window:** from its first measured trade on (round 6: it counts); every trade after it is held (the
     backfill is one run up to ChartBridge's seam, then every live trade). Labelled "since HH:MM ET";
-  - **none in the backfill:** from just after the first live trade, or from the moment the page went live (this PC's
+  - **none in the backfill:** from the first live trade on (round 6: it counts), or from the moment the page went live (this PC's
     clock at `ready`) when that is earlier, so a page open across 18:00 in the 17:00 to 18:00 break restarts the count
     at 18:00, whole. That moment counts 5 s later (`LIVE_MARGIN`), or this PC clock's lag plus 2 s (`CLOCK_SLACK`)
     when that is more (review 2 S1): every live tick carries the data's UTC time `u` and ChartBridge's receive time
@@ -77,22 +77,29 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   the same way. **On 5m, 15m and 1h** (round 5, review 4 S1) the bar holding the window's start is not left out: its
   trades count from that moment by their own time (`CumulativeDelta` option `byTime`), it opens at 0, and the label
   gives the exact moment ("since 13:00:00.3 ET (page opened)"), so a 1h view counts at once, not from the next hour.
-  With no backfill trade measured, the first live trade after a build moves the start to just after it (every trade
-  after it is held), a few seconds before the 5 s margin. The status line's feed delay (`rx - u`) said "(PC clock ahead)" when it was negative, which means the
+  With no backfill trade measured, the first live trade after a build moves the start to it (every trade from it on
+  is held, and it counts, round 6), a few seconds before the 5 s margin. The status line's feed delay (`rx - u`) said "(PC clock ahead)" when it was negative, which means the
   PC's clock is behind the data's; it now says "(PC clock behind)" (wrong since 1.1.0).
 - **The count survives a reload of the same instrument** (round 5, review 4 B1; Anthony uses the delta while trading):
   the counted trades live outside the store every load replaces, per instrument (`K` in live/live.js). The count begins
   with the instrument's first `ready` (its window and the backfill's measured trades), then takes every live trade of
   it, also those arriving while a later load of it is on its way. A later load of the same instrument (a ChartBridge
   reconnect, or a view that needs more ticks, such as 1m to 15s) builds the delta from the count, so its start and
-  "since ... (page opened)" stay as they were; its trades go on the new load's bars (a range trade on the chart's range
-  bar holding its time). The backfill's measured trades are not copied on the first load (the count points into the
+  "since ... (page opened)" stay as they were; its trades go on the new load's bars, on Range by their order in the new
+  store (`BB.RangeReplay`, round 6, review 5 S1: the builder fed the store as the chart's bars were, each counted trade
+  matched to its store trade), never by their time, so trades sharing a millisecond across a range-bar boundary stay in
+  their bar and the candles do not move after a reload. The backfill's measured trades are not copied on the first load (the count points into the
   store; copying them doubled the heap in smoke:perf, 99 MB against its 80); only before a later load of the same
   instrument is this session's part of them copied. Its trades are dropped at each 18:00 ET (the count starts again at 0
   there) and the oldest 500,000 past 2.5 million, like the store: at most one session of one instrument. A switch of instrument starts a new
   count, labelled "since HH:MM ET" with no "(page opened)". Trades that arrive neither live nor with a measured side (while
   a reconnect is down, or held by ChartBridge during a reload and sent only in the new backfill, with tick-rule sides
-  under quoteHours 0) are not in it, by the measured-sides rule.
+  under quoteHours 0) are not in it, by the measured-sides rule, and the label says so (round 6, review 5 B1): the
+  first trade of the later load measures the hole on the trades' own clock from the last one counted (it can be no
+  longer; a quiet market can make it read longer than what was really missed), for this session only, and from 1 s the
+  pane's title and the legend add the session's total: "Cumulative delta +123 since 13:00:15 ET (page opened), missed
+  32 s", or "since 18:00 ET, missed 32 s" for a session held from its start. A browser reload (F5) or a second tab is a
+  new page and starts a new count, "(page opened)".
 - **Nothing extra is loaded for the delta** (round 4): every view asks for the ticks it asked for before 1.7.0 (none on
   1m, 5m, 15m and 1h; 8 hours on 15s and 30s; Range its sessions, 9 to 33 hours), and switching the pane on never
   reloads: it is built from the store, so orders are never refused for it. On a minute view with quoteHours 0 the store
@@ -129,7 +136,8 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   quoteHours (only the backfill's last N hours measured, `sm` 2; before them the tick rule, `sm` 3; without the flag all
   measured, as 0.3.4). Each live tick's `u` is on the exchange clock and `rx` on the PC's (`--pc-clock-offset`, default
   the exchange clock's), so a PC clock behind the exchange can be tested; `--cme-hours` keeps CME's hours (nothing from
-  17:00 to 18:00 ET or over the weekend). Like ChartBridge, it now sends no tick backfill for `tickHours` 0 and no
+  17:00 to 18:00 ET or over the weekend); `--load-delay-ms` sends a load's ticks and `ready` that much later with no
+  live trade meanwhile, as ChartBridge holding them. Like ChartBridge, it now sends no tick backfill for `tickHours` 0 and no
   backfill trade stamped after now (it sent the forming minute's walk, to :59.9). Its order handling is unchanged.
 - **Unchanged:** the order path (`live/order-ticket.js`, `live/pin.js`, `test/orders-smoke.mjs`,
   `test/order-ticket.test.js`, `test/fake-orders.mjs`, the fake bridge's order handling) and everything under `nt8/`,
@@ -138,7 +146,8 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
 - Tests: `test/delta.test.js` (the candles on 15 s bars by hand; range bars of both styles through the page's bar
   builder against a count by hand, phantom bars blank; 18:00 ET over a weekend and on both DST changes from real UTC
   times, and 17:59:59.999 against 18:00:00.000; unknown and missing sides; bar delta per bar and each session's last close
-  against its sums; coverage: a later start, exactly at the start, `byTime` on 5m bars (round 5), a range bar that started
+  against its sums; coverage: a later start, exactly at the start, `byTime` on 5m bars (round 5), `RangeReplay` against
+  the store's own path with three trades a millisecond (round 6), a range bar that started
   before; the TickStore's sides across block boundaries after a trim; the page's path, backfill then live, against a
   rebuild from the store and the store's own sums, on range and 5m bars; on a stand-in canvas: the pane only with the
   layer, 20%, the candles inside it, off draws the same with or without a delta, bar mode from zero, the note draws
@@ -170,7 +179,10 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   at about 17:59:53: "since 18:01 ET (page opened)", never a count from 18:00, every trade from 18:01; round 5: 1h with
   no backfill counts at once from the page's opening, every live trade; 5m then 15s (a reload for 8 hours) then a
   ChartBridge reconnect (`/test/drop`) keep one count with every live trade of all three loads, still "(page opened)";
-  a count from quoteHours 1's window kept across a reconnect; another instrument starts a new count without it).
+  a count from quoteHours 1's window kept across a reconnect; another instrument starts a new count without it; round
+  6: 5m to 15s with the fake holding the trades 3 s (`--load-delay-ms=3000`) reads "missed 3 s" in the title and the
+  legend; the fake bridge killed for 8 s and started again on its port: the same count, every live trade before and
+  after, "missed 11 s").
   `test/delta.test.js` adds `TickStore.firstMeasured` (a quote window after tick-rule trades, a tick-rule trade inside
   it, a trim, none, the aggressor flag), a prepend through `_addBlockFront` and `_put` after a trim and with new blocks
   (every side stays with its trade), and review 2's width cases (800 to 803 and 1000 px with every bar in view, 800 to

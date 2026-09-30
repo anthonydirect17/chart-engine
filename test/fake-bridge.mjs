@@ -51,6 +51,9 @@
 //                                   exchange clock's, --clock-offset): each live tick's `rx` is read from it and `u` from
 //                                   the exchange clock (the data's time, a few ms before), so a PC clock 10 s behind the
 //                                   exchange is --pc-clock-offset=<clock offset - 10> (the page's own clock is the test's)
+//   --load-delay-ms=3000            a load's ticks and `ready` go out this long after its subscribe (NinjaTrader answering
+//                                   the tick request), and no live trade reaches the page meanwhile, as with ChartBridge
+//                                   holding them (a page reloading for more ticks misses those seconds)
 //   --cme-hours                     the history and trades follow CME's hours on the exchange clock: no minute bar, tick or
 //                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data
 //                                   shifted to now otherwise trades through 18:00)
@@ -114,6 +117,7 @@ const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
 const PC_CLOCK_OFFSET = flagValue('pc-clock-offset') !== '' ? +flagValue('pc-clock-offset') : CLOCK_OFFSET;
 const CME_HOURS = !!flag('cme-hours');
 const QUOTE_HOURS = flagValue('quote-hours') !== '' ? +flagValue('quote-hours') : null;
+const LOAD_DELAY_MS = +flagValue('load-delay-ms') || 0;
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
 const MARKET_HOURS = !!flag('market-hours');
 /* --market-hours: whether CME equity index futures are closed at exchange time t (the CME calendar, see the header). */
@@ -270,6 +274,7 @@ const tickCache = new Map();             // --tick-rate: millions of ticks, made
 function subscribe(c, m) {
   const r = INSTR[m.root] ? m.root : 'MNQ';
   c.root = r; c.ready = false;
+  const seq = c.seq = (c.seq || 0) + 1;
   const bars = data[r];
   for (let i = 0; i < bars.length; i += 4000) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
@@ -278,13 +283,17 @@ function subscribe(c, m) {
   const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours), key = r + '|' + hours;
   // tickHours 0 (minute views): no tick backfill at all, as ChartBridge (its seam trades are never sent; 1.7.0 round 4:
   // the fake used to send the forming minute's trades)
-  const ticks = m.tickHours === 0 ? null : TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
-  for (let i = 0; ticks && (i < ticks.length || i === 0); i += 20000) {
-    send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
-    if (!ticks.length) break;
-  }
-  send(c, { type: 'ready', root: r });
-  c.ready = true;
+  const finish = () => {
+    if (c.seq !== seq) return;                             // a newer subscribe won
+    const ticks = m.tickHours === 0 ? null : TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
+    for (let i = 0; ticks && (i < ticks.length || i === 0); i += 20000) {
+      send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
+      if (!ticks.length) break;
+    }
+    send(c, { type: 'ready', root: r });
+    c.ready = true;
+  };
+  if (LOAD_DELAY_MS) setTimeout(finish, LOAD_DELAY_MS); else finish();   // --load-delay-ms: NinjaTrader's tick request taking that long
 }
 
 const last = {}, held = {}, lastSide = {};

@@ -177,14 +177,15 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   grid and session dividers as in the plot, value grid lines in the grid color, the zero line in the divider color, a
   title at the top left on the legend ground ("CUMULATIVE DELTA" 600 10px Condensed caps in the axis text color, the
   value in 500 11px mono, then "since 10:04 ET (page opened)" in 500 10px Condensed when the session counts from later than 18:00: the first counted
-  bar's exact start, HH:MM on the minute, else HH:MM:SS, and tenths when not on the second);
+  bar's exact start, HH:MM on the minute, else HH:MM:SS, and tenths when not on the second; ", missed 32 s" after it
+  when the count missed a second or more of the session, a reconnect or a reload, 1.7.0 round 6);
   on its axis round values (400 11px mono, "+10,000", "-5,000", "0") and the newest bar's value in a tag in the candle
   color, the pointer's value in the crosshair tag. The value scale fits the candles in view (12% free at the top and
   bottom), eased like the price scale. Numbers with thousands separators and a sign. Bars with no delta (before the page
   has every trade, or with no trade) stay blank; a session that counts from later than 18:00 gets a dashed
   `#8392A5` line at its first counted bar. With ChartBridge 0.3.3 or older only the title and "Delta needs ChartBridge
   0.3.4 on this PC" (500 12px Condensed, centered) are drawn. Legend: "Delta +12,345" (bull color above zero, bear
-  below), "Bar delta +123" in bar mode, "Delta since 18:37:16.6 +1,234" for a later start, and "· 37 unknown" (the unknown
+  below), "Bar delta +123" in bar mode, "Delta since 18:37:16.6 +1,234" for a later start ("Delta since 18:37:16.6, missed 32 s +1,234" after a gap), and "· 37 unknown" (the unknown
   side volume of the session, dim) when there is any. On by default on the main pane, without a chip (pin it from the
   menu for one); its own Indicators entry "Cumulative delta" (chip DELTA, letter D) in the Volume group.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.

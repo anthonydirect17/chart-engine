@@ -16,7 +16,8 @@
 // ticks; the pane switched on in a 1m view never reloads; review 2's scenario C (the PC clock 10 s behind the exchange, a
 // 1m view going live seconds before 18:00 with nothing traded in the break) is labelled, never a count from 18:00.
 // Round 5 (review 4): a 1h view counts at once from the page's opening; a reload for more ticks (5m to 15s) and a ChartBridge
-// reconnect keep the count and its "(page opened)"; another instrument starts a new count.
+// reconnect keep the count and its "(page opened)"; another instrument starts a new count. Round 6 (review 5): the seconds a
+// reload (ChartBridge holding trades 3 s) and a ChartBridge restart missed are in the label ("missed 8 s").
 // Screenshots on the dark and black grounds, cumulative and bar, and the old-bridge note, labelled as sample data.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -66,6 +67,17 @@ async function startBridge(offset, extra) {
     if (!/EADDRINUSE/.test(errText)) throw new Error('bridge failed: ' + errText);
   }
   throw new Error('no free port from ' + BASE_PORT);
+}
+
+/* A fake bridge on a given port (a restart after a kill: the port may take a moment to free). */
+async function bridgeOn(p, offset, extra) {
+  for (let tries = 0; tries < 40; tries++) {
+    const b = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--pin-off', '--test-controls', '--clock-offset=' + offset].concat(extra || []), { stdio: ['ignore', 'pipe', 'pipe'] });
+    const ok = await new Promise(res => { b.stdout.once('data', () => res(true)); b.once('exit', () => res(false)); });
+    if (ok) { bridges.push(b); return { port: p, kill: () => b.kill() }; }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  throw new Error('no bridge on port ' + p);
 }
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -129,7 +141,7 @@ const live = p => p.waitForFunction(() => document.getElementById('connPill') &&
 async function openPage(ctx, url) {
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
-  p.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
+  p.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|ERR_CONNECTION_REFUSED/.test(m.text())) fail('console: ' + m.text()); });   // refused: the restart test's bridge is down
   await p.goto(url);
   await live(p);
   return p;
@@ -579,6 +591,48 @@ try {
     check(before.n > 1000 && after.from === before.from && after.n >= before.n && after.buy >= before.buy && after.sell >= before.sell && after.title.endsWith(' since ' + U.fmtExact(before.from) + ' ET'),
       'quoteHours 1, 15s then 1m, then a reconnect: the count from the quote window is kept (' + before.n + ' then ' + after.n + ' trades): "' + before.title + '" then "' + after.title + '"');
     await c.close(); b.kill();
+  }
+  {
+    /* round 6 (review 5 B1): the seconds a reload for more ticks misses are in the label (ChartBridge holds a page's trades
+       while NinjaTrader answers, here 3 s: --load-delay-ms) */
+    const o = offsetTo(13, 0, 0, weekday);
+    const b = await startBridge(o, ['--quote-hours=0', '--load-delay-ms=3000']);
+    const c = await context(o, 'm5');
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    await q.waitForTimeout(2000);
+    const t0 = await q.evaluate(() => window.liveChart.deltaPane().title);
+    check(/ \(page opened\)$/.test(t0), '5m before the reload: nothing missed, "' + t0 + '"');
+    await q.click('#tfSeg >> text="15s"'); await live(q);
+    let tt = '';
+    for (const until = Date.now() + 40000; Date.now() < until; ) { await q.waitForTimeout(1000); tt = await q.evaluate(() => window.liveChart.deltaPane().title); if (/ since /.test(tt)) break; }
+    const mm = / \(page opened\), missed (\d+) s$/.exec(tt), lg = (await q.textContent('#lgDelta')).trim();
+    check(!!mm && +mm[1] >= 3 && +mm[1] <= 5 && / missed \d+ s /.test(lg + ' '), 'to 15s with ChartBridge holding the trades 3 s: "' + tt + '", legend "' + lg + '"');
+    await c.close(); b.kill();
+  }
+  {
+    /* round 6 (review 5 B1): a ChartBridge restart; the count goes on, and the label says how long it missed */
+    const o = offsetTo(13, 0, 0, weekday);
+    const b1 = await startBridge(o, ['--quote-hours=0']);
+    const c = await context(o, 'm5');
+    const q = await openPage(c, `http://localhost:${b1.port}/live/`);
+    await q.waitForTimeout(3000);
+    const before = await q.evaluate(() => { const x = window.liveChart.getDelta().sessions.at(-1); return { title: window.liveChart.deltaPane().title, from: x.from, n: x.trades }; });
+    const downAt = Date.now();
+    b1.kill();
+    await q.waitForTimeout(8000);
+    const b2 = await bridgeOn(b1.port, o, ['--quote-hours=0']);
+    await live(q); await q.waitForTimeout(2000);
+    const down = (Date.now() - downAt) / 1000;
+    const after = await q.evaluate(() => new Promise(res => requestAnimationFrame(() => {
+      const x = window.liveChart.getDelta().sessions.at(-1);
+      let bb = 0, ss = 0, n = 0; for (const [t, , v, sd] of window.__live) if (t >= x.from) { n++; if (sd === 1) bb += v; else if (sd === -1) ss += v; }
+      res({ title: window.liveChart.deltaPane().title, from: x.from, n: x.trades, buy: x.buy, sell: x.sell, got: [bb, ss, n] });
+    })));
+    const mm = / \(page opened\), missed (\d+) s$/.exec(after.title);
+    check(after.from === before.from && after.n > before.n && after.buy === after.got[0] && after.sell === after.got[1] && after.n === after.got[2],
+      'a ChartBridge restart: the same count from ' + U.fmtExact(after.from) + ', every live trade before and after it (' + before.n + ' then ' + after.n + ')');
+    check(!!mm && +mm[1] >= 8 && +mm[1] <= down + 2, 'and the label says what it missed (down about ' + Math.round(down) + ' s): "' + after.title + '"');
+    await c.close(); b2.kill();
   }
   {
     /* scenario C (review 2 S1): the PC's clock 10 s behind the exchange; a 1m view with no tick backfill goes live at
