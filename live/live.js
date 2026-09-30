@@ -939,10 +939,12 @@ function start(container, opt, PAGE) {
    * the new backfill with tick-rule sides) are not in it, by the measured-sides rule.
    */
   const K = { root: null, opened: false, started: false, load: 0, open: false, openWhy: '', liveFrom: null, firstT: null, fixedFrom: -Infinity,
-    floor: -Infinity, trimmed: false, day: null, trades: new BB.TickStore() };
+    floor: -Infinity, trimmed: false, day: null, trades: new BB.TickStore(), base: null };
+  // K.base: the backfill's measured trades, { store, from, to }: on the count's first load the store itself (nothing
+  // copied), and before a later load only this session's part of it, copied once (countKeepBase), so no store is held twice
   let loadSeq = 0;
   function countReset(root) {
-    K.root = root; K.started = false; K.trades = new BB.TickStore(); K.day = null; K.firstT = null; K.floor = -Infinity; K.trimmed = false;
+    K.root = root; K.started = false; K.trades = new BB.TickStore(); K.base = null; K.day = null; K.firstT = null; K.floor = -Infinity; K.trimmed = false;
     K.openWhy = K.opened ? '' : 'page opened';         // "(page opened)" only for the page's first instrument
     K.opened = true;
   }
@@ -963,18 +965,34 @@ function start(container, opt, PAGE) {
   function countStart() {
     const cov = storeCoverage();
     K.started = true; K.load = loadSeq; K.open = cov.by !== 'store'; K.liveFrom = D.liveFrom; K.fixedFrom = cov.from;
-    for (let i = cov.index; i < D.ticks.length; i++) K.trades.push(D.ticks.time(i), D.ticks.price(i), D.ticks.volume(i), D.ticks.side(i), D.ticks.method(i));
-    if (K.trades.length) K.day = U.tradeDay(K.trades.time(K.trades.length - 1), SESSION);
+    K.base = cov.index < D.backfill ? { store: D.ticks, from: cov.index, to: D.backfill } : null;
+    if (K.base) K.day = U.tradeDay(D.ticks.time(D.backfill - 1), SESSION);
+  }
+  /* Before a later load of the count's instrument replaces the store: keep only this session's measured backfill trades. */
+  function countKeepBase() {
+    const b = K.base;
+    if (!b || b.store !== D.ticks) return;
+    const kept = new BB.TickStore(), start = BB.sessionStartOf(etNow(), SESSION);
+    for (let i = b.from; i < b.to; i++) { const t = b.store.time(i); if (t >= start) kept.push(t, b.store.price(i), b.store.volume(i), b.store.side(i), b.store.method(i)); }
+    K.base = kept.length ? { store: kept, from: 0, to: kept.length } : null;
+  }
+  /* The store dropped its oldest n trades (onTick): the count's part of it moves with it. */
+  function countStoreTrimmed(n) {
+    const b = K.base;
+    if (!b || b.store !== D.ticks) return;
+    b.from -= n; b.to -= n;
+    if (b.from < 0) { b.from = 0; K.floor = Math.max(K.floor, D.ticks.time(0) + 1e-6); K.trimmed = true; }
+    if (b.to <= 0) K.base = null;
   }
   /* A live trade of the count's instrument; true when the count's trades were dropped (a new session, or the cap). */
   function countAdd(m) {
     const t = m.t, day = U.tradeDay(t, SESSION);
     let dropped = false;
-    if (K.day !== null && day > K.day && K.trades.length) { K.trades = new BB.TickStore(); dropped = true; }   // 18:00 ET: a new session from 0
+    if (K.day !== null && day > K.day && (K.trades.length || K.base)) { K.trades = new BB.TickStore(); K.base = null; dropped = true; }   // 18:00 ET: a new session from 0
     if (K.day === null || day > K.day) K.day = day;
     if (K.firstT === null) K.firstT = t;
     K.trades.push(t, m.p, m.v || 0, m.s, m.sm);
-    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.floor = K.trades.time(0) + 1e-6; K.trimmed = true; dropped = true; }
+    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; K.trimmed = true; dropped = true; }
     return dropped;
   }
   /* The window a build counts from: the count's, when it began on an earlier load of this instrument, else this store's. */
@@ -1025,7 +1043,8 @@ function start(container, opt, PAGE) {
       // range bar holding its time (range bars are built from this load's store)
       const bars = () => D.cur ? D.cur.bars : [];
       const barAt = t => { const b = bars(); let lo = 0, hi = b.length - 1, r = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (b[mid].t <= t) { r = mid; lo = mid + 1; } else hi = mid - 1; } return r < 0 ? t : b[r].t; };
-      job = deltaJob = { cd, cov, store: K.trades, feed: range ? { addQuiet: (t, p, v, s2, sm) => cd.add(t, v, s2, barAt(t), sm) } : cd, pre: null, i: 0 };
+      job = deltaJob = { cd, cov, feed: range ? { addQuiet: (t, p, v, s2, sm) => cd.add(t, v, s2, barAt(t), sm) } : cd,
+        segs: (K.base ? [{ st: K.base.store, i: K.base.from, end: K.base.to }] : []).concat({ st: K.trades, i: 0, end: null }) };
     } else {
       // counted from the window's first trade by its place in the store (never a backfill trade before it, whatever its
       // time); range bars are still built from their session's start, the trades before the window only into the bars
@@ -1045,11 +1064,22 @@ function start(container, opt, PAGE) {
         if (j < n && BB.sessionStartOf(D.ticks.time(j), SESSION) < job.from) { later(slice, 0); return; }
         job.i = j < n ? j : 0;                              // no session start covered: from the first trade, as the chart
       }
-      const st = job.store;
-      do job.i = job.i < job.cov.index ? st.feedSides(job.pre, job.i, null, Math.min(job.cov.index, job.i + DELTA_SLICE_TRADES))
-        : st.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
-      while (job.i < st.length && performance.now() - t0 < DELTA_SLICE_MS);
-      if (job.i < st.length) { later(slice, 0); return; }
+      if (job.segs) {                                       // the count: its kept backfill part, then its live trades (to their end)
+        for (;;) {
+          const g = job.segs[0], end = () => g.end === null ? g.st.length : g.end;
+          do g.i = g.st.feedSides(job.feed, g.i, null, Math.min(end(), g.i + DELTA_SLICE_TRADES));
+          while (g.i < end() && performance.now() - t0 < DELTA_SLICE_MS);
+          if (g.i < end()) { later(slice, 0); return; }
+          if (g.end === null) break;
+          job.segs.shift();
+        }
+      } else {
+        const st = D.ticks;
+        do job.i = job.i < job.cov.index ? st.feedSides(job.pre, job.i, null, Math.min(job.cov.index, job.i + DELTA_SLICE_TRADES))
+          : st.feedSides(job.feed, job.i, null, job.i + DELTA_SLICE_TRADES);
+        while (job.i < st.length && performance.now() - t0 < DELTA_SLICE_MS);
+        if (job.i < st.length) { later(slice, 0); return; }
+      }
       deltaJob = null;
       D.deltaCov = job.cov;
       deltaSet(job.cd);
@@ -1152,8 +1182,8 @@ function start(container, opt, PAGE) {
       if (bridgeSides() !== before && IS.ind.delta.on) { deltaStart(); deltaFed = true; }   // built from the store, this trade in it
     }
     if (D.ticks.length > 2500000) {                      // the first session left is partial now
-      D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; D.backfill = Math.max(0, D.backfill - 500000);
-      if (deltaBuilding() && !deltaJob.cov.journal) { deltaStart(); deltaFed = true; }   // the store moved under a build: start it over
+      D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; D.backfill = Math.max(0, D.backfill - 500000); countStoreTrimmed(500000);
+      if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store (or the count's part of it) moved under a build: start it over
     }
     if (countDropped && deltaBuilding() && deltaJob.cov.journal) { deltaStart(); deltaFed = true; }   // the count moved under a build
     // how far the data's clock runs ahead of this PC's (review 2 S1): when it is more than the delta was built with and
@@ -1320,6 +1350,7 @@ function start(container, opt, PAGE) {
   function subscribe(root) {
     loadSeq++;
     if (root !== K.root) countReset(root);             // a new instrument: a new count; the same one keeps its count (round 5)
+    else countKeepBase();
     resetData(root);
     setConn('loading');
     D.tickHours = ticksWanted();

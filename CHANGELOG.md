@@ -86,8 +86,10 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   it, also those arriving while a later load of it is on its way. A later load of the same instrument (a ChartBridge
   reconnect, or a view that needs more ticks, such as 1m to 15s) builds the delta from the count, so its start and
   "since ... (page opened)" stay as they were; its trades go on the new load's bars (a range trade on the chart's range
-  bar holding its time). Its trades are dropped at each 18:00 ET (the count starts again at 0 there) and the oldest
-  500,000 past 2.5 million, like the store: at most one session of one instrument. A switch of instrument starts a new
+  bar holding its time). The backfill's measured trades are not copied on the first load (the count points into the
+  store; copying them doubled the heap in smoke:perf, 99 MB against its 80); only before a later load of the same
+  instrument is this session's part of them copied. Its trades are dropped at each 18:00 ET (the count starts again at 0
+  there) and the oldest 500,000 past 2.5 million, like the store: at most one session of one instrument. A switch of instrument starts a new
   count, labelled "since HH:MM ET" with no "(page opened)". Trades that arrive neither live nor with a measured side (while
   a reconnect is down, or held by ChartBridge during a reload and sent only in the new backfill, with tick-rule sides
   under quoteHours 0) are not in it, by the measured-sides rule.
@@ -168,7 +170,7 @@ new `live/live.js`, `live/live.css`, `live/bar-builder.js` and `src/chart-engine
   at about 17:59:53: "since 18:01 ET (page opened)", never a count from 18:00, every trade from 18:01; round 5: 1h with
   no backfill counts at once from the page's opening, every live trade; 5m then 15s (a reload for 8 hours) then a
   ChartBridge reconnect (`/test/drop`) keep one count with every live trade of all three loads, still "(page opened)";
-  another instrument starts a new count without it).
+  a count from quoteHours 1's window kept across a reconnect; another instrument starts a new count without it).
   `test/delta.test.js` adds `TickStore.firstMeasured` (a quote window after tick-rule trades, a tick-rule trade inside
   it, a trim, none, the aggressor flag), a prepend through `_addBlockFront` and `_put` after a trim and with new blocks
   (every side stays with its trade), and review 2's width cases (800 to 803 and 1000 px with every bar in view, 800 to

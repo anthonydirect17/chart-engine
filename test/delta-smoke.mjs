@@ -564,6 +564,23 @@ try {
     await c.close(); b.kill();
   }
   {
+    /* round 5: a count that began in the backfill's quote window (quoteHours 1) keeps it across a reconnect */
+    const o = offsetTo(13, 0, 0, weekday);
+    const b = await startBridge(o, ['--quote-hours=1']);
+    const c = await context(o, 's15');
+    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    await q.click('#tfSeg >> text="1m"'); await live(q);
+    const seen = () => q.evaluate(() => new Promise(res => requestAnimationFrame(() => { const x = window.liveChart.getDelta().sessions.at(-1); res({ title: window.liveChart.deltaPane().title, from: x.from, n: x.trades, buy: x.buy, sell: x.sell }); })));
+    const before = await seen();
+    await fetch(`http://localhost:${b.port}/test/drop`, { method: 'POST' });
+    await q.waitForFunction(() => document.getElementById('connPill').textContent !== 'LIVE', null, { timeout: 10000 }).catch(() => {});
+    await live(q); await q.waitForTimeout(1000);
+    const after = await seen();
+    check(before.n > 1000 && after.from === before.from && after.n >= before.n && after.buy >= before.buy && after.sell >= before.sell && after.title.endsWith(' since ' + U.fmtExact(before.from) + ' ET'),
+      'quoteHours 1, 15s then 1m, then a reconnect: the count from the quote window is kept (' + before.n + ' then ' + after.n + ' trades): "' + before.title + '" then "' + after.title + '"');
+    await c.close(); b.kill();
+  }
+  {
     /* scenario C (review 2 S1): the PC's clock 10 s behind the exchange; a 1m view with no tick backfill goes live at
        about 17:59:52 by the PC's clock, 18:00:02 by the exchange's: the trades of 18:00:00 to then never come */
     let done = false;
