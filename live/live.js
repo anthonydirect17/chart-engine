@@ -810,7 +810,8 @@ function start(container, opt, PAGE) {
     if (!s || !Array.isArray(s.rows)) { D.table = null; return; }
     let pvTicks = 0, vol = 0;
     for (const r of s.rows) { pvTicks += r[1] * r[2]; vol += r[2]; }
-    D.table = { from: +s.from, day: U.tradeDay(+s.from + 1, SESSION), whole: s.whole === true, coveredFrom: +s.coveredFrom, rows: s.rows, tick, pvTicks, vol, at: D.ticks.length };
+    D.table = { from: +s.from, day: U.tradeDay(+s.from + 1, SESSION), whole: s.whole === true, coveredFrom: +s.coveredFrom, rows: s.rows,
+      backfill: typeof s.backfill === 'string' ? s.backfill : '', drop: s.drop && +s.drop.at > 0 ? { at: +s.drop.at, why: String(s.drop.why || '') } : null, tick, pvTicks, vol, at: D.ticks.length };
     if (D.ready) {
       vpBuild();
       if (D.window && tickView()) rebuild();              // the VWAP from the table now (the backfill made it whole)
@@ -914,9 +915,13 @@ function start(container, opt, PAGE) {
         const wd = new Date(need * 1000).getUTCDay();
         text = wd === 0 || wd === 6 ? '' : 'Volume profile (RTH): no stock market session on ' + U.fmtDate(need) + ' (NYSE holiday).';
       } else if (rth && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
+      else if (T && T.drop && T.drop.at >= need) text = 'Volume profile missing trades: the data connection dropped at ' + U.fmtHM(T.drop.at) + ' ET, and the trades while it was down are not in it.';
       else if (coveredFrom > need) {
         const at = U.fmtHM(Math.min(coveredFrom, now));
-        text = T ? 'Volume profile building, from ' + at + ' ET: ChartBridge started after ' + from + ' ET and loads the session once, in the background.'
+        // ChartBridge 0.3.5: the session's one backfill still to come (building), or none for this instrument (since)
+        const building = T && /^(wanted|queued|asked|failed once)/.test(T.backfill);
+        text = T ? (building ? 'Volume profile building, from ' + at + ' ET: ChartBridge started after ' + from + ' ET and loads the session once, in the background.'
+            : 'Volume profile since ' + at + ' ET: ChartBridge started after ' + from + ' ET' + (/^none \(not in profileRoots/.test(T.backfill) ? ' and this instrument is not in its profileRoots.' : ' and could not load the session' + (T.backfill ? ' (' + T.backfill + ').' : '.')))
           : D.table || D.window ? 'Volume profile from ' + at + ' ET: it counts the live trades from then on.'
           : D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.'
           : 'Volume profile from ' + at + ' ET: this view loads no tick history, so it counts the live trades from then on.';
@@ -977,6 +982,7 @@ function start(container, opt, PAGE) {
   }
 
   function onTick(m) {
+    if (m.root === D.root) lastSeen[m.root] = m.p;       // the last price, also while a view loads (click-to-place, review N4)
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
     D.ticks.push(t, p, v);                             // columns, not one array per trade (TickStore, bar-builder.js)
@@ -989,7 +995,6 @@ function start(container, opt, PAGE) {
       if (D.table) D.table.at = Math.max(0, D.table.at - drop);
     }
     ticksSeen++;
-    lastSeen[D.root] = p;
     const r1 = D.m1.add(t, p, v);
     const tf = TF[S.tf];
     if (tf.mode === 'time' && tf.sec >= 60) chart.update(tf.sec === 60 ? r1.bar : U.foldLast(D.m1.bars, tf.sec));

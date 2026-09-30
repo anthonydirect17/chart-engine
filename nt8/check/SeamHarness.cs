@@ -39,6 +39,7 @@ public static class SeamHarness
     {
         Check = check;
         ChartBridgeServer.BackfillOn = false;   // 0.3.5: only WindowHarness's own case runs the session backfill
+        ChartBridgeServer.ByDateTickLoads = true;   // 0.3.5 never runs 0.3.4's by-date tick load; these cases test it (WindowHarness turns it off)
         Pure();
         Load();
         WindowHarness.Run(Check);   // 0.3.5: the session tables and the trade text (check/WindowHarness.cs)

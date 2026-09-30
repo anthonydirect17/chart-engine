@@ -19,15 +19,32 @@ never ask for quotes).
   far enough. ChartBridge keeps that window, extended by every live trade, in memory for the session: a reload, a second
   page or a view switch gets its trades from there, from the same first trade, and NinjaTrader is not asked again. Dropped
   at the next 18:00 ET session; never written to disk.
+- **One tick request to NinjaTrader at a time** (review 2 B1, B2): served windows first; a session backfill only with
+  nothing else out (no window, no other backfill, no minute chart's last-trades request, which also waits while a backfill
+  is out). A window request is shared by every load of that instrument that comes while it is out, kept whatever load is
+  current, asked at most twice (the second time larger), and after a failure not asked again for 60 s. Every tick
+  subscribe gets the served window, with or without `liveFirst` (a 1.6.x page, The Desk's relay): 0.3.5 never runs 0.3.4's
+  by-date tick load (review 2 S6).
 - **The session table:** per instrument, the session's volume at each price per half hour of New York time, fed by the live
-  trades. When ChartBridge starts mid-session, ONE backfill of the session runs, once, serial, after no tick chart has
-  loaded for 10 s, all copying and adding off NinjaTrader's threads, joined to the live trades by the 0.3.3 seam; never
-  repeated for that session and never for a page load. At 18:00 a new table starts; the finished one is kept (one small
-  file per instrument, `profile-MNQ.txt`) for the weekend's "last session" profile and a later weekly profile.
+  trades. When ChartBridge starts after 18:00, ONE backfill of the session per instrument in `profileRoots` (config, default
+  MNQ, NQ, ES, MES, in that order): queued at its first live trade, at least 20 s after market data starts, one at a time,
+  once per session, never for a page load, never while the market is closed. It asks by date from 18:00; NinjaTrader's help
+  says a by-date request covers whole days from midnight, so the answer also holds the previous day's hours before 18:00,
+  which are copied and then left out. On NinjaTrader's callback thread only the copy (timed, `/diag` `callbackMs`); the rest
+  on a worker, joined to the live trades by the 0.3.3 seam. On an error or an empty answer it is asked once more after 60 s,
+  then given up with a note; at most 500,000 live trades are kept for it, none once it fails or times out (review 2 S1). At
+  18:00 a new table starts; the finished one is kept (one small file per instrument, `profile-MNQ.txt`, not used when over 4
+  days old) for the weekend's "last session" profile and a later weekly profile. A trade more than 2 minutes off the clock
+  never opens a session (review 2 S7).
+- **A feed drop** (review 2 S2): when a price feed goes from Connected to anything else, or a market data reset arrives, the
+  table is not whole for the rest of the session ("Volume profile missing trades: the data connection dropped at HH:MM ET"),
+  the served window is dropped (the next load asks NinjaTrader again), and live pages get the profile again.
+- **No formatting under the market data lock** (review 2 S4): the `profile` message, the saved file and its read are made
+  from copies with no lock held.
 - **The `profile` message:** the table before `ready` (exactly up to the page's last trade), again when the backfill makes
   it whole. The page's volume profile is its rows plus every trade after them, on Range and minute views alike: equal to
-  the profile of every trade of the session (Session and RTH). While the table builds the profile says "Volume profile
-  building, from HH:MM ET".
+  the profile of every trade of the session (Session and RTH). While the backfill is to come the profile says "Volume
+  profile building, from HH:MM ET"; with none (not in `profileRoots`, or it failed) "Volume profile since HH:MM ET".
 - **Range bars start where they match** (docs/RANGE_BARS.md, Served window): the page draws range bars only from the first
   bar proven to be NinjaTrader's own (`RangeSync`: a session start, or a swing of more than the range each way), never
   offset bars before it; a quiet window shows none, with a note, until one is proven. A window that starts with its
@@ -36,6 +53,9 @@ never ask for quotes).
   whole bar.
 - **VWAP** of range and seconds bars starts from the table (its price times volume less the page's trades, in whole
   ticks): the VWAP of every trade from 18:00. None while the table builds.
+- **HEAD requests** (WORK W17): `HEAD /` and a HEAD for any page file got a 500 and a "request failed" line in the Output
+  window (ChartBridge wrote the body, which HttpListener refuses on a HEAD reply). Now the same status, Content-Type and
+  Content-Length as GET, and no body.
 - **Orders keep working during any load:** order actions no longer wait for a view's load; a price order (click to place)
   needs a known last price (the last seen for the instrument is kept across loads), market orders and Flatten never wait.
   The order path itself is unchanged (`ChartBridgeOrders.cs`, `ChartBridgePin.cs`, `live/order-ticket.js`, `live/pin.js`,
@@ -43,20 +63,25 @@ never ask for quotes).
 - **Gone** from the live-first branch's first design: the older history pulled after `ready` (`more`, `olderTicks`,
   `recentTicks`, the fill join and its harness cases, the 1-minute stand-ins, the reload button, the 120 hour tick cap,
   `quotes: false`, the quote start of review 1).
-- **Old bridges and relays:** ChartBridge 0.3.4 and older, and The Desk's relay (which passes no `features`), get the
-  subscribe of 1.6.0 and its full load. A 1.6.x page gets a full load from 0.3.5.
-- **`/diag`:** `books` (per instrument: the table, the last one, the backfill with its time and trade count, the served
-  window, the live trade rate) and `windows` (the last 20 served-window loads).
+- **Old bridges and relays:** ChartBridge 0.3.4 and older get the subscribe of 1.6.0 and its full load. A 1.6.x page and
+  The Desk's relay (which passes no `features` and drops `profile`) get the served window from 0.3.5, with their own
+  profile note; The Desk gets the exact profile once its relay passes both and it vendors chart 1.8.0.
+- **`/diag`:** `books` (per instrument: the table, the last one, the backfill with its state, time from the ask, time on
+  NinjaTrader's thread and trade count, the served window and its request, the live trade rate; then the gate,
+  `profileRoots` and `backfillTotalMs`) and `windows` (the last 20 served-window loads).
 - Tests: `nt8/check/WindowHarness.cs` (in `npm run check:orders`): the table exact per half hour and price, RTH edges,
   the profile message, the 18:00 rollover, the weekend, NinjaTrader in four time zones across the DST weeks, the whole
-  rule, a mid-session start whose backfill joins the live trades exactly and is never asked again, the served window by
-  count with its re-ask, a second page and a reload from memory with no request, the text format. `test/live-first.test.js`:
+  rule (a minute), profileRoots, a stale last trade at start, the bounded live list, a mid-session start whose backfill
+  joins the live trades exactly and is never asked again (with the time on the callback thread), the backfill waiting for a
+  window request that is out, its one retry and its time limit, the served window by count with its second ask (never a
+  third), a 1.6.x-style subscribe and a reload from memory with no request, two pages and a resubscribe sharing one request,
+  no re-ask right after a failure, a feed drop, the text format; all on a simulated clock (review 2 N7). `test/live-first.test.js`:
   `RangeSync` on 240 made-up histories, the VWAP seed, the trim, the profile from rows equal to the profile from every trade
   (Session and RTH, an early close, both DST changes), and the fake bridge's protocol against its tape.
   `npm run smoke:live-first`: NQ Range 40 in a busy market (trades, bars, VWAP and the profile equal to the tape's), a
   reload and a second page from memory with the same first bar, 15s, a 1m profile with no tick history, a building table
-  then its push, a market order and Flatten during a Range load, a quiet market, the Sunday open, the 18:00 rollover, an
-  old bridge.
+  then its push, an instrument not in profileRoots ("since"), a feed drop and a reload after it, a market order and Flatten
+  during a Range load, a quiet market, the Sunday open, the 18:00 rollover, an old bridge.
 
 ## ChartBridge 0.3.4.1 (2026-09-30): no historical quote requests by default
 

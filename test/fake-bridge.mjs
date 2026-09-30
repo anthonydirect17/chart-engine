@@ -59,12 +59,16 @@
 //   --window-ms=300                 how long "NinjaTrader" takes to answer the first window of a session
 //   --table-building=MS             the table is building (ChartBridge started mid-session): only the live trades from the
 //                                   fake's start, for MS ms; then its one backfill makes it whole and every page that is
-//                                   live and asked for "profile" gets a new one (no sub)
+//                                   live and asked for "profile" gets a new one (no sub). Only for --profile-roots
+//   --profile-roots=MNQ,NQ          ChartBridge's profileRoots (default all four): with --table-building the others never
+//                                   get a backfill (their table counts from the fake's start: "since")
+//   As ChartBridge 0.3.5 does it, every tick subscribe gets the served window, with or without liveFirst (a 1.6.x page)
 //   --calendar                      sample data on the real calendar at the fake's clock: weekends and the 17:00 to 18:00 ET
 //                                   break where they fall (with --clock-offset, a Sunday 18:00 open with Friday before it)
 //   With --test-controls: POST /test/features?liveFirst=0 makes hello leave the features out (a full load, like 0.3.4) for
 //   new connections; POST /test/tape?root=NQ&from=<t> the tape's trades from that time; /test/books what the fake's
-//   "ChartBridge" did per instrument (windows asked and served, the table's state).
+//   "ChartBridge" did per instrument (windows asked and served, the table's state); /test/feed-drop a data connection drop
+//   (every table not whole from then on, the served windows dropped, live pages get the profile again).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -94,6 +98,8 @@ const LIVE_FIRST = !!flag('live-first') && !V1, CALENDAR = !!flag('calendar');
 let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
 const RANGE_HOURS = +flagValue('range-hours') || 2, WINDOW_MS = flagValue('window-ms') === '' ? 300 : +flagValue('window-ms');
 const TABLE_BUILDING_MS = flagValue('table-building') === '' ? -1 : +flagValue('table-building');
+const PROFILE_ROOTS = flagValue('profile-roots') ? flagValue('profile-roots').split(',').map(x => x.trim().toUpperCase()) : ['MNQ', 'NQ', 'ES', 'MES'];
+let dropAt = null;                                 // /test/feed-drop: when the data connection dropped (bar time)
 /* The side of a trade from the previous one (see the header): [s, sm]. */
 function sideOf(p, prev, prevSide) {
   if (prev === undefined) return [0, 0];
@@ -228,7 +234,8 @@ const startedAt = Date.now(), startN = {};
 for (const r of Object.keys(tapes)) startN[r] = tapes[r].n;   // --table-building: the live trades from here on
 const books = {};
 for (const r of Object.keys(tapes)) books[r] = { window: null, asked: 0, served: 0, profiles: 0, pushed: 0 };
-const tableWhole = () => TABLE_BUILDING_MS < 0 || Date.now() - startedAt >= TABLE_BUILDING_MS;
+const backfilled = r => TABLE_BUILDING_MS < 0 || (PROFILE_ROOTS.includes(r) && Date.now() - startedAt >= TABLE_BUILDING_MS);
+const tableWhole = r => dropAt === null && backfilled(r);
 /* One session's table from the tape, trades [a, b), as ChartBridge sends it: [[half hour start, price in ticks, volume]]. */
 function tableRows(r, a, b) {
   const k = tapes[r], tick = INSTR[r].tick, m = new Map();
@@ -241,12 +248,13 @@ function tableRows(r, a, b) {
 /* The "profile" message: the session of the tape's last trade up to trade `end` (ChartBridge's table), and the one before. */
 function profileMsg(r, end, sub) {
   const k = tapes[r], lastT = end > 0 ? k.t[end - 1] : etNow(), s0 = sessionOf(lastT), a = k.at(s0);
-  const whole = tableWhole();
-  const from = whole ? a : Math.max(a, startN[r]);
-  const cov = whole ? s0 : startN[r] < k.n ? Math.max(s0, k.t[startN[r]]) : etNow();
+  const whole = tableWhole(r), all = backfilled(r);
+  const from = all ? a : Math.max(a, startN[r]);
+  const cov = all ? s0 : startN[r] < k.n ? Math.max(s0, k.t[startN[r]]) : etNow();
+  const backfill = TABLE_BUILDING_MS < 0 ? 'none' : !PROFILE_ROOTS.includes(r) ? 'none (not in profileRoots)' : all ? 'done' : 'asked';
   const p0 = k.at(sessionOf(s0 - 1));
   const msg = { type: 'profile', root: r, tick: INSTR[r].tick, bucketSeconds: 1800,
-    session: { from: s0, whole, coveredFrom: +cov.toFixed(3), rows: tableRows(r, from, end) },
+    session: { from: s0, whole, coveredFrom: +cov.toFixed(3), backfill, drop: dropAt === null ? null : { at: dropAt, why: 'the data connection went ConnectionLost' }, rows: tableRows(r, from, end) },
     last: p0 < a ? { from: sessionOf(s0 - 1), whole: true, coveredFrom: sessionOf(s0 - 1), rows: tableRows(r, p0, a) } : null };
   if (sub !== undefined) msg.sub = sub;
   books[r].profiles++;
@@ -254,7 +262,7 @@ function profileMsg(r, end, sub) {
 }
 if (LIVE_FIRST && TABLE_BUILDING_MS >= 0) setTimeout(() => {
   // the one backfill of the session is in: the table is whole, and every live page that asked for it gets it
-  for (const c of clients) if (c.ready && c.profile && tapes[c.root]) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
+  for (const c of clients) if (c.ready && c.profile && tapes[c.root] && PROFILE_ROOTS.includes(c.root)) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
 }, TABLE_BUILDING_MS);
 
 // ---------------------------------------------------------------- tiny WebSocket server
@@ -356,7 +364,8 @@ function subscribeTape(c, m, r) {
     if (c.profile) send(c, tag(profileMsg(r, end)));
     send(c, tag({ type: 'ready', root: r })); c.ready = true;
   };
-  if (!(m.liveFirst === true && hours > 0)) { finish(hours > 0 ? k.at(etNow() - hours * 3600) : null); return; }   // a full load, or none
+  if (!(hours > 0)) { finish(null); return; }       // a minute chart: no trades
+  if (!liveFirstOn && m.liveFirst !== true) { finish(k.at(etNow() - hours * 3600)); return; }   // an old bridge: the full load
   // the served window: dropped at the next session (the session of the tape's last trade moved on)
   if (b.window && b.window.session !== sessionOf(k.t[k.n - 1])) b.window = null;
   if (b.window) { b.served++; finish(b.window.from); return; }
@@ -447,6 +456,11 @@ const server = http.createServer((req, res) => {
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
+    else if (p === '/test/feed-drop') {
+      dropAt = +etNow().toFixed(3);
+      for (const x of Object.values(books)) x.window = null;
+      for (const c of clients) if (c.ready && c.profile && tapes[c.root]) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
+    }
     else if (p === '/test/tape') {
       const k = tapes[r], from = k ? k.at(+q.get('from') || 0) : 0;
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -454,7 +468,7 @@ const server = http.createServer((req, res) => {
     }
     else if (p === '/test/books') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(Object.fromEntries(Object.entries(books).map(([x, b]) => [x, { asked: b.asked, served: b.served, profiles: b.profiles, pushed: b.pushed, whole: tableWhole(),
+      return res.end(JSON.stringify(Object.fromEntries(Object.entries(books).map(([x, b]) => [x, { asked: b.asked, served: b.served, profiles: b.profiles, pushed: b.pushed, whole: tableWhole(x),
         windowFrom: b.window ? tapes[x].t[b.window.from] : null }]))));
     }
     else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });

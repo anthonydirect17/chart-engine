@@ -272,15 +272,17 @@ test('fake bridge --live-first --table-building: the table from the fake\'s star
   } finally { child.kill(); }
 });
 
-test('fake bridge --live-first: a page that does not ask gets a full load from the same tape, and no profile', async () => {
+test('fake bridge --live-first: a page that does not ask for liveFirst (1.6.x, The Desk relay) gets the served window too, and no profile', async () => {
   const port = 19600 + Math.floor(Math.random() * 300);
   const child = await startBridge(port, ['--live-first']);
   try {
     const ws = await wsConnect(port);
-    ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 2 });
+    ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 17 });
     assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'ready')));
     assert.equal(ws.msgs.find(m => m.type === 'ready').sub, undefined, 'no sub echoed when the page sent none');
-    assert.ok(ws.msgs.filter(m => m.type === 'ticks').flatMap(m => m.ticks).length > 1000);
+    const ticks = ws.msgs.filter(m => m.type === 'ticks').flatMap(m => m.ticks);
+    const now = U.zoneSeconds(Date.now() / 1000);
+    assert.ok(ticks.length > 100 && ticks[0][0] >= now - 2 * 3600 - 5, 'the window, not 17 hours: ' + ((now - ticks[0][0]) / 3600).toFixed(2) + ' h');
     assert.equal(ws.msgs.filter(m => m.type === 'profile').length, 0);
     ws.close();
   } finally { child.kill(); }

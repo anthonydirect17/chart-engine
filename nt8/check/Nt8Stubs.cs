@@ -80,12 +80,13 @@ namespace NinjaTrader.Cbi
         public string OrderId { get; set; }
     }
     public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnected, Disconnecting }
-    public class ConnectionStatusEventArgs : EventArgs { public Connection Connection { get; set; } public ConnectionStatus Status { get; set; } public ConnectionStatus PreviousStatus { get; set; } }
+    public class ConnectionStatusEventArgs : EventArgs { public Connection Connection { get; set; } public ConnectionStatus Status { get; set; } public ConnectionStatus PreviousStatus { get; set; } public ConnectionStatus PriceStatus { get; set; } public ConnectionStatus PreviousPriceStatus { get; set; } }
     public class Connection
     {
         public ConnectionStatus Status { get; set; }
         public static event EventHandler<ConnectionStatusEventArgs> ConnectionStatusUpdate;
         public static void FireStatus(Connection c, ConnectionStatus previous) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status, PreviousStatus = previous }); }
+        public static void FirePrice(Connection c, ConnectionStatus previous, ConnectionStatus now) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status, PreviousStatus = c.Status, PriceStatus = now, PreviousPriceStatus = previous }); }
     }
     public enum OrderAction { Buy, BuyToCover, Sell, SellShort }
     public enum OrderType { Limit, Market, MIT, StopMarket, StopLimit }

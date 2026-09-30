@@ -51,9 +51,9 @@ or a second page starts from the same trade without asking NinjaTrader again. Ra
 bar proven to be NinjaTrader's own (a session start, or a swing of more than the range each way; `docs/RANGE_BARS.md`),
 never offset bars before it, and once drawn they stay all day. The volume profile comes from ChartBridge's table of the
 session's volume at each price, fed by the live trades, on every view: exact from 18:00 ET. When ChartBridge starts
-mid-session it loads the session once in the background and the profile says "Volume profile building, from HH:MM ET"
-until then. Orders and Flatten work during any load. With ChartBridge 0.3.4 or older, or through The Desk's relay, the
-chart loads as before.
+after 18:00 it loads the session once, at start, one instrument at a time (`profileRoots`), and the profile says "Volume
+profile building, from HH:MM ET" until then. ChartBridge sends NinjaTrader one tick request at a time. Orders and Flatten
+work during any load. With ChartBridge 0.3.4 or older the chart loads as before.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
 line; recompile or restart NinjaTrader after a change):
@@ -65,6 +65,7 @@ line; recompile or restart NinjaTrader after a change):
 | `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
 | `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
+| `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
 | `quoteHours` | `0` | ChartBridge 0.3.4.1: hours of historical Bid and Ask a tick chart asks NinjaTrader for, to side its backfill trades: `0` (none; they go by the tick rule, live trades keep their side from the live quote), `1` or `2`. Anything else is `0`. See the changelog. |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |

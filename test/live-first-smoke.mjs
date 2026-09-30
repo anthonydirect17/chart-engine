@@ -229,7 +229,7 @@ try {
   {
     console.log('A table still building; an order while Range loads');
     const off = offsetWhere(10, 45, 0, weekday);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=150', '--window-ms=1500', '--table-building=9000', '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
+    const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=150', '--window-ms=1500', '--table-building=9000', '--profile-roots=NQ,MNQ', '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
     await profileOn(p, false);
@@ -263,6 +263,20 @@ try {
     const b = await books(br);
     check(b.NQ.pushed >= 1 && b.NQ.asked === 1, 'pushed to the live page (' + JSON.stringify(b.NQ) + ')');
     await hold(p, br, false);
+    // an instrument not in profileRoots: no backfill, the profile counts from the live trades, and says since when
+    const ctxE = await context(browser, off, { root: 'MES', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
+    const e = await openPage(ctxE, `http://localhost:${br.port}/live/`);
+    await profileOn(e, false);
+    const en = await e.evaluate(() => document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent);
+    check(/^Volume profile since \d+:\d\d ET: .*not in its profileRoots/.test(en), 'MES, not in profileRoots: "' + en + '"');
+    await ctxE.close();
+    // a data connection drop: the live page says the profile is missing trades, and so does a reload
+    await control(br.port, 'feed-drop');
+    await p.waitForTimeout(400);
+    const dn = await p.evaluate(() => document.getElementById('vpNote').textContent);
+    await p.reload(); await live(p);
+    const dn2 = await p.evaluate(() => document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent);
+    check(/^Volume profile missing trades: the data connection dropped at \d+:\d\d ET/.test(dn) && dn2 === dn, 'a feed drop: "' + dn + '", and the same after a reload (never whole again)');
     await ctx.close();
     br.kill();
   }

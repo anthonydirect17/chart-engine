@@ -26,6 +26,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -67,6 +68,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int DefaultDays = 5;
         public static int DefaultTickHours = 8;
         public static int RangeHours = 2;                           // 0.3.5: the hours of trades a tick chart gets before "ready" (the served window)
+        public static string[] ProfileRoots = new string[] { "MNQ", "NQ", "ES", "MES" };   // 0.3.5: roots whose session is loaded once at start, in this order
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
@@ -99,6 +101,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   days = 5
         //   tickHours = 8
         //   rangeHours = 2                (0.3.5: the hours of recent trades a Range or seconds chart starts with; 1 to 8)
+        //   profileRoots = MNQ, NQ, ES, MES
+        //                                 (0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far
+        //                                  is loaded once, one at a time in this order, for an exact volume profile; others
+        //                                  count from the live trades only. Default all four.)
         //   contract.MNQ = MNQ 12-26      (forces a contract instead of the computed front month)
         //   postFills = true              (send every fill to The Desk; off by default)
         //   deskUrl = http://localhost:8800
@@ -135,6 +141,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "days" && int.TryParse(val, out n)) DefaultDays = Math.Max(1, Math.Min(60, n));
                 else if (key == "tickHours" && int.TryParse(val, out n)) DefaultTickHours = Math.Max(0, Math.Min(48, n));
                 else if (key == "rangeHours" && int.TryParse(val, out n)) RangeHours = Math.Max(1, Math.Min(8, n));
+                else if (key == "profileRoots") ProfileRoots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key == "roots") Roots = val.Split(',').Select(s => s.Trim().ToUpperInvariant()).Where(s => s.Length > 0).ToArray();
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
@@ -1055,6 +1062,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double StartEt;                       // its start in bar-time seconds (New York wall clock), as the page keys it
         public bool Whole;                           // every trade of the session is in (else from CoveredFrom only)
         public double CoveredFromEt;
+        public bool Dropped; public double DropAtEt; public string DropWhy;   // 0.3.5 S2: the feed dropped this session (never whole again)
         public readonly Dictionary<long, long> Vol = new Dictionary<long, long>();   // (half hour, price in ticks) -> volume
         public long Trades, Volume;
 
@@ -1068,15 +1076,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             d[k] = was + volume;
         }
         // [[half hour start, price in ticks, volume], ...] in key order; `less` is taken off (trades the page gets as live ticks after it)
-        public static void AppendRows(StringBuilder b, Dictionary<long, long> d, Dictionary<long, long> less)
+        public static void AppendRows(StringBuilder b, long[] keys, long[] vals, Dictionary<long, long> less)
         {
-            List<long> keys = new List<long>(d.Keys);
-            keys.Sort();
+            long[] k2 = (long[])keys.Clone(), v2 = (long[])vals.Clone();
+            Array.Sort(k2, v2);
             b.Append('[');
             bool first = true;
-            foreach (long k in keys)
+            for (int i = 0; i < k2.Length; i++)
             {
-                long v = d[k], minus;
+                long k = k2[i], v = v2[i], minus;
                 if (less != null && less.TryGetValue(k, out minus)) v -= minus;
                 if (v <= 0) continue;
                 if (!first) b.Append(',');
@@ -1094,56 +1102,89 @@ namespace NinjaTrader.NinjaScript.AddOns
     }
 
     // One instrument's table, last finished table, served window and live trade rate. Lock Sync for everything in it; the
-    // market data handler takes it (then a page's Pending lock) for every trade, so a snapshot taken under it is exact.
+    // market data handler takes it (then a page's Pending lock) for every trade, so a snapshot taken under it is exact. Only
+    // short work runs under it: a trade's adds, and copies (snapshots) that the formatting then works from with no lock held.
     public class RootBook
     {
+        public const int LiveCap = 500000;           // live trades kept for a seam (backfill or window) at most; past it the request is abandoned
+        public const double StaleTradeSec = 120;     // a trade older than this (by the clock) never opens a session's table (S7)
         public readonly object Sync = new object();
         public readonly string Root; public readonly double Tick;
         public SessionTable Table, Last;
         public TradeLog Cache;
         public List<SeamTick> BackfillLive;          // live trades since the table began, while its backfill is to come
-        public bool BackfillQueued, LastChanged;
+        public bool LastChanged;
         public string BackfillState = "none";
-        public double BackfillMs = -1; public int BackfillTrades = -1, BackfillReleased = -1; public string BackfillFirst, BackfillLast;
-        public long LateTrades;                      // live trades older than the session held (NinjaTrader delivered them late)
+        public double BackfillAskedMs = -1, BackfillMs = -1, BackfillCallbackMs = -1; public int BackfillTrades = -1, BackfillReleased = -1, BackfillAsks; public string BackfillFirst, BackfillLast;
+        // The served window being asked of NinjaTrader (one request per instrument at a time, B2): the loads waiting for it,
+        // the live trades since it was asked (for its seam), and when the last one failed (no re-ask for a minute).
+        public bool WindowAsking; public int WindowGen, WindowAsks, WindowFailures; public double WindowFailedMs = -1, WindowCallbackMs = -1;
+        public string WindowAskedText, WindowError;
+        public List<SeamTick> WindowLive;
+        public readonly List<object> WindowWaiters = new List<object>();
+        public long LateTrades, StaleTrades;         // live trades older than the session held; trades too old to open a session
         public double MaxGapSec;                     // the longest time between two live trades this session (a feed gap shows here)
         private DateTime lastTrade;
         private long rateCur, rateLast; private double rateStartMs = -1;   // live trades in the current and the last 15 minutes
         public RootBook(string root, double tick) { Root = root; Tick = tick > 0 ? tick : 0.25; }
 
         // Under Sync. Session change: the table ends (kept as Last), the served window is dropped, and the new session's table
-        // starts. It is whole when ChartBridge was listening before the session started and its first trade came within 10
-        // minutes of the start (a feed that was down across 18:00 would come later); otherwise it is built from the first live
-        // trade, and one backfill of the session so far is wanted.
-        public void OnTrade(DateTime t, double price, long volume, double et, DateTime listeningSinceUtc, double nowMs)
+        // starts. It is whole when ChartBridge was listening before the session started and its first trade came within a
+        // minute of the start (a feed that was down across 18:00 comes later); otherwise it is built from the first live trade,
+        // and when `backfill` (profileRoots) one backfill of the session so far is wanted. A trade more than StaleTradeSec older
+        // than the clock (nowNt; MinValue: no check) never opens a table: NinjaTrader may replay the last trade as a snapshot
+        // when market data starts (a weekend, the 17:00 break), which would open a finished session.
+        public void OnTrade(DateTime t, double price, long volume, double et, DateTime listeningSinceUtc, double nowMs, DateTime nowNt, bool backfill)
         {
             if (Table == null || t >= Table.End || t < Table.Start)
             {
                 DateTime s, e;
                 SessionClock.Bounds(t, out s, out e);
-                if (Table != null && s < Table.Start) { LateTrades++; if (Cache != null) Cache.Add(t, price, volume); return; }
+                if (Table != null && s < Table.Start) { LateTrades++; if (Cache != null) Cache.Add(t, price, volume); AddLive(t, price, volume); return; }
+                if (nowNt != DateTime.MinValue && Math.Abs((nowNt - t).TotalSeconds) > StaleTradeSec) { StaleTrades++; return; }
                 if (Table != null) { Last = Table; LastChanged = true; }
                 bool listening = listeningSinceUtc.Ticks > 0 && listeningSinceUtc <= ChartBridgeTime.ToUtc(s);
-                bool whole = listening && (t - s).TotalMinutes <= 10;
+                bool whole = listening && (t - s).TotalSeconds <= 60;
                 Table = new SessionTable { Start = s, End = e, StartEt = ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(s)), Whole = whole, CoveredFromEt = whole ? 0 : et };
                 if (whole) Table.CoveredFromEt = Table.StartEt;
                 Cache = null;
-                BackfillLive = whole ? null : new List<SeamTick>();
-                BackfillQueued = false; BackfillState = whole ? "none" : "wanted";
-                BackfillMs = -1; BackfillTrades = -1; BackfillReleased = -1; BackfillFirst = null; BackfillLast = null;
+                BackfillLive = whole || !backfill ? null : new List<SeamTick>(4096);
+                BackfillState = whole ? "none" : backfill ? "wanted" : "none (not in profileRoots)";
+                BackfillAskedMs = -1; BackfillMs = -1; BackfillCallbackMs = -1; BackfillTrades = -1; BackfillReleased = -1; BackfillAsks = 0; BackfillFirst = null; BackfillLast = null;
                 LateTrades = 0; MaxGapSec = 0; lastTrade = t;
             }
             double gap = (t - lastTrade).TotalSeconds;
             if (gap > MaxGapSec) MaxGapSec = gap;
             if (t > lastTrade) lastTrade = t;
             Table.Add(et, SessionTable.PriceTicks(price, Tick), volume);
-            if (BackfillLive != null) BackfillLive.Add(new SeamTick { Time = t, Price = price, Volume = volume });
+            if (BackfillLive != null)
+            {
+                if (BackfillLive.Count < LiveCap) BackfillLive.Add(new SeamTick { Time = t, Price = price, Volume = volume });
+                else { BackfillLive = null; BackfillState = "abandoned: over " + LiveCap + " live trades while it waited"; }   // S1: bounded
+            }
             if (Cache != null) Cache.Add(t, price, volume);
+            AddLive(t, price, volume);
             if (rateStartMs < 0) rateStartMs = nowMs;
             if (nowMs - rateStartMs >= 15 * 60000) { rateLast = rateCur; rateCur = 0; rateStartMs = nowMs; }
             rateCur++;
         }
+        private void AddLive(DateTime t, double price, long volume)
+        {
+            if (WindowLive == null) return;
+            if (WindowLive.Count < LiveCap) WindowLive.Add(new SeamTick { Time = t, Price = price, Volume = volume });
+            else { WindowLive = null; WindowGen++; }   // abandoned: its answer is not used (the loads waiting get none)
+        }
         public bool InTable(DateTime t) { return Table != null && t >= Table.Start && t < Table.End; }
+
+        // Under Sync (S2): a feed drop or a reset. The table is no longer every trade of the session (and never becomes whole
+        // again this session), and the served window is dropped, so the next load asks NinjaTrader, whose history fills the gap.
+        public bool FeedDropped(double atEt, string why)
+        {
+            Cache = null;
+            if (Table == null || Table.Dropped) return false;
+            Table.Dropped = true; Table.Whole = false; Table.DropAtEt = atEt; Table.DropWhy = why;
+            return true;
+        }
 
         // Live trades an hour, from the last 15 to 30 minutes (-1 when under a minute of trades has been seen).
         public double RatePerHour(double nowMs)
@@ -1154,41 +1195,29 @@ namespace NinjaTrader.NinjaScript.AddOns
             return (rateCur + rateLast) * 3600000.0 / spanMs;
         }
 
-        // The "profile" message: this session's table (minus `less`: trades the page is about to get as live ticks) and the
-        // last finished session's, for the weekend's "last session" profile.
-        public string ProfileJson(string sub, List<SeamTick> less)
+        // S4: what the "profile" message needs, copied under Sync (the rows as two arrays: microseconds), formatted after with
+        // no lock held. Last is never changed once it is Last, so it is taken as it is.
+        public ProfileSnap Snap()
         {
-            StringBuilder b = new StringBuilder(4096);
-            b.Append("{\"type\":\"profile\",\"root\":").Append(CbJson.Str(Root));
-            if (sub != null) b.Append(",\"sub\":").Append(sub);
-            b.Append(",\"tick\":").Append(CbJson.Num(Tick)).Append(",\"bucketSeconds\":").Append((int)SessionTable.BucketSeconds);
-            Dictionary<long, long> minus = null;
-            if (Table != null && less != null && less.Count > 0)
+            ProfileSnap p = new ProfileSnap { Root = Root, Tick = Tick, Last = Last, Backfill = BackfillState };
+            SessionTable t = Table;
+            if (t != null)
             {
-                minus = new Dictionary<long, long>();
-                foreach (SeamTick h in less)
-                    if (InTable(h.Time)) SessionTable.Add(minus, ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(h.Time)), SessionTable.PriceTicks(h.Price, Tick), h.Volume);
+                p.Has = true; p.StartEt = t.StartEt; p.Whole = t.Whole; p.CoveredFromEt = t.CoveredFromEt; p.Start = t.Start; p.End = t.End;
+                p.Dropped = t.Dropped; p.DropAtEt = t.DropAtEt; p.DropWhy = t.DropWhy;
+                p.Keys = new long[t.Vol.Count]; p.Vals = new long[t.Vol.Count];
+                int i = 0;
+                foreach (KeyValuePair<long, long> kv in t.Vol) { p.Keys[i] = kv.Key; p.Vals[i] = kv.Value; i++; }
             }
-            b.Append(",\"session\":"); AppendTable(b, Table, minus);
-            b.Append(",\"last\":"); AppendTable(b, Last, null);
-            return b.Append('}').ToString();
-        }
-        private static void AppendTable(StringBuilder b, SessionTable t, Dictionary<long, long> minus)
-        {
-            if (t == null) { b.Append("null"); return; }
-            b.Append("{\"from\":"); CbJson.AppendNum3(b, t.StartEt);
-            b.Append(",\"whole\":").Append(t.Whole ? "true" : "false").Append(",\"coveredFrom\":"); CbJson.AppendNum3(b, t.CoveredFromEt);
-            b.Append(",\"rows\":"); SessionTable.AppendRows(b, t.Vol, minus);
-            b.Append('}');
+            return p;
         }
 
         // The last finished session's table, kept in one small file per instrument (ChartBridge's folder, profile-MNQ.txt):
         // its start, whether whole, and its rows. Only for the profile of the last session on a weekend (and a later weekly
         // profile); nothing about single trades.
         public string LastFile { get { return System.IO.Path.Combine(ChartBridgeConfig.Folder, "profile-" + Root + ".txt"); } }
-        public string LastText()
+        public static string LastText(SessionTable t)
         {
-            SessionTable t = Last;
             if (t == null) return null;
             StringBuilder b = new StringBuilder();
             b.Append("session ").Append(CbJson.Num3(t.StartEt)).Append(' ').Append(t.Whole ? 1 : 0).Append(' ').Append(CbJson.Num3(t.CoveredFromEt)).Append('\n');
@@ -1196,13 +1225,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (long k in keys) b.Append(k.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(t.Vol[k].ToString(CultureInfo.InvariantCulture)).Append('\n');
             return b.ToString();
         }
-        public static SessionTable ParseLast(string text)
+        public const double LastMaxAgeSec = 4 * 86400;   // a saved session older than this (a long weekend at most) is not used
+        public static SessionTable ParseLast(string text, double nowEt)
         {
             if (string.IsNullOrEmpty(text)) return null;
             string[] lines = text.Split('\n');
             string[] h = lines[0].Split(' ');
             if (h.Length < 4 || h[0] != "session") return null;
             SessionTable t = new SessionTable { StartEt = double.Parse(h[1], CultureInfo.InvariantCulture), Whole = h[2] == "1", CoveredFromEt = double.Parse(h[3], CultureInfo.InvariantCulture) };
+            if (nowEt - t.StartEt > LastMaxAgeSec) return null;
             for (int i = 1; i < lines.Length; i++)
             {
                 string[] kv = lines[i].Split(' ');
@@ -1211,6 +1242,57 @@ namespace NinjaTrader.NinjaScript.AddOns
                 t.Vol[k] = v; t.Volume += v;
             }
             return t;
+        }
+    }
+
+    // A "profile" message's content, copied under the book's lock and formatted with none held (RootBook.Snap).
+    public class ProfileSnap
+    {
+        public string Root, Backfill, DropWhy; public double Tick, StartEt, CoveredFromEt, DropAtEt; public bool Has, Whole, Dropped;
+        public DateTime Start, End;
+        public long[] Keys, Vals; public SessionTable Last;
+
+        // The "profile" message: this session's table less `less` (trades the page is about to get as live ticks), and the
+        // last finished session's, for the weekend's "last session" profile.
+        public string Json(string sub, List<SeamTick> less)
+        {
+            StringBuilder b = new StringBuilder(4096);
+            b.Append("{\"type\":\"profile\",\"root\":").Append(CbJson.Str(Root));
+            if (sub != null) b.Append(",\"sub\":").Append(sub);
+            b.Append(",\"tick\":").Append(CbJson.Num(Tick)).Append(",\"bucketSeconds\":").Append((int)SessionTable.BucketSeconds);
+            b.Append(",\"session\":");
+            if (!Has) b.Append("null");
+            else
+            {
+                Dictionary<long, long> minus = null;
+                if (less != null && less.Count > 0)
+                {
+                    minus = new Dictionary<long, long>();
+                    foreach (SeamTick h in less)
+                        if (h.Time >= Start && h.Time < End) SessionTable.Add(minus, ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(h.Time)), SessionTable.PriceTicks(h.Price, Tick), h.Volume);
+                }
+                b.Append("{\"from\":"); CbJson.AppendNum3(b, StartEt);
+                b.Append(",\"whole\":").Append(Whole ? "true" : "false").Append(",\"coveredFrom\":"); CbJson.AppendNum3(b, CoveredFromEt);
+                b.Append(",\"backfill\":").Append(CbJson.Str(Backfill ?? "none"));
+                b.Append(",\"drop\":");
+                if (!Dropped) b.Append("null");
+                else { b.Append("{\"at\":"); CbJson.AppendNum3(b, DropAtEt); b.Append(",\"why\":").Append(CbJson.Str(DropWhy ?? "")).Append('}'); }
+                b.Append(",\"rows\":"); SessionTable.AppendRows(b, Keys, Vals, minus);
+                b.Append('}');
+            }
+            b.Append(",\"last\":");
+            SessionTable l = Last;
+            if (l == null) b.Append("null");
+            else
+            {
+                b.Append("{\"from\":"); CbJson.AppendNum3(b, l.StartEt);
+                b.Append(",\"whole\":").Append(l.Whole ? "true" : "false").Append(",\"coveredFrom\":"); CbJson.AppendNum3(b, l.CoveredFromEt);
+                long[] lk = new long[l.Vol.Count], lv = new long[l.Vol.Count]; int i = 0;
+                foreach (KeyValuePair<long, long> kv in l.Vol) { lk[i] = kv.Key; lv[i] = kv.Value; i++; }
+                b.Append(",\"rows\":"); SessionTable.AppendRows(b, lk, lv, null);
+                b.Append('}');
+            }
+            return b.Append('}').ToString();
         }
     }
 
@@ -1835,11 +1917,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                         : "order entry is off (read only)");
                     Log(ChartBridgePin.IsSet ? "ChartBridge's page is locked with a PIN (pin.txt)" : "no PIN is set yet: ChartBridge's page asks for one before it shows anything");
                     SubscribeMarketData();
+                    WatchFeed();   // 0.3.5 S2
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
                     WatchAccounts();
                     ChartBridgeOrders.WatchConnections();
                     try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
-                    accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } }, null, 10000, 10000);
+                    accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } try { SweepBooks(); } catch (Exception) { } }, null, 10000, 10000);
                     pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } }, null, 2000, 2000);
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
@@ -1873,6 +1956,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Feeds.Clear();
                 Unwatch();
                 ChartBridgeOrders.UnwatchConnections();
+                UnwatchFeed();
                 try { if (listener != null) { listener.Stop(); listener.Close(); } } catch (Exception) { }
                 listener = null;
                 Instruments.Clear();
@@ -1996,10 +2080,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             res.ContentType = type + "; charset=utf-8";
             res.AddHeader("Cache-Control", "no-store");
             NoFraming(res);
+            WriteBody(ctx, body);
+        }
+
+        // 0.3.5: the body, or for a HEAD request only its length (HttpListener refuses a body on a HEAD reply: writing one
+        // failed the request with a 500 and a "request failed" line in the Output window).
+        private static void WriteBody(HttpListenerContext ctx, byte[] body)
+        {
+            HttpListenerResponse res = ctx.Response;
             res.ContentLength64 = body.Length;
-            res.OutputStream.Write(body, 0, body.Length);
+            if (!IsHead(ctx)) res.OutputStream.Write(body, 0, body.Length);
             res.Close();
         }
+        private static bool IsHead(HttpListenerContext ctx) { return string.Equals(ctx.Request.HttpMethod, "HEAD", StringComparison.OrdinalIgnoreCase); }
 
         // The page can place orders, so no other site may show it inside a frame (clickjacking).
         private static void NoFraming(HttpListenerResponse res)
@@ -2019,9 +2112,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 res.StatusCode = 404;
                 NoFraming(res);
-                byte[] msg = Encoding.UTF8.GetBytes("Not found. Page files go in " + root);
-                res.OutputStream.Write(msg, 0, msg.Length);
-                res.Close();
+                WriteBody(ctx, Encoding.UTF8.GetBytes("Not found. Page files go in " + root));
                 return;
             }
             string ext = Path.GetExtension(full).ToLowerInvariant();
@@ -2032,9 +2123,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             res.ContentType = type;
             res.AddHeader("Cache-Control", "no-cache");
             NoFraming(res);
-            res.ContentLength64 = body.Length;
-            res.OutputStream.Write(body, 0, body.Length);
-            res.Close();
+            WriteBody(ctx, body);
         }
 
         private const int MaxMessageBytes = 65536;   // page messages are small; anything bigger is not the page
@@ -2233,6 +2322,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try
                 {
                     SideTagger(RootOf(e.Instrument)).ClearQuote();
+                    string resetRoot = RootOf(e.Instrument), resetWhy = "a market data reset at " + EtText(NowNt());
+                    Task.Run(() => FeedDropped(resetRoot, resetWhy));   // 0.3.5 S2, off NinjaTrader's thread
                     if (Interlocked.Exchange(ref resetLogged, 1) == 0)
                         Log("market data reset (IsReset) on " + RootOf(e.Instrument) + ": type " + type + ", price " + e.Price.ToString(CultureInfo.InvariantCulture) + "; the live quote is forgotten, nothing is sent (logged once)");
                 }
@@ -2268,11 +2359,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // snapshot taken under it (a load's window and profile) is exact against what the pages get after it.
                 RootBook book = BookOf(root, e.Instrument);
                 bool wantBackfill, lastChanged;
+                bool profileRoot = Array.IndexOf(ChartBridgeConfig.ProfileRoots, root) >= 0;
                 lock (book.Sync)
                 {
-                    book.OnTrade(e.Time, e.Price, e.Volume, t, new DateTime(Interlocked.Read(ref listeningSinceUtcTicks), DateTimeKind.Utc), rx);
-                    wantBackfill = book.BackfillState == "wanted" && !book.BackfillQueued;
-                    if (wantBackfill) { book.BackfillQueued = true; book.BackfillState = "queued"; }
+                    DateTime nowNt = book.InTable(e.Time) ? DateTime.MinValue : NowNt();   // the clock only when a session may open
+                    book.OnTrade(e.Time, e.Price, e.Volume, t, new DateTime(Interlocked.Read(ref listeningSinceUtcTicks), DateTimeKind.Utc), rx, nowNt, profileRoot);
+                    wantBackfill = book.BackfillState == "wanted";
+                    if (wantBackfill) book.BackfillState = "queued";
                     lastChanged = book.LastChanged;
                     foreach (ChartBridgeClient c in Clients.Values)
                     {
@@ -2285,7 +2378,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         }
                     }
                 }
-                if (wantBackfill) QueueBackfill(book);
+                if (wantBackfill) QueueBackfill(book, e.Instrument, false);
                 if (lastChanged) SaveLast(book);
             }
             catch (Exception ex) { Log("tick error: " + ex.Message); }
@@ -2358,8 +2451,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         // sends nothing more: its history and ticks would be taken as the new load's and counted twice.
         private static bool Current(Load L) { return L.Client.Root == L.Root && Volatile.Read(ref L.Client.SubscribeSeq) == L.Seq; }
 
+        public static Func<DateTime> ClockForHarness;   // the harness's simulated NinjaTrader clock; null in NinjaTrader
         private static DateTime NowNt()
         {
+            Func<DateTime> fake = ClockForHarness;
+            if (fake != null) return fake();
             DateTime now = DateTime.Now;   // BarsRequest takes times in NinjaTrader's time zone setting
             try { now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo); } catch (Exception) { }
             return now;
@@ -2377,7 +2473,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 client.SendData("{\"type\":\"status\",\"level\":\"error\",\"text\":" + CbJson.Str("No instrument for " + root + ". Check the NinjaScript Output window.") + "}");
                 return;
             }
-            Load L = new Load { Client = client, Root = root, Name = inst.FullName, TickHours = tickHours, Inst = inst, Window = window && tickHours > 0, Profile = profile };
+            Load L = new Load { Client = client, Root = root, Name = inst.FullName, TickHours = tickHours, Inst = inst, Window = tickHours > 0 && !ByDateTickLoads, Profile = profile };   // S6: every tick chart gets the served window
             lock (client.Pending)   // from here every live trade for this root is held until MarkReady
             {
                 L.Seq = ++client.SubscribeSeq;
@@ -2391,7 +2487,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             L.StartedMs = ChartBridgeTime.NowUtcMs();
             if (L.Window)
             {
-                Interlocked.Exchange(ref lastWindowLoadMs, (long)L.StartedMs);   // the backfill waits for page loads to be done
                 L.Diag = new WindowDiag { Client = client.Id, Root = root, Sub = L.Sub, AtUtcMs = L.StartedMs };
                 lock (Windows) { Windows.Add(L.Diag); if (Windows.Count > 20) Windows.RemoveAt(0); }
             }
@@ -2505,6 +2600,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
             if (L.MinuteTail == null) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
+            // 0.3.5: not while a session backfill is out (the forming minute then stays as NinjaTrader sent it); counted, so no
+            // backfill starts while it is.
+            if (!BeginTail()) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
             // Minute and hour charts: only the last trades, for the forming minute (not sent to the page).
             BarsRequest ticks = new BarsRequest(L.Inst, SeamTicksBack);
             ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
@@ -2518,7 +2616,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else if (Current(L)) { raw = RawBars.Copy(req.Bars, true); NoteAnswer(L); }
                 }
                 catch (Exception ex) { Log("last trades error: " + ex.Message); }
-                finally { try { req.Dispose(); } catch (Exception) { } }
+                finally { try { req.Dispose(); } catch (Exception) { } EndTail(); }
                 RawBars copy = raw;
                 L.HeadSent.ContinueWith(delegate { Finish(L, copy); }, TaskScheduler.Default);
             }));
@@ -2820,32 +2918,40 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // "ready", then the held live trades that are not in the backfill (ChartBridgeSeam.Dedupe), in the order they came.
-        // Under the Pending lock, so no live trade can slip between the held ones and the ones that follow.
-        private static void MarkReady(Load L, RawBars seam) { MarkReady(L, seam, null); }
-        // cache (0.3.5): a served window just asked of NinjaTrader; with the held trades released after it, it becomes the
-        // instrument's served window when there is none yet. Under the book's lock (then Pending, the market data handler's
-        // order), so the "profile" message and the served window are exact against the live trades.
-        private static void MarkReady(Load L, RawBars seam, TradeLog cache)
+        // Under the Pending lock, so no live trade can slip between the held ones and the ones that follow. 0.3.5: the
+        // "profile" first (S4): the table copied under the book's lock together with the trades held so far (all in it), then
+        // formatted with no lock held, less those of them that are released after it (the page adds them as it gets them).
+        // The trades held after the copy are not in it and are released after it too.
+        private static void MarkReady(Load L, RawBars seam)
         {
             ChartBridgeClient client = L.Client;
-            RootBook book = L.Window || L.Profile ? BookOf(L.Root, L.Inst) : null;
-            lock (book != null ? book.Sync : new object())
+            string profile = null;
+            if (L.Profile)
+            {
+                RootBook book = BookOf(L.Root, L.Inst);
+                ProfileSnap snap; List<SeamTick> before;
+                lock (book.Sync)
+                lock (client.Pending)
+                {
+                    if (!Current(L)) return;
+                    snap = book.Snap();
+                    before = new List<SeamTick>(client.Pending);
+                }
+                // Dedupe decides each held trade in order, so the first ones decide the same way now as with more after them.
+                SeamResult early = seam != null ? ChartBridgeSeam.Dedupe(seam.Time, seam.Close, seam.Volume, seam.Count, before, L.HeldAtAnswer)
+                    : ChartBridgeSeam.Dedupe(null, null, null, 0, before);
+                profile = snap.Json(L.Sub, early.Release);
+            }
             lock (client.Pending)
             {
                 if (!Current(L)) return;
                 SeamResult r = seam != null
                     ? ChartBridgeSeam.Dedupe(seam.Time, seam.Close, seam.Volume, seam.Count, client.Pending, L.HeldAtAnswer)
                     : ChartBridgeSeam.Dedupe(null, null, null, 0, client.Pending);
-                if (cache != null && book.Cache == null)
-                {
-                    foreach (SeamTick h in r.Release) cache.Add(h.Time, h.Price, h.Volume);   // the held trades not in the answer
-                    book.Cache = cache;
-                }
                 // "ready" and the released trades go into the page's outbox as ONE data-lane entry (SendAll, 0.3.4): order
                 // traffic still goes out between them, and the page is not closed while it keeps draining (ChartBridgeClient).
-                // 0.3.5: the "profile" first, without the released trades (the page adds them as it gets them).
                 List<string> burst = new List<string>(r.Release.Count + 2);
-                if (L.Profile && book != null) burst.Add(book.ProfileJson(L.Sub, r.Release));
+                if (profile != null) burst.Add(profile);
                 burst.Add("{\"type\":\"ready\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
                 foreach (SeamTick h in ContinueSides(L, r.Release)) burst.Add(h.Json);
                 client.SendAll(burst);
@@ -2871,81 +2977,169 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- 0.3.5: the served window
-        // A tick chart (Range or seconds) that asks for it (subscribe "liveFirst") starts with the last rangeHours of trades,
-        // not with tickHours asked by date. The first such load of the session asks NinjaTrader for them BY COUNT
-        // (BarsRequest(instrument, barsBack): its help says a request by date returns whole trading days), sized from the live
-        // trade rate, asked again with a larger count when the answer does not reach back far enough. That answer, cut at
-        // rangeHours, plus every live trade since, is the instrument's served window (RootBook.Cache): every later load of that
-        // instrument, a reload or another page, gets its trades from there and NinjaTrader is not asked again. It is dropped at
-        // the next session. The held live trades meet it by the 0.3.3 seam (an answer from NinjaTrader) or not at all (the
-        // served window: every live trade is logged under the book's lock before a page holds it, so the held ones are exactly
-        // those after the snapshot).
+        // Every tick chart (Range or seconds; 0.3.5 never runs the by-date tick load of 0.3.4, S6) starts with the last
+        // rangeHours of trades. ChartBridge asks NinjaTrader for them BY COUNT (BarsRequest(instrument, barsBack)), sized from
+        // the live trade rate, and at most once more with three times the count when the answer is full and still does not
+        // reach back rangeHours (two asks at most). One request per instrument at a time (B2): loads that come while it is
+        // outstanding (a second page, a reload, a view switch) wait for the same answer. The answer is kept whatever load is
+        // current: cut at rangeHours and joined to the live trades since the ask by the 0.3.3 seam, it is the instrument's
+        // served window (RootBook.Cache), extended by every live trade. Every later load of that instrument gets its trades
+        // from there and NinjaTrader is not asked again. Dropped at the next session, at a feed drop, and after the session
+        // ends (a weekend). When a window fails, loads get none (their charts start from live trades) and NinjaTrader is not
+        // asked again for WindowRetryMs. The request itself waits its turn at the gate (one tick request at a time).
         public static int WindowFirstGuess = 200000;   // no live rate known yet (settable for the harness)
-        public const int WindowMaxTicks = 2000000, WindowRounds = 3;
-        private static long lastWindowLoadMs;
+        public const int WindowMaxTicks = 2000000;
+        public static int WindowRetryMs = 60000;       // after a failed window, no new ask for a minute
+        public static bool ByDateTickLoads;            // the harness only: 0.3.4's by-date tick load, kept for its tests; never on in 0.3.5
 
         private static void ServeWindow(Load L)
         {
             RootBook book = BookOf(L.Root, L.Inst);
-            TradeLog.View view = null;
+            bool ask = false, none = false; int gen = 0, count = WindowFirstGuess;
+            lock (book.Sync)
+            {
+                if (book.Cache == null)
+                {
+                    if (book.WindowAsking) { book.WindowWaiters.Add(L); if (L.Diag != null) L.Diag.Asked = "shared"; return; }   // the same answer
+                    if (book.WindowFailedMs >= 0 && ChartBridgeTime.NowUtcMs() - book.WindowFailedMs < WindowRetryMs) none = true;
+                    else
+                    {
+                        ask = true; gen = ++book.WindowGen;
+                        book.WindowAsking = true; book.WindowWaiters.Add(L); book.WindowLive = new List<SeamTick>(4096);
+                        double rate = book.RatePerHour(ChartBridgeTime.NowUtcMs());
+                        if (rate > 0) count = (int)Math.Max(20000, Math.Min(WindowMaxTicks, rate * ChartBridgeConfig.RangeHours * 1.5));
+                    }
+                }
+            }
+            if (none)
+            {
+                if (L.Diag != null) L.Diag.Error = "the last window failed less than " + (WindowRetryMs / 1000) + " s ago: not asked again yet";
+                L.HeadSent.ContinueWith(delegate { FinishWindow(L, null); }, TaskScheduler.Default);
+                return;
+            }
+            if (ask) { AskWindow(book, L.Inst, gen, count, 1); return; }
+            if (!ServeFromCache(L, book) && Current(L)) ServeWindow(L);   // the served window was just dropped (18:00, a feed drop): ask
+        }
+
+        // A load's trades from the served window: fixed under the book's lock (the page's held trades are all in it, so they
+        // are cleared), copied and sent with no lock held.
+        private static bool ServeFromCache(Load L, RootBook book)
+        {
+            TradeLog.View view;
             lock (book.Sync)
             lock (L.Client.Pending)
             {
-                if (!Current(L)) return;
-                if (book.Cache != null) { view = book.Cache.Snapshot(); book.Cache.Served++; L.Client.Pending.Clear(); }
+                if (!Current(L)) return true;
+                if (book.Cache == null) return false;
+                view = book.Cache.Snapshot(); book.Cache.Served++; L.Client.Pending.Clear();
             }
-            if (view != null)
-            {
-                L.FromCache = true;
-                if (L.Diag != null) L.Diag.FromCache = true;
-                TradeLog.View v = view;
-                L.HeadSent.ContinueWith(delegate { FinishWindow(L, v.ToBars(), 0, false); }, TaskScheduler.Default);
-                return;
-            }
-            double rate = book.RatePerHour(ChartBridgeTime.NowUtcMs());
-            int n = rate > 0 ? (int)Math.Max(20000, Math.Min(WindowMaxTicks, rate * ChartBridgeConfig.RangeHours * 1.5)) : WindowFirstGuess;
-            RequestWindow(L, n, 1);
+            L.FromCache = true;
+            if (L.Diag != null) L.Diag.FromCache = true;
+            L.HeadSent.ContinueWith(delegate { FinishWindow(L, view.ToBars()); }, TaskScheduler.Default);
+            return true;
         }
 
-        private static void RequestWindow(Load L, int count, int round)
+        private static void AskWindow(RootBook book, Instrument inst, int gen, int count, int round)
         {
-            L.WindowAsked += (L.WindowAsked.Length > 0 ? ", " : "") + count.ToString(CultureInfo.InvariantCulture);
-            if (L.Diag != null) L.Diag.Asked = L.WindowAsked;
-            BarsRequest ticks = new BarsRequest(L.Inst, count);
-            ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
-            ticks.TradingHours = L.Inst.MasterInstrument.TradingHours;
-            ticks.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
+            GateJob j = new GateJob { Kind = "window", Root = book.Root, TimeoutMs = WindowTimeoutMs };
+            j.OnTimeout = () => WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s");
+            j.Start = done =>
             {
-                RawBars raw = null; string error = null;
-                try
+                lock (book.Sync)
                 {
-                    if (code != ErrorCode.NoError) error = code + " " + message;
-                    else if (Current(L)) { raw = RawBars.Copy(req.Bars, true); NoteAnswer(L); }
+                    if (book.WindowGen != gen || !book.WindowAsking) { done(); return; }
+                    book.WindowAsks++;
+                    book.WindowAskedText = (round > 1 ? book.WindowAskedText + ", " : "") + count.ToString(CultureInfo.InvariantCulture);
                 }
-                catch (Exception ex) { error = ex.Message; Log("window error: " + ex.Message); }
-                finally { try { req.Dispose(); } catch (Exception) { } }
-                if (!Current(L)) return;
-                DateTime from = NowNt().AddHours(-ChartBridgeConfig.RangeHours);
-                // As many as asked and still not back to rangeHours: there are more; ask again for more (the live trades
-                // stay held meanwhile), at most WindowRounds times.
-                if (raw != null && raw.Count >= count && raw.Count > 0 && raw.Time[0] > from && count < WindowMaxTicks && round < WindowRounds)
+                BarsRequest ticks = new BarsRequest(inst, count);
+                ticks.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
+                ticks.TradingHours = inst.MasterInstrument.TradingHours;
+                ticks.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
                 {
-                    RequestWindow(L, Math.Min(WindowMaxTicks, count * 3), round + 1);
+                    // On NinjaTrader's thread only the copy (its Bars are its own) and a count; everything else on a worker.
+                    Stopwatch sw = Stopwatch.StartNew();
+                    RawBars raw = null; string error = null; int held = 0;
+                    try
+                    {
+                        if (code != ErrorCode.NoError) error = code + " " + message;
+                        else { raw = RawBars.Copy(req.Bars, true); lock (book.Sync) held = book.WindowLive != null ? book.WindowLive.Count : 0; }
+                    }
+                    catch (Exception ex) { error = ex.Message; }
+                    finally { try { req.Dispose(); } catch (Exception) { } }
+                    double cbMs = sw.Elapsed.TotalMilliseconds;
+                    done();
+                    Task.Run(() => OnWindowAnswer(book, inst, gen, count, round, raw, held, error, cbMs));
+                }));
+            };
+            GateEnqueue(j);
+        }
+
+        private static void OnWindowAnswer(RootBook book, Instrument inst, int gen, int count, int round, RawBars raw, int held, string error, double cbMs)
+        {
+            try
+            {
+                lock (book.Sync) { if (book.WindowGen == gen) book.WindowCallbackMs = Math.Max(book.WindowCallbackMs, cbMs); }
+                if (raw == null) { WindowFailed(book, gen, error ?? "no answer"); return; }
+                DateTime from = NowNt().AddHours(-ChartBridgeConfig.RangeHours);
+                // Full and still not back to rangeHours: there are more. Asked once more, larger (two asks at most).
+                if (raw.Count >= count && raw.Count > 0 && raw.Time[0] > from && count < WindowMaxTicks && round < 2)
+                {
+                    AskWindow(book, inst, gen, Math.Min(WindowMaxTicks, count * 3), round + 1);
                     return;
                 }
                 int start = 0;
-                if (raw != null) while (start < raw.Count && raw.Time[start] < from) start++;   // cut at rangeHours
-                if (error != null && L.Diag != null) L.Diag.Error = error;
-                RawBars copy = raw; int s0 = start;
-                L.HeadSent.ContinueWith(delegate { FinishWindow(L, copy, s0, true); }, TaskScheduler.Default);
-            }));
+                while (start < raw.Count && raw.Time[start] < from) start++;   // cut at rangeHours
+                TradeLog cache = new TradeLog();
+                for (int i = start; i < raw.Count; i++) cache.Add(raw.Time[i], raw.Close[i], raw.Volume[i]);   // off every lock
+                List<object> waiters;
+                lock (book.Sync)
+                {
+                    if (book.WindowGen != gen || !book.WindowAsking) return;   // failed or given up meanwhile (its loads were answered)
+                    if (book.WindowLive == null) { waiters = null; }        // abandoned (too many live trades) or a feed drop
+                    else
+                    {
+                        SeamResult r = ChartBridgeSeam.Dedupe(raw.Time, raw.Close, raw.Volume, raw.Count, book.WindowLive, held);
+                        foreach (SeamTick h in r.Release) cache.Add(h.Time, h.Price, h.Volume);   // the live trades not in the answer
+                        book.Cache = cache; book.WindowAsking = false; book.WindowLive = null; book.WindowFailedMs = -1;
+                        waiters = new List<object>(book.WindowWaiters); book.WindowWaiters.Clear();
+                    }
+                }
+                if (waiters == null) { WindowFailed(book, gen, "the live trades could not be joined to it (a feed drop, or too many while it came)"); return; }
+                string asked; lock (book.Sync) asked = book.WindowAskedText;
+                foreach (object o in waiters)
+                {
+                    Load w = (Load)o;
+                    if (w.Diag != null && w.Diag.Asked == null) w.Diag.Asked = asked;
+                    if (Current(w) && !ServeFromCache(w, book)) w.HeadSent.ContinueWith(delegate { FinishWindow(w, null); }, TaskScheduler.Default);
+                }
+            }
+            catch (Exception ex) { Log("window error: " + ex.Message); WindowFailed(book, gen, ex.Message); }
         }
 
-        // The served window out: the forming minute (rebuilt from it when it can be), the trades from `from`, then "ready".
-        // asked: the window came from NinjaTrader now (seam and a new served window) rather than from the served window.
-        private static void FinishWindow(Load L, RawBars ticks, int from, bool asked)
+        // A window that failed: its loads go live with no trades (their charts start from now), and no new ask for a minute.
+        private static void WindowFailed(RootBook book, int gen, string why)
         {
-            TradeLog cache = null;
+            List<object> waiters;
+            lock (book.Sync)
+            {
+                if (book.WindowGen != gen || !book.WindowAsking) return;
+                book.WindowGen++; book.WindowAsking = false; book.WindowLive = null;
+                book.WindowFailedMs = ChartBridgeTime.NowUtcMs(); book.WindowFailures++; book.WindowError = why;
+                waiters = new List<object>(book.WindowWaiters); book.WindowWaiters.Clear();
+            }
+            Log(book.Root + " tick window failed (" + why + "); tick charts start from live trades, asked again after " + (WindowRetryMs / 1000) + " s at the earliest");
+            foreach (object o in waiters)
+            {
+                Load w = (Load)o;
+                if (w.Diag != null) w.Diag.Error = why;
+                if (Current(w)) w.HeadSent.ContinueWith(delegate { FinishWindow(w, null); }, TaskScheduler.Default);
+            }
+        }
+
+        // The served window out: the forming minute (rebuilt from it when it can be), the trades, then "ready". ticks null:
+        // none (the window failed).
+        private static void FinishWindow(Load L, RawBars ticks)
+        {
             try
             {
                 if (!Current(L)) return;
@@ -2969,212 +3163,401 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 else
                 {
-                    if (L.Diag != null) { L.Diag.Trades = Math.Max(0, ticks.Count - from); if (from < ticks.Count) L.Diag.From = EtText(ticks.Time[from]); }
-                    SendTicks(L, ticks, null, from);
-                    if (asked)
-                    {
-                        cache = new TradeLog();
-                        for (int i = from; i < ticks.Count; i++) cache.Add(ticks.Time[i], ticks.Close[i], ticks.Volume[i]);
-                    }
+                    if (L.Diag != null) { L.Diag.Trades = ticks.Count; if (ticks.Count > 0) L.Diag.From = EtText(ticks.Time[0]); }
+                    SendTicks(L, ticks, null);
                 }
             }
             catch (Exception ex) { Log("window send error: " + ex.Message); }
-            finally { MarkReady(L, asked ? ticks : null, cache); }
+            finally { MarkReady(L, null); }
         }
+
+        // ---------------------------------------------------------- 0.3.5: one tick request to NinjaTrader at a time
+        // The served windows' requests and the session backfills go to NinjaTrader one at a time, windows first (B1, B2). A
+        // backfill starts only with nothing else outstanding: no window request, no backfill, no minute chart's last-trades
+        // request; and a minute chart does not ask for its last trades while a backfill is out (its forming minute stays as
+        // NinjaTrader sent it). A request NinjaTrader does not answer in time is given up: its loads go on without it; a
+        // backfill given up that way keeps every later backfill out until NinjaTrader does answer it.
+        private class GateJob { public string Kind, Root; public Action<Action> Start; public Action OnTimeout; public int TimeoutMs; }
+        private static readonly object GateLock = new object();
+        private static readonly List<GateJob> GateWindows = new List<GateJob>(), GateBackfills = new List<GateJob>();
+        private static bool gateRunning, backfillStuck;
+        private static string gateNow;                // the request outstanding now, for /diag and the minute charts
+        private static int tailsOut;                  // minute charts' last-trades requests outstanding
+        public static int WindowTimeoutMs = 120000, BackfillTimeoutMs = 300000, BackfillGapMs = 3000, BackfillStartMs = 20000, BackfillRetryMs = 60000;
+        public static bool BackfillOn = true;         // the harness turns it off for the cases that do not test it
+
+        private static void GateEnqueue(GateJob j)
+        {
+            lock (GateLock)
+            {
+                (j.Kind == "window" ? GateWindows : GateBackfills).Add(j);
+                if (gateRunning) return;
+                gateRunning = true;
+            }
+            Task.Run(() => GateWorker());
+        }
+
+        // Under GateLock: the next request to send, or null to wait.
+        private static GateJob GateNext()
+        {
+            GateJob j = null;
+            if (GateWindows.Count > 0) { j = GateWindows[0]; GateWindows.RemoveAt(0); return j; }
+            if (GateBackfills.Count == 0 || backfillStuck || tailsOut > 0) return null;
+            // a moment after market data starts, so every instrument's first trade is in and the order below holds
+            DateTime since = new DateTime(Interlocked.Read(ref listeningSinceUtcTicks), DateTimeKind.Utc);
+            if ((ChartBridgeTime.ToUtc(NowNt()) - since).TotalMilliseconds < BackfillStartMs) return null;
+            int best = int.MaxValue;
+            foreach (GateJob b in GateBackfills)
+            {
+                int i = Array.IndexOf(ChartBridgeConfig.ProfileRoots, b.Root);
+                if (i < 0) i = int.MaxValue - 1;
+                if (i < best) { best = i; j = b; }
+            }
+            GateBackfills.Remove(j);
+            return j;
+        }
+
+        private static void GateWorker()
+        {
+            while (true)
+            {
+                GateJob j;
+                lock (GateLock)
+                {
+                    j = GateNext();
+                    if (j == null && GateWindows.Count == 0 && GateBackfills.Count == 0) { gateRunning = false; return; }
+                    if (j != null) gateNow = j.Kind + " " + j.Root;
+                }
+                if (j == null) { Thread.Sleep(50); continue; }
+                ManualResetEventSlim done = new ManualResetEventSlim(false);
+                try { j.Start(() => done.Set()); }
+                catch (Exception ex) { Log(j.Kind + " request error (" + j.Root + "): " + ex.Message); done.Set(); }
+                bool answered = done.Wait(j.TimeoutMs);
+                if (!answered) { try { j.OnTimeout(); } catch (Exception ex) { Log("request timeout error: " + ex.Message); } }
+                lock (GateLock) gateNow = null;
+                if (j.Kind == "backfill" && answered && BackfillGapMs > 0) Thread.Sleep(BackfillGapMs);
+            }
+        }
+
+        // A minute chart's last trades (20,000 by count): not while a backfill is out; counted, so no backfill starts meanwhile.
+        private static bool BeginTail()
+        {
+            lock (GateLock)
+            {
+                if (gateNow != null && gateNow.StartsWith("backfill", StringComparison.Ordinal)) return false;
+                tailsOut++;
+                return true;
+            }
+        }
+        private static void EndTail() { lock (GateLock) if (tailsOut > 0) tailsOut--; }
 
         // ---------------------------------------------------------- 0.3.5: the books, and the one backfill of a session
         private static readonly Dictionary<string, RootBook> Books = new Dictionary<string, RootBook>();
         private static long listeningSinceUtcTicks;
         public static RootBook BookOf(string root, Instrument inst)
         {
+            RootBook b;
             lock (Books)
             {
-                RootBook b;
                 if (Books.TryGetValue(root, out b)) return b;
                 double tick = 0.25;
                 try { if (inst != null && inst.MasterInstrument != null && inst.MasterInstrument.TickSize > 0) tick = inst.MasterInstrument.TickSize; } catch (Exception) { }
                 b = new RootBook(root, tick);
-                try { if (File.Exists(b.LastFile)) b.Last = RootBook.ParseLast(File.ReadAllText(b.LastFile)); } catch (Exception ex) { Log("last session's profile not read: " + ex.Message); }
                 Books[root] = b;
-                return b;
             }
+            // The last session's table from its file, off the thread that asked (the market data handler, S4); at most a few
+            // days old (a long weekend).
+            RootBook nb = b;
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (!File.Exists(nb.LastFile)) return;
+                    SessionTable t = RootBook.ParseLast(File.ReadAllText(nb.LastFile), ChartBridgeTime.EtSeconds(DateTime.UtcNow));
+                    if (t != null) lock (nb.Sync) if (nb.Last == null) nb.Last = t;
+                }
+                catch (Exception ex) { Log("last session's profile not read: " + ex.Message); }
+            });
+            return b;
         }
-        // For the harness: forget every book, and set when ChartBridge began listening to market data.
+        // For the harness: forget every book and queued request, and set when ChartBridge began listening to market data.
         public static void ResetBooks(DateTime listeningSinceUtc)
         {
             lock (Books) Books.Clear();
-            lock (BackfillQueue) BackfillQueue.Clear();
+            lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); backfillStuck = false; tailsOut = 0; }
             Interlocked.Exchange(ref listeningSinceUtcTicks, listeningSinceUtc.Ticks);
         }
 
         private static void SaveLast(RootBook book)
         {
-            string text, file = book.LastFile;
-            lock (book.Sync) { text = book.LastText(); book.LastChanged = false; }
-            if (text == null) return;
-            Task.Run(() =>
+            SessionTable last; string file = book.LastFile;
+            lock (book.Sync) { last = book.Last; book.LastChanged = false; }
+            if (last == null) return;
+            Task.Run(() =>   // S4: formatted and written off the market data thread (a finished table is never changed)
             {
-                try { Directory.CreateDirectory(Path.GetDirectoryName(file)); File.WriteAllText(file + ".tmp", text); if (File.Exists(file)) File.Delete(file); File.Move(file + ".tmp", file); }
+                try
+                {
+                    string text = RootBook.LastText(last);
+                    Directory.CreateDirectory(Path.GetDirectoryName(file)); File.WriteAllText(file + ".tmp", text); if (File.Exists(file)) File.Delete(file); File.Move(file + ".tmp", file);
+                }
                 catch (Exception ex) { Log("last session's profile not saved: " + ex.Message); }
             });
         }
 
-        // One backfill at a time, of each instrument whose table is not whole (ChartBridge started mid-session): once per
-        // session, never for a page load. It waits until no page has started a tick chart load for 10 s and then asks
-        // NinjaTrader for the session so far (by date, ending past now like a full load); all copying and adding runs off
-        // NinjaTrader's threads. The live trades since the table began are matched to its answer by the 0.3.3 seam.
-        public static int BackfillQuietMs = 10000, BackfillGapMs = 3000;
-        private static readonly Queue<RootBook> BackfillQueue = new Queue<RootBook>();
-        private static bool backfillRunning;
-        public static bool BackfillOn = true;   // the harness turns it off for the cases that do not test it
-        private static void QueueBackfill(RootBook book)
+        // Every 10 s: the served window of a session that has ended (the weekend, or before the next session's first trade)
+        // is dropped (nit N6), so a Friday window does not sit in memory until Sunday.
+        private static void SweepBooks()
         {
-            if (!BackfillOn) return;
-            lock (BackfillQueue)
-            {
-                BackfillQueue.Enqueue(book);
-                if (backfillRunning) return;
-                backfillRunning = true;
-            }
-            Task.Run(() => BackfillWorker());
-        }
-        private static void BackfillWorker()
-        {
-            while (true)
-            {
-                RootBook book;
-                lock (BackfillQueue)
-                {
-                    if (BackfillQueue.Count == 0) { backfillRunning = false; return; }
-                    book = BackfillQueue.Dequeue();
-                }
-                try
-                {
-                    for (int i = 0; i < 600 && ChartBridgeTime.NowUtcMs() - Interlocked.Read(ref lastWindowLoadMs) < BackfillQuietMs; i++) Thread.Sleep(100);
-                    TaskCompletionSource<bool> done = new TaskCompletionSource<bool>();
-                    RunBackfill(book, done);
-                    done.Task.Wait(TimeSpan.FromMinutes(5));
-                }
-                catch (Exception ex) { Log(book.Root + " backfill error: " + ex.Message); }
-                Thread.Sleep(BackfillGapMs);
-            }
+            List<RootBook> list; lock (Books) list = Books.Values.ToList();
+            DateTime now = NowNt();
+            foreach (RootBook b in list) lock (b.Sync) { if (b.Table != null && now >= b.Table.End) b.Cache = null; }
         }
 
-        private static void RunBackfill(RootBook book, TaskCompletionSource<bool> done)
+        // The market is closed now (New York time: Friday 17:00 to Sunday 18:00, and the daily 17:00 to 18:00 break).
+        private static bool MarketClosedNow()
+        {
+            DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern);
+            double h = et.TimeOfDay.TotalHours;
+            if (et.DayOfWeek == DayOfWeek.Saturday) return true;
+            if (et.DayOfWeek == DayOfWeek.Sunday) return h < 18;
+            if (et.DayOfWeek == DayOfWeek.Friday) return h >= 17;
+            return h >= 17 && h < 18;
+        }
+
+        // The one backfill of a session, for an instrument in profileRoots whose table is not whole (ChartBridge started after
+        // 18:00 ET): queued at its first live trade (the feed is up), sent through the gate (nothing else outstanding), MNQ,
+        // NQ, ES, MES in profileRoots order, once per session, never for a page load. NinjaTrader is asked for the session so
+        // far BY DATE: its help says a by-date request covers whole trading days from 12:00 AM, so the answer also holds the
+        // hours before 18:00 (the previous day's session back to midnight); those are copied and then left out. On
+        // NinjaTrader's thread only the copy; the rest on a worker. On an error or an empty answer it is asked once more after
+        // BackfillRetryMs, then given up with a note. The live trades since the table began are joined to its answer by the
+        // 0.3.3 seam.
+        private class BackfillAsk { public volatile bool TimedOut; public bool Retry; }
+        private static void QueueBackfill(RootBook book, Instrument inst, bool retry)
+        {
+            if (!BackfillOn) return;
+            BackfillAsk ask = new BackfillAsk { Retry = retry };
+            GateJob j = new GateJob { Kind = "backfill", Root = book.Root, TimeoutMs = BackfillTimeoutMs };
+            j.Start = done => RunBackfill(book, inst, ask, done);
+            j.OnTimeout = () =>
+            {
+                ask.TimedOut = true;
+                lock (GateLock) backfillStuck = true;   // no other backfill until NinjaTrader answers this one
+                lock (book.Sync) { book.BackfillLive = null; book.BackfillState = "timed out: no answer in " + (BackfillTimeoutMs / 1000) + " s"; }
+                Log(book.Root + " session backfill: no answer from NinjaTrader in " + (BackfillTimeoutMs / 1000) + " s; given up (the volume profile stays from the first live trade)");
+            };
+            GateEnqueue(j);
+        }
+
+        private static void RunBackfill(RootBook book, Instrument inst, BackfillAsk ask, Action done)
         {
             SessionTable table;
             lock (book.Sync)
             {
                 table = book.Table;
-                if (table == null || table.Whole || book.BackfillLive == null) { done.TrySetResult(true); return; }
-                book.BackfillState = "asked";
+                if (table == null || table.Whole || book.BackfillLive == null) { done(); return; }
+                if (MarketClosedNow()) { book.BackfillLive = null; book.BackfillState = "skipped: the market is closed"; done(); return; }   // S7
+                book.BackfillState = ask.Retry ? "asked again" : "asked"; book.BackfillAsks++; book.BackfillAskedMs = ChartBridgeTime.NowUtcMs();
             }
-            Instrument inst;
-            if (!Instruments.TryGetValue(book.Root, out inst)) { lock (book.Sync) book.BackfillState = "no instrument"; done.TrySetResult(true); return; }
             double asked = ChartBridgeTime.NowUtcMs();
-            AskBackfill(book, table, inst, true, asked, done);
-        }
-
-        private static void AskBackfill(RootBook book, SessionTable table, Instrument inst, bool margin, double asked, TaskCompletionSource<bool> done)
-        {
-            BarsRequest req0 = new BarsRequest(inst, table.Start, margin ? NowNt().AddMinutes(TickToMarginMinutes) : NowNt());
+            BarsRequest req0 = new BarsRequest(inst, table.Start, ask.Retry ? NowNt() : NowNt().AddMinutes(TickToMarginMinutes));
             req0.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Tick, Value = 1 };
             req0.TradingHours = inst.MasterInstrument.TradingHours;
             req0.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
-                RawBars raw = null; int heldAtAnswer = 0; bool again = false; string error = null;
+                Stopwatch sw = Stopwatch.StartNew();
+                RawBars raw = null; int held = 0; string error = null;
                 try
                 {
-                    if (code != ErrorCode.NoError) { if (margin) again = true; else error = code + " " + message; }
-                    else
-                    {
-                        raw = RawBars.Copy(req.Bars, true);   // a quick copy on NinjaTrader's thread; the rest off it
-                        lock (book.Sync) heldAtAnswer = book.BackfillLive != null ? book.BackfillLive.Count : 0;
-                        if (margin && raw.Count == 0) { again = true; raw = null; }
-                    }
+                    if (ask.TimedOut) { }
+                    else if (code != ErrorCode.NoError) error = code + " " + message;
+                    else { raw = RawBars.Copy(req.Bars, true); lock (book.Sync) held = book.BackfillLive != null ? book.BackfillLive.Count : 0; }   // the one copy on NinjaTrader's thread
                 }
                 catch (Exception ex) { error = ex.Message; }
                 finally { try { req.Dispose(); } catch (Exception) { } }
-                if (again) { AskBackfill(book, table, inst, false, asked, done); return; }
-                RawBars copy = raw; int held = heldAtAnswer; string err = error;
-                Task.Run(() => { try { FinishBackfill(book, table, copy, held, err, asked); } finally { done.TrySetResult(true); } });
+                double cbMs = sw.Elapsed.TotalMilliseconds;
+                if (ask.TimedOut) { lock (GateLock) backfillStuck = false; Log(book.Root + " session backfill: NinjaTrader answered after it was given up; not used"); return; }
+                done();
+                RawBars copy = raw; int h = held; string err = error;
+                Task.Run(() => FinishBackfill(book, inst, table, copy, h, err, asked, cbMs, ask));
             }));
         }
 
-        private static void FinishBackfill(RootBook book, SessionTable table, RawBars raw, int heldAtAnswer, string error, double asked)
+        private static void FinishBackfill(RootBook book, Instrument inst, SessionTable table, RawBars raw, int heldAtAnswer, string error, double asked, double cbMs, BackfillAsk ask)
         {
-            if (raw == null || raw.Count == 0)
+            try
             {
-                lock (book.Sync) { if (book.Table == table) book.BackfillState = "failed: " + (error ?? "no trades came back"); }
-                Log(book.Root + " session backfill failed (" + (error ?? "no trades came back") + "); the volume profile stays from " + EtText(DateTime.Now));
-                return;
-            }
-            // Off every lock: the session's trades in the answer, per half hour and price.
-            Dictionary<long, long> d = new Dictionary<long, long>();
-            ChartBridgeTime.EtCache et = new ChartBridgeTime.EtCache();
-            long trades = 0, volume = 0;
-            for (int i = 0; i < raw.Count; i++)
-            {
-                if (raw.Time[i] < table.Start || raw.Time[i] >= table.End) continue;
-                SessionTable.Add(d, et.Seconds(raw.Time[i]), SessionTable.PriceTicks(raw.Close[i], book.Tick), raw.Volume[i]);
-                trades++; volume += raw.Volume[i];
-            }
-            lock (book.Sync)
-            {
-                if (book.Table != table || book.BackfillLive == null) return;   // the session changed meanwhile
-                SeamResult r = ChartBridgeSeam.Dedupe(raw.Time, raw.Close, raw.Volume, raw.Count, book.BackfillLive, heldAtAnswer);
-                foreach (SeamTick h in r.Release)
-                    if (book.InTable(h.Time)) { SessionTable.Add(d, ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(h.Time)), SessionTable.PriceTicks(h.Price, book.Tick), h.Volume); trades++; volume += h.Volume; }
-                table.Vol.Clear();
-                foreach (KeyValuePair<long, long> kv in d) table.Vol[kv.Key] = kv.Value;
-                table.Trades = trades; table.Volume = volume;
-                table.Whole = true; table.CoveredFromEt = table.StartEt;
-                book.BackfillLive = null;
-                book.BackfillState = "done"; book.BackfillMs = ChartBridgeTime.NowUtcMs() - asked; book.BackfillTrades = raw.Count; book.BackfillReleased = r.Release.Count;
-                book.BackfillFirst = EtText(raw.Time[0]); book.BackfillLast = EtText(raw.Time[raw.Count - 1]);
-                // Every page of this instrument that wants it gets the whole profile now, in order with its live trades.
-                string json = null;
-                foreach (ChartBridgeClient c in Clients.Values)
-                {
-                    if (c.Root != book.Root || !c.WantsProfile) continue;
-                    lock (c.Pending)
+                lock (book.Sync) { if (book.Table == table) book.BackfillCallbackMs = Math.Max(book.BackfillCallbackMs, cbMs); }
+                // Off every lock: the session's trades in the answer, per half hour and price (the day before 18:00 left out).
+                Dictionary<long, long> d = new Dictionary<long, long>();
+                ChartBridgeTime.EtCache et = new ChartBridgeTime.EtCache();
+                long trades = 0, volume = 0; DateTime lastIn = DateTime.MinValue;
+                if (raw != null)
+                    for (int i = 0; i < raw.Count; i++)
                     {
-                        if (!c.Ready) continue;   // still loading: its "ready" brings a fresh one
-                        if (json == null) json = book.ProfileJson(null, null);
-                        c.SendData(json);
+                        if (raw.Time[i] < table.Start || raw.Time[i] >= table.End) continue;
+                        SessionTable.Add(d, et.Seconds(raw.Time[i]), SessionTable.PriceTicks(raw.Close[i], book.Tick), raw.Volume[i]);
+                        trades++; volume += raw.Volume[i]; lastIn = raw.Time[i];
                     }
+                string why = error ?? (raw == null || raw.Count == 0 ? "no trades came back" : trades == 0 ? "no trade of this session came back" : null);
+                if (why == null)
+                {
+                    DateTime firstLive = DateTime.MaxValue;
+                    lock (book.Sync) { if (book.BackfillLive != null && book.BackfillLive.Count > 0) firstLive = book.BackfillLive[0].Time; }
+                    if (firstLive != DateTime.MaxValue && lastIn < firstLive.AddSeconds(-1)) why = "the answer ends at " + EtText(lastIn) + ", before the live trades began";
+                }
+                if (why != null)
+                {
+                    bool retry;
+                    lock (book.Sync)
+                    {
+                        if (book.Table != table || book.BackfillLive == null) return;
+                        retry = !ask.Retry;
+                        if (retry) book.BackfillState = "failed once (" + why + "), asked again in " + (BackfillRetryMs / 1000) + " s";
+                        else { book.BackfillState = "failed: " + why; book.BackfillLive = null; }   // S1: nothing more is kept for it
+                    }
+                    Log(book.Root + " session backfill failed (" + why + ")" + (retry ? "; asked once more in " + (BackfillRetryMs / 1000) + " s" : "; given up: the volume profile counts from the first live trade"));
+                    if (retry) Task.Delay(BackfillRetryMs).ContinueWith(delegate { QueueBackfill(book, inst, true); }, TaskScheduler.Default);
+                    return;
+                }
+                lock (book.Sync)
+                {
+                    if (book.Table != table || book.BackfillLive == null) return;   // the session changed, or it was given up
+                    SeamResult r = ChartBridgeSeam.Dedupe(raw.Time, raw.Close, raw.Volume, raw.Count, book.BackfillLive, heldAtAnswer);
+                    foreach (SeamTick h in r.Release)
+                        if (book.InTable(h.Time)) { SessionTable.Add(d, ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(h.Time)), SessionTable.PriceTicks(h.Price, book.Tick), h.Volume); trades++; volume += h.Volume; }
+                    table.Vol.Clear();
+                    foreach (KeyValuePair<long, long> kv in d) table.Vol[kv.Key] = kv.Value;
+                    table.Trades = trades; table.Volume = volume;
+                    if (!table.Dropped) { table.Whole = true; table.CoveredFromEt = table.StartEt; }   // a feed drop this session: never whole
+                    book.BackfillLive = null;
+                    book.BackfillState = "done"; book.BackfillMs = ChartBridgeTime.NowUtcMs() - asked; book.BackfillTrades = raw.Count; book.BackfillReleased = r.Release.Count;
+                    book.BackfillFirst = EtText(raw.Time[0]); book.BackfillLast = EtText(raw.Time[raw.Count - 1]);
+                }
+                PushProfile(book);
+                Log(book.Root + " session backfill: " + raw.Count + " trades (" + book.BackfillFirst + " to " + book.BackfillLast + ", " + trades + " of this session), " +
+                    Math.Round(book.BackfillMs) + " ms from the ask, " + Math.Round(cbMs, 1) + " ms on NinjaTrader's thread; the volume profile is " + (table.Whole ? "whole" : "still missing the feed drop"));
+            }
+            catch (Exception ex) { Log(book.Root + " session backfill error: " + ex.Message); lock (book.Sync) { if (book.Table == table) { book.BackfillLive = null; book.BackfillState = "failed: " + ex.Message; } } }
+        }
+
+        // A new "profile" to every live page of this instrument that asked for it, in order with its live trades: its trades are
+        // held (as during a load) while the message is made from a snapshot with no lock held, then released after it (S4).
+        private static void PushProfile(RootBook book)
+        {
+            foreach (ChartBridgeClient c in Clients.Values)
+            {
+                if (c.Root != book.Root || !c.WantsProfile) continue;
+                int seq; ProfileSnap snap;
+                lock (book.Sync)
+                lock (c.Pending)
+                {
+                    if (!c.Ready || c.Root != book.Root || !c.WantsProfile) continue;   // still loading: its "ready" brings a fresh one
+                    c.Ready = false; c.Pending.Clear(); seq = Volatile.Read(ref c.SubscribeSeq);
+                    snap = book.Snap();
+                }
+                string json = snap.Json(null, null);
+                lock (c.Pending)
+                {
+                    if (Volatile.Read(ref c.SubscribeSeq) != seq) continue;   // it subscribed again: that load owns it now
+                    List<string> burst = new List<string>(c.Pending.Count + 1) { json };
+                    foreach (SeamTick h in c.Pending) burst.Add(h.Json);
+                    c.SendAll(burst);
+                    c.Pending.Clear();
+                    c.Ready = true;
                 }
             }
-            Log(book.Root + " session backfill: " + raw.Count + " trades (" + book.BackfillFirst + " to " + book.BackfillLast + ") in " + Math.Round(book.BackfillMs) + " ms; the volume profile is whole");
+        }
+
+        // S2: a data connection lost (or a market data reset): each table named is not every trade of its session any more,
+        // its served window is dropped (the next load asks NinjaTrader, whose history fills the gap), a window being asked is
+        // not used, and the live pages get the profile again with the drop in it.
+        private static void FeedDropped(string root, string why)
+        {
+            List<RootBook> list; lock (Books) list = Books.Values.Where(b => root == null || b.Root == root).ToList();
+            double et = ChartBridgeTime.EtSeconds(DateTime.UtcNow);
+            if (ClockForHarness != null) et = ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(NowNt()));
+            foreach (RootBook b in list)
+            {
+                bool changed;
+                lock (b.Sync) { changed = b.FeedDropped(et, why); if (b.WindowAsking) b.WindowLive = null; }
+                if (changed) { Log(b.Root + ": " + why + "; the volume profile of this session is missing trades from here, and the tick window is asked again at the next load"); PushProfile(b); }
+            }
+        }
+
+        // NinjaTrader's static Connection.ConnectionStatusUpdate, attached by reflection (as ChartBridgeOrders does): a price
+        // feed that goes from Connected to anything else is a drop.
+        private static EventInfo feedEvent; private static Delegate feedHandler;
+        private static void WatchFeed()
+        {
+            try
+            {
+                EventInfo ev = typeof(Connection).GetEvent("ConnectionStatusUpdate", BindingFlags.Public | BindingFlags.Static);
+                if (ev == null) { Log("connection status events not found; a feed drop is not seen by the volume profile"); return; }
+                MethodInfo mi = typeof(ChartBridgeServer).GetMethod("OnFeedStatus", BindingFlags.NonPublic | BindingFlags.Static);
+                Delegate d = Delegate.CreateDelegate(ev.EventHandlerType, mi);
+                ev.AddEventHandler(null, d);
+                feedEvent = ev; feedHandler = d;
+            }
+            catch (Exception ex) { Log("could not watch connection status (" + ex.Message + "); a feed drop is not seen by the volume profile"); }
+        }
+        private static void UnwatchFeed()
+        {
+            try { if (feedEvent != null && feedHandler != null) feedEvent.RemoveEventHandler(null, feedHandler); } catch (Exception) { }
+            feedEvent = null; feedHandler = null;
+        }
+        private static void OnFeedStatus(object sender, EventArgs e)
+        {
+            try
+            {
+                PropertyInfo ps = e.GetType().GetProperty("PriceStatus") ?? e.GetType().GetProperty("Status");
+                PropertyInfo pp = e.GetType().GetProperty("PreviousPriceStatus") ?? e.GetType().GetProperty("PreviousStatus");
+                if (ps == null || pp == null) return;
+                string now = Convert.ToString(ps.GetValue(e, null)), was = Convert.ToString(pp.GetValue(e, null));
+                if (was == "Connected" && now != "Connected") { string why = "the data connection went " + now + " at " + EtText(NowNt()); Task.Run(() => FeedDropped(null, why)); }   // off NinjaTrader's thread
+            }
+            catch (Exception ex) { Log("feed status error: " + ex.Message); }
         }
 
         private static string BooksJson()
         {
             List<RootBook> list; lock (Books) list = Books.Values.ToList();
             StringBuilder b = new StringBuilder("{");
-            bool first = true;
-            double now = ChartBridgeTime.NowUtcMs();
+            double now = ChartBridgeTime.NowUtcMs(), total = 0;
             foreach (RootBook k in list)
             {
                 lock (k.Sync)
                 {
-                    if (!first) b.Append(',');
-                    first = false;
                     SessionTable t = k.Table;
                     b.Append(CbJson.Str(k.Root)).Append(":{\"table\":");
                     if (t == null) b.Append("null");
                     else b.Append("{\"session\":").Append(CbJson.Str(EtText(t.Start))).Append(",\"whole\":").Append(t.Whole ? "true" : "false")
                           .Append(",\"trades\":").Append(t.Trades).Append(",\"volume\":").Append(t.Volume).Append(",\"rows\":").Append(t.Vol.Count)
-                          .Append(",\"lateTrades\":").Append(k.LateTrades).Append(",\"maxGapSec\":").Append(CbJson.Num3(k.MaxGapSec)).Append('}');
+                          .Append(",\"drop\":").Append(t.Dropped ? CbJson.Str(t.DropWhy ?? "") : "null")
+                          .Append(",\"lateTrades\":").Append(k.LateTrades).Append(",\"staleTrades\":").Append(k.StaleTrades).Append(",\"maxGapSec\":").Append(CbJson.Num3(k.MaxGapSec)).Append('}');
                     b.Append(",\"last\":").Append(k.Last == null ? "null" : "{\"whole\":" + (k.Last.Whole ? "true" : "false") + ",\"volume\":" + k.Last.Volume + ",\"rows\":" + k.Last.Vol.Count + "}");
-                    b.Append(",\"backfill\":{\"state\":").Append(CbJson.Str(k.BackfillState)).Append(",\"ms\":").Append(k.BackfillMs >= 0 ? CbJson.Num3(k.BackfillMs) : "null")
+                    b.Append(",\"backfill\":{\"state\":").Append(CbJson.Str(k.BackfillState)).Append(",\"asks\":").Append(k.BackfillAsks)
+                     .Append(",\"askedAtUtcMs\":").Append(k.BackfillAskedMs >= 0 ? CbJson.Num3(k.BackfillAskedMs) : "null")
+                     .Append(",\"ms\":").Append(k.BackfillMs >= 0 ? CbJson.Num3(k.BackfillMs) : "null")
+                     .Append(",\"callbackMs\":").Append(k.BackfillCallbackMs >= 0 ? CbJson.Num3(k.BackfillCallbackMs) : "null")
                      .Append(",\"trades\":").Append(k.BackfillTrades).Append(",\"releasedLive\":").Append(k.BackfillReleased)
+                     .Append(",\"liveHeld\":").Append(k.BackfillLive != null ? k.BackfillLive.Count : 0)
                      .Append(",\"first\":").Append(k.BackfillFirst != null ? CbJson.Str(k.BackfillFirst) : "null").Append(",\"last\":").Append(k.BackfillLast != null ? CbJson.Str(k.BackfillLast) : "null").Append('}');
+                    if (k.BackfillMs >= 0) total += k.BackfillMs;
                     b.Append(",\"window\":").Append(k.Cache == null ? "null" : "{\"from\":" + CbJson.Str(EtText(k.Cache.First)) + ",\"trades\":" + k.Cache.Count + ",\"served\":" + k.Cache.Served + "}");
+                    b.Append(",\"windowAsk\":{\"asking\":").Append(k.WindowAsking ? "true" : "false").Append(",\"waiting\":").Append(k.WindowWaiters.Count)
+                     .Append(",\"asks\":").Append(k.WindowAsks).Append(",\"failures\":").Append(k.WindowFailures)
+                     .Append(",\"lastError\":").Append(k.WindowError != null ? CbJson.Str(k.WindowError) : "null")
+                     .Append(",\"callbackMs\":").Append(k.WindowCallbackMs >= 0 ? CbJson.Num3(k.WindowCallbackMs) : "null").Append('}');
                     double rate = k.RatePerHour(now);
-                    b.Append(",\"tradesPerHour\":").Append(rate >= 0 ? CbJson.Num3(rate) : "null").Append('}');
+                    b.Append(",\"tradesPerHour\":").Append(rate >= 0 ? CbJson.Num3(rate) : "null").Append("},");
                 }
             }
+            string gate;
+            lock (GateLock) gate = "{\"now\":" + (gateNow != null ? CbJson.Str(gateNow) : "null") + ",\"windowsQueued\":" + GateWindows.Count + ",\"backfillsQueued\":" + GateBackfills.Count +
+                ",\"minuteTailsOut\":" + tailsOut + ",\"backfillStuck\":" + (backfillStuck ? "true" : "false") + "}";
+            b.Append("\"gate\":").Append(gate).Append(",\"profileRoots\":[").Append(string.Join(",", ChartBridgeConfig.ProfileRoots.Select(x => CbJson.Str(x)).ToArray())).Append(']');
+            b.Append(",\"backfillTotalMs\":").Append(CbJson.Num3(total));
             return b.Append('}').ToString();
         }
         private static string WindowsJson() { lock (Windows) return "[" + string.Join(",", Windows.Select(x => x.Json()).ToArray()) + "]"; }
