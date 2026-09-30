@@ -11,7 +11,7 @@
   --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
   --crimson: #9F1239; --crimson-word: #E0445E;
   --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
-  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8;
+  --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8; --delta-sw: #4B9CD3;
   /* The chart's ground and the legend on it follow the Colors panel's Background (1.5.3; set from the engine's
      theme). These are the defaults: exactly the look before. On a light ground the page also sets the variables
      above (and --panel, --scheme, --ce-*) from ChartEngine.util.chromeColors, so the toolbar, menus and status line
@@ -148,6 +148,9 @@
 .chart-live .lg2 .down { color: var(--down-text); }
 .chart-live .lg3 .vw { color: var(--vwap-sw); }
 .chart-live .lg3 .vpc { color: var(--vp-poc); }
+.chart-live .lg3 .dv.up { color: var(--up-text); }
+.chart-live .lg3 .dv.down { color: var(--down-text); }
+.chart-live .lg3 span .dunk { color: var(--lg-dim); }
 .chart-live .lg3 .buy { color: var(--lg-buy); text-shadow: var(--lg-buy-halo, none); }
 .chart-live .lg3 .sell { color: var(--lg-sell); text-shadow: var(--lg-sell-halo, none); }
 .chart-live .notice { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 4; max-width: min(460px, calc(100% - 40px)); background: var(--s2); border: 1px solid var(--line-strong); border-radius: 12px; padding: 16px 18px; display: grid; gap: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.45); }

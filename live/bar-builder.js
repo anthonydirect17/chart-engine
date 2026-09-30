@@ -200,26 +200,45 @@ class BarBuilder {
  * was about 2 million objects (some 150 MB of JavaScript heap) for the garbage collector to walk and move, and the
  * page's frames waited on it. Blocks live outside that heap, are never copied as the store grows, and the oldest
  * are dropped whole when the page trims its history.
+ * Each trade's side (1.7.0, ChartBridge 0.3.4 sends `s` and `sm` with every trade; nt8/PROTOCOL.md, Trade side) is one
+ * byte beside its block: 0 when the trade came with no side at all (ChartBridge 0.3.3 and older), else
+ * 1 + (s + 1) + 3 * sm for s = 1 buy, -1 sell, 0 unknown and sm = 0 none, 1 aggressor, 2 bid/ask, 3 tick rule. A side
+ * or method that is not one of those is kept as unknown (s 0, sm 0). The page never works a side out itself.
  */
 const BLOCK = 65536, SHIFT = 16, MASK = BLOCK - 1;
+/* The side byte for s and sm as ChartBridge sends them (see above). */
+function sideCode(s, sm) {
+  if (s === undefined || s === null) return 0;
+  if (s !== 1 && s !== -1 && s !== 0) return 1 + 1;              // not a side: unknown
+  return 1 + (s + 1) + 3 * (sm === 1 || sm === 2 || sm === 3 ? sm : 0);
+}
+/* The side (1, -1, 0) of a side byte, or undefined for a trade that came with none; and its method (0 to 3). */
+const codeSide = c => c ? (c - 1) % 3 - 1 : undefined;
+const codeMethod = c => c ? Math.floor((c - 1) / 3) : 0;
 class TickStore {
   constructor() { this.clear(); }
-  clear() { this.blocks = []; this.start = 0; this.length = 0; }
-  /** Add one trade at the end. */
-  push(t, p, v) {
+  clear() { this.blocks = []; this.sides = []; this.start = 0; this.length = 0; }
+  /** Add one trade at the end; s and sm (ChartBridge 0.3.4) are left out for a trade that has none. */
+  push(t, p, v, s, sm) {
     const j = this.start + this.length;
     let b = this.blocks[j >>> SHIFT];
-    if (!b) { b = new Float64Array(BLOCK * 3); this.blocks.push(b); }
+    if (!b) { b = new Float64Array(BLOCK * 3); this.blocks.push(b); this.sides.push(new Uint8Array(BLOCK)); }
     const k = (j & MASK) * 3;
     b[k] = t; b[k + 1] = p; b[k + 2] = v || 0;
+    this.sides[j >>> SHIFT][j & MASK] = sideCode(s, sm);
     this.length++;
   }
-  /** Add trades as ChartBridge sends them, [[t, p, v], ...]. */
-  pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2]); } }
+  /** Add trades as ChartBridge sends them, [[t, p, v], ...] or since 0.3.4 [[t, p, v, s, sm], ...]. */
+  pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2], x[3], x[4]); } }
   _get(i, f) { const j = i + this.start; return this.blocks[j >>> SHIFT][(j & MASK) * 3 + f]; }
   time(i) { return this._get(i, 0); }
   price(i) { return this._get(i, 1); }
   volume(i) { return this._get(i, 2); }
+  _code(i) { const j = i + this.start; return this.sides[j >>> SHIFT][j & MASK]; }
+  /** The side of trade i: 1 buy, -1 sell, 0 unknown, or undefined when it came with none (ChartBridge 0.3.3). */
+  side(i) { return codeSide(this._code(i)); }
+  /** How its side was found: 0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule. */
+  method(i) { return codeMethod(this._code(i)); }
   /** The trade at i as [t, p, v] (a new array; for tests and rare use, not in loops). */
   at(i) { return i >= 0 && i < this.length ? [this._get(i, 0), this._get(i, 1), this._get(i, 2)] : undefined; }
   /** Drop the oldest n trades. */
@@ -227,7 +246,7 @@ class TickStore {
     n = Math.max(0, Math.min(this.length, n));
     this.start += n; this.length -= n;
     const whole = this.start >>> SHIFT;
-    if (whole) { this.blocks.splice(0, whole); this.start &= MASK; }
+    if (whole) { this.blocks.splice(0, whole); this.sides.splice(0, whole); this.start &= MASK; }
     if (!this.length) this.clear();
   }
   /** Feed trades from index `from` (with t >= minT, when given) to builder.add(t, p, v), oldest first. */
@@ -240,6 +259,22 @@ class TickStore {
       for (let k = (j & MASK) * 3; i < end; i++, k += 3) {
         if (!(b[k] >= min)) continue;                  // a NaN time is skipped too, as before 1.5.1
         if (quiet) builder.addQuiet(b[k], b[k + 1], b[k + 2]); else builder.add(b[k], b[k + 1], b[k + 2]);
+      }
+    }
+  }
+  /**
+   * feed() with each trade's side (1.7.0): builder.addQuiet(t, p, v, s, sm), s undefined for a trade that came with
+   * none. For the cumulative delta (ChartEngine.CumulativeDelta), which counts exactly the trades this store holds.
+   */
+  feedSides(builder, from, minT) {
+    const min = minT === undefined ? -Infinity : minT;
+    for (let i = Math.max(0, from || 0); i < this.length;) {
+      const j = i + this.start, b = this.blocks[j >>> SHIFT], sd = this.sides[j >>> SHIFT];
+      const end = Math.min(this.length, i + BLOCK - (j & MASK));
+      for (let m = j & MASK, k = m * 3; i < end; i++, m++, k += 3) {
+        if (!(b[k] >= min)) continue;
+        const c = sd[m];
+        builder.addQuiet(b[k], b[k + 1], b[k + 2], codeSide(c), codeMethod(c));
       }
     }
   }
@@ -288,5 +323,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
 });
