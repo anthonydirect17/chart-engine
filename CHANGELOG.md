@@ -118,6 +118,9 @@ Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
   a close always aborts the connection, so the page sees it and reconnects (a close between two sends used to leave it
   connected, silent and Armed); and a load queues its chunks at most three ahead of the page, so a loading page holds
   about 4 MB of them, not the whole load (Range 40 over 28 hours was about 295 MB).
+  The price of not counting the release (review 5): right after a load the chart can run behind by up to the release's
+  length plus 5 s before the rule acts (review 5 measured 4.4 to 14.3 s on healthy pages at 3,000 trades a second),
+  while trading stays enabled. Sending recent ticks first (the next step, branch live-first) is what shrinks the release.
 - **Sends never throw** (review 3): a message racing a page's Close is dropped quietly (it used to throw out of the loop
   sending an order, position or fill update to every page, so the pages after it missed it); a failed send closes the
   page so it reconnects.
