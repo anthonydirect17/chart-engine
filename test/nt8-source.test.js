@@ -499,10 +499,13 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(code, /public static int QuoteWaitMs = 2500;/);
   assert.match(code, /if \(L\.Waiting <= 0 \|\| \(trades && L\.LastTicks == null\)\)/);
   // review 2 S1: two lanes; order traffic ahead of queued market data; a draining page is not closed at 5,000
-  assert.match(code, /private readonly BlockingCollection<object> outbox = new BlockingCollection<object>\(new ConcurrentQueue<object>\(\), HardCap\);/);
-  assert.match(code, /public const int SoftCap = 5000, HardCap = 50000;/);
+  // review 3: a page more than 5 s behind is reconnected (no entry cap); a send racing a Close is dropped quietly
+  assert.match(code, /private readonly BlockingCollection<object> outbox = new BlockingCollection<object>\(new ConcurrentQueue<object>\(\)\);/);
+  assert.match(code, /public const int SoftCap = 5000;\s*public const double StuckMs = 2000, MaxLagMs = 5000;/);
+  assert.match(code, /if \(age > MaxLagMs\) \{ NotKeepingUp\(age\); return true; \}/);
+  assert.match(code, /catch \(InvalidOperationException\) \{ \}/);
   assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" \};/);
-  assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) return false;/);
+  assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
   assert.ok(md2.indexOf('if (e.IsReset)') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'IsReset handled before NoteLast');

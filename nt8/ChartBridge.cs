@@ -1077,17 +1077,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // data queued before them; the data lane (history, ticks, ready, tick, and anything else) is the FIFO outbox. Order
         // within each lane is kept. A data message never goes out ahead of an order-lane message sent before it.
         // The outbox holds one message (a string), several sent in order (a string[], SendAll), or Wake (an order-lane
-        // message is waiting). "Not keeping up" (the page is closed): SoftCap (5,000) entries waiting while the message
-        // being sent has been stuck for over StuckMs (2 s), or HardCap (50,000) entries waiting, or over SoftCap order-lane
-        // messages waiting. A page that keeps draining is not closed at 5,000: a big release in front of live trades
-        // drains at the page's pace, and the trades behind it are sent as soon as it is done.
-        public const int SoftCap = 5000, HardCap = 50000;
-        public const double StuckMs = 2000;
+        // message is waiting).
+        // A page more than 5 s behind is reconnected (review 3, Anthony's "just a reset"): it is closed, and it reconnects on
+        // its own and reloads. "Behind" is how long the oldest waiting market data entry has waited (DataAgeMs), counted
+        // from when it was queued, or from when the last history or ticks chunk (a load's bulk data) finished sending if that
+        // is later: a load's chunks go out back to back at the page's pace, and none of them is late for the page. Also
+        // closed: 5,000 entries waiting while the message being sent has been stuck for over StuckMs (2 s), and over 5,000
+        // order-lane messages waiting.
+        public const int SoftCap = 5000;
+        public const double StuckMs = 2000, MaxLagMs = 5000;
         private static readonly object Wake = new object();
-        private readonly BlockingCollection<object> outbox = new BlockingCollection<object>(new ConcurrentQueue<object>(), HardCap);
+        private readonly BlockingCollection<object> outbox = new BlockingCollection<object>(new ConcurrentQueue<object>());
+        private readonly ConcurrentQueue<long> queuedAt = new ConcurrentQueue<long>();   // Stopwatch time each data entry was queued, in outbox order
         private readonly ConcurrentQueue<string> orderLane = new ConcurrentQueue<string>();
         private int orderLaneCount;
         private long sendStarted;               // Stopwatch timestamp when the message being sent was handed to the socket; 0 when none
+        private long bulkDone;                  // Stopwatch timestamp when the last history or ticks chunk finished sending
         private readonly CancellationTokenSource cts = new CancellationTokenSource();
 
         public ChartBridgeClient(WebSocket socket, int id) { Socket = socket; Id = id; }
@@ -1097,32 +1102,65 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" };
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
-        public static bool OrderLane(string json)
+        public static string TypeOf(string json)
         {
             const string head = "{\"type\":\"";
-            if (json == null || !json.StartsWith(head, StringComparison.Ordinal)) return false;
+            if (json == null || !json.StartsWith(head, StringComparison.Ordinal)) return null;
             int end = json.IndexOf('"', head.Length);
-            if (end < 0) return false;
-            string type = json.Substring(head.Length, end - head.Length);
-            return Array.IndexOf(OrderLaneTypes, type) >= 0;
+            return end < 0 ? null : json.Substring(head.Length, end - head.Length);
         }
+
+        public static bool OrderLane(string json)
+        {
+            string type = TypeOf(json);
+            return type != null && Array.IndexOf(OrderLaneTypes, type) >= 0;
+        }
+
+        private static bool Bulk(string json)
+        {
+            return json.StartsWith("{\"type\":\"ticks\"", StringComparison.Ordinal) || json.StartsWith("{\"type\":\"history\"", StringComparison.Ordinal);
+        }
+
+        private static double MsSince(long stamp) { return (Stopwatch.GetTimestamp() - stamp) * 1000.0 / Stopwatch.Frequency; }
 
         private bool Stuck()
         {
             long started = Interlocked.Read(ref sendStarted);
-            return started != 0 && (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency > StuckMs;
+            return started != 0 && MsSince(started) > StuckMs;
         }
 
-        // Into the outbox, or false when the page is not keeping up (see above). Never blocks.
+        // How long the oldest waiting market data entry has waited, in ms (0 when none waits). See above.
+        public double DataAgeMs()
+        {
+            long q;
+            if (!queuedAt.TryPeek(out q)) return 0;
+            return Math.Max(0, MsSince(Math.Max(q, Interlocked.Read(ref bulkDone))));
+        }
+
+        public int Queued { get { return outbox.Count; } }
+        public int OrderLaneQueued { get { return Volatile.Read(ref orderLaneCount); } }
+
+        // Into the outbox, or false when the page is closed for being behind or stuck (see above). Never blocks, never
+        // throws: an entry that races a Close is dropped quietly (review 3 S2; it used to throw out of broadcast loops).
         private bool Admit(object item)
         {
-            if (outbox.Count >= SoftCap && Stuck()) return false;
-            return outbox.TryAdd(item);
+            if (outbox.Count >= SoftCap && Stuck()) { NotKeepingUp(null); return true; }
+            double age = DataAgeMs();
+            if (age > MaxLagMs) { NotKeepingUp(age); return true; }
+            try
+            {
+                if (item != Wake) queuedAt.Enqueue(Stopwatch.GetTimestamp());
+                if (!outbox.TryAdd(item)) NotKeepingUp(null);
+            }
+            catch (InvalidOperationException) { }   // closed meanwhile (CompleteAdding): Send after Close does nothing
+            return true;
         }
 
-        private void NotKeepingUp()
+        private int closedLogged;
+        private void NotKeepingUp(double? lagMs)
         {
-            ChartBridgeServer.Log("Client " + Id + " is not keeping up; closing it.");
+            if (Interlocked.Exchange(ref closedLogged, 1) == 0)
+                ChartBridgeServer.Log("Client " + Id + " is not keeping up" + (lagMs.HasValue ? ": " + (lagMs.Value / 1000).ToString("0.0", CultureInfo.InvariantCulture) + " s behind" : "") + "; closing it (the page reconnects and reloads).");
             Close();
         }
 
@@ -1132,16 +1170,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (cts.IsCancellationRequested) return;
             if (OrderLane(json))
             {
-                if (Interlocked.Increment(ref orderLaneCount) > SoftCap) { NotKeepingUp(); return; }
+                if (Interlocked.Increment(ref orderLaneCount) > SoftCap) { NotKeepingUp(null); return; }
                 orderLane.Enqueue(json);
-                if (!Admit(Wake)) NotKeepingUp();
+                Admit(Wake);
             }
-            else if (!Admit(json)) NotKeepingUp();
+            else Admit(json);
+        }
+
+        // Always the data lane, whatever the type (a load's own warnings stay after its history, as in 0.3.3).
+        public void SendData(string json)
+        {
+            if (Tap != null) Tap(json);
+            if (cts.IsCancellationRequested) return;
+            Admit(json);
         }
 
         // Several data-lane messages as ONE outbox entry, sent in this order, each its own WebSocket message (0.3.4): the
-        // held live trades released at "ready". Order-lane messages still go out between them (SendLoop), and the entries
-        // queued behind them are not counted against the page while it keeps draining (Admit).
+        // held live trades released at "ready". Order-lane messages still go out between them (SendLoop).
         public void SendAll(IList<string> msgs)
         {
             if (msgs == null || msgs.Count == 0) return;
@@ -1149,7 +1194,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (cts.IsCancellationRequested) return;
             string[] batch = new string[msgs.Count];
             msgs.CopyTo(batch, 0);
-            if (!Admit(batch)) NotKeepingUp();
+            Admit(batch);
         }
 
         private async Task<bool> SendText(string msg)
@@ -1181,8 +1226,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (!await SendOrderLane()) return;
                     if (item == Wake) continue;
+                    long ignored; queuedAt.TryDequeue(out ignored);   // this entry no longer waits
                     string[] batch = item as string[];
-                    if (batch == null) batch = new string[] { (string)item };
+                    if (batch == null)
+                    {
+                        string one = (string)item;
+                        if (!await SendText(one)) return;
+                        if (Bulk(one)) Interlocked.Exchange(ref bulkDone, Stopwatch.GetTimestamp());
+                        continue;
+                    }
                     foreach (string msg in batch)
                     {
                         if (!await SendOrderLane()) return;
@@ -1191,7 +1243,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { ChartBridgeServer.Log("Client " + Id + " send stopped: " + ex.Message); }
+            catch (Exception ex)
+            {
+                // Review 3 N1: a send that failed ends the page's stream; close it so the page reconnects instead of waiting.
+                ChartBridgeServer.Log("Client " + Id + " send stopped: " + ex.Message + "; closing it.");
+                Close();
+            }
+        }
+
+        public string DiagJson()
+        {
+            return "{\"id\":" + Id + ",\"root\":" + CbJson.Str(Root) + ",\"ready\":" + (Ready ? "true" : "false") +
+                ",\"queued\":" + Queued + ",\"orderLaneQueued\":" + OrderLaneQueued + ",\"oldestDataMs\":" + CbJson.Num3(DataAgeMs()) + "}";
         }
 
         public void Close()
@@ -1916,7 +1979,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst;
             if (!Instruments.TryGetValue(root, out inst))
             {
-                client.Send("{\"type\":\"status\",\"level\":\"error\",\"text\":" + CbJson.Str("No instrument for " + root + ". Check the NinjaScript Output window.") + "}");
+                client.SendData("{\"type\":\"status\",\"level\":\"error\",\"text\":" + CbJson.Str("No instrument for " + root + ". Check the NinjaScript Output window.") + "}");
                 return;
             }
             Load L = new Load { Client = client, Root = root, Name = inst.FullName, TickHours = tickHours, Inst = inst };
@@ -1940,7 +2003,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (code != ErrorCode.NoError)
                     {
-                        if (Current(L)) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Minute history failed: " + code + " " + message) + "}");
+                        if (Current(L)) client.SendData("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Minute history failed: " + code + " " + message) + "}");
                     }
                     else if (Current(L))
                     {
@@ -2054,7 +2117,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (code != ErrorCode.NoError)
                     {
                         if (Current(L) && margin) again = true;
-                        else if (Current(L)) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Tick history failed: " + code + " " + message + ". Seconds and range bars start from now.") + "}");
+                        else if (Current(L)) client.SendData("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str("Tick history failed: " + code + " " + message + ". Seconds and range bars start from now.") + "}");
                     }
                     else if (Current(L))
                     {
@@ -2592,6 +2655,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"fillsFoundByPolling\":").Append(Interlocked.Read(ref polledNew));
             b.Append(",\"lastPollUtcMs\":").Append(lastPollMs);
             b.Append(",\"clients\":").Append(Clients.Count);
+            b.Append(",\"pages\":[").Append(string.Join(",", Clients.Values.Select(c => c.DiagJson()).ToArray())).Append(']');   // 0.3.4: each page's queue and lag
             b.Append(",\"network\":").Append(ChartBridgeAccess.DiagJson());
             b.Append(",\"pin\":").Append(ChartBridgePin.DiagJson());   // whether a PIN is set, nothing else
             b.Append(",\"desk\":").Append(ChartBridgeDesk.DiagJson());

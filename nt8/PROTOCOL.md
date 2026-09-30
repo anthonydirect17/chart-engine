@@ -373,8 +373,10 @@ tick rule. The held trades of a load are tagged when they arrive, like any live 
 **Resets and bad prices.** NinjaTrader's help describes `IsReset` as "a UI reset is needed after a manual disconnect",
 meant for its market data columns. A market data event with `IsReset` is never a trade here, whatever its type and
 price: ChartBridge only forgets the live quote, sends nothing, and logs the first one (with its type and price) once.
-A Last event with a price of 0 or below is ignored too; neither reaches the order code's last price (review 2 S2: a
-reset of type Last at price 0 used to, which for 2 s would make a long bracket's stop look already passed). An automatic
+A Last event with a price of 0 or below is ignored too (review 3 N5: that would also drop a real trade at 0 or below,
+such as a calendar spread, should such an instrument ever be added to `roots`); neither reaches the order code's last
+price (review 2 S2: a reset of type Last at price 0 used to, which for 2 s would make a long bracket's stop look
+already passed). An automatic
 reconnect probably raises no reset, and connection status events are not watched here (that would touch the server's
 start and stop): after an outage over 60 s the old quote is stale; after a shorter one it can stand until the first new
 Bid and Ask updates.
@@ -422,13 +424,38 @@ before any history on connect, and order messages before `ready` after signing i
 review's shape, a page taking 20 or 200 us a message): an order reply sent during a 20,000-trade release arrives in
 under 1 ms (0.3.3 and the first 0.3.4 round: 0.45 s and 4.1 s, when the page was not closed first).
 
-A page is closed as "not keeping up" when 5,000 entries wait while the message being sent has been stuck for over 2
-seconds (a page that stopped reading), when 50,000 entries wait (a page slower than the traffic for good), or when
-5,000 order-lane messages wait. A page that keeps draining is not closed at 5,000: live trades queued behind a long
-release are sent when it is done (harness: 20,000 released at 200 us a message with 1,500 and 3,000 live trades a
-second after `ready`, every message delivered in order, not closed; 0.3.3 closed the page in every such case, the first
-0.3.4 round at 1,500 a second). This also removes the 0.3.3 risk that a very long load in a very busy market released
-more held trades than the outbox held and closed the page. Worst case memory per page: 50,000 waiting messages.
+**A page more than 5 s behind is reconnected** (review 3; Anthony: "just a reset"). ChartBridge closes a page's
+connection when the oldest market data waiting for it has waited more than 5 seconds; the page then reconnects on its
+own (without asking for the PIN again, as after any drop), signs in again and reloads, so it shows live data again and
+Armed is off. The Output window says so once, with the lag: "Client N is not keeping up: 5.0 s behind; closing it (the
+page reconnects and reloads)." The wait is counted from when the data was queued, or, when later, from when the last
+`history` or `ticks` chunk of a load finished sending: a load's chunks go out back to back at the page's pace and none
+of them is late (a 48 hour backfill is about 130 chunks of 20,000 trades; Chromium takes about 3.5 ms for one). Order
+lane messages do not count (they go out first anyway). Also closed, as before: 5,000 entries waiting while the message
+being sent has been stuck for over 2 seconds (a page that stopped reading), and over 5,000 order-lane messages waiting.
+Harness:
+
+- a page taking 1 ms a message (1,000 a second) against 3,000 trades a second is closed after 7.1 s, 5.0 s behind; one
+  taking 0.4 ms (2,500 a second) after 18 s, 5.0 s behind (0.3.3 closed both at 5,000 entries, about 1.7 s behind;
+  the second 0.3.4 round let them fall about 17 s behind);
+- 20,000 held trades released after `ready` at the page's real pace (30 us a message; review 3 measured 26 to 31 us a
+  live trade), with 3,000 live trades a second after it: not closed, every message in order (a slow page at 200 us a
+  message with 1,500 a second is not closed either: the last of the release waits about 4 s);
+- a 48 hour load (130 chunks), then a 20,000-trade release and live trades: not closed at 3.5 ms a chunk (drained in
+  1.3 s) or at 50 ms a chunk (8.8 s; the oldest wait never over 1.2 s).
+
+Memory (review 3 measured 350 bytes a queued trade): at most about 5 s of market data waits per page, about 15,000
+trades or 5 MB at 3,000 trades a second, plus a load's own `history` and `ticks` chunks while they go out (about
+600 KB each; a 48 hour backfill about 75 MB for the seconds it takes). An entry is not a message: the release after
+`ready` and each chunk count as one. There is no limit on the number of pages (each open tab, The Desk's relay, each
+embed is one).
+
+A Send that races a page's Close (a tab closing while NinjaTrader sends an order update to every page) drops the
+message quietly instead of throwing out of the loop that sends it to the other pages (review 3 S2). A send that fails
+closes the page, so it reconnects instead of staying connected and silent (review 3 N1). A load's own warnings
+("Minute history failed", "Tick history failed", "No instrument") go in the data lane, after that load's history, as in
+0.3.3 (review 3 N3). `pong` goes in the order lane, so it measures the round trip to ChartBridge and not the market data
+waiting in front of it (review 3 N4).
 
 **The seam is unchanged.** The side takes no part in matching held live trades against the backfill (price, volume
 and time, as in 0.3.3). A trade in both keeps the backfill's side. The released trades' tick rule then continues from
@@ -483,7 +510,9 @@ JSON: `version`; `network` (0.3.1: see Network access); `pin` (0.3.2: `{"set": b
 re-anchored; the clock is rechecked every 5 seconds and follows the PC clock when they differ by more
 than 50 ms); `fillEventsDelivered` and `fillsFoundByPolling` (how many fills came each way this
 session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`, `lastSendFailed`,
-`lastError`, `setAside`, `rejectedByDesk`); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
+`lastError`, `setAside`, `rejectedByDesk`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
+(entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
+waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
 `client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held
 trades against, all released), `backfillTicks`, `lastBackfillTick`, `firstHeldTick` and `firstReleasedTick` (New York
 time, `yyyy-MM-dd HH:mm:ss.fff`, or null), `overlapMs` (`lastBackfillTick` minus `firstHeldTick`: 0 or more means the

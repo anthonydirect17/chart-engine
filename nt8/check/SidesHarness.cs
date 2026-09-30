@@ -405,6 +405,8 @@ public static class SidesHarness
     class TimedSocket : System.Net.WebSockets.WebSocket
     {
         public double Us; public volatile bool Hang;
+        public Func<string, double> Per;                 // time per message by its text (overrides Us)
+        public int ThrowOnce;                            // 1: the next send fails (not a cancel), the socket stays open
         public readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
         public readonly List<string> Got = new List<string>();
         public readonly List<long> At = new List<long>();
@@ -420,10 +422,13 @@ public static class SidesHarness
         public override System.Threading.Tasks.Task<System.Net.WebSockets.WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> b, CancellationToken c) { return new System.Threading.Tasks.TaskCompletionSource<System.Net.WebSockets.WebSocketReceiveResult>().Task; }
         public override System.Threading.Tasks.Task SendAsync(ArraySegment<byte> b, System.Net.WebSockets.WebSocketMessageType t, bool end, CancellationToken c)
         {
+            if (Interlocked.Exchange(ref ThrowOnce, 0) == 1) throw new InvalidOperationException("simulated send failure");
             if (Hang) return new System.Threading.Tasks.TaskCompletionSource<int>().Task;   // a page that stopped reading
             c.ThrowIfCancellationRequested();
-            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew(); while (sw.Elapsed.TotalMilliseconds < Us / 1000.0) { }
             string text = System.Text.Encoding.UTF8.GetString(b.Array, b.Offset, b.Count);
+            double us = Per != null ? Per(text) : Us;
+            if (us >= 20000) Thread.Sleep((int)(us / 1000));
+            else { System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew(); while (sw.Elapsed.TotalMilliseconds < us / 1000.0) { } }
             lock (Got) { Got.Add(text); At.Add(Clock.ElapsedTicks); }
             return System.Threading.Tasks.Task.FromResult(0);
         }
@@ -485,13 +490,15 @@ public static class SidesHarness
             Console.WriteLine("     (" + r + ")");
             Check(!closed && reply >= 0 && reply < 10, "lanes: an order reply sent 5 ms into a 20,000-trade release at " + us + " us a message arrives " + reply.ToString("0.0") + " ms later (at the next message boundary)");
         }
-        // Live trades keep coming after ready while the release drains; the page keeps up in steady state.
-        foreach (int rate in new[] { 1500, 3000 })
+        // Live trades keep coming after ready while the release drains; the page keeps up in steady state. 30 us a message is
+        // the page's real pace (review 3 measured 26 to 31 us a live trade): 20,000 drain in about 0.6 s. At 200 us (a slow
+        // page) the last trades wait about 4 s, still under the 5 s rule.
+        foreach (double[] rr in new[] { new[] { 30.0, 3000 }, new[] { 200.0, 1500 } })
         {
-            string r = Race(20000, 200, rate, 5, 4500, out closed, out reply);
+            string r = Race(20000, rr[0], (int)rr[1], 5, 4500, out closed, out reply);
             Console.WriteLine("     (" + r + ")");
             Check(!closed && reply >= 0 && reply < 10 && r.Contains("data in order True"),
-                "lanes: 20,000 released at 200 us a message with " + rate + " live trades/s after ready: not closed, every data message in order, the order reply " + reply.ToString("0.0") + " ms");
+                "lanes: 20,000 released at " + rr[0] + " us a message with " + rr[1] + " live trades/s after ready: not closed, every data message in order, the order reply " + reply.ToString("0.0") + " ms");
         }
         // Order within and across lanes: data never goes ahead of an order-lane message sent before it; each lane is FIFO.
         TimedSocket s = new TimedSocket(50);
@@ -529,14 +536,177 @@ public static class SidesHarness
         Thread.Sleep(2300);
         hc.Send(LaneTick(-1));
         Check(ClosedLog(hid), "lanes: a page whose send has hung over 2 s with 5,000 waiting is closed, not keeping up");
-        // A page that is draining but slower than the traffic for good is closed at 50,000 waiting.
-        TimedSocket slow = new TimedSocket(300);
-        int sid = Interlocked.Increment(ref laneId);
-        ChartBridgeClient sc = new ChartBridgeClient(slow, sid);
-        System.Threading.Tasks.Task sl = System.Threading.Tasks.Task.Run(() => sc.SendLoop());
-        for (int i = 0; i < 52000; i++) sc.Send(LaneTick(i));   // about 50 ms; the page drains about 170 meanwhile
-        Check(ClosedLog(sid), "lanes: a draining page that falls 50,000 messages behind is closed");
-        hc.Close(); sc.Close();
+        hc.Close();
+        SlowPages();
+        LoadPace();
+        Adversarial();
+    }
+
+    // Review 3, round 3: a page more than 5 s behind is reconnected. A page that keeps draining, but slower than the market
+    // (3,000 trades a second), is closed about 5 s behind; the Output line gives the lag.
+    static void SlowPages()
+    {
+        foreach (double us in new[] { 1000.0, 400.0 })
+        {
+            TimedSocket s = new TimedSocket(us);
+            int id = Interlocked.Increment(ref laneId);
+            ChartBridgeClient c = new ChartBridgeClient(s, id);
+            System.Threading.Tasks.Task loop = System.Threading.Tasks.Task.Run(() => c.SendLoop());
+            System.Diagnostics.Stopwatch clock = s.Clock;
+            double t0 = clock.Elapsed.TotalMilliseconds, closedAt = -1, maxAge = 0;
+            long k = 0;
+            while (clock.Elapsed.TotalMilliseconds - t0 < 60000)
+            {
+                double now = clock.Elapsed.TotalMilliseconds - t0;
+                while (k < now * 3.0) { c.Send(LaneTick((int)k)); k++; }
+                if (ClosedLog(id)) { closedAt = now; break; }
+                maxAge = Math.Max(maxAge, c.DataAgeMs());
+                Thread.Sleep(1);
+            }
+            string line; lock (NinjaTrader.Code.Output.Lines) line = NinjaTrader.Code.Output.Lines.FirstOrDefault(x => x.Contains("Client " + id + " is not keeping up"));
+            Console.WriteLine("     (slow page, " + (1e6 / us).ToString("0") + " messages/s against 3,000 trades/s: closed after " + (closedAt / 1000).ToString("0.0") + " s, the oldest waiting trade " + (maxAge / 1000).ToString("0.0") + " s old; " + line + ")");
+            Check(closedAt > 0 && maxAge < 5600 && line != null && line.Contains(" s behind; closing it (the page reconnects and reloads)."),
+                "lag: a page at " + (1e6 / us).ToString("0") + " messages/s against 3,000 trades/s is closed about 5 s behind (after " + (closedAt / 1000).ToString("0.0") + " s), with its lag in the Output line");
+            c.Close();
+            try { loop.Wait(2000); } catch (Exception) { }
+        }
+    }
+
+    // A load's history and ticks chunks go out back to back at the page's pace; their wait does not count as lag. A 48 h
+    // backfill (130 chunks of 20,000 trades, about 600 KB each; about 2.6 million trades), then ready and 20,000 held
+    // trades, with live trades after it. The page's measured pace for such a chunk in Chromium is about 3.5 ms (JSON.parse
+    // and the tick store); here 50 ms (a PC 14 times slower), so the whole load takes about 7 s, and is not closed.
+    static void LoadPace()
+    {
+        foreach (double chunkMs in new[] { 3.5, 50.0 })
+        {
+            TimedSocket s = new TimedSocket(30);
+            s.Per = m => m.StartsWith("{\"type\":\"ticks\"") || m.StartsWith("{\"type\":\"history\"") ? chunkMs * 1000 : 30;
+            int id = Interlocked.Increment(ref laneId);
+            ChartBridgeClient c = new ChartBridgeClient(s, id);
+            System.Threading.Tasks.Task loop = System.Threading.Tasks.Task.Run(() => c.SendLoop());
+            string chunk = "{\"type\":\"ticks\",\"root\":\"MNQ\",\"ticks\":[[1,2,3,1,2]],\"done\":false}";
+            for (int i = 0; i < 20; i++) c.Send("{\"type\":\"history\",\"root\":\"MNQ\",\"bars\":[],\"done\":false}");
+            for (int i = 0; i < 130; i++) c.Send(chunk);
+            List<string> burst = new List<string> { "{\"type\":\"ready\",\"root\":\"MNQ\",\"sub\":1}" };
+            for (int i = 0; i < 20000; i++) burst.Add(LaneTick(i));
+            c.SendAll(burst);
+            System.Diagnostics.Stopwatch w = System.Diagnostics.Stopwatch.StartNew();
+            double maxAge = 0; long k = 0;
+            int want = 20 + 130 + 20001;
+            while (s.Count < want + (int)k && w.Elapsed.TotalSeconds < 30 && !ClosedLog(id))
+            {
+                while (k < w.Elapsed.TotalMilliseconds * 1.0) { c.Send(LaneTick(1000000 + (int)k)); k++; }   // 1,000 live trades a second
+                maxAge = Math.Max(maxAge, c.DataAgeMs());
+                Thread.Sleep(1);
+            }
+            Console.WriteLine("     (48 h load at " + chunkMs + " ms a chunk: drained in " + w.Elapsed.TotalSeconds.ToString("0.0") + " s, the oldest waiting entry at most " + (maxAge / 1000).ToString("0.00") + " s, closed " + ClosedLog(id) + ")");
+            Check(!ClosedLog(id) && s.Count >= want, "lag: a 48 h load (130 chunks at " + chunkMs + " ms each), then a 20,000-trade release and live trades: not closed (drained in " + w.Elapsed.TotalSeconds.ToString("0.0") + " s, lag at most " + (maxAge / 1000).ToString("0.00") + " s)");
+            c.Close();
+            try { loop.Wait(2000); } catch (Exception) { }
+        }
+    }
+
+    // Review 3's adversarial cases (Lanes3.cs), folded in: Close in the middle of a release, lost wakeups, cross-thread
+    // order, a Send racing a Close, and a send that fails.
+    static void Adversarial()
+    {
+        // Close mid-batch.
+        TimedSocket s = new TimedSocket(200);
+        ChartBridgeClient c = new ChartBridgeClient(s, Interlocked.Increment(ref laneId));
+        System.Threading.Tasks.Task loop = System.Threading.Tasks.Task.Run(() => c.SendLoop());
+        List<string> burst = new List<string> { "{\"type\":\"ready\",\"root\":\"MNQ\",\"sub\":1}" };
+        for (int i = 0; i < 20000; i++) burst.Add(LaneTick(i));
+        c.SendAll(burst);
+        Thread.Sleep(100);
+        c.Send("{\"type\":\"order\",\"id\":\"o1\"}");
+        Thread.Sleep(5);
+        c.Close();
+        bool ended = loop.Wait(2000);
+        int atClose = s.Count;
+        Exception thrown = null;
+        try { c.Send("{\"type\":\"order\",\"id\":\"o2\"}"); c.Send(LaneTick(-1)); c.SendAll(new List<string> { LaneTick(-2) }); c.SendData(LaneTick(-3)); } catch (Exception ex) { thrown = ex; }
+        Thread.Sleep(30);
+        bool o1; lock (s.Got) o1 = s.Got.Any(x => x.Contains("\"id\":\"o1\""));
+        Check(ended && !loop.IsFaulted && s.Count == atClose && o1 && thrown == null,
+            "adversarial: Close mid-release ends the send loop cleanly (sent " + atClose + " of 20,002), nothing after it, the order reply queued before it delivered, Send/SendAll/SendData after it quiet");
+
+        // Lost wakeups: an order-lane message sent alone from another thread, the loop parked or busy.
+        TimedSocket ws = new TimedSocket(0);
+        ChartBridgeClient wc = new ChartBridgeClient(ws, Interlocked.Increment(ref laneId));
+        System.Threading.Tasks.Task wl = System.Threading.Tasks.Task.Run(() => wc.SendLoop());
+        Random rnd = new Random(7);
+        int missed = 0; double worst = 0;
+        for (int i = 0; i < 3000; i++)
+        {
+            int mode = rnd.Next(3);
+            if (mode == 1) wc.Send(LaneTick(i));
+            if (mode == 2) { int j = i; System.Threading.Tasks.Task.Run(() => wc.Send(LaneTick(j))); }
+            string msg = "{\"type\":\"order\",\"id\":\"w" + i + "\"}";
+            System.Threading.Tasks.Task.Run(() => wc.Send(msg));
+            System.Diagnostics.Stopwatch w = System.Diagnostics.Stopwatch.StartNew();
+            bool got = false;
+            while (w.Elapsed.TotalMilliseconds < 200) { lock (ws.Got) { if (ws.Got.Count > 0 && ws.Got.Contains(msg)) { got = true; break; } } Thread.SpinWait(50); }
+            if (!got) missed++; else worst = Math.Max(worst, w.Elapsed.TotalMilliseconds);
+            lock (ws.Got) { ws.Got.Clear(); ws.At.Clear(); }
+        }
+        Check(missed == 0, "adversarial: 3,000 order-lane messages each sent alone from another thread: none lost (worst " + worst.ToString("0.0") + " ms)");
+        wc.Close();
+
+        // Cross-thread order: thread A sends order O_k, thread B then sends data D_k, during a 20,000 release.
+        TimedSocket xs = new TimedSocket(5);
+        ChartBridgeClient xc = new ChartBridgeClient(xs, Interlocked.Increment(ref laneId));
+        System.Threading.Tasks.Task xl = System.Threading.Tasks.Task.Run(() => xc.SendLoop());
+        List<string> rel = new List<string>();
+        for (int i = 0; i < 20000; i++) rel.Add("{\"type\":\"tick\",\"b\":" + i + "}");
+        xc.SendAll(rel);
+        int n = 5000, done = -1;
+        System.Threading.Tasks.Task ta = System.Threading.Tasks.Task.Run(() => { for (int k = 0; k < n; k++) { xc.Send("{\"type\":\"order\",\"k\":" + k + "}"); Volatile.Write(ref done, k); } });
+        System.Threading.Tasks.Task tb = System.Threading.Tasks.Task.Run(() => { for (int k = 0; k < n; k++) { while (Volatile.Read(ref done) < k) Thread.SpinWait(5); xc.Send("{\"type\":\"tick\",\"k\":" + k + "}"); } });
+        System.Threading.Tasks.Task.WaitAll(ta, tb);
+        for (int i = 0; i < 3000 && xs.Count < 20000 + 2 * n; i++) Thread.Sleep(10);
+        List<string> got2; lock (xs.Got) got2 = xs.Got.ToList();
+        Dictionary<string, int> pos = new Dictionary<string, int>();
+        for (int i = 0; i < got2.Count; i++) pos[got2[i]] = i;
+        int bad = 0;
+        for (int k = 0; k < n; k++)
+        {
+            string o = "{\"type\":\"order\",\"k\":" + k + "}", d = "{\"type\":\"tick\",\"k\":" + k + "}";
+            if (!pos.ContainsKey(o) || !pos.ContainsKey(d) || pos[o] > pos[d]) bad++;
+            if (k > 0 && (pos[o] < pos["{\"type\":\"order\",\"k\":" + (k - 1) + "}"] || pos[d] < pos["{\"type\":\"tick\",\"k\":" + (k - 1) + "}"])) bad++;
+        }
+        for (int i = 1; i < 20000; i++) if (pos["{\"type\":\"tick\",\"b\":" + i + "}"] < pos["{\"type\":\"tick\",\"b\":" + (i - 1) + "}"]) bad++;
+        Check(got2.Count == 20000 + 2 * n && bad == 0, "adversarial: 5,000 order/data pairs from two threads during a 20,000 release: every message delivered, no data ahead of its order, each lane in order (" + bad + " violations)");
+        xc.Close();
+
+        // A Send racing a Close never throws (review 3 S2: it used to, out of the broadcast loops).
+        foreach (string msg in new[] { "{\"type\":\"order\",\"id\":\"x\"}", "{\"type\":\"tick\",\"p\":1}" })
+        {
+            int threw = 0; string kind = "";
+            for (int r = 0; r < 3000; r++)
+            {
+                ChartBridgeClient rc = new ChartBridgeClient(new TimedSocket(0), Interlocked.Increment(ref laneId));
+                ManualResetEventSlim go = new ManualResetEventSlim();
+                System.Threading.Tasks.Task closer = System.Threading.Tasks.Task.Run(() => { go.Wait(); rc.Close(); });
+                go.Set();
+                try { for (int i = 0; i < 200; i++) rc.Send(msg); rc.SendAll(new List<string> { msg }); rc.SendData(msg); }
+                catch (Exception ex) { threw++; kind = ex.GetType().Name; }
+                closer.Wait();
+            }
+            Check(threw == 0, "adversarial: Send racing Close, 3,000 rounds (" + ChartBridgeClient.TypeOf(msg) + "): no throw (" + threw + " " + kind + ")");
+        }
+
+        // A send that fails (not a cancel) with the socket still open: the page is closed so it reconnects (review 3 N1).
+        TimedSocket fs = new TimedSocket(0) { ThrowOnce = 1 };
+        int fid = Interlocked.Increment(ref laneId);
+        ChartBridgeClient fc = new ChartBridgeClient(fs, fid);
+        System.Threading.Tasks.Task fl = System.Threading.Tasks.Task.Run(() => fc.SendLoop());
+        fc.Send(LaneTick(0));
+        bool fended = fl.Wait(2000);
+        bool flog; lock (NinjaTrader.Code.Output.Lines) flog = NinjaTrader.Code.Output.Lines.Any(x => x.Contains("Client " + fid + " send stopped: simulated send failure; closing it."));
+        int fbefore = fs.Count;
+        fc.Send("{\"type\":\"order\",\"id\":\"after\"}");
+        Check(fended && flog && fs.Count == fbefore, "adversarial: a failed send closes the page (it reconnects) instead of leaving it connected and silent");
     }
 
     static void LoadTick()
@@ -862,6 +1032,9 @@ public static class SidesHarness
         Check(OrdersLast() == 25000.25 && Sent().Count == n, "reset: a Last event at price 0 or below is not a trade: not to the order code, not to the page");
         Trade(4.0, 25000.5, 1);
         Check(OrdersLast() == 25000.5 && Sent().Count == n + 1, "reset: the next real trade goes through as usual");
+        string dg = Diag();
+        Check(dg.Contains("\"pages\":[") && dg.Contains("{\"id\":77,\"root\":\"MNQ\",\"ready\":true,\"queued\":") && dg.Contains("\"orderLaneQueued\":") && dg.Contains("\"oldestDataMs\":"),
+            "diag: each page's queue depth, order-lane depth and oldest waiting market data age (" + dg.Substring(dg.IndexOf("\"pages\""), Math.Min(160, dg.Length - dg.IndexOf("\"pages\""))) + ")");
         Reset();
     }
 

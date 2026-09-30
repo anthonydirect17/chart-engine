@@ -33,17 +33,23 @@ Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
   Review: only time and price are kept, size-only rows are dropped (the first row of each price and one every 5 s,
   each with the time of the last row it stands for, so a quote's age is exact), nothing is copied for a load that
   already went out, and the quote window is at most 24 hours (older trades: tick rule). Trades the quote history does
-  not cover (before it, over 5 s past its end, or a quote over 60 s old) go by the tick rule; with no bid/ask history every trade does, and `/diag` and the Output window say so.
+  not cover (before it, over 5 s past its end, or a quote over 60 s old) go by the tick rule; with no bid/ask history
+  every trade does, and `/diag` and the Output window say so.
 - **The quotes do not hold the chart up** (review): they get at most 2.5 s after the trades are in (was 15 s), and no
   wait at all when the trade request failed.
-- **Order traffic first; a page that keeps up is not closed** (reviews 1 and 2): `ready` and the held live trades
-  released after it go into the page's outbox as one entry, and order traffic (`order`, `orders`, `position`, `reject`,
-  `trading`, fills, `status`, `pong`, `hello`) has its own lane, sent at the next message boundary ahead of queued market
-  data, each lane in order. An order reply sent during a 20,000-trade release now arrives in under 1 ms (was up to 4 s).
-  A page is closed only when a send has been stuck for 2 s with 5,000 waiting, or 50,000 wait: live trades behind a
-  long release no longer close a page that keeps up (20,000 released at 200 us a message with 3,000 trades a second
-  after `ready`: not closed). This also removes the 0.3.3 risk that a long load in a busy market closed the page (the
-  connection that also carries orders).
+- **Order traffic first** (reviews 1 and 2): `ready` and the held live trades released after it go into the page's
+  outbox as one entry, and order traffic (`order`, `orders`, `position`, `reject`, `trading`, fills, `status`, `pong`,
+  `hello`) has its own lane, sent at the next message boundary ahead of queued market data, each lane in order. An order
+  reply sent during a 20,000-trade release now arrives in under 1 ms (was up to 4 s).
+- **A page more than 5 s behind is reconnected** (review 3; Anthony: "just a reset"): when the oldest market data waiting
+  for a page has waited over 5 s, ChartBridge closes that page, which reconnects on its own without the PIN and reloads
+  (Armed off). One Output line gives the lag. A load's history and ticks chunks do not count as lag while they go out.
+  This replaces a limit of 5,000 waiting messages (0.3.3; it closed a page after a long release in a busy market) and
+  of 50,000 (the second 0.3.4 round; it let a slow page fall about 17 s behind). A page that stopped reading is still
+  closed after a 2 s stuck send with 5,000 waiting. `/diag` `pages` shows each page's queue and lag.
+- **Sends never throw** (review 3): a message racing a page's Close is dropped quietly (it used to throw out of the loop
+  sending an order, position or fill update to every page, so the pages after it missed it); a failed send closes the
+  page so it reconnects.
 - **The seam (0.3.3) is unchanged:** the side takes no part in matching held live trades against the backfill, so a
   trade the live and the history quote call differently is still sent once (with the backfill's side). Review: the
   released trades' tick rule continues from that backfill copy, not from the dropped live twin.
