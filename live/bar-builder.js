@@ -265,18 +265,22 @@ class TickStore {
   /**
    * feed() with each trade's side (1.7.0): builder.addQuiet(t, p, v, s, sm), s undefined for a trade that came with
    * none. For the cumulative delta (ChartEngine.CumulativeDelta), which counts exactly the trades this store holds.
+   * `to` (optional) stops before that index, so a long build can go in slices (the page's delta, review S5); returns
+   * the index it stopped at.
    */
-  feedSides(builder, from, minT) {
-    const min = minT === undefined ? -Infinity : minT;
-    for (let i = Math.max(0, from || 0); i < this.length;) {
+  feedSides(builder, from, minT, to) {
+    const min = minT === undefined || minT === null ? -Infinity : minT, stop = to === undefined ? this.length : Math.min(this.length, to);
+    let i = Math.max(0, from || 0);
+    while (i < stop) {
       const j = i + this.start, b = this.blocks[j >>> SHIFT], sd = this.sides[j >>> SHIFT];
-      const end = Math.min(this.length, i + BLOCK - (j & MASK));
+      const end = Math.min(stop, i + BLOCK - (j & MASK));
       for (let m = j & MASK, k = m * 3; i < end; i++, m++, k += 3) {
         if (!(b[k] >= min)) continue;
         const c = sd[m];
         builder.addQuiet(b[k], b[k + 1], b[k + 2], codeSide(c), codeMethod(c));
       }
     }
+    return i;
   }
 }
 /* the time of trade i, in a TickStore or a plain [[t, p, v], ...] list */
@@ -299,6 +303,9 @@ function rangeHistoryFrom(now, s) {
   return now - cur < YOUNG_SESSION ? cur - DAY : cur;
 }
 function rangeTickHours(now, s) { return Math.min(48, Math.ceil((now - rangeHistoryFrom(now, s)) / 3600) + 1); }
+/* The tickHours that reach back to this session's start (1.7.0: for minute views when the delta pane loads a whole
+   session's ticks; off today, see DELTA_WANTS_SESSION_TICKS in live.js). */
+function sessionTickHours(now, s) { return Math.min(48, Math.ceil((now - sessionStartOf(now, s)) / 3600) + 1); }
 function rangeStartIndex(ticks, from, s) {
   for (let i = 0; i < ticks.length; i++) if (sessionStartOf(timeAt(ticks, i), s) >= from) return i;
   return 0;
@@ -323,5 +330,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, sessionTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
 });

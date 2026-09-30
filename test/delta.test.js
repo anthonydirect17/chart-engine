@@ -304,7 +304,7 @@ test('chart: the delta pane sits below the plot only with the delta layer (about
   const T = chart.colors();
   const fills = ops.filter(o => o.op === 'fill' && o.path && (o.color === T.up || o.color === T.down));
   const paneFills = fills.filter(f => f.path.rects.length && f.path.rects.every(r => inPane(r, pane)));
-  assert.equal(paneFills.length, 2, 'one path per color in the pane (the plot\'s candles are the other two)');
+  assert.ok(paneFills.length >= 2 && paneFills.length <= 4, 'the closed candles one path per color, the newest one its own (' + paneFills.length + ')');
   assert.ok(paneFills[0].path.rects.length + paneFills[1].path.rects.length > 100, 'candles: a wick and a body per bar');
   assert.ok(fills.filter(f => !paneFills.includes(f)).every(f => f.path.rects.every(r => r[1] + r[3] <= pane.plotHeight + 0.5)), 'the plot\'s candles stay above it');
   assert.ok(ops.some(o => o.op === 'text' && o.s === 'CUMULATIVE DELTA'), 'its title');
@@ -412,4 +412,56 @@ test('chart: live trades redraw the pane with no rebuild: the chart only reads t
   cd.add(T0 + 199 * 60 + 50, 40, 1);
   frame();
   assert.equal(chart.deltaPane().title, 'Cumulative delta ' + U.fmtSigned(cd.last.c, 0), 'one trade, redrawn');
+});
+
+test('chart: the closed candles are drawn from kept paths; a trade redraws the newest candle only, and the kept range still fits it (review N4)', () => {
+  const { chart, ops, cd, redraw, settle, T0, bars } = stubChart();
+  chart.setDelta(cd); chart.setLayers({ delta: true }); settle(); redraw();
+  const pane = chart.deltaPane(), T = chart.colors();
+  const paneFills = () => ops.filter(o => o.op === 'fill' && o.path && (o.color === T.up || o.color === T.down) && o.path.rects.length && o.path.rects.every(r => inPane(r, pane)));
+  const first = paneFills(), kept = first.filter(f => f.path.rects.length > 2);
+  assert.ok(kept.length >= 1 && kept.every(f => f.path.rects.length > 10), 'closed candles in their own paths');
+  cd.add(T0 + 199 * 60 + 55, 3, 1);                                   // a trade in the newest bar
+  redraw();
+  const again = paneFills();
+  for (const f of kept) assert.ok(again.some(g => g.path === f.path), 'the same kept path object is filled again');
+  const last = again.filter(g => !kept.some(f => f.path === g.path));
+  assert.ok(last.length >= 1 && last.every(g => g.path.rects.length <= 2), 'the newest candle: one wick and one body');
+  // a trade far outside the range: the scale grows to fit the newest candle
+  cd.add(T0 + 199 * 60 + 58, 5000, 1); for (let i = 0; i < 80; i++) { chart.setLayers({}); }
+  settle();
+  assert.ok(chart.deltaPane().hi > cd.last.h, 'the pane\'s scale fits the newest high: ' + chart.deltaPane().hi + ' > ' + cd.last.h);
+  assert.equal(bars.length, 200);
+});
+
+test('chart: the divider\'s band covers the gap and the top of the pane only, never the plot or the price axis; "Jump to live" sits above the pane (review N2, N3)', () => {
+  const { chart, settle, divider, W, H, E } = stubChart();
+  const btn = { style: {} };
+  chart.setLayers({ delta: true }); settle();
+  const pane = chart.deltaPane();
+  assert.equal(divider.style.top, pane.plotHeight + 'px', 'starts where the plot ends');
+  assert.equal(divider.style.right, '78px', 'stops at the price axis');
+  assert.ok(pane.plotHeight + 10 <= pane.top + 6 + 0.5, 'into the pane at most 6 px');
+  assert.ok(W > 0 && H > 0 && E && btn);
+});
+
+test('chart: a key that cannot move the pane (a chart too short for the height asked) changes and saves nothing; a click on the divider saves nothing (review N7)', () => {
+  const { chart, settle, divider } = stubChart();
+  const got = [];
+  chart.on('paneResize', e => got.push(e));
+  chart.setLayers({ delta: true }); chart.setDeltaView({ ratio: 0.6 }); settle();
+  const key = k => divider.handlers.keydown({ key: k, preventDefault() {}, stopPropagation() {} });
+  const r0 = chart.deltaPane().ratio, h0 = chart.deltaPane().height;
+  key('Home'); key('PageUp');                                        // already the largest: nothing moves
+  assert.deepEqual([chart.deltaPane().ratio, chart.deltaPane().height, got.length], [r0, h0, 0]);
+  divider.handlers.pointerdown({ pointerId: 3, clientX: 100, clientY: 200, preventDefault() {} });
+  divider.handlers.pointerup({ pointerId: 3, clientX: 100, clientY: 200 });
+  assert.equal(got.length, 0, 'a click alone saves nothing');
+  key('ArrowDown');
+  assert.equal(got.length, 1, 'a key that moves it is saved');
+});
+
+test('util.fmtExact: whole minutes as HH:MM, whole seconds with seconds, else tenths (review N1)', () => {
+  const T = Date.UTC(2026, 8, 29, 18, 0) / 1000;
+  assert.deepEqual([U.fmtExact(T), U.fmtExact(T + 15), U.fmtExact(T + 0.3), U.fmtExact(T + 3 * 3600 + 40 * 60), U.fmtExact(T + 3.87)], ['18:00', '18:00:15', '18:00:00.3', '21:40', '18:00:03.8']);
 });

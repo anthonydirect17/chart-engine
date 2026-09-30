@@ -23,6 +23,9 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 const pad = n => (n < 10 ? '0' : '') + n;
 const fmtHM = t => { const s = tod(t); return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor(s % 3600 / 60)); };
 const fmtHMS = t => fmtHM(t) + ':' + pad(Math.floor(tod(t) % 60));
+/* A time as exactly as it is kept (1.7.0, where the delta pane counts from): "21:40" on a whole minute, "18:00:15" on a
+   whole second, else with tenths ("18:05:00.3", floored), so a start inside the 18:00 minute never reads "18:00". */
+const fmtExact = t => { const ms = Math.round(tod(t) * 1000) % 60000; return ms === 0 ? fmtHM(t) : ms % 1000 === 0 ? fmtHMS(t) : fmtHMS(t) + '.' + Math.floor(ms % 1000 / 100); };
 const fmtDay = t => { const d = new Date(t * 1000); return DOW[d.getUTCDay()] + ' ' + d.getUTCDate(); };
 const fmtMD = t => { const d = new Date(t * 1000); return MON[d.getUTCMonth()] + ' ' + d.getUTCDate(); };
 const fmtDate = t => { const d = new Date(t * 1000); return DOW[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()] + ' ' + d.getUTCFullYear(); };
@@ -687,9 +690,9 @@ const CSS = `
 .ce-ground:focus-visible{outline:2px solid var(--ce-accent,#B69CFF);outline-offset:2px}
 .ce-ground i{width:16px;height:16px;border-radius:4px;flex:none;box-shadow:inset 0 0 0 1px rgba(154,168,184,.45)}
 .ce-row input[type=text][aria-invalid="true"]{border-color:var(--ce-bad,#FF7A7A);box-shadow:inset 0 0 0 1px var(--ce-bad,#FF7A7A)}
-.ce-divider{position:absolute;left:0;right:0;height:12px;z-index:2;cursor:row-resize;touch-action:none;outline:none}
+.ce-divider{position:absolute;left:0;right:0;height:10px;z-index:2;cursor:row-resize;touch-action:none;outline:none}
 .ce-divider[hidden]{display:none}
-.ce-divider:hover,.ce-divider.is-drag,.ce-divider:focus-visible{background:linear-gradient(transparent 5px,rgba(182,156,255,.55) 5px,rgba(182,156,255,.55) 7px,transparent 7px)}
+.ce-divider:hover,.ce-divider.is-drag,.ce-divider:focus-visible{background:linear-gradient(transparent 1px,rgba(182,156,255,.55) 1px,rgba(182,156,255,.55) 3px,transparent 3px)}
 .ce-divider:focus-visible{box-shadow:inset 0 0 0 2px #B69CFF}
 `;
 function injectStyle() {
@@ -756,7 +759,7 @@ function create(container, options) {
      chart's height it asks for, a note drawn instead of anything else (the page's "Delta needs ChartBridge 0.3.4 on
      this PC"), and its own eased value scale. */
   let delta = null;
-  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tval: null, widths: new Map() };
+  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
      the rest with 'levels'. */
@@ -906,26 +909,38 @@ function create(container, options) {
   /* The heights of the plot, the delta pane and the band between them (see PANE_RATIO). */
   function layout() {
     const area = H - TIME_H;
-    if (!paneOn()) { plotH = Math.max(10, H - TIME_H); paneTop = plotH; paneH = 0; timeY = plotH; divEl.hidden = true; return; }
+    if (!paneOn()) {
+      plotH = Math.max(10, H - TIME_H); paneTop = plotH; paneH = 0; timeY = plotH; divEl.hidden = true;
+      if (liveBtn && liveBtn.style.bottom) liveBtn.style.bottom = '';
+      return;
+    }
     const least = Math.min(PANE_MIN, Math.floor(area * 0.3)), most = Math.max(least, area - PANE_GAP - PRICE_MIN);
     paneH = Math.max(0, Math.round(clamp(area * pane.ratio, least, most)));
     plotH = Math.max(10, area - PANE_GAP - paneH);
     paneTop = plotH + PANE_GAP; timeY = paneTop + paneH;
     divEl.hidden = false;
-    divEl.style.top = Math.round(plotH + PANE_GAP / 2 - 6) + 'px';
+    // the band starts where the plot ends (its last row, order tags there and the wheel stay the plot's) and stops at
+    // the price axis: the 4 px gap and the top 6 px of the pane (review N2)
+    divEl.style.top = Math.round(plotH) + 'px'; divEl.style.right = AXIS_W + 'px';
+    if (liveBtn) liveBtn.style.bottom = Math.round(H - plotH + 12) + 'px';   // "Jump to live" over the plot, above the pane (review N3)
     divEl.setAttribute('aria-valuenow', String(Math.round(pane.ratio * 100)));
     divEl.setAttribute('aria-valuetext', 'Delta pane ' + Math.round(pane.ratio * 100) + '% of the chart height');
   }
   /* A new height for the pane from a drag or a key: kept between PANE_RATIO_MIN and PANE_RATIO_MAX, then to what the
-     pixel limits allow, so what is saved is what is seen. */
+     pixel limits allow, so what is saved is what is seen. Nothing changes and nothing is saved when the pane would not
+     move (review N7: a key on a chart too short for the height asked, where the pixel limits hold it, must not save
+     that limited height over the one chosen on a larger screen). Returns whether it moved. */
   function setPaneRatio(r, done) {
     const area = H - TIME_H;
-    if (!(isFinite(r) && area > 0)) return;
+    if (!(isFinite(r) && area > 0) || !paneOn()) return false;
+    const before = { ratio: pane.ratio, h: paneH };
     pane.ratio = clamp(r, PANE_RATIO_MIN, PANE_RATIO_MAX);
     layout();
-    if (paneOn()) pane.ratio = Math.round(clamp(paneH / area, PANE_RATIO_MIN, PANE_RATIO_MAX) * 1000) / 1000;
+    if (paneH === before.h) { pane.ratio = before.ratio; layout(); return false; }
+    pane.ratio = Math.round(clamp(paneH / area, PANE_RATIO_MIN, PANE_RATIO_MAX) * 1000) / 1000;
     layout(); clampRight(); dirty = true;
     emit('paneResize', { ratio: pane.ratio, height: paneH, done: !!done });
+    return true;
   }
 
   function autoTarget() {
@@ -950,15 +965,26 @@ function create(container, options) {
     const n = last(); if (n < 0 || !delta || !delta.bars.length) return null;
     const from = Math.max(0, Math.floor(indexAt(0))), to = Math.min(n, Math.ceil(indexAt(plotW)));
     if (to < from) return null;
-    // worked out again only when the delta, the bars in view or the mode changed (not on every frame)
-    const key = delta.version + '|' + from + '|' + to + '|' + pane.mode + '|' + bars.length + '|' + bars[from].t;
-    if (pane.tkey === key) return pane.tval;
-    pane.tkey = key; pane.tval = paneTargetScan(from, to);
-    return pane.tval;
+    // the closed bars' range is kept until the bars in view, the mode or the candles change (review N4); only the
+    // newest bar, the one trades still move, is read on every frame
+    const key = pane.cid + '|' + from + '|' + to + '|' + pane.mode + '|' + bars.length + '|' + bars[from].t + '|' + delta.bars.length;
+    if (pane.tkey !== key) { pane.tkey = key; pane.tclosed = paneTargetScan(from, Math.min(to, n - 1)); }
+    let mn = pane.tclosed.mn, mx = pane.tclosed.mx;
+    const d = to === n ? delta.last : null, bar = pane.mode === 'bar';
+    if (d && d.t === bars[n].t) {
+      if (bar) { const v = d.c - d.o; if (v < mn) mn = v; if (v > mx) mx = v; } else { if (d.l < mn) mn = d.l; if (d.h > mx) mx = d.h; }
+    }
+    if (mn > mx) return null;
+    if (bar) { mn = Math.min(0, mn); mx = Math.max(0, mx); }
+    const range = Math.max(mx - mn, 4), m = 0.12;
+    return { hi: mx + range * m / (1 - 2 * m), lo: mn - range * m / (1 - 2 * m) };
   }
+  /* The lows and highs (or bar deltas) of the candles on bars from..to. */
   function paneTargetScan(from, to) {
     const db = delta.bars, bar = pane.mode === 'bar';
-    let k = delta.lowerBound(bars[from].t), mn = Infinity, mx = -Infinity;
+    let mn = Infinity, mx = -Infinity;
+    if (to < from) return { mn, mx };
+    let k = delta.lowerBound(bars[from].t);
     for (let i = from; i <= to && k < db.length; i++) {
       const t = bars[i].t;
       while (k < db.length && db[k].t < t) k++;
@@ -967,10 +993,7 @@ function create(container, options) {
       if (bar) { const v = d.c - d.o; if (v < mn) mn = v; if (v > mx) mx = v; }
       else { if (d.l < mn) mn = d.l; if (d.h > mx) mx = d.h; }
     }
-    if (mn > mx) return null;
-    if (bar) { mn = Math.min(0, mn); mx = Math.max(0, mx); }
-    const range = Math.max(mx - mn, 4), m = 0.12;
-    return { hi: mx + range * m / (1 - 2 * m), lo: mn - range * m / (1 - 2 * m) };
+    return { mn, mx };
   }
 
   /* one animation step; true while something is still moving */
@@ -1179,13 +1202,9 @@ function create(container, options) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       const sp = V.spacing * dpr, wickW = Math.max(1, Math.round(dpr));
       let bodyW = Math.max(wickW, Math.floor(sp * 0.72)); if ((bodyW - wickW) % 2) bodyW -= 1; if (bodyW < wickW) bodyW = wickW;
-      const up = new Path2D(), dn = new Path2D(), Y = v => Math.round(yD(v) * dpr), barMode = pane.mode === 'bar';
-      let k = delta.lowerBound(bars[from].t);
-      for (let i = from; i <= to && k < db.length; i++) {
-        const t = bars[i].t;
-        while (k < db.length && db[k].t < t) k++;
-        if (k >= db.length || db[k].t !== t) continue;
-        const d = db[k], xc = Math.round(xOf(i) * dpr);
+      const Y = v => Math.round(yD(v) * dpr), barMode = pane.mode === 'bar';
+      const candle = (d, i, up, dn) => {
+        const xc = Math.round(xOf(i) * dpr);
         if (barMode) {
           const v = d.c - d.o, y0 = Y(0), y1 = Y(v);
           (v >= 0 ? up : dn).rect(xc - (bodyW >> 1), Math.min(y0, y1), bodyW, Math.max(1, Math.abs(y1 - y0)));
@@ -1194,8 +1213,29 @@ function create(container, options) {
           path.rect(xc - (wickW >> 1), yh, wickW, Math.max(1, yl - yh));
           if (bodyW > wickW) path.rect(xc - (bodyW >> 1), Math.min(yo, yc), bodyW, Math.max(1, Math.abs(yc - yo)));
         }
+      };
+      // the closed candles' paths are kept while nothing about them changes (the bars in view, their places, the scale,
+      // the size, the mode, the candles); a normal frame with a trade adds only the newest bar's candle (review N4)
+      const ckey = [pane.cid, from, to, n, bars.length, V.right, V.spacing, pane.lo, pane.hi, top, h, dpr, pane.mode, db.length].join('|');
+      let cc = pane.cc;
+      if (!cc || cc.key !== ckey) {
+        cc = pane.cc = { key: ckey, up: new Path2D(), dn: new Path2D() };
+        const end = Math.min(to, n - 1);
+        let k = end >= from ? delta.lowerBound(bars[from].t) : db.length;
+        for (let i = from; i <= end && k < db.length; i++) {
+          const t = bars[i].t;
+          while (k < db.length && db[k].t < t) k++;
+          if (k >= db.length || db[k].t !== t) continue;
+          candle(db[k], i, cc.up, cc.dn);
+        }
       }
-      ctx.fillStyle = T.up; ctx.fill(up); ctx.fillStyle = T.down; ctx.fill(dn);
+      ctx.fillStyle = T.up; ctx.fill(cc.up); ctx.fillStyle = T.down; ctx.fill(cc.dn);
+      const ld = to === n ? delta.last : null;
+      if (ld && ld.t === bars[n].t) {
+        const up = new Path2D(), dn = new Path2D();
+        candle(ld, n, up, dn);
+        ctx.fillStyle = T.up; ctx.fill(up); ctx.fillStyle = T.down; ctx.fill(dn);
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     // the crosshair: the bar's line through the pane, and the value line where the pointer is
@@ -1213,7 +1253,7 @@ function create(container, options) {
     const val = !show ? '' : lb ? fmtSigned(pane.mode === 'bar' ? lb.c - lb.o : lb.c, 0) : '-';
     const why = pane.reason ? ': ' + pane.reason : '';
     const since = !show ? '' : !delta.bars.length ? 'starts with the next full bar' + why
-      : pane.mode !== 'bar' && lses && lses.partial ? 'from ' + fmtHM(lses.from) + ' ET, not ' + fmtHM(o.session.start || 0) + why : '';
+      : pane.mode !== 'bar' && lses && lses.partial ? 'from ' + fmtExact(lses.from) + ' ET, not ' + fmtHM(o.session.start || 0) + why : '';
     pane.title = [title, val, since, pane.note].filter(Boolean).join(' ');
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     // text widths kept per font and text (the title and the start rarely change; the value's digits are few)
@@ -1843,17 +1883,18 @@ function create(container, options) {
     if (!paneOn()) return;
     e.preventDefault();
     try { divEl.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
-    pane.drag = { id: e.pointerId }; divEl.classList.add('is-drag');
+    pane.drag = { id: e.pointerId, moved: false }; divEl.classList.add('is-drag');
   }
   function onDivMove(e) {
     if (!pane.drag || e.pointerId !== pane.drag.id) return;
-    const y = local(e).y;
-    setPaneRatio((H - TIME_H - (y + PANE_GAP / 2)) / (H - TIME_H), false);
+    const y = local(e).y;                                      // the pointer on the gap: the pane starts just under it
+    if (setPaneRatio((H - TIME_H - (y + PANE_GAP / 2)) / (H - TIME_H), false)) pane.drag.moved = true;
   }
   function onDivUp(e) {
     if (!pane.drag || e.pointerId !== pane.drag.id) return;
+    const moved = pane.drag.moved;
     pane.drag = null; divEl.classList.remove('is-drag');
-    setPaneRatio(pane.ratio, true);
+    if (moved) emit('paneResize', { ratio: pane.ratio, height: paneH, done: true });   // a click alone saves nothing (review N7)
   }
   function onDivKey(e) {
     const steps = { ArrowUp: 0.02, ArrowDown: -0.02, PageUp: 0.1, PageDown: -0.1 };
@@ -1981,7 +2022,7 @@ function create(container, options) {
      * The cumulative delta to draw (a ChartEngine.CumulativeDelta, or null), in the pane below the plot while the
      * 'delta' layer is on (1.7.0). The chart redraws when delta.version changes, so the caller only adds trades to it.
      */
-    setDelta(cd) { delta = cd && typeof cd.lowerBound === 'function' ? cd : null; pane.init = false; pane.ver = -1; pane.tkey = ''; dirty = true; },
+    setDelta(cd) { delta = cd && typeof cd.lowerBound === 'function' ? cd : null; pane.init = false; pane.ver = -1; pane.cid++; pane.tkey = ''; pane.cc = null; dirty = true; },
     getDelta() { return delta; },
     /**
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
@@ -2567,7 +2608,7 @@ return {
   VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH, VP_WIDTH, VP_POC_MIN,
   PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX, PANE_MIN, PRICE_MIN, PANE_GAP,
   util: {
-    DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
+    DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtExact, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
