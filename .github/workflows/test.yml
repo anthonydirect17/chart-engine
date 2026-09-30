@@ -1,6 +1,9 @@
 name: test
+# A push to a branch with a pull request already runs as pull_request, so a push runs only on main (the per-PC
+# updater reads the checks of main's commits). This halves the Actions minutes a pull request uses.
 on:
   push:
+    branches: [main]
   pull_request:
 jobs:
   unit:
