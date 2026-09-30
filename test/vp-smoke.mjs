@@ -152,7 +152,7 @@ try {
   /* off by default, listed in the Indicators menu */
   const s0 = await state(p), px0 = await pixels(p);
   check(s0.on === false && s0.has === false && s0.legend === null, 'volume profile off by default: no layer, no profile, no legend');
-  check(await p.textContent('#indCount') === '5/5', 'Indicators count 5/5 (shown / on this chart; the profile is not on it): ' + await p.textContent('#indCount'));
+  check(await p.textContent('#indCount') === '6/6', 'Indicators count 6/6 (shown / on this chart; the profile is not on it, the delta pane is, 1.7.0): ' + await p.textContent('#indCount'));
   check(px0.column.poc === 0 && px0.column.value === 0, 'nothing of the profile at the right edge while off: ' + JSON.stringify(px0.column));
 
   /* on from the menu: the full session */
@@ -162,13 +162,16 @@ try {
   await p.click('#indBody [data-act="gear"][data-id="vp"]');
   check(JSON.stringify((await state(p)).pressed) === '["full"]' && /Hours/.test(await p.textContent('#indBody .ind-set[data-id="vp"]')), 'its gear panel: the Session / RTH switch shows Session');
   await p.screenshot({ path: path.join(SHOTS, 'vp-indicators-menu.png') });
-  await p.click('#indBody [data-f="add:vp"]'); await p.keyboard.press('Escape');
-  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,ib,vp,fills', 'added: its chip on the strip (the sixth: full)');
+  await p.click('#indBody [data-f="add:vp"]');
+  const addNote = await p.textContent('#indLive');
+  await p.keyboard.press('Escape');
+  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,ib,delta,fills' && /added without a chip/.test(addNote),
+    'added to a full strip (the delta pane is the main pane\'s sixth chip since 1.7.0): no chip, and the menu says so');
   await p.mouse.move(10, 400); await p.waitForTimeout(600);
   const s1 = await state(p), px1 = await pixels(p);
   check(s1.on === true && s1.has === true && s1.rth === false, 'on: the chart has a session profile');
   check(s1.total === s1.expect.session && s1.total > 0, 'session profile holds every trade from 18:00 ET the page got: ' + s1.total + ' = ' + s1.expect.session);
-  check(await p.textContent('#indCount') === '6/6', 'Indicators count 6/6');
+  check(await p.textContent('#indCount') === '7/7', 'Indicators count 7/7');
   const fmt = v => U.fmtPrice(v, 2);
   check(s1.legend === 'POC ' + fmt(s1.poc) + ' · VA ' + fmt(s1.va[0]) + ' to ' + fmt(s1.va[1]), 'legend: ' + s1.legend);
   check(s1.va[0] <= s1.poc && s1.poc <= s1.va[1], 'VAL <= POC <= VAH');

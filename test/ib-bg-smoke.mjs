@@ -117,7 +117,7 @@ try {
     }, ib[0].price);
     check(drawn.n > 20 && drawn.first > 200, 'IBH pixels start well right of the left edge (at the 9:30 bar): first orchid at x ' + drawn.first);
     check((await p.evaluate(() => window.liveChart.getLayers().ib)) === true, 'Initial balance on by default on the main pane');
-    check(/5\/5/.test(await p.textContent('#indCount')), 'indicator count 5/5: ' + await p.textContent('#indCount'));
+    check(/6\/6/.test(await p.textContent('#indCount')), 'indicator count 6/6 (the delta pane on too, 1.7.0): ' + await p.textContent('#indCount'));
     await p.screenshot({ path: path.join(SHOTS, 'ib-forming-1000.png') });
     // the same IB on every view
     for (const tf of ['15s', '30s', '5m', '15m', '1h', 'Range', '1m']) {
@@ -339,9 +339,11 @@ try {
     check(JSON.parse(await host.evaluate(() => localStorage.getItem('desk:live-colors-v1'))).bg === '#000000' && JSON.parse(await host.evaluate(() => localStorage.getItem('live-colors-v1'))).bg === '#F5F7FA',
       'embedded ground saved under desk:, the page\'s untouched');
     await host.close();
-    // reset puts the default ground back
+    // reset puts the default ground back (tab A to the front first: with several headless tabs the frames go to one of
+    // them, and after the host tab closes that was not always A, so the reset was sometimes not drawn yet)
+    await a.bringToFront();
     await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape'); await a.waitForTimeout(200);
-    check((await look(a)).canvas === '#080B10', 'Reset to default: the dark ground again');
+    check((await look(a)).canvas === '#080B10', 'Reset to default: the dark ground again: ' + JSON.stringify(await look(a)));
     check(await a.evaluate(() => getComputedStyle(document.querySelector('.chart-live')).backgroundColor) === 'rgb(8, 11, 16)' && await a.evaluate(() => document.querySelector('.chart-live').style.getPropertyValue('--s2')) === '',
       'back on the dark ground the toolbar is the house style again');
     await ctx.close(); br.kill();

@@ -6,6 +6,8 @@
 // at load and its drawing at the right edge are measured too. The RTH choice runs at 13:30 ET (PERF_SMOKE_ET to change),
 // when there is an RTH profile to draw; the others at 01:30, when the page loads the most history. At 13:30 the Range
 // backfill is one session, so the RTH run asks for denser sample ticks (17 a second, not 15) to stay over a million.
+// The delta pane (1.7.0) is on in every load, as it is on the main pane by default (PERF_SMOKE_DELTA=0 for off); its
+// build with the range bars at load, each live trade added to it and its drawing are measured with the rest.
 //   npm run smoke:perf           (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser; about 90 s)
 //   PERF_SMOKE_ROOT=../old-checkout npm run smoke:perf    measures another checkout's page on the same feed
 import { spawnSync } from 'node:child_process';
@@ -24,7 +26,8 @@ const errors = [];
 for (let i = 0; i < LOADS; i++) {
   const args = [path.join(here, 'test', 'perf-live.mjs'), '--view=range', '--secs=10', '--warm=3', '--et=' + ET, '--tick-rate=' + TICK_RATE, '--live-rate=150',
     '--port=' + (PORT + i), '--json=' + out, '--root=' + path.resolve(process.env.PERF_SMOKE_ROOT || here)]
-    .concat(process.env.PERF_SMOKE_VP === '0' ? [] : [process.env.PERF_SMOKE_VP === 'rth' ? '--vp=rth' : '--vp']);
+    .concat(process.env.PERF_SMOKE_VP === '0' ? [] : [process.env.PERF_SMOKE_VP === 'rth' ? '--vp=rth' : '--vp'])
+    .concat(process.env.PERF_SMOKE_DELTA === '0' ? ['--delta=0'] : []);
   const r = spawnSync(process.execPath, args, { stdio: ['ignore', 'ignore', 'inherit'], timeout: 180000 });
   if (r.status !== 0) { errors.push('load ' + (i + 1) + ': perf-live exited ' + r.status); continue; }
 }
@@ -33,12 +36,15 @@ fs.rmSync(out, { force: true });
 runs.forEach((d, i) => {
   const tag = 'load ' + (i + 1) + ' (' + d.version + ', ' + d.backfillTicks.toLocaleString() + ' ticks)';
   console.log(tag + ': chart frames ' + (d.frameLoopAlive ? 'running' : 'STOPPED') + ', frames over 50 ms ' + d.over50 + ', long tasks ' + d.longTasks + (d.volumeProfile ? ', volume profile ' + d.volumeProfile.mode + ' (' + d.volumeProfile.volumeAtStart + ' contracts, bars rebuilt ' + d.volumeProfile.builds + ' times)' : '') +
+    (d.deltaPane ? ', delta pane (' + d.deltaPane.tradesAtStart + ' trades at the start, ' + d.deltaPane.tradesAtEnd + ' at the end, ' + d.deltaPane.bars + ' candles)' : ', delta pane off') +
     ', tick ' + d.tickMeanUs + ' us, chart frame ' + d.chartFrameMeanMs + ' ms, GC max ' + d.gcMaxMs + ' ms, heap ' + d.heapEndMB + ' MB');
   for (const e of d.errors) errors.push(tag + ': page error: ' + e);
   if (d.backfillTicks < 1000000) errors.push(tag + ': backfill too small to test (' + d.backfillTicks + ')');
   if (!d.frameLoopAlive) errors.push(tag + ': the chart stopped drawing');
   if (d.over50 > 3) errors.push(tag + ': ' + d.over50 + ' frames over 50 ms');
   if (d.volumeProfile && (d.volumeProfile.volumeAtStart === null || d.volumeProfile.volumeAtStart === undefined)) errors.push(tag + ': the volume profile was not on');   // RTH at 01:30 is on and empty
+  if (process.env.PERF_SMOKE_DELTA !== '0' && !process.env.PERF_SMOKE_ROOT && !(d.deltaPane && d.deltaPane.tradesAtEnd > d.deltaPane.tradesAtStart)) errors.push(tag + ': the delta pane was not on, or took no live trades');
+  if (process.env.PERF_SMOKE_DELTA === '0' && d.deltaPane) errors.push(tag + ': the delta pane was on with PERF_SMOKE_DELTA=0');
   if (d.heapEndMB > HEAP_MB) errors.push(tag + ': JavaScript heap ' + d.heapEndMB + ' MB (over ' + HEAP_MB + ')');
 });
 if (runs.length < LOADS) errors.push('only ' + runs.length + ' of ' + LOADS + ' loads measured');
