@@ -6,8 +6,7 @@ talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on 
 0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
 ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
 Since 0.3.4 every trade, live and in the backfill, carries its side (buy or sell) and how it was found; see
-"Trade side" below. Since 0.3.5 a page can go live on the most recent trades and pull the older history after; see
-"Live first" below.
+"Trade side" below.
 
 ## Network access (0.3.1)
 
@@ -189,11 +188,11 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst"]`) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue}]`, `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places), `done` (bool) | after `history`, the current session's trades, chunked |
-| `ready` | `root`, `sub` (0.3.3), `older` (0.3.5: `true` when the page asked for live first and the older history follows) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
-| `olderTicks` | `root`, `sub`, `ticks`: `[[t,p,v,s,sm], ...]` oldest first, `left` (older trades still to come), `done`; on the last also, when the older history could not be joined to the page's first trade (then it holds no trade): `joinMismatch` (`true`: NinjaTrader's two answers do not line up there), `gapMs` (it ended that long before the page's first trade), `startsAfter` (`true`: it starts after the page's first trade, so nothing older exists in it); `error` (why it could not be sent); `dropped` (`true`: ChartBridge dropped it, the one answer to a `more` after that) | 0.3.5, live first: as many as the page asks for with `more`, newest chunk first (see Live first) |
+| `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
+| `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
@@ -203,8 +202,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields |
 |---|---|
-| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8; at most 48, and since 0.3.5 up to 120 while CME Globex is closed, see Live first, "Tick hours"), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (0.3.5, optional: `true` or `1` for the most recent trades first; see Live first), `quotes` (0.3.5, optional: `false` or `0` for trades only, no Bid and Ask ticks asked of NinjaTrader; the sides then come from the tick rule) |
-| `more` | `sub`, `upTo` (0.3.5: that load's older history until the page has had `upTo` chunks in all, so asking again with the same `upTo` adds nothing; without `upTo`, one chunk more; market data only, never an order message) |
+| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (0.3.5: with `tickHours` above 0, the served window instead of `tickHours` by date), `profile` (0.3.5: send the `profile` message) |
 | `ping` | `c` (page clock, echoed back in a `pong` with the server clock `s`) |
 
 ## Backfill and live: one seam (0.3.3)
@@ -417,7 +415,7 @@ drain at the page's pace. So ChartBridge sends in two lanes:
 - **Order lane:** `hello`, `trading`, `orders`, `order`, `position`, `reject`, `exec`, `execs`, `status`, `pong`.
   Checked before every message ChartBridge sends, so such a message goes out at the next message boundary (one
   market data message at most is in flight), ahead of market data queued before it.
-- **Data lane:** `history`, `ticks`, `ready`, `tick`, `olderTicks` (0.3.5), and any other type: first in, first out, as before.
+- **Data lane:** `history`, `ticks`, `ready`, `tick`, and any other type: first in, first out, as before.
 
 The guarantee: order within each lane is kept, and a data message never goes out ahead of an order-lane message sent
 before it. An order-lane message can go out ahead of data sent before it. That is safe for the page: order, position,
@@ -445,9 +443,8 @@ credit** (review 5 S1): right after a load, the live trades queued behind the re
 long, and that is not counted, so the chart can run behind by up to the length of the release plus 5 s before the rule
 acts, not 5 s, while trading stays enabled. Review 5 measured, at 3,000 trades a second: healthy pages 4.4 to 14.3 s
 behind right after a load, never closed; a page slower than the market closed only 37.6 s after `ready`; with repeated
-loads a slow page reached 17.2 s behind before its close. Live first (0.3.5, below) shrinks the release to the trades
-held while the recent window loads: in the same model, the page is 0.35 to 1.05 s behind right after `ready` (see Live
-first, post-load lag). Order lane messages do not count (they go out first
+loads a slow page reached 17.2 s behind before its close. What shrinks the release is sending recent ticks first (the
+next step, branch live-first); this branch changes no page code. Order lane messages do not count (they go out first
 anyway). Also closed, as before: 5,000 entries waiting while the message being sent has been stuck for over 2 seconds
 (a page that stopped reading), and over 5,000 order-lane messages waiting. The age is checked when something is queued
 for the page (and while a load waits to queue its next chunk), so a page with nothing new waiting is not closed; order
@@ -514,219 +511,55 @@ NinjaTrader's historical data) excluding the trade's own step uses an older quot
 can be wrong more often, so the two resolutions in `/diag` matter. Real bid/ask tick counts and memory on Tradovate are
 unknown until the live PC reads `bidTicks`, `bidRowsKept` and `quoteCopyMs`.
 
-## Live first (0.3.5)
+## Served window and session table (0.3.5)
 
-On WORK (2026-09-30) the MNQ Range 40 chart took about 30 s to load: `loadMs` 29,827 for `backfillTicks` 4,612,769 over
-`tickHours` 28, and after an F5 the page took 15 to 20 s to be usable. Since 0.3.4 a page more than 5 s behind is
-reconnected and reloads, so a fast load makes that reset cheap. Anthony (2026-09-30): "Stream the most recent ticks first
-so the chart is live at once, then fill the older history in the background."
+Anthony's rules (2026-09-30, after the WORK session where each Range load pulled 16 to 17 hours of trades and NinjaTrader
+showed 8 to 11 s "high latency" stalls): the Range chart only needs the last 2 hours when it opens, and its bars then stay
+all day; the volume profile must be exact from 18:00 ET; nothing about trades or range bars is kept past the session.
 
-**Which page gets it.** `hello` lists `features: ["liveFirst"]`. A page that sees it may subscribe with `liveFirst: true`
-(and its `sub`); only a tick chart (`tickHours` above 0) loads that way. A page that does not ask, and every page of
-chart 1.6.x, gets the full load of 0.3.4, unchanged. The Desk's relay passes `hello` without `features` and rebuilds the
-subscribe from its own fields, so a chart behind it loads fully, as before. The flag in `hello` (not the version) is what
-the page reads, so a relay that drops it can never make a page wait for history that is not coming.
+**The served window.** A subscribe with `liveFirst: true` and `tickHours` above 0 (a Range or seconds chart) gets the last
+`rangeHours` of trades (config, default 2, 1 to 8) in its `ticks` instead of `tickHours` by date. The first such load of a
+session asks NinjaTrader **by count** (`BarsRequest(instrument, barsBack)`; NinjaTrader's help says a request by date
+returns whole trading days), sized from the live trade rate (1.5 times `rangeHours` of it, 20,000 to 2,000,000; 200,000
+before a rate is known), and asks again with three times the count, at most three rounds, while the answer is full and
+still starts after `rangeHours` back; the answer is cut at `rangeHours`. Live trades are held meanwhile and meet the answer
+by the 0.3.3 seam. That answer plus every live trade since is the instrument's served window, kept in ChartBridge's memory:
+every later load of that instrument (a reload, a second page, a view switch back to Range) gets its trades from there,
+from the same first trade, and NinjaTrader is not asked again. It is dropped at the next session (the first trade after
+18:00 ET). Its trades are `[t, p, v]` (no side: the delta pane counts live trades from the page's open). A subscribe
+without `liveFirst` loads as before 0.3.5.
 
-**The load.**
+**The session table.** ChartBridge keeps, per instrument, the volume at each price of the current session (from 18:00 ET),
+per half hour of New York time (9:30, 13:00 and 16:00 are half hour edges, so RTH, and an NYSE early close, are whole rows),
+fed by every live trade (OnMarketData Last) under the instrument's lock. The table is whole when ChartBridge was listening
+before the session started and its first trade came within 10 minutes of 18:00. Otherwise (ChartBridge started
+mid-session) it holds the live trades from its first one (`coveredFrom`) and ONE backfill of the session is run: once per
+session, never for a page load, serial across instruments, after no tick chart has started a load for 10 s, asking
+NinjaTrader for the session so far by date, with all copying and adding off NinjaTrader's threads; the live trades since
+the table began are joined to its answer by the 0.3.3 seam. When it is in, the table is whole and every live page of that
+instrument that asked for `profile` gets a new `profile` (no `sub`), in order with its live trades. At 18:00 ET (the first
+trade of the next session) a new table starts; the finished one is kept as `last` and written to one small file per
+instrument (`profile-MNQ.txt` in ChartBridge's folder: the session's start, whether whole, and its rows), for the
+weekend's "last session" profile and a later weekly profile. Nothing else about trades is written to disk.
 
-1. The minute history, as before (its forming minute rebuilt from the trades below when they reach back to its start).
-2. The **recent window**: the last `recentTicks` trades (config.txt, default 100,000) and the last 8 times as many Bid and
-   Ask ticks of each side, asked **by count** (`BarsRequest(instrument, barsBack)`). NinjaTrader's help for BarsRequest:
-   "When using the DateTime fromLocal and toLocal parameters, the dates are converted to local daily timestamps (12:00 AM)
-   and return a BarsRequest representing full trading days. If you need less than one full day, use the barsBack parameter
-   instead." A request by date for the last ten minutes would still load whole days; by count it loads what it needs.
-   Nothing is asked of the future, so there is no retry ending now.
-3. The recent window's trades are classified as any backfill (the prevailing quote, else the tick rule) and sent from its
-   **front** (below), then `ready` with `older: true` and the held live trades not in the window, by the 0.3.3 seam,
-   **unchanged**: the recent window is the backfill the held trades are matched against (its last trade is T), with
-   `heldAtAnswer`, whole-second and millisecond rules, `droppedAsDuplicate`, and the released trades' tick rule continuing
-   from the window's last trade (ContinueSides, FixLast), all as before. The page is live and can trade from `ready`, as
-   before; `ready` now comes after the recent window instead of after the whole window.
-4. The **older history**: right after `ready`, the whole window is asked exactly as a full load asks it (trades from
-   `tickHours` back, ending 60 minutes past now, asked again ending now if refused or empty; the Bid and Ask ticks from the
-   recent window's quote start, 2.5 s at most after the trades), classified the same way, and joined to the page's first
-   trade (below). When the join is proven, the page gets everything before that trade in `olderTicks` chunks of 10,000
-   trades, **newest first** (each chunk oldest first inside). The page asks with `more` and `upTo`, the chunks it wants in
-   all: 2 at `ready`, then two more than it has as each arrives, so **at most two chunks are ever on their way to it**
-   (review N1). While no chunk has come for 10 s (the whole window still loading in NinjaTrader, or a request lost), the
-   page asks again with the same `upTo`, which adds nothing; ChartBridge keeps at most 4 asked in any case (a page without
-   `upTo` asks one more per `more`). ChartBridge has the load's state in place before `ready` is queued, so a `more` sent
-   the moment the page sees `ready` is never lost (the harness sends it at that very moment).
-5. If the recent window fails, comes back empty, or has no trade whose side stands on its own (below), the load goes on as
-   a full load of 0.3.4 (the live trades still held; a plain `ready`); `/diag` says why (`fellBack`). If the older
-   history fails, the last `olderTicks` says so (`error`) and the page keeps what it has. The older history is dropped, and
-   freed at once, when the page subscribes again or disconnects (review N3; also a page that disconnects before `ready`
-   never starts one), and when the page asks for nothing for 120 s (it went away, or its tab was frozen) or a send fails;
-   a `more` after such a drop gets one answer, an empty `olderTicks` with `done`, `dropped` and the reason (review N2), at
-   once when the page had chunks asked, so the page never waits for history that is not coming.
+**The `profile` message.** Sent right before `ready` to a subscribe with `profile: true` (any view): `session` is the table
+exactly up to the last trade the page has (the held live trades released after `ready` are taken off, the page adds them
+as it gets them), so the page's profile is the rows plus every trade after them, equal to one built from every trade of
+the session. Rows are `[t, priceTicks, v]`: `t` the half hour's start in bar-time seconds (New York wall clock), the price
+in ticks of `tick`, the volume. `from` is the session's start, `whole` whether every trade of it is in, `coveredFrom` from
+when it is (the start when whole). `last` is the finished session's table, or null.
 
-**Three joins, and why nothing is counted twice or missed.**
+**For a page.** With ChartBridge 0.3.5 the chart draws Range bars only from the first bar proven to be NinjaTrader's own
+(docs/RANGE_BARS.md, Served window), and starts the session VWAP of range and seconds bars from the table (its price
+times volume and volume, less the trades the page holds). Old pages (no `liveFirst` or `profile`) and The Desk's relay
+(which passes no `features`) work as before.
 
-- *Recent window and live trades*: the 0.3.3 seam, unchanged (above). The harness runs it with the recent window as the
-  backfill.
-- *Older history and recent window* (`ChartBridgeFill.Join`): both are NinjaTrader's own tick series in its own order,
-  and the older history was asked later, so it ends after the recent window. It does **not** always start before it
-  (review B1): a request by date returns whole trading days, a request by count the last trades whatever their day, so at
-  the Sunday 18:00 ET open or after a holiday the recent window reaches back into Friday while the older history holds
-  only Sunday's session (and the same when a small `tickHours` in a quiet market makes the recent window span more time).
-  So Join first compares the two starts. The page's first trade R[w] sits at time T0.
-  - The older history starts after T0 (`startsAfter`): it holds nothing older than the page's first trade, so nothing is
-    sent. It is still checked against the recent window where it starts (for `/diag`). The page's store is then the recent
-    window from its front on, one exact run, and at a weekly open it covers the whole of Sunday's session (more than a full
-    load has); the page says the history starts where the recent trades begin.
-  - The older history ends before T0 (`gapMs`): the trades between could be missing, so nothing is sent.
-  - Otherwise R[w] is the (g+1)th trade at T0 in the recent window (g of them before it), so in the older history it is
-    the (g+1)th at T0 too, never past its last trade at T0. When the recent window itself starts inside T0's trades (the
-    count cut them), or the older history does, each position among its trades at T0 is tried. A position is **proven**
-    when up to 2,000 trades after it match the recent window's from R[w] on, and the trades before it match the recent
-    window's before R[w] (as far back as both go), in time, price (on the 0.000001 grid) and volume, and no other position
-    fits too.
-
-  Only a proven join sends older trades. When NinjaTrader's two answers do not line up (`joinMismatch`; review S2: same-time
-  trades in another order, a trade in one and not the other) nothing older is sent either: the page keeps the recent window,
-  one exact run, never a trade twice or two swapped, and says so with a Reload (a reload asks both again). `/diag`
-  `fills.join`: `proven`, `matched`, `checked`, `startsAfter`, `mismatchAt`, `gapMs` (each case also logged in the Output
-  window). The Mono harness checks the reviewer's cases (J1 to J4) as pure functions and through whole loads whose older
-  history is answered in whole trading days (a Sunday open, answers that differ at the front), a random hunt of 3,000 tapes
-  (the page's trades are always the truth from its first trade on, and an older history that covers the front is always
-  sent whole), and `check/join-cases.txt`, the C# answers written down, which `test/live-first.test.js` runs through the
-  fake bridge's port of Join (`test/fill-join.js`, review N7) so the fake's smokes use the same join.
-- *Older chunks with each other*: consecutive slices of one array, B[a, b) then B[a', a), so no trade is in two chunks and
-  none falls between. A newer subscribe stops the older load's history (checked before every chunk); a chunk already on
-  its way carries the older `sub`, which the page drops. The page also refuses any chunk that is not wholly at or before its
-  store's first trade (review B1), with every older trade it took in that load: whatever ChartBridge sends, its store stays
-  one exact run.
-
-The Mono harness (`check/FillHarness.cs`) plays a made-up tape of 40,000 trades and their Bid and Ask updates through
-ChartBridge's own Subscribe, market data handler and `more`, with trades and quotes arriving live between every answer
-and every chunk: the page's trades (older chunks, recent window, released and live) are the tape, each exactly once and in
-order, and every side and method equals a full load's classification of the same tape.
-
-**Sides at the joins.** A full load classifies every trade with the quote rows from its quote start (now minus
-min(`tickHours`, 24) hours, `ChartBridgeServer.QuoteStart`) and one tick-rule chain from the session start. The recent
-window has only its own quotes and trades, so its first trades could come out differently. Its quote rows by count are cut
-at the same quote start (review S1: uncut, rows by count can reach back before it, a minute view's profile at 18:xx or any
-view in a quiet night, and the trades there got quote sides where a full load gives the tick rule; 8,151 of 15,000 in the
-reviewer's case), and the older history uses the recent window's quote start, not one seconds later. So the recent rows
-are the full load's rows from some point on, and the page gets the recent window only from its **front**
-(`ChartBridgeFill.FrontStart`), the first trade that is:
-
-- more than 60 s (the stale-quote age) after the later of the recent Bid and Ask histories' starts. From there the quote
-  in force at any trade is in the recent histories too, or else it is stale in both (the tick rule either way); and
-- itself not leaning on the trade before the window: classified by the quote, or a price change from the trade before
-  it (the tick rule's up or down needs only that trade), or the first of an 18:00 ET session (the tick rule starts over).
-  Every later trade's tick rule then runs inside the window.
-
-The trades before the front come with the older history instead, with the full load's sides. The harness proves the rule
-on 400 made-up tapes (some with a 70 s quote silence, some across the 17:00 to 18:00 ET break, half with the quote start
-inside the tape, both loads cut there): 25,869 trades from the front compared, none different, while trades before the
-front often differ (so the cut matters); and the reviewer's case (quotes over 3 hours, `tickHours` 1): none different, and
-8,151 of 15,000 when the rows by count are left uncut. The older history's own sides are the full load's by construction
-(the same request, classification and quote start). `/diag` `fills.join.sidesDiffer` compares the two answers' sides on
-the matched trades, as a live check.
-
-**Trades only** (`quotes: false`). A minute view asks for ticks only for its volume profile, which counts trades, not sides.
-Its subscribe says `quotes: false`, and ChartBridge asks NinjaTrader for no Bid and Ask ticks, in the recent window or the
-older history: every trade's side then comes from the tick rule (`sm` 3), and `/diag` `sides` says the quotes were "not
-asked". The page does not use sides on a minute view; the delta pane, when it lands, must not take them for a full load's
-(the page notes it, `D.quotes` false; the pane shows its partial label on minute views). The page and ChartBridge 0.3.4 or
-older never send it.
-
-**The 5 s rule and the send lanes.** `olderTicks` is market data (data lane); `more` is handled apart from every order
-message. Since the page asks with `upTo` for two more chunks than it has, and a repeat adds nothing, live trades never queue
-behind more than two chunks (review N1: before `upTo`, re-asks while NinjaTrader loaded could let four through), and a chunk
-counts as a load's bulk data (like `history` and `ticks`), so it never counts as lag. Harness (Mono on the build box, a page
-simulated at its pace, a million older trades in 101 chunks while live trades arrive):
-
-- a page taking 5 ms a 10,000-trade chunk and 30 us a live trade (Chromium on the build box: 2 to 3 ms a chunk, at most
-  16 ms; review 3 measured 26 to 31 us a live trade), 3,000 live trades a second: the older history in 3.4 to 3.8 s; the
-  oldest waiting market data at most 15 to 44 ms (the rule closes at 5,000 ms: a margin of more than 4.9 s); live trades
-  waited median 0.2 ms, p99 20 to 31 ms, at most 25 to 62 ms (3.3 to 3.5 ms p99 with no history coming);
-- a slow page, 25 ms a chunk and 100 us a trade, 1,500 live trades a second: 5.9 to 6.0 s; oldest waiting data at most
-  43 to 48 ms; live trades waited p99 86 to 90 ms (60 ms p99 with no history coming: most of it is the slow page itself).
-(Numbers vary run to run on the build box; ranges over the runs made.)
-
-**Post-load lag** (review 5 S1, measured in review 5's own model: Lanes5.cs B's page with a Chromium-like buffer of
-24,000 or 400 messages, a 250 ms freeze at `ready`, 20 or 45 us a live trade, 3.5 ms a chunk, 3,000 live trades a second;
-driven through ChartBridge's own SubscribeLiveFirst, the recent window of 100,000 trades answered after 1, 2 or 5 s, the
-older history of 4.6 million trades answered 25 s after `ready` and pulled by the page). How far behind the page's live
-trades were:
-
-| | right after `ready` (first 5 s) | while NinjaTrader loads the rest | while 4.6 million older trades stream |
-|---|---|---|---|
-| 0.3.4 full load of 30, 45, 60 s (90,000 to 180,000 held; 7c28d55, the same box) | 4.3 to 13.1 s | | |
-| live first, recent window in 1 s (3,000 held) | 0.35 s (20 us), 0.42 s (45 us) | 0.01 to 0.04 s | 0.04 to 0.08 s (461 chunks in 6.4 to 7.1 s) |
-| live first, recent window in 2 s (6,000 held) | 0.43 s (20 us), 0.58 s (45 us), 0.53 s (400-message buffer) | 0.01 to 0.02 s | 0.05 to 0.07 s |
-| live first, recent window in 5 s (15,000 held) | 0.67 s (20 us), 1.05 s (45 us) | 0.01 to 0.02 s | 0.05 to 0.07 s |
-
-Never closed; the oldest waiting data (the 5 s rule's measure) at most 0.25 s. The post-load lag is now the release of
-the trades held while the recent window loads, so it grows with NinjaTrader's time to answer the requests by count: if
-that were as long as a full load's, it would be as before. `/diag` `fills.timeToLiveMs` shows it on the trading PC.
-
-**NinjaTrader's memory and CPU.** The recent window adds one request by count (100,000 trades, up to 800,000 quote rows a
-side, thinned to the rows that change the quote). The older history is the request a full load makes, copied the same way,
-and held until the page has pulled it (dropped, and freed at once, at a newer subscribe or when the page disconnects;
-after 120 s without a `more`; or not kept at all when the join is not proven). At most two 10,000-trade chunks of its text
-wait for the page at a time (about 380 KB each). Writing a trade's text is now about 10 times cheaper (0.41 us against 3.94 us on Mono): numbers go
-straight into the message, and the New York time is worked out once per hour of NinjaTrader time unless a daylight saving
-change falls inside it (`CbJson.AppendNum3`, `AppendNum`, `ChartBridgeTime.EtCache`); the harness checks 252,000 trades
-read exactly as 0.3.4 wrote them, in 7 NinjaTrader time zones across the 2026 changes. That also speeds up the full load of
-older pages. The join over 2,000,000 older trades takes about 12 ms.
-
-**Time to live.** Measured on the fake bridge (sample data): the page is live 0.4 to 0.5 s after it subscribes (0.3 s of
-it the fake's stand-in for NinjaTrader's answer), and with 1.8 million trades the page's own part of a full load is about
-5 s. On the trading PC the time to live is NinjaTrader's answer to the requests by count plus about 0.2 s; how long
-NinjaTrader takes to answer them is only known there (`/diag` `fills.timeToLiveMs`, and `backgroundAnswerMs` for the
-whole window).
-
-**The page** (chart 1.8.0; `live/live.js`, "Live first"): puts each chunk in front of its tick store after checking it lies
-wholly at or before the store's first trade, so the store is one unbroken, exact run at every moment; minute and hour bars
-are exact at once (they come from the minute history); the volume profile takes each chunk's trades of its session;
-seconds bars show from the first whole bar the store holds; range bars show from their first proven point
-(docs/RANGE_BARS.md, Live first), with the 1-minute bars of the minutes before it on their left, or 1-minute bars alone
-until such a point is seen (review S3: when a live trade gives the first proven point, the range bars appear at the right
-of the 1-minute bars, never alone); range and seconds bars, and their 1-minute stand-ins, draw no VWAP until the history is
-in (it is the session's); after the last chunk it rebuilds the view from the whole store in slices and swaps it in. The
-range bars shown from the proven point are the same bars after the swap in price and volume, at the same time to the
-millisecond (docs/RANGE_BARS.md, review N4); range bars older than it take the place of the 1-minute stand-ins, and the
-VWAP line appears. The status line says "History: loading 6 h of 28 h".
-
-When the history ends short (the join was not proven, a gap, an error, or ChartBridge dropped it), the page keeps what it
-has, one exact run of trades, and stays as it was while loading: range bars only from a proven point, no VWAP on range and
-seconds bars (review N5), the Initial balance not drawn when a minute of it lacks its first trades, the profile's own note
-on how far back it counts. The status line says why and where the history starts, with a **Reload** that loads the chart
-again (review S2). Dropping the older history and keeping the recent window, rather than reloading on its own, was chosen
-because it keeps every trade on the page exactly once at every moment, never takes the chart or orders away without
-Anthony's click, and cannot loop when NinjaTrader's two answers keep differing; the reload is one click when he wants it.
-The store's trimming (the oldest 500,000 trades past 2.5 million) resumes then too (review N2).
-
-With the volume profile on, minute views ask for ticks back to the profile's start (18:00 ET, 9:30 for RTH), live first
-and trades only (`quotes: false`), so the profile counts the whole session. Switching the profile on (or Session after
-RTH) on a minute view, and the Reload above, load again with the chart kept on screen and order entry working (review N6):
-the page keeps the last price it had until the new load is live (ChartBridge checks every order against its own last price
-anyway); only the live trades pause, as in any load.
-
-**Live checks on the trading PC.** `/diag` `fills` for each live-first load: `timeToLiveMs` (subscribe to `ready`),
-`recentTicks`, `recentSent` and `recentSentFrom` (the front), `recentWindowMin`, `backgroundAnswerMs` (subscribe to the
-whole window's answer), `backgroundMs` (to the last chunk), `chunks`, `maxOldestDataMs` (the 5 s rule's measure, sampled at
-each chunk), `join` (`proven` and `matched` true and `mismatchAt` -1 expected; `sidesDiffer` 0 expected; `gapMs` null
-expected; `startsAfter` true only at a weekly open or after a holiday), `state` `done`, `fellBack` null. And `seams` as
-before for the recent window (`liveFirst` true).
-
-**Tick hours** (0.3.5). A page may ask for 48 hours of ticks while CME Globex trades, as before, and for up to 120 hours only
-while Globex is closed: from Friday 17:00 to Sunday 18:00 ET, or on a weekday when NinjaTrader has had no trade on any of
-ChartBridge's instruments for 90 minutes while subscribed to them (a full CME closure, such as a holiday; a lost data
-connection counts too, when no market data or order flow runs anyway). That lets the volume profile show the last session
-on a weekend, also after a Friday holiday (a Sunday then asks about 97 hours), while no page bug, old tab or other client
-can pull about five sessions (some 20 million trades, about 480 MB copied) into the NinjaTrader that holds Anthony's orders
-on a weekday. The weekday 17:00 to 18:00 ET break keeps 48 hours: the last session is under 25 hours old then, and a long
-load started at 17:59 would still run at the 18:00 open. The harness checks the rule at ten times of the week, and a
-subscribe for 97 hours on a Saturday and on a weekday. (The page on this branch asks for at most 48 hours; the weekend
-profile's rule arrives with chart-rulings.)
-
-**Still open.** How long NinjaTrader takes to answer a request by count on Tradovate data, and whether its count requests
-and date requests return the same trades in the same order (the join's check says so on every load). The 8x quote rows:
-when NinjaTrader keeps more updates per trade, the front moves later (fewer recent trades sent, never a wrong side).
+`/diag` (0.3.5) adds `books`, per instrument: `table` (`session`, `whole`, `trades`, `volume`, `rows`, `lateTrades`: live
+trades older than the session, `maxGapSec`: the longest time between two live trades this session, where a feed gap
+would show), `last` (`whole`, `volume`, `rows`), `backfill` (`state`: none, wanted, queued, asked, done or failed; `ms`,
+`trades`, `releasedLive`, `first`, `last`), `window` (the served window: `from`, `trades`, `served`) and `tradesPerHour`;
+and `windows`, the last 20 served-window loads: `client`, `root`, `sub`, `atUtcMs`, `fromCache`, `askedByCount` (the counts
+asked, e.g. "200000, 600000"), `trades`, `from`, `timeToLiveMs`, `error`.
 
 ## Delay readout
 
@@ -756,8 +589,7 @@ session); `lastPollUtcMs`; `clients`; `desk` (`postFills`, `deskUrl`, `waiting`,
 `lastError`, `setAside`, `rejectedByDesk`); `pages` (0.3.4, one entry per connected page: `id`, `root`, `ready`, `queued`
 (entries waiting in its data lane), `orderLaneQueued`, `oldestDataMs` (how long the oldest waiting market data has
 waited, as the 5 s rule counts it)); `seams` (0.3.3, the last 20 subscribes, oldest first; see Backfill and live):
-`client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `liveFirst` (0.3.5: the backfill here is a
-recent window; see Live first), `matched` (false: nothing to match the held
+`client`, `root`, `sub`, `tickHours`, `atUtcMs`, `loadMs` (subscribe to `ready`), `matched` (false: nothing to match the held
 trades against, all released), `backfillTicks`, `lastBackfillTick`, `firstHeldTick` and `firstReleasedTick` (New York
 time, `yyyy-MM-dd HH:mm:ss.fff`, or null), `overlapMs` (`lastBackfillTick` minus `firstHeldTick`: 0 or more means the
 streams overlapped, so nothing fell between them; below 0, no held trade was at or before the backfill's end: a quiet
@@ -767,16 +599,9 @@ answer, matching at T: dropped at millisecond resolution, sent at whole seconds)
 answer yet older than T, dropped: above 0 means NinjaTrader delivers some live trades after its answer has them),
 `released`,
 `resolutionMs` (the time step both sides were compared at: 1, 1000, or 0.0001 for NinjaTrader's 100 ns), `tickToAheadMin`
-(60, 0 after a retry, null with no tick backfill or a recent window), `tickRetriedEndingNow`, `minuteTailRebuilt` (minute bars rebuilt from
+(60, 0 after a retry, null with no tick backfill), `tickRetriedEndingNow`, `minuteTailRebuilt` (minute bars rebuilt from
 trades; 0 when NinjaTrader's was kept, -1 when there was none), `ntTailVolume` and `rebuiltTailVolume` (that minute's volume,
-NinjaTrader's and rebuilt from trades; null when not compared); `fills` (0.3.5, the last 20 live-first loads, filled in as
-each goes; see Live first): `client`, `root`, `sub`, `tickHours`, `atUtcMs`, `state` (`recent`, `live`, `older history asked`,
-`sending`, `done`, `done: <error>`, `dropped: <why>`, or `full load`), `fellBack` (why it loaded fully instead, or null),
-`recentTicksAsked`, `recentTicks`, `recentSent`, `recentQuoteCut` (the first trade the quote histories allowed),
-`recentSentFrom` and `recentLast` (New York time), `recentWindowMin`, `timeToLiveMs`, `backgroundAnswerMs`,
-`backgroundTicks`, `olderTicks` (sent before the page's first trade), `olderSent`, `chunks`, `chunksTotal`, `backgroundMs`,
-`maxOldestDataMs`, `join` (`index`, `matched`, `checked`, `mismatchAt`, `gapMs`, `truncated`, `sidesChecked`,
-`sidesDiffer`) and `error`; and `accounts`: one row per watched account with `name`, `connection` (status),
+NinjaTrader's and rebuilt from trades; null when not compared); and `accounts`: one row per watched account with `name`, `connection` (status),
 `executions`, `orders`, `positions` (counts NinjaTrader holds) and `fillEvents`, `orderEvents`,
 `positionEvents` (events seen). Account names are in this local page; never copy them into reports.
 `sides` (0.3.4, see Trade side): one entry per instrument with `live` (null before its first quote or trade:

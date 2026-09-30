@@ -160,7 +160,6 @@
 .chart-live .status .sep { color: var(--line-strong); }
 .chart-live .status .msg.warn { color: var(--warn); }
 .chart-live .status .ibnote { color: var(--text3); font-family: var(--sans); }
-.chart-live .status .reload { font: 500 11px var(--sans); color: var(--accent-text); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .chart-live .status .msg.error { color: var(--loss); }
 .chart-live .status .ro { margin-left: auto; font-family: var(--sans); }
 

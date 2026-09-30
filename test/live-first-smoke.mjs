@@ -1,15 +1,14 @@
-// 1.8.0 smoke: live first (ChartBridge 0.3.5) on the real page against the fake bridge's tape (sample data only, never
-// market data). The fake answers the recent window after 300 ms and the whole window 1.2 s after ready, while the market
-// trades on (150 trades a second, bursts of 450), so live trades arrive during the load and during the older history.
+// 1.8.0 smoke: the served window and the session table (ChartBridge 0.3.5) on the real page against the fake bridge's tape
+// (sample data only, never market data). The market trades on during every load (150 trades a second, bursts of 450).
 //   npm run smoke:live-first      (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser; SHOTS=dir for the screenshots)
-// Checks, on NQ Range 40 at 10:45 ET on a weekday: time to live against a full load of the same tape; orders work at
-// ready, before the history is in; the progress line in the status bar, clear of the order bar; range bars shown only
-// from their proven point (or 1m bars until then), and none of them moves when the whole history is in; every trade of the
-// tape once and in order (the page's store against the tape), with the tape's sides; the live trades' delay while the
-// history comes; range, 15s and 1m bars, VWAP and the Initial balance equal a full load's (a second tab, the feature off).
-// Then a 1m view with the volume profile on: it asks for ticks back to 18:00 (RTH: 9:30), the profile fills in and equals
-// the tape's volume. Then a resubscribe in the middle of the history (15s to Range): nothing of the older load mixes in.
-// Then an old bridge (no liveFirst in hello): a full load as before.
+// Checks, on NQ Range 40 at 10:45 ET on a weekday: the subscribe asks for the served window and the profile; the page's
+// trades start 2 h back and are the tape's, trade by trade; the range bars shown are exactly those of a build from the
+// session's first trade (price, volume and VWAP), from the first proven bar on, and none before it; the volume profile
+// equals the tape's volume at every price, for the session and for RTH. A reload and a second page get the same window
+// from ChartBridge's memory (NinjaTrader asked once) and draw the same first bar. A 1m page gets the exact profile with no
+// tick history. A table still building: the note "building, from HH:MM ET" and no VWAP on range bars, then the pushed
+// profile makes both exact; a market order during a Range load fills. A quiet market: no range bar until one is proven,
+// with a note. The Sunday 18:00 open. The 18:00 rollover on an open page, and a reload after it. An old bridge: a full load.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -28,12 +27,12 @@ const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
 const check = (ok, m) => { if (!ok) fail(m); else console.log('  ok   ' + m); };
 const note = m => console.log('       ' + m);
 
-/* Seconds to add to the real clock to stand at hh:mm New York time on the most recent weekday with a session. */
-function offsetTo(hh, mm) {
+/* Seconds to add to the real clock to stand at hh:mm:ss New York time on the most recent day passing `want(bar time)`. */
+function offsetWhere(hh, mm, ss, want) {
   const now = Date.now() / 1000, today = Math.floor(U.zoneSeconds(now) / 86400);
   for (let back = 0; back < 30; back++) {
-    const bt = (today - back) * 86400 + hh * 3600 + mm * 60;
-    if (!U.rthDay(bt)) continue;
+    const bt = (today - back) * 86400 + hh * 3600 + mm * 60 + ss;
+    if (!want(bt)) continue;
     let unix = bt - (U.zoneSeconds(now) - now);
     unix = bt - (U.zoneSeconds(unix) - unix);
     if (unix > now) continue;
@@ -41,23 +40,11 @@ function offsetTo(hh, mm) {
   }
   throw new Error('no day found');
 }
-
-/* Seconds to add to the real clock to stand at hh:mm New York time on the most recent past `dow` (0 Sunday). */
-function offsetToDay(dow, hh, mm) {
-  const now = Date.now() / 1000, today = Math.floor(U.zoneSeconds(now) / 86400);
-  for (let back = 0; back < 14; back++) {
-    const bt = (today - back) * 86400 + hh * 3600 + mm * 60;
-    if (new Date(bt * 1000).getUTCDay() !== dow) continue;
-    let unix = bt - (U.zoneSeconds(now) - now);
-    unix = bt - (U.zoneSeconds(unix) - unix);
-    if (unix > now) continue;
-    return Math.round(unix - now);
-  }
-  throw new Error('no day found');
-}
+const weekday = bt => U.rthDay(bt);                                        // a day with a stock market session
+const midWeek = bt => U.rthDay(bt) && U.rthDay(bt + 86400) && new Date(bt * 1000).getUTCDay() < 5;   // Mon to Thu: a session follows at 18:00
+const sunday = bt => new Date(bt * 1000).getUTCDay() === 0;
 
 let port = BASE_PORT;
-const bridges = [];
 async function startBridge(offset, extra) {
   for (let tries = 0; tries < 6; tries++, port++) {
     const p = port;
@@ -65,38 +52,28 @@ async function startBridge(offset, extra) {
     let errText = '';
     b.stderr.on('data', d => { errText += d; });
     const ok = await new Promise(res => { b.stdout.once('data', () => res(true)); b.once('exit', () => res(false)); });
-    if (ok) { port++; bridges.push(b); return { port: p, kill: () => b.kill() }; }
+    if (ok) { port++; return { port: p, kill: () => b.kill() }; }
     if (!/EADDRINUSE/.test(errText)) throw new Error('bridge failed: ' + errText);
   }
   throw new Error('no free port from ' + BASE_PORT);
 }
 const control = (p, what, q) => fetch(`http://localhost:${p}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' }).then(r => r.json());
 
-/* A context on the fake's clock. Records every trade the page receives for `rec` (with sides), what it sends, and times. */
-async function context(browser, offset, settings, extra) {
+/* A context on the fake's clock, recording what the page sends and the profile messages it gets. */
+async function context(browser, offset, settings, ranges) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
   await ctx.addInitScript(`(() => {
     const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000};
     try {
       if (!localStorage.getItem('live-settings-v2')) localStorage.setItem('live-settings-v2', ${JSON.stringify(JSON.stringify(settings))});
-      if (!localStorage.getItem('live-range-v2')) localStorage.setItem('live-range-v2', JSON.stringify({ NQ: 40 }));
-      ${extra || ''}
+      if (!localStorage.getItem('live-range-v2')) localStorage.setItem('live-range-v2', ${JSON.stringify(JSON.stringify(ranges || { NQ: 40 }))});
     } catch (e) {}
-    const R = window.__rec = { trades: [], sent: [], subscribeAt: null, readyAt: null, doneAt: null, lagFill: [], lagQuiet: [], chunks: 0, chunkMs: [] };
+    const R = window.__rec = { sent: [], profiles: 0 };
     const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
     const send = WebSocket.prototype.send;
-    WebSocket.prototype.send = function (x) { try { const m = JSON.parse(x); R.sent.push(m); if (m.type === 'subscribe') { R.subscribeAt = performance.now(); R.readyAt = null; R.doneAt = null; } } catch (e) {} return send.apply(this, arguments); };
+    WebSocket.prototype.send = function (x) { try { R.sent.push(JSON.parse(x)); } catch (e) {} return send.apply(this, arguments); };
     Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
-      d.set.call(this, ev => {
-        if (typeof ev.data === 'string') {
-          const m = ev.data.startsWith('{"type":"hello"') || ev.data.startsWith('{"type":"ready"') || ev.data.startsWith('{"type":"tick"') || ev.data.startsWith('{"type":"olderTicks"') ? JSON.parse(ev.data) : null;
-          if (m && m.type === 'hello') R.trades.length = 0;
-          if (m && m.type === 'ready') R.readyAt = performance.now();
-          if (m && m.type === 'olderTicks') { R.chunks++; if (m.done) R.doneAt = performance.now(); const t0 = performance.now(); const r = fn(ev); R.chunkMs.push(performance.now() - t0); return r; }
-          if (m && m.type === 'tick') { const lag = (performance.timeOrigin + performance.now()) - m.rx; (R.readyAt && !R.doneAt ? R.lagFill : R.lagQuiet).push(lag); }
-        }
-        return fn(ev);
-      });
+      d.set.call(this, ev => { if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"profile"')) R.profiles++; return fn(ev); });
     } });
   })();`);
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
@@ -111,387 +88,264 @@ async function openPage(ctx, url) {
   await live(p);
   return p;
 }
-const fillDone = p => p.waitForFunction(() => { const D = window.liveData(); return D.fill && D.fill.done && !D.fill.rebuilding && !D.sync; }, null, { timeout: 60000, polling: 50 });
-/* The page's store against the fake's tape, trade by trade (in the page, so millions stay there). */
-const storeVsTape = (p, bridgePort, root) => p.evaluate(async ([pt, r]) => {
-  const D = window.liveData(), s = D.ticks;
-  const tape = await (await fetch(`http://localhost:${pt}/test/tape?root=${r}&from=${s.time(0)}`, { method: 'POST' })).json();
-  let bad = -1;
-  for (let i = 0; i < s.length && bad < 0; i++) if (s.time(i) !== tape.t[i] || s.price(i) !== tape.p[i] || s.volume(i) !== tape.v[i]) bad = i;
-  return { n: s.length, tape: tape.n, bad, first: s.time(0) };
-}, [bridgePort, root]);
-const bars = p => p.evaluate(() => window.liveChart.bars().map(b => [b.t, b.o, b.h, b.l, b.c, b.v, b.vw === undefined ? null : Math.round(b.vw * 100) / 100]));
-const q = (a, f) => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(f * s.length))]; };
+const subscribes = p => p.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe'));
+async function profileOn(p, rth) {
+  await p.click('#indBtn');
+  if (!(await p.evaluate(() => window.liveChart.getLayers().vp))) { await p.fill('#indQ', 'profile'); await p.keyboard.press('Enter'); await p.fill('#indQ', ''); }
+  await p.click('#indBody [data-act="gear"][data-id="vp"]');
+  await p.click(`#indBody [data-act="opt"][data-id="vp"][data-v="${rth ? 'rth' : 'full'}"]`);
+  await p.keyboard.press('Escape');
+}
+/* Hold the market so the page and the tape can be compared at rest. */
+async function hold(p, br, on) { await control(br.port, 'hold', { root: 'NQ', on: on ? '1' : '0' }); if (on) await p.waitForTimeout(400); }
+
+/*
+ * Everything the page shows against the fake's tape, in the page (the tape can be millions of trades): the store trade by
+ * trade from its first; the range bars shown (or the seconds bars) against a build of the tape from the first trade of the
+ * session holding the store's first trade, OHLC, volume and VWAP (bars of the current session); the volume profile at every
+ * price against the tape's trades from the profile's start.
+ */
+const exact = (p, br) => p.evaluate(async pt => {
+  const D = window.liveData(), BB = window.BarBuilder, CE = window.ChartEngine, U = CE.util, S = D.ticks;
+  const now = U.zoneSeconds(Date.now() / 1000), SS = 18 * 3600;
+  const sessionOf = t => (U.tradeDay(t, SS) - 1) * 86400 + SS;
+  const from = S.length ? Math.min(sessionOf(S.time(0)), sessionOf(now)) : sessionOf(now);
+  const tape = await (await fetch(`http://localhost:${pt}/test/tape?root=${D.root}&from=${from}`, { method: 'POST' })).json();
+  const out = { n: S.length, first: S.length ? S.time(0) : null, now };
+  // the store against the tape
+  let off = 0; while (off < tape.n && tape.t[off] < out.first) off++;
+  out.storeBad = -1;
+  for (let i = 0; i < S.length && out.storeBad < 0; i++) if (S.time(i) !== tape.t[off + i] || S.price(i) !== tape.p[off + i] || S.volume(i) !== tape.v[off + i]) out.storeBad = i;
+  const end = off + S.length;                                   // the tape up to the store's last trade
+  // bars
+  const shown = window.liveChart.bars();
+  out.bars = shown.length;
+  out.firstBar = shown.length ? shown[0].t : null;
+  if (D.cur && shown.length) {
+    const b0 = D.cur;
+    const full = b0.mode === 'range' ? new BB.BarBuilder({ mode: 'range', rangeTicks: b0.rangeTicks, rangeMode: b0.rangeMode, tick: b0.tick, sessionStart: SS })
+      : new BB.BarBuilder({ mode: 'time', seconds: b0.seconds, tick: b0.tick, sessionStart: SS });
+    for (let j = 0; j < end; j++) full.addQuiet(tape.t[j], tape.p[j], tape.v[j]);
+    const k = full.bars.findIndex(b => b.t === shown[0].t);
+    out.barsBad = k < 0 ? 'no full bar at ' + shown[0].t : null;
+    const day = U.tradeDay(now, SS);
+    out.vwBars = 0;
+    for (let i = 0; i < shown.length && !out.barsBad; i++) {
+      const a = shown[i], b = full.bars[k + i];
+      if (!b || a.t !== b.t || a.o !== b.o || a.h !== b.h || a.l !== b.l || a.c !== b.c || a.v !== b.v) out.barsBad = 'bar ' + i + ': ' + JSON.stringify(a) + ' vs ' + JSON.stringify(b);
+      else if (U.tradeDay(a.t, SS) === day && a.vw !== null && a.vw !== undefined) { out.vwBars++; if (Math.abs(a.vw - b.vw) > 1e-6) out.barsBad = 'VWAP of bar ' + i + ': ' + a.vw + ' vs ' + b.vw; }
+    }
+    out.fullBars = full.bars.length - k;
+    out.vwNull = shown.filter(b => U.tradeDay(b.t, SS) === day && (b.vw === null || b.vw === undefined)).length;
+  }
+  // the profile
+  const vp = window.liveChart.getProfile && window.liveChart.getProfile();
+  if (vp) {
+    const start = vp.startOf(now), want = new Map();
+    for (let j = 0; j < end; j++) if (tape.t[j] >= start && (!vp.rth || vp.inRth(tape.t[j]))) { const q = Math.round(tape.p[j] / D.tick); want.set(q, (want.get(q) || 0) + tape.v[j]); }
+    const got = new Map(vp.rows().filter(r => r.volume > 0).map(r => [Math.round(r.price / D.tick), r.volume]));
+    let bad = got.size === want.size ? null : 'rows ' + got.size + ' vs ' + want.size;
+    for (const [q, v] of want) if (!bad && got.get(q) !== v) bad = 'price ' + q * D.tick + ': ' + got.get(q) + ' vs ' + v;
+    out.vp = { rth: vp.rth, total: vp.total, rows: got.size, bad };
+  }
+  out.vpNote = document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent;
+  out.rangeNote = document.getElementById('rangeNote').hidden ? '' : document.getElementById('rangeNote').textContent;
+  out.legendVw = document.getElementById('lgVw').textContent;
+  return out;
+}, br.port);
+const books = br => control(br.port, 'books');
+const hm = t => U.fmtHM(t);
 
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
-  /* ---------------- NQ Range 40 at 10:45 ET: the WORK case, in a busy market */
+  /* ---------------- NQ Range 40 at 10:45 ET in a busy market */
   {
-    const off = offsetTo(10, 45);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=4', '--live-rate=150', '--recent-ticks=30000', '--recent-ms=300', '--older-ms=1200', '--older-chunk=10000',
-      '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, '');
+    console.log('NQ Range 40 at 10:45 ET, busy market');
+    const off = offsetWhere(10, 45, 0, weekday);
+    const br = await startBridge(off, ['--live-first', '--tick-rate=4', '--live-rate=150', '--window-ms=300']);
+    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
     const t0 = Date.now();
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const liveMs = Date.now() - t0;
-    const snap = await p.evaluate(() => ({ bars: window.liveChart.bars().map(b => [b.t, b.o, b.h, b.l, b.c, b.v]), vw: window.liveChart.bars().map(b => b.vw), fallback: window.liveData().fallback, done: window.liveData().fill.done,
-      syncAt: window.liveData().syncAt, m1: window.liveData().m1.bars.map(b => [b.t, b.o, b.h, b.l, b.c, b.v]) }));
-    const early = await p.evaluate(() => { const D = window.liveData(), R = window.__rec; return { fill: !!D.fill, done: D.fill && D.fill.done, n: D.ticks.length, ttl: R.readyAt - R.subscribeAt, sub: R.sent.find(m => m.type === 'subscribe'), sync: D.sync && D.sync.bar, fallback: D.fallback, note: document.getElementById('fillNote').textContent }; });
-    check(early.fill && !early.done && early.sub.liveFirst === true && early.sub.sub > 0 && early.sub.tickHours >= 17, 'live first: subscribe asks for it (' + JSON.stringify(early.sub) + '), LIVE with the older history still to come (' + early.n + ' trades in)');
-    note('time to live: ' + Math.round(early.ttl) + ' ms from subscribe to ready (' + liveMs + ' ms from opening the page)');
-    check(/^History: loading /.test(early.note), 'the progress line: "' + early.note + '"');
-    const layout = await p.evaluate(() => {
-      const r = id => document.getElementById(id).getBoundingClientRect(), n = r('fillNote'), o = r('obar'), f = document.querySelector('footer.status').getBoundingClientRect(), c = r('chart');
-      return { inFooter: n.top >= f.top - 1 && n.bottom <= f.bottom + 1, clearOfBar: n.bottom <= o.top || n.top >= o.bottom, clearOfChart: n.top >= c.bottom - 1 };
-    });
-    check(layout.inFooter && layout.clearOfBar && layout.clearOfChart, 'the progress line sits in the status bar, clear of the order bar and the chart (' + JSON.stringify(layout) + ')');
-    check(early.fallback ? /\(1m until loaded\)/.test(await p.textContent('#lgTf')) : early.sync >= 0, early.fallback ? 'range bars not proven yet: 1m bars, and the legend says so' : 'range bars shown from their proven point (bar ' + early.sync + ' of the window\'s build)');
-    await p.screenshot({ path: path.join(SHOTS, 'live-first-loading.png') });
-    // orders at ready, before the history is in
-    await p.waitForFunction(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled, null, { timeout: 10000 });
-    await p.click('#armBtn');
-    await p.click('#buyMkt');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent.startsWith('LONG 1'), null, { timeout: 5000 }).catch(() => {});
-    const midFill = await p.evaluate(() => !window.liveData().fill.done);
-    check((await p.textContent('#oPos')).startsWith('LONG 1'), 'orders work at ready: a market buy filled' + (midFill ? ' while the older history was still coming' : ''));
-    await p.click('#flattenBtn');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent === 'Flat', null, { timeout: 5000 }).catch(() => {});
-    check(await p.textContent('#oPos') === 'Flat', 'and flattened');
-    await p.click('#armBtn');
-    await fillDone(p);
-    const R = await p.evaluate(() => { const r = window.__rec; return { ready: r.readyAt - r.subscribeAt, done: r.doneAt - r.subscribeAt, chunks: r.chunks, lagFill: r.lagFill, lagQuiet: r.lagQuiet, chunkMs: r.chunkMs }; });
-    note('the page\'s own time per 10,000-trade chunk (parse, put in front, count): median ' + q(R.chunkMs, 0.5).toFixed(1) + ' ms, max ' + Math.max(0, ...R.chunkMs).toFixed(1) + ' ms');
-    note('the older history: ' + R.chunks + ' chunks, all in ' + Math.round(R.done) + ' ms after the subscribe (the fake answers it 1.2 s after ready)');
-    note('live trades while it came: ' + R.lagFill.length + ', delay to the page median ' + q(R.lagFill, 0.5).toFixed(1) + ' ms, p99 ' + q(R.lagFill, 0.99).toFixed(1) + ' ms, max ' + Math.max(0, ...R.lagFill).toFixed(1) + ' ms (otherwise p99 ' + q(R.lagQuiet, 0.99).toFixed(1) + ' ms)');
-    check(R.lagFill.length > 20 && Math.max(...R.lagFill) < 1000, 'live trades keep coming during the older history, none held back a second (the 5 s rule is far off)');
-    const after = await p.evaluate(() => window.liveChart.bars().map(b => [b.t, b.o, b.h, b.l, b.c, b.v]));
-    const afterVw = new Map(await p.evaluate(() => window.liveChart.bars().map(b => [b.t, b.vw])));
-    // the early view: range bars from the proven point (syncAt), and the 1-minute bars of the minutes before it on their left
-    const rangeFrom = snap.fallback ? Infinity : snap.syncAt, shownEarly = snap.bars.map((b, i) => [b, snap.vw[i]]);
-    const early1m = shownEarly.filter(x => x[0][0] < rangeFrom), earlyRange = shownEarly.filter(x => x[0][0] >= rangeFrom);
-    const m1ByT = new Map(snap.m1.map(b => [b[0], b]));
-    check(early1m.every(x => x[0][0] % 60 === 0 && JSON.stringify(m1ByT.get(x[0][0])) === JSON.stringify(x[0])) && (snap.fallback || early1m.every(x => x[0][0] + 60 <= rangeFrom)),
-      'the early view: ' + early1m.length + ' one-minute bars (the whole minutes before the first proven range bar), then ' + earlyRange.length + ' range bars (review S3: never a lone bar)');
-    check(shownEarly.every(x => x[1] === null) && [...afterVw.values()].every(v => typeof v === 'number'), 'no VWAP on the range view until the history is in, its 1m stand-ins included (so no VWAP line can jump or stop halfway), then every bar has it');
-    if (!snap.fallback) {
-      // bar for bar from the first proven one: the same prices and volume, and the time within the same millisecond (a bar
-      // opened in the same instant as the trade before it steps 10 us on from the bar before it, which can differ: N4)
-      const shown = earlyRange.map(x => x[0]).slice(0, -1), at = after.findIndex(b => Math.abs(b[0] - rangeFrom) < 0.001);
-      const moved = at < 0 ? shown : shown.filter((b, i) => { const a = after[at + i]; return !a || Math.abs(a[0] - b[0]) >= 0.001 || JSON.stringify(a.slice(1)) !== JSON.stringify(b.slice(1)); });
-      check(!snap.done && earlyRange.length > 1 && moved.length === 0, 'no range bar moved when the whole history came in: ' + shown.length + ' finished range bars shown before it, all the same after in price and volume, at the same time to the millisecond (' + after.length + ' bars now)' +
-        (moved.length ? '; moved: ' + moved.slice(0, 3).map(b => JSON.stringify(b)).join(' | ') : ''));
-    } else note('the early view was 1m bars (no full swing yet), so there were no range bars to compare');
-    check(!(await p.textContent('#fillNote')) && await p.isHidden('#fillNote'), 'the progress line is gone once the history is in');
-    await p.screenshot({ path: path.join(SHOTS, 'live-first-loaded.png') });
-    // stop the market, then every trade against the tape
-    await control(br.port, 'hold', { root: 'NQ' });
-    await p.waitForTimeout(600);
-    const st = await storeVsTape(p, br.port, 'NQ');
-    check(st.bad < 0 && st.n === st.tape, 'every trade of the tape once and in order: the page holds ' + st.n.toLocaleString() + ', the tape ' + st.tape.toLocaleString() + (st.bad >= 0 ? ' (first wrong at ' + st.bad + ')' : ''));
-    // a full load of the same tape in a second tab (the feature off), and the two compared
-    await control(br.port, 'features', { liveFirst: '0' });
-    const t1 = Date.now();
-    const pB = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const fullMs = Date.now() - t1;
-    const fullTtl = await pB.evaluate(() => window.__rec.readyAt - window.__rec.subscribeAt);
-    check(await pB.evaluate(() => !window.liveData().fill && !window.__rec.sent.find(m => m.type === 'subscribe').liveFirst), 'the second tab: a full load (hello without the feature)');
-    note('time to live of the full load of the same tape: ' + Math.round(fullTtl) + ' ms from subscribe to ready (' + fullMs + ' ms from opening), against ' + Math.round(early.ttl) + ' ms live first');
-    const compare = async (tf, label) => {
-      for (const pg of [p, pB]) { await pg.click(`#tfSeg [data-v="${tf}"]`); await pg.waitForTimeout(300); }
-      const a = await bars(p), b = await bars(pB), from = Math.max(a[0][0], b[0][0]) + (tf === 'range' ? 0 : 60);
-      const A = a.filter(x => x[0] >= from), B = b.filter(x => x[0] >= from);
-      const vw = tf === 'range' || tf === 'm1';
-      const strip = x => vw ? x : x.slice(0, 6);
-      const same = A.length === B.length && A.every((x, i) => JSON.stringify(strip(x)) === JSON.stringify(strip(B[i])));
-      check(same && A.length > 10, label + ': ' + A.length + ' bars identical to the full load\'s' + (vw ? ' (VWAP too)' : ' (OHLC and volume; each tab\'s seconds VWAP starts where its 8 hours start)') + (same ? '' : ' (' + A.length + ' vs ' + B.length + ')'));
-    };
-    await compare('range', 'Range 40 after the fill');
-    await compare('s15', '15s');
-    await compare('m1', '1m');
-    const ib = pg => pg.evaluate(() => window.liveChart.getLevels().filter(l => /IB/.test(l.name)).map(l => l.name + ' ' + l.price).join(', '));
-    const ibA = await ib(p), ibB = await ib(pB);
-    check(!!ibA && ibA === ibB, 'the Initial balance is the full load\'s: ' + ibA);
-    await pB.close();
-    await p.close();
-    await ctx.close();
-    br.kill();
-  }
-
-  /* ---------------- sides: what the page receives, live first and full, against the tape */
-  {
-    const off = offsetTo(11, 10);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=150', '--recent-ticks=20000', '--older-ms=800']);
-    const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
-    await ctx.addInitScript(`(() => {
-      const realNow = Date.now; Date.now = () => realNow() + ${off * 1000};
-      localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }));
-      const got = window.__sides = [];
-      const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
-      Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
-        d.set.call(this, ev => {
-          if (typeof ev.data === 'string' && (ev.data.startsWith('{"type":"ticks"') || ev.data.startsWith('{"type":"olderTicks"') || ev.data.startsWith('{"type":"tick"'))) {
-            const m = JSON.parse(ev.data);
-            if (m.root === 'NQ') { if (m.type === 'tick') got.push([m.t, m.p, m.v, m.s, m.sm]); else got.push(...m.ticks.map(x => x.concat(m.type === 'olderTicks' ? ['o'] : []))); }
-          }
-          return fn(ev);
-        });
-      } });
-    })();`);
-    await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    await fillDone(p);
-    await control(br.port, 'hold', { root: 'NQ' });
-    await p.waitForTimeout(500);
-    const res = await p.evaluate(async pt => {
-      const tape = await (await fetch(`http://localhost:${pt}/test/tape?root=NQ&from=0`, { method: 'POST' })).json();
-      const at = new Map();                                   // tape index by (t, p, v, occurrence)
-      const key = (t, p, v) => t + '|' + p + '|' + v;
-      const idx = new Map();
-      for (let i = 0; i < tape.n; i++) { const k = key(tape.t[i], tape.p[i], tape.v[i]); if (!idx.has(k)) idx.set(k, []); idx.get(k).push(i); }
-      const used = new Map();
-      let bad = 0, n = 0, first = null;
-      for (const x of window.__sides) {
-        const k = key(x[0], x[1], x[2]), list = idx.get(k) || [], u = used.get(k) || 0;
-        used.set(k, u + 1);
-        const i = list[u];
-        n++;
-        if (i === undefined || tape.s[i] !== x[3] || tape.m[i] !== x[4]) { bad++; if (!first) first = JSON.stringify(x); }
-      }
-      return { n, bad, first };
-    }, br.port);
-    check(res.bad === 0 && res.n > 10000, 'trade sides: all ' + res.n.toLocaleString() + ' trades the page received (recent, older, live) carry the tape\'s side and method' + (res.first ? ' (first wrong ' + res.first + ')' : ''));
-    await ctx.close();
-    br.kill();
-  }
-
-  /* ---------------- 1m with the volume profile: ticks back to 18:00 (RTH: 9:30) in the background */
-  {
-    const off = offsetTo(13, 30);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=3', '--live-rate=100', '--recent-ticks=20000', '--older-ms=2000']);
-    const vpOn = `localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } }));`;
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' }, vpOn);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const sub = await p.evaluate(() => window.__rec.sent.find(m => m.type === 'subscribe'));
-    check(sub.liveFirst === true && sub.tickHours === 21 && sub.quotes === false, '1m with the profile on asks for ticks back to 18:00 ET, live first, trades only (no Bid and Ask requests for NinjaTrader) (tickHours ' + sub.tickHours + ' at 13:30)');
-    const during = await p.evaluate(() => ({ note: document.getElementById('vpNote').textContent, total: window.liveChart.getProfile() && window.liveChart.getProfile().total }));
-    check(/is still loading/.test(during.note), 'while it loads the profile says so: "' + during.note + '"');
-    await fillDone(p);
-    await control(br.port, 'hold', { root: 'NQ' });
-    await p.waitForTimeout(500);
-    const vpCheck = () => p.evaluate(async pt => {
-      const vp = window.liveChart.getProfile(), now = Date.now() / 1000, et = window.ChartEngine.util.zoneSeconds(now);
-      const from = vp.startOf(et);
-      const tape = await (await fetch(`http://localhost:${pt}/test/tape?root=NQ&from=${from}`, { method: 'POST' })).json();
-      let vol = 0;
-      for (let i = 0; i < tape.n; i++) if (!vp.rth || vp.inRth(tape.t[i])) vol += tape.v[i];
-      return { total: vp.total, vol, rth: vp.rth, note: document.getElementById('vpNote').textContent, from };
-    }, br.port);
-    let v = await vpCheck();
-    check(v.total === v.vol && v.total > 0 && !v.note, 'the profile holds every contract of the session since 18:00 ET: ' + v.total.toLocaleString() + ' (the tape: ' + v.vol.toLocaleString() + '), and no note');
-    // RTH, from the profile's gear: the same store covers 9:30, so nothing is reloaded
-    const subs0 = await p.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe').length);
-    await p.click('#indBtn'); await p.click('#indBody [data-act="gear"][data-id="vp"]'); await p.click('#indBody [data-act="opt"][data-id="vp"][data-v="rth"]'); await p.keyboard.press('Escape');
+    note('live ' + (Date.now() - t0) + ' ms after opening the page');
+    const sub = (await subscribes(p))[0];
+    check(sub.liveFirst === true && sub.profile === true && sub.sub > 0 && sub.tickHours > 0, 'the subscribe asks for the served window and the profile: ' + JSON.stringify(sub));
+    await profileOn(p, false);
+    await hold(p, br, true);
+    const a = await exact(p, br);
+    check(a.first >= a.now - 2 * 3600 - 5 && a.first < a.now - 2 * 3600 + 60, 'the trades start 2 h back: ' + hm(a.first) + ' ET (' + a.n.toLocaleString() + ' trades)');
+    check(a.storeBad < 0, 'every trade of the tape from there, once and in order (' + a.n + ')');
+    check(a.bars > 20 && !a.barsBad && a.vwBars === a.bars, 'the range bars from the first proven one (' + hm(a.firstBar) + ' ET, ' + a.bars + ' bars) are a full build\'s from 18:00, price, volume and VWAP' + (a.barsBad ? ': ' + a.barsBad : ''));
+    check(a.vp && !a.vp.rth && !a.vp.bad && a.vp.total > 0 && !a.vpNote, 'the session profile equals the tape at every price (' + (a.vp && a.vp.rows) + ' rows, ' + (a.vp && a.vp.total) + ' contracts)' + (a.vp && a.vp.bad ? ': ' + a.vp.bad : ''));
+    await p.screenshot({ path: path.join(SHOTS, 'live-first-range40.png') });
+    await hold(p, br, false);
+    await profileOn(p, true);
+    await p.waitForTimeout(1500);                                  // live trades into the profile
+    await hold(p, br, true);
+    const r = await exact(p, br);
+    check(r.vp && r.vp.rth && !r.vp.bad && r.vp.total > 0 && r.vp.total < a.vp.total + 100000, 'RTH: equal to the tape\'s trades from 9:30 at every price, with live trades added (' + (r.vp && r.vp.total) + ')' + (r.vp && r.vp.bad ? ': ' + r.vp.bad : ''));
+    check(!r.barsBad && r.firstBar === a.firstBar, 'the range bars still exact after live trades, from the same first bar');
+    await profileOn(p, false);
+    let b = await books(br);
+    check(b.NQ.asked === 1 && b.NQ.served === 0, 'NinjaTrader asked once for the window (' + JSON.stringify(b.NQ) + ')');
+    await hold(p, br, false);
+    // a reload: from the served window
+    await p.reload(); await live(p);
+    await hold(p, br, true);
+    const c = await exact(p, br);
+    b = await books(br);
+    check(b.NQ.asked === 1 && b.NQ.served === 1 && c.first === a.first, 'reload: the same window from ChartBridge\'s memory (' + JSON.stringify(b.NQ) + '), first trade ' + hm(c.first) + ' ET');
+    check(c.firstBar === a.firstBar && !c.barsBad && c.bars >= a.bars && c.storeBad < 0, 'reload: the bars start where they started (' + hm(c.firstBar) + ' ET) and are exact (' + c.bars + ' bars)');
+    check(c.vp && !c.vp.bad, 'reload: the profile is exact');
+    // a second page
+    const p2 = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const d = await exact(p2, br);
+    b = await books(br);
+    check(b.NQ.asked === 1 && b.NQ.served === 2 && d.firstBar === a.firstBar && !d.barsBad, 'a second page: from memory too, the same first bar (' + JSON.stringify(b.NQ) + ')');
+    await p2.close();
+    // a 15s view from the same window (no load), bars from the first whole one, with VWAP
+    await p.click('#tfSeg [data-v="s15"]');
     await p.waitForTimeout(300);
-    v = await vpCheck();
-    const subs1 = await p.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe').length);
-    check(v.rth && v.total === v.vol && v.total > 0 && subs1 === subs0, 'RTH: the profile holds every contract since 9:30 ET (' + v.total.toLocaleString() + '), from the same history (no reload)');
-    await p.screenshot({ path: path.join(SHOTS, 'live-first-1m-profile.png') });
+    const s = await exact(p, br);
+    check((await subscribes(p)).length === 1 && s.bars > 100 && !s.barsBad && s.firstBar > s.first && s.firstBar - s.first <= 15 && s.vwBars === s.bars, '15s: no new load, bars from the first whole one (' + hm(s.firstBar) + ' ET), exact with VWAP' + (s.barsBad ? ': ' + s.barsBad : ''));
+    await hold(p, br, false);
     await ctx.close();
-    // the profile switched on in a 1m view that has no ticks: the page asks for them (live first)
-    const ctx2 = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' }, '');
-    const p2 = await openPage(ctx2, `http://localhost:${br.port}/live/`);
-    const first = await p2.evaluate(() => window.__rec.sent.find(m => m.type === 'subscribe'));
-    check(first.tickHours === 0 && !first.liveFirst, '1m with the profile off: no tick history, as before');
-    await p2.click('#indBtn');
-    await p2.fill('#indQ', 'profile');
-    await p2.keyboard.press('Enter');
-    await p2.waitForFunction(() => window.__rec.sent.filter(m => m.type === 'subscribe').length === 2, null, { timeout: 5000 }).catch(() => {});
-    const second = await p2.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe')[1]);
-    check(second && second.tickHours === 21 && second.liveFirst === true && second.quotes === false, 'switching the profile on asks for the session\'s ticks, live first, trades only (' + JSON.stringify(second) + ')');
-    await p2.keyboard.press('Escape');
-    await live(p2);
-    await fillDone(p2);
-    check(await p2.evaluate(() => { const vp = window.liveChart.getProfile(); return !!vp && vp.total > 0 && !document.getElementById('vpNote').textContent; }), 'and the profile fills in, with no note');
+    // a 1m page: the profile from the table, no tick history
+    const ctx2 = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
+    const m = await openPage(ctx2, `http://localhost:${br.port}/live/`);
+    await profileOn(m, false);
+    await hold(m, br, true);
+    const e = await exact(m, br);
+    const ms = await subscribes(m);
+    check(ms.length === 1 && ms[0].tickHours === 0 && !ms[0].liveFirst && ms[0].profile === true && e.n < 5000, '1m: no tick history asked (' + JSON.stringify(ms[0]) + ', ' + e.n + ' live trades held)');
+    check(e.vp && !e.vp.bad && e.vp.total > 0 && !e.vpNote, '1m: the session profile equals the tape at every price, no note (' + (e.vp && e.vp.total) + ')' + (e.vp && e.vp.bad ? ': ' + e.vp.bad : ''));
+    await m.screenshot({ path: path.join(SHOTS, 'live-first-1m-profile.png') });
     await ctx2.close();
     br.kill();
   }
 
-  /* ---------------- a resubscribe in the middle of the older history (15s, then Range needs more hours) */
+  /* ---------------- the table still building (ChartBridge started mid-session), and an order during a Range load */
   {
-    const off = offsetTo(10, 15);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=4', '--live-rate=150', '--recent-ticks=20000', '--older-ms=400', '--older-chunk=3000']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 's15', glide: 'smooth', rangeMode: 'nt' }, '');
+    console.log('A table still building; an order while Range loads');
+    const off = offsetWhere(10, 45, 0, weekday);
+    const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=150', '--window-ms=1500', '--table-building=9000', '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
+    const ctx = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    await p.waitForFunction(() => window.__rec.chunks >= 2, null, { timeout: 20000 });
-    const mid = await p.evaluate(() => ({ done: window.liveData().fill.done, sub: window.liveData().sub }));
+    await profileOn(p, false);
+    await hold(p, br, true);
+    const a = await exact(p, br);
+    check(/^Volume profile building, from \d+:\d\d ET/.test(a.vpNote), 'the note: "' + a.vpNote + '"');
+    await hold(p, br, false);
+    // Range: a new window load (1.5 s); a market order during it
+    await p.waitForFunction(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled, null, { timeout: 10000 });
+    await p.click('#armBtn');
     await p.click('#tfSeg [data-v="range"]');
+    const pill = await p.textContent('#connPill');
+    await p.click('#buyMkt');
+    await p.waitForFunction(() => document.getElementById('oPos').textContent.startsWith('LONG 1'), null, { timeout: 5000 }).catch(() => {});
+    const msg = await p.textContent('#statusMsg');
+    check(pill === 'LOADING' && (await p.textContent('#oPos')).startsWith('LONG 1'), 'a market buy while Range loads fills (pill ' + pill + ', "' + msg + '")');
+    await p.click('#flattenBtn');
+    await p.waitForFunction(() => document.getElementById('oPos').textContent === 'Flat', null, { timeout: 5000 }).catch(() => {});
+    check(await p.textContent('#oPos') === 'Flat', 'and Flatten, still loading or live');
+    await p.click('#armBtn');
     await live(p);
-    await fillDone(p);
-    const subs = await p.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe').map(m => m.sub + ':' + m.tickHours));
-    check(!mid.done && subs.length === 2, 'switched to Range in the middle of the 15s history: a new load (' + subs.join(', ') + ')');
+    await hold(p, br, true);
+    const r = await exact(p, br);
+    check(r.bars > 0 && !r.barsBad && r.vwBars === 0 && r.legendVw === '-', 'range bars exact, without VWAP while the table builds (legend "' + r.legendVw + '")' + (r.barsBad ? ': ' + r.barsBad : ''));
+    await hold(p, br, false);
+    await p.waitForFunction(() => window.__rec.profiles >= 3, null, { timeout: 15000 }).catch(() => {});
+    await hold(p, br, true);
+    const w = await exact(p, br);
+    check(!w.vpNote && w.vp && !w.vp.bad && w.vp.total > a.vp.total * 3, 'the backfill\'s profile: whole, equal to the tape at every price (' + (w.vp && w.vp.total) + '), the note gone' + (w.vp && w.vp.bad ? ': ' + w.vp.bad : ''));
+    check(!w.barsBad && w.vwBars === w.bars && w.bars > 0, 'and the range bars get their VWAP, equal to a full build\'s (' + w.bars + ' bars)' + (w.barsBad ? ': ' + w.barsBad : ''));
+    const b = await books(br);
+    check(b.NQ.pushed >= 1 && b.NQ.asked === 1, 'pushed to the live page (' + JSON.stringify(b.NQ) + ')');
+    await hold(p, br, false);
+    await ctx.close();
+    br.kill();
+  }
+
+  /* ---------------- a quiet market: no range bar before one is proven */
+  {
+    console.log('A quiet market (window of 72 s, Range 200)');
+    const off = offsetWhere(10, 45, 0, weekday);
+    const br = await startBridge(off, ['--live-first', '--range-hours=0.02', '--window-ms=100']);
     await control(br.port, 'hold', { root: 'NQ' });
+    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, { NQ: 200 });
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
     await p.waitForTimeout(600);
-    const st = await storeVsTape(p, br.port, 'NQ');
-    check(st.bad < 0 && st.n === st.tape, 'nothing of the older load mixed in: the page holds the tape exactly (' + st.n.toLocaleString() + ' trades)');
+    const a = await exact(p, br);
+    check(a.bars === 0 && /^Range bars start where they are proven/.test(a.rangeNote), 'no range bar yet, and the note: "' + a.rangeNote + '"');
+    const last = (await control(br.port, 'state', { root: 'NQ' })).last;
+    await control(br.port, 'price', { root: 'NQ', p: last + 60 });
+    await control(br.port, 'price', { root: 'NQ', p: last + 5 });
+    await p.waitForTimeout(400);
+    const c = await exact(p, br);
+    check(c.bars > 0 && !c.barsBad && !c.rangeNote, 'after a swing of more than the range each way: ' + c.bars + ' bars, exact, the note gone' + (c.barsBad ? ': ' + c.barsBad : ''));
     await ctx.close();
     br.kill();
   }
 
-
-  /* ---------------- review S3: a quiet recent window shows 1m bars; the first swing comes live: never a lone bar */
+  /* ---------------- the Sunday 18:00 open */
   {
-    const off = offsetTo(10, 45);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=4', '--live-rate=150', '--recent-ticks=30', '--recent-ms=200', '--older-ms=40000']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, `localStorage.setItem('live-range-v2', JSON.stringify({ NQ: 12 }));`);
+    console.log('Sunday 18:05 ET, the open');
+    const off = offsetWhere(18, 5, 0, sunday);
+    const br = await startBridge(off, ['--live-first', '--calendar', '--live-rate=100']);
+    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const s0 = await p.evaluate(() => ({ fallback: window.liveData().fallback, n: window.liveChart.bars().length, tf: document.getElementById('lgTf').textContent }));
-    check(s0.fallback && s0.n > 100 && /\(1m until loaded\)/.test(s0.tf), 'a quiet recent window (30 trades, no full swing): ' + s0.n + ' one-minute bars, the legend "' + s0.tf + '"');
-    await p.waitForFunction(() => { const D = window.liveData(); return D.sync && D.sync.bar >= 0; }, null, { timeout: 30000, polling: 20 });
-    await p.waitForTimeout(800);                         // the price axis eases to the new bars
-    const s1 = await p.evaluate(() => {
-      const D = window.liveData(), c = window.liveChart, bars = c.bars(), h = document.getElementById('chart').getBoundingClientRect().height;
-      const last = bars.slice(-30), wide = bars.slice(-200);
-      return { done: D.fill.done, n: bars.length, range: bars.filter(b => b.t >= D.syncAt).length, top: c.yToPrice(0), bot: c.yToPrice(h - 30),
-        hi: Math.max(...last.map(b => b.h)), lo: Math.min(...last.map(b => b.l)), span: Math.max(...wide.map(b => b.h)) - Math.min(...wide.map(b => b.l)), tf: document.getElementById('lgTf').textContent };
-    });
-    check(!s1.done && s1.range >= 1 && s1.n - s1.range > 100, 'the first swing came live: ' + s1.range + ' range bar(s) at the right, with ' + (s1.n - s1.range) + ' one-minute bars before them, not a lone bar (legend "' + s1.tf + '")');
-    check(s1.hi <= s1.top && s1.lo >= s1.bot && s1.top - s1.bot < 4 * s1.span + 5, 'the price axis fits the bars on screen (' + s1.bot.toFixed(2) + ' to ' + s1.top.toFixed(2) + ' for the last bars ' + s1.lo + ' to ' + s1.hi + ')');
-    await p.screenshot({ path: path.join(SHOTS, 'live-first-first-swing.png') });
+    await profileOn(p, false);
+    await hold(p, br, true);
+    const a = await exact(p, br);
+    const S0 = (U.tradeDay(a.now, 64800) - 1) * 86400 + 64800;
+    check(a.first >= S0 && a.first < S0 + 60 && a.firstBar === a.first && !a.barsBad && a.vwBars === a.bars, 'bars from the session\'s first trade (' + hm(a.firstBar) + ' ET), exact with VWAP' + (a.barsBad ? ': ' + a.barsBad : ''));
+    check(a.vp && !a.vp.bad && !a.vpNote, 'the profile of the new session equals the tape (' + (a.vp && a.vp.total) + ')');
     await ctx.close();
     br.kill();
   }
 
-  /* ---------------- review B1: the Sunday 18:00 ET open. The recent trades by count reach back into Friday; the older
-     history (whole trading days) is Sunday's only. Nothing is counted twice; the chart equals a full load's. */
+  /* ---------------- the 18:00 rollover on an open page, and a reload after it */
   {
-    const off = offsetToDay(0, 18, 15);
-    const vpOn = `localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } })); localStorage.setItem('live-range-v2', JSON.stringify({ NQ: 12 }));`;
-    const br = await startBridge(off, ['--live-first', '--calendar', '--tick-rate=2', '--live-rate=60', '--recent-ticks=2000', '--recent-ms=200', '--older-ms=500']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, vpOn);
+    console.log('18:00 ET rollover on an open page');
+    const off = offsetWhere(17, 59, 48, midWeek);
+    const br = await startBridge(off, ['--live-first', '--calendar', '--live-rate=100']);
+    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    await fillDone(p);
-    await control(br.port, 'hold', { root: 'NQ' });
-    await p.waitForTimeout(500);
-    const st = await storeVsTape(p, br.port, 'NQ');
-    const f = await p.evaluate(() => { const D = window.liveData(); return { startsAfter: D.fill.startsAfter, got: D.fill.got, short: D.fill.short, note: document.getElementById('fillNote').textContent, first: D.ticks.time(0), vw: window.liveChart.bars().every(b => typeof b.vw === 'number') }; });
-    check(new Date(f.first * 1000).getUTCDay() === 5 && st.bad < 0 && st.n === st.tape, 'Sunday open: the page holds the tape from Friday ' + U.fmtHM(f.first) + ' ET on, every trade once (' + st.n.toLocaleString() + ', Sunday\'s opening print once)' + (st.bad >= 0 ? ' (first wrong at ' + st.bad + ')' : ''));
-    check(f.startsAfter && f.got === 0 && !f.short && /where the recent trades begin/.test(f.note), 'Sunday open: nothing older came (the older history starts after the recent trades), and the status line says so: "' + f.note + '"');
+    await profileOn(p, false);
+    await p.waitForFunction(() => window.ChartEngine.util.zoneSeconds(Date.now() / 1000) % 86400 > 64803, null, { timeout: 30000, polling: 200 });
+    await hold(p, br, true);
+    const a = await exact(p, br);
+    check(a.vp && !a.vp.bad && a.vp.total > 0 && !a.vpNote, 'after 18:00 the profile is the new session\'s, equal to the tape (' + (a.vp && a.vp.total) + ')');
+    check(!a.barsBad && a.bars > 0, 'the range bars across 18:00 are exact (' + a.bars + ' bars)' + (a.barsBad ? ': ' + a.barsBad : ''));
+    await hold(p, br, false);
+    await p.reload(); await live(p);
+    const b = await books(br);
+    check(b.NQ.asked === 2, 'a reload after 18:00 asks NinjaTrader again: the served window was dropped at the session change (' + JSON.stringify(b.NQ) + ')');
+    await hold(p, br, true);
+    const c = await exact(p, br);
+    check(!c.barsBad && c.bars > 0 && c.vp && !c.vp.bad, 'and the reloaded page is exact');
+    await ctx.close();
+    br.kill();
+  }
+
+  /* ---------------- an old bridge (no features in hello): the full load of 1.6.0 */
+  {
+    console.log('An old bridge');
+    const off = offsetWhere(10, 45, 0, weekday);
+    const br = await startBridge(off, ['--live-first', '--live-rate=100']);
     await control(br.port, 'features', { liveFirst: '0' });
-    const pB = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const a = await bars(p), b = await bars(pB);
-    const same = a.length === b.length && a.every((x, i) => JSON.stringify(x) === JSON.stringify(b[i]));
-    check(same && a.length > 3 && f.vw, 'Sunday open: the range bars (from Sunday 18:00, VWAP too) equal a full load\'s, bar for bar (' + a.length + ' against ' + b.length + '; the week\'s first bar ' + JSON.stringify(a[0]) + (same ? '' : ' against ' + JSON.stringify(b[0])) + ')');
-    const vp = await p.evaluate(async pt => {
-      const vp = window.liveChart.getProfile(), from = vp.startOf(window.ChartEngine.util.zoneSeconds(Date.now() / 1000));
-      const tape = await (await fetch(`http://localhost:${pt}/test/tape?root=NQ&from=${from}`, { method: 'POST' })).json();
-      return { total: vp.total, vol: tape.v.reduce((x, y) => x + y, 0) };
-    }, br.port);
-    check(vp.total === vp.vol && vp.total > 0, 'Sunday open: the volume profile counts Sunday\'s session once: ' + vp.total + ' contracts (the tape: ' + vp.vol + ')');
-    await p.screenshot({ path: path.join(SHOTS, 'live-first-sunday-open.png') });
-    await ctx.close();
-    br.kill();
-  }
-
-  /* ---------------- review S2: NinjaTrader's two answers do not line up: nothing older is kept, the page says so and offers a
-     reload, and orders keep working while it reloads */
-  {
-    const off = offsetTo(10, 45);
-    const br = await startBridge(off, ['--live-first', '--join-mismatch', '--tick-rate=2', '--live-rate=100', '--recent-ticks=20000', '--recent-ms=1500', '--older-ms=300',
-      '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, '');
+    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
     const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    await p.waitForFunction(() => { const D = window.liveData(); return D.fill && D.fill.done && !D.fill.rebuilding; }, null, { timeout: 20000 });
-    await p.waitForTimeout(300);
-    const m = await p.evaluate(() => { const D = window.liveData(); return { mismatch: D.fill.mismatch, short: D.fill.short, got: D.fill.got, note: document.getElementById('fillNote').textContent, reload: !document.getElementById('fillReload').hidden, vw: document.getElementById('lgVw').textContent, tf: document.getElementById('lgTf').textContent }; });
-    check(m.mismatch && m.short && m.got === 0 && /did not line up/.test(m.note) && m.reload, 'join mismatch: no older trade kept, the note "' + m.note + '", and a Reload button');
-    check(m.vw === '-', 'join mismatch: no VWAP on the range bars (the history is not whole): legend "VWAP ' + m.vw + '", "' + m.tf + '"');
-    // one click reloads; orders keep working meanwhile (the recent window takes 1.5 s here)
-    await p.waitForFunction(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled, null, { timeout: 10000 });
-    await p.click('#armBtn');
-    await p.click('#fillReload');
-    const during = await p.evaluate(() => ({ pill: document.getElementById('connPill').textContent, bars: window.liveChart.bars().length, subs: window.__rec.sent.filter(x => x.type === 'subscribe').length }));
-    await p.click('#buyMkt');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent.startsWith('LONG 1'), null, { timeout: 5000 }).catch(() => {});
-    const msg = await p.textContent('#statusMsg');
-    check(during.pill === 'LOADING' && during.bars > 10 && during.subs === 2 && (await p.textContent('#oPos')).startsWith('LONG 1') && !/Still loading/.test(msg),
-      'Reload: a new load (pill ' + during.pill + ', the chart kept on screen with ' + during.bars + ' bars), and a market buy while it loads filled ("' + msg + '")');
-    await live(p);
-    await p.click('#flattenBtn');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent === 'Flat', null, { timeout: 5000 }).catch(() => {});
-    check(await p.textContent('#oPos') === 'Flat', 'and flattened');
-    await p.click('#armBtn');
-    await p.waitForFunction(() => { const D = window.liveData(); return D.fill && D.fill.done; }, null, { timeout: 20000 });
-    await control(br.port, 'hold', { root: 'NQ' });
-    await p.waitForTimeout(500);
-    const st = await storeVsTape(p, br.port, 'NQ');
-    check(st.bad < 0 && st.n === st.tape, 'join mismatch: the page holds the tape from its first trade on, each once (' + st.n.toLocaleString() + ')');
-    await p.screenshot({ path: path.join(SHOTS, 'live-first-mismatch.png') });
-    await ctx.close();
-    br.kill();
-  }
-
-  /* ---------------- review N2: ChartBridge drops the older history: the page is told, stops loading, trims again */
-  {
-    const off = offsetTo(10, 45);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=100', '--recent-ticks=20000', '--recent-ms=200', '--older-ms=20000']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 's15', glide: 'smooth', rangeMode: 'nt' }, '');
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    await p.waitForTimeout(500);
-    await control(br.port, 'drop-fill');
-    await p.waitForFunction(() => window.liveData().fill.done, null, { timeout: 5000 }).catch(() => {});
-    const d = await p.evaluate(() => { const D = window.liveData(); return { done: D.fill.done, dropped: D.fill.dropped, short: D.fill.short, trims: !(D.fill && (!D.fill.done || D.fill.rebuilding)), note: document.getElementById('fillNote').textContent, reload: !document.getElementById('fillReload').hidden, vw: window.liveChart.bars().every(b => b.vw === null) }; });
-    check(d.done && d.dropped && d.short && d.trims && /dropped/.test(d.note) && d.reload && d.vw, 'dropped older history: the page stops loading ("' + d.note + '"), offers a reload, trims its store again, and draws no VWAP');
-    await ctx.close();
-    br.kill();
-  }
-
-  /* ---------------- review N6: switching the profile on in a 1m view reloads with the chart kept and orders working */
-  {
-    const off = offsetTo(13, 30);
-    const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=100', '--recent-ticks=20000', '--recent-ms=1500', '--older-ms=500',
-      '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' }, '');
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    await p.waitForFunction(() => !document.getElementById('obar').hidden && !document.getElementById('buyMkt').disabled, null, { timeout: 10000 });
-    await p.click('#armBtn');
-    await p.click('#indBtn');
-    await p.fill('#indQ', 'profile');
-    await p.keyboard.press('Enter');
-    await p.keyboard.press('Escape');
-    const during = await p.evaluate(() => ({ pill: document.getElementById('connPill').textContent, bars: window.liveChart.bars().length, soft: !!window.liveData().soft }));
-    await p.click('#buyMkt');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent.startsWith('LONG 1'), null, { timeout: 5000 }).catch(() => {});
-    const msg = await p.textContent('#statusMsg');
-    check(during.pill === 'LOADING' && during.soft && during.bars > 100 && (await p.textContent('#oPos')).startsWith('LONG 1') && !/Still loading/.test(msg),
-      'profile switched on in 1m: it reloads (pill ' + during.pill + ') with the chart kept (' + during.bars + ' bars) and a market buy meanwhile filled ("' + msg + '")');
-    await live(p);
-    await p.click('#flattenBtn');
-    await p.waitForFunction(() => document.getElementById('oPos').textContent === 'Flat', null, { timeout: 5000 }).catch(() => {});
-    check(await p.textContent('#oPos') === 'Flat', 'and flattened');
-    await p.click('#armBtn');
-    await ctx.close();
-    br.kill();
-  }
-
-  /* ---------------- an old bridge (ChartBridge 0.3.4): a full load, as before */
-  {
-    const off = offsetTo(10, 45);
-    const br = await startBridge(off, ['--tick-rate=2']);
-    const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, `localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } }));`);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const r = await p.evaluate(() => ({ sub: window.__rec.sent.find(m => m.type === 'subscribe'), fill: window.liveData().fill, n: window.liveData().ticks.length, bars: window.liveChart.bars().length, more: window.__rec.sent.filter(m => m.type === 'more').length }));
-    check(r.sub.liveFirst === undefined && r.sub.sub === undefined && r.fill === null && r.more === 0 && r.n > 10000 && r.bars > 10,
-      'old bridge: the subscribe of 1.6.0 (no liveFirst, no sub), a full load (' + r.n.toLocaleString() + ' trades, ' + r.bars + ' range bars), nothing pulled');
-    await p.click('#tfSeg [data-v="m1"]');
-    await p.waitForTimeout(300);
-    const subs = await p.evaluate(() => window.__rec.sent.filter(m => m.type === 'subscribe').length);
-    check(subs === 1, 'old bridge: 1m with the profile on loads no more ticks (as 1.6.0)');
+    await profileOn(p, false);
+    await hold(p, br, true);
+    const a = await exact(p, br);
+    const sub = (await subscribes(p))[0];
+    check(sub.liveFirst === undefined && sub.profile === undefined && sub.sub === undefined && sub.tickHours >= 17 && a.first < a.now - 16 * 3600, 'a full load as before (' + JSON.stringify(sub) + ', trades from ' + hm(a.first) + ' ET)');
+    check(!a.barsBad && a.vp && !a.vp.bad && (await p.evaluate(() => window.__rec.profiles)) === 0, 'bars and profile exact from the store, no profile message');
     await ctx.close();
     br.kill();
   }
 } finally {
   await browser.close();
-  for (const b of bridges) b.kill();
 }
-if (errors.length) { console.error('\nlive-first smoke FAILED: ' + errors.length); process.exit(1); }
-console.log('\nlive-first smoke ok');
+if (errors.length) { console.error('\n' + errors.length + ' failed'); process.exit(1); }
+console.log('\nlive-first smoke: all passed');

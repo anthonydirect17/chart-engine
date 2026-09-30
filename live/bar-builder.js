@@ -23,8 +23,11 @@ const tradeDay = (t, s) => s ? Math.floor((t + DAY - s) / DAY) : Math.floor(t / 
  *   'traded': traded prices only. The trade that breaks out opens the next bar at its own price, so a jump
  *     over the boundary leaves the finished bar short of the full range. Nothing is invented.
  * Both start a new bar at the first trade of each session (NinjaTrader's Break at EOD).
- * vwap: false (1.8.0, live first) leaves each bar's session VWAP out (vw null, which the chart does not draw): a build
- * from a window of recent trades has no VWAP it could stand behind until the session's trades are in.
+ * vwapSeed (1.8.0, served window): a build from the last hours of trades, not from the session's first. Left out, the
+ * VWAP is worked out from the trades fed, as always. { day, pv, vol }: the session VWAP of trade day `day` starts from
+ * the price times volume and the volume of that session's trades before the first one fed (ChartBridge's session
+ * table, less the trades the page holds); bars of earlier days get none (vw null, which the chart does not draw).
+ * null: no VWAP at all (the session's trades before the window are not known yet).
  */
 class BarBuilder {
   constructor(opts) {
@@ -35,17 +38,21 @@ class BarBuilder {
     this.rangeTicks = Math.max(1, o.rangeTicks || 20);
     this.rangeMode = o.rangeMode === 'traded' ? 'traded' : 'nt';
     this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
-    this.vwapOn = o.vwap !== false;
+    this.vwapSeed = o.vwapSeed;
     this.reset();
   }
-  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.lastT = -Infinity; this._dayBar = null; this._barDay = null; this._fast = null; }
+  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.vwOff = false; this.lastT = -Infinity; this._dayBar = null; this._barDay = null; this._fast = null; }
   get last() { return this.bars[this.bars.length - 1]; }
 
   _vwap(t, price, v) {
     const d = tradeDay(t, this.sessionStart);
-    if (d !== this.day) { this.day = d; this.pv = 0; this.vol = 0; }
+    if (d !== this.day) {
+      const s = this.vwapSeed;
+      this.day = d; this.pv = 0; this.vol = 0; this.vwOff = s === null || (s !== undefined && d < s.day);
+      if (s && d === s.day) { this.pv = s.pv; this.vol = s.vol; }
+    }
     this.pv += price * v; this.vol += v;
-    return !this.vwapOn ? null : this.vol > 0 ? this.pv / this.vol : price;
+    return this.vwOff ? null : this.vol > 0 ? this.pv / this.vol : price;
   }
 
   /** Seed with finished bars (e.g. 1-minute history). VWAP continues from their typical prices. */
@@ -84,7 +91,7 @@ class BarBuilder {
       const P = Math.round(price / this.tick);
       if (P <= f.lo + this.rangeTicks && P >= f.hi - this.rangeTicks) {
         this.pv += price * v; this.vol += v;
-        const vw = !this.vwapOn ? null : this.vol > 0 ? this.pv / this.vol : price, bar = f.bar;
+        const vw = this.vwOff ? null : this.vol > 0 ? this.pv / this.vol : price, bar = f.bar;
         if (t > this.lastT) this.lastT = t;
         if (price > bar.h) { bar.h = price; f.hi = P; }
         if (price < bar.l) { bar.l = price; f.lo = P; }
@@ -203,14 +210,11 @@ class BarBuilder {
  * was about 2 million objects (some 150 MB of JavaScript heap) for the garbage collector to walk and move, and the
  * page's frames waited on it. Blocks live outside that heap, are never copied as the store grows, and the oldest
  * are dropped whole when the page trims its history.
- * Live first (1.8.0, ChartBridge 0.3.5): the older history arrives after the live trades, newest first, and is put in
- * front of the first trade (prependAll), so the store is one unbroken run of trades at every moment. `prepended` counts
- * the trades put in front since the store was made, so an index taken before can be moved on (i + prepended - then).
  */
 const BLOCK = 65536, SHIFT = 16, MASK = BLOCK - 1;
 class TickStore {
   constructor() { this.clear(); }
-  clear() { this.blocks = []; this.start = 0; this.length = 0; this.prepended = 0; }
+  clear() { this.blocks = []; this.start = 0; this.length = 0; }
   /** Add one trade at the end. */
   push(t, p, v) {
     const j = this.start + this.length;
@@ -222,25 +226,6 @@ class TickStore {
   }
   /** Add trades as ChartBridge sends them, [[t, p, v], ...]. */
   pushAll(list) { for (let i = 0; i < list.length; i++) { const x = list[i]; this.push(x[0], x[1], x[2]); } }
-  /**
-   * Put older trades in front of the first one: `list` is [[t, p, v], ...] oldest first, all older than the store's first
-   * trade (ChartBridge's olderTicks, 0.3.5). Costs only the trades given: whole new blocks go in front when the first
-   * block has no room.
-   */
-  prependAll(list) {
-    const n = list.length;
-    if (!n) return;
-    if (n > this.start) {
-      const add = Math.ceil((n - this.start) / BLOCK);
-      for (let k = 0; k < add; k++) this.blocks.unshift(new Float64Array(BLOCK * 3));
-      this.start += add * BLOCK;
-    }
-    this.start -= n; this.length += n; this.prepended += n;
-    for (let i = 0; i < n; i++) {
-      const j = this.start + i, b = this.blocks[j >>> SHIFT], k = (j & MASK) * 3, x = list[i];
-      b[k] = x[0]; b[k + 1] = x[1]; b[k + 2] = x[2] || 0;
-    }
-  }
   _get(i, f) { const j = i + this.start; return this.blocks[j >>> SHIFT][(j & MASK) * 3 + f]; }
   time(i) { return this._get(i, 0); }
   price(i) { return this._get(i, 1); }
@@ -253,16 +238,21 @@ class TickStore {
     this.start += n; this.length -= n;
     const whole = this.start >>> SHIFT;
     if (whole) { this.blocks.splice(0, whole); this.start &= MASK; }
-    if (!this.length) { const p = this.prepended; this.clear(); this.prepended = p; }
+    if (!this.length) this.clear();
   }
-  /** Feed trades from index `from` (with t >= minT, when given; up to index `to`, when given) to builder.add(t, p, v), oldest first. */
-  feed(builder, from, minT, to) {
+  /** The index of the first trade at or after time t (the store is in time order), or length. */
+  indexAt(t) {
+    let lo = 0, hi = this.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (this.time(m) < t) lo = m + 1; else hi = m; }
+    return lo;
+  }
+  /** Feed trades from index `from` (with t >= minT, when given) to builder.add(t, p, v), oldest first. */
+  feed(builder, from, minT) {
     const min = minT === undefined ? -Infinity : minT;
     const quiet = typeof builder.addQuiet === 'function';
-    const last = to === undefined ? this.length : Math.min(this.length, to);
-    for (let i = Math.max(0, from || 0); i < last;) {
+    for (let i = Math.max(0, from || 0); i < this.length;) {
       const j = i + this.start, b = this.blocks[j >>> SHIFT];
-      const end = Math.min(last, i + BLOCK - (j & MASK));
+      const end = Math.min(this.length, i + BLOCK - (j & MASK));
       for (let k = (j & MASK) * 3; i < end; i++, k += 3) {
         if (!(b[k] >= min)) continue;                  // a NaN time is skipped too, as before 1.5.1
         if (quiet) builder.addQuiet(b[k], b[k + 1], b[k + 2]); else builder.add(b[k], b[k + 1], b[k + 2]);
@@ -277,7 +267,7 @@ const timeAt = (ticks, i) => typeof ticks.time === 'function' ? ticks.time(i) : 
 const sessionStartOf = (t, s) => s ? (tradeDay(t, s) - 1) * DAY + s : tradeDay(t, s) * DAY;
 
 /*
- * RangeSync (1.8.0, live first): where range bars built from a window of recent trades become exactly the bars a build
+ * RangeSync (1.8.0, served window): where range bars built from a window of recent trades become exactly the bars a build
  * from the session's first trade gives, without the trades before the window. Range bars depend on where the build
  * starts, but two builds meet for good once they close a bar on the same trade with the same edge; from that trade on
  * every bar is the same (the bar it opens, and all after it). That happens, whatever the build before the window did:
@@ -290,8 +280,8 @@ const sessionStartOf = (t, s) => s ? (tradeDay(t, s) - 1) * DAY + s : tradeDay(t
  *     a fall of more than the range from the high so far to a low, then a rise of more than the range above that low.
  * Both range styles close on the same test (a price past the far side by more than the range, in whole ticks), so the
  * rule holds for both. step(t, price), fed every trade of the window in order, returns true for the trade from which
- * the two builds agree; the bars from the one that trade opens on are exact. The test in test/live-first.test.js checks
- * it against full builds from many made-up histories.
+ * the two builds agree; the bars from the one that trade opens on are exact. test/live-first.test.js checks it against
+ * full builds from many made-up histories.
  */
 class RangeSync {
   constructor(rangeTicks, tick, sessionStart) {
@@ -310,6 +300,19 @@ class RangeSync {
     if (P > this.max) { this.max = P; this.trough = P; } else if (P < this.trough) this.trough = P;
     return false;
   }
+}
+
+/*
+ * trimCount (1.8.0): how many of the oldest trades the page drops when its store is over `cap`: the trades of sessions
+ * before the one holding `now`, but the last of them (so a range build from the store's first trade still sees the
+ * session start, RangeSync). The current session's trades are never dropped (range bars stay all day), unless the store
+ * passes `hard` (a memory limit only; far above a busy session): then the oldest `step`.
+ */
+function trimCount(ticks, now, s, cap, hard, step) {
+  if (ticks.length <= cap) return 0;
+  const n = ticks.indexAt(sessionStartOf(now, s)) - 1;
+  if (n > 0) return n;
+  return ticks.length > hard ? Math.min(step, ticks.length) : 0;
 }
 
 /*
@@ -350,5 +353,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, RangeSync, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
+return { BarBuilder, TickStore, RangeSync, trimCount, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart };
 });

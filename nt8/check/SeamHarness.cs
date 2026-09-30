@@ -38,9 +38,10 @@ public static class SeamHarness
     public static void Run(Action<bool, string> check)
     {
         Check = check;
+        ChartBridgeServer.BackfillOn = false;   // 0.3.5: only WindowHarness's own case runs the session backfill
         Pure();
         Load();
-        FillHarness.Run(Check);   // live first (0.3.5): the joins as pure functions (check/FillHarness.cs)
+        WindowHarness.Run(Check);   // 0.3.5: the session tables and the trade text (check/WindowHarness.cs)
     }
 
     // ------------------------------------------------------------ the pure functions
@@ -161,7 +162,7 @@ public static class SeamHarness
         client.Tap = s => { lock (sent) sent.Add(s); };
         clients[77] = client;
         BarsRequest.AutoAnswer = SidesHarness.QuoteAnswer;   // no quote history unless a case sets one
-        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); FillHarness.Load(Check, inst); }
+        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); WindowHarness.Load(Check, inst); }
         finally
         {
             BarsRequest.AutoAnswer = null;

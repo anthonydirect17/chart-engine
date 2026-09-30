@@ -4,7 +4,7 @@
 //
 //   node test/perf-live.mjs [--view=range|m1] [--secs=30] [--root=DIR] [--label=main] [--port=8830]
 //                           [--tick-rate=15] [--live-rate=100] [--range=40] [--et=HH:MM] [--second-tab] [--embed]
-//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--live-first[=OLDER_MS]]
+//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--live-first]
 //
 // --root serves the page from another checkout (the bridge is always this one), so an older version can be measured
 // on the same feed. It sets the saved settings (NQ, the view, Range 40, NinjaTrader style) in both the 1.3 and the
@@ -12,9 +12,7 @@
 // Range history, 33 hours). --embed measures ChartLive.mount in test/embed-host.html (1.5.0 and later) instead of the
 // standalone page. CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser. --vp turns the volume profile on
 // (1.6.0; --vp=rth for its RTH choice), so its build at load and its drawing are measured too. --live-first (1.8.0,
-// ChartBridge 0.3.5) makes the bridge send the most recent trades first and the older history after ready (answered
-// OLDER_MS after it, default 1000); the measurement then starts at LIVE, with no warm-up, and runs until SECS after the last
-// chunk, so every chunk, the rebuild at the end and the live trades meanwhile are inside it.
+// ChartBridge 0.3.5) makes the bridge serve the last 2 hours of trades (the served window) and the session table.
 //
 // Measures, over the window after a warm-up: requestAnimationFrame intervals (frames over 16.7 ms and 33 ms), the
 // chart's own frame callback (step and draw), long tasks, each live tick message (JSON, onTick, the bar builders,
@@ -46,11 +44,10 @@ const OFFSET = (() => {
 const HEADED = !!arg('headed', false), EMBED = !!arg('embed', false);   // a real window (run under xvfb-run on a server)
 const SECOND = !!arg('second-tab', false), PROFILE = !!arg('profile', false), WARM = +arg('warm', 5);
 const VP = arg('vp', false);               // true, or 'rth'
-const LIVE_FIRST = arg('live-first', false);
+const LIVE_FIRST = !!arg('live-first', false);
 
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
-  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : [])
-  .concat(LIVE_FIRST ? ['--live-first', '--older-ms=' + (LIVE_FIRST === true ? 1000 : +LIVE_FIRST)] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(LIVE_FIRST ? ['--live-first'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
 
 const settings = { root: 'NQ', tf: VIEW === 'm1' ? 'm1' : 'range', glide: 'smooth' };
@@ -66,19 +63,13 @@ const init = `(() => {
       localStorage.setItem('live-indicator-options-v1', ${JSON.stringify(JSON.stringify({ main: { vp: { session: VP === 'rth' ? 'rth' : 'full' } } }))});
     }
   } catch (e) {}
-  const P = window.__perf = { backfill: 0, older: 0, chunkMs: [], subAt: 0, readyAt: 0, doneAt: 0, tickHours: null, lagMax: 0, lag: [], on: false, tick: [], rafCb: [], ts: [], long: [], heap: [], update: 0, updateN: 0, setBars: 0, setBarsN: 0, add: 0, addN: 0 };
+  const P = window.__perf = { backfill: 0, tickHours: null, lagMax: 0, lag: [], on: false, tick: [], rafCb: [], ts: [], long: [], heap: [], update: 0, updateN: 0, setBars: 0, setBarsN: 0, add: 0, addN: 0 };
   const now = () => performance.now();
   const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
   Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
-    const send = this.send; this.send = function (x) { try { const m = JSON.parse(x); if (m.type === 'subscribe') { P.tickHours = m.tickHours; P.backfill = 0; P.older = 0; P.subAt = now(); P.readyAt = 0; P.doneAt = 0; } } catch (e) {} return send.apply(this, arguments); };
+    const send = this.send; this.send = function (x) { try { const m = JSON.parse(x); if (m.type === 'subscribe') { P.tickHours = m.tickHours; P.backfill = 0; } } catch (e) {} return send.apply(this, arguments); };
     d.set.call(this, ev => {
       if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"ticks"')) P.backfill += JSON.parse(ev.data).ticks.length;
-      if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"ready"')) P.readyAt = now();
-      if (typeof ev.data === 'string' && ev.data.startsWith('{"type":"olderTicks"')) {
-        const t0 = now(); const r = fn(ev); P.chunkMs.push(now() - t0);
-        const m = JSON.parse(ev.data); P.older += m.ticks.length; if (m.done) P.doneAt = now();
-        return r;
-      }
       if (!P.on || typeof ev.data !== 'string' || !ev.data.startsWith('{"type":"tick"')) return fn(ev);
       const t0 = now(); fn(ev); P.tick.push(now() - t0);
     });
@@ -128,18 +119,15 @@ try {
   const other = SECOND ? await open() : null;
   const { page, loadMs } = await open();
   await page.bringToFront();
-  if (!LIVE_FIRST) await page.waitForTimeout(WARM * 1000);
+  await page.waitForTimeout(WARM * 1000);
   const before = await page.evaluate(() => ({ iso: self.crossOriginIsolated, bars: window.__chart.bars().length, heap: performance.memory && performance.memory.usedJSHeapSize, version: window.ChartEngine.VERSION,
     vp: typeof window.__chart.getProfile === 'function' && window.__chart.getLayers().vp && window.__chart.getProfile() ? window.__chart.getProfile().total : null }));
   const cdp = await ctx.newCDPSession(page);
   if (PROFILE) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 100 }); await cdp.send('Profiler.start'); }
   await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8', 'disabled-by-default-v8.gc', 'blink.user_timing', 'toplevel'] });
   await page.evaluate(() => { window.__perf.on = true; });
-  const t0Window = Date.now();
-  if (LIVE_FIRST) await page.waitForFunction(() => { const D = window.liveData && window.liveData(); return !D || !D.fill || (D.fill.done && !D.fill.rebuilding); }, null, { timeout: 120000, polling: 100 });
-  const fillWindowMs = Date.now() - t0Window;
   await page.waitForTimeout(SECS * 1000);
-  const P = await page.evaluate(() => { window.__perf.on = false; const p = window.__perf; return Object.assign({}, p, { bars: window.__chart.bars().length, stats: window.__chart.stats(), liveFirst: !!(window.liveData && window.liveData().fill) }); });
+  const P = await page.evaluate(() => { window.__perf.on = false; const p = window.__perf; return Object.assign({}, p, { bars: window.__chart.bars().length, stats: window.__chart.stats() }); });
   const trace = JSON.parse((await browser.stopTracing()).toString());
   let profile = null;
   if (PROFILE) profile = (await cdp.send('Profiler.stop')).profile;
@@ -173,8 +161,6 @@ try {
   result = {
     label: LABEL + (EMBED ? ' (embedded)' : ''), version: before.version, embed: EMBED, view: VIEW === 'm1' ? '1m' : 'Range ' + RANGE, secs: SECS, secondTab: SECOND, crossOriginIsolated: before.iso,
     et: ET || 'now', headed: HEADED, volumeProfile: VP ? { mode: VP === 'rth' ? 'rth' : 'full', volumeAtStart: before.vp, builds: P.stats.profileBuilds } : null, rafLagMaxMs: r2(P.lagMax), rafLagWindowP99: r2(q(P.lag, 0.99)), rafLagWindowMax: r2(Math.max(0, ...P.lag)), frameLoopAlive: P.rafCb.length > 0, tickHours: P.tickHours, backfillTicks: P.backfill, loadMs, bars: P.bars, liveTicks: P.tick.length, ticksPerSec: r2(P.tick.length / SECS),
-    liveFirst: LIVE_FIRST ? { on: P.liveFirst, timeToLiveMs: r2(P.readyAt - P.subAt), olderTicks: P.older, chunks: P.chunkMs.length, fillMs: r2(P.doneAt - P.readyAt), windowMs: fillWindowMs + SECS * 1000,
-      chunkMsP50: r2(q(P.chunkMs, 0.5)), chunkMsMax: r2(Math.max(0, ...P.chunkMs)) } : null,
     frames: iv.length, fps: r2(iv.length / SECS), frameP50: r2(q(iv, 0.5)), frameP99: r2(q(iv, 0.99)), frameMax: r2(Math.max(0, ...iv)),
     over16: iv.filter(d => d > FRAME * 1.25).length, over33: iv.filter(d => d > 33.4).length, over50: iv.filter(d => d > 50).length, droppedFrames: dropped,
     chartFrameMeanMs: r3(mean(P.rafCb)), chartFrameP95: r3(q(P.rafCb, 0.95)), chartFrameP99: r3(q(P.rafCb, 0.99)), chartFrameMax: r2(Math.max(0, ...P.rafCb)),

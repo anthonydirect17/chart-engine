@@ -453,12 +453,12 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   // the tick request ends past now; a refused one is asked once more ending now
   assert.match(bodyOf(code, 'private static void RequestTickHistory('), /DateTime to = margin \? L\.NowNt\.AddMinutes\(TickToMarginMinutes\) : NowNt\(\);/);
   // ready and the held trades under the Pending lock, only for the page's latest subscribe, only those Dedupe releases
-  const ready = bodyOf(code, 'private static void MarkReady(');
+  const ready = bodyOf(code, 'private static void MarkReady(Load L, RawBars seam, TradeLog cache)');
   assert.match(ready, /lock \(client\.Pending\)\s*\{\s*if \(!Current\(L\)\) return;\s*SeamResult r = seam != null\s*\? ChartBridgeSeam\.Dedupe\(/);
   // 0.3.4: ready and the released trades as one outbox entry (a release of any size cannot close the page)
   assert.match(ready, /foreach \(SeamTick h in ContinueSides\(L, r\.Release\)\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*older = client\.Fill;\s*client\.Fill = null;[^\n]*\s*\}\s*if \(older != null\) lock \(older\.Sync\) older\.Drop\(/);   // 0.3.5: and an older load's history stops, freed at once
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*\}/);   // 0.3.5: and whether it wants "profile"
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
@@ -468,7 +468,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   // re-review: the heldAtAnswer gate only at whole seconds; sub echoed as canonical digits
   assert.match(code, /if \(i < heldAtAnswer \|\| unit < Second\) \{ r\.DroppedSameTime\+\+; continue; \}/);
   assert.match(code, /long\.Parse\(sm\.Groups\[1\]\.Value, CultureInfo\.InvariantCulture\)\.ToString\(CultureInfo\.InvariantCulture\)/);
-  for (const f of ['private static void SendBars(', 'private static void SendTicks(']) {
+  for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, BackfillSides sides, int from)']) {
     const body = bodyOf(code, f);
     assert.equal((body.match(/L\.Client\.Send\(/g) || []).length, (body.match(/Current\(L\)/g) || []).length, f + ': a Current check for every send');
   }
@@ -489,8 +489,8 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   // the live tick keeps 0.3.3's fields in order and adds s and sm at the end
   assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ "\}"/);
   // backfill trades: t, p, v first, then s and sm
-  // (0.3.5: written by AppendTrade with no string per number; FillHarness.cs checks the text is 0.3.4's)
-  assert.match(bodyOf(code, 'private static void SendTicks('), /AppendTrade\(b, bars, sides, i, et\);/);
+  // (0.3.5: written by AppendTrade with no string per number; WindowHarness.cs checks the text is 0.3.4's)
+  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, BackfillSides sides, int from)'), /AppendTrade\(b, bars, sides, i, et\);/);
   assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*if \(sides != null\) \{ b\.Append\(','\); CbJson\.AppendLong\(b, sides\.Side\[i\]\); b\.Append\(','\); CbJson\.AppendLong\(b, sides\.Method\[i\]\); \}/);
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
@@ -508,7 +508,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   // review 4: a close always ends the connection; the page's own bulk sends are not lag; a load queues few chunks ahead
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
-  for (const f of ['private static void SendBars(', 'private static void SendTicks(']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
+  for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, BackfillSides sides, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
   assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" \};/);
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
@@ -518,57 +518,44 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.ok(md2.indexOf('if (!(e.Price > 0)) return;') >= 0 && md2.indexOf('if (!(e.Price > 0)) return;') < md2.indexOf('ChartBridgeOrders.NoteLast('), 'price checked before NoteLast');
   // tick charts ask for Bid and Ask ticks of the same window; minute charts do not
   const rt = bodyOf(code, 'private static void RequestTicks(');
-  assert.match(rt, /if \(L\.NoQuotes\) return;\s*RequestQuotes\(L, MarketDataType\.Bid, !L\.Recent\);\s*RequestQuotes\(L, MarketDataType\.Ask, !L\.Recent\);/);   // 0.3.5: by count for a recent window; none for trades only
+  assert.match(rt, /RequestQuotes\(L, MarketDataType\.Bid, true\);\s*RequestQuotes\(L, MarketDataType\.Ask, true\);/);
   assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /new BarsRequest\(L\.Inst, L\.QuoteFrom, to\)/);
-  // every load keeps quote rows from the full load's start (0.3.5 review S1: the recent window too; the older history its window's)
-  assert.match(rt, /L\.QuoteFrom = L\.Background && L\.Front != null \? L\.Front\.QuoteFrom : QuoteStart\(L\.NowNt, L\.TickHours\);/);
-  assert.match(code, /public static DateTime QuoteStart\(DateTime nowNt, int tickHours\) \{ return nowNt\.AddHours\(-Math\.Min\(tickHours, QuoteHoursMax\)\); \}/);
+  assert.match(rt, /L\.QuoteFrom = L\.NowNt\.AddHours\(-Math\.Min\(L\.TickHours, QuoteHoursMax\)\);/);
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"sides\\":"\)\.Append\(SidesJson\(\)\);/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
   assert.match(orders, /check\/SidesHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /SidesHarness\.Run\(Check\);/);
 });
 
-// ---- 0.3.5: live first (behaviour: nt8/check/FillHarness.cs under Mono, test/live-first.test.js, test/live-first-smoke.mjs)
-test('0.3.5: live first: the recent window by count, ready, then the older history pulled by the page in the data lane', () => {
+// ---- 0.3.5: the served window and the session's volume at price (behaviour: nt8/check/WindowHarness.cs under Mono)
+test('0.3.5: a tick chart gets the served window by count, then from memory; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.5 for NinjaTrader 8/);
   assert.match(code, /public const string Version = "0\.3\.5";/);
-  // the page learns of it from hello, and asks with liveFirst; only tick charts load that way
-  assert.match(bodyOf(code, 'private static string HelloJson('), /b\.Append\(",\\"features\\":\[\\"liveFirst\\"\]"\);/);
-  assert.match(bodyOf(code, 'private static void StartLoad('), /Recent = liveFirst && tickHours > 0/);
-  // the recent window asks by count (NinjaTrader's from/to requests are whole days); the older history as before
-  const th = bodyOf(code, 'private static void RequestTickHistory(');
-  assert.match(th, /BarsRequest ticks = L\.Recent \? new BarsRequest\(L\.Inst, ChartBridgeConfig\.RecentTicks\) : new BarsRequest\(L\.Inst, L\.NowNt\.AddHours\(-L\.TickHours\), to\);/);
-  assert.match(bodyOf(code, 'private static void RequestQuotesOnce('), /BarsRequest quotes = L\.Recent \? new BarsRequest\(L\.Inst, RecentQuoteRows\) : new BarsRequest\(L\.Inst, L\.QuoteFrom, to\);/);
-  // ready says "older" only for a recent window, and the background starts after ready
-  const fin = bodyOf(code, 'private static void Finish(');
-  assert.match(fin, /MarkReady\(L, seam\);\s*\}\s*if \(L\.Recent\) StartBackground\(L\);/);
-  assert.match(fin, /if \(why != null\) \{ FallBack\(L, why\); return; \}/);
-  assert.match(bodyOf(code, 'private static void MarkReady('), /\(L\.Recent \? ",\\"older\\":true" : ""\)/);
-  // the older history: one chunk per "more", at most MaxAsked waiting, in the data lane, only for the page's current load
-  // upTo: the chunks the page wants in all, so asking again adds nothing (review N1); without it, one more; capped either way
-  assert.match(bodyOf(code, 'private static void OnMore('), /f\.Asked = upTo >= 0 \? Math\.Max\(0, Math\.Min\(upTo - f\.Sent, MaxAsked\)\) : Math\.Min\(f\.Asked \+ 1, MaxAsked\);/);
-  // a dropped fill answers once (review N2); a page that disconnects has its fill dropped at once (review N3)
-  assert.match(bodyOf(code, 'private static void OnMore('), /if \(f\.DroppedWhy == null \|\| f\.DropAnswered\) return;/);
-  assert.match(bodyOf(code, 'public void Close()'), /Task\.Run\(\(\) => DropFill\("the page disconnected"\)\)/);
-  // only a proven join sends older trades (review B1, S2)
-  assert.match(bodyOf(code, 'private static void FinishBackground('), /int send = j\.Send;/);
-  assert.match(code, /public int Send \{ get \{ return Proven \? Index : 0; \} \}/);
-  // the tick-hours cap: 48 while Globex trades, 120 only while it is closed
-  assert.match(bodyOf(code, 'private static void OnClientMessage('), /Math\.Min\(TickHoursCap\(CapClock\(\)\), int\.Parse\(hm\.Groups\[1\]\.Value\)\)/);
-  assert.match(code, /public const int TickHoursOpen = 48, TickHoursClosed = 120;/);
-  const pump = bodyOf(code, 'private static void Pump(');
-  assert.match(pump, /client\.SendData\(msg\);/);
-  assert.match(pump, /if \(f\.Done \|\| f\.Asked <= 0 \|\| !Owns\(client, f\)\)/);
-  assert.ok(!/"olderTicks"|"more"/.test(code.slice(code.indexOf('OrderLaneTypes'), code.indexOf('OrderLaneTypes') + 200)), 'olderTicks is not an order-lane type');
-  assert.match(code, /\|\| json\.StartsWith\("\{\\"type\\":\\"olderTicks\\"", StringComparison\.Ordinal\);/);
-  // "more" is market data only: routed apart from every order message
-  const msg = bodyOf(code, 'private static void OnClientMessage(');
-  assert.ok(msg.indexOf('type == "more"') < msg.indexOf('ChartBridgeOrders.OnMessage('), '"more" handled before the order routing');
-  assert.match(msg, /else if \(type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "cancel" \|\| type == "flatten"\)\s*ChartBridgeOrders\.OnMessage\(client, type, text\);/);
-  // the older history is not matched against held trades; the recent window's seam is the 0.3.3 one
-  assert.match(bodyOf(code, 'private static void NoteAnswer('), /if \(L\.Background\) return;/);
-  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"fills\\":"\)\.Append\(FillsJson\(\)\);/);
+  assert.match(bodyOf(code, 'private static string HelloJson('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\"\]/);
+  // the window: from memory when there is one, else by count (never by date), with no Bid or Ask request
+  assert.match(bodyOf(code, 'private static void RequestTicks('), /if \(L\.Window\) \{ ServeWindow\(L\); return; \}/);
+  const serve = bodyOf(code, 'private static void ServeWindow(');
+  assert.match(serve, /lock \(book\.Sync\)\s*lock \(L\.Client\.Pending\)/);
+  assert.match(serve, /view = book\.Cache\.Snapshot\(\); book\.Cache\.Served\+\+; L\.Client\.Pending\.Clear\(\);/);
+  assert.match(bodyOf(code, 'private static void RequestWindow('), /new BarsRequest\(L\.Inst, count\)/);
+  assert.ok(!/RequestQuotes/.test(serve + bodyOf(code, 'private static void RequestWindow(') + bodyOf(code, 'private static void FinishWindow(')), 'no quote request for a window');
+  // the market data handler feeds the book and the pages under the book's lock (then Pending): snapshots are exact
+  const md = bodyOf(code, 'private static void OnMarketData(');
+  assert.match(md, /lock \(book\.Sync\)\s*\{\s*book\.OnTrade\(/);
+  assert.ok(md.indexOf('book.OnTrade(') < md.indexOf('c.Pending.Add('), 'the book takes the trade before any page holds it');
+  // ready: the profile first (less the released trades), then ready, then the released trades
+  const ready = bodyOf(code, 'private static void MarkReady(Load L, RawBars seam, TradeLog cache)');
+  assert.match(ready, /lock \(book != null \? book\.Sync : new object\(\)\)\s*lock \(client\.Pending\)/);
+  assert.match(ready, /if \(L\.Profile && book != null\) burst\.Add\(book\.ProfileJson\(L\.Sub, r\.Release\)\);\s*burst\.Add\("\{\\"type\\":\\"ready\\"/);
+  // the one backfill: only for a table that is not whole, serial, after page loads went quiet, by date from the session start
+  assert.match(code, /public static bool BackfillOn = true;/);
+  assert.match(bodyOf(code, 'private static void RunBackfill('), /if \(table == null \|\| table\.Whole \|\| book\.BackfillLive == null\)/);
+  assert.match(bodyOf(code, 'private static void AskBackfill('), /new BarsRequest\(inst, table\.Start, /);
+  assert.match(bodyOf(code, 'private static void FinishBackfill('), /ChartBridgeSeam\.Dedupe\(raw\.Time, raw\.Close, raw\.Volume, raw\.Count, book\.BackfillLive, heldAtAnswer\)/);
+  // no older-history pull, no quote start, no 120 hour cap
+  assert.ok(!/olderTicks|"more"|FillState|QuoteStart|TickHoursCap/.test(code), 'the older history pull and its pieces are gone');
+  assert.match(code, /int tickHours = hm\.Success \? Math\.Max\(0, Math\.Min\(48, /);
+  assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"books\\":"\)\.Append\(BooksJson\(\)\);/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
-  assert.match(orders, /check\/FillHarness\.cs/);
+  assert.match(orders, /check\/WindowHarness\.cs/);
 });

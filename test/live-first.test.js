@@ -1,8 +1,9 @@
 'use strict';
-// Live first (chart 1.8.0, ChartBridge 0.3.5): the page's side of the older history. The tick store taking the older
-// trades in front (TickStore.prependAll), the range-bar sync rule (RangeSync) proven against full builds from made-up
-// histories, and the fake bridge's live-first protocol (every trade of its tape once, in order). The page itself runs in
-// test/live-first-smoke.mjs. Made-up prices; nothing here is market data.
+// Served window and session table (chart 1.8.0, ChartBridge 0.3.5): the page's side. The range-bar sync rule (RangeSync)
+// proven against full builds from made-up histories; the session VWAP started from the table (BarBuilder vwapSeed); the
+// store's trim that never drops the current session; the volume profile from the table's rows equal to one from every trade
+// (session and RTH, an early close, both DST changes); and the fake bridge's protocol (window, served window, profile) against
+// its tape. The page itself runs in test/live-first-smoke.mjs. Made-up prices; nothing here is market data.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -10,9 +11,8 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const BB = require('../live/bar-builder.js');
-const FJ = require('./fill-join.js');
-const U = require('../src/chart-engine.js').util;
-const fs = require('node:fs');
+const CE = require('../src/chart-engine.js');
+const U = CE.util;
 
 /* a seeded random walk, one tick at a time with jumps now and then, times that sometimes repeat */
 function walk(n, seed, opts) {
@@ -30,36 +30,6 @@ function walk(n, seed, opts) {
   }
   return out;
 }
-
-test('TickStore.prependAll: older trades in front, across blocks, with pushes and trims after, the same as one load', () => {
-  const all = walk(300000, 7);
-  for (const cut of [[0, 150000], [250000, 1], [65536, 131072], [199999, 200000], [70000, 70001]]) {
-    const whole = new BB.TickStore(); whole.pushAll(all);
-    const s = new BB.TickStore();
-    s.pushAll(all.slice(cut[1]));                               // the recent trades first
-    for (let b = cut[1]; b > 0;) {                              // then older chunks, newest first, of odd sizes
-      const a = Math.max(0, b - (1 + (b * 7919) % 70000));
-      s.prependAll(all.slice(a, b));
-      b = a;
-    }
-    assert.equal(s.length, all.length);
-    assert.equal(s.prepended, cut[1]);
-    for (const i of [0, 1, 65535, 65536, cut[1] - 1, cut[1], all.length - 1]) if (i >= 0 && i < all.length) assert.deepEqual(s.at(i), whole.at(i), 'trade ' + i);
-    const b1 = new BB.BarBuilder({ mode: 'range', rangeTicks: 40, tick: 0.25 }), b2 = new BB.BarBuilder({ mode: 'range', rangeTicks: 40, tick: 0.25 });
-    s.feed(b1, 0); whole.feed(b2, 0);
-    assert.deepEqual(b1.bars, b2.bars, 'range bars from the prepended store');
-    s.push(1e9, 1, 1); s.dropFirst(100000);
-    assert.equal(s.length, all.length - 100000 + 1);
-    assert.deepEqual(s.at(0), all[100000]);
-    assert.deepEqual(s.at(s.length - 1), [1e9, 1, 1]);
-  }
-  const e = new BB.TickStore();
-  e.prependAll([[1, 2, 3]]); e.push(2, 3, 4); e.prependAll([[0, 1, 1]]);
-  assert.deepEqual([e.at(0), e.at(1), e.at(2)], [[0, 1, 1], [1, 2, 3], [2, 3, 4]], 'into an empty store');
-  const f = new BB.TickStore(); f.pushAll(all.slice(0, 1000));
-  const seen = []; f.feed({ addQuiet: (t) => seen.push(t) }, 10, undefined, 20);
-  assert.equal(seen.length, 10, 'feed stops at `to`');
-});
 
 /* the bars a full build gives from `from` (the window's front) on, against the window's own build from its sync point */
 function syncCase(all, from, mode, R) {
@@ -113,6 +83,85 @@ test('RangeSync: a window that starts inside a bar is not taken as synced before
   assert.equal(rs2.step(18 * 3600 + 1, 100), true);
 });
 
+
+test('BarBuilder vwapSeed: a window build started from the session\'s totals before it has the full build\'s VWAP; earlier days none', () => {
+  for (const [k, from] of [[0, 1500], [1, 4000], [2, 10], [3, 5999]]) {
+    const all = walk(6000, 300 + k, { breakAt: k === 1 ? 3000 : 0, t0: k === 1 ? 17 * 3600 - 1800 : 20 * 3600 });
+    for (const mode of ['range', 'time']) {
+      const opts = mode === 'range' ? { mode, rangeTicks: 12, tick: 0.25 } : { mode, seconds: 15, tick: 0.25 };
+      const full = new BB.BarBuilder(opts);
+      for (const x of all) full.add(x[0], x[1], x[2]);
+      const day = BB.tradeDay(all[all.length - 1][0], 18 * 3600);
+      let pv = 0, vol = 0;                                        // in whole ticks, as the page works it out from the table
+      for (let i = 0; i < from; i++) if (BB.tradeDay(all[i][0], 18 * 3600) === day) { pv += Math.round(all[i][1] / 0.25) * all[i][2]; vol += all[i][2]; }
+      const w = new BB.BarBuilder(Object.assign({ vwapSeed: { day, pv: pv * 0.25, vol } }, opts));
+      for (const x of all.slice(from)) w.add(x[0], x[1], x[2]);
+      const last = w.last, fl = full.last;
+      assert.ok(Math.abs(last.vw - fl.vw) < 1e-9, mode + ' case ' + k + ': ' + last.vw + ' vs ' + fl.vw);
+      for (const b of w.bars) {
+        const d = BB.tradeDay(b.t, 18 * 3600);
+        if (d < day) assert.equal(b.vw, null, 'an earlier day has no VWAP');
+        else assert.ok(typeof b.vw === 'number');
+      }
+      const none = new BB.BarBuilder(Object.assign({ vwapSeed: null }, opts));
+      for (const x of all.slice(from)) none.add(x[0], x[1], x[2]);
+      assert.ok(none.bars.every(b => b.vw === null), 'seed null: no VWAP');
+      assert.deepEqual(none.bars.map(b => [b.t, b.o, b.h, b.l, b.c, b.v]), w.bars.map(b => [b.t, b.o, b.h, b.l, b.c, b.v]), 'the bars themselves are the same');
+    }
+  }
+});
+
+test('trimCount: over the cap only earlier sessions go (but their last trade); the current session stays up to the hard limit', () => {
+  const s = new BB.TickStore();
+  const day = 20000, S0 = (day - 1) * 86400 + 18 * 3600;           // a session start
+  for (let i = 0; i < 1000; i++) s.push(S0 - 5000 + i, 100, 1);    // the session before
+  for (let i = 0; i < 3000; i++) s.push(S0 + i, 100, 1);           // this one
+  const now = S0 + 4000;
+  assert.equal(s.indexAt(S0), 1000);
+  assert.equal(BB.trimCount(s, now, 18 * 3600, 5000, 10000, 500), 0, 'under the cap: nothing');
+  assert.equal(BB.trimCount(s, now, 18 * 3600, 2000, 10000, 500), 999, 'the earlier session but its last trade');
+  s.dropFirst(999);
+  assert.equal(s.time(0), S0 - 5000 + 999);
+  assert.equal(BB.trimCount(s, now, 18 * 3600, 2000, 10000, 500), 0, 'only the current session left (and one before): kept');
+  assert.equal(BB.trimCount(s, now, 18 * 3600, 2000, 2500, 500), 500, 'past the hard limit: the oldest step');
+  // a range build from the trimmed store still sees the session start
+  const rs = new BB.RangeSync(8, 0.25, 18 * 3600);
+  assert.equal(rs.step(s.time(0), 100), false);
+  assert.equal(rs.step(s.time(1), 100), true);
+});
+
+/* ChartBridge's session table from trades (SessionTable.Key: the half hour of New York time and the price in ticks). */
+function tableRows(trades, tick) {
+  const m = new Map();
+  for (const [t, p, v] of trades) { const k = Math.floor(t / 1800) * 1800 + '|' + Math.round(p / tick); m.set(k, (m.get(k) || 0) + v); }
+  return [...m].map(([k, v]) => { const [h, p] = k.split('|'); return [+h, +p, v]; }).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+}
+const profileOf = vp => JSON.stringify({ rows: vp.rows(), total: vp.total, poc: vp.poc(), va: vp.valueArea(), low: vp.low, high: vp.high });
+
+test('volume profile from the table\'s rows equals the profile from every trade: session and RTH, an early close, both DST changes', () => {
+  // trade days (bar time: New York wall clock) chosen for: a plain Wednesday, the NYSE early close the day after
+  // Thanksgiving, and the Mondays after the March and November clock changes
+  const days = [Date.UTC(2026, 8, 30), Date.UTC(2026, 10, 27), Date.UTC(2026, 2, 9), Date.UTC(2026, 10, 2)].map(ms => ms / 86400000);
+  for (const day of days) {
+    const S0 = (day - 1) * 86400 + 18 * 3600;
+    const trades = walk(40000, day, { t0: S0, step: 5.2 }).filter(x => x[0] < S0 + 23 * 3600);
+    // trades right on the edges: 18:00, 9:30, 13:00, 16:00 (and a hair before each)
+    for (const e of [S0, day * 86400 + 34200, day * 86400 + 46800, day * 86400 + 57600]) trades.push([e - 0.001, 25000, 3], [e, 25000.25, 2]);
+    trades.sort((a, b) => a[0] - b[0]);
+    const inSession = trades.filter(x => x[0] >= S0);
+    for (const rth of [false, true]) {
+      const a = new CE.VolumeProfile({ tick: 0.25, sessionStart: 18 * 3600, rth }), b = new CE.VolumeProfile({ tick: 0.25, sessionStart: 18 * 3600, rth });
+      for (const x of inSession) a.add(x[0], x[1], x[2]);
+      // the page's vpBuild: the rows (time: the half hour's start), then the trades after the table
+      const cut = Math.floor(inSession.length * 0.7);
+      for (const r of tableRows(inSession.slice(0, cut), 0.25)) b.add(r[0], +(r[1] * 0.25).toFixed(10), r[2]);
+      for (const x of inSession.slice(cut)) b.add(x[0], x[1], x[2]);
+      assert.ok(a.trades > 5000, 'trades in the profile: ' + a.trades);
+      assert.equal(profileOf(b), profileOf(a), new Date(day * 86400000).toISOString().slice(0, 10) + (rth ? ' RTH' : ' session'));
+    }
+  }
+});
+
 /* ---------------- the fake bridge's live-first protocol, trade by trade against its tape */
 function wsConnect(port) {
   return new Promise((resolve, reject) => {
@@ -155,159 +204,84 @@ async function startBridge(port, flags) {
   return child;
 }
 
-test('fake bridge --live-first: recent window, ready, older history on request; every tape trade once and in order, in a busy market', async () => {
+
+test('fake bridge --live-first: the served window, the profile before ready, and a second page from the served window', async () => {
   const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first', '--recent-ticks=3000', '--recent-ms=400', '--older-ms=300', '--older-chunk=2000', '--live-rate=400']);
+  const child = await startBridge(port, ['--live-first', '--window-ms=300', '--live-rate=300']);
   try {
     const ws = await wsConnect(port);
     assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'hello')));
-    assert.deepEqual(ws.msgs.find(m => m.type === 'hello').features, ['liveFirst']);
-    let chunks = 0;
-    ws.onMsg = m => { if (m.type === 'ready' && m.older) ws.send({ type: 'more', sub: 5, upTo: 2 }); else if (m.type === 'olderTicks' && !m.done) ws.send({ type: 'more', sub: 5, upTo: ++chunks + 2 }); };
-    ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 3, sub: 5, liveFirst: true });
-    assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'olderTicks' && m.done), 20000), 'the older history ends');
-    await new Promise(r => setTimeout(r, 300));
+    assert.deepEqual(ws.msgs.find(m => m.type === 'hello').features, ['liveFirst', 'profile']);
+    ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 2, sub: 5, liveFirst: true, profile: true });
+    assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'ready'), 10000));
+    await new Promise(r => setTimeout(r, 400));
     const got = ws.msgs.slice();
     ws.close();
-    const ready = got.findIndex(m => m.type === 'ready');
-    assert.equal(got[ready].sub, 5); assert.equal(got[ready].older, true);
-    const recent = got.slice(0, ready).filter(m => m.type === 'ticks').flatMap(m => m.ticks);
-    assert.ok(recent.length > 0 && recent.length <= 3000);
-    const older = got.filter(m => m.type === 'olderTicks');
-    assert.ok(older.every(m => m.sub === 5) && older.length > 3);
-    const page = older.slice().reverse().flatMap(m => m.ticks).concat(recent, got.slice(ready + 1).filter(m => m.type === 'tick' && m.root === 'MNQ').map(m => [m.t, m.p, m.v, m.s, m.sm]));
-    const tape = await (await fetch(`http://127.0.0.1:${port}/test/tape?root=MNQ&from=${page[0][0]}`, { method: 'POST' })).json();
-    assert.ok(tape.n >= page.length);
+    const ready = got.findIndex(m => m.type === 'ready'), prof = got.findIndex(m => m.type === 'profile');
+    assert.ok(prof >= 0 && prof === ready - 1 && got[prof].sub === 5 && got[ready].sub === 5, 'the profile right before ready, with the page\'s id');
+    const win = got.slice(0, ready).filter(m => m.type === 'ticks').flatMap(m => m.ticks);
+    const now = U.zoneSeconds(Date.now() / 1000);
+    assert.ok(win.length > 100 && win[0][0] >= now - 2 * 3600 - 5 && win[0][0] < now - 2 * 3600 + 120, 'the window starts 2 h back: ' + (now - win[0][0]));
+    const live = got.slice(ready + 1).filter(m => m.type === 'tick').map(m => [m.t, m.p, m.v, m.s, m.sm]);
+    const page = win.concat(live);
+    const S0 = (U.tradeDay(now, 18 * 3600) - 1) * 86400 + 18 * 3600;
+    const tape = await (await fetch(`http://127.0.0.1:${port}/test/tape?root=MNQ&from=${Math.min(S0, page[0][0])}`, { method: 'POST' })).json();
+    const off = tape.t.findIndex(t => t >= page[0][0]);
     for (let i = 0; i < page.length; i++) {
-      const x = page[i];
-      if (x[0] !== tape.t[i] || x[1] !== tape.p[i] || x[2] !== tape.v[i] || x[3] !== tape.s[i] || x[4] !== tape.m[i]) assert.fail('trade ' + i + ' of ' + page.length + ': ' + JSON.stringify(x) + ' against the tape ' + JSON.stringify([tape.t[i], tape.p[i], tape.v[i], tape.s[i], tape.m[i]]));
+      const x = page[i], j = off + i;
+      if (x[0] !== tape.t[j] || x[1] !== tape.p[j] || x[2] !== tape.v[j] || x[3] !== tape.s[j] || x[4] !== tape.m[j]) assert.fail('trade ' + i + ': ' + JSON.stringify(x));
     }
-    const live = got.slice(ready + 1).filter(m => m.type === 'tick').length;
-    assert.ok(live > 50, 'live trades during and after the load: ' + live);
+    // the table plus the trades after it are exactly the session's trades
+    const P = got[prof], sessionTrades = [];
+    for (let j = 0; j < off + page.length; j++) if (tape.t[j] >= S0) sessionTrades.push([tape.t[j], tape.p[j], tape.v[j]]);
+    const cut = sessionTrades.length - live.length;
+    assert.equal(P.session.from, S0); assert.equal(P.session.whole, true);
+    assert.deepEqual(P.session.rows, tableRows(sessionTrades.slice(0, cut), 0.25), 'the table is the session up to the window\'s last trade');
+    // a second page: from the served window, the same first trade, NinjaTrader not asked again
+    const ws2 = await wsConnect(port);
+    ws2.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 2, sub: 1, liveFirst: true, profile: true });
+    assert.ok(await ws2.until(() => ws2.msgs.some(m => m.type === 'ready'), 10000));
+    const w2 = ws2.msgs.filter(m => m.type === 'ticks').flatMap(m => m.ticks);
+    assert.deepEqual(w2[0], win[0], 'the same first trade');
+    // a minute page: the profile, no trades
+    ws2.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 0, sub: 2, profile: true });
+    assert.ok(await ws2.until(() => ws2.msgs.some(m => m.type === 'ready' && m.sub === 2), 10000));
+    const m2 = ws2.msgs.slice(ws2.msgs.findIndex(m => m.type === 'history' && m.sub === 2));
+    assert.equal(m2.filter(m => m.type === 'ticks').length, 0);
+    assert.equal(m2.filter(m => m.type === 'profile').length, 1);
+    ws2.close();
+    const books = await (await fetch(`http://127.0.0.1:${port}/test/books`, { method: 'POST' })).json();
+    assert.equal(books.MNQ.asked, 1); assert.equal(books.MNQ.served, 1);
   } finally { child.kill(); }
 });
 
-test('fake bridge --live-first: a page that does not ask gets a full load from the same tape', async () => {
+test('fake bridge --live-first --table-building: the table from the fake\'s start, then whole and pushed to live pages (no sub)', async () => {
+  const port = 19600 + Math.floor(Math.random() * 300);
+  const child = await startBridge(port, ['--live-first', '--table-building=1500', '--live-rate=200']);
+  try {
+    const ws = await wsConnect(port);
+    ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 0, sub: 3, profile: true });
+    assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'ready'), 10000));
+    const first = ws.msgs.find(m => m.type === 'profile');
+    assert.equal(first.session.whole, false);
+    assert.ok(first.session.coveredFrom > first.session.from);
+    assert.ok(await ws.until(() => ws.msgs.filter(m => m.type === 'profile').length === 2, 5000), 'pushed when whole');
+    const pushed = ws.msgs.filter(m => m.type === 'profile')[1];
+    assert.equal(pushed.session.whole, true); assert.equal(pushed.sub, undefined);
+    ws.close();
+  } finally { child.kill(); }
+});
+
+test('fake bridge --live-first: a page that does not ask gets a full load from the same tape, and no profile', async () => {
   const port = 19600 + Math.floor(Math.random() * 300);
   const child = await startBridge(port, ['--live-first']);
   try {
     const ws = await wsConnect(port);
     ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 2 });
     assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'ready')));
-    const ready = ws.msgs.find(m => m.type === 'ready');
-    assert.equal(ready.older, undefined);
-    assert.equal(ready.sub, undefined, 'no sub echoed when the page sent none');
+    assert.equal(ws.msgs.find(m => m.type === 'ready').sub, undefined, 'no sub echoed when the page sent none');
     assert.ok(ws.msgs.filter(m => m.type === 'ticks').flatMap(m => m.ticks).length > 1000);
+    assert.equal(ws.msgs.filter(m => m.type === 'profile').length, 0);
     ws.close();
-    await fetch(`http://127.0.0.1:${port}/test/features?liveFirst=0`, { method: 'POST' });
-    const ws2 = await wsConnect(port);
-    assert.ok(await ws2.until(() => ws2.msgs.some(m => m.type === 'hello')));
-    assert.equal(ws2.msgs.find(m => m.type === 'hello').features, undefined, 'features off: hello as 0.3.4');
-    ws2.close();
-  } finally { child.kill(); }
-});
-
-/* ---------------- the join: the fake bridge's port of ChartBridgeFill.Join gives the C#'s answers (review N7) */
-test('fill-join.js (the fake bridge\'s join) gives ChartBridge\'s answers on every case in nt8/check/join-cases.txt', () => {
-  const lines = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'join-cases.txt'), 'utf8').split('\n').filter(l => l && l[0] !== '#');
-  assert.ok(lines.length > 100);
-  const cols = x => { const t = [], p = [], v = []; for (const y of x ? x.split(' ') : []) { const [a, b, c] = y.split(':'); t.push(+a); p.push(+b); v.push(+c); } return { t, p, v }; };
-  let checked = 0;
-  for (const line of lines) {
-    const c = line.split('\t'), B = cols(c[2]), R = cols(c[3]);
-    const j = FJ.join(B.t, B.p, B.v, R.t, R.p, R.v, +c[1]);
-    const got = [j.index, j.send, j.matched ? 1 : 0, j.startsAfter ? 1 : 0, j.gapMs >= 0 ? 1 : 0, j.mismatchAt, j.checked].join(' ');
-    assert.equal(got, c.slice(4, 11).join(' '), c[0]);
-    checked++;
-  }
-  assert.ok(checked > 100);
-});
-
-/* Seconds to add to the clock to stand at hh:mm New York time on the most recent past `dow` (0 Sunday .. 6 Saturday). */
-function offsetToDay(dow, hh, mm) {
-  const now = Date.now() / 1000, today = Math.floor(U.zoneSeconds(now) / 86400);
-  for (let back = 0; back < 14; back++) {
-    const bt = (today - back) * 86400 + hh * 3600 + mm * 60;
-    if (new Date(bt * 1000).getUTCDay() !== dow) continue;
-    let unix = bt - (U.zoneSeconds(now) - now);
-    unix = bt - (U.zoneSeconds(unix) - unix);
-    if (unix > now) continue;
-    return Math.round(unix - now);
-  }
-  throw new Error('no day found');
-}
-/* A live-first load through the fake, pulled as live.js pulls it; what the page got, in its order. */
-async function pull(port, tickHours, opts) {
-  const o = opts || {};
-  const ws = await wsConnect(port);
-  let chunks = 0;
-  ws.onMsg = m => { if (m.type === 'ready' && m.older) { for (let i = 0; i < (o.asks || 1); i++) ws.send({ type: 'more', sub: 9, upTo: 2 }); } else if (m.type === 'olderTicks' && !m.done && !o.noMore) ws.send({ type: 'more', sub: 9, upTo: ++chunks + 2 }); };
-  ws.send({ type: 'subscribe', root: 'NQ', days: 1, tickHours, sub: 9, liveFirst: true });
-  if (o.before) await o.before(ws);
-  assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'olderTicks' && m.done), 20000), 'the older history ends');
-  await fetch(`http://127.0.0.1:${port}/test/hold?root=NQ`, { method: 'POST' });
-  await new Promise(r => setTimeout(r, 300));
-  const got = ws.msgs.slice();
-  ws.close();
-  const ready = got.findIndex(m => m.type === 'ready');
-  const older = got.filter(m => m.type === 'olderTicks');
-  const recent = got.slice(0, ready).filter(m => m.type === 'ticks').flatMap(m => m.ticks);
-  const page = older.slice().reverse().flatMap(m => m.ticks).concat(recent, got.slice(ready + 1).filter(m => m.type === 'tick' && m.root === 'NQ').map(m => [m.t, m.p, m.v]));
-  const tape = await (await fetch(`http://127.0.0.1:${port}/test/tape?root=NQ&from=${page[0][0]}`, { method: 'POST' })).json();
-  let bad = -1;
-  if (tape.n !== page.length) bad = Math.min(tape.n, page.length);
-  for (let i = 0; i < Math.min(tape.n, page.length) && bad < 0; i++) if (page[i][0] !== tape.t[i] || page[i][1] !== tape.p[i] || page[i][2] !== tape.v[i]) bad = i;
-  return { older, recent, page, tape, bad, last: older[older.length - 1] };
-}
-
-test('fake bridge --live-first at the Sunday 18:00 ET open (--calendar): the recent window reaches into Friday, the older history (whole trading days) is Sunday only, nothing is sent twice', async () => {
-  const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first', '--calendar', '--clock-offset=' + offsetToDay(0, 18, 5), '--tick-rate=2', '--live-rate=60', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=200']);
-  try {
-    const r = await pull(port, 26);
-    const sunday = x => new Date(x * 1000).getUTCDay() === 0;
-    assert.ok(r.recent.length > 100 && !sunday(r.recent[0][0]) && r.recent.some(x => sunday(x[0])), 'the recent trades start before the weekend and include Sunday\'s');
-    assert.equal(r.older.length, 1);
-    assert.deepEqual([r.last.ticks.length, r.last.done, r.last.startsAfter, r.last.joinMismatch], [0, true, true, undefined], 'nothing older, done, startsAfter');
-    assert.equal(r.bad, -1, 'the page\'s trades are the tape from its first trade on, each once (' + r.page.length + ' against ' + r.tape.n + ')');
-    const loads = await (await fetch(`http://127.0.0.1:${port}/test/loads`, { method: 'POST' })).json();
-    assert.ok(loads.some(l => l && l.join && l.join.startsAfter && l.join.matched), 'the fake joined with the port: startsAfter, matched where it starts');
-  } finally { child.kill(); }
-});
-
-test('fake bridge --live-first --join-mismatch: nothing older is sent, the page is told (joinMismatch), and a repeated upTo adds no chunk', async () => {
-  const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first', '--join-mismatch', '--tick-rate=2', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=200']);
-  try {
-    const r = await pull(port, 3, { asks: 4 });
-    assert.equal(r.older.length, 1);
-    assert.deepEqual([r.last.ticks.length, r.last.done, r.last.joinMismatch], [0, true, true]);
-    assert.equal(r.bad, -1, 'the page holds the tape from its front, each trade once');
-  } finally { child.kill(); }
-  const port2 = 19600 + Math.floor(Math.random() * 300);
-  const child2 = await startBridge(port2, ['--live-first', '--tick-rate=2', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=200', '--older-chunk=1000']);
-  try {
-    // the page asks upTo 2 four times at ready and nothing more: exactly two chunks come
-    const ws = await wsConnect(port2);
-    ws.onMsg = m => { if (m.type === 'ready' && m.older) for (let i = 0; i < 4; i++) ws.send({ type: 'more', sub: 9, upTo: 2 }); };
-    ws.send({ type: 'subscribe', root: 'NQ', days: 1, tickHours: 3, sub: 9, liveFirst: true });
-    assert.ok(await ws.until(() => ws.msgs.filter(m => m.type === 'olderTicks').length >= 2, 8000));
-    await new Promise(r => setTimeout(r, 400));
-    assert.equal(ws.msgs.filter(m => m.type === 'olderTicks').length, 2, 'two chunks, not four');
-    ws.close();
-  } finally { child2.kill(); }
-});
-
-test('fake bridge --live-first: a dropped older history is answered (empty, done, dropped), at once when chunks were asked', async () => {
-  const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first', '--tick-rate=2', '--recent-ticks=2000', '--recent-ms=100', '--older-ms=5000']);
-  try {
-    const r = await pull(port, 3, { before: async ws => {
-      assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'ready')));
-      await new Promise(res => setTimeout(res, 200));
-      await fetch(`http://127.0.0.1:${port}/test/drop-fill`, { method: 'POST' });
-    } });
-    assert.equal(r.older.length, 1);
-    assert.ok(r.last.done && r.last.dropped && /dropped/.test(r.last.error) && r.last.ticks.length === 0);
   } finally { child.kill(); }
 });

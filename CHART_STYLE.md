@@ -265,10 +265,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Anything not real is labelled on the chart (legend "sample data", SIM pill).
 - Levels, VWAP, the Initial Balance and trade marks are computed from bars, never typed in. A level that cannot be
   computed exactly is not drawn (the IB says why on the status line).
-- Live first (1.8.0): while the older history is still loading, nothing is drawn that it could change. Range bars show
-  only from a point where they are proven the same as a full load's, with the 1-minute bars of the minutes before it on
-  their left (the legend on one of them says "Range 40t (1m before 10:31)"), or 1-minute bars alone until such a point
-  (the legend "Range 40t (1m until loaded)"); range and seconds bars, and those stand-ins, draw no VWAP (legend "VWAP
-  loading"). The status line says "History: loading 6 h of 28 h" in the quiet grey, beside the other notes, and the note
-  goes when the history is in. When the history ends short the note says why and ends with "Reload" in the accent text
-  color, underlined, the one control on the status line.
+- Served window (1.8.0): range bars are drawn only from the first bar proven to be NinjaTrader's own; before it the chart
+  is empty and the status line says "Range bars start where they are proven to match NinjaTrader's" in the quiet grey.
+  Range and seconds bars carry no VWAP while ChartBridge's session table is still building (legend "VWAP -"), and the
+  profile's note reads "Volume profile building, from 10:45 ET" until it is whole.

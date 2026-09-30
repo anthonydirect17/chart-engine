@@ -1,109 +1,61 @@
 # Changelog
 
-## 1.8.0 and ChartBridge 0.3.5 (2026-09-30): live first, the history after
+## 1.8.0 and ChartBridge 0.3.5 (2026-09-30): a light Range chart, an exact volume profile
 
-Page, bar builder and ChartBridge; the engine only changes its version. **Needs a recompile:** run `nt8\install.ps1` again
-(it copies `ChartBridge.cs` and the page files), then compile in NinjaTrader (F5). Anthony (2026-09-30): "Stream the most
-recent ticks first so the chart is live at once, then fill the older history in the background." On WORK the MNQ Range 40
-chart took about 30 s to load (`loadMs` 29,827, 4,612,769 trades over 28 hours) and 15 to 20 s after an F5; since 0.3.4 a
-page more than 5 s behind is reset, and a fast load makes that reset cheap. Chart 1.8.0 because the delta pane's branch
-claims 1.7.0; the numbers are reconciled when both merge. Depends on ChartBridge 0.3.4 (bridge-side) merging first.
-- **Live first** (nt8/PROTOCOL.md, Live first): ChartBridge's `hello` lists `features: ["liveFirst"]`; the page then
-  subscribes with its `sub` and `liveFirst`. ChartBridge asks NinjaTrader for the last `recentTicks` trades (config.txt,
-  default 100,000) and their Bid and Ask ticks **by count** (NinjaTrader's help: a request by date returns whole trading
-  days; "if you need less than one full day, use the barsBack parameter"), sends them, then `ready` with `older` and the
-  held live trades by the 0.3.3 seam, unchanged. The chart is live, and orders work, from `ready`, as before. Then it asks
-  for the whole window exactly as a full load does, and the page pulls it with `more`, one `olderTicks` chunk of 10,000
-  trades at a time, newest first (the store stays one unbroken run, and a fill cut short still leaves a correct history
-  back from the live edge). A recent window that fails or comes back empty falls back to the full load of 0.3.4.
-- **Nothing counted twice or missed, at three joins:** the recent window against the live trades (the 0.3.3 seam, run
-  with the recent window as the backfill); the older history against the recent window (`ChartBridgeFill.Join`: the
-  page's first trade found by its position among the trades at its time, checked on up to 2,000 trades after it); the
-  chunks with each other (consecutive slices of one array). Mono harness: a 40,000-trade tape with its quotes played live
-  through Subscribe, the market data handler and `more`, trades and quotes arriving between every step: the page gets
-  every trade exactly once and in order.
-- **Sides equal a full load's:** the page gets the recent window only from its front (`ChartBridgeFill.FrontStart`):
-  past 60 s after the start of the recent quote histories, from the first trade whose side does not lean on the trade
-  before the window (by the quote, a price change, or the first of an 18:00 ET session). Proven on 400 made-up tapes
-  (33,528 trades, none different; some with a 70 s quote silence, some across the 17:00 to 18:00 break); on the 40,000-trade
-  tape every trade's side and method, older, recent, released and live, equals a full load's. The 18:00 restart and the
-  seam's tick-rule continuation (ContinueSides, FixLast) run as before, on the recent window.
-- **The 5 s rule and the lanes:** `olderTicks` is data-lane bulk data (never counted as lag), `more` is market data
-  only. Harness, a million older trades while live trades arrive: at the page's pace (5 ms a chunk, 30 us a trade, 3,000
-  trades a second) the oldest waiting data was at most 15 to 44 ms (the rule closes at 5,000), live trades waited median
-  0.2 ms, p99 20 to 31 ms; a slow page (25 ms a chunk, 100 us a trade, 1,500 a second) at most 48 ms, p99 86 to 90 ms.
-- **Post-load lag** (review 5 S1): in review 5's own model at 3,000 trades a second, the page's live trades were 0.35 to
-  1.05 s behind right after `ready` (the recent window answered in 1 to 5 s), against 4.3 to 13.1 s after a full load of
-  30 to 60 s on 7c28d55, and at most 0.08 s while 4.6 million older trades streamed (461 chunks in 6.3 to 7.3 s).
-- **Cheaper text, for every load:** a trade's text is written straight into the message (0.41 us a trade on Mono, was
-  3.94 us), byte for byte what 0.3.4 wrote (252,000 trades compared in 7 time zones across the DST changes). At most two
-  chunks of the older history's text wait for the page at a time.
-- **The page** (`live/live.js`, "Live first"): minute and hour views are exact at once; the volume profile takes each
-  chunk's trades; seconds views show the bars the store holds whole; **range bars** show only from where they are proven
-  exact (`RangeSync`: the first trade of a session, or a swing of more than the range each way; docs/RANGE_BARS.md, Live
-  first), with 1-minute bars until then ("Range 40t (1m until loaded)"); range and seconds bars draw no VWAP until the
-  history is in ("VWAP loading"). When the last chunk is in, the view is rebuilt from the whole store in slices and swapped
-  in: the range bars shown before stay the same in price and volume (review 1 below). "History: loading 6 h of 28 h" in the status line meanwhile, never over the order bar.
-  The store keeps every trade while the history comes (the 2.5 million trim waits). A message of an older subscribe is
-  dropped by its `sub` (with 0.3.5).
-- **Volume profile on minute views** (Anthony's ruling tonight): with the profile on and ChartBridge 0.3.5, 1m, 5m, 15m and
-  1h ask for ticks back to 18:00 ET (9:30 for RTH), live first, so the profile counts the whole session; switching the
-  profile on (or Session after RTH) asks for them. With 0.3.4 or older they load no ticks, as before (a full load there
-  would make the minute chart as slow as the range chart).
+Page, bar builder, fake bridge and ChartBridge; the engine only changes its version. **Needs a recompile:** run
+`nt8\install.ps1` again (it copies `ChartBridge.cs` and the page files), then compile in NinjaTrader (F5). Why: on WORK
+(2026-09-30 RTH) each Range page load pulled 16 to 17 hours of MNQ trades (2.8 to 2.96 million, 33 to 72 s) plus 0.3.4's
+quote history, NinjaTrader showed 8.5 to 10.9 s "high latency" stalls across all its windows while Anthony was in a trade,
+and pages that reconnected ran the heavy load again. Anthony's rules: the Range chart only needs the last 2 hours at open
+and its bars then stay all day; the volume profile must be exact from 18:00 ET; delta runs live from page open (its own
+PR); nothing about trades or range bars kept past the session; don't over engineer. Chart 1.8.0 because the delta pane's
+branch claims 1.7.0. The quote requests themselves go with ChartBridge 0.3.4.1 (`quoteHours`, branch hotfix-no-quotes),
+merged in here once main has it.
+- **The served window** (nt8/PROTOCOL.md, Served window and session table): ChartBridge's `hello` lists
+  `features: ["liveFirst", "profile"]`; a Range or seconds chart then subscribes with `liveFirst` and gets the last
+  `rangeHours` of trades (config.txt, default 2), asked of NinjaTrader **by count** (a request by date returns whole
+  trading days), sized from the live trade rate and asked again (at most three rounds) when the answer does not reach back
+  far enough. ChartBridge keeps that window, extended by every live trade, in memory for the session: a reload, a second
+  page or a view switch gets its trades from there, from the same first trade, and NinjaTrader is not asked again. Dropped
+  at the next 18:00 ET session; never written to disk.
+- **The session table:** per instrument, the session's volume at each price per half hour of New York time, fed by the live
+  trades. When ChartBridge starts mid-session, ONE backfill of the session runs, once, serial, after no tick chart has
+  loaded for 10 s, all copying and adding off NinjaTrader's threads, joined to the live trades by the 0.3.3 seam; never
+  repeated for that session and never for a page load. At 18:00 a new table starts; the finished one is kept (one small
+  file per instrument, `profile-MNQ.txt`) for the weekend's "last session" profile and a later weekly profile.
+- **The `profile` message:** the table before `ready` (exactly up to the page's last trade), again when the backfill makes
+  it whole. The page's volume profile is its rows plus every trade after them, on Range and minute views alike: equal to
+  the profile of every trade of the session (Session and RTH). While the table builds the profile says "Volume profile
+  building, from HH:MM ET".
+- **Range bars start where they match** (docs/RANGE_BARS.md, Served window): the page draws range bars only from the first
+  bar proven to be NinjaTrader's own (`RangeSync`: a session start, or a swing of more than the range each way), never
+  offset bars before it; a quiet window shows none, with a note, until one is proven. A window that starts with its
+  session's first trade is proven from it (the table says no trade of the session came before). Once drawn, bars stay all
+  day: over 2.5 million trades the page drops only earlier sessions' trades (`trimCount`). Seconds bars start at the first
+  whole bar.
+- **VWAP** of range and seconds bars starts from the table (its price times volume less the page's trades, in whole
+  ticks): the VWAP of every trade from 18:00. None while the table builds.
+- **Orders keep working during any load:** order actions no longer wait for a view's load; a price order (click to place)
+  needs a known last price (the last seen for the instrument is kept across loads), market orders and Flatten never wait.
+  The order path itself is unchanged (`ChartBridgeOrders.cs`, `ChartBridgePin.cs`, `live/order-ticket.js`, `live/pin.js`,
+  `install.ps1`, the fake bridge's order handling).
+- **Gone** from the live-first branch's first design: the older history pulled after `ready` (`more`, `olderTicks`,
+  `recentTicks`, the fill join and its harness cases, the 1-minute stand-ins, the reload button, the 120 hour tick cap,
+  `quotes: false`, the quote start of review 1).
 - **Old bridges and relays:** ChartBridge 0.3.4 and older, and The Desk's relay (which passes no `features`), get the
-  subscribe of 1.6.0 and a full load. A 1.6.x page gets 0.3.4's full load from 0.3.5.
-- **`/diag` `fills`** per live-first load: `timeToLiveMs`, `recentTicks`, `recentSent`, `recentSentFrom`,
-  `recentWindowMin`, `backgroundAnswerMs`, `backgroundMs`, `chunks`, `maxOldestDataMs`, the join (`matched`, `checked`,
-  `mismatchAt`, `gapMs`, `sidesDiffer`), `state` and `fellBack`; `seams` entries say `liveFirst`.
-- **The delta pane** (next): the same path serves it (its trades per chunk in `historyGrew`, a rebuild at the end).
-- **Review 1 (2026-09-30), fixed:**
-  - **B1, the Sunday open:** NinjaTrader answers a request by date with whole trading days, so at the Sunday 18:00 ET open
-    (or after a holiday) the recent trades by count reach back into Friday while the older history holds only Sunday's
-    session; `ChartBridgeFill.Join` sent Sunday's opening print again in front of Friday's trades. Join now sees an older
-    history that starts after the page's first trade (`startsAfter`: nothing older, the page says the history starts where
-    the recent trades begin), keeps its position within the trades at the front's time, checks the trades before the join
-    as well as after, and sends older trades only when the join is proven. The page refuses any chunk that is not wholly
-    at or before its first trade. Harness: the reviewer's J1 to J4, a whole load whose older history is answered in whole
-    trading days (a Sunday open, and answers that differ at the front), a hunt over 3,000 tapes; the fake bridge answers
-    in whole trading days too, with a Sunday-open tape (`--calendar`) in `smoke:live-first`.
-  - **S1, sides:** the recent window's quote rows by count are cut at the full load's quote start (now minus
-    min(tickHours, 24) h), and the older history uses the same start: sides from the front are a full load's (the
-    reviewer's case: 8,151 of 15,000 differed, now none). The sides proof now cuts its full load at a quote start too.
-  - **S2, a join that does not match:** nothing older is sent, the page is told (`joinMismatch`, at once), keeps the recent
-    trades only (every trade once), says so and offers a one-click Reload (chosen over reloading on its own: no loop, and
-    never taking the chart or orders away without Anthony's click).
-  - **S3, the 1m fallback:** when a live trade gives the first proven point, the range bars appear to the right of the
-    1-minute bars of the minutes before it (the reviewer saw 6,511 bars become 1); the price axis fits.
-  - **N1:** the page asks with `upTo` (two chunks more than it has), so a re-ask adds nothing: at most two chunks on the way.
-  - **N2:** a dropped older history answers the next `more` (empty, done, `dropped`); the page stops loading, says so,
-    offers a Reload and trims its store again.
-  - **N3:** a page that disconnects, or subscribes again, has its older history dropped and freed at once.
-  - **N4:** documented: range bars keep their price and volume across the swap; a bar opened in a same-millisecond pileup
-    can move by 10 us inside that millisecond, which changes nothing on screen (docs/RANGE_BARS.md).
-  - **N5:** when the history ends short (an error, a gap, a mismatch, a drop), range and seconds bars keep no VWAP; the
-    Initial balance is not drawn when one of its minutes lacks its first trades.
-  - **N6:** switching the profile (or Session after RTH) on in a minute view, and the Reload, load again with the chart kept
-    and order entry working until the new load is live.
-  - **N7:** the fake bridge joins with a port of `ChartBridgeFill.Join` (`test/fill-join.js`), checked against the C#'s
-    answers on 157 cases (`nt8/check/join-cases.txt`), so the smokes exercise the real join logic.
-  - **N8:** `smoke:ib` waits for the Reset state instead of 200 ms; `smoke:perf` measures a live-first load again when it
-    had a frame over 50 ms, and fails only if the second one does too.
-  - **Trades only for a minute view's profile:** its subscribe says `quotes: false`, and ChartBridge asks NinjaTrader for no
-    Bid and Ask ticks (the sides come from the tick rule; the page does not use them on a minute view).
-  - **Tick hours:** ChartBridge serves 48 hours of ticks while CME Globex trades, and up to 120 only while it is closed (the
-    weekend, or a weekday with no trade for 90 minutes), for the weekend volume profile of chart-rulings.
-- **Unchanged:** orders, the PIN, network rules and fills (`ChartBridgeOrders.cs`, `ChartBridgePin.cs`,
-  `live/order-ticket.js`, `live/pin.js` and the fake bridge's order handling untouched).
-- Tests: `check/FillHarness.cs` (run by `npm run check:orders`): FrontStart and Join by hand and the sides proof, the
-  text against 0.3.4's, whole loads (the tape, with the page's first two `more` sent the very moment `ready` is queued; a
-  resubscribe mid-history; the recent window refused or empty; the older history failing; a page that stops asking;
-  minute charts; a page that does not ask), `/diag`, and the pacing rows above. `test/live-first.test.js`:
-  `TickStore.prependAll`, `RangeSync` against full builds on 240 made-up histories (both styles, 4 to 40 ticks, across the
-  break), and the fake bridge's protocol trade by trade. `npm run smoke:live-first`: NQ Range 40 in a busy market, time to
-  live, orders at ready mid-history, the progress line's place, no bar moving, the store equal to the tape, sides, Range,
-  15s, 1m bars and the IB equal to a full load's in a second tab; 1m with the profile (Session and RTH, and switched on);
-  a resubscribe mid-history; an old bridge. `npm run smoke:perf` adds three live-first loads (1.8 million trades, 1.7
-  million of them pulled after ready): no frame over 50 ms from LIVE to 10 s after the last chunk.
+  subscribe of 1.6.0 and its full load. A 1.6.x page gets a full load from 0.3.5.
+- **`/diag`:** `books` (per instrument: the table, the last one, the backfill with its time and trade count, the served
+  window, the live trade rate) and `windows` (the last 20 served-window loads).
+- Tests: `nt8/check/WindowHarness.cs` (in `npm run check:orders`): the table exact per half hour and price, RTH edges,
+  the profile message, the 18:00 rollover, the weekend, NinjaTrader in four time zones across the DST weeks, the whole
+  rule, a mid-session start whose backfill joins the live trades exactly and is never asked again, the served window by
+  count with its re-ask, a second page and a reload from memory with no request, the text format. `test/live-first.test.js`:
+  `RangeSync` on 240 made-up histories, the VWAP seed, the trim, the profile from rows equal to the profile from every trade
+  (Session and RTH, an early close, both DST changes), and the fake bridge's protocol against its tape.
+  `npm run smoke:live-first`: NQ Range 40 in a busy market (trades, bars, VWAP and the profile equal to the tape's), a
+  reload and a second page from memory with the same first bar, 15s, a 1m profile with no tick history, a building table
+  then its push, a market order and Flatten during a Range load, a quiet market, the Sunday open, the 18:00 rollover, an
+  old bridge.
 
 ## ChartBridge 0.3.4 (2026-09-30): every trade carries its side
 
