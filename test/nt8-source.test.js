@@ -203,9 +203,11 @@ test('the main file routes order messages only to ChartBridgeOrders, and ships b
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
   assert.match(code, /ChartBridgeOrders\.UnwatchConnections\(\);/);
   assert.ok(!/Access-Control-Allow-Origin/.test(code + ocode), 'no CORS headers anywhere');
+  // nt8/install.ps1 (and the updater, nt8/update-pc.ps1) copy what nt8/install-files.json lists
   const install = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install.ps1'), 'utf8');
-  assert.match(install, /ChartBridgeOrders\.cs/);
-  assert.match(install, /'nt8\\ChartBridgePin\.cs'/);
+  assert.match(install, /nt8\\install-files\.json/);
+  const addons = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons;
+  assert.ok(addons.includes('nt8/ChartBridgeOrders.cs') && addons.includes('nt8/ChartBridgePin.cs'));
   const check = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'check.sh'), 'utf8');
   assert.match(check, /ChartBridgeOrders\.cs ChartBridgePin\.cs/);
   const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8');
