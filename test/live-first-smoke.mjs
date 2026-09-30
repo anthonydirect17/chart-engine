@@ -110,19 +110,22 @@ const exact = (p, br) => p.evaluate(async pt => {
   const now = U.zoneSeconds(Date.now() / 1000), SS = 18 * 3600;
   const sessionOf = t => (U.tradeDay(t, SS) - 1) * 86400 + SS;
   const from = S.length ? Math.min(sessionOf(S.time(0)), sessionOf(now)) : sessionOf(now);
+  // what the page shows, taken in one go before any await (live trades can still arrive while the tape is fetched)
+  const shown = window.liveChart.bars().map(b => Object.assign({}, b)), vp = window.liveChart.getProfile && window.liveChart.getProfile();
+  const vpRows = vp ? vp.rows().filter(r => r.volume > 0) : null, vpStart = vp ? vp.startOf(now) : 0, vpRth = vp ? vp.rth : false, vpTotal = vp ? vp.total : 0;
+  const nStore = S.length, cur = D.cur ? { mode: D.cur.mode, rangeTicks: D.cur.rangeTicks, rangeMode: D.cur.rangeMode, tick: D.cur.tick, seconds: D.cur.seconds } : null;
   const tape = await (await fetch(`http://localhost:${pt}/test/tape?root=${D.root}&from=${from}`, { method: 'POST' })).json();
-  const out = { n: S.length, first: S.length ? S.time(0) : null, now };
+  const out = { n: nStore, first: S.length ? S.time(0) : null, now };
   // the store against the tape
   let off = 0; while (off < tape.n && tape.t[off] < out.first) off++;
   out.storeBad = -1;
-  for (let i = 0; i < S.length && out.storeBad < 0; i++) if (S.time(i) !== tape.t[off + i] || S.price(i) !== tape.p[off + i] || S.volume(i) !== tape.v[off + i]) out.storeBad = i;
-  const end = off + S.length;                                   // the tape up to the store's last trade
+  for (let i = 0; i < nStore && out.storeBad < 0; i++) if (S.time(i) !== tape.t[off + i] || S.price(i) !== tape.p[off + i] || S.volume(i) !== tape.v[off + i]) out.storeBad = i;
+  const end = off + nStore;                                     // the tape up to the store's last trade
   // bars
-  const shown = window.liveChart.bars();
   out.bars = shown.length;
   out.firstBar = shown.length ? shown[0].t : null;
-  if (D.cur && shown.length) {
-    const b0 = D.cur;
+  if (cur && shown.length) {
+    const b0 = cur;
     const full = b0.mode === 'range' ? new BB.BarBuilder({ mode: 'range', rangeTicks: b0.rangeTicks, rangeMode: b0.rangeMode, tick: b0.tick, sessionStart: SS })
       : new BB.BarBuilder({ mode: 'time', seconds: b0.seconds, tick: b0.tick, sessionStart: SS });
     for (let j = 0; j < end; j++) full.addQuiet(tape.t[j], tape.p[j], tape.v[j]);
@@ -139,14 +142,13 @@ const exact = (p, br) => p.evaluate(async pt => {
     out.vwNull = shown.filter(b => U.tradeDay(b.t, SS) === day && (b.vw === null || b.vw === undefined)).length;
   }
   // the profile
-  const vp = window.liveChart.getProfile && window.liveChart.getProfile();
   if (vp) {
-    const start = vp.startOf(now), want = new Map();
-    for (let j = 0; j < end; j++) if (tape.t[j] >= start && (!vp.rth || vp.inRth(tape.t[j]))) { const q = Math.round(tape.p[j] / D.tick); want.set(q, (want.get(q) || 0) + tape.v[j]); }
-    const got = new Map(vp.rows().filter(r => r.volume > 0).map(r => [Math.round(r.price / D.tick), r.volume]));
+    const start = vpStart, want = new Map();
+    for (let j = 0; j < end; j++) if (tape.t[j] >= start && (!vpRth || vp.inRth(tape.t[j]))) { const q = Math.round(tape.p[j] / D.tick); want.set(q, (want.get(q) || 0) + tape.v[j]); }
+    const got = new Map(vpRows.map(r => [Math.round(r.price / D.tick), r.volume]));
     let bad = got.size === want.size ? null : 'rows ' + got.size + ' vs ' + want.size;
     for (const [q, v] of want) if (!bad && got.get(q) !== v) bad = 'price ' + q * D.tick + ': ' + got.get(q) + ' vs ' + v;
-    out.vp = { rth: vp.rth, total: vp.total, rows: got.size, bad };
+    out.vp = { rth: vpRth, total: vpTotal, rows: got.size, bad };
   }
   out.vpNote = document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent;
   out.rangeNote = document.getElementById('rangeNote').hidden ? '' : document.getElementById('rangeNote').textContent;
