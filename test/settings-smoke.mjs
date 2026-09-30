@@ -123,8 +123,9 @@ try {
     const layers = await p.evaluate(() => window.liveChart.getLayers());
     check(layers.volume === false && layers.vwap === true && layers.levels === false, '1.3 indicator choices carried over: ' + JSON.stringify(layers));
     check(await p.inputValue('#rangeTicks') === '40' && /Range 40t/.test(await p.textContent('#lgTf')), '1.3 NQ range 40 carried over');
-    // 1.3 had no IB: the main pane gets IB 1h's default (on, 1.5.3), so 2 of the 1.3 four plus IB
-    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '3/5' && layers.ib === true, 'indicator count 3/5 (IB 1h on by default)');
+    // 1.3 had no IB: the main pane gets the Initial balance default (on, 1.5.3), so 2 of the 1.3 four plus IB; since 1.6.0 the two
+    // that were off stay on the main pane's chart, hidden (shown/on: 3/5)
+    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '3/5' && layers.ib === true, 'indicator count 3/5 (Initial balance on by default)');
     await ctx.close();
   }
 } finally {

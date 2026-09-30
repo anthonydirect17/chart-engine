@@ -19,10 +19,14 @@
  * Keys (versioned):
  *   live-settings-v2    { root, tf, glide, rangeMode }
  *   live-range-v2       { NQ: 40, ... } range bar size in ticks, per instrument root; only roots set by hand
- *   live-indicators-v1  { <paneId>: { volume, vwap, levels, fills, ib } } indicators on each chart pane (ib: 1.5.3)
+ *   live-indicators-v2  { <paneId>: { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null } }
+ *                       the Indicators menu per chart pane (1.6.0): on = on this chart, shown = drawn (hidden keeps it on
+ *                       the chart), pin = a chip on the pane's strip; the last 5 used; what Hide all hid, for Restore
+ *   live-indicator-options-v1  { <paneId>: { vp: { session: 'full' | 'rth' } } } an indicator's own options, per pane
+ *                       (INDICATOR_OPTIONS, 1.6.0; the volume profile's hours)
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
- * The 1.3 keys live-settings-v1 and live-range-v1 are read once, when the new keys do not exist yet, and left
- * in place.
+ * The 1.3 keys live-settings-v1 and live-range-v1, and 1.4 to 1.5.3's live-indicators-v1 ({ <paneId>: { volume, vwap,
+ * levels, fills, ib } }), are read once, when the new keys do not exist yet, and left in place.
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = { LivePrefs: factory() };
@@ -36,22 +40,52 @@ const GLIDES = ['smooth', 'fast', 'off'];
 const RANGE_MODES = ['nt', 'traded'];
 const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };
 const RANGE_MIN = 1, RANGE_MAX = 400;
+/*
+ * The indicators (1.6.0 menu). `id` is also the chart layer (fills: the fill marks). Listed in the order the menu's
+ * "On this chart" group and the chip strip show them. `sw` is the CSS color of the swatch; `short` is the chip text and
+ * `letter` the chip on a narrow pane; `alias` holds the short names search matches; `opt` is the read-only setting the
+ * gear shows (only what the chart really does; the account whose fills are marked is the one account picker's).
+ */
 const INDICATORS = [
-  { id: 'volume', name: 'Volume' },
-  { id: 'vwap', name: 'VWAP' },
-  { id: 'levels', name: 'Levels' },
-  { id: 'fills', name: 'Fills' },
-  { id: 'ib', name: 'IB 1h' },
+  { id: 'volume', name: 'Volume bars', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
+    opt: 'Bottom 16% of the plot, in the candle colors' },
+  { id: 'vwap', name: 'VWAP', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
+    opt: 'Session VWAP from 18:00 ET; its color is in Colors' },
+  { id: 'levels', name: 'Levels', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
+    alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val value area',
+    opt: 'Prior day high, low, close and value area; overnight high and low' },
+  { id: 'ib', name: 'Initial balance', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
+    opt: '1 hour, locks 10:30 ET' },
+  { id: 'vp', name: 'Volume profile', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
+    alias: 'vp volume profile poc vah val value area',
+    opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
+  { id: 'fills', name: 'Fills', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
+    opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
 ];
+/* Listed in the menu, tagged "coming" and not selectable until they exist (none since the volume profile, 1.6.0). */
+const COMING = [];
+const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }];
+const IND_IDS = INDICATORS.map(x => x.id);
+const RECENT_MAX = 5;
+/* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
+   smoke test can lower it. */
+let api = null;
+const pinMax = () => (api ? api.PIN_MAX : 6);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
-   starts here. A main pane saved before 1.5.3 has no ib choice yet and gets this default too. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true };
+   starts here, each on the chart, shown and pinned to the chip strip. */
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false };   // the profile: off on every pane
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false };
+/*
+ * Options an indicator has besides on and off, each a list of allowed values with the default first (set in its gear
+ * panel). The volume profile: the full session from 18:00 ET, or RTH 9:30 to 16:00 ET, 13:00 on NYSE early closes
+ * (Anthony's ruling 2026-09-29).
+ */
+const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] } };
 const MAIN_PANE = 'main';
 
-const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v1', bracket: 'live-bracket-v1' };
-const OLD = { settings: 'live-settings-v1', range: 'live-range-v1' };
+const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1' };
+const OLD = { settings: 'live-settings-v1', range: 'live-range-v1', indicators: 'live-indicators-v1' };
 
 /** A whole number of ticks from 1 to 400, or null when the text is not one (half typed, empty, 0, 4.5). */
 function parseRange(v) {
@@ -66,10 +100,190 @@ function clampRange(v) {
   return Math.max(RANGE_MIN, Math.min(RANGE_MAX, n));
 }
 
+/* The 1.4 to 1.5.3 per-pane flags (live-indicators-v1): known ids only, booleans only, the rest from `base`. */
 function cleanIndicators(v, base) {
   const out = Object.assign({}, base || NEW_PANE_INDICATORS);
   if (v && typeof v === 'object') for (const k of Object.keys(out)) if (typeof v[k] === 'boolean') out[k] = v[k];
   return out;
+}
+
+const own = (o, k) => !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
+/* An indicator's options: the saved values that are allowed, the defaults for the rest ({} for an unknown id).
+   Only own properties count (review S5): 'toString' or '__proto__' is never an indicator, an option or a value. */
+function cleanIndicatorOptions(id, v) {
+  const spec = own(INDICATOR_OPTIONS, id) ? INDICATOR_OPTIONS[id] : {}, out = {};
+  for (const k of Object.keys(spec)) out[k] = own(v, k) && spec[k].includes(v[k]) ? v[k] : spec[k][0];
+  return out;
+}
+/** Whether `value` is an allowed value of option `key` of indicator `id` (own properties only). */
+function indicatorOptionAllowed(id, key, value) {
+  return own(INDICATOR_OPTIONS, id) && own(INDICATOR_OPTIONS[id], key) && INDICATOR_OPTIONS[id][key].includes(value);
+}
+
+/*
+ * One pane's indicator state (1.6.0): { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null }.
+ *   on      on this chart (listed under "On this chart"); off means it waits in its group with a + to add it
+ *   shown   drawn; a hidden one stays on the chart with everything it had (the switch, a chip, Hide all)
+ *   pin     a chip on the pane's strip (only while it is on the chart); one added gets a chip while the strip has
+ *           fewer than 6 (pinMax), and pinning by hand is refused when it is full
+ *   recent  the last 5 used from the menu, newest first
+ *   restore what Hide all hid, so Restore brings back that same mix (cleared by any other show or hide)
+ * The functions below never change the state they are given; they return a new one.
+ */
+const isList = v => Array.isArray(v);
+function defaultPane(paneId) {
+  const main = paneId === MAIN_PANE, ind = {};
+  for (const id of IND_IDS) { const on = main && DEFAULT_INDICATORS[id]; ind[id] = { on, shown: true, pin: on }; }
+  return { ind, recent: [], restore: null };
+}
+function cleanIdList(v, max) {
+  if (!isList(v)) return [];
+  const out = [];
+  for (const id of v) if (IND_IDS.includes(id) && !out.includes(id)) out.push(id);
+  return max ? out.slice(0, max) : out;
+}
+function cleanPane(v, paneId) {
+  const out = defaultPane(paneId);
+  if (!v || typeof v !== 'object' || isList(v)) return out;
+  const ind = v.ind && typeof v.ind === 'object' && !isList(v.ind) ? v.ind : {};
+  for (const id of IND_IDS) {
+    const x = ind[id];
+    if (!x || typeof x !== 'object') continue;
+    for (const f of ['on', 'shown', 'pin']) if (typeof x[f] === 'boolean') out.ind[id][f] = x[f];
+  }
+  out.recent = cleanIdList(v.recent, RECENT_MAX);
+  out.restore = isList(v.restore) ? cleanIdList(v.restore) : null;
+  return out;
+}
+/*
+ * A pane saved by 1.4 to 1.5.3 (live-indicators-v1), carried over so every indicator draws exactly as before; an
+ * explicit off stays off. The main pane listed all five as its own, so each stays on the chart: the ones that were
+ * off are hidden (one click brings one back, as before) and all five are pinned. Any other pane started empty, so
+ * only the ones that were on are on its chart (pinned); an off there is off, as on a new pane. The volume profile is
+ * read like the others: a 1.5.3 save never has a vp key, so it starts off after upgrading from 1.5.3; a save from the
+ * unreleased profile test build that had it on keeps it on (shown and pinned, the main pane's sixth chip).
+ */
+function paneFromV1(v1, paneId) {
+  const main = paneId === MAIN_PANE;
+  const flags = cleanIndicators(v1, main ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
+  const out = defaultPane(paneId);
+  for (const id of IND_IDS) {
+    const listed = main && DEFAULT_INDICATORS[id];                 // the main pane's own five (never the volume profile)
+    out.ind[id] = listed ? { on: true, shown: flags[id], pin: true } : { on: flags[id], shown: true, pin: flags[id] };
+  }
+  return out;
+}
+function copyPane(st) {
+  const ind = {};
+  for (const id of IND_IDS) ind[id] = Object.assign({}, st.ind[id]);
+  return { ind, recent: st.recent.slice(), restore: st.restore ? st.restore.slice() : null };
+}
+const touch = (st, id) => { st.recent = [id].concat(st.recent.filter(x => x !== id)).slice(0, RECENT_MAX); };
+const pinnedCount = st => IND_IDS.filter(id => st.ind[id].on && st.ind[id].pin).length;
+/* On the chart and shown (in a copy): one that was off gets a chip while the strip has room. */
+function putOn(n, id) {
+  const x = n.ind[id];
+  if (!x.on) { x.pin = pinnedCount(n) < pinMax(); x.on = true; }
+  x.shown = true;
+}
+const Pane = {
+  /** Chips on the strip now (pinned and on the chart), and whether it is full. */
+  pinned(st) { return pinnedCount(st); },
+  pinFull(st) { return pinnedCount(st) >= pinMax(); },
+  /** Drawn or not, per indicator: what the chart shows. */
+  drawn(st) { const out = {}; for (const id of IND_IDS) out[id] = !!(st.ind[id].on && st.ind[id].shown); return out; },
+  /** { shown, hidden, on } counts for the button ("shown/on") and the menu. */
+  counts(st) {
+    let shown = 0, on = 0;
+    for (const id of IND_IDS) if (st.ind[id].on) { on++; if (st.ind[id].shown) shown++; }
+    return { shown, on, hidden: on - shown };
+  },
+  /*
+   * The changes, each with a fixed result (review S1): the page works out what a click means from what it shows, then
+   * applies the same absolute change to its own state and to the state read fresh from storage, so a tab never saves
+   * the opposite of what it shows when another tab changed the same pane.
+   */
+  /** Put it on the chart, shown (a chip while the strip has room; one already on keeps its chip). A recent use. */
+  add(st, id, recent) {
+    if (!IND_IDS.includes(id)) return st;
+    const n = copyPane(st);
+    putOn(n, id);
+    if (recent !== false) touch(n, id);
+    n.restore = null;
+    return n;
+  },
+  /** Show or hide one that is on the chart (a chip, or the menu's switch with `recent`). */
+  setShown(st, id, shown, recent) {
+    if (!IND_IDS.includes(id) || !st.ind[id].on) return st;
+    const n = copyPane(st);
+    n.ind[id].shown = !!shown; n.restore = null;
+    if (recent) touch(n, id);
+    return n;
+  },
+  /** Hide these (Hide all) and remember them for Restore. */
+  hideIds(st, ids) {
+    const list = cleanIdList(ids).filter(id => st.ind[id].on);
+    if (!list.length) return st;
+    const n = copyPane(st);
+    for (const id of list) n.ind[id].shown = false;
+    n.restore = list;
+    return n;
+  },
+  /** Show these again (Restore). */
+  showIds(st, ids) {
+    const n = copyPane(st);
+    for (const id of cleanIdList(ids)) putOn(n, id);              // shown here means shown after a reload too (review 2, N7)
+    n.restore = null;
+    return n;
+  },
+  /** What the switch, +, a Recent button mean now: add it when it is not on the chart, else show or hide it. */
+  toggleOp(st, id) {
+    if (!IND_IDS.includes(id)) return x => x;
+    if (!st.ind[id].on || !st.ind[id].shown) return x => Pane.add(x, id);   // showing writes on and shown, whatever another tab did
+    return x => Pane.setShown(x, id, false, true);
+  },
+  /** What Hide all means now: hide the shown ones, or with none shown bring back what it hid (Restore). */
+  hideAllOp(st) {
+    const ids = IND_IDS.filter(id => st.ind[id].on && st.ind[id].shown);
+    if (ids.length) return x => Pane.hideIds(x, ids);
+    const back = st.restore ? st.restore.filter(id => st.ind[id].on) : [];
+    if (back.length) return x => Pane.showIds(x, back);
+    return x => x;
+  },
+  toggle(st, id) { return Pane.toggleOp(st, id)(st); },
+  hideAll(st) { return Pane.hideAllOp(st)(st); },
+  /** The x: take it off the chart (added again, it gets a chip again while the strip has room). */
+  remove(st, id) {
+    if (!IND_IDS.includes(id)) return st;
+    const n = copyPane(st);
+    n.ind[id].on = false; n.ind[id].shown = true;
+    if (n.restore) { n.restore = n.restore.filter(x => x !== id); if (!n.restore.length) n.restore = null; }
+    return n;
+  },
+  /** Pin or unpin; pinning one that is on the chart while the strip is full is refused (the same state comes back). */
+  pin(st, id, pinned) {
+    if (!IND_IDS.includes(id)) return st;
+    const v = pinned === undefined ? !st.ind[id].pin : !!pinned;
+    if (v && !st.ind[id].pin && st.ind[id].on && pinnedCount(st) >= pinMax()) return st;
+    const n = copyPane(st);
+    n.ind[id].pin = v;
+    return n;
+  },
+  /** The footer button's label: "Hide all (n)", or "Restore" when Hide all left nothing shown. */
+  hideLabel(st) {
+    const c = Pane.counts(st);
+    return c.shown ? 'Hide all (' + c.shown + ')' : st.restore && st.restore.some(id => st.ind[id].on) ? 'Restore' : 'Hide all (0)';
+  },
+};
+
+/* Search: every word typed must be found in the name, the chip text or a short name ("vw", "ib", "pdh", "vol"). */
+function searchIndicators(q) {
+  const words = String(q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  return INDICATORS.concat(COMING).filter(d => {
+    const hay = (d.name + ' ' + d.short + ' ' + d.alias).toLowerCase();
+    return words.every(w => hay.includes(w));
+  });
 }
 
 function create(storage) {
@@ -90,15 +304,27 @@ function create(storage) {
       if (TFS.includes(s.tf)) next.tf = s.tf;
       if (GLIDES.includes(s.glide)) next.glide = s.glide;
       raw.set(KEYS.settings, next);
-      if (!raw.has(KEYS.indicators) && s.layers) raw.set(KEYS.indicators, { [MAIN_PANE]: cleanIndicators(s.layers, DEFAULT_INDICATORS) });
+      if (!raw.has(OLD.indicators) && !raw.has(KEYS.indicators) && s.layers) raw.set(OLD.indicators, { [MAIN_PANE]: cleanIndicators(s.layers, DEFAULT_INDICATORS) });
     }
     if (!raw.has(KEYS.range)) {
       const r = obj(OLD.range), next = {};
       for (const root of ROOTS) { const n = parseRange(r[root]); if (n !== null) next[root] = n; }
       raw.set(KEYS.range, next);
     }
+    /* 1.6.0: each pane saved by 1.4 to 1.5.3 carried over once (paneFromV1); panes never saved keep their defaults.
+       A damaged live-indicators-v2 is carried over from v1 again rather than read as the defaults (review N3). */
+    const v2 = raw.get(KEYS.indicators);
+    if (!v2 || typeof v2 !== 'object' || isList(v2)) {             // none yet, or damaged (not JSON): carry v1 over (again)
+      const v1 = raw.get(OLD.indicators);
+      if (v1 && typeof v1 === 'object' && !isList(v1)) {
+        const next = {};
+        for (const paneId of Object.keys(v1)) if (paneId && v1[paneId] && typeof v1[paneId] === 'object' && !isList(v1[paneId])) next[paneId] = paneFromV1(v1[paneId], paneId);
+        raw.set(KEYS.indicators, next);
+      }
+    }
   }
   migrate();
+  const paneOk = paneId => typeof paneId === 'string' && !!paneId && !Object.prototype.hasOwnProperty.call(Object.prototype, paneId);
 
   return {
     raw,
@@ -116,18 +342,36 @@ function create(storage) {
     /** Range bar size in ticks for a root: the saved one, else the default. */
     range(root) { const n = parseRange(obj(KEYS.range)[root]); return n !== null ? n : (DEFAULT_RANGE[root] || 20); },
     setRange(root, ticks) { const n = parseRange(ticks); if (n === null || !ROOTS.includes(root)) return false; return patch(KEYS.range, root, n); },
-    /** Indicators on a pane: the saved set, the 1.3 set for the main pane, else the clean set for a new pane. */
-    indicators(paneId) {
+    /** One pane's indicator state (see Pane above): the saved one, else the pane's default. */
+    pane(paneId) { return cleanPane(paneOk(paneId) ? obj(KEYS.indicators)[paneId] : null, paneId); },
+    /** Drawn or not per indicator on a pane. */
+    indicators(paneId) { return Pane.drawn(this.pane(paneId)); },
+    /**
+     * Change one pane: read the key fresh, apply `fn` (one of the Pane functions) to that pane's saved state and write it
+     * back, so a change made in another tab (another pane, or another indicator on this one) is never undone.
+     */
+    updatePane(paneId, fn) {
+      if (!paneOk(paneId) || typeof fn !== 'function') return false;
       const all = obj(KEYS.indicators);
-      return cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
-    },
-    /** Turn one indicator on or off on one pane; the pane's other indicators are read fresh, not overwritten. */
-    setIndicator(paneId, id, on) {
-      if (!INDICATORS.some(x => x.id === id) || typeof paneId !== 'string' || !paneId) return false;
-      const all = obj(KEYS.indicators);
-      const cur = cleanIndicators(all[paneId], paneId === MAIN_PANE ? DEFAULT_INDICATORS : NEW_PANE_INDICATORS);
-      cur[id] = !!on; all[paneId] = cur;
+      all[paneId] = fn(cleanPane(all[paneId], paneId));
       return raw.set(KEYS.indicators, all);
+    },
+    /** One indicator's options on one pane, e.g. indicatorOptions('main', 'vp') -> { session: 'full' }. */
+    indicatorOptions(paneId, id) {
+      const all = obj(KEYS.indicatorOptions), pane = own(all, paneId) ? all[paneId] : null;
+      return cleanIndicatorOptions(id, own(pane, id) ? pane[id] : null);
+    },
+    /** Set one option of one indicator on one pane (read fresh, only that field written); false when not allowed. */
+    setIndicatorOption(paneId, id, key, value) {
+      if (!indicatorOptionAllowed(id, key, value) || typeof paneId !== 'string' || !paneId) return false;
+      // fresh objects with no prototype, filled from own properties only: a pane id such as '__proto__' is a plain
+      // key here, never Object.prototype (review S5)
+      const all = Object.assign(Object.create(null), obj(KEYS.indicatorOptions));
+      const saved = own(all, paneId) && all[paneId] && typeof all[paneId] === 'object' && !Array.isArray(all[paneId]) ? all[paneId] : null;
+      const pane = Object.assign(Object.create(null), saved);
+      pane[id] = Object.assign(cleanIndicatorOptions(id, own(pane, id) ? pane[id] : null), { [key]: value });
+      all[paneId] = pane;
+      return raw.set(KEYS.indicatorOptions, all);
     },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** Set one bracket field ('stop' or 'target', whole ticks 0 to 200) for one root; the other field is kept. */
@@ -151,7 +395,9 @@ function debounce(fn, ms) {
   return d;
 }
 
-return { create, debounce, parseRange, clampRange, cleanIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, DEFAULT_RANGE, INDICATORS, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+api = { create, debounce, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+return api;
 });
 
 
@@ -180,6 +426,12 @@ const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 2
 const SCRIPT = document.currentScript;
 const EMBED_PREFIX = 'embed:';            // storage prefix when a host passes none (live/EMBED.md)
 let mountCount = 0;
+/* The "/" key opens the Indicators menu of the chart under the mouse (1.6.0): each mounted chart notes when the pointer
+   is over it. */
+let hoverRoot = null;
+const mountedRoots = new Set();
+/* Charts on one page that share a storage prefix follow each other's account pick (review 2, N6). */
+const accountPeers = new Set();
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -197,7 +449,7 @@ function markup(p, o) {
   const obar = !o.trading ? '' : `
   <div class="obar-ground"><section class="obar" id="${p}obar" aria-label="Order entry" hidden>
     <button type="button" class="arm" id="${p}armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every page load."><span class="knob" aria-hidden="true"></span><span id="${p}armText">Armed off</span></button>
-    <label class="ofield"><span class="glabel">Account</span><select class="acct-sel" id="${p}oAcct" aria-label="Trade account"></select></label>
+    <label class="ofield"><span class="glabel">Account</span><select class="acct-sel acct-main" id="${p}oAcct" aria-label="Account: orders go to it and the chart marks its fills" title="Orders go to this account, and the chart marks its fills"></select></label>
     <label class="ofield"><span class="glabel">Qty</span><input class="oin" id="${p}oQty" type="number" min="1" max="1" step="1" value="1" inputmode="numeric" aria-label="Order quantity"></label>
     <span class="ofield">
       <button type="button" class="obtn buy" id="${p}buyMkt">Buy MKT</button>
@@ -226,6 +478,11 @@ function markup(p, o) {
       <button type="button" data-v="ES">ES</button>
     </div>
 
+    <div class="group acct-pick" id="${p}acctWrap" hidden>
+      <label class="glabel" for="${p}acctPick">Account</label>
+      <select class="acct-sel acct-compact" id="${p}acctPick" title="The chart marks this account's fills"></select>
+    </div>
+
     <div class="group">
       <span class="glabel" id="${p}tfLabel">Bars</span>
       <div class="seg" id="${p}tfSeg" role="group" aria-labelledby="${p}tfLabel">
@@ -243,19 +500,23 @@ function markup(p, o) {
           <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
     </div>
 
-    <div class="group">
+    <div class="group ind-group">
       <div class="ind" id="${p}indWrap" data-pane="${esc(o.paneId)}">
-        <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
-        <div class="ind-panel" id="${p}indPanel" role="group" aria-label="Indicators on this chart" hidden>
-          <label class="ind-row"><input type="checkbox" data-layer="volume"><span class="sw" style="--sw: var(--text3)"></span>Volume</label>
-          <label class="ind-row"><input type="checkbox" data-layer="vwap"><span class="sw" style="--sw: var(--vwap-sw)"></span>VWAP</label>
-          <label class="ind-row"><input type="checkbox" data-layer="levels"><span class="sw" style="--sw: var(--info)"></span>Levels</label>
-          <label class="ind-row"><input type="checkbox" data-layer="fills"><span class="sw" style="--sw: var(--profit)"></span>Fills</label>
-          <label class="ind-row"><input type="checkbox" data-layer="ib"><span class="sw" style="--sw: var(--ib-sw)"></span>IB 1h</label>
+        <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel" aria-haspopup="dialog" title="Indicators on this chart (/ with the mouse over the chart)">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
+        <div class="ind-panel" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
+          <div class="ind-head"><span class="ind-title">Indicators</span><span class="ind-sum" id="${p}indSum"></span></div>
+          <div class="ind-search">
+            <label class="visually-hidden" for="${p}indQ">Search indicators</label>
+            <input id="${p}indQ" type="text" placeholder="Search: vwap, ib, pdh, profile" autocomplete="off" spellcheck="false" data-f="q">
+            <kbd aria-hidden="true" title="Press / with the mouse over the chart to open this menu">/</kbd>
+          </div>
+          <div class="visually-hidden" id="${p}indLive" role="status" aria-live="polite"></div>
+          <div class="ind-body" id="${p}indBody"></div>
+          <div class="ind-sep"></div>
+          <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
         </div>
       </div>
-      <label class="visually-hidden" for="${p}fillAcct">Show fills from</label>
-      <select class="acct-sel" id="${p}fillAcct" title="Which account's fills to show"><option value="">All accounts</option></select>
+      <div class="ind-chips" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
     </div>
 
     <div class="group" role="group" aria-label="Drawing tools">
@@ -288,7 +549,7 @@ ${obar}
     <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
-      <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgFill"></span></div>
+      <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span></span><span id="${p}lgFill"></span></div>
     </div>
     <div class="notice" id="${p}notice" hidden>
       <h2 id="${p}noticeTitle">Waiting for ChartBridge</h2>
@@ -302,6 +563,7 @@ ${obar}
     <span id="${p}fps">-</span><span class="sep">·</span>
     <span id="${p}ticksSeen">0 ticks</span>
     <span class="ibnote" id="${p}ibNote" hidden></span>
+    <span class="ibnote" id="${p}vpNote" hidden></span>
     <span class="msg" id="${p}statusMsg"></span>
     <span class="ro" id="${p}statusRo">Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.</span>
   </footer>
@@ -361,7 +623,8 @@ function start(container, opt, PAGE) {
 
   /* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
-  const S = Object.assign(prefs.settings(), { layers: prefs.indicators(PANE) });
+  let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
+  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp') } });   // layers: what is drawn
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   const saveSetting = k => prefs.setSetting(k, S[k]);
@@ -381,7 +644,7 @@ function start(container, opt, PAGE) {
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, trades: false },
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, trades: false },
     motion: GLIDE[S.glide], clock: etNow,
   });
 
@@ -389,21 +652,33 @@ function start(container, opt, PAGE) {
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
-    lv: [], ib: null, ibKey: '' };
+    lv: [], ib: null, ibKey: '', vp: null, liveFrom: null };
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
   const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
   const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
-  let fillAccount = store.get('live-fill-account-v1', '');   // '' = all accounts
+  /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
+     one; with no order bar (a mounted chart, or ChartBridge 0.2) a compact one sits in the toolbar. The chart marks the
+     fills of that account only. While trading is on, the account is the order account (TR.account, chosen exactly as
+     before 1.6.0); otherwise it is `viewAccount`, the last one picked, saved in live-account-v1. The 1.5 fills choice
+     (live-fill-account-v1) is read once when there is none yet; its "All accounts" is gone and means none chosen. */
+  let viewAccount = (() => {
+    const v = store.get('live-account-v1', null);
+    if (typeof v === 'string' && v) return v;
+    const old = store.get('live-fill-account-v1', '');
+    return typeof old === 'string' ? old : '';
+  })();
   const accountsSeen = new Set();
+  let helloSeen = false;                                       // ChartBridge has said which accounts it knows
   let ticksSeen = 0;
   const delays = { feed: [], local: [] };
 
   function resetData(root) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.ib = null; D.ibKey = ''; ibNote(null);
+    D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -475,10 +750,10 @@ function start(container, opt, PAGE) {
     ibNote(ib);
   }
   const IB_NOTES = {
-    uncovered: 'IB 1h not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
-    gap: 'IB 1h not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong. A reload fetches the history again.',
-    inexact: 'IB 1h not shown: the bars do not line up with 9:30 and 10:30 ET.',
-    empty: 'IB 1h not shown: no trades yet between 9:30 and 10:30 ET.',
+    uncovered: 'Initial balance not shown: the history does not reach back before 9:30 ET today, so the first hour may be incomplete.',
+    gap: 'Initial balance not shown: minutes are missing between 9:30 and 10:30 ET, so it could be wrong. A reload fetches the history again.',
+    inexact: 'Initial balance not shown: the bars do not line up with 9:30 and 10:30 ET.',
+    empty: 'Initial balance not shown: no trades yet between 9:30 and 10:30 ET.',
   };
   /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
   function ibNote(ib) {
@@ -486,9 +761,87 @@ function start(container, opt, PAGE) {
     let text = ib && S.layers.ib ? IB_NOTES[ib.state] || '' : '';
     if (ib && S.layers.ib && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
       const wd = new Date(ib.start * 1000).getUTCDay();
-      text = wd === 0 || wd === 6 ? '' : 'IB 1h: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
+      text = wd === 0 || wd === 6 ? '' : 'Initial balance: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
     }
     el.textContent = text; el.hidden = !text;
+  }
+
+  /*
+   * The volume profile (1.6.0; Anthony's ruling 2026-09-29): the 'vp' indicator, off by default, drawn
+   * by the engine at the right edge of the plot behind the candles, 1-tick rows, POC and 70% value area highlighted.
+   * The option S.options.vp.session picks the full session from 18:00 ET ('full') or RTH 9:30 to 16:00 ET ('rth').
+   * Built from the TickStore when the indicator is on at `ready`, when it is switched on, and when the option
+   * changes (the store holds every trade the page got: the backfill, then each live tick), then fed each live tick
+   * right after the store's push in onTick, so it holds exactly what the store holds (VolumeProfile in the engine
+   * has the notes, and the backfill seam that is not settled). It holds the trading day of the clock: the timer
+   * below moves it to the new session at 18:00 ET even before the first trade. It does not depend on the view, so
+   * changing bars keeps it. While it is off there is no profile at all.
+   * Views that load no tick history (1m and longer, when the page subscribed on one: tickHours 0) have only the
+   * live trades since `ready`, so the profile starts at the first live trade; a quiet note on the status line says
+   * so, and says when the tick history does not reach back to 18:00 (or 9:30 for RTH).
+   */
+  function vpBuild() {
+    D.vp = null;
+    if (S.layers.vp && D.ready) {
+      const now = etNow();
+      const vp = new CE.VolumeProfile({ tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth' });
+      D.ticks.feed(vp, 0, vp.startOf(now));
+      vp.advance(now);
+      D.vp = vp;
+    }
+    chart.setProfile(D.vp);
+    vpNote(); vpLegend();
+  }
+  /* The quiet note while the profile is on and cannot show the whole session (or RTH) for a reason. */
+  function vpNote() {
+    const el = $('vpNote'); if (!el) return;
+    let text = '';
+    if (S.layers.vp && D.ready && D.vp) {
+      const now = etNow(), need = D.vp.startOf(now), rth = D.vp.rth, from = rth ? '9:30' : '18:00';
+      // every trade is known from here on: the tick backfill's start (later when NinjaTrader sent less than asked,
+      // or the page dropped its oldest ticks), or with no tick history (tickHours 0) the moment the page went live
+      const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
+      const coveredFrom = D.tickHours > 0 ? Math.max(D.tickFrom, D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity) : D.liveFrom;
+      if (rth && !U.rthDay(need)) {
+        const wd = new Date(need * 1000).getUTCDay();
+        text = wd === 0 || wd === 6 ? '' : 'Volume profile (RTH): no stock market session on ' + U.fmtDate(need) + ' (NYSE holiday).';
+      } else if (rth && now < need) text = 'Volume profile (RTH) starts at 9:30 ET.';
+      else if (coveredFrom > need) {
+        const at = U.fmtHM(Math.min(coveredFrom, now));
+        text = D.tickHours > 0 ? 'Volume profile from ' + at + ' ET: the tick history does not reach back to ' + from + ' ET.'
+          : 'Volume profile from ' + at + ' ET: this view loads no tick history, so it counts the live trades from then on.';
+      }
+    }
+    if (el.textContent !== text) el.textContent = text;
+    el.hidden = !text;
+  }
+  /* "POC <price> · VA <val> to <vah>" in the legend while the profile is on and has trades; redone once per change. */
+  let vpLegendVer = -1;
+  function vpLegend() {
+    const el = $('lgVp'); if (!el) return;
+    const cols = S.layers.vp && D.vp ? D.vp.columns() : null;
+    el.hidden = !cols;
+    if (!cols || cols.version === vpLegendVer) return;
+    vpLegendVer = cols.version;
+    const va = D.vp.valueArea(), dp = precisionOf();
+    $('lgPoc').textContent = U.fmtPrice(D.vp.poc().price, dp); $('lgVal').textContent = U.fmtPrice(va.val, dp); $('lgVah').textContent = U.fmtPrice(va.vah, dp);
+    el.title = 'Volume profile, ' + (D.vp.rth ? 'RTH 9:30 to 16:00 ET' : 'full session from 18:00 ET') + ': point of control and 70% value area';
+  }
+  /*
+   * An indicator's option (LivePrefs INDICATOR_OPTIONS), saved per pane: setIndicatorOption('vp', 'session', 'rth').
+   * Returns false for an option or value that does not exist. The volume profile is rebuilt from the store.
+   * Always saved, also when the tab already shows that value: another tab may have saved the other one since (review
+   * S2), and a click is saved as what this tab shows, on a fresh read (only this pane's field is written).
+   */
+  function setIndicatorOption(id, key, value) {
+    if (!LP.indicatorOptionAllowed(id, key, value)) return false;   // own properties only: 'toString' is not an option
+    prefs.setIndicatorOption(PANE, id, key, value);
+    if (S.options[id][key] !== value) {
+      S.options[id][key] = value;
+      if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
+    }
+    syncIndicators();
+    return true;
   }
 
   function onReady() {
@@ -505,7 +858,9 @@ function start(container, opt, PAGE) {
       D.ticks.feed(D.m1, 0, Math.max(cutoff, lastHist));
     }
     D.ready = true;
+    D.liveFrom = etNow();
     rebuild();
+    vpBuild();
     setConn('live');
     $('notice').hidden = true;
   }
@@ -514,6 +869,7 @@ function start(container, opt, PAGE) {
     if (m.root !== D.root || !D.ready) return;
     const t = m.t, p = m.p, v = m.v || 0;
     D.ticks.push(t, p, v);                             // columns, not one array per trade (TickStore, bar-builder.js)
+    if (D.vp) D.vp.add(t, p, v);                       // the volume profile holds what the store holds (vpBuild)
     if (D.ticks.length > 2500000) { D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; }   // the first session left is partial now
     ticksSeen++;
     const r1 = D.m1.add(t, p, v);
@@ -536,20 +892,72 @@ function start(container, opt, PAGE) {
     fills.set(f.account + '|' + f.id, { t: f.t, price: f.p, side: f.side, qty: f.qty, root: f.root, name: f.name, account: f.account });
     if (f.account && !accountsSeen.has(f.account)) { accountsSeen.add(f.account); syncAccounts(); }
   }
-  /* Account dropdown: All accounts, or one account (Anthony, 2026-09-29). Accounts with fills come first. */
-  function syncAccounts(listed) {
-    if (listed) for (const a of listed) accountsSeen.add(a);
-    const sel = $('fillAcct');
+  /* Accounts known to this chart (ChartBridge's list and any with fills), those with fills first. */
+  function knownAccounts() {
     const withFills = new Set([...fills.values()].map(f => f.account));
     const names = [...accountsSeen].sort((a, b) => (withFills.has(b) - withFills.has(a)) || a.localeCompare(b));
-    if (fillAccount && !accountsSeen.has(fillAccount)) names.unshift(fillAccount);   // keep a saved choice even before it reconnects
-    sel.replaceChildren(new Option('All accounts', ''), ...names.map(n => new Option(withFills.has(n) ? n : n + ' (no fills yet)', n)));
-    sel.value = fillAccount;
+    if (viewAccount && !accountsSeen.has(viewAccount)) names.unshift(viewAccount);   // keep a saved choice even before it reconnects
+    return { names, withFills };
   }
+  const tradeMode = () => TRADING && TR.v2 && TR.enabled;
+  const orderBarShown = () => TRADING && TR.v2;
+  /** The account whose fills are marked (and, while trading, the order account). */
+  function account() {
+    if (tradeMode()) return TR.account;
+    return viewAccount || OT.defaultAccount(knownAccounts().names, '');
+  }
+  /* Both pickers from the state; the fills follow. */
+  function syncAccounts(listed) {
+    if (listed) for (const a of listed) accountsSeen.add(a);
+    if (tradeMode() && TR.account) viewAccount = TR.account;       // trading off later keeps showing the same account
+    const { names, withFills } = knownAccounts(), cur = account();
+    const label = n => !accountsSeen.has(n) ? (helloSeen ? n + ' (no longer listed)' : n) : withFills.has(n) ? n : n + ' (no fills yet)';
+    const opts = () => names.length ? names.map(n => new Option(label(n), n)) : [new Option('No accounts yet', '')];
+    /* the toolbar picker: only with no order bar; on the trading page not before ChartBridge's hello says which (review 2, N4) */
+    const noToolbarPicker = orderBarShown() || (TRADING && !helloSeen);
+    if ($('acctWrap').hidden !== noToolbarPicker) { $('acctWrap').hidden = noToolbarPicker; fitChips(); }   // the toolbar changed
+    if (orderBarShown()) {                                         // say what the picker does now (review 2, S2)
+      const t = tradeMode() ? 'Orders go to this account, and the chart marks its fills' : 'Trading is off: this only picks whose fills the chart marks';
+      $('oAcct').title = t; $('oAcct').setAttribute('aria-label', 'Account. ' + t);
+    }
+    if (!orderBarShown()) { $('acctPick').replaceChildren(...opts()); $('acctPick').value = cur; $('acctPick').disabled = !names.length; }
+    else if (tradeMode()) syncTradeAccounts();                    // trading: the accounts ChartBridge allows, as before
+    else { $('oAcct').replaceChildren(...opts()); $('oAcct').value = cur; $('oAcct').disabled = !names.length; }
+    applyMarkers();
+  }
+  function pickViewAccount(v) {
+    viewAccount = v;
+    store.set('live-account-v1', v);
+    syncAccounts();
+    for (const peer of accountPeers) if (peer.prefix === PREFIX && peer.follow !== followAccount) peer.follow(v);
+  }
+  /* Another chart with this prefix (on this page, or in another tab) picked an account: show the same. While trading
+     the order account is not changed; only the account shown after trading goes off is. */
+  function followAccount(v) {
+    if (typeof v !== 'string' || v === viewAccount || destroyed) return;
+    viewAccount = v;
+    syncAccounts();
+  }
+  accountPeers.add({ prefix: PREFIX, follow: followAccount });
+  cleanups.push(() => { for (const peer of accountPeers) if (peer.follow === followAccount) accountPeers.delete(peer); });
+  listen(window, 'storage', e => {
+    if (e.key !== PREFIX + 'live-account-v1') return;
+    try { followAccount(JSON.parse(e.newValue)); } catch (err) { /* not ours */ }
+  });
+  /* Fills of the account picked, on this instrument. With Fills hidden (its switch, a chip or Hide all) past fills go,
+     but the open trade never does: its entry fills stay (OrderTicket.openEntryFills, checked against the position
+     ChartBridge reports while trading), and the position line, working orders and stop and target lines are not
+     indicators at all. */
   function applyMarkers() {
-    const list = S.layers.fills ? [...fills.values()].filter(f => f.root === D.root && (!fillAccount || f.account === fillAccount)) : [];
+    const acc = account();
+    const mine = acc ? [...fills.values()].filter(f => f.root === D.root && f.account === acc) : [];
+    let list = mine;
+    if (!S.layers.fills) {
+      const pos = tradeMode() ? TR.positions.get(acc + '|' + D.root) : null;
+      list = OT.openEntryFills(mine, pos ? pos.qty : undefined);
+    }
     chart.setMarkers(list);
-    const lastFill = list.sort((a, b) => a.t - b.t)[list.length - 1];
+    const lastFill = list.slice().sort((a, b) => a.t - b.t)[list.length - 1];
     const el = $('lgFill');
     if (lastFill) {
       el.className = lastFill.side === 'buy' ? 'buy' : 'sell';
@@ -615,6 +1023,7 @@ function start(container, opt, PAGE) {
   function handle(m) {
     switch (m.type) {
       case 'hello':
+        helloSeen = true;
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
@@ -647,7 +1056,7 @@ function start(container, opt, PAGE) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); break;
       case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); renderTrading(); break;
       case 'order': onOrder(m); break;
-      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); break;
+      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); applyMarkers(); break;
       case 'reject': flash('Refused by ChartBridge: ' + m.reason, 'error'); renderTrading(); break;
     }
   }
@@ -710,14 +1119,14 @@ function start(container, opt, PAGE) {
     TR.maxQty = t.maxQty || {};
     TR.account = OT.defaultAccount(TR.accounts, TR.account);
     if (!TR.enabled) setArmed(false);
-    syncTradeAccounts();
     renderTrading();
+    syncAccounts();
   }
   function tradingLost(reason) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
-    setArmed(false); renderTrading();
+    setArmed(false); renderTrading(); syncAccounts();
   }
   function onOrder(o) {
     if (!served(o.root)) return;
@@ -787,13 +1196,14 @@ function start(container, opt, PAGE) {
     const sel = $('oAcct');
     sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
     sel.value = TR.account;
+    sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1)
   }
   /* Order bar, order lines, position line; also run on every instrument switch and order message. */
   function renderTrading() {
     if (!TRADING || !TR.v2) return;
     const bar = $('obar'); bar.hidden = false;
     const on = TR.enabled, root = D.root || S.root, cap = OT.maxQtyFor(TR, root);
-    for (const el of bar.querySelectorAll('button, input, select')) el.disabled = !on;
+    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on;   // the account picker works with trading off too (it drives the fills)
     const q = $('oQty'); q.max = String(cap);
     if (!q.value) q.value = '1';
     for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
@@ -863,6 +1273,7 @@ function start(container, opt, PAGE) {
 
   let legendKey = '';
   chart.on('legend', e => {
+    vpLegend();
     const { bar: b, prev, forming } = e;
     const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap].join('|');
     if (key === legendKey) return;
@@ -904,6 +1315,9 @@ function start(container, opt, PAGE) {
       const chrome = U.chromeColors(T);
       for (const k of U.CHROME_VARS) { if (chrome) st.setProperty(k, chrome[k]); else st.removeProperty(k); }
       st.setProperty('--ib-sw', chrome ? U.markOnGround(CE.LEVEL_COLORS.ibHigh, T.bg, CE.FLOOR.text, T.to) : CE.LEVEL_COLORS.ibHigh);
+      // the volume profile: its menu swatch as the IB's (on the page chrome), the legend's POC on the chart ground
+      st.setProperty('--vp-sw', chrome ? U.markOnGround(CE.DEFAULT_THEME.vpPoc, T.bg, CE.FLOOR.text, T.to) : CE.DEFAULT_THEME.vpPoc);
+      st.setProperty('--vp-poc', T.vpPocText);
       legendKey = '';
     },
   });
@@ -971,40 +1385,255 @@ function start(container, opt, PAGE) {
     S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSetting('glide'); syncButtons();
   });
 
-  /* Indicators: one menu per chart pane, saved per pane id. */
+  /*
+   * Indicators (1.6.0, Anthony's menu "E2"): one menu per chart pane, saved per pane id (LivePrefs.Pane).
+   * The menu: a search box (focused on open), the last 5 used, "On this chart" (a show or hide switch that keeps
+   * everything, the swatch, the name, a pin for the chip strip, a gear with the one open settings panel, an x to take it
+   * off), then the groups, folded, one open at a time, each with a + to add, and Hide all / Restore. The chip strip next
+   * to the button holds the pinned ones: one click shows or hides; on a narrow pane each chip is one letter.
+   */
+  const IND = LP.INDICATORS, ALL_DEFS = IND.concat(LP.COMING);
+  const defOf = id => ALL_DEFS.find(d => d.id === id);
+  const M = { q: '', cat: null, gear: null, returnTo: null, note: '' };   // menu state that is not saved
+  const SVG = {
+    plus: '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M5 1v8M1 5h8"/></svg>',
+    pin: '<svg width="13" height="13" viewBox="0 0 14 14" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5l1.7 3.5 3.8.5-2.8 2.6.7 3.8L7 10.1 3.6 11.9l.7-3.8L1.5 5.5l3.8-.5z"/></svg>',
+    gear: '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4h6M11 4h1M2 10h1M6 10h6"/><circle cx="9.5" cy="4" r="1.5"/><circle cx="4.5" cy="10" r="1.5"/></svg>',
+    x: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>',
+  };
+
+  /* Draw what the state says: only the layers that changed are handed to the chart. */
+  function applyIndicators() {
+    const drawn = LP.Pane.drawn(IS);
+    for (const k of Object.keys(drawn)) {
+      if (drawn[k] === S.layers[k]) continue;
+      S.layers[k] = drawn[k];
+      if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
+      if (k === 'ib') ibNote(D.ib);
+      if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
+    }
+    legendKey = '';
+    syncIndicators();
+  }
+  /* One change, here and in storage (read fresh there, so another tab's choices are kept). `fn` runs twice, so it
+     must be absolute: what a click means is worked out from IS first (Pane.toggleOp, hideAllOp; review S1). */
+  function changeIndicators(fn) {
+    IS = fn(IS);
+    prefs.updatePane(PANE, fn);
+    applyIndicators();
+  }
+
+  function rowHtml(d) {
+    const st = IS.ind[d.id], coming = !!d.coming, on = !coming && st.on, shown = on && st.shown, pinned = !coming && st.pin, open = M.gear === d.id;
+    const name = esc(d.name), setId = p + 'indSet-' + d.id;
+    const lead = coming ? '<span class="ind-lead" aria-hidden="true"></span>'
+      : on ? `<button type="button" class="ind-switch" data-act="toggle" data-id="${d.id}" data-f="sw:${d.id}" aria-pressed="${shown}" aria-label="${shown ? 'Hide' : 'Show'} ${name}" title="${shown ? 'Hide' : 'Show'}; its settings are kept"><span class="knob" aria-hidden="true"></span></button>`
+      : `<button type="button" class="ind-add" data-act="toggle" data-id="${d.id}" data-f="add:${d.id}" aria-label="Add ${name} to this chart" title="Add to this chart">${SVG.plus}</button>`;
+    /* the pin only on rows on this chart (Anthony); the gear wherever there is something to read */
+    const tools = coming ? '<span class="ind-ic-sp" aria-hidden="true"></span>'
+      : (on ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '') +
+        `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
+    const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
+    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}</div>` : '';
+    return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
+      `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-name">${name}</span>` +
+      (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
+  }
+  /* An indicator's real options in its gear panel (LivePrefs INDICATOR_OPTIONS): today the volume profile's hours. */
+  const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } } } };
+  function optionsHtml(id) {
+    if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return '';
+    return Object.keys(LP.INDICATOR_OPTIONS[id]).map(k => {
+      const t = OPTION_TEXT[id][k], cur = S.options[id][k], lblId = p + 'indOpt-' + id + '-' + k;
+      const btns = LP.INDICATOR_OPTIONS[id][k].map(v => `<button type="button" data-act="opt" data-id="${id}" data-k="${k}" data-v="${v}" data-f="opt:${id}:${k}:${v}" aria-pressed="${v === cur}" title="${esc(t.values[v][1])}">${esc(t.values[v][0])}</button>`).join('');
+      return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
+    }).join('');
+  }
+  function renderMenu() {
+    const body = $('indBody'), c = LP.Pane.counts(IS);
+    $('indSum').textContent = c.on ? c.shown + ' shown' + (c.hidden ? ', ' + c.hidden + ' hidden' : '') : 'none on this chart';
+    const hide = $('indHideAll'), label = LP.Pane.hideLabel(IS);
+    hide.textContent = label;
+    hide.disabled = label === 'Hide all (0)';
+    hide.title = label === 'Restore' ? 'Show again the ones Hide all hid' : 'Hide every indicator on this chart, settings kept. The open trade, working orders and stop and target lines always stay.';
+    const focusKey = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.f : null;
+    let html = M.note ? `<div class="ind-note">${esc(M.note)}</div>` : '';
+    const q = M.q.trim();
+    if (q) {
+      const found = LP.searchIndicators(q);
+      html += `<div class="ind-cap">${found.length ? 'Results' : 'No match'}</div>` + found.map(rowHtml).join('');
+    } else {
+      if (IS.recent.length) html += '<div class="ind-recent"><span class="ind-cap-in">Recent</span>' + IS.recent.map(id => {
+        const d = defOf(id), shown = IS.ind[id].on && IS.ind[id].shown;
+        return `<button type="button" class="ind-rec" data-act="toggle" data-id="${id}" data-f="rec:${id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: click to ${IS.ind[id].on ? (shown ? 'hide' : 'show') : 'add'}">${esc(d.short)}</button>`;
+      }).join('') + '</div>';
+      html += '<div class="ind-cap">On this chart</div>';
+      const onChart = IND.filter(d => IS.ind[d.id].on);
+      html += onChart.length ? onChart.map(rowHtml).join('') : '<div class="ind-empty">Nothing on this chart yet: add one from a group below.</div>';
+      html += '<div class="ind-sep"></div>';
+      for (const cat of LP.CATEGORIES) {
+        const all = ALL_DEFS.filter(d => d.cat === cat.id), open = M.cat === cat.id;
+        html += `<button type="button" class="ind-cat" data-act="cat" data-id="${cat.id}" data-f="cat:${cat.id}" aria-expanded="${open}"><span class="ind-caret${open ? ' is-open' : ''}" aria-hidden="true"></span><span class="ind-cat-name">${esc(cat.name)}</span><span class="ind-cat-n">${all.length}</span></button>`;
+        if (open) {
+          const rows = all.filter(d => d.coming || !IS.ind[d.id].on);
+          html += rows.length ? rows.map(rowHtml).join('') : '<div class="ind-empty">All on this chart</div>';
+        }
+      }
+      html += '<div class="ind-coming">Coming: cumulative delta, time and sales</div>';
+    }
+    body.innerHTML = html;
+    /* one live region, changed only when its text changes, so a screen reader hears the result count and notes once */
+    const said = M.note || (q ? (() => { const n = LP.searchIndicators(q).length; return n ? n + (n === 1 ? ' match' : ' matches') : 'No match'; })() : '');
+    if ($('indLive').textContent !== said) $('indLive').textContent = said;
+    if (focusKey) {                                                 // keep the keyboard where it was
+      const alt = { 'sw:': 'add:', 'add:': 'sw:', 'x:': 'add:', 'rec:': 'rec:' };
+      let el = body.querySelector(`[data-f="${focusKey}"]`);
+      if (!el) for (const k of Object.keys(alt)) if (focusKey.startsWith(k)) el = body.querySelector(`[data-f="${alt[k] + focusKey.slice(k.length)}"]`);
+      (el || $('indQ')).focus();
+    }
+  }
+  function renderChips() {
+    const strip = $('indChips'), pinned = IND.filter(d => IS.ind[d.id].on && IS.ind[d.id].pin);
+    strip.classList.toggle('is-empty', !pinned.length);
+    strip.innerHTML = pinned.map(d => {
+      const shown = IS.ind[d.id].shown;
+      return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
+        `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span></button>`;
+    }).join('');
+    fitChips();
+  }
+  /* The strip never wraps and never moves the toolbar (review N4): it always keeps room for a full strip of one-letter
+     chips (6), so pinning or unpinning cannot change the toolbar's lines, and chips show their names only when that
+     fits without adding a toolbar line; otherwise each is one letter. */
+  function fitChips() {
+    const strip = $('indChips'), bar = strip.closest('.bar');
+    const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
+    strip.style.setProperty('--chip-room', room + 'px');
+    strip.classList.add('is-narrow');
+    const h = bar.offsetHeight;
+    strip.classList.remove('is-narrow');
+    if (bar.offsetHeight > h || strip.scrollWidth > strip.clientWidth + 1) strip.classList.add('is-narrow');
+  }
   function syncIndicators() {
-    let on = 0;
-    for (const c of $('indPanel').querySelectorAll('input[data-layer]')) { c.checked = !!S.layers[c.dataset.layer]; if (c.checked) on++; }
-    $('indCount').textContent = on + '/' + LP.INDICATORS.length;
+    const c = LP.Pane.counts(IS);
+    $('indCount').textContent = c.shown + '/' + c.on;
+    $('indBtn').setAttribute('aria-label', 'Indicators, ' + c.shown + ' shown of ' + c.on + ' on this chart');
+    renderChips();
+    if (!$('indPanel').hidden) renderMenu();
   }
-  function setIndicator(k, v) {
-    if (!(k in S.layers)) return;
-    S.layers[k] = !!v;
-    if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: S.layers[k] });
-    if (k === 'ib') ibNote(D.ib);
-    legendKey = ''; prefs.setIndicator(PANE, k, S.layers[k]); syncIndicators();
+  const STRIP_FULL = () => 'The chip strip holds ' + LP.PIN_MAX + ': unpin one to pin another.';
+  function indAction(act, id) {
+    M.note = '';
+    if (act === 'toggle') {
+      const adding = !IS.ind[id].on, full = LP.Pane.pinFull(IS);
+      if (adding && full) M.note = LP.INDICATORS.find(d => d.id === id).name + ' added without a chip. ' + STRIP_FULL();
+      changeIndicators(LP.Pane.toggleOp(IS, id));
+    } else if (act === 'remove') { if (M.gear === id) M.gear = null; changeIndicators(st => LP.Pane.remove(st, id)); }
+    else if (act === 'pin') {
+      const v = !IS.ind[id].pin;
+      if (v && LP.Pane.pinFull(IS)) { M.note = STRIP_FULL(); renderMenu(); return; }   // refused: the strip is full
+      changeIndicators(st => LP.Pane.pin(st, id, v));
+    }
+    else if (act === 'gear') { M.gear = M.gear === id ? null : id; renderMenu(); }
+    else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
+  let openMenu;
   {
-    const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel');
-    const open = v => {
-      panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
-      if (v) { const first = panel.querySelector('input'); if (first) first.focus(); }
+    const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel'), q = $('indQ');
+    /* The panel stays inside the chart's own element (a pane can be narrow, and a host may clip it). */
+    /* It opens below the order bar when there is one, so the Armed switch, the account and the position readout stay
+       in view (review N5); its list scrolls inside when the space is short. */
+    const place = () => {
+      const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+      const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;
+      panel.style.top = Math.round(below - w.top + 6) + 'px';
+      panel.style.maxWidth = Math.max(220, Math.floor(r.right - b.left - 8)) + 'px';
+      panel.style.maxHeight = Math.max(200, Math.floor(Math.min(r.bottom, window.innerHeight) - below - 14)) + 'px';
     };
-    btn.addEventListener('click', () => open(panel.hidden));
-    panel.addEventListener('change', e => { const c = e.target.closest('input[data-layer]'); if (c) setIndicator(c.dataset.layer, c.checked); });
-    listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) open(false); });
-    wrap.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hidden) { e.preventDefault(); open(false); btn.focus(); } });
-    wrap.addEventListener('focusout', e => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) open(false); });
+    openMenu = (v, from) => {
+      if (v === !panel.hidden) { if (v) q.focus(); return; }
+      panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
+      if (v) {
+        M.returnTo = from && from !== document.body && !wrap.contains(from) ? from : btn;
+        M.cat = null; M.q = ''; q.value = ''; M.note = '';            // groups folded and a clean search on every open (Anthony)
+        place(); renderMenu(); q.focus(); q.select();
+      } else { M.gear = null; M.note = ''; M.q = ''; q.value = ''; $('indLive').textContent = ''; }   // reopening shows the normal view (review S2)
+    };
+    const close = refocus => {
+      if (panel.hidden) return;
+      openMenu(false);
+      if (refocus) { const to = M.returnTo && M.returnTo.isConnected ? M.returnTo : btn; to.focus(); }
+    };
+    btn.addEventListener('click', () => { if (panel.hidden) openMenu(true, btn); else close(false); });
+    q.addEventListener('input', () => { M.q = q.value; renderMenu(); });
+    q.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || !M.q.trim()) return;                 // Enter adds or shows the first match, never hides it
+      const first = LP.searchIndicators(M.q).find(d => !d.coming);
+      if (!first) return;
+      e.preventDefault();
+      if (!IS.ind[first.id].on) indAction('toggle', first.id);
+      else if (!IS.ind[first.id].shown) { M.note = ''; changeIndicators(st => LP.Pane.add(st, first.id)); }
+    });
+    panel.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]');
+      if (!b || !panel.contains(b)) return;
+      if (b.dataset.act === 'opt') { M.note = ''; setIndicatorOption(b.dataset.id, b.dataset.k, b.dataset.v); return; }   // saved per pane, as it is
+      indAction(b.dataset.act, b.dataset.id);
+    });
+    $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
+    $('indChips').addEventListener('click', e => {
+      const b = e.target.closest('button[data-id]'); if (!b) return;
+      const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
+      changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
+    });
+    listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
+    wrap.addEventListener('keydown', e => {
+      if (panel.hidden) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && panel.contains(e.target) && e.target.tagName !== 'SELECT') {
+        const list = [...panel.querySelectorAll('input, button, select')].filter(el => !el.disabled && el.offsetParent !== null);
+        const i = list.indexOf(e.target);
+        if (i < 0) return;
+        e.preventDefault();
+        const next = list[(i + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length];
+        if (next) next.focus();
+      }
+    });
+    wrap.addEventListener('focusout', e => { if (!panel.hidden && e.relatedTarget && !wrap.contains(e.relatedTarget)) openMenu(false); });
+    /* "/" opens this chart's menu only when the focus is inside this chart, or on the page itself (nothing focused) with
+       the mouse over this chart (or it is the only chart). Never while typing in a box (order quantity, bracket ticks,
+       range size), never while anything outside the chart has the focus (a host's dialog or fields), never with Ctrl,
+       Alt or Cmd, and the PIN pad stops every key before it gets here. */
+    listen(document, 'keydown', e => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || destroyed) return;
+      const a = document.activeElement;
+      if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+      const onBody = !a || a === document.body || a === document.documentElement;
+      if (!onBody && !rootEl.contains(a)) return;                   // the focus is elsewhere (a host dialog, another chart)
+      const mine = !onBody || (hoverRoot ? hoverRoot === rootEl : mountedRoots.size === 1);
+      if (!mine) return;
+      e.preventDefault();
+      openMenu(true, a);
+    });
+    rootEl.addEventListener('pointerenter', () => { hoverRoot = rootEl; });
+    rootEl.addEventListener('pointerleave', () => { if (hoverRoot === rootEl) hoverRoot = null; });
+    mountedRoots.add(rootEl);
+    cleanups.push(() => { mountedRoots.delete(rootEl); if (hoverRoot === rootEl) hoverRoot = null; });
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => { fitChips(); if (!panel.hidden) place(); });
+      ro.observe(rootEl);
+      ro.observe(rootEl.querySelector('.bar'));                  // the toolbar's own width (a host resizing the pane)
+      cleanups.push(() => ro.disconnect());
+    }
   }
-  $('fillAcct').addEventListener('change', e => {
-    fillAccount = e.target.value; store.set('live-fill-account-v1', fillAccount); applyMarkers();
-  });
+  $('acctPick').addEventListener('change', e => pickViewAccount(e.target.value));
   $('toolTrend').addEventListener('click', () => chart.setTool(chart.getTool() === 'trend' ? null : 'trend'));
   $('toolHline').addEventListener('click', () => chart.setTool(chart.getTool() === 'hline' ? null : 'hline'));
   $('clearDraw').addEventListener('click', () => chart.clearDrawings());
   $('resetBtn').addEventListener('click', () => chart.reset());
   if (PIN) { $('pinBtn').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => PIN.openChange()); }
   syncButtons();
+  syncAccounts();
 
   /* order bar and order actions on the chart: only on a trading chart (a read-only one has no order bar at all) */
   const bracketSaved = LP.debounce((root, k) => prefs.setBracketField(root, k, brackets[root][k]), 350);
@@ -1020,9 +1649,12 @@ function start(container, opt, PAGE) {
       flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
     });
     $('oAcct').addEventListener('change', e => {
+      if (!tradeMode()) { pickViewAccount(e.target.value); return; }   // trading off: it only picks whose fills are marked
       TR.account = e.target.value;
       if (TR.armed) { setArmed(false); flash('Armed turned off: the account changed.', 'warn'); }
       renderTrading();
+      viewAccount = TR.account; store.set('live-account-v1', TR.account);
+      applyMarkers();
     });
     $('oQty').addEventListener('change', () => {
       const q = $('oQty'), v = Math.round(+q.value);
@@ -1098,10 +1730,13 @@ function start(container, opt, PAGE) {
     // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
     // since the drop hide the IB (a 'gap') rather than leave a stale one up
     if (D.m1) updateIB(false);
+    // the volume profile moves to the new session at 18:00 ET on the clock, before its first trade
+    if (D.vp && D.vp.advance(etNow())) vpLegend();
+    vpNote(); vpLegend();
   }, 500);
 
   if (document.fonts && document.fonts.load) {
-    Promise.all([document.fonts.load('500 11px "IBM Plex Mono"'), document.fonts.load('600 10px "IBM Plex Sans Condensed"')]).then(() => { if (!destroyed) chart.setLayers({}); }, () => {});
+    Promise.all([document.fonts.load('500 11px "IBM Plex Mono"'), document.fonts.load('600 10px "IBM Plex Sans Condensed"'), document.fonts.load('600 11px "IBM Plex Mono"')]).then(() => { if (!destroyed) { chart.setLayers({}); fitChips(); } }, () => {});
   }
   connect();
 
@@ -1122,7 +1757,7 @@ function start(container, opt, PAGE) {
     if (PAGE && window.liveChart === chart) delete window.liveChart;
     rootEl.remove();
   }
-  return { destroy, chart, element: rootEl, paneId: PANE };
+  return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}) };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX };

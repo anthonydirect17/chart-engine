@@ -31,9 +31,12 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
-On the page, the **Indicators** menu turns Volume, VWAP, Levels, Fills and **IB 1h** (today's 1-hour Initial
-Balance, 1.5.3) on and off, and the **account
-dropdown** next to it picks whose fills are marked on the chart (All accounts, or one). **Range** bars are
+On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills and the
+**Initial balance** (today's 1-hour IB, 1.5.3) per chart pane, with a search box ("/" opens it), a Recent line, Hide
+all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). Hiding
+Fills never hides the open trade (its entry fills, the position line, working orders, stop and target lines). One
+**Account** picker, the order bar's (or, with no order bar, a compact one in the toolbar), chooses the account for
+orders and whose fills are marked. **Range** bars are
 built like NinjaTrader's (every finished bar exactly the range; see `docs/RANGE_BARS.md`), or from traded
 prices only, picked next to the range size, which is kept per instrument. Every choice is remembered in
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
@@ -148,7 +151,9 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   changes, the connection drops or ChartBridge turns trading off. While it is on, the bar and the chart are
   outlined in amber, the legend shows ARMED and the tab title starts with ARMED. **Nothing trades while it
   is off**, and nothing asks for confirmation while it is on: one click sends the order.
-- **Account** (only `tradeAccounts`; Sim101 is chosen first), **Qty** (1 to that instrument's cap).
+- **Account** (only `tradeAccounts`; Sim101 is chosen first), **Qty** (1 to that instrument's cap). The chart
+  marks this account's fills (1.6.0). With trading off the picker lists every account ChartBridge knows and still
+  switches the fills.
 - **Buy MKT / Sell MKT**.
 - **Shift+click** a price on the chart to place a limit or stop at that price. The side is the bar's
   Buy / Sell choice; the kind follows from where you click: a better price than the last trade is a limit
@@ -237,6 +242,12 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `setBarSeconds(sec)` · `goLive()` · `reset()` · `isLive()` · `bars()` · `stats()` · `resize()` ·
 `destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)`
 
+Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
+trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only
+9:30:00 up to 16:00:00 ET. `setProfile(profile | null)` hands one to the chart, drawn while the `vp` layer is on
+(`setLayers({ vp: true })`, off by default) as bars from the right edge of the plot behind the candles; the chart
+redraws on its own when the profile changes.
+
 Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { pointValue })` ·
 `setOrderEditing(bool)` · `setOrderPreview(fn)` · `orderHandles()` · `priceToY(price)` · `yToPrice(y)` ·
 `on('orderMove', { id, price })` · `on('orderCancel', { id })` · `on('orderPlace', { price })`. The chart only
@@ -254,7 +265,8 @@ for live updates; `addSessionVwap(bars, sessionStart)`; `sessionLevels(bars, opt
 high/low/close, overnight high/low and the prior session's 70% value area; `levelLines(levels)` turns
 those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-hour Initial Balance (9:30 to
 10:30 ET) from 1-minute bars or trades, with its state (`before`, `forming`, `locked`, or why there is none), and
-`ibLines(ib)` turns it into lines; `rthDay(t)` and `nyseHolidays(year)` say which days have a regular session; plus
+`ibLines(ib)` turns it into lines; `rthDay(t)` and `nyseHolidays(year)` say which days have a regular session;
+`profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
 formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`).
 
 ## Colors
@@ -284,7 +296,7 @@ npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
-npm run smoke:ib         # IB 1h forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 ```
 

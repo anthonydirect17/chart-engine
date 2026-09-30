@@ -48,6 +48,31 @@ function defaultAccount(accounts, current) {
   return list[0] || '';
 }
 
+/*
+ * The fills of the trade still open (1.6.0, Anthony: the live trade always stays visible, whatever is hidden). `fills`
+ * are one account's fills on one instrument ({ t, side, qty }). Walked in time order: a fill on the side of the
+ * position (or from flat) is an entry and is kept; a fill against it reduces it, and when the position is back to flat
+ * every entry is dropped; a fill that turns the position over starts a new trade with it. `posQty`, when known (the
+ * position ChartBridge reports, signed, long > 0), is the check: flat gives none, and a walk that ends on the other side
+ * or flat (fills missing from the history) gives none rather than marks of a trade that is not open.
+ */
+function openEntryFills(fills, posQty) {
+  if (posQty === 0) return [];
+  const list = (fills || []).filter(f => f && (f.side === 'buy' || f.side === 'sell') && +f.qty > 0).slice().sort((a, b) => a.t - b.t);
+  let net = 0, open = [];
+  for (const f of list) {
+    const q = f.side === 'buy' ? +f.qty : -f.qty;
+    if (net === 0 || Math.sign(q) === Math.sign(net)) { open.push(f); net += q; continue; }
+    const before = net;
+    net += q;
+    if (net === 0) open = [];
+    else if (Math.sign(net) !== Math.sign(before)) open = [f];          // turned over: this fill opens the new trade
+  }
+  if (net === 0) return [];
+  if (typeof posQty === 'number' && isFinite(posQty) && Math.sign(posQty) !== Math.sign(net)) return [];
+  return open;
+}
+
 /** Cancel all for an account and root: one cancel per order, and one per OCO pair (the partner goes with it). */
 /* Cancel all while a position is open keeps every order on the closing side (sells while long, buys while
    short): those are the position's stop and target, from the chart or from NinjaTrader. Returns the ids
@@ -137,5 +162,5 @@ function repeatGuard(ms) {
   };
 }
 
-return { MAX_BRACKET_TICKS, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, cancelAllIds, orderEvent, legSummary, repeatGuard };
+return { MAX_BRACKET_TICKS, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
 });

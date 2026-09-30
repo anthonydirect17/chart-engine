@@ -71,6 +71,194 @@ Reviewed twice; the fixes from the reviews are marked "review" and "review 2".
   cases run unchanged. `test/trade-sides.test.js` checks the page's parsing and bar building with the new messages,
   and the fake bridge, which now sends sides (`--no-sides` for the old format).
 
+## 1.6.0 (2026-09-29): the Indicators menu "E2", a chip strip per pane, one account picker, and the volume profile
+
+Page and engine; works with ChartBridge 0.3.2 and 0.3.3, no recompile. The engine adds the volume profile (below) and
+`getMarkers()`; with the profile off it draws exactly as 1.5.3. Run `nt8\install.ps1` again after pulling. The Desk gets it with the new `live/live.js`, `live/live.css`,
+`live/order-ticket.js` and `src/chart-engine.js`.
+- **The menu Anthony approved in the design canvas (E2)**, one per chart pane, from the same Indicators button (its
+  count now reads shown/on this chart, "4/5"): a search box, focused on open, that matches names and short names
+  (vwap; ib, ibh, ibl; pdh, pdl, onh, onl, levels; vol, volume; fills); Enter adds or shows the first match and never
+  hides it (review); a Recent line with the last 5 used; "On this chart" with every indicator on the pane, each with
+  a show or hide switch (hiding keeps it and its settings), its swatch, a pin for the chip strip, a gear for what it
+  does (one panel open at a time) and an x that takes it off the chart; then the groups, folded on every open, one open
+  at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars, Volume profile) and Trades (Fills), each with a + and the gear (no pin: pins are only on
+  rows on the chart, Anthony); "Coming: cumulative delta, time and sales"; and "Hide all (n)", which becomes "Restore"
+  and brings back the same mix, not everything. Saved sets are not in this build. The search is cleared when the menu
+  closes (review).
+- **Names** (Anthony): "Initial balance" (chip IB; "IB 1h" before) and "Volume bars" (chip VOL) in the menu, chips,
+  status line ("Initial balance not shown: ...") and docs. The legend's "Vol" is the bar's volume and stays.
+- **Chip strip** beside the button: pinned indicators only, **at most 6** (Anthony). An indicator added gets a chip
+  while there is room; added to a full strip it gets none, and pinning onto a full strip is refused, each with a short
+  note in the menu ("The chip strip holds 6: unpin one to pin another."). One click shows or hides. Shown: filled,
+  solid border, its color line; hidden: no fill, dashed border, grey text and line (not only a color change). The
+  strip always keeps room for six one-letter chips and shows the names only when that adds no toolbar line, so it
+  never wraps and pinning or unpinning never moves the order bar or the chart (review N4; toolbar heights at 1920,
+  1680, 1440, 1280 and 1024 px are those of 1.5.3).
+- **One account picker** (Anthony). The order bar's Account picker is now the one account control, larger (600 13px
+  mono, 34 px): orders go to it, and the chart marks **its fills only**. There is no "All accounts" any more and no
+  fills filter anywhere else (the 1.6.0 draft had one in the Fills gear, hidden: review B1). With trading off the
+  picker still works: it lists every account ChartBridge knows and switches the fills (the other order controls stay
+  off, and nothing can be sent). With no order bar (a mounted chart such as The Desk's, or ChartBridge 0.2) a compact
+  Account picker sits in the toolbar. Saved in `live-account-v1`, per prefix; a 1.5 `live-fill-account-v1` choice is
+  read once when there is none ("All accounts" means none picked). Charts with one prefix follow each other's pick
+  (the Desk's panes at once, other tabs through the storage event); a saved account ChartBridge no longer lists reads
+  "(no longer listed)". The trading page shows no toolbar picker while connecting, so the toolbar does not jump. The
+  picker's tooltip says what it does now: with trading off, "this only picks whose fills the chart marks". After an
+  empty `hello` (no connected account yet) the picker is enabled again when the sign-in turns trading on (review 2,
+  S1). The order path is unchanged: while trading, the
+  order account is chosen exactly as before (Sim101 first, never from storage), the Armed switch still turns off when
+  it changes, and nothing new is sent to ChartBridge.
+- **The live trade always stays visible** (Anthony). Hide all includes Fills, and hiding Fills hides past fills and
+  trade marks, but never the open trade: its entry fills stay marked (`OrderTicket.openEntryFills`, checked against
+  the position ChartBridge reports while trading), and the position line and label, working orders and stop and
+  target lines were never indicators. The Fills gear says so.
+- **"/"** opens this chart's menu, with the focus in its search box, when the focus is inside the chart, or with
+  nothing focused, the chart under the mouse (review N6: never while a host dialog or anything outside the chart has
+  the focus). Never while a box has the focus (order quantity, bracket ticks, range size, a host's fields) or with
+  Ctrl, Alt or Cmd; no chart or order-bar key used "/", and the PIN pad still takes every key first. Arrows move
+  through the menu; Escape closes it and puts the focus back where it was.
+- **The panel opens below the order bar** (review N5), so the Armed switch, the account and the position readout stay
+  in view at every width; its list scrolls inside when the space is short, and it never gets wider than its pane.
+- Accessibility: real buttons, `aria-pressed` and `aria-expanded`; switch and pin labels say what a press does
+  ("Hide VWAP", "Unpin VWAP from the chip strip"); `aria-controls` only while its panel exists; one live region for
+  the result count and notes, changed only when its text changes (review N8).
+- **Saved per pane** in `live-indicators-v2` (`{ <paneId>: { ind: { <id>: { on, shown, pin } }, recent, restore }
+  }`), per storage prefix (The Desk's `desk:` keys stay its own). What a click means is worked out from what the tab
+  shows and saved as that fixed result on a fresh read, so two tabs never undo each other and a tab never saves the
+  opposite of what it shows (review S1: the switch, +, Recent, Enter and Hide all were saved as relative toggles).
+  Showing (the switch, a chip, Enter, Restore) writes "on the chart and shown", so even one another tab took off is
+  drawn after a reload as it is now (review 2, N7).
+  **Carried over once** from `live-indicators-v1` (left in place): every indicator draws exactly as before and an
+  explicit off stays off. On the main pane all five stay on its chart, pinned, the ones that were off hidden; on any
+  other pane only the ones that were on are on its chart. A damaged `live-indicators-v2` is carried over from v1 again
+  (review N3). New panes start with nothing on (Anthony's rule); the main pane with the five on.
+- **Open for Anthony** (review 2, S2, unchanged from 1.5.x): after a reconnect, or when trading comes on after the
+  sign-in, the order account goes back to Sim101 (or the first allowed account), not the one in use; Armed is off after
+  it and the picker shows the real order account. Which account should a load or a reconnect start on?
+- **Going back to 1.5.x** (review N2): 1.6.0 never writes `live-indicators-v1`, so a 1.5.x page opened afterwards (or a
+  1.5.3 tab left open) shows the set from before the upgrade, and what it saves is not read by 1.6.0 again. Nothing is
+  lost; each version keeps its own key.
+- Works the same in `ChartLive.mount`, read only included (nothing is sent to ChartBridge for indicators or the
+  account).
+- Tests: `test/prefs.test.js` (add, show, hide, remove, pin, the 6-chip cap with the auto-pin and the refusal, Recent,
+  Hide all and Restore, counts, two tabs on different and on the same indicator and both pressing Hide all, junk in
+  storage, search; the migration: explicit offs, a main pane saved before 1.5.3, other panes, junk, a damaged v2,
+  read once, per prefix); `test/order-ticket.test.js` (`openEntryFills`: flat, scaled out, turned over, the reported
+  position). `npm run smoke:live` (search and Enter that never hides, the switch by Space with its label, one settings
+  panel, chips, Hide all and Restore, pin, x and +, the cap note, "/" and a clean reopen, "/" ignored in a box, reload,
+  the toolbar account picker with the fills always its account's, one-letter chips at 400 px), `npm run smoke:orders`
+  (the order bar's picker switching the fills; Hide all and hidden Fills with an open position and its stop and
+  target: the position, both legs and the entry fill stay; trading off: only the picker works and the fills follow it,
+  remembered; ChartBridge 0.2: the toolbar picker), `npm run smoke:embed` (the embed's toolbar picker and its fills,
+  saved under the prefix; "/" by focus, by hover with nothing focused, and not with a host control focused; a 351 px
+  pane with one-letter chips on one line and the menu inside it; a 1.5.3 embed's indicators carried over under its
+  prefix), `smoke:settings` and `smoke:ib` updated.
+
+### The volume profile (1.6.0)
+
+- **The volume profile, drawn** (Anthony's ruling 2026-09-29): the session's volume per price on the right edge of
+  the plot, behind the candles (in front of the grid, behind volume, levels, VWAP and candles), 1-tick rows, the POC
+  and the 70% value area highlighted. The POC row is 25% of the plot width (`VP_WIDTH`), every other row in
+  proportion. Colors are theme values (`vpRow` `#141C26`, `vpValue` `#212C3B`, `vpPoc` the value-level gold
+  `#E0B45A`); on another ground the rows are mixed from the ground (7% and 14% toward the ink) and the POC moves
+  until it reads at 3:1 on the value-area rows, built once per theme change like the rest. Candles over the rows read
+  lower than on the bare ground: on the default ground bear 1.99:1 over the value-area rows and 2.42:1 over the
+  others (2.77:1 on the bare ground), bull 4.70:1; the lowest over the presets and odd grounds tested is 1.76:1 (bear
+  on Blue-grey); what floor they should keep is open for Anthony. Rows thinner than a device pixel share it (the
+  longest bar there, the POC always shown), and the POC bar is at least 2 CSS px tall (`VP_POC_MIN`), centred on its
+  row (review; it was a 1 device px hairline at 1-tick rows). The bars are laid out by `util.profileRects` once per
+  change of the profile, the view or the size, kept as rectangle lists and filled with `fillRect`; the profile's rows
+  are read once per version (`VolumeProfile.columns()`, cached). While trades flow the profile changes with nearly
+  every frame, so in practice that is a rebuild per frame (about 700 in a 10 s busy window), costing well under a
+  millisecond; with no trade and no view change nothing is rebuilt.
+- **Off by default on every pane, added from the Indicators menu** (Volume group, with a +) as the indicator `vp`
+  ("Volume profile", chip PROFILE, letter P), registered like the others: search finds it by vp, profile, poc, vah,
+  val and value area; it gets a chip while the strip has room (with the main pane's five that makes six, a full
+  strip); Hide all, Restore and the two-tab rule cover it like the others. The carry-over from `live-indicators-v1`
+  reads it like the others: a 1.5.3 save never has a `vp` key, so the profile starts off after upgrading from 1.5.3;
+  a save from the unreleased profile test build that had it on keeps it on (shown and pinned, the main pane's sixth
+  chip).
+- **Session or RTH** (Anthony): the full session from 18:00 ET, or RTH, 9:30:00.000 up to (not including)
+  16:00:00.000 ET of the trading day (`VolumeProfile` option `rth`; the same window as the chart's RTH shading and
+  sessionLevels; none on weekends and NYSE holidays, the IB's rule; the RTH profile empties at 18:00 and stays empty
+  until 9:30). On NYSE early-close days (the day after Thanksgiving, Christmas Eve and July 3 when they fall Monday to
+  Thursday; `util.nyseEarlyCloses`, `util.rthClose`) RTH ends at the 13:00 close, not 16:00 (review); the chart's RTH
+  shading still runs to 16:00 on those days. There was no option mechanism for indicators, so there is one now: `LivePrefs.INDICATOR_OPTIONS`
+  (`{ vp: { session: ['full', 'rth'] } }`), saved per pane in `live-indicator-options-v1`, set with
+  `setIndicatorOption('vp', 'session', 'rth')` on the handle `ChartLive.mount` returns (and read with
+  `indicatorOptions('vp')`; live/EMBED.md; it returns false, never throws, for any name that is not an option,
+  including inherited ones such as `toString`, and a pane id such as `__proto__` is stored as a plain key), and in the menu the Volume profile's gear panel: "Hours", Session or RTH (the
+  toolbar's segmented style at 11 px), with a line saying what the choice counts. A pick is always saved as what the
+  tab shows, on a fresh read of that pane's field, also when the tab already shows it: a second tab still showing RTH
+  after another tab saved Session saves RTH again, so the next load draws what it showed (review S2).
+- **Legend:** "POC 26,150.50 · VA 26,101.50 to 26,289.50" (the POC price in the gold) while the profile is on and has
+  trades.
+- **Data:** built from the page's TickStore at `ready` (when on), when switched on and when Session / RTH changes,
+  then each live tick is added right after the store's push, so it holds what the store holds; it moves to the new
+  session at 18:00 ET on the clock (before the first trade). It does not depend on the bars, so changing the view
+  keeps it. 1m and longer views that loaded no tick history (the page subscribed on one: tickHours 0) have only the
+  live trades: the profile starts at the first live trade after the page went live, and the status line says so in
+  its quiet grey ("Volume profile from 13:00 ET: this view loads no tick history, ..."). It also says when the tick
+  history does not reach back to 18:00 (9:30 for RTH), for example the 8 hours of the 15s and 30s views late in the
+  day, and "Volume profile (RTH) starts at 9:30 ET." before the open. ChartBridge is unchanged.
+- Engine API: `setProfile(profile | null)`, `getProfile()`, layer `vp` (default false), `stats().profileBuilds`,
+  `VP_WIDTH`, `VP_POC_MIN`, `util.profileRects`, `util.nyseEarlyCloses`, `util.rthClose`; `VolumeProfile`: option `rth` (with `rthStart`, `rthEnd`), `inRth(t)`,
+  `startOf(t)`, `outside` (trades outside the RTH window, not counted in `skipped`), `columns()`; theme keys `vpRow`,
+  `vpValue`, `vpPoc` and the derived `vpPocText`.
+- Tests: `test/vp-draw.test.js` (RTH edges at 9:30:00.000 and 16:00:00.000, the overnight, four DST dates through
+  `zoneSeconds`, a weekend, Labor Day, seven early-close days (12:59:59.999 in, 13:00:00.000 out) and the days next
+  to them, the early-close calendar 2019 to 2026, RTH from the TickStore against a hand filter; `columns()` and its
+  cache; the geometry: right edge, POC width, the POC's 2 CSS px at dpr 1, 2 and 3, row heights and gaps, sub-pixel
+  rows, rows in view only, volume 0; the colors on the presets and odd grounds; candle and VWAP contrast over the
+  rows on every ground and preset, measured and reported (`--test-reporter=tap` shows the table), held only to the
+  current values, not to a floor; on a stand-in canvas: only with the layer, drawn after the grid and
+  before the volume bars and candles, rebuilt once per change and not per frame); `test/prefs.test.js` (the `vp`
+  indicator and its option, per pane, refused values; inherited names and `__proto__`, `constructor` and `toString`
+  as pane ids, with Object.prototype untouched; the carry-over of a v1 save without a `vp` key and with `vp` on,
+  under the 6-chip cap); `npm run smoke:vp` (NQ Range 40 on sample data at 13:00 ET:
+  off by default, on from the menu, the POC row's pixels from the right edge at about 25% width, value-area and
+  other rows at the edge, nothing in the left half; the profile equal to every trade the page received, for the
+  session and for RTH, also after 2.5 s of live trades; Session and RTH differ in totals, legend and pixels; both
+  choices after a reload; 5m keeps it; the POC bar at least 2 CSS px; a mounted pane's `setIndicatorOption` under
+  `desk:`, and false with no throw for inherited names; two tabs: a stale tab's RTH saved again after another tab's
+  Session, the other keys kept, and a new load drawing RTH; a 1m first load with its note). The live, embed, settings
+  and IB smokes count what is on the chart (the profile off).
+- **Performance** (`npm run smoke:perf`, NQ Range 40, 150 trades a second with bursts of 450, three loads of 10 s
+  each, headless Chromium on the build box; the smoke now runs with the profile on, `PERF_SMOKE_VP=0` for off,
+  `=rth` for RTH at 13:30 ET). Frames over 50 ms per load, and the chart's own frame time:
+  - 01:30 ET (1.81 million backfill trades), profile off: 0, 0, 0; 0.91 to 1.05 ms.
+  - 01:30 ET, profile on (Session, 476,800 contracts): 0, 0, 0; 0.95 to 1.06 ms.
+  - 13:30 ET (1.11 million trades at 17 a second), profile off: 0, 0, 0; 0.93 to 0.95 ms.
+  - 13:30 ET, profile on (RTH, 410,500 contracts): 0, 0, 0; 0.98 to 1.12 ms.
+  The difference is within this box's run-to-run noise: the review's own profile-off run had 3 frames over 50 ms in
+  one load and a slower frame than its profile-on run. A first cut that drew the bars as Path2D paths had 1 frame
+  over 50 ms in two of three loads; filling rectangles removed that. Not measured in the smoke: building the profile
+  from the store when it is switched on or Session / RTH changes is one task of about 40 to 70 ms for 1.8 million
+  trades on this box (the review's figure), longer on a slower PC.
+- **Open for Anthony:** (1) the profile holds the trading day of the clock, so over a weekend and in RTH mode from
+  18:00 to the next 9:30 it is empty (like the IB): should it keep the last session (or the day's RTH) up instead?
+  (2) RTH counts nothing on NYSE holidays (Globex trades to an early halt); right? (3) Minute views loaded without tick history start the profile at the first live trade: should the page ask
+  ChartBridge for ticks back to 18:00 whenever the profile is on (a slower load), or keep the note? The 15s and 30s
+  views ask for 8 hours, so late in the day they start partway too. (4) The 25% width and the colors are my picks.
+  (5) The legend line does not say Session or RTH (its tooltip does): add a tag? (6) The POC shares the gold of the
+  prior day's VAH and VAL lines: keep it, or a different gold? (7) The candle floor over the profile rows (above).
+- **Volume profile, the compute core** (`ChartEngine.VolumeProfile` in `src/chart-engine.js`). A session volume profile from trades (t, price, size): rows at the tick (NQ 0.25) with optional grouping of N ticks
+  per row, all in whole ticks; total volume; POC (ties go to the row closest to the middle of the profile, then the
+  lower); value area high and low for a set share (default 70%) by the CBOT method (from the POC, add the larger of
+  the next two rows above or the next two below, both when equal). One profile per trading session, emptied at the
+  same 18:00 ET boundary as the range bars and VWAP (the engine's `tradeDay`). `add` is amortised O(1); POC and value
+  area are cached until the profile changes. Only finite numbers are taken (null, strings and booleans are left out
+  and counted). Measured with Node 22 on 500,000 trades: 7 to 70 ms to build (the first build in a process is the
+  slowest), 0.02 to 1.1 ms for the first POC and value area after it (about 7 ms on one cold run elsewhere), and
+  about 10 nanoseconds once cached.
+- Built from the page's TickStore at `ready` and then from each live tick, so it holds exactly what the store holds.
+  A trade at the moment ChartBridge started the tick backfill could come both in the backfill and as a held
+  live tick and be counted twice (in the range bars too); ChartBridge 0.3.3 settles that seam (below), with the page
+  unchanged.
+- No buy/sell split: ChartBridge's ticks carry no aggressor side. Open questions for Anthony are listed in the code
+  comment. Tests in `test/volume-profile.test.js`.
+
 ## ChartBridge 0.3.3 (2026-09-29): the backfill and live trades meet at one seam
 
 ChartBridge (nt8/) only: the page, the engine and the chart version are unchanged, and the page needs no change to
