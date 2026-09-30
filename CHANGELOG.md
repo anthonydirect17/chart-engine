@@ -38,8 +38,9 @@ then two reviews (fixes marked "review" and "review 2").
   design: "ARMED · MNQ · EVAL-1" while armed ("ARMED" stays first, so a narrow tab still shows it), "MNQ · EVAL-1 ·
   Live Chart" otherwise, and the pill "ARMED · EVAL-1". The order bar keeps its size.
 - **Other accounts by name** (review S3): "Other accounts on MNQ: EVAL-1: LONG 1, 1 order · EVAL-2: 2 orders" in the
-  order bar's state row, in the warning color while one of them has a position, on one line (the whole text in its
-  tooltip). 1.6.0 showed only a dim count.
+  order bar's state row, in the warning color while one of them has a position. It wraps on a narrow screen rather
+  than being cut short, so a live trade on another account is never hidden (review 3 S2; the first cut kept it to one
+  line and cut "LONG 1" off at 390 px). 1.6.0 showed only a dim count.
 - **The account shown is the account used.** Every order path sends for `TR.account` and only after `ready()`, which
   now also refuses if the picker does not show `TR.account` ("Nothing was sent: the account shown was not the order
   account. The picker is back on EVAL-1; click again to act on EVAL-1."; review N2). Checked: order bar Buy and Sell,
@@ -47,14 +48,18 @@ then two reviews (fixes marked "review" and "review 2").
   line). The x and the drag also refuse an order that is not on the account shown ("Not sent: that order is not on
   EVAL-1.") or no longer working ("Not sent: that order is no longer working."; review N4). While trading is off
   there is no order account at all. The fills follow the picker as in 1.6.0.
-- **Cancel all, once clicked, finishes** (review N1, then review 2 S1, S2, N1). Its ids are the working orders of the
-  account and instrument shown at the click, after `ready()`. They go out by order id, fewer than 8 order actions of
-  any kind in any 1.1 s (ChartBridge refuses more than 10 a second; the rest leaves room for Anthony's own clicks),
-  and **the rest keep going out whatever Armed, the picker or the instrument show afterwards**: Anthony asked for
-  those cancels, a cancel only takes an order away, and each goes to that order's own account. So "the account shown
-  is the account used" holds for every order, change, Flatten and every Cancel all click; only the tail of a Cancel
-  all Anthony already clicked can go out after a switch, and the state row says so while it does, "Cancelling on
-  EVAL-1 MNQ: 12 left (8 a second).", whatever account or instrument is shown.
+- **Cancel all, once clicked, finishes** (review N1, then review 2 S1, S2, N1, review 3 S1, S2, S4, N1). Its ids are
+  the working orders of the account and instrument shown at the click, after `ready()`. They go out by order id,
+  fewer than 6 order actions of any kind in any 1.1 s (ChartBridge refuses more than 10 a second; the other 4 are
+  Anthony's, Flatten above all), and **the rest keep going out whatever Armed, the picker or the instrument show
+  afterwards**: Anthony asked for those cancels, a cancel only takes an order away, and each goes to that order's own
+  account. So "the account shown is the account used" holds for every order, change, Flatten and every Cancel all
+  click; only the tail of a Cancel all Anthony already clicked can go out after a switch, and the state row says so
+  while it does, "Cancelling on EVAL-1 MNQ: 12 left (6 a second).", whatever account or instrument is shown, in the
+  warning color while that account or instrument is not the one shown, and wrapping on a narrow screen (review 3 S2).
+  - **The newest click goes first** (review 3 S1): each Cancel all click is its own queue, so a Cancel all on the
+    account shown goes out at the next slot of the pace, not behind an earlier one on another account (the first
+    cut sent Sim101's 3 cancels 2.9 to 4.0 s after the click, behind 22 of DEMO-EVAL's).
   - **Nothing is locked** while it runs: Armed, the account picker, the instrument and Flatten all work. 1.6.1's first
     cut locked the picker and Armed until the last cancel, and an instrument switch then dropped the rest and kept
     Flatten out of reach for up to 2 s per 16 orders (review 2 S1). The picker lock is gone too: its only purpose was
@@ -65,13 +70,20 @@ then two reviews (fixes marked "review" and "review 2").
     (review 2 S2); the x on one of them takes it off too.
   - **A second Cancel all** while one is under way adds only orders not already in it and not cancelled in the last
     5 s: a repeat click sends nothing ("Still cancelling on EVAL-1 MNQ: 12 left. Nothing new to send."; review 2 S2,
-    where 1.6.0 and the first cut sent 32 cancels and ChartBridge refused 12, leaving 6 orders working).
+    where 1.6.0 and the first cut sent 32 cancels and ChartBridge refused 12, leaving 6 orders working). A cancel
+    ChartBridge refused can go again at the next click (review 3 N1).
+  - **Flatten is never blocked** (review 3 S4): it goes out at once, never behind the pace, and with 6 a second for a
+    batch Anthony's Buy, Sell and Flatten fit within one second (at 8, ChartBridge refused a Flatten after two quick
+    orders, as in 1.6.0). If ChartBridge still refuses a Flatten for the rate, the page sends it once more 1.1 s later
+    while the same account and instrument are shown ("ChartBridge refused Flatten for EVAL-1 MNQ (more than 10 order
+    actions a second): sending it again in 1 s."); otherwise the note above the chart says it was not sent. A second
+    Flatten finds the account flat.
   - It stops only for what ChartBridge would refuse: **the connection drops**, trading goes off, or the account leaves
     ChartBridge's list. Then a note that stays until Anthony dismisses it, or until those orders are no longer working,
-    says so in the warning color above the chart: "12 cancels on EVAL-1 MNQ were not sent: the connection to
+    says so in the warning color above the chart: "14 cancels on EVAL-1 MNQ were not sent: the connection to
     ChartBridge dropped. Those orders may still be working. Check them, then Cancel all again on that account and
     instrument (or in NinjaTrader)." (review 2 S1; a 6 s status line before.)
-  - 8 orders or fewer all go out at the click, so Armed going off right after drops none (review 2 N1). The account
+  - 6 orders or fewer all go out at the click, so Armed going off right after drops none (review 2 N1). The account
     note keeps its full 8 s or 15 s whatever a batch does (review 2 N2).
 - **A pick while trading is off counts.** During a drop or the sign-in window the picker still switches the fills,
   and that account is also the one orders go to when trading comes back (if allowed), so the picker never jumps. Its
@@ -115,8 +127,12 @@ then two reviews (fixes marked "review" and "review 2").
   Desk's relay serves 8 hours) the note says only where the ticks start (review 2 S4). With no ticks of the last
   session at all it shows none and a small note, never an error.
 - **A session's first trade a few ms after 18:00:00.000** (or 9:30), with nothing traded before it (after a holiday
-  halt or the break), no longer makes the profile "partial" (review 2 S4): when the ticks were asked from before the
-  session's start and its first trade came within 3 minutes of it, the session counts as whole.
+  halt or the break), no longer makes the profile "partial" (review 2 S4). The session counts as whole only when the
+  ticks were asked from before its start and the 1-minute bars the page loaded agree (review 3 S3): no bar with
+  volume between the start and the first tick's minute, and that minute's ticks hold its bar's volume (2% for
+  rounding); with no bar to check against, only within 5 s of the start. Otherwise the legend and the note say where
+  the ticks start, to the second in the session's first minute ("(Mon from 18:00:46)"). The first cut allowed 3
+  minutes and called a session whole with up to 2.5 minutes of its open missing.
 - **Legend:** the session's day at the end, "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", in the quiet grey,
   and "(Fri from 12:00)" when its ticks start after the session did; the tooltip names the date.
 - **The IB is unchanged** (none on weekends and NYSE holidays): it shares no code with the profile.
@@ -141,10 +157,12 @@ then two reviews (fixes marked "review" and "review 2").
   over a weekend, weekday evenings as 1.6.0, Thanksgiving, Christmas, `keep` off unchanged, `fromStore` over a
   weekend, Labor Day and Thanksgiving and not over a weekday night, `closedFrom` at 25 clocks, the CME calendar and
   every minute of 2026 and 2027: null while Globex trades, at most 97 hours; nt8/ as on main, the page's cap by
-  version, no install advice).
+  version, no install advice). Review 3: the newest click first, the batch line's warning color, 6 a second, a
+  refused cancel sent again, Flatten sent again once after a rate refusal (and not after a switch: the note says so)).
 - `test/fake-bridge.mjs --market-hours`: the sample on the real calendar (moved by whole weeks), no trades while CME is
   closed (`util.cmeClosed`), tick history counted back from the clock, as ChartBridge does. `--tick-shift-ms=137`
-  stamps every trade that much later (a session's first trade at 18:00:00.137); `--version` sets hello's version.
+  stamps every trade that much later (a session's first trade at 18:00:00.137); `--version` sets hello's version. A
+  minute's trades now add up to its bar's volume, as NinjaTrader's do (review 3 S3 checks the ticks against the bars).
 - `npm run smoke:orders`, a 1.6.1 section: first visit on Sim101 with the ring and the note; pick, arm, reload with the
   PIN: back on the tab's account, Armed off; every order path on the restored account, with every message the page
   sent for that account; a stored account that is not a trade account (the fallback); two tabs, including the
@@ -152,11 +170,14 @@ then two reviews (fixes marked "review" and "review 2").
   the named other account; a dropped connection; the note cleared on Armed on and on trading lost; a pick while
   trading is off ("picked while trading was off"); the title and the pill at 1440 and 400 px. Review 2: a Cancel
   all of 10 (nothing locked, the state row counting down, every cancel for DEMO-EVAL); R15 an instrument switch
-  300 ms into 30 (Armed off but usable, arm and Flatten on NQ at once, all 30 cancelled); R16 a drop 300 ms in (8
-  sent, the note naming DEMO-EVAL MNQ and 12 still up after the reconnect and 7 s, gone once they are cancelled);
+  300 ms into 30 (Armed off but usable, arm and Flatten on NQ at once, all 30 cancelled); R16 a drop 300 ms in (6
+  sent, the note naming DEMO-EVAL MNQ and 14 still up after the reconnect and 7 s, gone once they are cancelled);
   R17 DEMO-EVAL leaving the list (the note says why, the fallback note keeps its 15 s, Dismiss); R18 Flatten 300 ms
-  in (flat, nothing working, no cancel after it, no reject); R19 a second Cancel all (20 cancels in all, at most 8 in
-  any second, no reject); 3 orders with Armed off in the same task (all 3 sent).
+  in (flat, nothing working, no cancel after it, no reject); R19 a second Cancel all (20 cancels in all, at most 6 in
+  any second, no reject); 3 orders with Armed off in the same task (all 3 sent). Review 3: R26 (DEMO-EVAL long with
+  30 orders, Cancel all, then Sim101 picked and its own Cancel all: Sim101's 3 are the first sent after its click;
+  at 390 px the batch line, in the warning color, and "Other accounts ... DEMO-EVAL: LONG 1" both whole); R23 (Cancel
+  all, Buy, Sell and Flatten within 300 ms: none refused, flat; a made-up rate refusal of Flatten: sent once more).
 - `npm run smoke:vp`, new, all with the page's own subscribe (no hook on it): Saturday and Sunday 12:00 on Range, 15s,
   1m and 15m, Session and RTH (Friday's profile, every Friday trade the page got) with ChartBridge 0.3.5; a reconnect
   on each; ChartBridge 0.3.4 on Sunday (asks 48, "(Fri from 12:0x)" and its note, no install advice, a view switch
@@ -165,11 +186,15 @@ then two reviews (fixes marked "review" and "review 2").
   12:00 (every view asks its own hours only, RTH says why it is empty) and at 14:00 after the halt (RTH keeps the
   last RTH day, Session the holiday's own session) on Range and 1m; review 2's +137 ms case (the Saturday after a
   Thursday holiday, and Tuesday 17:30 after a Monday holiday: the whole session, no "from 18:00"); The Desk's embed
-  through a relay serving 8 hours on Sunday (a neutral note). `npm run smoke:embed`: a pick saved by another tab still followed by both
+  through a relay serving 8 hours on Sunday (a neutral note); review 3: Monday 17:30 with the session's first 0, 1,
+  45 and 150 s missing from the tick history (whole with none missing, else "(Mon from 18:00:03)" and so on, with
+  the note). `npm run smoke:embed`: a pick saved by another tab still followed by both
   mounted panes, and no account note or ring in the embed.
 - **Changed because the old behaviour changed:** `smoke:vp`'s two legend checks now expect the day, " (Tue)";
   `smoke:orders`' trading-off tooltip check now expects the new tooltip text; review 2 replaced the first cut's lock
-  checks (unit and smoke:orders) and its holiday and older-ChartBridge checks in smoke:vp. No other existing check changed;
+  checks (unit and smoke:orders) and its holiday and older-ChartBridge checks in smoke:vp; review 3 made smoke:ib's
+  "Reset to default" check wait for the repaint with its tab in front (it failed now and then, on main too). No other
+  existing check changed;
   `test/order-ticket.test.js` and `live/order-ticket.js` are untouched.
 - Order-path files changed: `live/live.js` (account handling, `ready()`, Cancel all, the chart's move and cancel
   handlers, Flatten taking its orders off a Cancel all, the order-action count in `send`, the title and pill) and

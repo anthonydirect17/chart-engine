@@ -339,9 +339,14 @@ try {
     check(JSON.parse(await host.evaluate(() => localStorage.getItem('desk:live-colors-v1'))).bg === '#000000' && JSON.parse(await host.evaluate(() => localStorage.getItem('live-colors-v1'))).bg === '#F5F7FA',
       'embedded ground saved under desk:, the page\'s untouched');
     await host.close();
-    // reset puts the default ground back
-    await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape'); await a.waitForTimeout(200);
-    check((await look(a)).canvas === '#080B10', 'Reset to default: the dark ground again');
+    // reset puts the default ground back. The page is brought to the front first (the embed's tab was on top, and a
+    // background tab paints no frames), and the canvas is read until it repaints, up to 3 s (review 3 N5: this check
+    // read the canvas 200 ms after the click and failed now and then, on main too)
+    await a.bringToFront();
+    await a.click('.ce-theme-btn'); await a.click('.ce-reset'); await a.keyboard.press('Escape');
+    let reset = await look(a);
+    for (let k = 0; k < 30 && reset.canvas !== '#080B10'; k++) { await a.waitForTimeout(100); reset = await look(a); }
+    check(reset.canvas === '#080B10', 'Reset to default: the dark ground again: ' + reset.canvas + ', saved ' + JSON.stringify(reset.saved));
     check(await a.evaluate(() => getComputedStyle(document.querySelector('.chart-live')).backgroundColor) === 'rgb(8, 11, 16)' && await a.evaluate(() => document.querySelector('.chart-live').style.getPropertyValue('--s2')) === '',
       'back on the dark ground the toolbar is the house style again');
     await ctx.close(); br.kill();

@@ -213,9 +213,10 @@
 .chart-live .acct-note { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--accent-soft); }
 .chart-live .acct-note:empty { display: none; }
 .chart-live .ostate { min-width: 0; }                 /* a one-line note is cut short, never wider than the bar */
-/* Other accounts on this instrument, by name (1.6.1, review S3): one line, cut short with the whole text in its tooltip,
-   so the chart never moves; the warning color while one of them has a position. */
-.chart-live .oother { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Other accounts on this instrument, by name (1.6.1, review S3): the warning color while one of them has a position.
+   It wraps on a narrow screen rather than being cut short (review 3 S2): a live trade on another account is never
+   hidden, even if the chart moves down a line. */
+.chart-live .oother { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .chart-live .oother:empty { display: none; }
 .chart-live .oother.live { color: var(--warn); }
 .chart-live .acct-note.warn { color: var(--warn); }
@@ -232,7 +233,8 @@
 .chart-live .alert-text { flex: 1 1 200px; white-space: pre-line; }
 .chart-live .alert.warn { border-color: var(--warn); background: rgba(224, 180, 90, 0.10); }   /* cancels not sent (1.6.1): stays until dismissed */
 .chart-live .alert.warn .alert-title { color: var(--warn); }
-.chart-live .batch-note { color: var(--head); }                  /* a Cancel all under way, whatever is shown (1.6.1) */
+.chart-live .acct-note.batch-note { flex: 1 1 auto; white-space: normal; overflow: visible; overflow-wrap: anywhere; color: var(--head); }   /* a Cancel all under way, whatever is shown (1.6.1); wraps, never cut short (review 3 S2) */
+.chart-live .acct-note.batch-note.away { color: var(--warn); }   /* its account or instrument is not the one shown */
 .chart-live select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 
 @media (max-width: 720px) {

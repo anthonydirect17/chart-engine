@@ -170,9 +170,10 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   market. **Cancel all** cancels the working orders and leaves the position; while a position is open it
   keeps every order on the closing side (the position's stop and target, from the chart or NinjaTrader)
   and says how many it kept. Cancel those one by one with their x, or use Flatten. Its cancels go out by order id,
-  at most 8 order actions in any 1.1 s (ChartBridge allows 10 a second); once clicked it finishes whatever Armed, the
-  account or the instrument shown do next, and the state row names it until the last one is sent ("Cancelling on
-  EVAL-1 MNQ: 12 left"). Nothing is locked meanwhile. If the connection drops first, a note above the chart names
+  at most 6 order actions in any 1.1 s (ChartBridge allows 10 a second, so Flatten always has room), the newest click
+  first; once clicked it finishes whatever Armed, the account or the instrument shown do next, and the state row
+  names it until the last one is sent ("Cancelling on EVAL-1 MNQ: 12 left", in amber while another account or
+  instrument is shown). Nothing is locked meanwhile. A Flatten ChartBridge refuses for the rate is sent once more. If the connection drops first, a note above the chart names
   the account, the instrument and how many were not sent, until dismissed or those orders are gone (1.6.1).
 - Working orders show as lines with a label and a price tag (green buy, red sell; stops dashed, limits and
   targets solid). While Armed, drag a label (or its price tag) to move the order, press Escape during the

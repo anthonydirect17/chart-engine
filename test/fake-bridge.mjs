@@ -140,9 +140,10 @@ function ticksFrom(bars, hours) {
       while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
-    const v = Math.max(1, Math.round(b.v / prices.length));
+    // the minute's volume shared out over its trades, so they add up to the bar's (at least 1 each), as NinjaTrader's do
+    const base = Math.floor(b.v / prices.length), extra = b.v - base * prices.length;
     prices.forEach((p, i) => {
-      const row = [+(b.t + i * 59.9 / prices.length + TICK_SHIFT).toFixed(3), p, v];
+      const row = [+(b.t + i * 59.9 / prices.length + TICK_SHIFT).toFixed(3), p, Math.max(1, base + (i < extra ? 1 : 0))];
       if (SIDES) { const prev = out.length ? out[out.length - 1] : undefined; row.push(...sideOf(p, prev && prev[1], prev && prev[3])); }
       out.push(row);
     });

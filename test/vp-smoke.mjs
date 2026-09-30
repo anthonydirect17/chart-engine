@@ -337,10 +337,10 @@ try {
     return null;
   }
   /* A context on that clock that records what the page asks for; `gate` holds live trades until window.__open. */
-  async function closedContext(offset, gate) {
+  async function closedContext(offset, gate, drop) {
     const ctx = await context(offset);
     await ctx.addInitScript(`(() => {
-      window.__asked = []; window.__open = ${gate ? 'false' : 'true'}; window.__kept = [];
+      window.__asked = []; window.__open = ${gate ? 'false' : 'true'}; window.__kept = []; window.__drop = ${JSON.stringify(drop || null)};
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function (d) { if (typeof d === 'string' && d.startsWith('{"type":"subscribe"')) window.__asked.push(JSON.parse(d).tickHours); return send.call(this, d); };
       const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
@@ -348,7 +348,11 @@ try {
         desc.set.call(this, ev => {
           if (typeof ev.data === 'string') {
             if (ev.data.startsWith('{"type":"hello"')) window.__kept = [];
-            else if (ev.data.startsWith('{"type":"ticks"')) { const m = JSON.parse(ev.data); if (m.root === 'NQ') for (const x of m.ticks) window.__kept.push(x); }
+            else if (ev.data.startsWith('{"type":"ticks"')) {
+              const m = JSON.parse(ev.data), d = window.__drop;   // d: a gap in the tick history, [from, to) in exchange seconds
+              if (d) { m.ticks = m.ticks.filter(x => x[0] < d[0] || x[0] >= d[1]); ev = { data: JSON.stringify(m) }; }
+              if (m.root === 'NQ') for (const x of m.ticks) window.__kept.push(x);
+            }
             else if (ev.data.startsWith('{"type":"tick"')) { if (!window.__open) return; const m = JSON.parse(ev.data); if (m.root === 'NQ') window.__kept.push([m.t, m.p, m.v || 0]); }
           }
           return fn(ev);
@@ -529,6 +533,27 @@ try {
     check(first !== null && Math.abs(U.tod(first) - 64800.137) < 0.0005 && w.total === exp.total && w.total > 0 && new RegExp(' \\(' + exp.day + '\\)$').test(w.legend || '') && w.note === '',
       what + ' (' + U.fmtDate(Math.floor((await etNowOf(q)) / 86400) * 86400) + '), first trade ' + (first === null ? 'none' : U.fmtFull(first) + ' +' + Math.round((first % 1) * 1000) + ' ms') + ': the whole session, ' + w.legend + (w.note ? ' | ' + w.note : ''));
     await ctx.close(); br.kill();
+  }
+
+  /* A real gap at the open (review 3 S3): the tick history drops the session's first G seconds, on a Monday at the 17:30
+     break (the session opened Sunday 18:00, with nothing traded in the hour before). The 1-minute bars show trades the
+     ticks do not have, so the profile says where its ticks start, to the second in the first minute; with no gap it is
+     whole. Every trade stamped 137 ms after its second, as real ones are. */
+  {
+    const off = offsetAt(17, 30, 0, bt => dowOf(bt) === 1 && U.rthDay(bt) && U.rthDay(bt - 3 * 86400));
+    const need = Math.floor(U.zoneSeconds(Date.now() / 1000 + off) / 86400) * 86400 - 86400 + 64800;   // Sunday 18:00
+    for (const gap of [0, 1, 45, 150]) {
+      const br = await startBridge(off, NEW_BRIDGE.concat('--tick-shift-ms=137'));
+      const ctx = await closedContext(off, true, gap ? [need, need + gap] : null);
+      await vpOn(ctx);
+      const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+      await loadOn(q, 'm1', 'full');
+      const w = await state(q), got = await trades(q), first = got.length ? got[0][0] : null;
+      const ok = gap === 0 ? / \(Mon\)$/.test(w.legend || '') && w.note === ''
+        : / \(Mon from 18:0\d(:\d\d)?\)$/.test(w.legend || '') && /^Volume profile from 18:0\d(:\d\d)? ET: the tick history does not reach back to 18:00 ET\.$/.test(w.note);
+      check(ok, 'Monday 17:30, 1m, the first ' + gap + ' s of the session missing (first tick ' + (first === null ? 'none' : U.fmtFull(first) + ':' + (U.tod(first) % 60).toFixed(3)) + '): ' + (gap ? 'says where the ticks start' : 'whole') + ': ' + w.legend + (w.note ? ' | ' + w.note : ''));
+      await ctx.close(); br.kill();
+    }
   }
 
   /* The Desk (an embed through a relay that serves 8 hours), Sunday 12:00 with ChartBridge 0.3.4: a neutral note, never
