@@ -537,15 +537,25 @@ all day; the volume profile must be exact from 18:00 ET; the one-time load of th
 instrument at a time; once loaded, switching charts and instruments never loads again; nothing about trades or range bars is
 kept past the session.
 
-**One tick request to NinjaTrader at a time.** Every tick request of this section (a served window, a session backfill) goes
-through one gate: one request out at a time, windows first. A backfill starts only with nothing else out: no window request,
-no other backfill, no minute chart's last-trades request (20,000 by count, for its forming minute); and a minute chart does not
-make that request while a backfill is out (its forming minute stays as NinjaTrader sent it). A request NinjaTrader does not
-answer in time (a window 120 s, a backfill 5 min) is given up for the pages waiting on it, but it stays outstanding: nothing
-else goes out until NinjaTrader answers it (no window, no backfill, no minute chart's last-trades request; tick charts that
-load meanwhile go live with no trades), and its late answer is dropped at once, not copied. The minute history of each load
-(a small by-date request of 1-minute bars) is not gated; minute charts' last-trades requests are not gated against each
-other or against a window (each is 20,000 trades).
+**What goes to NinjaTrader one at a time.** The served windows (Range and seconds charts) and the session backfills go
+through one gate: one of them out at a time, windows first (a window's second ask ahead of any backfill). A backfill starts
+only with nothing else out: no window, no other backfill, and no minute chart's last-trades request. A minute chart's
+last-trades request (20,000 trades by count, for its forming minute) is the one 0.3.3 and 0.3.4 already made: it does not go
+through the gate, so it can go out beside a window or another minute chart's, as before; it is only skipped (the forming
+minute stays as NinjaTrader sent it) while a backfill is out or a request is stuck (below). The minute history of each load
+(a small by-date request of 1-minute bars) is not gated either.
+
+**One unanswered request.** A window or a backfill NinjaTrader does not answer in time (a window 120 s, a backfill 5 min) is
+given up for the pages waiting on it, but it stays outstanding at NinjaTrader. Until NinjaTrader answers it (the late answer
+is dropped at once, not copied) or restarts (or the add-on is recompiled), ChartBridge asks for no tick history: no window,
+no backfill, no minute chart's last-trades request. Meanwhile nothing waits on it: a Range or seconds load, queued or new,
+gets the served window from ChartBridge's memory when there is one (with its gap, if a feed drop left one), else goes live
+at once with no trades and "Tick history failed: NinjaTrader has not answered an earlier tick request (the request) yet;
+tick history is not asked for until it does or NinjaTrader restarts", and its live trades are not held for a request that
+will not be made. A queued backfill waits and says so (the page: "loading this session waits for NinjaTrader, which has not
+answered an earlier tick request"), not "building"; it runs as usual once NinjaTrader answers. Minute charts load as usual.
+Orders and Flatten are never affected. `/diag` `gate.stuck` names the request, `stuckSinceUtcMs` says since when, and a
+waiting backfill's `state` starts "waiting:".
 
 **The served window.** Every subscribe with `tickHours` above 0 (a Range or seconds chart, with or without `liveFirst`: a 1.6.x
 page or The Desk's relay gets it too; 0.3.5 never runs 0.3.4's by-date tick load) gets the last `rangeHours` of trades
@@ -558,9 +568,10 @@ the ask by the 0.3.3 seam, it is the instrument's served window, kept in ChartBr
 trade. Every later load of that instrument gets its trades from there, from the same first trade, and NinjaTrader is not
 asked again. It is dropped at the next session (the first trade after 18:00 ET) and after the session ends (a Friday window
 does not wait in memory for Sunday, so a weekend Range load asks NinjaTrader again, for a small window). After a feed drop
-(below) it is kept with its gap, and asked again at a load at most once in 10 minutes per instrument. When a window fails (an error, no answer in time, or its
-live trades could not be joined), the loads waiting go live with no trades ("Tick history failed", charts start from live
-trades), and no load asks again for 60 s. Its trades are `[t, p, v]` (no side: the delta pane counts live trades from the
+(below) it is kept with its gap, and asked again at a load at most once in 10 minutes per instrument. When a window fails (an error, or no answer in time), the
+loads waiting go live with no trades ("Tick history failed", charts start from live trades), and no load asks again for 60
+s. When its live trades cannot be joined to it (a feed drop while it was out), or more than 500,000 live trades come while it
+is out, its loads go live the same way at once, nothing more is held for it, and the next load may ask again. Its trades are `[t, p, v]` (no side: the delta pane counts live trades from the
 page's open). A late-day reload sends the whole window: from the first window's start (say 6:30) to now.
 
 **The session table.** ChartBridge keeps, per instrument, the volume at each price of the current session (from 18:00 ET),
@@ -621,7 +632,7 @@ The Desk vendors chart 1.8.0.
 `backfill` (`state`, `asks`, `askedAtUtcMs`, `ms` from the ask to the table being whole, `callbackMs` on NinjaTrader's
 callback thread, `trades` in the answer, `releasedLive`, `liveHeld`, `first`, `last`), `window` (the served window: `from`,
 `trades`, `served`), `windowAsk` (`asking`, `waiting`, `asks`, `failures`, `lastError`, `callbackMs`) and `tradesPerHour`;
-then `gate` (`now`: the request out, `windowsQueued`, `backfillsQueued`, `minuteTailsOut`, `backfillStuck`), `profileRoots`,
+then `gate` (`now`: the request out, `windowsQueued`, `backfillsQueued`, `minuteTailsOut`, `stuck`: the request given up and still unanswered, or null, `stuckSinceUtcMs`, `feedDown`, `firstTradeUtcMs`), `profileRoots`,
 and `backfillTotalMs` (the backfills' times added up). `windows` lists the last 20 window loads: `client`, `root`, `sub`,
 `atUtcMs`, `fromCache`, `askedByCount` (the counts asked, "shared" for a load that waited on another's request), `trades`,
 `from`, `timeToLiveMs`, `error`.

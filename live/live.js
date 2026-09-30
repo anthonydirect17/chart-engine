@@ -883,6 +883,7 @@ function start(container, opt, PAGE) {
     if (!text && D.ready && D.window && tickView() && S.layers.vwap && T && T.day === U.tradeDay(etNow(), SESSION)) {
       if (T.drop && T.coveredFrom <= T.from + 1) text = 'VWAP and ' + (TF[S.tf].mode === 'range' ? 'range bars after ' + U.fmtHM(T.drop.at) + ' ET miss' : 'bars miss') + ' the trades while the data connection was down (' + U.fmtHM(T.drop.at) + ' ET).';
       else if (!T.whole) text = /^(wanted|queued|asked|failed once)/.test(T.backfill) ? 'VWAP: shown once ChartBridge has loaded this session from 18:00 ET (building).'
+        : /^waiting/.test(T.backfill) ? 'VWAP not shown yet: loading this session waits for NinjaTrader, which has not answered an earlier tick request.'
         : 'VWAP not shown: ChartBridge has this session\'s trades only since ' + U.fmtHM(T.coveredFrom) + ' ET.';
     }
     if (el.textContent !== text) el.textContent = text;
@@ -1073,6 +1074,7 @@ function start(container, opt, PAGE) {
       else if (partial && D.vpTable) {                 // 1.8.0: ChartBridge's table: its one backfill still to come (building), or none (since)
         const T = D.vpTable, building = /^(wanted|queued|asked|failed once)/.test(T.backfill);
         text = building ? 'Volume profile building, from ' + fromText + ' ET: ChartBridge started after ' + from + ' ET and loads the session once, in the background.'
+          : /^waiting/.test(T.backfill) ? 'Volume profile since ' + fromText + ' ET: loading this session waits for NinjaTrader, which has not answered an earlier tick request.'   // review 4 S2
           : 'Volume profile since ' + fromText + ' ET: ChartBridge started after ' + from + ' ET' + (/^none \(not in profileRoots/.test(T.backfill) ? ' and this instrument is not in its profileRoots.' : ' and could not load the session' + (T.backfill ? ' (' + T.backfill + ').' : '.'));
       }
       else if (partial) {                              // the session held is only partly in the tick history

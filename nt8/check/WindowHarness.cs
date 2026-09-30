@@ -394,12 +394,20 @@ public static class WindowHarness
         ChartBridgeServer.ByDateTickLoads = false;
         ChartBridgeServer.ClockForHarness = () => simNow;
         Priv("WatchFeed");
+        Dictionary<string, Instrument> named = (Dictionary<string, Instrument>)typeof(ChartBridgeServer).GetField("Instruments", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+        bool hadNq = named.ContainsKey("NQ"), hadEs = named.ContainsKey("ES");
+        if (!hadNq) named["NQ"] = NqInst;
+        if (!hadEs) named["ES"] = EsInst;
         try
         {
             ChartBridgeServer.BackfillGapMs = 0; ChartBridgeServer.BackfillRetryMs = 300; ChartBridgeServer.WindowRetryMs = 400;
             MidSession();
             BackfillWaitsAndRetries();
             GateAfterTimeout();
+            StuckStrandsNothing();
+            WindowCap();
+            TimeoutRace();
+            Counts();
             BackfillOrderAndRound2();
             ClosedMarketDrop();
             Windows();
@@ -412,6 +420,8 @@ public static class WindowHarness
             ChartBridgeServer.BackfillTimeoutMs = toWas; ChartBridgeServer.WindowRetryMs = wretryWas; ChartBridgeServer.WindowTimeoutMs = wtoWas;
             ChartBridgeServer.ClockForHarness = null; ChartBridgeServer.ByDateTickLoads = true;
             Priv("UnwatchFeed");
+            if (!hadNq) named.Remove("NQ");
+            if (!hadEs) named.Remove("ES");
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
             BarsRequest.AutoAnswer = was;
             DropClient(client);
@@ -542,6 +552,171 @@ public static class WindowHarness
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
     }
 
+    static void SubOn(ChartBridgeClient c, string root, string sub, int tickHours)
+    {
+        Priv("OnClientMessage", c, "{\"type\":\"subscribe\",\"root\":\"" + root + "\",\"days\":5,\"tickHours\":" + tickHours + ",\"sub\":" + sub + (tickHours > 0 ? ",\"liveFirst\":true" : "") + ",\"profile\":true}");
+    }
+    static string Gate() { return System.Text.RegularExpressions.Regex.Match(Books(), "\"gate\":\\{[^}]*\\}").Value; }
+    static bool IsWin(BarsRequest r) { return IsTrades(r) && ByCount(r); }
+
+    // Review 4 B1 (the reviewer's "queued"), S2 ("bfstuck"), S4 ("gapstuck") and S3 ("mixed"): while a request is stuck at
+    // NinjaTrader nothing waits on it. A window queued behind it is answered at once (its page goes live with no trades and
+    // says why), and so is every later load; a load of an instrument with a served window gets it (with its gap, if any);
+    // queued backfills say they wait (not "building") and run once NinjaTrader answers. A minute chart is never held up.
+    static void StuckStrandsNothing()
+    {
+        DateTime t0 = SimBase.AddMinutes(-20);
+        List<Trade> mnq = Walk(t0, 4000, 101, 100), nq = Walk(t0, 4000, 102, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-1));   // a start after 18:00: backfills wanted
+        ChartBridgeServer.BackfillOn = true; ChartBridgeServer.BackfillStartMs = 3600000;   // the backfills stay queued here
+        ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 5000;
+        List<string> sa = new List<string>(), sb = new List<string>(), sc = new List<string>(), sd = new List<string>();
+        ChartBridgeClient a = NewClient(931, sa), b = NewClient(932, sb), c = NewClient(933, sc), d = NewClient(934, sd);
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, mnq, 0, 50); LiveOn(NqInst, nq, 0, 50);
+            // an MNQ page with its window served first (it has a served window from then on), then a feed drop (a gap in it)
+            SubOn(a, "MNQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest wa = null;
+            WaitFor(() => (wa = Find(m0, r => IsWin(r) && RootOfReq(r) == "MNQ")) != null);
+            if (wa != null) wa.Answer(Answer(mnq, 0, 50), ErrorCode.NoError);
+            WaitFor(() => { lock (sa) return Ready(sa, "1"); });
+            Connection.FirePrice(new Connection { Status = ConnectionStatus.Connected }, ConnectionStatus.Connected, ConnectionStatus.ConnectionLost);
+            Thread.Sleep(100);
+            LiveOn(inst, mnq, 50, 100); LiveOn(NqInst, nq, 50, 100);
+            // an NQ page: its window times out and stays at NinjaTrader; an ES page's window was queued behind it
+            SubOn(b, "NQ", "1", 2); SubOn(c, "ES", "1", 2); AnswerMinutes(m0);
+            BarsRequest wn = null;
+            WaitFor(() => (wn = Find(m0, r => IsWin(r) && RootOfReq(r) == "NQ")) != null);
+            Check(WaitFor(() => { lock (sb) return Ready(sb, "1"); }, 3000) && WaitFor(() => { lock (sc) return Ready(sc, "1"); }, 3000) && !Made(m0).Any(r => IsWin(r) && RootOfReq(r) == "ES"),
+                "review 4 B1: a window queued behind a stuck request is answered at once: its page goes live with no trades (no ES request went out)");
+            string esNote; lock (sc) esNote = sc.FirstOrDefault(x => x.Contains("\"status\"")) ?? "";
+            Check(esNote.Contains("has not answered an earlier tick request (window NQ)") && esNote.Contains("until it does or NinjaTrader restarts"), "review 4 B1, S5: and says why and until when: " + esNote);
+            // later loads never wait either: an NQ reload and a new ES page are live at once
+            SubOn(b, "NQ", "2", 2); SubOn(d, "ES", "2", 2); AnswerMinutes(m0);
+            Check(WaitFor(() => { lock (sb) return Ready(sb, "2"); }, 2000) && WaitFor(() => { lock (sd) return Ready(sd, "2"); }, 2000), "review 4 B1: later loads while it is stuck go live at once too");
+            // review 4 S4: an MNQ reload (its served window has a gap): served the window with its gap, not thrown away
+            int trades0; lock (sa) trades0 = sa.Count;
+            SubOn(a, "MNQ", "2", 2); AnswerMinutes(m0);
+            WaitFor(() => { lock (sa) return Ready(sa, "2"); }, 2000);
+            List<string> la; lock (sa) la = sa.Skip(trades0).ToList();
+            int nTicks = la.Where(x => x.StartsWith("{\"type\":\"ticks\"")).Sum(x => Arr(x, "ticks").Count);
+            Check(nTicks >= 100 && !la.Any(x => x.Contains("Tick history failed")), "review 4 S4: a load with a gapped served window while stuck gets that window (" + nTicks + " trades), not nothing");
+            // review 4 S2: the queued backfills say they wait, not "building"
+            string st = Books();
+            Check(st.Contains("\"state\":\"waiting: NinjaTrader has not answered an earlier tick request (window NQ)\"") && !st.Contains("\"state\":\"queued\""), "review 4 S2: queued backfills wait, and say so (not building)");
+            // review 4 S3: a minute chart is not held up (its last-trades request is skipped while stuck)
+            SubOn(d, "ES", "3", 0); AnswerMinutes(m0);
+            Check(WaitFor(() => { lock (sd) return Ready(sd, "3"); }, 2000), "review 4 S3: a minute page is live while the gate is stuck");
+            // NinjaTrader answers at last: the answer is dropped, the backfills are queued again, loads ask again
+            if (wn != null) wn.Answer(Answer(nq, 0, 100), ErrorCode.NoError);
+            Thread.Sleep(200);
+            SubOn(c, "ES", "3", 2); AnswerMinutes(m0);
+            Check(!Books().Contains("waiting:") && Gate().Contains("\"stuck\":null") && WaitFor(() => Find(m0, r => IsWin(r) && RootOfReq(r) == "ES") != null, 3000),
+                "review 4 S2: once NinjaTrader answers, the backfills are queued again and the next ES load asks for its window");
+            BarsRequest we = Find(m0, r => IsWin(r) && RootOfReq(r) == "ES");
+            if (we != null) we.Answer(Answer(nq, 0, 100), ErrorCode.NoError);
+            WaitFor(() => { lock (sc) return Ready(sc, "3"); });
+        }
+        finally { DropClient(a); DropClient(b); DropClient(c); DropClient(d); }
+        // review 4 S3 ("mixed"): minute charts' last-trades requests (20,000 by count, as since 0.3.3) are not queued behind a window
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        ChartBridgeServer.BackfillOn = false;
+        List<string> se = new List<string>(), sf = new List<string>();
+        ChartBridgeClient e = NewClient(935, se), f = NewClient(936, sf);
+        try
+        {
+            simNow = t0;
+            int m1 = MadeCount();
+            LiveOn(inst, mnq, 0, 20); LiveOn(EsInst, nq, 0, 20);
+            SubOn(e, "MNQ", "1", 2); SubOn(f, "ES", "1", 0);
+            foreach (BarsRequest r in Made(m1).Where(r => IsMinute(r) && !r.Answered)) { Bars bb = new Bars(); bb.Add(simNow.AddSeconds(-30), 20000, 20000, 20000, 20000, 5); r.Answer(bb, ErrorCode.NoError); }
+            Check(WaitFor(() => Find(m1, r => IsTrades(r) && r.BarsBack == ChartBridgeServer.SeamTicksBack) != null && Find(m1, IsWin) != null, 2000),
+                "review 4 S3: a minute chart's last-trades request is not queued behind a window (unchanged since 0.3.3)");
+            foreach (BarsRequest r in Made(m1).Where(r => IsTrades(r) && !r.Answered)) r.Answer(Answer(mnq, 0, 20), ErrorCode.NoError);
+            WaitFor(() => { lock (se) return Ready(se, "1"); });
+        }
+        finally { DropClient(e); DropClient(f); }
+        ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillStartMs = 0; ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000;
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+    }
+
+    // Review 4 B2 (the reviewer's "cap"): a window whose live trades pass the cap while it is out answers its loads (no trades)
+    // and frees the instrument: the next load asks again.
+    static void WindowCap()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        ChartBridgeServer.WindowFirstGuess = 5000;
+        List<string> sa = new List<string>(), sb = new List<string>();
+        ChartBridgeClient a = NewClient(941, sa), b = NewClient(942, sb);
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(NqInst, Walk(t0, 10, 111, 100), 0, 10);
+            SubOn(a, "NQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest w = null;
+            WaitFor(() => (w = Find(m0, IsWin)) != null);
+            MethodInfo md = typeof(ChartBridgeServer).GetMethod("OnMarketData", BindingFlags.NonPublic | BindingFlags.Static);
+            for (int k = 0; k < RootBook.LiveCap + 5; k++) { simNow = simNow.AddMilliseconds(2); md.Invoke(null, new object[] { null, new MarketDataEventArgs { Instrument = NqInst, MarketDataType = MarketDataType.Last, Price = 20000, Volume = 1, Time = simNow } }); }
+            bool rdy = WaitFor(() => { lock (sa) return Ready(sa, "1"); }, 3000) && WaitFor(() => a.Ready, 30000);   // its held trades are tapped one by one
+            Check(rdy && a.Pending.Count == 0 && Books().Contains("\"windowAsk\":{\"asking\":false"),
+                "review 4 B2: past " + RootBook.LiveCap.ToString("N0", CultureInfo.InvariantCulture) + " live trades while the window was out, its page goes live (no trades held) and the instrument is freed");
+            if (w != null) w.Answer(Answer(Walk(t0, 100, 112, 100), 0, 100), ErrorCode.NoError);   // the answer, late: not used
+            SubOn(b, "NQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest w2 = null;
+            Check(WaitFor(() => (w2 = Made(m0).Where(IsWin).Skip(1).FirstOrDefault()) != null, 3000), "review 4 B2: a new NQ page afterwards asks for its window again");
+            if (w2 != null) w2.Answer(Answer(Walk(simNow.AddMinutes(-5), 100, 113, 100), 0, 100), ErrorCode.NoError);
+            Check(WaitFor(() => { lock (sb) return Ready(sb, "1"); }, 3000), "review 4 B2: and loads");
+        }
+        finally { DropClient(a); DropClient(b); ChartBridgeServer.WindowFirstGuess = 200000; ChartBridgeServer.ResetBooks(DateTime.MinValue); }
+    }
+
+    // Review 4 S1 (the reviewer's "race"): an answer whose copy is still running when the time limit passes. The request is
+    // claimed once: whichever wins, the gate is never left stuck after NinjaTrader answered. Run at several moments near the limit.
+    static void TimeoutRace()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 3000000;
+        List<Trade> big = Walk(SimBase.AddHours(-1.9), 1500000, 121, 3);
+        Bars bigBars = Answer(big, 0, big.Count);
+        string bad = null; int runs = 0;
+        foreach (int at in new[] { 240, 270, 285, 295, 305 })
+        {
+            simNow = big[big.Count - 1].T;
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+            List<string> sa = new List<string>(), sb = new List<string>();
+            ChartBridgeClient a = NewClient(951, sa), b = NewClient(952, sb);
+            try
+            {
+                int m0 = MadeCount();
+                SubOn(a, "MNQ", "1", 2); AnswerMinutes(m0);
+                BarsRequest w = null;
+                System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                WaitFor(() => (w = Find(m0, IsWin)) != null, 2000);
+                if (w == null) { bad = "no window"; break; }
+                Thread.Sleep(Math.Max(0, at - (int)sw.ElapsedMilliseconds));
+                w.Answer(bigBars, ErrorCode.NoError);
+                WaitFor(() => { lock (sa) return Ready(sa, "1"); }, 5000);
+                Thread.Sleep(200);
+                if (!Gate().Contains("\"stuck\":null")) { bad = "answered at " + at + " ms: " + Gate(); break; }
+                SubOn(b, "NQ", "1", 2); AnswerMinutes(m0);
+                if (!WaitFor(() => Find(m0, r => IsWin(r) && RootOfReq(r) == "NQ") != null, 2000)) { bad = "answered at " + at + " ms: the next window did not go out"; break; }
+                BarsRequest wn = Find(m0, r => IsWin(r) && RootOfReq(r) == "NQ");
+                wn.Answer(Answer(big, big.Count - 100, big.Count), ErrorCode.NoError);
+                WaitFor(() => { lock (sb) return Ready(sb, "1"); });
+                runs++;
+            }
+            finally { DropClient(a); DropClient(b); }
+        }
+        Check(bad == null, "review 4 S1: an answer at the time limit (a 1.5 M trade copy racing the timeout, " + runs + " runs): the gate is never left stuck, the next window goes" + (bad != null ? " (" + bad + ")" : ""));
+        ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000;
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+    }
+
     static void LiveOn(Instrument i, List<Trade> tape, int from, int to)
     {
         for (int k = from; k < to; k++)
@@ -594,6 +769,65 @@ public static class WindowHarness
 
     // S-E: the backfills wait for the feed to be up a while (BackfillStartMs from the first live trade) and go in profileRoots
     // order (MNQ, NQ, ES), whatever order the first trades came in. S-D: a window's second ask goes before a queued backfill.
+    // Review 4 "counts": the tick requests NinjaTrader gets after a mid-session start with two Range pages (MNQ, NQ) open
+    // before the backfills: the two windows, then the backfills in profileRoots order, never two out at once. Then a
+    // reconnect storm: 10 MNQ pages subscribing twice each, one window in all.
+    static void Counts()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-1));
+        ChartBridgeServer.BackfillOn = true; ChartBridgeServer.BackfillStartMs = 0; ChartBridgeServer.WindowFirstGuess = 1000;
+        List<Trade> mnq = Walk(t0, 20, 131, 100), nq = Walk(t0, 20, 132, 100), es = Walk(t0, 20, 133, 100);
+        List<string> sa = new List<string>(), sb = new List<string>();
+        ChartBridgeClient a = NewClient(951, sa), b = NewClient(952, sb);
+        List<ChartBridgeClient> storm = new List<ChartBridgeClient>();
+        try
+        {
+            int m0 = MadeCount();
+            SubOn(a, "MNQ", "1", 2); SubOn(b, "NQ", "1", 2); AnswerMinutes(m0);
+            WaitFor(() => TradesAsked(m0, r => true) >= 1);
+            LiveOn(inst, mnq, 0, 20); LiveOn(NqInst, nq, 0, 20); LiveOn(EsInst, es, 0, 20);   // the backfills are wanted now
+            int maxOut = 0; List<string> order = new List<string>();
+            for (int k = 0; k < 10; k++)
+            {
+                BarsRequest r = null;
+                if (!WaitFor(() => (r = Made(m0).FirstOrDefault(x => IsTrades(x) && !x.Answered)) != null, 1500)) break;
+                Thread.Sleep(30);   // anything else that would go out meanwhile
+                maxOut = Math.Max(maxOut, Made(m0).Count(x => IsTrades(x) && !x.Answered));
+                string root = RootOfReq(r);
+                order.Add((ByCount(r) ? "window " : "backfill ") + root);
+                List<Trade> tp = root == "MNQ" ? mnq : root == "NQ" ? nq : es;
+                r.Answer(Answer(tp, 0, tp.Count), ErrorCode.NoError);
+            }
+            AnswerMinutes(m0);
+            string got = string.Join(", ", order.ToArray());
+            Check(got == "window MNQ, window NQ, backfill MNQ, backfill NQ, backfill ES" && maxOut == 1,
+                "review 4 counts: a mid-session start with two Range pages: " + got + "; at most " + maxOut + " out at once");
+            Check(WaitFor(() => { lock (sa) lock (sb) return Ready(sa, "1") && Ready(sb, "1"); }), "review 4 counts: both pages load");
+            ChartBridgeServer.BackfillOn = false;
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+            int m1 = MadeCount();
+            LiveOn(inst, mnq, 0, 5);
+            for (int k = 0; k < 10; k++) { List<string> l = new List<string>(); storm.Add(NewClient(960 + k, l)); SubOn(storm[k], "MNQ", "1", 2); }
+            AnswerMinutes(m1);
+            Thread.Sleep(100);
+            int during = TradesAsked(m1, r => true);
+            BarsRequest w = null;
+            if (WaitFor(() => (w = Find(m1, IsWin)) != null)) w.Answer(Answer(mnq, 0, 5), ErrorCode.NoError);
+            Thread.Sleep(200);
+            foreach (ChartBridgeClient c in storm) SubOn(c, "MNQ", "2", 2);
+            AnswerMinutes(m1);
+            Check(WaitFor(() => storm.All(c => c.Ready)) && during == 1 && TradesAsked(m1, r => true) == 1,
+                "review 4 counts: a reconnect storm (10 MNQ pages, 2 subscribes each): one window in all (" + TradesAsked(m1, r => true) + ")");
+        }
+        finally
+        {
+            DropClient(a); DropClient(b); foreach (ChartBridgeClient c in storm) DropClient(c);
+            ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowFirstGuess = 200000; ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
     static void BackfillOrderAndRound2()
     {
         DateTime t0 = SimBase.AddMinutes(-20);

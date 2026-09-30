@@ -1119,6 +1119,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The served window being asked of NinjaTrader (one request per instrument at a time, B2): the loads waiting for it,
         // the live trades since it was asked (for its seam), and when the last one failed (no re-ask for a minute).
         public bool WindowAsking; public int WindowGen, WindowAsks, WindowFailures; public double WindowFailedMs = -1, WindowCallbackMs = -1;
+        public int CapGen = -1;                      // B2: the window whose live trades passed LiveCap (failed off the lock, OnMarketData)
         public string WindowAskedText, WindowError;
         public bool CacheGap; public double GapAskMs = -1;   // S-G: the served window misses a feed drop; when it was last asked again for that
         public List<SeamTick> WindowLive;
@@ -1178,7 +1179,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (WindowLive == null) return;
             if (WindowLive.Count < LiveCap) WindowLive.Add(new SeamTick { Time = t, Price = price, Volume = volume });
-            else { WindowLive = null; WindowGen++; }   // abandoned: its answer is not used (the loads waiting get none)
+            else { WindowLive = null; CapGen = WindowGen; }   // abandoned: the loads waiting are answered (no trades) off the lock
         }
         public bool InTable(DateTime t) { return Table != null && t >= Table.Start && t < Table.End; }
 
@@ -1960,7 +1961,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Clients.Clear();
                 foreach (MarketData md in Feeds) { try { md.Update -= OnMarketData; } catch (Exception) { } }
                 Feeds.Clear();
-                lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); }   // nothing queued carries over to the next start (review 3 N-9)
+                lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); gateStuck = null; gateStuckSinceMs = -1; }   // nothing carries over to the next start (review 3 N-9)
+                lock (Books) Books.Clear();
                 Unwatch();
                 ChartBridgeOrders.UnwatchConnections();
                 UnwatchFeed();
@@ -2368,7 +2370,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // snapshot taken under it (a load's window and profile) is exact against what the pages get after it.
                 if (Volatile.Read(ref feedDown) != 0 || Interlocked.Read(ref firstTradeUtcTicks) == 0) FeedUp();   // a trade: the feed is up
                 RootBook book = BookOf(root, e.Instrument);
-                bool wantBackfill, lastChanged;
+                bool wantBackfill, lastChanged; int capGen;
                 bool profileRoot = Array.IndexOf(ChartBridgeConfig.ProfileRoots, root) >= 0;
                 lock (book.Sync)
                 {
@@ -2378,6 +2380,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     wantBackfill = book.BackfillState == "wanted";
                     if (wantBackfill) book.BackfillState = "queued";
                     lastChanged = book.LastChanged;
+                    capGen = book.CapGen; book.CapGen = -1;
                     foreach (ChartBridgeClient c in Clients.Values)
                     {
                         if (c.Root != root) continue;
@@ -2390,6 +2393,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                 }
                 if (wantBackfill) QueueBackfill(book, e.Instrument, false);
+                if (capGen >= 0) Task.Run(() => WindowFailed(book, capGen, "over " + RootBook.LiveCap + " live trades came while it waited", false));   // B2
                 if (lastChanged) SaveLast(book);
             }
             catch (Exception ex) { Log("tick error: " + ex.Message); }
@@ -3011,14 +3015,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             string stuck; lock (GateLock) stuck = gateStuck;
             lock (book.Sync)
             {
-                // S-G: a served window that misses a feed drop is asked again at a load, at most once in GapReaskMs per instrument
-                if (book.Cache != null && book.CacheGap && (book.GapAskMs < 0 || ChartBridgeTime.NowUtcMs() - book.GapAskMs >= GapReaskMs))
-                { book.Cache = null; book.CacheGap = false; book.GapAskMs = ChartBridgeTime.NowUtcMs(); }
+                double nowMs = ChartBridgeTime.NowUtcMs();
+                bool backoff = book.WindowFailedMs >= 0 && nowMs - book.WindowFailedMs < WindowRetryMs;
+                // S-G: a served window that misses a feed drop is asked again at a load, at most once in GapReaskMs per instrument,
+                // and only when the ask can go out now (review 4 S4): else the window is served with its gap
+                if (book.Cache != null && book.CacheGap && stuck == null && !backoff && !book.WindowAsking && (book.GapAskMs < 0 || nowMs - book.GapAskMs >= GapReaskMs))
+                { book.Cache = null; book.CacheGap = false; book.GapAskMs = nowMs; }
                 if (book.Cache == null)
                 {
-                    if (book.WindowAsking) { book.WindowWaiters.Add(L); if (L.Diag != null) L.Diag.Asked = "shared"; return; }   // the same answer
-                    if (stuck != null) { none = true; if (L.Diag != null) L.Diag.Error = "NinjaTrader has not answered the last tick request (" + stuck + ") yet"; }   // X1
-                    else if (book.WindowFailedMs >= 0 && ChartBridgeTime.NowUtcMs() - book.WindowFailedMs < WindowRetryMs) none = true;
+                    if (book.WindowAsking && stuck == null) { book.WindowWaiters.Add(L); if (L.Diag != null) L.Diag.Asked = "shared"; return; }   // the same answer
+                    if (stuck != null) { none = true; if (L.Diag != null) L.Diag.Error = StuckNote(stuck); }   // X1, review 4 B1: never waits on it
+                    else if (backoff) none = true;
                     else
                     {
                         ask = true; gen = ++book.WindowGen;
@@ -3058,9 +3065,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void AskWindow(RootBook book, Instrument inst, int gen, int count, int round)
         {
-            GateJob j = new GateJob { Kind = "window", Root = book.Root, TimeoutMs = WindowTimeoutMs };
-            BackfillAsk ask = new BackfillAsk();   // its TimedOut flag
-            j.OnTimeout = () => { ask.TimedOut = true; WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s"); };
+            GateJob j = new GateJob { Kind = "window", Root = book.Root, Book = book, TimeoutMs = WindowTimeoutMs };
+            j.OnTimeout = () => WindowFailed(book, gen, "no answer from NinjaTrader in " + (WindowTimeoutMs / 1000) + " s", true);
+            j.OnStuck = what => WindowFailed(book, gen, StuckNote(what), false);   // review 4 B1: never left waiting on a stuck gate
             j.Start = done =>
             {
                 lock (book.Sync)
@@ -3077,7 +3084,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     // On NinjaTrader's thread only the copy (its Bars are its own) and a count; everything else on a worker. An answer
                     // given up (X1) is dropped at once, not copied. A full answer that does not reach back rangeHours is not copied
                     // either: the second, larger ask is queued before the gate goes on (review 3 S-D: ahead of any backfill).
-                    if (ask.TimedOut) { try { req.Dispose(); } catch (Exception) { } GateUnstuck("window " + book.Root); return; }
+                    if (!Claim(j)) { try { req.Dispose(); } catch (Exception) { } GateUnstuck("window " + book.Root); return; }   // review 4 S1: timed out first
                     Stopwatch sw = Stopwatch.StartNew();
                     RawBars raw = null; string error = null; int held = 0; bool again = false;
                     try
@@ -3093,7 +3100,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     catch (Exception ex) { error = ex.Message; again = false; }
                     finally { try { req.Dispose(); } catch (Exception) { } }
                     double cbMs = sw.Elapsed.TotalMilliseconds;
-                    if (again) AskWindow(book, inst, gen, Math.Min(WindowMaxTicks, count * 3), round + 1);
+                    if (again) AskWindow(book, inst, gen, Math.Min(WindowMaxTicks, count * 3), round + 1);   // queued ahead of any backfill
                     done();
                     if (!again) Task.Run(() => OnWindowAnswer(book, inst, gen, count, round, raw, held, error, cbMs));
                     else lock (book.Sync) { if (book.WindowGen == gen) book.WindowCallbackMs = Math.Max(book.WindowCallbackMs, cbMs); }
@@ -3107,7 +3114,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 lock (book.Sync) { if (book.WindowGen == gen) book.WindowCallbackMs = Math.Max(book.WindowCallbackMs, cbMs); }
-                if (raw == null) { WindowFailed(book, gen, error ?? "no answer"); return; }
+                if (raw == null) { WindowFailed(book, gen, error ?? "no answer", true); return; }
                 DateTime from = NowNt().AddHours(-ChartBridgeConfig.RangeHours);
                 int start = 0;
                 while (start < raw.Count && raw.Time[start] < from) start++;   // cut at rangeHours
@@ -3126,7 +3133,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         waiters = new List<object>(book.WindowWaiters); book.WindowWaiters.Clear();
                     }
                 }
-                if (waiters == null) { WindowFailed(book, gen, "the live trades could not be joined to it (a feed drop, or too many while it came)"); return; }
+                if (waiters == null) { WindowFailed(book, gen, "the live trades could not be joined to it (a feed drop, or too many while it came)", false); return; }
                 string asked; lock (book.Sync) asked = book.WindowAskedText;
                 foreach (object o in waiters)
                 {
@@ -3135,21 +3142,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (Current(w) && !ServeFromCache(w, book)) w.HeadSent.ContinueWith(delegate { FinishWindow(w, null); }, TaskScheduler.Default);
                 }
             }
-            catch (Exception ex) { Log("window error: " + ex.Message); WindowFailed(book, gen, ex.Message); }
+            catch (Exception ex) { Log("window error: " + ex.Message); WindowFailed(book, gen, ex.Message, true); }
         }
 
         // A window that failed: its loads go live with no trades (their charts start from now), and no new ask for a minute.
-        private static void WindowFailed(RootBook book, int gen, string why)
+        private static void WindowFailed(RootBook book, int gen, string why, bool backoff)
         {
             List<object> waiters;
             lock (book.Sync)
             {
                 if (book.WindowGen != gen || !book.WindowAsking) return;
                 book.WindowGen++; book.WindowAsking = false; book.WindowLive = null;
-                book.WindowFailedMs = ChartBridgeTime.NowUtcMs(); book.WindowFailures++; book.WindowError = why;
+                if (backoff) book.WindowFailedMs = ChartBridgeTime.NowUtcMs();   // a stuck gate or the cap: the next load may ask again
+                book.WindowFailures++; book.WindowError = why;
                 waiters = new List<object>(book.WindowWaiters); book.WindowWaiters.Clear();
             }
-            Log(book.Root + " tick window failed (" + why + "); tick charts start from live trades, asked again after " + (WindowRetryMs / 1000) + " s at the earliest");
+            Log(book.Root + " tick window failed (" + why + "); tick charts start from live trades" + (backoff ? ", asked again after " + (WindowRetryMs / 1000) + " s at the earliest" : ""));
             foreach (object o in waiters)
             {
                 Load w = (Load)o;
@@ -3196,11 +3204,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- 0.3.5: one tick request to NinjaTrader at a time
         // The served windows' requests and the session backfills go to NinjaTrader one at a time, windows first (B1, B2). A
         // backfill starts only with nothing else outstanding: no window request, no backfill, no minute chart's last-trades
-        // request; and a minute chart does not ask for its last trades while a backfill is out (its forming minute stays as
-        // NinjaTrader sent it). A request NinjaTrader does not answer in time is given up for its loads (they go on without
-        // it), but it stays outstanding (review 3 X1): nothing else goes out until NinjaTrader answers it, and that late answer
-        // is dropped at once, not copied.
-        private class GateJob { public string Kind, Root; public Action<Action> Start; public Action OnTimeout; public int TimeoutMs; }
+        // request. A minute chart's last trades (as in 0.3.3) are not queued here: they can go beside a window or each other,
+        // and are skipped while a backfill is out (its forming minute stays as NinjaTrader sent it). A request NinjaTrader does
+        // not answer in time is given up for its loads (they go on without it), but it stays outstanding (review 3 X1): no
+        // tick request goes out until NinjaTrader answers it (or restarts), and that late answer is dropped at once, not
+        // copied. Meanwhile nothing waits on it (review 4 B1, S2): a window load goes live at once with the reason, and a
+        // queued backfill says it waits.
+        // State (review 4 S1): 0 out, 1 answered, 2 timed out; claimed once with Interlocked, so an answer and a timeout never both
+        // act, and an answer that loses to the timeout still frees the gate (GateUnstuck).
+        private class GateJob { public string Kind, Root; public RootBook Book; public Action<Action> Start; public Action OnTimeout; public Action<string> OnStuck; public int TimeoutMs; public int State; }
+        private static bool Claim(GateJob j) { return Interlocked.CompareExchange(ref j.State, 1, 0) == 0; }
+        // The note for a load (and the log) while a request is stuck: what it turns off, and until when.
+        private static string StuckNote(string what) { return "NinjaTrader has not answered an earlier tick request (" + what + ") yet; tick history is not asked for until it does or NinjaTrader restarts"; }
+        private static double gateStuckSinceMs = -1;
         private static readonly object GateLock = new object();
         private static readonly List<GateJob> GateWindows = new List<GateJob>(), GateBackfills = new List<GateJob>();
         private static bool gateRunning;
@@ -3212,7 +3228,13 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void GateEnqueue(GateJob j)
         {
-            lock (GateLock) (j.Kind == "window" ? GateWindows : GateBackfills).Add(j);
+            string stuck;
+            lock (GateLock)
+            {
+                stuck = gateStuck;
+                if (stuck == null || j.Kind != "window") (j.Kind == "window" ? GateWindows : GateBackfills).Add(j);
+            }
+            if (stuck != null && j.OnStuck != null) { j.OnStuck(stuck); if (j.Kind == "window") return; }   // review 4 B1, S2
             GateKick();
         }
         // Starts the worker when there is work and it is not running (after an enqueue, a late answer, a tail's end).
@@ -3266,11 +3288,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { j.Start(() => done.Set()); }
                 catch (Exception ex) { Log(j.Kind + " request error (" + j.Root + "): " + ex.Message); done.Set(); }
                 bool answered = done.Wait(j.TimeoutMs);
-                if (!answered)
+                if (!answered && Interlocked.CompareExchange(ref j.State, 2, 0) == 0)
                 {
-                    lock (GateLock) gateStuck = j.Kind + " " + j.Root;   // still at NinjaTrader: nothing else goes until it answers
+                    // Still at NinjaTrader: nothing else goes until it answers (X1). Windows queued behind it are answered now
+                    // (their loads go live with no trades and a note, review 4 B1); queued backfills say they wait (S2).
+                    string what = j.Kind + " " + j.Root;
+                    List<GateJob> windows, backfills;
+                    lock (GateLock)
+                    {
+                        gateStuck = what; gateStuckSinceMs = ChartBridgeTime.NowUtcMs();
+                        windows = new List<GateJob>(GateWindows); GateWindows.Clear();
+                        backfills = new List<GateJob>(GateBackfills);
+                    }
                     try { j.OnTimeout(); } catch (Exception ex) { Log("request timeout error: " + ex.Message); }
+                    Log(StuckNote(what));
+                    foreach (GateJob w in windows.Concat(backfills)) { try { if (w.OnStuck != null) w.OnStuck(what); } catch (Exception ex) { Log("request stuck error: " + ex.Message); } }
                 }
+                else if (!answered) done.Wait();   // the answer claimed it at the limit: its copy is finishing
                 lock (GateLock) gateNow = null;
                 if (j.Kind == "backfill" && answered && BackfillGapMs > 0) Thread.Sleep(BackfillGapMs);
             }
@@ -3278,9 +3312,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A given-up request answered at last: its answer is dropped at once (not copied), and the gate goes on.
         private static void GateUnstuck(string what)
         {
-            lock (GateLock) gateStuck = null;
-            Log(what + ": NinjaTrader answered after it was given up; not used");
+            List<GateJob> backfills;
+            lock (GateLock) { gateStuck = null; gateStuckSinceMs = -1; backfills = new List<GateJob>(GateBackfills); }
+            Log(what + ": NinjaTrader answered after it was given up; not used. Tick requests go out again");
+            foreach (GateJob b in backfills) BackfillWaits(b.Book, null);   // back to "queued"; they run as usual
             GateKick();
+        }
+        // A queued backfill's label while the gate is stuck (review 4 S2): it waits, it is not "building"; null: queued again.
+        private static void BackfillWaits(RootBook book, string what)
+        {
+            if (book == null) return;
+            bool changed = false;
+            lock (book.Sync)
+            {
+                if (what != null && book.BackfillState == "queued") { book.BackfillState = "waiting: NinjaTrader has not answered an earlier tick request (" + what + ")"; changed = true; }
+                else if (what == null && book.BackfillState.StartsWith("waiting:", StringComparison.Ordinal)) { book.BackfillState = "queued"; changed = true; }
+            }
+            if (changed) Task.Run(() => PushProfile(book));
         }
 
         // A minute chart's last trades (20,000 by count): not while a backfill is out or a request is stuck; counted, so no
@@ -3390,23 +3438,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         // NinjaTrader's thread only the copy; the rest on a worker. On an error or an empty answer it is asked once more after
         // BackfillRetryMs, then given up with a note. The live trades since the table began are joined to its answer by the
         // 0.3.3 seam.
-        private class BackfillAsk { public volatile bool TimedOut; public bool Retry; }
+        private class BackfillAsk { public bool Retry; }
         private static void QueueBackfill(RootBook book, Instrument inst, bool retry)
         {
             if (!BackfillOn) return;
             BackfillAsk ask = new BackfillAsk { Retry = retry };
-            GateJob j = new GateJob { Kind = "backfill", Root = book.Root, TimeoutMs = BackfillTimeoutMs };
-            j.Start = done => RunBackfill(book, inst, ask, done);
+            GateJob j = new GateJob { Kind = "backfill", Root = book.Root, Book = book, TimeoutMs = BackfillTimeoutMs };
+            j.Start = done => RunBackfill(book, inst, ask, j, done);
+            j.OnStuck = what => BackfillWaits(book, what);
             j.OnTimeout = () =>
             {
-                ask.TimedOut = true;   // the gate keeps every other request out until NinjaTrader answers this one (X1)
                 lock (book.Sync) { book.BackfillLive = null; book.BackfillState = "timed out: no answer in " + (BackfillTimeoutMs / 1000) + " s"; }
                 Log(book.Root + " session backfill: no answer from NinjaTrader in " + (BackfillTimeoutMs / 1000) + " s; given up (the volume profile stays from the first live trade)");
             };
             GateEnqueue(j);
         }
 
-        private static void RunBackfill(RootBook book, Instrument inst, BackfillAsk ask, Action done)
+        private static void RunBackfill(RootBook book, Instrument inst, BackfillAsk ask, GateJob j, Action done)
         {
             SessionTable table;
             lock (book.Sync)
@@ -3422,7 +3470,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             req0.TradingHours = inst.MasterInstrument.TradingHours;
             req0.Request(new Action<BarsRequest, ErrorCode, string>((req, code, message) =>
             {
-                if (ask.TimedOut) { try { req.Dispose(); } catch (Exception) { } GateUnstuck(book.Root + " session backfill"); return; }   // dropped at once, not copied
+                if (!Claim(j)) { try { req.Dispose(); } catch (Exception) { } GateUnstuck(book.Root + " session backfill"); return; }   // timed out first: dropped at once, not copied
                 Stopwatch sw = Stopwatch.StartNew();
                 RawBars raw = null; int held = 0; string error = null;
                 try
@@ -3525,9 +3573,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // S2: a data connection lost (or a market data reset): each table named is not every trade of its session any more,
-        // its served window is dropped (the next load asks NinjaTrader, whose history fills the gap), a window being asked is
-        // not used, and the live pages get the profile again with the drop in it.
+        // S2: a data connection lost (or a market data reset) while the market is open: each table named is not every trade of
+        // its session any more, its served window keeps the gap (asked again at a load at most once in 10 minutes, when the ask
+        // can go out), a window being asked is not used, and the live pages get the profile again with the drop in it. While
+        // the market is closed nothing was missed: only the feed is noted down (a session starting before it is back is not whole).
         private static void FeedDropped(string root, string why)
         {
             Interlocked.Exchange(ref feedDown, 1);   // a session that starts before the feed is back is not whole
@@ -3539,7 +3588,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bool changed;
                 lock (b.Sync) { changed = b.FeedDropped(et, why); if (b.WindowAsking) b.WindowLive = null; }
-                if (changed) { Log(b.Root + ": " + why + "; the volume profile of this session is missing trades from here, and the tick window is asked again at the next load"); PushProfile(b); }
+                if (changed) { Log(b.Root + ": " + why + "; the volume profile of this session is missing trades from here; the served window keeps the gap (asked again at a load at most once in 10 minutes)"); PushProfile(b); }
             }
         }
 
@@ -3614,7 +3663,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             string gate;
             lock (GateLock) gate = "{\"now\":" + (gateNow != null ? CbJson.Str(gateNow) : "null") + ",\"windowsQueued\":" + GateWindows.Count + ",\"backfillsQueued\":" + GateBackfills.Count +
-                ",\"minuteTailsOut\":" + tailsOut + ",\"stuck\":" + (gateStuck != null ? CbJson.Str(gateStuck) : "null") +
+                ",\"minuteTailsOut\":" + tailsOut + ",\"stuck\":" + (gateStuck != null ? CbJson.Str(gateStuck) : "null") + ",\"stuckSinceUtcMs\":" + (gateStuckSinceMs >= 0 ? CbJson.Num3(gateStuckSinceMs) : "null") +
                 ",\"feedDown\":" + (Volatile.Read(ref feedDown) != 0 ? "true" : "false") + ",\"firstTradeUtcMs\":" + (Interlocked.Read(ref firstTradeUtcTicks) > 0 ? CbJson.Num3((Interlocked.Read(ref firstTradeUtcTicks) - 621355968000000000L) / 10000.0) : "null") + "}";
             b.Append("\"gate\":").Append(gate).Append(",\"profileRoots\":[").Append(string.Join(",", ChartBridgeConfig.ProfileRoots.Select(x => CbJson.Str(x)).ToArray())).Append(']');
             b.Append(",\"backfillTotalMs\":").Append(CbJson.Num3(total));

@@ -19,14 +19,25 @@ never ask for quotes).
   far enough. ChartBridge keeps that window, extended by every live trade, in memory for the session: a reload, a second
   page or a view switch gets its trades from there, from the same first trade, and NinjaTrader is not asked again. Dropped
   at the next 18:00 ET session; never written to disk.
-- **One tick request to NinjaTrader at a time** (review 2 B1, B2; review 3 X1: also after a timeout, a request given up
-  stays outstanding until NinjaTrader answers, nothing goes beside it, and its late answer is dropped uncopied): served
-  windows first, a window's second ask ahead of any backfill (review 3 S-D); a session backfill only with
-  nothing else out (no window, no other backfill, no minute chart's last-trades request, which also waits while a backfill
-  is out). A window request is shared by every load of that instrument that comes while it is out, kept whatever load is
-  current, asked at most twice (the second time larger), and after a failure not asked again for 60 s. Every tick
+- **The served windows and the session backfills go to NinjaTrader one at a time** (review 2 B1, B2): windows first, a
+  window's second ask ahead of any backfill (review 3 S-D); a session backfill only with nothing else out (no window, no
+  other backfill, no minute chart's last-trades request). A minute chart's last-trades request (20,000 by count, made since
+  0.3.3) is not queued behind them, as before: it can go beside a window or another minute chart's, and is skipped (the
+  forming minute as NinjaTrader sent it) while a backfill is out (review 4 S3). A window request is shared by every load of
+  that instrument that comes while it is out, kept whatever load is current, asked at most twice (the second time larger),
+  and after a failure not asked again for 60 s. When over 500,000 live trades come while it is out, its loads go live at
+  once with no trades and a note, nothing more is held for it, and the next load asks again (review 4 B2). Every tick
   subscribe gets the served window, with or without `liveFirst` (a 1.6.x page, The Desk's relay): 0.3.5 never runs 0.3.4's
   by-date tick load (review 2 S6).
+- **One unanswered request** (review 3 X1, review 4 B1, S1, S2, S4): a window or a backfill NinjaTrader does not answer in
+  time (120 s, 5 min) is given up for its pages but stays outstanding, so ChartBridge asks for no tick history (no window,
+  no backfill, no minute chart's last trades) until NinjaTrader answers it (the late answer is dropped uncopied) or
+  restarts. Nothing waits on it: a Range or seconds load, queued or new, gets the served window from memory when there is
+  one (with its gap, if a feed drop left one; the gap is asked again only when the ask can go out), else goes live at once
+  with no trades and says NinjaTrader has not answered an earlier request; its live trades are not held. Queued backfills
+  say they wait (the profile and VWAP notes, `/diag` state "waiting: ..."), not "building", and run as usual once it
+  answers. An answer and the time limit are decided once (Interlocked), so an answer at the limit never leaves it stuck.
+  `/diag` `gate.stuck` and `stuckSinceUtcMs`. Stopping ChartBridge clears it and the instruments' tables.
 - **The session table:** per instrument, the session's volume at each price per half hour of New York time, fed by the live
   trades. Whole when ChartBridge and the feed were up before 18:00, however late the first trade (review 3 S-A). When
   ChartBridge starts after 18:00 (NinjaTrader started, or the add-on recompiled), and only then, ONE backfill of the session
@@ -92,7 +103,11 @@ never ask for quotes).
   joins the live trades exactly and is never asked again (with the time on the callback thread), the backfill waiting for a
   window request that is out, its one retry and its time limit, the served window by count with its second ask (never a
   third), a 1.6.x-style subscribe and a reload from memory with no request, two pages and a resubscribe sharing one request,
-  no re-ask right after a failure, a feed drop, the text format; all on a simulated clock (review 2 N7). `test/live-first.test.js`:
+  no re-ask right after a failure, a feed drop, the text format; review 4's probes: a window queued behind a stuck request,
+  later loads while stuck, a gapped window while stuck, backfills waiting then running, a minute page and its last trades
+  beside a window, the 500,000 trade cap, an answer racing the time limit (1.5 million trades at 240 to 305 ms of a 300 ms
+  limit), and the requests counted for a mid-session start with two Range pages and a reconnect storm; all on a simulated
+  clock (review 2 N7). `test/live-first.test.js`:
   `RangeSync` on 240 made-up histories, the VWAP seed, the trim, the profile from rows equal to the profile from every trade
   (Session and RTH, an early close, both DST changes), and the fake bridge's protocol against its tape.
   `npm run smoke:live-first`: NQ Range 40 in a busy market (trades, bars, VWAP and the profile equal to the tape's), a

@@ -540,8 +540,12 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   assert.match(bodyOf(code, 'private static void RequestTicks('), /if \(L\.Window\) \{ ServeWindow\(L\); return; \}/);
   // B2: one window request per instrument: loads wait on it; a failure is not re-asked for WindowRetryMs; two asks at most
   const serve = bodyOf(code, 'private static void ServeWindow(');
-  assert.match(serve, /if \(book\.WindowAsking\) \{ book\.WindowWaiters\.Add\(L\);/);
-  assert.match(serve, /ChartBridgeTime\.NowUtcMs\(\) - book\.WindowFailedMs < WindowRetryMs\) none = true;/);
+  assert.match(serve, /bool backoff = book\.WindowFailedMs >= 0 && nowMs - book\.WindowFailedMs < WindowRetryMs;/);
+  assert.match(serve, /else if \(backoff\) none = true;/);
+  // review 4 B1: a load never waits on a stuck gate (it goes live with the reason); S4: a gapped window is kept unless the ask can go now
+  assert.match(serve, /if \(book\.WindowAsking && stuck == null\) \{ book\.WindowWaiters\.Add\(L\);/);
+  assert.match(serve, /if \(stuck != null\) \{ none = true; if \(L\.Diag != null\) L\.Diag\.Error = StuckNote\(stuck\); \}/);
+  assert.match(serve, /book\.CacheGap && stuck == null && !backoff && !book\.WindowAsking/);
   assert.match(bodyOf(code, 'private static bool ServeFromCache('), /view = book\.Cache\.Snapshot\(\); book\.Cache\.Served\+\+; L\.Client\.Pending\.Clear\(\);/);
   const askw = bodyOf(code, 'private static void AskWindow(');
   assert.match(askw, /new BarsRequest\(inst, count\)/);
@@ -550,8 +554,12 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   assert.match(askw, /round < 2;/);
   assert.match(askw, /if \(again\) AskWindow\(book, inst, gen, Math\.Min\(WindowMaxTicks, count \* 3\), round \+ 1\);\s*done\(\);/);
   // review 3 X1: a given-up request stays outstanding: nothing else goes; its late answer is dropped, not copied
-  assert.match(askw, /if \(ask\.TimedOut\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} GateUnstuck\("window " \+ book\.Root\); return; \}/);
-  assert.match(bodyOf(code, 'private static void RunBackfill('), /if \(ask\.TimedOut\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} GateUnstuck\(/);
+  // review 4 S1: each request is claimed once (the answer or the timeout), by compare-and-swap
+  assert.match(code, /private static bool Claim\(GateJob j\) \{ return Interlocked\.CompareExchange\(ref j\.State, 1, 0\) == 0; \}/);
+  assert.match(bodyOf(code, 'private static void GateWorker('), /if \(!answered && Interlocked\.CompareExchange\(ref j\.State, 2, 0\) == 0\)/);
+  assert.match(askw, /if \(!Claim\(j\)\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} GateUnstuck\("window " \+ book\.Root\); return; \}/);
+  assert.match(bodyOf(code, 'private static void RunBackfill('), /if \(!Claim\(j\)\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} GateUnstuck\(/);
+  assert.match(askw, /j\.OnStuck = what => WindowFailed\(book, gen, StuckNote\(what\), false\);/);
   assert.ok(!/RequestQuotes/.test(serve + askw + bodyOf(code, 'private static void OnWindowAnswer(') + bodyOf(code, 'private static void FinishWindow(')), 'no quote request for a window');
   // one tick request to NinjaTrader at a time: windows first, a backfill only with nothing else out (no minute tail either)
   const next = bodyOf(code, 'private static GateJob GateNext(');
