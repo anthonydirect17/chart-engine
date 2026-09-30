@@ -1,4 +1,4 @@
-// ChartBridge 0.3.4 for NinjaTrader 8
+// ChartBridge 0.3.4.1 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
@@ -71,6 +71,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string DeskUrl = "http://localhost:8800";
         public static List<string> AccountAllow = new List<string>();   // empty = every account except Backtest / Playback
         public static List<string> AllowOrigins = new List<string>();   // web pages besides ChartBridge's own that may open the read-only WebSocket
+        public static int QuoteHours = 0;                           // 0.3.4.1: hours of historical Bid and Ask a tick chart asks for (0, 1 or 2)
 
         public static bool AccountAllowed(string name)
         {
@@ -109,10 +110,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
         //                                  they can never trade. Requests still have to come from this PC.
         //                                  One line: the last allowOrigins line wins. Non-ASCII hosts in punycode.)
+        //   quoteHours = 0                (0.3.4.1: hours of historical Bid and Ask ticks a tick chart asks NinjaTrader for,
+        //                                  to side its backfill trades: 0 (the default: none; they go by the tick rule),
+        //                                  1 or 2. Anything else is 0, with a line in the Output window.)
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
+            QuoteHours = 0;
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -133,8 +138,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
                 else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
+                else if (key == "quoteHours") QuoteHours = ParseQuoteHours(val);
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
+        }
+
+        // quoteHours (0.3.4.1): the whole numbers 0, 1 or 2; anything else is 0 (no bid/ask history), said in the Output window.
+        public static int ParseQuoteHours(string val)
+        {
+            int n;
+            if (int.TryParse(val, out n) && n >= 0 && n <= 2) return n;
+            ChartBridgeServer.Log("config.txt: quoteHours = " + val + " is not 0, 1 or 2; using 0 (no bid/ask history is asked)");
+            return 0;
         }
     }
 
@@ -1489,7 +1504,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.4";
+        public const string Version = "0.3.4.1";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -1995,12 +2010,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int HeldAtAnswer = -1;            // trades held when NinjaTrader answered the tick request
             public string Sub;                       // the subscribe id on history, ticks and ready: the page's, or Seq
             // 0.3.4: tick charts also ask for the historical Bid and Ask ticks of the same window, at the same time as the
-            // trades; the backfill goes out once all three are in (Arrived), each trade tagged with its side.
+            // trades; the backfill goes out once all three are in (Arrived), each trade tagged with its side. 0.3.4.1: only
+            // with quoteHours 1 or 2 in config.txt, and only those hours; otherwise only the trades are waited for.
             public int Waiting;                      // answers still to come (trades, bids, asks); under lock (L)
             public bool Proceeded, QuotesTimedOut;   // the backfill went out (Finish queued); it did not wait longer for quotes
             public RawBars LastTicks;
             public QuoteSeries Bids, Asks;
-            public DateTime QuoteFrom;               // the quote window's start (at most QuoteHoursMax back)
+            public DateTime QuoteFrom;               // the quote window's start (QuoteWindowHours back)
+            public int QuoteHours;                   // 0.3.4.1: the hours of Bid and Ask this load asked for (0: none)
+            public string QuotesSkipped;             // 0.3.4.1: why none were asked (quoteHours 0, or one still outstanding); null when asked
             public double QuoteCopyMs;               // ChartBridge's time copying and thinning the two quote answers
             public bool HasBackLast; public DateTime BackLastTime; public double BackLastPrice; public int BackLastSide;   // the backfill's last trade (N3)
             public string BidNote = "asked", AskNote = "asked";   // then ok, empty, the error, or no answer in time, for /diag
@@ -2124,10 +2142,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!Current(L)) return;   // a newer subscribe owns the client now
             if (L.TickHours > 0)
             {
-                lock (L) { L.Waiting = 3; L.QuoteFrom = L.NowNt.AddHours(-Math.Min(L.TickHours, QuoteHoursMax)); }
+                // 0.3.4.1: the Bid and Ask history only when config.txt asks for it (quoteHours 1 or 2), and never while an
+                // earlier request for this instrument is still outstanding. Without it the backfill goes out as soon as the
+                // trades are in, every trade by the tick rule; live trades keep their side from the live quote.
+                int hours = QuoteWindowHours(ChartBridgeConfig.QuoteHours, L.TickHours);
+                string skipped = hours > 0 ? null : "not requested (quoteHours 0)";
+                if (hours > 0 && !BeginQuotes(L.Root)) { hours = 0; skipped = "not requested: an earlier bid/ask request for " + L.Root + " is still outstanding"; }
+                lock (L)
+                {
+                    L.QuoteHours = hours; L.QuotesSkipped = skipped;
+                    L.Waiting = hours > 0 ? 3 : 1;
+                    if (hours > 0) L.QuoteFrom = L.NowNt.AddHours(-hours);
+                    else { L.BidNote = skipped; L.AskNote = skipped; }
+                }
                 RequestTickHistory(L, true);
-                RequestQuotes(L, MarketDataType.Bid, true);
-                RequestQuotes(L, MarketDataType.Ask, true);
+                if (hours > 0)
+                {
+                    RequestQuotes(L, MarketDataType.Bid, true);
+                    RequestQuotes(L, MarketDataType.Ask, true);
+                }
                 return;
             }
             if (L.MinuteTail == null) { L.HeadSent.ContinueWith(delegate { Finish(L, null); }, TaskScheduler.Default); return; }
@@ -2201,6 +2234,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // Could not even ask: count it as answered (with nothing), so the backfill never waits on it.
                 Log((isBid ? "bid" : "ask") + " history request error: " + ex.Message);
+                QuoteAnswered(L.Root);
                 lock (L) { if (!L.Proceeded) { if (isBid) L.BidNote = "error: " + ex.Message; else L.AskNote = "error: " + ex.Message; } }
                 Arrived(L, false);
             }
@@ -2241,9 +2275,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (again)
                 {
                     lock (L) { if (isBid) L.BidRetried = true; else L.AskRetried = true; }
-                    RequestQuotes(L, type, false);
+                    RequestQuotes(L, type, false);   // still outstanding: the retry answers for it
                     return;
                 }
+                QuoteAnswered(L.Root);
                 lock (L)
                 {
                     if (!L.Proceeded)   // a late answer (after QuoteWaitMs) is not used
@@ -2264,9 +2299,48 @@ namespace NinjaTrader.NinjaScript.AddOns
         // chart and a longer hold. When the trade request failed there is nothing to classify and no wait at all.
         public static int QuoteWaitMs = 2500;
         // The quote window: at most the last 24 hours (a range view may ask up to 48 hours of trades). Older trades go by
-        // the tick rule (beforeQuotes). 24 hours covers the whole current session (18:00 to 17:00 ET), which the delta pane
-        // shows, and bounds the quote copy.
+        // the tick rule (beforeQuotes). 0.3.4.1: quoteHours (at most 2) sets the window now; this stays as a ceiling.
         public const int QuoteHoursMax = 24;
+
+        // 0.3.4.1: the hours of Bid and Ask a tick load asks for: quoteHours (0, 1 or 2 from config.txt), at most the trades'
+        // own window and QuoteHoursMax. 0: none asked (also for minute and hour charts, which have no tick backfill).
+        public static int QuoteWindowHours(int quoteHours, int tickHours)
+        {
+            if (quoteHours <= 0 || tickHours <= 0) return 0;
+            return Math.Min(Math.Min(quoteHours, tickHours), QuoteHoursMax);
+        }
+
+        // 0.3.4.1: the Bid and Ask requests NinjaTrader has not answered yet, per instrument root (2 when a load asks for
+        // both). NinjaTrader's help documents no way to cancel a BarsRequest that has been sent (BarsRequest: Request(),
+        // Dispose() once done), so a load that went out without its quotes cannot stop them; instead a reload does not ask
+        // again until they have answered (its trades go by the tick rule, and /diag says why). A request that never
+        // answers keeps that instrument's quotes off until NinjaTrader restarts: the safe side.
+        private static readonly Dictionary<string, int> QuotesOutstanding = new Dictionary<string, int>();
+
+        private static bool BeginQuotes(string root)
+        {
+            lock (QuotesOutstanding)
+            {
+                int n;
+                if (QuotesOutstanding.TryGetValue(root, out n) && n > 0) return false;
+                QuotesOutstanding[root] = 2;
+                return true;
+            }
+        }
+
+        private static void QuoteAnswered(string root)
+        {
+            lock (QuotesOutstanding)
+            {
+                int n;
+                if (QuotesOutstanding.TryGetValue(root, out n) && n > 0) QuotesOutstanding[root] = n - 1;
+            }
+        }
+
+        private static int QuotesOutstandingFor(string root)
+        {
+            lock (QuotesOutstanding) { int n; return QuotesOutstanding.TryGetValue(root, out n) ? n : 0; }
+        }
 
         private static void Arrived(Load L, bool trades)
         {
@@ -2490,13 +2564,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             string bidNote, askNote; bool bidRetried, askRetried, timedOut; double quotesMs, copyMs;
             lock (L) { bidNote = L.BidNote; askNote = L.AskNote; bidRetried = L.BidRetried; askRetried = L.AskRetried; quotesMs = L.QuotesAnsweredMs; timedOut = L.QuotesTimedOut; copyMs = L.QuoteCopyMs; }
             int bidRows = bq != null ? bq.Count : 0, askRows = aq != null ? aq.Count : 0;
-            bool capped = L.TickHours > QuoteHoursMax;
-            // In words, when some trades could not use the quote history (also in the Output window).
+            int quoteHours; string skipped;
+            lock (L) { quoteHours = L.QuoteHours; skipped = L.QuotesSkipped; }
+            bool capped = quoteHours > 0 && L.TickHours > quoteHours;
+            // In words, when some trades could not use the quote history (also in the Output window, except when no quotes
+            // were asked: that is the setting, said in /diag only, not a line on every load).
             string note = null;
-            if (r.Trades > 0 && (bidRows == 0 || askRows == 0))
+            if (skipped != null) note = skipped == "not requested (quoteHours 0)" ? "quotes not requested (quoteHours 0)" : "quotes " + skipped + " (every backfill trade went by the tick rule)";
+            else if (r.Trades > 0 && (bidRows == 0 || askRows == 0))
                 note = "no " + (bidRows == 0 && askRows == 0 ? "bid or ask" : bidRows == 0 ? "bid" : "ask") + " history came back (bid: " + bidNote + ", ask: " + askNote + "): every backfill trade went by the tick rule";
             else if (r.BeforeQuotes > 0 || r.AfterQuotes > 0 || r.StaleQuotes > 0)
-                note = "the bid/ask history does not cover every trade: " + r.BeforeQuotes + " trade(s) before it" + (capped ? " (quotes are kept for the last " + QuoteHoursMax + " hours)" : "") +
+                note = "the bid/ask history does not cover every trade: " + r.BeforeQuotes + " trade(s) before it" + (capped ? " (quotes are asked for the last " + quoteHours + " hour" + (quoteHours == 1 ? "" : "s") + ", quoteHours in config.txt)" : "") +
                     ", " + r.AfterQuotes + " after it and " + r.StaleQuotes + " with a quote over " + (ChartBridgeSides.QuoteMaxAge / TimeSpan.TicksPerSecond) + " s old went by the tick rule";
             StringBuilder b = new StringBuilder("{");
             b.Append("\"sub\":").Append(L.Sub);
@@ -2509,7 +2587,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"note\":").Append(note != null ? CbJson.Str(note) : "null");
             b.Append(",\"bidTicks\":").Append(bq != null ? bq.RawRows : 0).Append(",\"askTicks\":").Append(aq != null ? aq.RawRows : 0);
             b.Append(",\"bidRowsKept\":").Append(bidRows).Append(",\"askRowsKept\":").Append(askRows);   // after dropping size-only updates
-            b.Append(",\"quoteWindowHours\":").Append(Math.Min(L.TickHours, QuoteHoursMax));
+            b.Append(",\"quoteHours\":").Append(ChartBridgeConfig.QuoteHours);   // 0.3.4.1: the setting
+            b.Append(",\"quoteWindowHours\":").Append(quoteHours);                // the hours this load asked for (0: none)
             b.Append(",\"quoteCopyMs\":").Append(CbJson.Num3(copyMs));
             b.Append(",\"bidRequest\":").Append(CbJson.Str(bidNote)).Append(",\"askRequest\":").Append(CbJson.Str(askNote));
             b.Append(",\"quotesRetriedEndingNow\":").Append(bidRetried || askRetried ? "true" : "false");
@@ -2533,7 +2612,7 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"agree\":").Append(r.StampAgree).Append(",\"disagree\":").Append(r.StampDisagree).Append('}');
             b.Append('}');
             lock (LastLoadSides) LastLoadSides[L.Root] = b.ToString();
-            if (note != null) Log(L.Root + " trade sides: " + note + " (see /diag sides)");
+            if (note != null && skipped == null) Log(L.Root + " trade sides: " + note + " (see /diag sides)");
         }
 
         // Per instrument: the live counts and quote, and the last backfill's (null before the first tick chart load).
@@ -2551,7 +2630,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string last;
                 lock (LastLoadSides) LastLoadSides.TryGetValue(root, out last);
                 if (!first) b.Append(','); first = false;
-                b.Append(CbJson.Str(root)).Append(":{\"live\":").Append(t != null ? t.DiagJson() : "null").Append(",\"lastLoad\":").Append(last ?? "null").Append('}');
+                b.Append(CbJson.Str(root)).Append(":{\"live\":").Append(t != null ? t.DiagJson() : "null").Append(",\"lastLoad\":").Append(last ?? "null")
+                 .Append(",\"quotesOutstanding\":").Append(QuotesOutstandingFor(root)).Append('}');   // 0.3.4.1: bid/ask requests not yet answered
             }
             return b.Append('}').ToString();
         }
