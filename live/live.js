@@ -2421,7 +2421,7 @@ function start(container, opt, PAGE) {
     if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
     $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
     renderQty(root, cap);
-    for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'beBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
+    for (const id of ['buyMkt', 'sellMkt', 'beBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why (Flatten works disarmed, so it never dims: Anthony 2026-10-01)
     $('oOff').textContent = on ? '' : 'Trading off: ' + TR.reason;
     $('oOff').hidden = on;
     renderBracket(root);
