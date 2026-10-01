@@ -118,11 +118,11 @@ should have their own preset group, so I can set colors for indicators on a whit
   chosen while the high is the brighter by 1.25:1; when it is not (a high picked darker than its low, or the same),
   the pair is drawn as on the other grounds, and if even that leaves the high the darker, the high moves toward white
   and the low toward black until it is (`ibPair`).
-- A chart preset can bring an indicator preset with it (Anthony: "link the groups"). Saving a chart preset with
-  **Include the current indicator colors** ticked (the default) keeps the id of the indicator preset that holds the
-  indicator colors in use; when none holds them they are saved first as a new indicator preset under the chart
-  preset's name (a number added if that name is taken). Picking the chart preset then applies both. If that
-  indicator preset is deleted later, the chart preset still works, without it and without a message.
+- A chart preset can remember one indicator preset (Anthony: "link the groups"). The chart group's save row has
+  **Indicator colors: None / <each indicator preset>**, set at first to the indicator preset that holds the indicator
+  colors in use, else None; the chart preset keeps that preset's id, and picking it applies both. A save never makes
+  or changes an indicator preset, and a re-save sets the link only as the select says. If that indicator preset is
+  deleted later, the chart preset still works, without it and without a message.
 - The colors in use stay per browser (`live-colors-v1`, `live-indicator-colors-v1`); the presets go through one small
   store interface (`LivePrefs.localPresetStore`: this browser today, a store shared by every PC once one is chosen).
 

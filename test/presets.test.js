@@ -248,8 +248,10 @@ test('linked presets: a chart preset keeps its indicator preset\'s id; a link to
   const a = await s.save('chart', 'White chart', WHITE, ind.id);
   assert.equal(a.preset.ind, ind.id);
   assert.equal((await s.list()).chart[0].ind, ind.id, 'kept in the store');
-  // only an indicator preset that is there, and only on a chart preset
-  assert.equal((await s.save('chart', 'Other', DARK, 'p-nope')).preset.ind, undefined, 'an unknown id is not kept');
+  // only an indicator preset that is there (else the save is refused, nothing written), and only on a chart preset
+  const before = st.getItem('live-color-presets-v1');
+  await assert.rejects(s.save('chart', 'Other', DARK, 'p-nope'), /gone/);
+  assert.equal(st.getItem('live-color-presets-v1'), before, 'a refused save writes nothing');
   assert.equal((await s.save('indicator', 'Ind 2', IND(), ind.id)).preset.ind, undefined, 'an indicator preset has no link');
   // replacing without the link drops it; with it, it comes back; a rename keeps it
   assert.equal((await s.save('chart', 'white CHART', WHITE)).preset.ind, undefined);
@@ -265,6 +267,26 @@ test('linked presets: a chart preset keeps its indicator preset\'s id; a link to
     indicator: [{ id: 'p1', name: 'I', colors: IND(), ind: 'a' }] });
   assert.deepEqual(c.chart.map(p => p.ind), ['p1', undefined, undefined]);
   assert.equal(c.indicator[0].ind, undefined);
+});
+
+test('linked presets: a chart save never touches the indicator group; full groups refuse only their own save (review 2 S1, S2)', async () => {
+  const st = memStorage(), s = LP.localPresetStore(st);
+  const day = (await s.save('indicator', 'Day', IND())).preset;
+  for (let i = 1; i < LP.PRESET_MAX; i++) await s.save('indicator', 'I' + i, Object.assign(IND(), { vwap: '#0000' + String(i).padStart(2, '0') }));
+  assert.equal((await s.list()).indicator.length, LP.PRESET_MAX, 'the indicator group is full');
+  // S2: a linked chart preset re-saved while the indicator group is full keeps its link (the select still says Day)
+  const night = (await s.save('chart', 'Night', DARK, day.id)).preset;
+  const r = await s.save('chart', 'night', WHITE, day.id);
+  assert.equal(r.replaced, true); assert.equal(r.preset.id, night.id); assert.equal(r.preset.ind, day.id, 'the link is kept');
+  assert.equal((await s.list()).indicator.length, LP.PRESET_MAX, 'no indicator preset made or dropped');
+  // S1: the chart group full: the refused save writes nothing at all, the indicator group untouched
+  for (let i = 1; i < LP.PRESET_MAX; i++) await s.save('chart', 'C' + i, DARK, day.id);
+  const before = st.getItem('live-color-presets-v1');
+  await assert.rejects(s.save('chart', 'One too many', WHITE, day.id), /holds 24/);
+  assert.equal(st.getItem('live-color-presets-v1'), before, 'nothing written: no orphan anywhere');
+  // the indicator group full refuses only an indicator save, with the same message
+  await assert.rejects(s.save('indicator', 'More', IND()), /holds 24/);
+  assert.equal((await s.save('chart', 'Night', DARK)).preset.ind, undefined, 'None drops the link, only when asked');
 });
 
 test('the Colors panel: VWAP can be left out of it, the house default keeps it', () => {

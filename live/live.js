@@ -506,7 +506,8 @@ function orderAccount(allowed, wanted) {
  * store is still to be decided) can replace this browser's storage without changing the page:
  *   list()                     -> Promise of { chart: [preset], indicator: [preset] }
  *   save(group, name, colors, ind) -> Promise of { lists, preset, replaced }; a preset of that name (any case) is
- *                              replaced. `ind` (chart presets only): the id of an indicator preset to bring with it
+ *                              replaced. `ind` (chart presets only): the id of an indicator preset to bring with it,
+ *                              refused when that preset is gone; none drops the link of a preset replaced
  *   rename(group, id, name)    -> Promise of { lists, preset }
  *   remove(group, id)          -> Promise of { lists }
  *   shared                     true when every PC sees the same presets
@@ -548,7 +549,8 @@ function localPresetStore(storage) {
       if (!n) return fail('Type a name for the preset first.');
       if (Object.keys(c).length !== PRESET_GROUPS[group].length) return fail('Not saved: a color is missing.');
       const all = read(), list = all[group], same = list.find(p => p.name.toLowerCase() === n.toLowerCase());
-      const link = group === 'chart' && all.indicator.some(p => p.id === ind) ? ind : null;   // only an indicator preset there now
+      if (group === 'chart' && ind && !all.indicator.some(p => p.id === ind)) return fail('That indicator preset is gone (deleted in another window).');
+      const link = group === 'chart' && ind ? ind : null;          // the chart preset's indicator preset; none drops it
       if (same) { same.name = n; same.colors = c; if (link) same.ind = link; else delete same.ind; return done(all, { preset: same, replaced: true }); }
       if (list.length >= PRESET_MAX) return fail('This group holds ' + PRESET_MAX + ' presets: delete one to save another.');
       const p = { id: newId(), name: n, colors: c };
@@ -2124,10 +2126,10 @@ function start(container, opt, PAGE) {
    * indicator presets (every indicator color, each set in its gear). Pick one to use it; save the colors in use under a
    * name (a name already there replaces that preset); rename; delete, after a second click. The presets come from
    * presetStore; the colors in use stay this browser's (live-colors-v1, live-indicator-colors-v1).
-   * A chart preset can bring an indicator preset with it (1.9.0, Anthony: "link the groups"): saved with "Include the
-   * current indicator colors" (ticked by default) it keeps the id of the indicator preset holding the indicator colors
-   * in use (saved as a new one, under the chart preset's name, when none holds them), and picking it applies both. A
-   * link to an indicator preset deleted since is ignored.
+   * A chart preset can remember one indicator preset (1.9.0, Anthony: "link the groups"): the chart group's save row has
+   * "Indicator colors: None / <each indicator preset>", set at first to the indicator preset holding the colors in use
+   * (else None). The chart preset keeps that preset's id; picking it applies both. A save never makes or changes an
+   * indicator preset, and a re-save sets the link only as the select says. A link to one deleted since is ignored.
    */
   const PR_GROUPS = [
     { g: 'chart', title: 'Chart presets', hint: 'Bar colors and the chart background.', place: 'Name this chart look' },
@@ -2137,7 +2139,8 @@ function start(container, opt, PAGE) {
     edit: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M2 10l.6-2.4L8.2 2 10 3.8 4.4 9.4z"/></svg>',
     x: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M2 2l8 8M10 2l-8 8"/></svg>',
   };
-  PR = { lists: { chart: [], indicator: [] }, note: { chart: '', indicator: '' }, edit: null, confirm: null };
+  // indSel: the save row's indicator preset as chosen by hand ('' None, an id), or null to follow the colors in use
+  PR = { lists: { chart: [], indicator: [] }, note: { chart: '', indicator: '' }, edit: null, confirm: null, indSel: null };
   const prCurrent = g => { if (g !== 'chart') return Object.assign({}, IC); const c = themePanel.get(); return { up: c.up, down: c.down, bg: c.bg }; };
   const prSame = (g, colors) => { const cur = prCurrent(g); return LP.PRESET_GROUPS[g].every(k => cur[k] === colors[k]); };
   const prSwatch = (g, c) => g === 'chart'
@@ -2148,7 +2151,7 @@ function start(container, opt, PAGE) {
     `<div class="ce-lbl" id="${p}pr-${G.g}">${G.title}</div><div class="ce-note">${G.hint}</div><div class="pr-list"></div>` +
     `<div class="pr-save"><input type="text" class="pr-name-in" maxlength="${LP.PRESET_NAME_MAX}" placeholder="${G.place}" aria-label="${G.place}" spellcheck="false" autocomplete="off">` +
     `<button type="button" class="pr-btn" data-act="save">Save</button></div>` +
-    (G.g === 'chart' ? `<label class="pr-inc"><input type="checkbox" class="pr-inc-in" checked>Include the current indicator colors</label>` : '') +
+    (G.g === 'chart' ? `<label class="pr-inc"><span>Indicator colors</span><select class="pr-ind" data-f="ind" title="The indicator preset this chart preset brings with it"></select></label>` : '') +
     `<div class="pr-note" role="status"></div></div>`).join('');
 
   function prRow(g, pr) {
@@ -2177,6 +2180,14 @@ function start(container, opt, PAGE) {
       box.querySelector('.pr-list').innerHTML = PR.lists[g].length ? PR.lists[g].map(pr => prRow(g, pr)).join('') : '<div class="pr-empty">None saved yet.</div>';
       box.querySelector('.pr-note').textContent = PR.note[g];
       prLabel(box);
+      const sel = box.querySelector('.pr-ind');
+      if (sel) {
+        const opts = '<option value="">None</option>' + PR.lists.indicator.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+        if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; }
+        const held = PR.lists.indicator.find(x => prSame('indicator', x.colors));
+        const chosen = PR.indSel !== null && (PR.indSel === '' || PR.lists.indicator.some(x => x.id === PR.indSel));
+        sel.value = chosen ? PR.indSel : held ? held.id : '';
+      }
       if (focus && !box.contains(document.activeElement)) (box.querySelector(prSel(focus)) || box.querySelector('.pr-name-in')).focus();
     }
   }
@@ -2186,24 +2197,20 @@ function start(container, opt, PAGE) {
   const prName = r => (r && r.preset && LP.presetName(r.preset.name)) || 'the preset';
   function prRun(g, call, said) {
     return Promise.resolve(call).then(r => { PR.lists = LP.cleanPresets(r && r.lists); PR.note[g] = said(r || {}); },
-      e => { PR.note[g] = e && e.message ? String(e.message) : 'Not saved.'; })
+      e => {                                                    // refused: nothing was written; list what the store holds
+        PR.note[g] = e && e.message ? String(e.message) : 'Not saved.';
+        return presetStore.list().then(lists => { PR.lists = LP.cleanPresets(lists); }, () => {});
+      })
       .then(() => { if (!destroyed) renderPresets(); });
   }
   /* a chart preset's indicator preset, while it is still there */
   const prLinked = pr => pr.ind ? PR.lists.indicator.find(x => x.id === pr.ind) || null : null;
   function prSave(box) {
-    const g = box.dataset.g, input = box.querySelector('.pr-name-in'), inc = box.querySelector('.pr-inc-in'), name = LP.presetName(input.value);
-    const said = (r, extra) => { input.value = ''; return (r.replaced ? 'Replaced ' : 'Saved ') + prName(r) + (extra || '') + '.'; };
-    if (g !== 'chart' || !inc || !inc.checked || !name) { prRun(g, presetStore.save(g, input.value, prCurrent(g)), r => said(r)); return; }
-    // the indicator colors in use go with it: the indicator preset that holds them, else a new one under this name
-    const held = PR.lists.indicator.find(x => prSame('indicator', x.colors));
-    const taken = new Set(PR.lists.indicator.map(x => x.name.toLowerCase()));
-    let iname = name; for (let i = 2; taken.has(iname.toLowerCase()); i++) iname = LP.presetName(name.slice(0, LP.PRESET_NAME_MAX - 4) + ' ' + i);
-    const ind = held ? Promise.resolve({ preset: held, made: false }) : presetStore.save('indicator', iname, prCurrent('indicator')).then(r => ({ preset: r.preset, made: true }), e => ({ e }));
-    prRun(g, ind.then(L => presetStore.save('chart', name, prCurrent('chart'), L.preset ? L.preset.id : null).then(r => Object.assign({}, r, { L }))), r => {
-      const L = r.L || {};
-      if (!L.preset) return said(r, ' without the indicator colors' + (L.e && L.e.message ? ' (' + String(L.e.message).replace(/\.$/, '') + ')' : ''));
-      return said(r, L.made ? ', with the indicator colors saved as the indicator preset ' + prName(L) : ', with the indicator preset ' + prName(L));
+    const g = box.dataset.g, input = box.querySelector('.pr-name-in'), sel = box.querySelector('.pr-ind');
+    const ind = g === 'chart' && sel && sel.value ? PR.lists.indicator.find(x => x.id === sel.value) || { id: sel.value } : null;
+    prRun(g, presetStore.save(g, input.value, prCurrent(g), ind ? ind.id : undefined), r => {
+      input.value = ''; PR.indSel = null;
+      return (r.replaced ? 'Replaced ' : 'Saved ') + prName(r) + (ind && ind.name ? ', with the indicator preset ' + ind.name : '') + '.';
     });
   }
   function prRename(box, pr) {
@@ -2243,7 +2250,8 @@ function start(container, opt, PAGE) {
   });
   themePanel.slot.addEventListener('input', e => {
     const t = e.target;
-    if (t.classList.contains('pr-name-in')) prLabel(t.closest('.pr-group'));
+    if (t.classList.contains('pr-ind')) PR.indSel = t.value;
+    else if (t.classList.contains('pr-name-in')) prLabel(t.closest('.pr-group'));
     else if (t.classList.contains('pr-edit') && PR.edit) PR.edit.text = t.value;
   });
   /* Enter saves; Escape leaves a rename or a delete question without closing the panel */
@@ -2261,7 +2269,7 @@ function start(container, opt, PAGE) {
   });
   themePanel.element.querySelector('.ce-theme-btn').addEventListener('click', () => {
     if (!themePanel.isOpen()) return;
-    PR.edit = PR.confirm = null; PR.note.chart = PR.note.indicator = '';
+    PR.edit = PR.confirm = null; PR.note.chart = PR.note.indicator = ''; PR.indSel = null;
     prRefresh();                                              // another tab (or PC) may have changed them
   });
   prRefresh();

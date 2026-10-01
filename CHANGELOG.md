@@ -13,10 +13,12 @@ default). No file under `nt8/`, `live/order-ticket.js`, `live/pin.js` or the ord
   case, is replaced and the button says Replace), pick one to apply it, rename it (the pencil; Enter keeps, Escape
   cancels) and delete it (the x, a second click confirms). The one matching the colors in use shows as pressed. Up to 24
   per group, names up to 40 characters. The built-in presets (Carolina, Mint, House, the four grounds) stay as they were.
-- **A chart preset brings its indicator preset** (Anthony: link the groups). Saving a chart preset with **Include the
-  current indicator colors** ticked (the default) keeps the id of the indicator preset holding the indicator colors in
-  use, saving them first as a new indicator preset under the chart preset's name when none holds them. Picking the
-  chart preset applies both. An indicator preset deleted since is ignored: the chart preset still works, no message.
+- **A chart preset can remember one indicator preset** (Anthony: link the groups). The chart group's save row has
+  **Indicator colors: None / <each indicator preset>**, set at first to the indicator preset holding the colors in use,
+  else None. The chart preset keeps that preset's id, and picking it applies both. A save never makes or changes an
+  indicator preset; a re-save sets the link only as the select says; a full group refuses only its own save, and a
+  refused save writes nothing (the panel lists the store again). An indicator preset deleted since is ignored: the
+  chart preset still works, no message. A link to one deleted while the panel was open refuses the save with a message.
 - **One small store for the presets:** `LivePrefs.localPresetStore(storage)` (`list`, `save`, `rename`, `remove`, each
   returning a promise, and `shared`), in this browser today (`live-color-presets-v1`, per storage prefix, read fresh on
   every call so two windows do not undo each other). A store shared by every PC plugs in as `ChartLive.mount`'s
@@ -56,10 +58,11 @@ default). No file under `nt8/`, `live/order-ticket.js`, `live/pin.js` or the ord
   takes `vwap: false`, `note`, and returns `slot` and `isOpen()`. On the live page the Colors panel scrolls when taller
   than the window (live.css, so other hosts of the engine keep their panel as it was).
 - **Tests:** `test/presets.test.js` (the store, its refusals, damaged storage, prefixes, indicator colors and their
-  migration with a ground changed first, level and IB colors, linked presets, every text of the order bar at 4.5:1
+  migration with a ground changed first, level and IB colors, linked presets and full groups (review 2 S1, S2), every text of the order bar at 4.5:1
   and every dimmed control at least as on the house bar across review 1's 21 grounds, the greys and 600 random
   grounds), `test/theme.test.js` (the chrome on every ground, the IB high the brighter with any colors) and
-  `npm run smoke:presets` (the panel, every preset action, linked presets and one deleted, the old VWAP after a ground
+  `npm run smoke:presets` (the panel, every preset action, linked presets, a chart save making no indicator preset, a
+  refused save writing nothing and a full indicator group keeping a link, a linked preset deleted, the old VWAP after a ground
   change and a reload, the top bar on the four grounds and custom ones, an in-page contrast sweep of the 21 grounds in
   four states, the light order bar and its Buy MKT and Flatten, the gears, a second window, a reload). `smoke:ib` now
   checks the bar is unchanged on the default ground and takes the chrome's ground on every other; `smoke:embed` sets
