@@ -23,7 +23,7 @@ test('default layout (Anthony, 2026-10-01): 4 charts, the order ticket top right
   const l = W.defaultLayout(() => 'id' + (++n));
   assert.deepStrictEqual(l.panels.map(p => [p.type, p.root, p.tf, p.x + 1, p.x + p.w, p.y + 1, p.y + p.h]), [
     ['chart', 'MNQ', 'range', 1, 7, 1, 4], ['chart', 'MNQ', 'h1', 1, 7, 5, 6], ['chart', 'NQ', 'm5', 8, 10, 1, 3], ['chart', 'ES', 'm1', 8, 10, 4, 6],
-    ['ticket', undefined, undefined, 11, 12, 1, 2], ['tape', 'MNQ', undefined, 11, 12, 3, 6]]);
+    ['ticket', undefined, undefined, 11, 12, 1, 3], ['tape', 'MNQ', undefined, 11, 12, 4, 6]]);
   assert.ok(l.panels.every(p => !('exec' in p)), 'no execution chart');
   assert.strictEqual(l.panels[0].range, 40);
   assert.deepStrictEqual(W.cleanLayout(l), l, 'the default is already clean');
@@ -110,7 +110,7 @@ test('largestFree: biggest free rectangle, top left on a tie, null when full', (
   assert.strictEqual(W.largestFree(full), null);
   const def = W.defaultLayout().panels;
   assert.strictEqual(W.largestFree(def), null);
-  assert.deepStrictEqual(W.largestFree(def.filter(p => p.type !== 'tape')), { x: 10, y: 2, w: 2, h: 4 }, 'closing the tape frees its place');
+  assert.deepStrictEqual(W.largestFree(def.filter(p => p.type !== 'tape')), { x: 10, y: 3, w: 2, h: 3 }, 'closing the tape frees its place');
 });
 
 test('reflow: nothing off the grid, nothing overlapping, nothing lost while there is room', () => {
@@ -201,7 +201,7 @@ test('no en or em dashes in the workspace files', () => {
 test('the workspace is the main page (index.html), the single chart page is single.html, both installed', () => {
   const www = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).www;
   const to = www.map(f => f.to);
-  for (const f of ['index.html', 'single.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js']) assert.ok(to.includes(f), f);
+  for (const f of ['index.html', 'single.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js', 'trade.js', 'ticket-link.js']) assert.ok(to.includes(f), f);
   assert.ok(!to.includes('workspace.html'), 'no workspace.html any more');
   assert.deepStrictEqual(www.find(f => f.to === 'index.html').from, 'live/index.html');
   assert.deepStrictEqual(www.find(f => f.to === 'single.html').from, 'live/single.html');
@@ -213,5 +213,7 @@ test('the workspace is the main page (index.html), the single chart page is sing
   assert.match(html, /data-update-host/, 'the update notice has its place in the top bar');
   const single = fs.readFileSync(path.join(__dirname, '..', 'live', 'single.html'), 'utf8');
   assert.match(single, /<script src="live\.js" data-mount="page"><\/script>/, 'single.html is the trading page');
-  assert.ok(!/workspace|feed\.js/.test(single), 'and nothing of the workspace');
+  assert.ok(!/workspace|feed\.js|ticket-link/.test(single), 'and nothing of the workspace');
+  const sat = f => single.indexOf('src="' + f + '"');
+  assert.ok(sat('order-ticket.js') < sat('trade.js') && sat('trade.js') < sat('live.js') && at('trade.js') < at('live.js') && at('ticket-link.js') < at('workspace.js'), '1.12.0: trade.js (the one order path) before live.js on both pages, ticket-link.js before workspace.js');
 });

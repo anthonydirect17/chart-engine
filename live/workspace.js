@@ -219,8 +219,10 @@ function newId() { return 'p' + Date.now().toString(36) + (++idSeq).toString(36)
  * The default layout (Anthony, 2026-10-01: the mockup's, with the order ticket in place of the execution chart): MNQ
  * Range 40 top left (cols 1 to 7, rows 1 to 4), MNQ under it (cols 1 to 7, rows 5 to 6; 1 hour bars until ChartBridge
  * 0.3.7 brings daily bars), NQ 5 min and ES 1 min stacked in the middle (cols 8 to 10), the order ticket top right
- * (cols 11 to 12, rows 1 to 2) and Time and Sales under it (cols 11 to 12, rows 3 to 6). The first chart starts with the
+ * (cols 11 to 12) and Time and Sales under it (cols 11 to 12). The first chart starts with the
  * single chart page's indicators (the page's main pane defaults); every other new chart with none.
+ * 1.12.0: the ticket takes rows 1 to 3 and Time and Sales rows 4 to 6, so the whole ticket shows at 1366x768 (Anthony:
+ * Time and Sales gives up rows). A layout saved before keeps its own sizes (the ticket scrolls inside if it is short).
  */
 function defaultLayout(makeId = newId) {
   return { panels: [
@@ -228,8 +230,8 @@ function defaultLayout(makeId = newId) {
     { id: makeId(), type: 'chart', root: 'MNQ', tf: 'h1', x: 0, y: 4, w: 7, h: 2 },
     { id: makeId(), type: 'chart', root: 'NQ', tf: 'm5', x: 7, y: 0, w: 3, h: 3 },
     { id: makeId(), type: 'chart', root: 'ES', tf: 'm1', x: 7, y: 3, w: 3, h: 3 },
-    { id: makeId(), type: 'ticket', x: 10, y: 0, w: 2, h: 2 },
-    { id: makeId(), type: 'tape', root: 'MNQ', x: 10, y: 2, w: 2, h: 4 },
+    { id: makeId(), type: 'ticket', x: 10, y: 0, w: 2, h: 3 },
+    { id: makeId(), type: 'tape', root: 'MNQ', x: 10, y: 3, w: 2, h: 3 },
   ] };
 }
 
@@ -334,11 +336,11 @@ function syncConn() {
   if (el.dataset.text !== text) { el.dataset.text = text; el.className = 'ws-conn' + (cls ? ' ' + cls : ''); $('wsConnText').textContent = text; }
 }
 let noteTimer = 0;
-function note(text, warn) {
+function note(text, warn, ms) {
   const el = $('wsNote');
-  el.textContent = text; el.className = 'ws-note' + (warn ? ' warn' : ''); el.hidden = !text;
+  el.textContent = text; el.title = text || ''; el.className = 'ws-note' + (warn ? ' warn' : ''); el.hidden = !text;
   clearTimeout(noteTimer);
-  if (text) noteTimer = setTimeout(() => { el.hidden = true; }, 4000);
+  if (text) noteTimer = setTimeout(() => { el.hidden = true; }, ms || 4000);
 }
 
 /* One status line for the window (the charts' own are not shown here): the worst feed and local delay over the
@@ -368,6 +370,395 @@ function syncStats() {
     ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
 }
 setInterval(syncStats, 1000);
+
+/* ======================================================================== orders (1.12.0)
+ * Every window has its own order connection to ChartBridge (signed in like the single chart page) and its own TradeCore
+ * (live/trade.js: the order bar's very functions). The order ticket lives in one window at a time (TicketLink, live/
+ * ticket-link.js: the browser's lock decides, so two windows never both hold it):
+ *   - the ticket's window is the only one that arms and sends Buy, Sell, B/E, chart clicks, drags and cancels; a chart
+ *     click, drag or cancel on the ticket's instrument in another window, and the Buy, Sell and B/E keys there, are
+ *     forwarded to it and acted on there with the same checks (no answer in 300 ms: a note, nothing sent);
+ *   - Close, Flatten all (keys) and the top bar's Flatten all go from whichever window they are pressed in, on its own
+ *     connection, on the ticket's account (as the ticket's window says it; with no ticket, the account trading came on
+ *     with, as on the single chart page);
+ *   - every chart shows its own instrument's working orders, position and fills on that account (Armed or not); the
+ *     charts on the ticket's instrument take order clicks and drags while it is Armed, with the Armed border.
+ * Saved here: live-ticket-v1 { root, account } (the ticket's instrument and account, kept for the next time it opens).
+ */
+const TC = window.TradeCore, TL = window.TicketLink, U = window.ChartEngine.util;
+const TICKET_KEY = 'live-ticket-v1';
+const readTicket = () => { try { const v = JSON.parse(store.getItem(TICKET_KEY)); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; } };
+const TK = {
+  root: W.ROOTS.includes(readTicket().root) ? readTicket().root : 'MNQ',   // the ticket's instrument
+  bar: null, el: null, view: null,                    // the shared order bar wiring and the ticket's element, while this window holds it
+  price: null, last: {},                              // the ticket's price feed (its instrument's last trade)
+  noteTimer: 0, published: '',
+};
+const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
+let tws = null, tTries = 0, tTimer = 0, instruments = {};
+const tfills = new Map();                             // 'account|id' -> fill (the order connection's execs)
+const tickOf = r => (instruments[r] && +instruments[r].tick) || 0.25;
+const precisionOf = r => W.decimalsOf(tickOf(r));
+const fmtPx = (p, r) => U.fmtPrice(p, precisionOf(r || ticketRoot()));
+let sentCount = 0;                                    // order actions sent here (a forwarded action's answer says how many)
+let capture = null;                                   // the notes of a forwarded action, for its answer
+
+/* the ticket as this window knows it: its own, or the one another window announced */
+const linkInfo = () => link ? link.info() : { held: false, holder: null, supported: false };
+const holds = () => !!link && link.held();
+const holder = () => linkInfo().holder;
+function ticketRoot() { if (holds()) return TK.root; const h = holder(); return h && W.ROOTS.includes(h.root) ? h.root : TK.root; }
+function ticketArmed() { if (holds()) return core.TR.armed; const h = holder(); return !!(h && h.armed); }
+function ticketAccount() { if (holds()) return core.TR.account; const h = holder(); return h && typeof h.account === 'string' && h.account ? h.account : core.TR.account; }
+const ticketQty = () => { if (holds() && TK.el) { const v = +tk('oQty').value; return Number.isInteger(v) ? v : 1; } const h = holder(); return h && Number.isInteger(h.qty) ? h.qty : 1; };
+const accountPick = () => { try { const v = JSON.parse(store.getItem('live-account-v1')); return typeof v === 'string' ? v : ''; } catch (e) { return ''; } };
+
+/* notes: the ticket's own line in the ticket's window, else the top bar's */
+function tnote(text, level) {
+  if (capture) capture.push(text);
+  if (holds() && TK.el) {
+    const el = tk('note');
+    el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
+    clearTimeout(TK.noteTimer);
+    const t = text;
+    if (text) TK.noteTimer = setTimeout(() => { if (el.textContent === t) { el.textContent = ''; el.title = ''; } }, level === 'error' ? 12000 : 6000);
+  } else note(text, !!level, level === 'error' ? 12000 : 6000);
+}
+const tTimers = new Set();
+const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); fn(); }, ms); tTimers.add(id); return id; };
+
+const core = TC.create({
+  LP, prefs, pin: PIN, framed: FRAMED, framedReason: 'This page is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own window.',
+  fetch: (u, o) => fetch(u, o),
+  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },
+  open: () => !!tws && tws.readyState === 1, sock: () => tws,
+  root: () => ticketRoot(),
+  lastPrice: () => { const x = TK.last[ticketRoot()]; return x ? x.p : null; },
+  qty: () => (holds() && TK.el ? Number(tk('oQty').value === '' ? NaN : +tk('oQty').value) : NaN),
+  pickerAccount: () => (holds() && TK.el ? tk('oAcct').value : ticketAccount()),
+  wantedAccount: () => { const h = holder(); return !holds() && h && h.account ? h.account : readTicket().account || accountPick(); },
+  tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
+  flash: tnote, later: tlater, destroyed: () => false,
+  changed: () => renderOrders(), armed: on => ticketArmedUi(on),
+  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && core.TR.account && (cameOn || pick.missed)) ticketAccountNote(pick); renderOrders(); },
+  lost: () => {}, syncAccounts: () => { if (TK.bar) TK.bar.syncTradeAccounts(); },
+  batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
+  armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
+});
+
+/* ---------------- this window's order connection: no subscribe, only sign-in and order messages */
+function tconnect() {
+  tTimer = 0;
+  let sock;
+  Promise.resolve().then(() => wsUrl()).then(url => {
+    try { sock = new WebSocket(url); } catch (e) { tretry(); return; }
+    tws = sock;
+    sock.onopen = () => { if (sock === tws) tTries = 0; };
+    sock.onmessage = ev => { if (sock !== tws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } tmessage(m); };
+    sock.onclose = () => { if (sock !== tws) return; tws = null; core.lost('Not connected to ChartBridge.'); tretry(); };
+    sock.onerror = () => { /* onclose follows */ };
+  }, tretry);
+}
+function tretry() { tTries++; tTimer = setTimeout(tconnect, Math.min(5000, 500 * tTries)); }
+function tmessage(m) {
+  switch (m.type) {
+    case 'hello':
+      instruments = {};
+      for (const i of m.instruments || []) instruments[i.root] = i;
+      core.hello(m);
+      renderOrders();
+      return;
+    case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
+    case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
+    case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.text) note('ChartBridge: ' + m.text, m.level === 'warn'); return;
+  }
+  core.message(m);
+}
+/* ChartBridge's error about orders stays until dismissed (the newest three), as on the single chart page */
+const alerts = [];
+function alertLoud(text) {
+  alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
+  $('wsAlertText').textContent = alerts.join('\n'); $('wsAlert').hidden = false;
+}
+$('wsAlertClose').addEventListener('click', () => { alerts.length = 0; $('wsAlert').hidden = true; });
+function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n.show; $('wsUnsentText').textContent = n.text; }
+$('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
+
+/* ---------------- what every chart shows, and which charts take orders */
+function chartTrade(v) {
+  const r = v.panel.root, TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct;
+  const pos = on ? TR.positions.get(acct + '|' + r) : null;
+  return { root: r, account: acct, live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.working(acct, r) : [],
+    position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty() };
+}
+function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }
+function renderOrders() {
+  if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
+  renderCharts();
+  renderFlat();
+}
+function renderFlat() {
+  const b = $('wsFlat'), a = ticketAccount(), on = core.TR.enabled && !!a;
+  b.disabled = !on;
+  const t = on ? 'Flatten all on ' + a + ': every instrument with a position or a working order, cancel its orders and close its position at market. Works with Armed off.'
+    : 'Flatten all: ' + (core.TR.reason || 'not connected to ChartBridge yet');
+  if (b.title !== t) b.title = t;
+}
+$('wsFlat').addEventListener('click', e => {
+  e.currentTarget.blur();
+  if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
+  core.flattenAll();
+});
+
+/* A chart's click, drag or cancel (ChartLive.mount's `trade`): in the ticket's window straight to TradeCore, else
+   forwarded to it. Either way only for the ticket's instrument. */
+function chartAction(action) {
+  if (holds()) { const r = actHere(action); if (r.note && !capture) { /* the note is on the ticket already */ } renderOrders(); return; }
+  forward(action);
+}
+function forward(action) {
+  link.forward(action).then(r => {
+    if (!r.answered || !r.sent) note(r.note || 'Nothing was sent.', true, 8000);
+    else note(r.note, false, 6000);
+    renderCharts();                                     // a refused drag puts the line back
+  });
+}
+/* Act on a click, drag, cancel or Buy, Sell, B/E key here, in the ticket's window: { sent, note } */
+function actHere(a) {
+  const before = sentCount, notes = [];
+  const was = capture; capture = notes;
+  try {
+    const R = ticketRoot();
+    if (a.root && a.root !== R && (a.kind === 'place' || a.kind === 'move' || a.kind === 'cancel')) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
+    else if ((a.kind === 'move' || a.kind === 'cancel') && core.TR.orders.has(a.id) && core.TR.orders.get(a.id).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
+    else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeAt(a.side, +a.price);
+    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) core.moveOrder(a.id, +a.price);
+    else if (a.kind === 'cancel' && typeof a.id === 'string') core.cancelOrder(a.id);
+    else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
+    else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
+    else if (a.kind === 'be') core.breakEven();
+  } finally { capture = was; }
+  return { sent: sentCount - before, note: notes.length ? notes[notes.length - 1] : '' };
+}
+const tradeHost = {
+  place: (side, price, root) => chartAction({ kind: 'place', side, price, root }),
+  move: (id, price, root) => chartAction({ kind: 'move', id, price, root }),
+  cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
+};
+
+/* ---------------- the one ticket across windows */
+const linkChannel = TL.browserChannel(TL.CHANNEL);
+const locks = typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' ? navigator.locks : null;
+const link = linkChannel ? TL.create({
+  channel: linkChannel, locks,
+  onState: () => linkChanged(),
+  onRelease: () => { if (core.TR.armed) core.setArmed(false); },   // moved to another window: Armed off before the lock goes
+  onForward: a => { const r = actHere(a); renderOrders(); return r; },
+  onLate: a => note('The order ticket\'s window answered late: ' + a.note, true, 12000),
+}) : null;
+let wasHeld = false;
+function linkChanged() {
+  const h = holds();
+  if (h !== wasHeld) {
+    wasHeld = h;
+    if (!h) { if (core.TR.armed) core.setArmed(false); stopTicketPrice(); }
+    renderTicketPanel();
+  } else if (!h) renderTicketPanel();
+  // another window's ticket: this window's orders go to its account (Close, Flatten all, what the charts show)
+  const hd = holder();
+  if (!h && hd && hd.account && hd.account !== core.TR.account && core.TR.accounts.includes(hd.account)) core.pickAccount(hd.account);
+  renderOrders();
+}
+function publish() {
+  if (!holds()) return;
+  const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty() };
+  const k = JSON.stringify(st);
+  if (k === TK.published) return;
+  TK.published = k;
+  link.publish(st);
+  try { store.setItem(TICKET_KEY, JSON.stringify({ root: TK.root, account: core.TR.account || readTicket().account || '' })); } catch (e) { /* blocked */ }
+}
+setInterval(() => { if (link) link.check(); }, 3000);
+window.addEventListener('pagehide', () => { if (link) link.close(); });
+
+/* Take the ticket into this window (Add panel, or the placeholder's button): the lock if free, else ask to move it. */
+function takeTicket(onDone) {
+  if (!link) { note('This browser cannot keep one order ticket across windows: nothing to trade from here.', true); if (onDone) onDone(false); return; }
+  link.take().then(r => {
+    if (r === 'held') { TK.published = ''; linkChanged(); if (onDone) onDone(true); return; }
+    if (r === 'unsupported') { note('This browser has no Web Locks, so it cannot keep one order ticket across windows. Use Chrome or Edge.', true, 12000); if (onDone) onDone(false); return; }
+    confirmBox('Move the ticket here? The order ticket is in another window. Armed is off after the move (arm it again here).', 'Move here', () => {
+      link.move().then(m => {
+        if (m === 'held') { TK.published = ''; linkChanged(); note('The order ticket is in this window now. Armed is off.', false); if (onDone) onDone(true); }
+        else { note('The ticket could not be moved here: another window has it.', true); renderTicketPanel(); if (onDone) onDone(false); }
+      });
+    }, () => { if (onDone) onDone(false); });
+  });
+}
+function releaseTicket() { if (holds()) { if (core.TR.armed) core.setArmed(false); link.release(); } }
+
+/* ---------------- the ticket panel: the live ticket here, or a placeholder */
+function renderTicketPanel() {
+  const v = [...views.values()].find(x => x.panel.type === 'ticket');
+  if (!v) { TK.el = null; TK.bar = null; return; }
+  const live = holds();
+  if (live && v.mode === 'live') return;
+  if (!live && v.mode !== 'live' && v.mode === placeholderKind()) return;
+  TK.el = null; TK.bar = null; TK.view = null;
+  for (const f of v.cleanups.splice(0)) f();
+  if (live) { mountTicket(v); return; }
+  v.mode = placeholderKind();
+  const sup = !!(link && locks);
+  const hd = holder();
+  v.body.innerHTML = !sup ? '<div class="tk-hold" role="note"><b>No order ticket in this browser</b><span>It needs the Web Locks API to keep one ticket across windows. Use Chrome or Edge.</span></div>'
+    : hd ? `<div class="tk-hold" role="note"><b>Ticket is in the other window</b><span>${esc(hd.root || '')} ${esc(hd.account || '')}${hd.armed ? ' · ARMED' : ''}</span><button type="button" class="ws-btn primary" data-tk="take">Move the ticket here</button></div>`
+    : '<div class="tk-hold" role="note"><b>Order ticket</b><span>No window has the ticket.</span><button type="button" class="ws-btn primary" data-tk="take">Use the ticket here</button></div>';
+  const b = v.body.querySelector('[data-tk="take"]');
+  if (b) b.addEventListener('click', () => takeTicket());
+}
+const placeholderKind = () => !(link && locks) ? 'none' : holder() ? 'elsewhere:' + JSON.stringify(holder()) : 'free';
+const tk = id => TK.view ? TK.view[id] || null : null;
+function mountTicket(v) {
+  v.mode = 'live';
+  const opt = r => `<option value="${r}">${r}</option>`;
+  v.body.innerHTML = `<div class="chart-live tk">
+  <section class="obar tk-bar" data-tk-id="obar" aria-label="Order ticket">
+    <div class="tk-row tk-acct"><select class="acct-sel tk-root" data-tk-id="root" data-keep aria-label="Ticket instrument" title="The ticket's instrument: its orders, and the charts on it take order clicks while Armed">${W.ROOTS.map(opt).join('')}</select>
+      <select class="acct-sel acct-main" data-tk-id="oAcct" aria-label="Account: orders go to it" title="Orders go to this account"></select></div>
+    <div class="tk-row"><button type="button" class="arm" data-tk-id="armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every load and every move of the ticket."><span class="knob" aria-hidden="true"></span><span class="arm-text"><span data-tk-id="armText">Armed off</span></span></button></div>
+    <div class="tk-row"><span class="glabel">Qty</span><select class="acct-sel oqty" data-tk-id="oQty" aria-label="Order quantity">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select><span class="ounit" data-tk-id="oQtyCap"></span>
+      <select class="acct-sel bpre" data-tk-id="bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
+      <span class="bsave" data-tk-id="bSaveBox" hidden><input class="oin bname" data-tk-id="bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" data-tk-id="bSaveOk">Save</button><button type="button" class="btn" data-tk-id="bSaveNo" aria-label="Do not save">x</button></span></div>
+    <div class="tk-row"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-tk-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
+      <input class="oin" data-tk-id="bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
+      <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span></div>
+    <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
+    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button></div>
+    <div class="tk-state ostate">
+      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
+      <span class="tk-also" data-tk-id="also"></span>
+      <span class="oinfo dim oother" data-tk-id="oOther"></span><span class="oinfo acct-note" data-tk-id="oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" data-tk-id="oCancel" role="status"></span><span class="ooff" data-tk-id="oOff"></span>
+      <span class="tk-note" data-tk-id="note" role="status"></span>
+    </div>
+  </section></div>`;
+  const map = {};
+  for (const el of v.body.querySelectorAll('[data-tk-id]')) map[el.dataset.tkId] = el;
+  map.unsentBar = $('wsUnsent'); map.unsentText = $('wsUnsentText'); map.unsentClose = document.createElement('button');   // the window's own note (one per window)
+  TK.view = map; TK.el = v.body.firstChild;
+  map.root.value = TK.root;
+  TK.bar = TC.wire(id => map[id] || null, core, {
+    U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen: (t, type, fn) => { t.addEventListener(type, fn); v.cleanups.push(() => t.removeEventListener(type, fn)); },
+    tick: tickOf, lastPrice: () => { const x = TK.last[TK.root]; return x ? x.p : null; }, pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
+    pickViewAccount: a => { store.setItem('live-account-v1', JSON.stringify(a)); renderOrders(); },
+    accountPicked: a => { store.setItem('live-account-v1', JSON.stringify(a)); renderOrders(); },
+    clearAccountNote: () => { map.oAcctNote.textContent = ''; map.oAcctNote.title = ''; },
+    armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
+  });
+  map.root.addEventListener('change', () => {
+    const r = map.root.value;
+    TK.bar.handBack(map.root);
+    if (!W.ROOTS.includes(r) || r === TK.root) return;
+    TK.root = r;
+    if (core.TR.armed) { core.setArmed(false); tnote('Armed turned off: the instrument changed.', 'warn'); }
+    startTicketPrice();
+    renderOrders();
+  });
+  /* "Also open": the ticket's account on another instrument, each with its own Close */
+  map.also.addEventListener('click', e => {
+    const b = e.target.closest('button[data-close]');
+    if (!b) return;
+    b.blur();
+    if (e.detail === 0) { tnote('Order buttons work by click only, not by keyboard.', 'warn'); return; }
+    core.flattenHere(b.dataset.close);
+  });
+  TK.bar.syncTradeAccounts();
+  ticketArmedUi(core.TR.armed);
+  startTicketPrice();
+  renderOrders();
+}
+function ticketArmedUi(on) {
+  if (!TK.view) return;
+  tk('armBtn').setAttribute('aria-checked', String(on));
+  tk('armText').textContent = on ? 'ARMED' : 'Armed off';
+  tk('obar').classList.toggle('armed', on);
+}
+function ticketAccountNote(pick) {
+  const el = tk('oAcctNote');
+  if (!el) return;
+  const text = pick.missed ? 'Last account ' + pick.missed + ' not available, on ' + pick.account + '.' : 'On ' + pick.account + '. Armed is off.';
+  el.textContent = text; el.title = text; el.classList.toggle('warn', !!pick.missed);
+  tlater(() => { if (el.textContent === text) { el.textContent = ''; el.title = ''; } }, pick.missed ? 15000 : 8000);
+}
+/* the last fill of the ticket's account and instrument, and the account's other instruments still open */
+function renderTicketExtras() {
+  const TR = core.TR, acct = TR.account, r = TK.root;
+  const fill = TR.enabled && acct ? [...tfills.values()].filter(f => f.account === acct && f.root === r).sort((a, b) => a.t - b.t).pop() : null;
+  const fe = tk('fill');
+  const ft = fill ? 'Last fill ' + String(fill.side).toUpperCase() + ' ' + fill.qty + ' @ ' + fmtPx(+fill.p, r) + ' ' + U.fmtHM(fill.t) : '';
+  if (fe.textContent !== ft) { fe.textContent = ft; fe.className = 'oinfo tk-fill' + (fill ? ' ' + (fill.side === 'buy' ? 'long' : 'short') : ''); }
+  const rows = [];
+  if (TR.enabled && acct) for (const x of W.ROOTS) {
+    if (x === r) continue;
+    const p = TR.positions.get(acct + '|' + x), n = core.working(acct, x).length;
+    if (!(p && p.qty) && !n) continue;
+    rows.push({ root: x, text: x + ' ' + [p && p.qty ? (p.qty > 0 ? '+' : '') + p.qty : '', n ? n + ' order' + (n > 1 ? 's' : '') : ''].filter(Boolean).join(', ') });
+  }
+  const key = rows.map(x => x.text).join('|');
+  const el = tk('also');
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Close ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Close</button></span>`).join('');
+}
+/* the ticket's price: its instrument's trades from the window's feed (no history kept) */
+function startTicketPrice() {
+  const root = TK.root;
+  if (TK.price && TK.price.root === root) return;
+  if (TK.price) { TK.price.sock.send({ type: 'subscribe', root, days: 1, tickHours: 0 }); TK.price.root = root; return; }
+  let sock;
+  try { sock = hub.open(root); } catch (e) { return; }
+  const P = TK.price = { root, sock, retry: 0 };
+  sock.onmessage = ev => {
+    const m = ev.message;
+    if (!m || TK.price !== P) return;
+    if (m.type === 'hello') sock.send({ type: 'subscribe', root: P.root, days: 1, tickHours: 0 });
+    else if (m.type === 'tick' && m.root === P.root) TK.last[m.root] = { p: +m.p, at: Date.now() };
+    else if (m.type === 'history' && m.root === P.root && Array.isArray(m.bars) && m.bars.length && !TK.last[m.root]) TK.last[m.root] = { p: +m.bars[m.bars.length - 1][4], at: Date.now() };
+  };
+  sock.onclose = () => { if (TK.price !== P) return; TK.price = null; P.retry = setTimeout(() => { if (holds() && !TK.price) startTicketPrice(); }, 1000); };
+}
+function stopTicketPrice() {
+  const P = TK.price; TK.price = null;
+  if (P) { P.sock.onmessage = P.sock.onclose = null; try { P.sock.close(); } catch (e) { /* closed */ } }
+}
+setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);   // the P&L, as the single chart page's
+
+/* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
+   this one, on the ticket's account (Anthony 2026-10-01). */
+let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
+const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
+const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else forward({ kind }); };
+document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
+  keys: () => HK, root: document.body, busy,
+  actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
+  ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
+}));
+/* KEYS ON / KEYS OFF: whether a key pressed now would fire a hotkey here */
+function keysOn() {
+  if (!document.hasFocus() || busy()) return false;
+  const a = document.activeElement;
+  return !(a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)));
+}
+function syncKeys() {
+  const on = keysOn(), el = $('wsKeys');
+  if (el.dataset.on === String(on)) return;
+  el.dataset.on = String(on);
+  el.textContent = on ? 'KEYS ON' : 'KEYS OFF';
+  el.className = 'ws-keys' + (on ? ' on' : '');
+  el.title = on ? 'A hotkey pressed now works in this window' : 'Hotkeys do nothing now: this window does not have the focus, or a box, menu or dialog has it. Click the page (not a box) to turn them on.';
+}
+for (const t of ['focusin', 'focusout', 'pointerup', 'keyup']) document.addEventListener(t, () => setTimeout(syncKeys, 0), true);
+window.addEventListener('focus', syncKeys); window.addEventListener('blur', syncKeys);
+setInterval(syncKeys, 250);
 
 /* ---------------- saving */
 function save() { W.saveLayout(store, layout, { panels }); }
@@ -406,17 +797,18 @@ function addView(p) {
     mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Large prints" title="Large prints" aria-expanded="false">⚙</button>';
-  } else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>';
+  } else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
+    '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   el.innerHTML = `<header class="ws-head"><span class="ws-grip" aria-hidden="true">⋮⋮</span>${mid}${close}</header>` +
     '<div class="ws-body"></div><div class="ws-size" aria-hidden="true" title="Resize"></div>';
   place(el, p);
   grid.appendChild(el);
   if (sizes) sizes.observe(el);
-  const v = { panel: p, el, head: el.querySelector('.ws-head'), body: el.querySelector('.ws-body'), state: null, destroy: () => {} };
+  const v = { panel: p, el, head: el.querySelector('.ws-head'), body: el.querySelector('.ws-body'), state: null, cleanups: [], destroy: () => {} };
   views.set(p.id, v);
   if (p.type === 'chart') mountChart(v);
   else if (p.type === 'tape') mountTape(v);
-  else v.body.innerHTML = '<div class="tk-hold" role="note"><b>Order ticket: next build</b><span>Every chart here is read only until then. Trade from the single chart page (/single.html).</span></div>';
+  else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
   el.querySelector('.ws-size').addEventListener('pointerdown', e => startDrag(e, v, 'size'));
@@ -438,7 +830,7 @@ function mountChart(v) {
   v.nameEl = v.head.querySelector('.ws-name'); v.tfEl = v.head.querySelector('.ws-tf'); v.viewBtn = v.head.querySelector('.ws-view');
   headChart(v);
   const pane = window.ChartLive.mount(v.body, {
-    feed: hub, paneId: p.id, storagePrefix: PREFIX, toolbar: false, compact: true,
+    feed: hub, paneId: p.id, storagePrefix: PREFIX, toolbar: false, compact: true, trade: tradeHost,
     view: { root: p.root, tf: p.tf, range: p.tf === 'range' ? p.range : undefined },
     onView: nv => viewChanged(v, nv),
     onColors: () => { for (const o of chartViews()) if (o !== v) o.pane.refreshColors(); },
@@ -448,6 +840,7 @@ function mountChart(v) {
     },
   });
   v.pane = pane;
+  pane.setTrade(chartTrade(v));                             // its instrument's orders, position and fills on the ticket's account
   v.head.querySelector('.ws-ind').append(pane.indicators, pane.chips);   // the chart's own Indicators button and menu, its chips
   const indBtn = pane.indicators.querySelector('.ind-btn');
   const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
@@ -460,6 +853,7 @@ function viewChanged(v, nv) {
   p.root = nv.root; p.tf = nv.tf;
   if (nv.tf === 'range') p.range = nv.range; else delete p.range;
   headChart(v); save();
+  if (v.pane) v.pane.setTrade(chartTrade(v));
 }
 /* The first chart of a new default layout starts with the single chart page's indicators (its main pane's defaults);
    any other new pane starts with none (Anthony's rule for new panes). */
@@ -473,6 +867,7 @@ function seedMainIndicators(l) {
 function closePanel(id) {
   const v = views.get(id); if (!v) return;
   closePops();
+  if (v.panel.type === 'ticket') releaseTicket();           // no window has the ticket until one adds it
   v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); views.delete(id);
   panels = panels.filter(p => p.id !== id);
   save(); syncConn(); placeColors(); syncAddMenu();
@@ -489,6 +884,8 @@ function addPanel(type) {
   panels.push(p);
   addView(p);
   save(); syncConn(); placeColors(); syncAddMenu();
+  if (type === 'ticket') takeTicket(ok => { if (!ok && views.has(p.id) && !holds()) closePanel(p.id); });
+  else if (type === 'chart') renderCharts();
 }
 
 /* ---------------- drag and resize: the ghost shows the snapped cells; a place that overlaps is refused */
@@ -759,7 +1156,7 @@ $('wsRangeMode').addEventListener('change', e => {
 
 /* Hotkeys: the single chart page's Settings, the same keys (live-hotkeys-v1). Each box reads the keys pressed in it. */
 const HKKEY = LP.KEYS.hotkeys;
-const readHotkeys = () => OT.cleanHotkeys(prefs.raw.get(HKKEY));
+const readHotkeys = () => (HK = OT.cleanHotkeys(prefs.raw.get(HKKEY)));
 $('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="wsHkCap">${OT.HOTKEY_ACTIONS.map(a => `
   <div class="hk-row" data-hk="${a.id}">
     <label class="hk-name" for="wsHk-${a.id}">${esc(a.name)}</label>
@@ -868,23 +1265,30 @@ function askName(title, value, done) {
   });
   const i = $('wsName'); i.focus(); i.select();
 }
-function confirmBox(text, label, done) {
+function confirmBox(text, label, done, cancel) {
   const d = $('wsDialog');
   d.innerHTML = `<form class="ws-dlg" method="dialog"><p>${esc(text)}</p><div class="ws-dlg-btns"><button type="button" class="ws-btn" data-act="cancel">Cancel</button>` +
     `<button type="submit" class="ws-btn primary">${esc(label)}</button></div></form>`;
-  showDialog(d, () => { done(); return true; });
+  showDialog(d, () => { done(); return true; }, cancel);
   d.querySelector('[type="submit"]').focus();
 }
-function showDialog(d, onOk) {
+function showDialog(d, onOk, onCancel) {
   closePops();
   const form = d.querySelector('form');
-  form.addEventListener('submit', e => { e.preventDefault(); if (onOk()) d.close(); });
+  let ok = false;
+  form.addEventListener('submit', e => { e.preventDefault(); if (onOk()) { ok = true; d.close(); } });
   form.querySelector('[data-act="cancel"]').addEventListener('click', () => d.close());
+  d.addEventListener('close', () => { if (!ok && onCancel) onCancel(); }, { once: true });
   if (typeof d.showModal === 'function') d.showModal(); else d.setAttribute('open', '');
 }
 
 /* ---------------- open a layout (from the URL, the select, New, Delete, Reset) */
-function teardown() { closePops(); for (const v of views.values()) { v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); } views.clear(); panels = []; colorsOwner = null; }
+function teardown() {
+  closePops();
+  if (core.TR.armed) core.setArmed(false);                 // the ticket is built again: Armed off
+  for (const v of views.values()) { v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); }
+  views.clear(); panels = []; colorsOwner = null; TK.el = null; TK.bar = null; TK.view = null;
+}
 function openLayout(name) {
   teardown();
   layout = W.layoutName(name) || W.DEFAULT_NAME;
@@ -894,6 +1298,8 @@ function openLayout(name) {
   panels = (got || W.cleanLayout(W.defaultLayout())).panels;
   for (const p of panels) addView(p);
   setUrl(); syncSelect(); syncConn(); placeColors(); syncAddMenu();
+  if (holds() && !panels.some(p => p.type === 'ticket')) releaseTicket();   // a layout without the ticket lets it go
+  renderOrders();
 }
 
 /* Another window or the single chart page changed something this page uses. Its open layouts stay its own. */
@@ -904,7 +1310,8 @@ window.addEventListener('storage', e => {
   else if (k === W.KEYS.floors) { floors = W.readFloors(store); refloorTapes(); }
   else if (k === LP.KEYS.settings) { for (const v of chartViews()) v.pane.refreshSettings(); if (pop && pop.el === $('wsSettings')) renderGeneral(); }
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
-  else if (k === HKKEY && pop && pop.el === $('wsSettings')) renderHotkeys();
+  else if (k === HKKEY) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
+  else if (k === LP.KEYS.bracketPresets && TK.bar) { core.readPresets(); TK.bar.render(); }
 });
 window.addEventListener('pagehide', () => { if (layout) save(); });
 
@@ -913,6 +1320,6 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   views: () => [...views.values()].map(v => ({ id: v.panel.id, type: v.panel.type, state: v.state, count: v.tape ? v.tape.count() : null })),
   feed: () => hub.stats() };
 
-const start = () => openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME);
+const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); };
 if (PIN) PIN.gate().then(start); else start();
 })();

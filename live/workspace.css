@@ -110,9 +110,62 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-panel .chart-live .stage { min-height: 48px; }
 /* delays and fps are in the top bar; a chart's own notes show under it (ChartLive.mount compact: true, live.css) */
 
-/* ---------------- the order ticket's place (the ticket comes in E2b) */
+/* ---------------- top bar (1.12.0): KEYS ON / OFF, the window's Flatten all */
+.ws-keys { flex: none; font: 600 11px var(--ws-mono); letter-spacing: .06em; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
+.ws-keys.on { color: var(--ws-buy); border-color: color-mix(in srgb, var(--ws-buy) 55%, transparent); }
+.ws-btn.ws-flat { color: var(--ws-sell); border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); background: var(--ws-sell-ground); font-weight: 600; }
+.ws-btn.ws-flat:hover { color: var(--ws-text); }
+.ws-btn.ws-flat:disabled { opacity: .45; cursor: not-allowed; }
+/* ChartBridge's order errors and what was not sent: under the top bar, until dismissed */
+.ws-alerts { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 0 6px; }
+.ws-alerts:not(:has(> :not([hidden]))) { display: none; }
+.ws-alert { display: flex; align-items: center; gap: 10px; margin-top: 4px; padding: 6px 10px; border: 1px solid var(--ws-sell); border-radius: 8px; background: var(--ws-sell-ground); color: var(--ws-text); }
+.ws-alert[hidden] { display: none; }
+.ws-alert b { color: var(--ws-sell); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; font-size: 11px; }
+.ws-alert span { flex: 1 1 auto; white-space: pre-line; }
+.ws-alert.warn { border-color: var(--ws-warn); background: var(--ws-warn-ground); }
+.ws-alert.warn b { color: var(--ws-warn); }
+
+/* ---------------- the order ticket (1.12.0): the order bar's controls (live.css) in a column; Armed in the Armed color.
+   It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel scrolls inside. */
+.ws-panel .chart-live.tk { height: auto; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px; gap: 0; background: transparent; font-size: 12px; }
+.chart-live .obar.tk-bar { display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px; padding: 6px; border-radius: 8px; }
+.chart-live .tk-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chart-live .tk-row > * { min-width: 0; }
+.chart-live .tk-two > * { flex: 1 1 0; }
+.chart-live .tk-three > * { flex: 1 1 0; padding-inline: 4px; }
+.chart-live .tk-bar .acct-sel { max-width: none; min-height: 28px; padding: 3px 6px; }
+.chart-live .tk-bar .bpre { flex: 1 1 auto; max-width: none; }
+.chart-live .tk-bar .oin { flex: 1 1 0; width: 0; min-height: 28px; }
+.chart-live .tk-bar .btn, .chart-live .tk-bar .obtn { min-height: 28px; }
+.chart-live .tk-bar .arm { min-height: 28px; padding-right: 10px; }
+.chart-live .tk-acct .tk-root { flex: none; width: 72px; }
+.chart-live .tk-acct .acct-main { flex: 1 1 0; width: 0; min-width: 0; }
+.chart-live .tk-row .glabel { flex: none; }
+.chart-live .tk-bar .arm { flex: 1 1 auto; justify-content: flex-start; white-space: nowrap; }
+.chart-live .tk-bar .oqty { flex: none; width: 46px; }
+.chart-live .tk-bar .ounit { flex: none; white-space: nowrap; }
+.chart-live .tk-bar .seg.bunit { flex: none; }
+.chart-live .tk-three .btn { font-size: 11px; white-space: nowrap; }
+.chart-live .tk-bar .bsave { flex: 1 1 auto; }
+.chart-live .tk-bar .bsave .oin.bname { flex: 1 1 auto; width: 0; }
+.chart-live .tk-state { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; }
+.chart-live .tk-state > * { overflow-wrap: anywhere; }
+.chart-live .tk-fill.long { color: var(--profit); }
+.chart-live .tk-fill.short { color: var(--loss); }
+.chart-live .tk-also { display: flex; flex-direction: column; gap: 2px; }
+.chart-live .tk-also:empty { display: none; }
+.chart-live .tk-also-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; font: 500 12px var(--mono); color: var(--warn); }
+.chart-live .tk-also-row .btn { min-height: 22px; padding: 1px 8px; }
+.chart-live .tk-note { font-size: 11px; color: var(--text2); overflow-wrap: anywhere; }
+.chart-live .tk-note:empty { display: none; }
+.chart-live .tk-note.warn { color: var(--warn); }
+.chart-live .tk-note.error { color: var(--loss); }
+
+/* ---------------- the order ticket's place: in another window, or in none */
 .tk-hold { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px; text-align: center; color: var(--ws-muted); line-height: 1.4; }
 .tk-hold b { color: var(--ws-text2); font-weight: 600; letter-spacing: .02em; }
+.tk-hold .ws-btn { margin-top: 4px; }
 
 /* ---------------- Time and Sales */
 .tp-cols, .tp-row { display: grid; grid-template-columns: 62px minmax(0, 1fr) 40px; gap: 6px; padding: 0 8px; }
