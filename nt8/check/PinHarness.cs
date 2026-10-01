@@ -258,6 +258,15 @@ public static class PinHarness
         Check(ChartBridgePin.Unlock(PinA).Status == 403 && ChartBridgePin.Unlock(PinB).Ok, "after the change: the old PIN is refused, the new one opens");
         Check(ChartBridgePin.WsUnlocked(Own, t1) && Get("/session", t1).Status == 200, "after the change: a page unlocked before stays unlocked");
 
+        // 0.3.5: HEAD gets the headers GET gets, and no body (it used to fail with a 500 and a "request failed" line)
+        File.WriteAllText(Path.Combine(ChartBridgeConfig.WwwFolder, "index.html"), "<!doctype html><title>test page</title>");
+        int failedBefore; lock (NinjaTrader.Code.Output.Lines) failedBefore = NinjaTrader.Code.Output.Lines.Count(l => l.Contains("request failed"));
+        Reply g = Get("/"), h = Send("HEAD", "/", null, null, null, null, null), hd = Send("HEAD", "/diag", null, null, null, null, null), hm = Send("HEAD", "/nothing.js", null, null, null, null, null);
+        int failedAfter; lock (NinjaTrader.Code.Output.Lines) failedAfter = NinjaTrader.Code.Output.Lines.Count(l => l.Contains("request failed"));
+        Check(g.Status == 200 && g.Body.Length > 0 && h.Status == 200 && h.Body == "" && h.Headers["Content-Type"] == g.Headers["Content-Type"] && h.Headers["Content-Length"] == g.Headers["Content-Length"]
+              && hd.Status == 200 && hd.Body == "" && hm.Status == 404 && hm.Body == "" && failedAfter == failedBefore,
+              "HEAD: the same status, Content-Type and Content-Length as GET, no body, no Output line (/ " + h.Status + " " + h.Headers["Content-Length"] + ", /diag " + hd.Status + ", a missing file " + hm.Status + ")");
+
         // /diag says only whether a PIN is set
         string diag = Get("/diag").Body;
         string[] parts = DataLine().Split(' ');

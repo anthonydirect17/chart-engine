@@ -10,22 +10,22 @@ if (-not (Test-Path $nt)) { throw "NinjaTrader 8 folder not found at $nt" }
 
 $addons = Join-Path $nt 'bin\Custom\AddOns'
 $www = Join-Path $nt 'ChartBridge\www'
-New-Item -ItemType Directory -Force -Path $addons, $www, (Join-Path $www 'src') | Out-Null
+New-Item -ItemType Directory -Force -Path $addons, $www | Out-Null
 
-Copy-Item (Join-Path $repo 'nt8\ChartBridge.cs') (Join-Path $addons 'ChartBridge.cs') -Force
-Copy-Item (Join-Path $repo 'nt8\ChartBridgeOrders.cs') (Join-Path $addons 'ChartBridgeOrders.cs') -Force   # order entry (off unless config.txt turns it on)
-Copy-Item (Join-Path $repo 'nt8\ChartBridgePin.cs') (Join-Path $addons 'ChartBridgePin.cs') -Force       # the PIN on ChartBridge's own page (0.3.2)
-Copy-Item (Join-Path $repo 'nt8\ChartBridgeBars.cs') (Join-Path $addons 'ChartBridgeBars.cs') -Force     # daily 1-minute bars to The Desk (0.3.6, off unless bars = on)
-Copy-Item (Join-Path $repo 'live\index.html') (Join-Path $www 'index.html') -Force
-Copy-Item (Join-Path $repo 'live\live.js') (Join-Path $www 'live.js') -Force
-Copy-Item (Join-Path $repo 'live\live.css') (Join-Path $www 'live.css') -Force
-Copy-Item (Join-Path $repo 'live\bar-builder.js') (Join-Path $www 'bar-builder.js') -Force
-Copy-Item (Join-Path $repo 'live\order-ticket.js') (Join-Path $www 'order-ticket.js') -Force
-Copy-Item (Join-Path $repo 'live\pin.js') (Join-Path $www 'pin.js') -Force
-Copy-Item (Join-Path $repo 'live\pin.css') (Join-Path $www 'pin.css') -Force
-Copy-Item (Join-Path $repo 'src\chart-engine.js') (Join-Path $www 'src\chart-engine.js') -Force
+# What gets copied is listed once, in nt8\install-files.json (nt8\update-pc.ps1 reads the same list):
+# the add-on sources (ChartBridge.cs; ChartBridgeOrders.cs, order entry, off unless config.txt turns it on;
+# ChartBridgePin.cs, the PIN on ChartBridge's own page) and the live page files.
+$list = Get-Content -Raw -LiteralPath (Join-Path $repo 'nt8\install-files.json') | ConvertFrom-Json
+foreach ($f in $list.addons) {
+  Copy-Item (Join-Path $repo $f) (Join-Path $addons (Split-Path -Leaf $f)) -Force
+}
+foreach ($f in $list.www) {
+  $dest = Join-Path $www $f.to
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+  Copy-Item (Join-Path $repo $f.from) $dest -Force
+}
 
-Write-Host "ChartBridge.cs, ChartBridgeOrders.cs, ChartBridgePin.cs, ChartBridgeBars.cs -> $addons"
+Write-Host "$(($list.addons | ForEach-Object { Split-Path -Leaf $_ }) -join ', ') -> $addons"
 Write-Host "live page       -> $www"
 Write-Host ""
 Write-Host "Next: NinjaTrader > New > NinjaScript Editor > compile (F5)."
@@ -34,3 +34,4 @@ Write-Host "Messages appear in New > NinjaScript Output."
 Write-Host "Forgot the PIN? Delete ChartBridge\pin.txt in the NinjaTrader 8 folder (NinjaTrader may stay open); the page asks for a new one."
 Write-Host "ChartBridge answers this PC only. Other pages that may read the stream (The Desk) go in allowOrigins in config.txt;"
 Write-Host "keep inbound port 8765 blocked in the Windows firewall as a second layer (see nt8\PROTOCOL.md, Network access)."
+Write-Host "To keep this PC up to date from now on: README.md, 'Keep this PC up to date' (nt8\update-pc.ps1)."

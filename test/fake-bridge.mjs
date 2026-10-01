@@ -13,6 +13,16 @@
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
 //   --tick-hours-max=3              serve at most this many hours of tick history, whatever the page asks
 //                                   (like a PC with little local tick data)
+//   --market-hours                  sample data on the real calendar (chart 1.6.1, for the weekend volume profile):
+//                                   the sample moved by whole weeks so its weekends fall on the real ones and nothing
+//                                   comes after the clock; no trades while CME Globex is closed (the engine's
+//                                   util.cmeClosed: Friday 17:00 to Sunday 18:00, the 17:00 break, New Year's Day,
+//                                   Good Friday and Christmas, and from 13:00 on the other NYSE holidays, the equity
+//                                   futures' halt); tick history counted back from the clock, as ChartBridge does
+//   --tick-shift-ms=137             every trade stamped this many ms later (history and live), as real trades are: a
+//                                   session's first trade at 18:00:00.137, not 18:00:00.000 (chart 1.6.1, review 2 S4)
+//   --version=0.3.5                 the version hello reports (default fake-0.3.2; fake-0.2.1 with --v1); the page
+//                                   reads how many hours of ticks ChartBridge serves from it (48 before 0.3.5)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --tickets                       like The Desk's relay: /ws needs ?ticket=<t>, and each ticket works once
@@ -37,12 +47,52 @@
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day)
+//   --pc-clock-offset=-45010        the clock of the PC ChartBridge runs on, as seconds off the real one (default: the
+//                                   exchange clock's, --clock-offset): each live tick's `rx` is read from it and `u` from
+//                                   the exchange clock (the data's time, a few ms before), so a PC clock 10 s behind the
+//                                   exchange is --pc-clock-offset=<clock offset - 10> (the page's own clock is the test's)
+//   --load-delay-ms=3000            a load's ticks and `ready` go out this long after its subscribe (NinjaTrader answering
+//                                   the tick request), and no live trade reaches the page meanwhile, as with ChartBridge
+//                                   holding them (a page reloading for more ticks misses those seconds)
+//   --cme-hours                     the history and trades follow CME's hours on the exchange clock: no minute bar, tick or
+//                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data
+//                                   shifted to now otherwise trades through 18:00)
 //   --no-sides                      behave like ChartBridge 0.3.3 for trade sides: ticks as [t,p,v] and live ticks without
 //                                   s and sm (to check the page against an older add-on)
 // Trade sides (ChartBridge 0.3.4, nt8/PROTOCOL.md "Trade side"): every backfill trade is [t, p, v, s, sm] and every live
 // tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
 // quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
 // previous side by the tick rule (sm 3), the first is unknown (0, 0). Sample data, not a real classification.
+// Served window and session table (ChartBridge 0.3.5, nt8/PROTOCOL.md "Served window" and "Session table"), sample data,
+// never market data:
+//   --live-first                    hello lists "liveFirst" and "profile". The data is one tape per instrument: the tick
+//                                   history, then every live trade appended to it, so what a page gets can be checked trade
+//                                   by trade (/test/tape). A seconds or range load (subscribe liveFirst, tickHours above 0)
+//                                   gets the served window: the last --range-hours of trades; the first such load of a
+//                                   session "asks NinjaTrader" (--window-ms), later ones (a reload, another page) get the same
+//                                   window from the fake's memory, from the same first trade, extended by the live trades
+//                                   (dropped at the next session). Live trades are held during a load, as ChartBridge does.
+//                                   A subscribe with profile gets the "profile" message before ready: the session table
+//                                   (the tape's trades of the session so far, per half hour and price), exactly the trades
+//                                   before the ones the page gets next. A load without liveFirst is a full load from the tape.
+//   --range-hours=2                 the served window's hours (ChartBridge's rangeHours)
+//   --window-ms=300                 how long "NinjaTrader" takes to answer the first window of a session
+//   --table-building=MS             the table is building (ChartBridge started mid-session): only the live trades from the
+//                                   fake's start, for MS ms; then its one backfill makes it whole and every page that is
+//                                   live and asked for "profile" gets a new one (no sub). Only for --profile-roots
+//   --profile-roots=MNQ,NQ          ChartBridge's profileRoots (default all four): with --table-building the others never
+//                                   get a backfill (their table counts from the fake's start: "since")
+//   As ChartBridge 0.3.5 does it, every tick subscribe gets the served window, with or without liveFirst (a 1.6.x page)
+//   --calendar                      sample data on the real calendar at the fake's clock: weekends and the 17:00 to 18:00 ET
+//                                   break where they fall (with --clock-offset, a Sunday 18:00 open with Friday before it)
+//   With --test-controls: POST /test/features?liveFirst=0 makes hello leave the features out (a full load, like 0.3.4) for
+//   new connections; POST /test/tape?root=NQ&from=<t> the tape's trades from that time; /test/books what the fake's
+//   "ChartBridge" did per instrument (windows asked and served, the table's state); /test/feed-drop a data connection drop
+//   (every table not whole from then on, the served windows dropped, live pages get the profile again).
+// --quote-hours=N (ChartBridge 0.3.4.1's config.txt quoteHours): only the backfill's last N hours have measured sides
+// (sm 2); every trade before them gets a tick-rule side (sm 3), as when NinjaTrader is asked for no historical quotes
+// there. 0 is 0.3.4.1's default (no measured side in the backfill); without the flag, every backfill trade is measured
+// like 0.3.4's (its quote history covered the whole window).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -68,6 +118,12 @@ const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES =
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const SIDES = !flag('no-sides') && !V1;           // ChartBridge 0.2 (--v1) had no sides either
+const LIVE_FIRST = !!flag('live-first') && !V1, CALENDAR = !!flag('calendar');
+let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
+const RANGE_HOURS = +flagValue('range-hours') || 2, WINDOW_MS = flagValue('window-ms') === '' ? 300 : +flagValue('window-ms');
+const TABLE_BUILDING_MS = flagValue('table-building') === '' ? -1 : +flagValue('table-building');
+const PROFILE_ROOTS = flagValue('profile-roots') ? flagValue('profile-roots').split(',').map(x => x.trim().toUpperCase()) : ['MNQ', 'NQ', 'ES', 'MES'];
+let dropAt = null;                                 // /test/feed-drop: when the data connection dropped (bar time)
 /* The side of a trade from the previous one (see the header): [s, sm]. */
 function sideOf(p, prev, prevSide) {
   if (prev === undefined) return [0, 0];
@@ -90,7 +146,24 @@ const pinReady = flagValue('test-pin') && !pin.isSet() ? pin.set(flagValue('test
 const OWN = 'http://localhost:' + PORT;
 
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
+const PC_CLOCK_OFFSET = flagValue('pc-clock-offset') !== '' ? +flagValue('pc-clock-offset') : CLOCK_OFFSET;
+const CME_HOURS = !!flag('cme-hours');
+const QUOTE_HOURS = flagValue('quote-hours') !== '' ? +flagValue('quote-hours') : null;
+const LOAD_DELAY_MS = +flagValue('load-delay-ms') || 0;
 const etNow = () => CE.util.zoneSeconds(Date.now() / 1000 + CLOCK_OFFSET);
+const MARKET_HOURS = !!flag('market-hours');
+/* --market-hours: whether CME equity index futures are closed at exchange time t (the CME calendar, see the header). */
+const marketClosed = t => CE.util.cmeClosed(t);
+const TICK_SHIFT = (+flagValue('tick-shift-ms') || 0) / 1000;
+/* CME closed (Globex equity futures) at exchange time t (New York wall clock as bar-time seconds): 17:00 to 18:00 every
+   day, Friday 17:00 to Sunday 18:00. */
+function cmeClosed(t) {
+  const d = new Date(t * 1000).getUTCDay(), s = ((t % 86400) + 86400) % 86400;
+  if (d === 6) return true;
+  if (d === 5 && s >= 61200) return true;
+  if (d === 0 && s < 64800) return true;
+  return s >= 61200 && s < 64800;
+}
 const INSTR = {
   MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2, scale: 1 },
   NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20, scale: 1 },
@@ -99,18 +172,28 @@ const INSTR = {
 };
 const rq = (p, t) => Math.round(p / t) * t;
 
-// Sample history shifted so its last bar is the current minute.
+// Sample history shifted so its last bar is the current minute (--calendar: made on the real calendar up to now, unshifted).
 function makeData(rootSym) {
-  const feed = SampleFeed.create({ seed: 20260929 + rootSym.length });
+  const liveMin = Math.floor(etNow() / 60) * 60;
+  // --calendar: the feed made up to the next Tuesday 10:31 ET (its demo trades need that morning), from a week before, and
+  // cut at the current minute
+  let tue = Math.floor(liveMin / 86400);
+  while (new Date(tue * 86400000).getUTCDay() !== 2 || tue * 86400 + 37860 < liveMin) tue++;
+  const feed = CALENDAR ? SampleFeed.create({ seed: 20260929 + rootSym.length, start: (tue - 8) * 86400 + 18 * 3600, live: tue * 86400 + 37860 })
+    : SampleFeed.create({ seed: 20260929 + rootSym.length });
   const k = INSTR[rootSym].scale;
-  const base = feed.base.slice(0, -1);
-  const shift = Math.floor(etNow() / 60) * 60 - base[base.length - 1].t;
-  const bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
+  const base = CALENDAR ? feed.base.filter(b => b.t <= liveMin) : feed.base.slice(0, -1);
+  let shift = CALENDAR ? 0 : liveMin - base[base.length - 1].t;
+  if (MARKET_HOURS && !CALENDAR) { const W = 7 * 86400; let k = Math.ceil(shift / W); if (base[0].t + k * W > etNow()) k--; shift = k * W; }
+  let bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
-  return bars;
+  if (CME_HOURS) bars = bars.filter(b => !cmeClosed(b.t));
+  return MARKET_HOURS ? bars.filter(b => b.t <= Math.floor(etNow() / 60) * 60 && !marketClosed(b.t)) : bars;
 }
 function ticksFrom(bars, hours) {
-  const out = [], from = bars[bars.length - 1].t - hours * 3600;
+  const out = [], from = (MARKET_HOURS ? etNow() : bars[bars.length - 1].t) - hours * 3600;
+  const quoteFrom = QUOTE_HOURS === null ? -Infinity : (MARKET_HOURS ? etNow() : bars[bars.length - 1].t + 60) - QUOTE_HOURS * 3600;
+  const nowT = etNow();                                  // no trade after now (the forming minute's walk used to run on to :59.9)
   let seed = 7;
   const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
   const stepTicks = () => { if (!TICK_GAPS) return 1; const r = rnd(); return r < 0.8 ? 1 : r < 0.97 ? 2 + Math.floor(rnd() * 2) : 8 + Math.floor(rnd() * 9); };
@@ -125,10 +208,16 @@ function ticksFrom(bars, hours) {
       while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
-    const v = Math.max(1, Math.round(b.v / prices.length));
+    // the minute's volume shared out over its trades, so they add up to the bar's (at least 1 each), as NinjaTrader's do
+    const base = Math.floor(b.v / prices.length), extra = b.v - base * prices.length;
     prices.forEach((p, i) => {
-      const row = [+(b.t + i * 59.9 / prices.length).toFixed(3), p, v];
-      if (SIDES) { const prev = out.length ? out[out.length - 1] : undefined; row.push(...sideOf(p, prev && prev[1], prev && prev[3])); }
+      const row = [+(b.t + i * 59.9 / prices.length + TICK_SHIFT).toFixed(3), p, Math.max(1, base + (i < extra ? 1 : 0))];
+      if (row[0] > nowT) return;
+      if (SIDES) {
+        const prev = out.length ? out[out.length - 1] : undefined, sd = sideOf(p, prev && prev[1], prev && prev[3]);
+        if (sd[1] === 2 && row[0] < quoteFrom) sd[1] = 3;          // before the quote window: the same side, by the tick rule
+        row.push(...sd);
+      }
       out.push(row);
     });
   }
@@ -159,6 +248,75 @@ function avgVol(bars) {
 
 const data = {};
 for (const r of Object.keys(INSTR)) data[r] = makeData(r);
+
+/* --live-first: one tape of trades per instrument, in columns (history up to now, then every live trade), with sides. */
+class Tape {
+  constructor(cap) { this.n = 0; this._grow(cap || 1024); }
+  _grow(cap) {
+    const old = this.n ? this : null;
+    this.cap = cap;
+    const t = new Float64Array(cap), p = new Float64Array(cap), v = new Float64Array(cap), s = new Int8Array(cap), m = new Int8Array(cap);
+    if (old) { t.set(this.t.subarray(0, this.n)); p.set(this.p.subarray(0, this.n)); v.set(this.v.subarray(0, this.n)); s.set(this.s.subarray(0, this.n)); m.set(this.m.subarray(0, this.n)); }
+    this.t = t; this.p = p; this.v = v; this.s = s; this.m = m;
+  }
+  push(t, p, v, s, sm) { if (this.n === this.cap) this._grow(this.cap * 2); const i = this.n++; this.t[i] = t; this.p[i] = p; this.v[i] = v; this.s[i] = s; this.m[i] = sm; }
+  row(i) { return SIDES ? [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i]] : [this.t[i], this.p[i], this.v[i]]; }
+  rows(a, b, plain) { const out = new Array(Math.max(0, b - a)); for (let i = a; i < b; i++) out[i - a] = plain ? [this.t[i], this.p[i], this.v[i]] : this.row(i); return out; }
+  /* the first trade at or after time t */
+  at(t) { let lo = 0, hi = this.n; while (lo < hi) { const m = (lo + hi) >> 1; if (this.t[m] < t) lo = m + 1; else hi = m; } return lo; }
+}
+const tapes = {};
+if (LIVE_FIRST) for (const r of Object.keys(INSTR)) {
+  const hist = ticksFrom(data[r], CALENDAR ? 96 : 48), now = etNow(), k = new Tape(hist.length + 65536);   // --calendar: back over a weekend
+  let prevP, prevS = 0;
+  for (const x of hist) {
+    if (x[0] > now) break;                          // the tape ends now; live trades carry on from here
+    const [sd, sm] = sideOf(x[1], prevP, prevS);
+    k.push(x[0], x[1], x[2], sd, sm); prevP = x[1]; prevS = sd;
+  }
+  tapes[r] = k;
+}
+/* The fake's "ChartBridge" per instrument (--live-first): the served window (its first tape index and session) and the
+   session table's state. The table itself is worked out from the tape when a profile is sent (the same numbers ChartBridge
+   keeps as trades come). */
+const SESSION = 18 * 3600;
+const sessionOf = t => (CE.util.tradeDay(t, SESSION) - 1) * 86400 + SESSION;
+const startN = {};
+for (const r of Object.keys(tapes)) startN[r] = tapes[r].n;   // --table-building: the live trades from here on
+const books = {};
+for (const r of Object.keys(tapes)) books[r] = { window: null, asked: 0, served: 0, profiles: 0, pushed: 0 };
+let backfillDone = false;                          // --table-building: set when its time has come (a flag: timers can fire a ms early)
+const backfilled = r => TABLE_BUILDING_MS < 0 || (backfillDone && PROFILE_ROOTS.includes(r));
+const tableWhole = r => dropAt === null && backfilled(r);
+/* One session's table from the tape, trades [a, b), as ChartBridge sends it: [[half hour start, price in ticks, volume]]. */
+function tableRows(r, a, b) {
+  const k = tapes[r], tick = INSTR[r].tick, m = new Map();
+  for (let i = a; i < b; i++) {
+    const key = Math.floor(k.t[i] / 1800) * 1800 + '|' + Math.round(k.p[i] / tick);
+    m.set(key, (m.get(key) || 0) + k.v[i]);
+  }
+  return [...m].map(([key, v]) => { const [h, p] = key.split('|'); return [+h, +p, v]; }).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+}
+/* The "profile" message: the session of the tape's last trade up to trade `end` (ChartBridge's table), and the one before. */
+function profileMsg(r, end, sub) {
+  const k = tapes[r], lastT = end > 0 ? k.t[end - 1] : etNow(), s0 = sessionOf(lastT), a = k.at(s0);
+  const whole = tableWhole(r), all = backfilled(r);
+  const from = all ? a : Math.max(a, startN[r]);
+  const cov = all ? s0 : startN[r] < k.n ? Math.max(s0, k.t[startN[r]]) : etNow();
+  const backfill = TABLE_BUILDING_MS < 0 ? 'none' : !PROFILE_ROOTS.includes(r) ? 'none (not in profileRoots)' : all ? 'done' : 'asked';
+  const p0 = k.at(sessionOf(s0 - 1));
+  const msg = { type: 'profile', root: r, tick: INSTR[r].tick, bucketSeconds: 1800,
+    session: { from: s0, whole, coveredFrom: +cov.toFixed(3), backfill, drop: dropAt === null ? null : { at: dropAt, why: 'the data connection went ConnectionLost' }, rows: tableRows(r, from, end) },
+    last: p0 < a ? { from: sessionOf(s0 - 1), whole: true, coveredFrom: sessionOf(s0 - 1), rows: tableRows(r, p0, a) } : null };
+  if (sub !== undefined) msg.sub = sub;
+  books[r].profiles++;
+  return msg;
+}
+if (LIVE_FIRST && TABLE_BUILDING_MS >= 0) setTimeout(() => {
+  // the one backfill of the session is in: the table is whole, and every live page that asked for it gets it
+  backfillDone = true;
+  for (const c of clients) if (c.ready && c.profile && tapes[c.root] && PROFILE_ROOTS.includes(c.root)) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
+}, TABLE_BUILDING_MS);
 
 // ---------------------------------------------------------------- tiny WebSocket server
 function frame(text) {
@@ -223,33 +381,84 @@ const tickCache = new Map();             // --tick-rate: millions of ticks, made
 function subscribe(c, m) {
   const r = INSTR[m.root] ? m.root : 'MNQ';
   c.root = r; c.ready = false;
+  if (LIVE_FIRST) return subscribeTape(c, m, r);
+  const seq = c.seq = (c.seq || 0) + 1;
   const bars = data[r];
   for (let i = 0; i < bars.length; i += 4000) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
     send(c, { type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length });
   }
   const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours), key = r + '|' + hours;
-  const ticks = TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
-  for (let i = 0; i < ticks.length || i === 0; i += 20000) {
-    send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
-    if (!ticks.length) break;
+  // tickHours 0 (minute views): no tick backfill at all, as ChartBridge (its seam trades are never sent; 1.7.0 round 4:
+  // the fake used to send the forming minute's trades)
+  const finish = () => {
+    if (c.seq !== seq) return;                             // a newer subscribe won
+    const ticks = m.tickHours === 0 ? null : TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
+    for (let i = 0; ticks && (i < ticks.length || i === 0); i += 20000) {
+      send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
+      if (!ticks.length) break;
+    }
+    send(c, { type: 'ready', root: r });
+    c.ready = true;
+  };
+  if (LOAD_DELAY_MS) setTimeout(finish, LOAD_DELAY_MS); else finish();   // --load-delay-ms: NinjaTrader's tick request taking that long
+}
+
+/* --live-first: a load from the tape, as ChartBridge 0.3.5 does it. */
+function subscribeTape(c, m, r) {
+  const sub = Number.isInteger(m.sub) ? m.sub : undefined, k = tapes[r], bars = data[r], b = books[r];
+  const tag = o => (sub !== undefined ? Object.assign(o, { sub }) : o);
+  c.seq = (c.seq || 0) + 1; c.profile = m.profile === true;
+  const seq = c.seq;
+  for (let i = 0; i < bars.length; i += 4000) {
+    const chunk = bars.slice(i, i + 4000).map(x => [x.t, x.o, x.h, x.l, x.c, x.v]);
+    send(c, tag({ type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length }));
   }
-  send(c, { type: 'ready', root: r });
-  c.ready = true;
+  const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours);
+  const sendTicks = (a, e) => {
+    // the served window's trades carry no side (ChartBridge 0.3.5 sends [t, p, v]); an old bridge's full load does
+    for (let i = a; i < e || i === a; i += 20000) { send(c, tag({ type: 'ticks', root: r, ticks: k.rows(i, Math.min(e, i + 20000), liveFirstOn), done: i + 20000 >= e })); if (e <= a) break; }
+  };
+  const finish = from => {                          // the trades from `from` up to now, the profile of exactly those before, ready
+    const end = k.n;
+    if (from !== null) sendTicks(from, end);
+    if (c.profile) send(c, tag(profileMsg(r, end)));
+    send(c, tag({ type: 'ready', root: r })); c.ready = true;
+  };
+  if (!(hours > 0)) { finish(null); return; }       // a minute chart: no trades
+  if (!liveFirstOn && m.liveFirst !== true) { finish(k.at(etNow() - hours * 3600)); return; }   // an old bridge: the full load
+  // the served window: dropped at the next session (the session of the tape's last trade moved on)
+  if (b.window && b.window.session !== sessionOf(k.t[k.n - 1])) b.window = null;
+  if (b.window) { b.served++; finish(b.window.from); return; }
+  b.asked++;
+  setTimeout(() => {                                 // "NinjaTrader" answers; the live trades meanwhile are held, then in the window
+    if (c.seq !== seq || c.sock.destroyed) return;
+    if (!b.window) b.window = { from: k.at(etNow() - RANGE_HOURS * 3600), session: sessionOf(k.t[k.n - 1]) };
+    finish(b.window.from);
+  }, WINDOW_MS);
 }
 
 const last = {}, held = {}, lastSide = {};
 for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
+if (LIVE_FIRST) for (const r of Object.keys(INSTR)) { const k = tapes[r]; if (k.n) { last[r] = k.p[k.n - 1]; lastSide[r] = k.s[k.n - 1]; } }
 function trade(r, p) {
+  if (CME_HOURS && cmeClosed(etNow())) return;          // nothing trades while CME is closed
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
   last[r] = p; lastSide[r] = s;
   const now = Date.now();
-  const msg = { type: 'tick', root: r, t: +etNow().toFixed(3), u: now - 20 - Math.random() * 30, rx: now, p, v: 1 + Math.floor(Math.random() * 5) };
+  // u: the data's UTC time, on the exchange clock, 20 to 50 ms before ChartBridge's PC receives it (rx, on its clock)
+  const msg = { type: 'tick', root: r, t: +(etNow() + TICK_SHIFT).toFixed(3), u: now + CLOCK_OFFSET * 1000 - 20 - Math.random() * 30, rx: now + PC_CLOCK_OFFSET * 1000, p, v: 1 + Math.floor(Math.random() * 5) };
   if (SIDES) { msg.s = s; msg.sm = sm; }
+  if (LIVE_FIRST) {                                   // on the tape: never older than its last trade
+    const k = tapes[r];
+    if (k.n && msg.t < k.t[k.n - 1]) msg.t = k.t[k.n - 1];
+    k.push(msg.t, p, msg.v, s, sm);
+  }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade
 }
 if (!LIVE_RATE) setInterval(() => {
+  if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
   for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 else {
@@ -262,7 +471,7 @@ else {
   setInterval(() => {
     const burst = ((Date.now() - t0) % 10000) < 1500 ? 3 : 1;
     for (const r of Object.keys(INSTR)) {
-      if (held[r] || ![...clients].some(c => c.ready && c.root === r)) continue;
+      if (held[r] || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
       const n = poisson(LIVE_RATE * burst / 100);
       for (let k = 0; k < n; k++) {
         const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
@@ -310,6 +519,22 @@ const server = http.createServer((req, res) => {
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
+    else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
+    else if (p === '/test/feed-drop') {
+      dropAt = +etNow().toFixed(3);
+      for (const x of Object.values(books)) if (x.window && !x.gapAsked) { x.window = null; x.gapAsked = true; }   // asked again once (ChartBridge: at most once in 10 minutes)
+      for (const c of clients) if (c.ready && c.profile && tapes[c.root]) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
+    }
+    else if (p === '/test/tape') {
+      const k = tapes[r], from = k ? k.at(+q.get('from') || 0) : 0;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(k ? { n: k.n - from, t: Array.from(k.t.subarray(from, k.n)), p: Array.from(k.p.subarray(from, k.n)), v: Array.from(k.v.subarray(from, k.n)), s: Array.from(k.s.subarray(from, k.n)), m: Array.from(k.m.subarray(from, k.n)) } : null));
+    }
+    else if (p === '/test/books') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(Object.fromEntries(Object.entries(books).map(([x, b]) => [x, { asked: b.asked, served: b.served, profiles: b.profiles, pushed: b.pushed, whole: tableWhole(x),
+        windowFrom: b.window ? tapes[x].t[b.window.from] : null }]))));
+    }
     else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ root: r, last: last[r], held: !!held[r] }));
@@ -344,8 +569,10 @@ server.on('upgrade', (req, sock) => {
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
-  const hello = { type: 'hello', version: V1 ? 'fake-0.2.1' : 'fake-0.3.2', now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
+  // the version as the real add-on names it in hello: 0.3.4 sends trade sides, 0.3.3 (--no-sides) does not; --version sets it
+  const hello = { type: 'hello', version: flagValue('version') || (V1 ? 'fake-0.2.1' : SIDES ? 'fake-0.3.4' : 'fake-0.3.3'), now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
+  if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {

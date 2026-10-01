@@ -328,6 +328,430 @@ try {
   await phone.close();
   await page.close();
 
+  /* ---------------- 1.6.1 (Anthony's ruling 2026-09-30): the order account after a reload or a dropped connection.
+     The account last picked on this PC when ChartBridge allows it, else Sim101 with a note; Armed always off; the
+     picker highlighted; every order path sends for the account shown; two tabs each keep their own account. */
+  {
+    const P5 = PORT + 5;
+    // MNQ cap 40: the cap counts working orders, and the Cancel all probes below keep 30 working while Anthony buys
+    await startBridge(P5, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:40', '--test-controls', '--test-pin=' + TEST_PIN]);
+    const L5 = Math.round((await control(P5, 'hold', { root: 'MNQ' })).last);
+    await control(P5, 'price', { root: 'MNQ', p: L5 });
+    const state5 = () => control(P5, 'state', { root: 'MNQ' });
+    const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 1 });
+    await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+    // every message a page sends, and the account of every order ChartBridge reports to it
+    await ctx.addInitScript(() => {
+      window.__sent = []; window.__orderAcct = {}; window.__rejects = []; window.__statusSeen = [];
+      const iv = setInterval(() => { const el = document.getElementById('statusMsg'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (d) { try { window.__sent.push(Object.assign(JSON.parse(d), { __at: performance.now() })); } catch (e) { /* not JSON */ } return send.call(this, d); };
+      const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+      Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
+        window.__inject = m => fn({ data: JSON.stringify(m) });   // a ChartBridge message made up by the test (R17)
+        d.set.call(this, ev => {
+          try {
+            const m = JSON.parse(ev.data);
+            if (m.type === 'order' && m.id) window.__orderAcct[m.id] = m.account;
+            if (m.type === 'reject') window.__rejects.push(m.reason);
+            if (m.type === 'trading' && m.enabled) window.__lastTrading = m;
+            if (m.type === 'trading' && window.__holdTrading) return;
+          } catch (e) { /* not JSON */ }
+          return fn(ev);   // __holdTrading: the sign-in answer held back, so trading stays off after a reconnect
+        });
+      } });
+    });
+    const tradingOn = pg => until(() => pg.evaluate(() => !document.getElementById('buyMkt').disabled && document.getElementById('connPill').textContent === 'LIVE'), 'trading on', 15000);
+    const openTab = async () => {
+      const pg = await ctx.newPage();
+      pg.on('pageerror', e => fail('1.6.1 pageerror: ' + e.message));
+      pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('1.6.1 console: ' + m.text()); });
+      await pg.goto(`http://localhost:${P5}/live/`);
+      await unlockIfAsked(pg);
+      await tradingOn(pg);
+      return pg;
+    };
+    const reloadTab = async pg => { await pg.reload(); await unlockIfAsked(pg); await tradingOn(pg); };
+    const acct = pg => pg.evaluate(() => { const s = document.getElementById('oAcct'), n = document.getElementById('oAcctNote');
+      return { shown: s.value, options: [...s.options].map(o => o.value), armed: document.getElementById('armBtn').getAttribute('aria-checked'), note: n.textContent, warn: n.classList.contains('warn'),
+        ring: s.classList.contains('acct-flash'), stored: JSON.parse(localStorage.getItem('live-account-v1')), tab: JSON.parse(sessionStorage.getItem('live-account-tab-v1')), fills: document.getElementById('lgFill').textContent.split(' · ').pop() }; });
+
+    // a first visit (nothing picked yet): Sim101, Armed off, and the picker stands out with a note
+    const A = await openTab();
+    let a = await acct(A);
+    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'On Sim101. Armed is off.' && a.ring && !a.warn && a.stored === null, '1.6.1 first visit: Sim101, Armed off, highlighted: ' + JSON.stringify(a));
+    check(await A.evaluate(() => { const b = document.getElementById('oAcct').getBoundingClientRect(); return getComputedStyle(document.getElementById('oAcct')).boxShadow !== 'none' && b.height >= 30; }), '1.6.1: the highlight is a ring around the picker');
+    await A.waitForTimeout(3800);
+    a = await acct(A);
+    check(!a.ring && a.note !== '', '1.6.1: the ring goes after a few seconds, the note stays a little longer');
+
+    // pick DEMO-EVAL and arm; a reload (with the PIN asked again) comes back on DEMO-EVAL with Armed off
+    const box0 = await A.locator('#chart canvas').boundingBox();
+    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    a = await acct(A);
+    check(a.shown === 'DEMO-EVAL' && a.stored === 'DEMO-EVAL' && a.note === '' && a.fills === 'DEMO-EVAL', '1.6.1: a pick is saved, the note cleared, the fills follow: ' + JSON.stringify(a));
+    await A.click('#armBtn');
+    check(await A.getAttribute('#armBtn', 'aria-checked') === 'true', '1.6.1: armed on DEMO-EVAL');
+    await A.reload();
+    check(await unlockIfAsked(A), '1.6.1: the reload asks for the PIN again');
+    await tradingOn(A);
+    a = await acct(A);
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL, the account this tab was on. Armed is off.' && a.ring && a.fills === 'DEMO-EVAL' && JSON.stringify(a.options) === '["Sim101","DEMO-EVAL"]',
+      '1.6.1 reload: back on DEMO-EVAL (this tab\'s account), Armed off, highlighted, its fills: ' + JSON.stringify(a));
+    check(!(await A.title()).startsWith('ARMED'), '1.6.1: the title is not ARMED after the reload');
+    const box1 = await A.locator('#chart canvas').boundingBox();
+    check(Math.abs(box1.y - box0.y) < 1 && Math.abs(box1.height - box0.height) < 1, '1.6.1: the note and the ring do not move the chart: ' + box0.y + ' / ' + box1.y);
+    await shot(A, 'orders-1440-account-restored.png');
+
+    // every order path, armed on the restored account: the account shown is the account used
+    const yAt5 = p => A.evaluate(pr => window.liveChart.priceToY(pr), p);
+    const settle = async price => { await A.evaluate(() => window.liveChart.goLive()); for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt5(price); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await A.waitForTimeout(150); } };
+    const shiftClick = async price => { await settle(price); const b = await A.locator('#chart canvas').boundingBox(); await A.keyboard.down('Shift'); await A.mouse.click(b.x + b.width * 0.45, b.y + await yAt5(price)); await A.keyboard.up('Shift'); };
+    const handle = id => A.evaluate(i => window.liveChart.orderHandles().find(x => x.id === i), id);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await A.click('#armBtn');
+    await A.click('#buyMkt');                                                         // order bar Buy
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), '1.6.1 Buy MKT on DEMO-EVAL');
+    await A.waitForTimeout(450);
+    await A.click('#sellMkt');                                                        // order bar Sell
+    await until(async () => (await A.textContent('#oPos')) === 'Flat', '1.6.1 Sell MKT on DEMO-EVAL');
+    await shiftClick(L5 - 12);                                                       // Shift+click (click-trade)
+    let s5 = await until(async () => { const x = await state5(); return x.orders.length === 1 ? x : null; }, '1.6.1 Shift+click limit');
+    const lim = s5 && s5.orders[0];
+    await until(() => A.evaluate(id => !!window.liveChart.orderHandles().find(x => x.id === id), lim.id), '1.6.1 the limit on the chart');
+    let h = await handle(lim.id), b5 = await A.locator('#chart canvas').boundingBox();   // drag it (modify)
+    await A.mouse.move(b5.x + h.box.x + h.box.w / 2, b5.y + h.box.y + h.box.h / 2); await A.mouse.down();
+    await A.mouse.move(b5.x + h.box.x + h.box.w / 2, b5.y + h.box.y + h.box.h / 2 + 25, { steps: 5 }); await A.mouse.up();
+    await until(async () => { const x = await state5(); const o = x.orders.find(q => q.id === lim.id); return o && o.price < lim.price; }, '1.6.1 limit moved');
+    h = await handle(lim.id); b5 = await A.locator('#chart canvas').boundingBox();     // its x (single cancel)
+    await A.mouse.click(b5.x + h.xbox.x + h.xbox.w / 2, b5.y + h.xbox.y + h.xbox.h / 2);
+    await until(async () => (await state5()).orders.length === 0, '1.6.1 the x cancelled it');
+    await shiftClick(L5 - 14); await A.waitForTimeout(450); await shiftClick(L5 - 16);  // two more, then Cancel all
+    await until(async () => (await state5()).orders.length === 2, '1.6.1 two limits');
+    await A.click('#cancelAllBtn');
+    await until(async () => (await state5()).orders.length === 0, '1.6.1 Cancel all');
+    await A.click('#buyMkt');
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), '1.6.1 long before Flatten');
+    await A.click('#flattenBtn');                                                     // Flatten
+    await until(async () => (await A.textContent('#oPos')) === 'Flat', '1.6.1 Flatten');
+    const sent = await A.evaluate(() => ({ sent: window.__sent.filter(m => ['order', 'flatten', 'cancel', 'change'].includes(m.type)), acct: window.__orderAcct }));
+    const kinds = sent.sent.map(m => m.type + (m.type === 'order' ? ':' + m.kind : '')).join(',');
+    check(kinds === 'order:market,order:market,order:limit,change,cancel,order:limit,order:limit,cancel,cancel,order:market,flatten', '1.6.1 every order path was used: ' + kinds);
+    const wrong = sent.sent.filter(m => (m.type === 'order' || m.type === 'flatten') ? m.account !== 'DEMO-EVAL' : sent.acct[m.id] !== 'DEMO-EVAL');
+    check(wrong.length === 0, '1.6.1 Buy, Sell, Shift+click, modify, single cancel, Cancel all and Flatten all for DEMO-EVAL, the account shown: ' + JSON.stringify(wrong));
+    s5 = await state5();
+    check(!Object.keys(s5.positions).some(k => k.startsWith('Sim101|')) && (await acct(A)).shown === 'DEMO-EVAL', '1.6.1 nothing reached Sim101: ' + JSON.stringify(s5.positions));
+    await A.click('#armBtn');
+
+    // the account last picked is not a trade account now (DEMO-EMPTY is known to ChartBridge, not allowed): Sim101, a note
+    await A.evaluate(() => { localStorage.setItem('live-account-v1', JSON.stringify('DEMO-EMPTY')); sessionStorage.setItem('live-account-tab-v1', JSON.stringify('DEMO-EMPTY')); });
+    await reloadTab(A);
+    a = await acct(A);
+    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'Last account DEMO-EMPTY not available, on Sim101.' && a.warn && a.ring && a.stored === 'DEMO-EMPTY' && a.fills === 'Sim101',
+      '1.6.1 not available: Sim101 with the note, storage keeps the pick: ' + JSON.stringify(a));
+    await shot(A, 'orders-1440-account-not-available.png');
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await A.click('#armBtn'); await A.click('#buyMkt');
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), '1.6.1 Buy on the fallback');
+    await A.click('#flattenBtn');
+    await until(async () => (await A.textContent('#oPos')) === 'Flat', '1.6.1 Flatten on the fallback');
+    const sentF = await A.evaluate(() => window.__sent.filter(m => m.type === 'order' || m.type === 'flatten').map(m => m.account));
+    check(sentF.length === 2 && sentF.every(x => x === 'Sim101'), '1.6.1 on the fallback, orders go to Sim101, the account shown: ' + sentF.join());
+    await A.click('#armBtn');
+
+    // two tabs (review S1): each tab keeps its own account while it is open, and a reload of a tab comes back on that
+    // tab's account (sessionStorage); a new tab starts on the last one picked on this PC
+    const obarBox = pg => pg.evaluate(() => { const r = document.getElementById('obar').getBoundingClientRect(); return [r.width, r.height].join('x'); });
+    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    const bar0 = await obarBox(A);
+    await A.click('#armBtn');
+    // review S5: the tab title and the ARMED pill name the account; the order bar keeps its size
+    check(await A.title() === 'ARMED · MNQ · DEMO-EVAL' && await A.textContent('#armPill') === 'ARMED · DEMO-EVAL' && await A.isVisible('#armPill') && await obarBox(A) === bar0,
+      '1.6.1 S5: title "' + await A.title() + '", pill "' + await A.textContent('#armPill') + '", order bar ' + bar0 + ' -> ' + await obarBox(A));
+    await shot(A, 'orders-1440-armed-account-title.png');
+    const B = await openTab();
+    let b = await acct(B);
+    check(b.shown === 'DEMO-EVAL' && b.armed === 'false' && b.note === 'On DEMO-EVAL, the last account picked. Armed is off.' && b.tab === null && await B.title() === 'MNQ · DEMO-EVAL · Live Chart',
+      '1.6.1 two tabs: a new tab B opens on the last pick, DEMO-EVAL, Armed off: ' + JSON.stringify(b) + ' ' + await B.title());
+    // the review's case: tab A has a DEMO-EVAL long with a working stop; tab B picks Sim101; tab A reloads
+    await A.fill('#bStop', '40'); await A.press('#bStop', 'Tab'); await A.fill('#bTarget', '0'); await A.press('#bTarget', 'Tab');
+    await A.click('#buyMkt');
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1') && (await state5()).orders.length === 1, '1.6.1 tab A long 1 with a stop on DEMO-EVAL');
+    await B.selectOption('#oAcct', 'Sim101'); await B.waitForTimeout(400);
+    a = await acct(A); b = await acct(B);
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'true' && a.fills === 'DEMO-EVAL' && b.shown === 'Sim101' && a.stored === 'Sim101' && a.tab === 'DEMO-EVAL' && b.tab === 'Sim101',
+      '1.6.1 two tabs: B picks Sim101 (saved for new tabs); A stays on DEMO-EVAL, still armed: ' + JSON.stringify({ a, b }));
+    // review S3: tab B names the other account's live trade, in the warning color, on one line
+    const other = await until(() => B.evaluate(() => { const el = document.getElementById('oOther'); return el.textContent ? { text: el.textContent, live: el.classList.contains('live'), h: el.getBoundingClientRect().height } : null; }), 'tab B shows DEMO-EVAL\'s trade');
+    check(other && other.text === 'Other accounts on MNQ: DEMO-EVAL: LONG 1, 1 order' && other.live && other.h <= 20, '1.6.1 S3: the other account by name: ' + JSON.stringify(other));
+    await shot(B, 'orders-1440-other-account-named.png');
+    await reloadTab(A);
+    a = await acct(A);
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.note === 'On DEMO-EVAL, the account this tab was on. Armed is off.' && (await A.textContent('#oPos')).startsWith('LONG 1') && a.fills === 'DEMO-EVAL',
+      '1.6.1 S1: tab A reloaded comes back on its own account, DEMO-EVAL, with its long: ' + JSON.stringify(a) + ' ' + await A.textContent('#oPos'));
+    // a dropped connection, the page kept: no account changes, Armed off
+    let n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
+    await control(P5, 'drop');
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 tab A reconnected', 15000);
+    await tradingOn(A); await tradingOn(B);
+    await until(async () => (await acct(A)).note === 'Still on DEMO-EVAL. Armed is off.', '1.6.1 the reconnect note in tab A');
+    a = await acct(A); b = await acct(B);
+    check(a.shown === 'DEMO-EVAL' && a.armed === 'false' && a.ring && b.shown === 'Sim101' && b.armed === 'false' && b.note === 'Still on Sim101. Armed is off.',
+      '1.6.1 reconnect keeping the page: A still DEMO-EVAL, B still Sim101, both Armed off: ' + JSON.stringify({ a, b }));
+    await shot(A, 'orders-1440-account-after-reconnect.png');
+    // review S2: Armed on clears the note ("Armed is off" would contradict it)
+    await A.click('#armBtn');
+    check((await acct(A)).note === '' && (await acct(A)).armed === 'true', '1.6.1 S2: arming clears the note');
+    await A.click('#armBtn');
+    // review S2 and N3: trading off (the connection back, the sign-in held): the note goes; a pick then is named on return
+    await A.evaluate(() => { window.__holdTrading = true; });
+    n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
+    await control(P5, 'drop');
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 tab A reconnected, trading held off', 15000);
+    await until(() => A.evaluate(() => document.getElementById('buyMkt').disabled && document.getElementById('connPill').textContent === 'LIVE'), '1.6.1 tab A live with trading off');
+    check((await acct(A)).note === '', '1.6.1 S2: trading lost clears the note');
+    await A.selectOption('#oAcct', 'Sim101'); await A.waitForTimeout(200);
+    a = await acct(A);
+    check(a.shown === 'Sim101' && a.note === '' && a.tab === 'Sim101', '1.6.1: a pick while trading is off: the picker shows it, no stale note: ' + JSON.stringify(a));
+    await A.evaluate(() => { window.__holdTrading = false; });
+    n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
+    await control(P5, 'drop');
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), '1.6.1 tab A reconnected again', 15000);
+    await tradingOn(A);
+    await until(async () => (await acct(A)).note !== '', '1.6.1 the note after trading came back');
+    a = await acct(A);
+    check(a.shown === 'Sim101' && a.armed === 'false' && a.note === 'On Sim101 (picked while trading was off). Armed is off.', '1.6.1 N3: the note says the account changed while off: ' + JSON.stringify(a));
+    // back on DEMO-EVAL: flatten the long (orders only for DEMO-EVAL, the account shown)
+    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await A.click('#armBtn'); await A.click('#flattenBtn');
+    await until(async () => (await A.textContent('#oPos')) === 'Flat' && (await state5()).orders.length === 0, '1.6.1 tab A flat on DEMO-EVAL');
+    // review 2 S1, S2, N1, N2: a Cancel all goes out by id, 8 a second, and locks nothing: Armed, the picker, the
+    // instrument and Flatten all work while it runs. The state row names what is still going out.
+    await A.bringToFront();                                                           // tab B opened after A: timers of a tab behind run late
+    const place = async (n, from) => { for (let i = 0; i < n; i++) await control(P5, 'elsewhere', { account: 'DEMO-EVAL', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: L5 - (from || 20) - i }); };
+    const evalWorking = async () => (await state5()).orders.filter(o => o.account === 'DEMO-EVAL' && o.root === 'MNQ').length;
+    // the orders on the chart, and 1.2 s since the last cancels (the page sends at most 8 in any 1.1 s)
+    const onChart = async n => { await until(() => A.evaluate(k => window.liveChart.getOrders().length === k, n), '1.6.1 ' + n + ' DEMO-EVAL orders on the chart'); await A.waitForTimeout(1200); };
+    const sentOf = type => A.evaluate(t => window.__sent.filter(m => m.type === t).map(m => ({ id: m.id, acct: window.__orderAcct[m.id], at: m.__at, account: m.account, root: m.root })), type);
+    const bar = () => A.evaluate(() => ({ unsent: document.getElementById('unsentBar').hidden ? '' : document.getElementById('unsentText').textContent, batch: document.getElementById('oCancel').textContent,
+      acct: document.getElementById('oAcct').disabled, arm: document.getElementById('armBtn').disabled, flatten: document.getElementById('flattenBtn').disabled, note: document.getElementById('oAcctNote').textContent }));
+    const armOn = async () => { if (await A.getAttribute('#armBtn', 'aria-checked') !== 'true') await A.click('#armBtn'); };
+    const armOff = async () => { if (await A.getAttribute('#armBtn', 'aria-checked') === 'true') await A.click('#armBtn'); };
+    const batchDone = what => until(async () => (await bar()).batch === '' && await evalWorking() === 0, what, 8000);
+
+    // 10 orders: nothing locked, the state row counts down, every cancel for DEMO-EVAL
+    await place(10);
+    await onChart(10);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    let bb = await bar();
+    check(!bb.acct && !bb.arm && !bb.flatten && bb.batch === 'Cancelling on DEMO-EVAL MNQ: 4 left (6 a second).', '1.6.1 review 2 S1: during a Cancel all nothing is locked, the state row names it: ' + JSON.stringify(bb));
+    await shot(A, 'orders-1440-cancel-all-under-way.png');
+    await batchDone('1.6.1 all ten cancelled');
+    let cs = await sentOf('cancel');
+    check(cs.length === 10 && cs.every(x => x.acct === 'DEMO-EVAL'), '1.6.1 ten cancels, all DEMO-EVAL: ' + cs.map(x => x.acct).join());
+
+    // R15: an instrument switch 300 ms into a batch of 30 (about 4 s of cancels, so it still runs on a slow box): Armed
+    // goes off but stays usable, Flatten works at once, and all the cancels Anthony asked for go out (1.6.1 before
+    // review 2, with 20: 8 sent, Armed locked about 1.8 s)
+    await place(30);
+    await onChart(30);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.click('#symSeg button[data-v="NQ"]');
+    bb = await bar();
+    const armedAfter = await A.getAttribute('#armBtn', 'aria-checked');
+    check(armedAfter === 'false' && !bb.arm && /^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(bb.batch), 'R15: after the switch Armed is off and not locked, the state row still names DEMO-EVAL MNQ: ' + JSON.stringify(bb));
+    await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 NQ loaded', 8000);
+    await A.click('#armBtn'); await A.click('#flattenBtn');
+    const fl15 = await sentOf('flatten');
+    check(fl15.length === 1 && fl15[0].account === 'DEMO-EVAL' && fl15[0].root === 'NQ', 'R15: arm and Flatten on NQ right after the switch: ' + JSON.stringify(fl15));
+    await until(async () => await evalWorking() === 0, 'R15 every MNQ order cancelled', 8000);
+    cs = await sentOf('cancel');
+    check(cs.length === 30 && cs.every(x => x.acct === 'DEMO-EVAL') && await evalWorking() === 0, 'R15: all 30 cancels sent by id, 0 DEMO-EVAL MNQ orders working: ' + cs.length);
+    await until(async () => (await bar()).batch === '', 'R15 the batch note gone', 5000);
+    await armOff();
+    await A.click('#symSeg button[data-v="MNQ"]');
+    await until(() => A.evaluate(() => document.getElementById('connPill').textContent === 'LIVE'), 'R15 back on MNQ', 8000);
+
+    // R16: the connection drops 300 ms into a batch of 20: a note that stays (not a 6 s status line) names the account,
+    // the instrument and the 14 cancels not sent; it stays over the reconnect and goes by itself once they are cancelled
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    n0 = await A.evaluate(() => window.__sent.filter(m => m.type === 'subscribe').length);
+    await control(P5, 'drop');
+    await until(() => A.evaluate(n => window.__sent.filter(m => m.type === 'subscribe').length > n, n0), 'R16 reconnected', 15000);
+    await tradingOn(A);
+    await A.waitForTimeout(7000);                                                     // longer than any status line
+    bb = await bar();
+    check(/^14 cancels on DEMO-EVAL MNQ were not sent: the connection to ChartBridge dropped\.\nThose orders may still be working\./.test(bb.unsent) && await evalWorking() === 14 && (await sentOf('cancel')).length === 6,
+      'R16: 6 sent, the note stays over the reconnect and 7 s: ' + JSON.stringify(bb.unsent) + ' working ' + await evalWorking() + ', sent ' + JSON.stringify(await sentOf('cancel')));
+    await shot(A, 'orders-1440-cancels-not-sent.png');
+    await A.click('#armBtn'); await A.click('#cancelAllBtn');
+    await batchDone('R16 the rest cancelled');
+    await until(async () => (await bar()).unsent === '', 'R16 the note goes once those orders are no longer working', 5000);
+    await armOff();
+
+    // R17: DEMO-EVAL leaves ChartBridge's list 300 ms into a batch of 20: the rest are not sent (ChartBridge would refuse
+    // them), the note says why and stays until dismissed; the fallback note keeps its 15 s after the batch (N2)
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.evaluate(() => window.__inject(Object.assign({}, window.__lastTrading, { accounts: ['Sim101'] })));
+    await A.waitForTimeout(3000);                                                     // past where the batch would have ended
+    bb = await bar();
+    const a17 = await acct(A);
+    check(/^14 cancels on DEMO-EVAL MNQ were not sent: the account is no longer a trade account in ChartBridge\./.test(bb.unsent) && (await sentOf('cancel')).length === 6 && a17.shown === 'Sim101' && a17.armed === 'false' && a17.note === 'Last account DEMO-EVAL not available, on Sim101.',
+      'R17 and N2: 6 sent, the note says why, the fallback note still up 3 s later: ' + JSON.stringify({ unsent: bb.unsent, note: a17.note, shown: a17.shown }));
+    await A.click('#unsentClose');
+    check((await bar()).unsent === '', 'R17: Dismiss takes the note away');
+    await A.evaluate(() => window.__inject(window.__lastTrading));                   // DEMO-EVAL allowed again
+    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+    await A.click('#armBtn'); await A.click('#cancelAllBtn');
+    await batchDone('R17 the rest cancelled after DEMO-EVAL came back');
+    await armOff();
+
+    // R18: Flatten 300 ms into a batch of 20 with a position: flat, every order gone, and no cancel after the Flatten
+    // (so no red "No working order" from ChartBridge)
+    await armOn();
+    await A.fill('#bStop', '0'); await A.press('#bStop', 'Tab');
+    await A.click('#buyMkt');                                                         // the long first (the MNQ cap counts working orders)
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), 'R18 long 1');
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await A.waitForTimeout(1200);                                                     // ChartBridge's 10 a second counts the Buy too
+    await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.click('#flattenBtn');
+    await A.waitForTimeout(3000);
+    const msgs18 = await A.evaluate(() => window.__sent.filter(m => ['cancel', 'flatten'].includes(m.type)).map(m => m.type));
+    const rej18 = await A.evaluate(() => window.__rejects.slice());
+    check((await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0 && msgs18.lastIndexOf('cancel') < msgs18.indexOf('flatten') && rej18.length === 0 && (await status(A)).cls.indexOf('error') < 0,
+      'R18: Flatten mid-batch: flat, no order working, no cancel after it, no reject: ' + msgs18.join(',') + ' ' + JSON.stringify(rej18));
+    await armOff();
+
+    // R19: a second Cancel all 300 ms into a batch of 20 sends nothing new; never more than 8 in any second; none left
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; window.__statusSeen.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(300);
+    await A.click('#cancelAllBtn');
+    const st19 = { text: (await A.evaluate(() => window.__statusSeen.filter(t => /^Still cancelling/.test(t)))).join(' | ') };
+    await batchDone('R19 all cancelled');
+    const times = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.__at));
+    const most = Math.max(...times.map(t => times.filter(u => u >= t && u < t + 1000).length));
+    const rej19 = await A.evaluate(() => window.__rejects.slice());
+    check(times.length === 20 && most <= 6 && rej19.length === 0 && /^Still cancelling on DEMO-EVAL MNQ: 14 left\. Nothing new to send\./.test(st19.text),
+      'R19: the second click sent nothing new (' + times.length + ' cancels, at most ' + most + ' in a second, rejects ' + JSON.stringify(rej19) + '): ' + st19.text);
+    await armOff();
+
+    // R26 (review 3 S1, S2): DEMO-EVAL long 1 with 30 orders, Cancel all, pick Sim101 150 ms later, arm, Cancel all on
+    // Sim101 (3 orders): Sim101's go first, at the next slot of the pace, not behind DEMO-EVAL's. At 390 px the batch
+    // line (in the warning color: DEMO-EVAL is not shown) and "Other accounts ... DEMO-EVAL: LONG 1" wrap, never cut
+    await armOn();
+    await A.click('#buyMkt');
+    await until(async () => (await A.textContent('#oPos')).startsWith('LONG 1'), 'R26 long 1 on DEMO-EVAL');
+    await armOff();
+    await place(30);
+    for (let i = 0; i < 3; i++) await control(P5, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: L5 - 60 - i });
+    await onChart(30);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(150);
+    await A.selectOption('#oAcct', 'Sim101'); await A.waitForTimeout(100);
+    await A.setViewportSize({ width: 390, height: 860 });
+    await A.waitForTimeout(200);
+    const r26 = await A.evaluate(() => { const c = document.getElementById('oCancel'), o = document.getElementById('oOther');
+      return { batch: c.textContent, away: c.classList.contains('away'), color: getComputedStyle(c).color, other: o.textContent, cut: [c, o].map(el => el.scrollWidth > el.clientWidth + 1), sw: document.documentElement.scrollWidth }; });
+    check(/^Cancelling on DEMO-EVAL MNQ: \d+ left/.test(r26.batch) && r26.away && /DEMO-EVAL: LONG 1/.test(r26.other) && !r26.cut[0] && !r26.cut[1] && r26.sw <= 390,
+      'R26 at 390 px: the batch line in the warning color and "Other accounts" with LONG 1, both whole: ' + JSON.stringify(r26));
+    await shot(A, 'orders-390-cancel-all-other-account.png');
+    await A.setViewportSize({ width: 1440, height: 860 });
+    await A.click('#armBtn');
+    const t26 = await A.evaluate(() => performance.now());
+    await A.click('#cancelAllBtn');
+    await until(async () => (await state5()).orders.filter(o => o.account === 'Sim101').length === 0, 'R26 Sim101 cancelled', 8000);
+    const c26 = await A.evaluate(t => window.__sent.filter(m => m.type === 'cancel' && m.__at >= t).map(m => ({ acct: window.__orderAcct[m.id], dt: Math.round(m.__at - t) })), t26);
+    const sims = c26.filter(x => x.acct === 'Sim101'), evalAfter = c26.filter(x => x.acct === 'DEMO-EVAL');
+    check(sims.length === 3 && c26.slice(0, 3).every(x => x.acct === 'Sim101') && sims.every(x => x.dt <= 1300),
+      'R26: Sim101\'s 3 cancels are the first sent after its click, at the next slot of the pace (' + sims.map(x => x.dt).join(', ') + ' ms), DEMO-EVAL\'s rest (' + evalAfter.length + ') after them');
+    await batchDone('R26 DEMO-EVAL\'s rest cancelled');
+    await armOff();
+    await A.selectOption('#oAcct', 'DEMO-EVAL'); await A.waitForTimeout(200);
+
+    // R23 (review 3 S4): long 1 and 30 orders; Cancel all, Buy MKT +100 ms, Sell MKT +200 ms, Flatten +300 ms: at 6 a
+    // second the batch leaves room, so nothing is refused and the account ends flat
+    await place(30);
+    await onChart(30);
+    await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    await A.waitForTimeout(100); await A.click('#buyMkt');
+    await A.waitForTimeout(100); await A.click('#sellMkt');
+    await A.waitForTimeout(100); await A.click('#flattenBtn');
+    await until(async () => (await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0, 'R23 flat, nothing working', 8000);
+    const rej23 = await A.evaluate(() => window.__rejects.slice());
+    check(rej23.length === 0 && (await A.textContent('#oPos')) === 'Flat', 'R23: Cancel all, Buy, Sell and Flatten within 300 ms: none refused, flat: ' + JSON.stringify(rej23));
+    // and if ChartBridge refuses Flatten for the rate anyway, the page sends it once more 1.1 s later (a made-up refusal)
+    await A.waitForTimeout(1200);                                                     // past Flatten's 0.4 s repeat guard and the last refusal's window
+    await A.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
+    await A.click('#flattenBtn');
+    await A.evaluate(() => window.__inject({ type: 'reject', reason: 'More than 10 order actions in one second. Slow down.' }));
+    await until(() => A.evaluate(() => window.__sent.filter(m => m.type === 'flatten').length === 2), 'R23 Flatten sent again', 4000);
+    const fl23 = await A.evaluate(() => ({ f: window.__sent.filter(m => m.type === 'flatten').map(m => m.account + ' ' + m.root + ' ' + Math.round(m.__at)), seen: window.__statusSeen.filter(t => /Flatten/.test(t)) }));
+    check(fl23.f.length === 2 && fl23.f.every(x => x.startsWith('DEMO-EVAL MNQ')) && fl23.seen.some(t => /^ChartBridge refused Flatten for DEMO-EVAL MNQ .*sending it again in 1 s\./.test(t)) && fl23.seen.some(t => t === 'Flatten sent again for DEMO-EVAL MNQ.'),
+      'review 3 S4: a Flatten refused for the rate is sent once more: ' + JSON.stringify(fl23));
+    await armOff();
+
+    // Anthony 2026-09-30: a drag on an order still in a Cancel all sends no change; the Cancel all cancels it
+    await place(20);
+    await onChart(20);
+    await A.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
+    await armOn(); await A.click('#cancelAllBtn');
+    const sentNow = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.id));
+    const queued = (await A.evaluate(() => window.liveChart.getOrders().map(o => ({ id: o.id, price: o.price })))).find(o => !sentNow.includes(o.id));
+    await settle(queued.price);
+    const hq = await handle(queued.id), bq = await A.locator('#chart canvas').boundingBox();
+    await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2); await A.mouse.down();
+    await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2 + 25, { steps: 5 }); await A.mouse.up();
+    await batchDone('the drag probe: all cancelled');
+    const dq = await A.evaluate(id => ({ changes: window.__sent.filter(m => m.type === 'change').length, cancels: window.__sent.filter(m => m.type === 'cancel' && m.id === id).length,
+      seen: window.__statusSeen.filter(t => /^Not moved/.test(t)) }), queued.id);
+    check(dq.changes === 0 && dq.cancels === 1 && dq.seen.includes('Not moved: order ' + queued.id + ' is in the Cancel all under way, which cancels it.') && await evalWorking() === 0,
+      'a drag on order ' + queued.id + ' while it waits in a Cancel all: no change sent, cancelled once, said so: ' + JSON.stringify(dq));
+    await armOff();
+
+    // review 2 N1: a Cancel all of 3, and Armed off in the same task: all 3 are sent at the click
+    await place(3);
+    await onChart(3);
+    await A.evaluate(() => { window.__sent.length = 0; });
+    await armOn();
+    await A.evaluate(() => { document.getElementById('cancelAllBtn').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); document.getElementById('armBtn').click(); });
+    await until(async () => await evalWorking() === 0, 'N1 the three cancelled');
+    check((await sentOf('cancel')).length === 3 && await A.getAttribute('#armBtn', 'aria-checked') === 'false', 'review 2 N1: 3 of 3 sent though Armed went off in the same task');
+    // a phone: the note never wraps the order bar
+    await B.setViewportSize({ width: 400, height: 860 });
+    await reloadTab(B);
+    const n400 = await B.evaluate(() => { const n = document.getElementById('oAcctNote'); return { text: n.textContent, h: n.getBoundingClientRect().height, sw: document.documentElement.scrollWidth }; });
+    check(n400.text === 'On Sim101, the account this tab was on. Armed is off.' && n400.h <= 20 && n400.sw <= 400, '1.6.1 400 px: the note on one line, no sideways scroll: ' + JSON.stringify(n400));
+    await shot(B, 'orders-400-account-restored.png');
+    const barB = await obarBox(B);
+    await B.click('#armBtn');
+    check(await B.title() === 'ARMED · MNQ · Sim101' && await B.textContent('#armPill') === 'ARMED · Sim101' && await obarBox(B) === barB && await B.evaluate(() => document.documentElement.scrollWidth <= 400),
+      '1.6.1 S5 at 400 px: title and pill name the account, the order bar keeps its size (' + barB + '), no sideways scroll');
+    await shot(B, 'orders-400-armed-account.png');
+    await B.click('#armBtn');
+    await ctx.close();
+  }
+
   /* ---------------- trading off in config.txt: the bar says why, every control disabled */
   await startBridge(PORT + 1, ['--test-pin=' + TEST_PIN]);
   const off = await open(browser, PORT + 1, 1440);
@@ -335,7 +759,7 @@ try {
   check(/Trading off: Trading is off\. Set trading = true in config\.txt/.test(await off.textContent('#oOff')), 'reason shown: ' + await off.textContent('#oOff'));
   const enabled = await off.$$eval('#obar button, #obar input, #obar select', els => els.filter(e => !e.disabled).map(e => e.id));
   check(JSON.stringify(enabled) === '["oAcct"]', 'while trading is off only the account picker works: ' + enabled.join(','));
-  check(/^Trading is off: this only picks whose fills/.test(await off.getAttribute('#oAcct', 'title')), 'trading off: the picker says it only picks the fills: ' + await off.getAttribute('#oAcct', 'title'));
+  check(/^Trading is off: this picks whose fills the chart marks, and the account orders go to when trading comes back on$/.test(await off.getAttribute('#oAcct', 'title')), 'trading off: the picker says what it picks (1.6.1: also the account used when trading comes back): ' + await off.getAttribute('#oAcct', 'title'));
   // trading off: the picker still switches whose fills are marked (the accounts ChartBridge knows)
   check(await off.isHidden('#acctWrap') && await off.inputValue('#oAcct') === 'Sim101' && /Sim101/.test(await off.textContent('#lgFill')), 'trading off: Sim101 picked, its fills marked');
   await off.selectOption('#oAcct', 'DEMO-EVAL'); await off.waitForTimeout(200);

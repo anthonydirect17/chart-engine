@@ -72,6 +72,40 @@ Range R = the range in ticks times the tick size. For each trade at price P:
   after that reloads the backfill only if the ticks left no longer reach this session's start; otherwise it
   rebuilds from this session's first trade and leaves out the older, now partial, session.
 
+## Served window (1.8.0): range bars from the first proven bar
+
+With ChartBridge 0.3.5 a Range chart opens with the last 2 hours of trades (`rangeHours`; nt8/PROTOCOL.md, Served window),
+not with every trade since 18:00 ET (Anthony, 2026-09-30: "open at 8:30, bars start at 6:30"). Range bars are path
+dependent: a bar's edges depend on every trade since the session's first (Break at EOD), so a build from the window's
+first trade can have other edges than NinjaTrader's until the two builds meet. The page therefore draws range bars only
+from the first bar proven to be NinjaTrader's own, and none before it (`RangeSync` in `live/bar-builder.js`):
+
+- Two range builds of the same trades meet for good once they close a bar on the same trade with the same edge. That is
+  certain at the first trade of a new session inside the window, and after a swing of more than the range each way: once
+  the price has risen more than the range from the window's low so far to a high, then falls more than the range below
+  that high (before a higher high), every build, whatever it did before the window, has that high as its bar's high and
+  closes the bar down on the same trade. (The rise forces a bar that opened after the low; an up close opens a bar at its
+  trade, and a down close opens one below the bar before it, so no bar can hold a high above that one.) The mirror holds
+  for a fall and a rise. The rule reads only prices and times, in whole ticks, and holds for both styles.
+  `test/live-first.test.js` checks it against builds from the session start on 240 made-up histories (both styles, ranges
+  of 4, 12 and 40 ticks, some across the 18:00 break): every bar from the sync point on is identical, and a trend without
+  a swing is never taken as synced.
+- A window that starts with its session's first trade (a chart opened between 18:00 and 20:00 ET) is proven from that first trade:
+  the page knows it from ChartBridge's session table (no trade of the session before the window).
+- In a quiet window the chart shows no range bar, with the note "Range bars start where they are proven to match
+  NinjaTrader's", until the first swing, live. On NQ Range 40 a 10-point swing each way comes within minutes in most
+  sessions, so with 2 hours of trades the bars show at once.
+- Once drawn, bars stay all day: the page keeps every trade of the current session (over 2.5 million trades it drops only
+  earlier sessions' trades), so a view switch builds the same bars again. A reload or a second page gets the same window
+  from ChartBridge's memory, from the same first trade, so the bars start where they started.
+- The session VWAP of range (and seconds) bars starts from ChartBridge's session table: its price times volume and volume,
+  less the trades the page holds, in whole ticks, so it equals the VWAP of every trade from 18:00. While the table is still
+  building (ChartBridge started mid-session) there is no VWAP on these views; the table's backfill brings it.
+- Seconds bars start at the first bar the window holds whole.
+
+The smoke (`npm run smoke:live-first`) compares the page's range bars bar for bar (price, volume, VWAP) with a build of
+the fake's tape from 18:00, in a busy market, after a reload, on a second page, at the Sunday open and across 18:00.
+
 ## Confirmed by Anthony
 
 - **Break at EOD is ON** in Anthony's NinjaTrader Range charts (Anthony, 2026-09-29). So NinjaTrader starts a fresh

@@ -1,4 +1,4 @@
-// ChartBridge daily 1-minute bars to The Desk (0.3.6-pre), for NinjaTrader 8.
+// ChartBridge daily 1-minute bars to The Desk (0.3.6), for NinjaTrader 8.
 // OFF unless config.txt has "bars = on". Contract v1 (2026-09-30, approved by Anthony): after each CME session
 // closes (17:00 New York time, plus a few minutes), and at ChartBridge's start for any of the last 5 sessions not sent
 // yet, ChartBridge copies that session's finished 1-minute bars for NQ, MNQ, ES and MES (the front month the chart
@@ -8,9 +8,13 @@
 // 10 second requests, retried every 10 seconds, a message The Desk calls malformed is set aside in
 // rejected_bars.jsonl); sessions The Desk took are noted in sent_bars.txt so the catch-up knows what is done.
 // Only market data and the PC name leave this PC: no account, no PIN, no token.
-// This file never places, changes or cancels an order and never touches the order lane: its requests run one at a
-// time on a background thread of its own, at below-normal priority, only while no chart is loading, and every
-// failure or timeout is logged and tried again later, never thrown into NinjaTrader.
+// This file never places, changes or cancels an order and never touches the order lane. Its work runs on a background
+// thread of its own at below-normal priority, and its requests go to NinjaTrader through the 0.3.5 gate in ChartBridge.cs
+// (ChartBridgeServer.GateBars), last of all: queued only when no Range window, session backfill, minute chart's last trades
+// or page load is out, queued or still to come; one at a time, so never beside a window or a backfill (one asked meanwhile
+// waits behind it). Stop() ends it with nothing more asked or sent (as the gate's StopGate). In regular trading hours (09:30 to
+// 16:15 New York time) it asks for nothing, except the catch-up after a start once the charts have settled. Every failure
+// or timeout is logged and tried again later (3 tries, then not until the next start), never thrown into NinjaTrader.
 //
 // NinjaTrader 8 help used (ninjatrader.com/support/helpGuides/nt8/):
 //   barsrequest.htm (from/to are turned into whole trading days; Request, Bars, Dispose), request.htm,
@@ -109,9 +113,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int TickMs = 10000;                   // the queue is retried every 10 s, like fills
         public static int PlanEveryMs = 60000;              // what is due is looked at once a minute
         public static int SettleMs = 120000;                // nothing is asked for in the first 2 minutes after the start (the charts load first)
-        public static int RequestTimeoutMs = 120000;        // a request NinjaTrader has not answered in 2 minutes is given up (and tried later)
+        public static int RequestTimeoutMs = 60000;         // the gate's time limit for one request (one contract's minutes, about a second)
+        public static int QueueWaitMs = 60000;              // a request queued at the gate that has not gone out in this long is taken back
         public static int RetryMinutes = 15;                // a failed or empty request is tried again after this long
+        public static int MaxTries = 3;                     // then not again until ChartBridge restarts (a day NinjaTrader has no bars for)
         public static int PauseBetweenMs = 2000;            // between two requests
+        public static int StopJoinMs = 250;                 // Stop() runs on NinjaTrader's thread: it waits this long for the worker
 
         // Test hooks (the stand-ins for NinjaTrader in nt8/check); NinjaTrader's own by default.
         public static Func<DateTime> UtcNow = () => DateTime.UtcNow;
@@ -139,6 +146,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime d = DateTime.SpecifyKind(session.Date, DateTimeKind.Unspecified);
             openUtc = TimeZoneInfo.ConvertTimeToUtc(d.AddDays(-1).AddHours(18), ChartBridgeTime.Eastern);
             closeUtc = TimeZoneInfo.ConvertTimeToUtc(d.AddHours(17), ChartBridgeTime.Eastern);
+        }
+
+        // Regular trading hours, 09:30 to 16:15 New York time on a weekday: no bars request then, except the start's catch-up.
+        public static bool InRth(DateTime et)
+        {
+            if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
+            TimeSpan tod = et.TimeOfDay;
+            return tod >= new TimeSpan(9, 30, 0) && tod < new TimeSpan(16, 15, 0);
         }
 
         // NinjaTrader stamps a bar with its CLOSING time, in the time zone set under Tools > Options > General
@@ -301,18 +316,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the worker
         private static readonly object Gate = new object();
         private static ManualResetEvent stopEvent;
+        private static Thread worker;
         private static int generation;
         private static readonly Dictionary<string, DateTime> RetryAt = new Dictionary<string, DateTime>();   // key -> not before (UTC)
+        private static readonly Dictionary<string, int> Tries = new Dictionary<string, int>();               // key -> failed tries this run
+        private static readonly HashSet<string> GaveUp = new HashSet<string>();                             // not asked again this run
         private static readonly Dictionary<string, string> LoggedFailure = new Dictionary<string, string>();
-        private static string fetchError = "", lastRequest = "";
+        private static volatile string fetchError = "", lastRequest = "", state = "off", waitingForGate;
+        private static volatile bool catchUpDone;            // the start's catch-up has been through every session once
 
         public static void Start()
         {
+            Stop();
             lock (Gate)
             {
-                StopLocked();
-                lock (RetryAt) { RetryAt.Clear(); LoggedFailure.Clear(); }
-                fetchError = ""; lastRequest = "";
+                lock (RetryAt) { RetryAt.Clear(); Tries.Clear(); GaveUp.Clear(); LoggedFailure.Clear(); }
+                fetchError = ""; lastRequest = ""; waitingForGate = null; catchUpDone = false;
+                state = Enabled ? "starting" : "off";
                 if (!Enabled) return;
                 try
                 {
@@ -324,6 +344,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     t.IsBackground = true;
                     t.Priority = ThreadPriority.BelowNormal;
                     t.Name = "ChartBridge bars";
+                    worker = t;
                     t.Start();
                     ChartBridgeServer.Log("daily 1-minute bars go to The Desk after each close (bars = on): " + string.Join(", ", Roots) +
                         "; " + ChartBridgeBarsQueue.Waiting() + " message(s) waiting in pending_bars.jsonl");
@@ -332,91 +353,122 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        public static void Stop() { lock (Gate) StopLocked(); }
-
-        private static void StopLocked()
+        // Nothing more is asked of NinjaTrader or sent to The Desk after this returns: the worker leaves any wait at once, a
+        // post in flight is aborted (the message stays queued; The Desk stores a resend once), and an answer that comes later is
+        // not copied. Runs on NinjaTrader's thread, so it waits StopJoinMs (250 ms) for the worker at most, as the gate's Stop.
+        public static void Stop()
         {
-            generation++;
-            try { if (stopEvent != null) stopEvent.Set(); } catch (Exception) { }
-            stopEvent = null;
+            Thread t;
+            lock (Gate)
+            {
+                generation++;
+                try { if (stopEvent != null) stopEvent.Set(); } catch (Exception) { }
+                stopEvent = null;
+                t = worker; worker = null;
+                if (t != null) state = "stopped";
+            }
+            ChartBridgeBarsQueue.Abort();
+            try
+            {
+                if (t != null && t != Thread.CurrentThread && !t.Join(StopJoinMs))
+                    ChartBridgeServer.Log("the bars worker did not end within " + StopJoinMs + " ms of the stop; it ends on its own and sends nothing more");
+            }
+            catch (Exception) { }
         }
 
         private static bool Stopping(int gen, ManualResetEvent stop) { return gen != Volatile.Read(ref generation) || stop.WaitOne(0); }
 
         private static void Run(int gen, ManualResetEvent stop)
         {
-            DateTime started = UtcNow(), lastPlan = DateTime.MinValue;
+            Func<bool> stopping = () => Stopping(gen, stop);
+            System.Diagnostics.Stopwatch since = System.Diagnostics.Stopwatch.StartNew();
+            long lastPlan = long.MinValue / 2;
+            state = "starting: the charts load first";
             while (!stop.WaitOne(TickMs))
             {
-                if (Stopping(gen, stop)) return;
-                try { ChartBridgeBarsQueue.Flush(); } catch (Exception ex) { Note("bars send error: " + ex.Message); }
-                DateTime now = UtcNow();
-                if ((now - started).TotalMilliseconds < SettleMs || (now - lastPlan).TotalMilliseconds < PlanEveryMs) continue;
+                if (stopping()) return;
+                try { ChartBridgeBarsQueue.Flush(stopping); } catch (Exception ex) { Note("bars send error: " + ex.Message); }
+                long now = since.ElapsedMilliseconds;
+                if (now < SettleMs || now - lastPlan < PlanEveryMs) continue;
                 lastPlan = now;
-                try { PlanOnce(() => Stopping(gen, stop)); } catch (Exception ex) { Note("bars error: " + ex.Message); }
+                try { PlanOnce(stopping); } catch (Exception ex) { Note("bars error: " + ex.Message); }
             }
         }
 
-        // One look at what is due; asks NinjaTrader for it one contract at a time. Public for the harness.
+        private static bool Nap(int ms, Func<bool> stopping)
+        {
+            for (int left = ms; left > 0; left -= 50) { if (stopping != null && stopping()) return true; Thread.Sleep(Math.Min(50, left)); }
+            return stopping != null && stopping();
+        }
+
+        // One look at what is due; asks NinjaTrader for it one contract at a time, through the gate. Public for the harness.
         public static void PlanOnce(Func<bool> stopping)
         {
-            if (!Enabled) return;
-            if (!IsConnected()) return;   // tried again next minute
+            if (stopping == null) stopping = () => false;
+            if (!Enabled) { state = "off"; return; }
+            if (!IsConnected()) { state = "waiting: NinjaTrader has no price connection"; return; }   // tried again next minute
             DateTime nowUtc = UtcNow();
             DateTime nowEt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ChartBridgeTime.Eastern);
+            if (catchUpDone && InRth(nowEt)) { state = "waiting: regular trading hours (after 16:15 ET)"; waitingForGate = null; return; }
             HashSet<DateTime> holidays = Holidays();
             List<DateTime> sessions = RecentSessions(nowEt, CatchUpSessions, d => holidays.Contains(d.Date));
             bool first = true;
             foreach (BarsJob j in Wanted(sessions, Roots, FillJobs(sessions)))
             {
-                if (stopping != null && stopping()) return;
+                if (stopping()) return;
                 if (ChartBridgeBarsQueue.IsDone(j.Key) || ChartBridgeBarsQueue.IsWaiting(j.Key)) continue;
                 DateTime notBefore;
-                lock (RetryAt) { if (RetryAt.TryGetValue(j.Key, out notBefore) && UtcNow() < notBefore) continue; }
-                if (ChartBridgeServer.PagesLoading()) return;   // a chart is loading its history: it goes first
-                if (!first && PauseBetweenMs > 0) Thread.Sleep(PauseBetweenMs);
+                lock (RetryAt)
+                {
+                    if (GaveUp.Contains(j.Key)) continue;
+                    if (RetryAt.TryGetValue(j.Key, out notBefore) && UtcNow() < notBefore) continue;
+                }
+                if (!first && PauseBetweenMs > 0 && Nap(PauseBetweenMs, stopping)) return;
                 first = false;
-                Fetch(j);
-                try { ChartBridgeBarsQueue.Flush(); } catch (Exception ex) { Note("bars send error: " + ex.Message); }
+                Outcome o = Fetch(j, stopping);
+                if (o == Outcome.Stopped) return;
+                if (o == Outcome.Wait) return;   // the gate is busy: this pass ends, the next minute tries again
+                try { ChartBridgeBarsQueue.Flush(stopping); } catch (Exception ex) { Note("bars send error: " + ex.Message); }
             }
+            catchUpDone = true;
+            waitingForGate = null;
+            state = "idle";
         }
 
-        // A later try for this job, and one Output line per job and reason.
+        // A later try for this job (MaxTries in all, then not until ChartBridge restarts), and one Output line per job and reason.
         private static void Later(BarsJob j, string why)
         {
             fetchError = j.Key + ": " + why;
-            bool log;
+            bool log, gaveUp;
             lock (RetryAt)
             {
-                RetryAt[j.Key] = UtcNow().AddMinutes(RetryMinutes);
+                int n;
+                Tries.TryGetValue(j.Key, out n);
+                Tries[j.Key] = ++n;
+                gaveUp = n >= MaxTries;
+                if (gaveUp) GaveUp.Add(j.Key); else RetryAt[j.Key] = UtcNow().AddMinutes(RetryMinutes);
                 string was;
-                log = !LoggedFailure.TryGetValue(j.Key, out was) || was != why;
+                log = gaveUp || !LoggedFailure.TryGetValue(j.Key, out was) || was != why;
                 LoggedFailure[j.Key] = why;
             }
-            if (log) ChartBridgeServer.Log("bars for " + j.Contract + " session " + j.Session.ToString("yyyy-MM-dd", Inv) + ": " + why + "; trying again in " + RetryMinutes + " minutes");
+            if (log) ChartBridgeServer.Log("bars for " + j.Contract + " session " + j.Session.ToString("yyyy-MM-dd", Inv) + ": " + why +
+                (gaveUp ? "; tried " + MaxTries + " times, not asked again until ChartBridge restarts" : "; trying again in " + RetryMinutes + " minutes"));
         }
 
         // The Desk set this message aside: not asked for again until the next start.
-        public static void SkipThisRun(string key) { lock (RetryAt) RetryAt[key] = DateTime.MaxValue; }
+        public static void SkipThisRun(string key) { lock (RetryAt) GaveUp.Add(key); }
 
         private static void Note(string text) { fetchError = text; ChartBridgeServer.Log(text); }
 
-        private class Answer
-        {
-            public readonly ManualResetEventSlim Done = new ManualResetEventSlim(false);
-            public volatile bool Abandoned;
-            public RawBars Raw;
-            public ErrorCode Code = ErrorCode.NoError;
-            public string Message = "", Error;
-        }
+        private enum Outcome { Done, Later, Wait, Stopped }
 
-        // Ask NinjaTrader for the job's contract, 1-minute Last bars, whole trading days around the session (BarsRequest
-        // turns from and to into whole trading days), then keep the session's own finished minutes.
-        private static void Fetch(BarsJob j)
+        // Ask NinjaTrader, through the gate, for the job's contract, 1-minute Last bars, whole trading days around the session
+        // (BarsRequest turns from and to into whole trading days), then keep the session's own finished minutes.
+        private static Outcome Fetch(BarsJob j, Func<bool> stopping)
         {
             Instrument inst = null;
             try { inst = Lookup(j.Contract); } catch (Exception) { inst = null; }
-            if (inst == null || inst.MasterInstrument == null) { Later(j, "NinjaTrader does not know the instrument"); return; }
+            if (inst == null || inst.MasterInstrument == null) { Later(j, "NinjaTrader does not know the instrument"); return Outcome.Later; }
             DateTime nowUtc = UtcNow(), openUtc, closeUtc;
             SessionUtc(j.Session, out openUtc, out closeUtc);
             TimeZoneInfo ntZone = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo;   // BarsRequest takes NinjaTrader's times
@@ -424,58 +476,70 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime toNt = TimeZoneInfo.ConvertTimeFromUtc(closeUtc, ntZone).Date.AddDays(1);
             DateTime nowNt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ntZone);
             if (toNt > nowNt) toNt = nowNt;   // never past now
+
+            BarsTicket t = new BarsTicket();
+            string busy = ChartBridgeServer.GateBars(j.Key, inst, fromNt, toNt, RequestTimeoutMs, stopping, t);
+            if (busy != null) { waitingForGate = busy; state = "waiting for the gate: " + busy; return Outcome.Wait; }
+            waitingForGate = null;
+            state = "asking NinjaTrader: " + j.Key;
             lastRequest = j.Key + " at " + nowUtc.ToString("yyyy-MM-dd HH:mm:ss", Inv) + " UTC";
-
-            Answer a = new Answer();
-            try
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            long giveUpMs = (long)QueueWaitMs + RequestTimeoutMs + ChartBridgeServer.AnswerCopyMs + 5000;
+            while (!t.Done.Wait(50))
             {
-                BarsRequest req = new BarsRequest(inst, fromNt, toNt);
-                req.BarsPeriod = new BarsPeriod { BarsPeriodType = BarsPeriodType.Minute, Value = 1, MarketDataType = MarketDataType.Last };
-                req.TradingHours = inst.MasterInstrument.TradingHours;   // the template the chart uses
-                req.MergePolicy = MergePolicy.DoNotMerge;                // this contract's own prices, never another contract's
-                req.Request(new Action<BarsRequest, ErrorCode, string>((r, code, message) =>
+                if (stopping()) { ChartBridgeServer.GateBarsWithdraw(t); return Outcome.Stopped; }
+                if (!t.Started && sw.ElapsedMilliseconds > QueueWaitMs && ChartBridgeServer.GateBarsWithdraw(t))
                 {
-                    try
-                    {
-                        a.Code = code; a.Message = message ?? "";
-                        if (code == ErrorCode.NoError && !a.Abandoned && r.Bars != null) a.Raw = RawBars.Copy(r.Bars, false);   // quick copy on NinjaTrader's thread
-                    }
-                    catch (Exception ex) { a.Error = ex.Message; }
-                    finally { try { r.Dispose(); } catch (Exception) { } a.Done.Set(); }
-                }));
+                    waitingForGate = "the request did not go out within " + (QueueWaitMs / 1000) + " s (the chart's requests went first)";
+                    state = "waiting for the gate: " + waitingForGate;
+                    return Outcome.Wait;
+                }
+                if (sw.ElapsedMilliseconds > giveUpMs) { Later(j, "no answer from the gate"); return Outcome.Later; }
             }
-            catch (Exception ex) { Later(j, "the request failed: " + ex.Message); return; }
-
-            if (!a.Done.Wait(RequestTimeoutMs))
-            {
-                a.Abandoned = true;
-                Later(j, "NinjaTrader did not answer within " + (RequestTimeoutMs / 1000) + " seconds");
-                return;
-            }
-            if (a.Error != null) { Later(j, "could not copy the bars: " + a.Error); return; }
-            if (a.Code != ErrorCode.NoError) { Later(j, "NinjaTrader refused the request: " + a.Code + " " + a.Message); return; }
-            List<DeskBar> bars = SessionBars(a.Raw, j.Session, UtcNow());
-            if (bars.Count == 0) { Later(j, "NinjaTrader has no 1-minute bars for it"); return; }
+            if (stopping()) return Outcome.Stopped;
+            if (t.GateStuck) { waitingForGate = t.Error; state = "waiting for the gate: " + t.Error; return Outcome.Wait; }
+            if (t.Error != null) { Later(j, t.Error); return Outcome.Later; }
+            List<DeskBar> bars = SessionBars(t.Raw, j.Session, UtcNow());
+            if (bars.Count == 0) { Later(j, "NinjaTrader has no 1-minute bars for it"); return Outcome.Later; }
+            if (stopping()) return Outcome.Stopped;   // nothing is queued after a stop
             string root = (inst.MasterInstrument.Name ?? j.Root).ToUpperInvariant();
             ChartBridgeBarsQueue.Queue(j.Key, MessageJson(inst.FullName, root, inst.MasterInstrument.TickSize, j.Session, bars));
-            lock (RetryAt) { RetryAt.Remove(j.Key); LoggedFailure.Remove(j.Key); }
+            lock (RetryAt) { RetryAt.Remove(j.Key); Tries.Remove(j.Key); LoggedFailure.Remove(j.Key); }
             fetchError = "";
             ChartBridgeServer.Log("bars for " + inst.FullName + " session " + j.Session.ToString("yyyy-MM-dd", Inv) + ": " + bars.Count + " minutes queued for The Desk");
+            return Outcome.Done;
         }
 
-        // /diag "bars": enabled, the last session The Desk took per contract, the queue, the last problem.
+        // /diag "bars": enabled, what it is doing (and what it waits for at the gate), the last session The Desk took per contract,
+        // the queue, what was set aside or given up, the last problem.
         public static string DiagJson()
         {
             string err = ChartBridgeBarsQueue.SendError();
             if (err.Length == 0) err = fetchError ?? "";
+            int gaveUp; lock (RetryAt) gaveUp = GaveUp.Count;
+            string wait = waitingForGate;
             return "{\"enabled\":" + (Enabled ? "true" : "false") +
+                ",\"state\":" + CbJson.Str(state ?? "") +
+                ",\"waitingForGate\":" + (wait != null ? CbJson.Str(wait) : "null") +
                 ",\"roots\":[" + string.Join(",", Roots.Select(r => CbJson.Str(r)).ToArray()) + "]" +
                 ",\"lastSent\":" + ChartBridgeBarsQueue.LastSentJson() +
                 ",\"waiting\":" + ChartBridgeBarsQueue.Waiting() +
                 ",\"setAside\":" + ChartBridgeBarsQueue.SetAsideCount() +
-                ",\"lastRequest\":" + CbJson.Str(lastRequest) +
+                ",\"gaveUp\":" + gaveUp +
+                ",\"lastRequest\":" + CbJson.Str(lastRequest ?? "") +
                 ",\"lastError\":" + CbJson.Str(err) + "}";
         }
+    }
+
+    // One daily bars request at the gate (ChartBridgeServer.GateBars): its answer copied on NinjaTrader's thread, or why not.
+    public class BarsTicket
+    {
+        public readonly ManualResetEventSlim Done = new ManualResetEventSlim(false);
+        public volatile bool Started;      // it went to NinjaTrader (it can no longer be taken back)
+        public volatile bool GateStuck;    // it waited at the gate while another request was not answered: asked again later
+        public RawBars Raw;
+        public volatile string Error;
+        public object Job;                 // the gate's own record of it
     }
 
     // ------------------------------------------------------------------ the bars queue (the fills queue's rules)
@@ -519,6 +583,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Pending.Clear(); PendingKeys.Clear(); Sent.Clear();
                 sendError = ""; lastFailed = false;
+                Interlocked.Exchange(ref setAside, 0);   // /diag: set aside since this start
                 int bad = 0;
                 try
                 {
@@ -622,29 +687,46 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Sends the waiting messages, oldest first, until one fails (then the next try is in 10 seconds). Runs on the bars
-        // thread (never NinjaTrader's); a second caller while one is sending returns at once.
-        public static void Flush()
+        // thread (never NinjaTrader's); a second caller while one is sending returns at once. Nothing is posted once
+        // stopping() is true or Abort() has run.
+        public static void Flush() { Flush(null); }
+        public static void Flush(Func<bool> stopping)
         {
             if (!ChartBridgeBars.Enabled) return;
             if (Interlocked.CompareExchange(ref sending, 1, 0) != 0) return;
+            int gen = Volatile.Read(ref stopGen);
             try
             {
                 while (true)
                 {
+                    if (stopping != null && stopping()) return;
                     string line, key;
                     lock (Sync)
                     {
                         if (Pending.Count == 0) return;
                         line = Pending[0]; key = PendingKeys[0];
                     }
-                    if (!SendOne(key, line)) return;
+                    if (!SendOne(key, line, gen)) return;
                 }
             }
             finally { Interlocked.Exchange(ref sending, 0); }
         }
 
+        // ChartBridgeBars.Stop: a post in flight is aborted (the message stays queued) and no other starts.
+        private static readonly object AbortSync = new object();
+        private static int stopGen;
+        private static HttpWebRequest inFlight;
+        public static void Abort()
+        {
+            lock (AbortSync)
+            {
+                stopGen++;
+                try { if (inFlight != null) inFlight.Abort(); } catch (Exception) { }
+            }
+        }
+
         // True when the message left the queue (taken, or set aside).
-        private static bool SendOne(string key, string line)
+        private static bool SendOne(string key, string line, int gen)
         {
             HttpWebRequest req = null;
             try
@@ -653,6 +735,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 req = (HttpWebRequest)WebRequest.Create(ChartBridgeConfig.DeskUrl + "/api/bars");
                 req.Method = "POST";
                 req.ContentType = "application/json";
+                lock (AbortSync) { if (stopGen != gen) return false; inFlight = req; }
                 Task<WebResponse> call = Post(req, bytes);
                 if (!call.Wait(TimeoutMs) && !call.IsCompleted)
                 {
@@ -684,11 +767,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ChartBridgeServer.Log("The Desk refused the bars for " + key + " (" + code + (why.Length > 0 ? ": " + Clean(why) : "") + "); set aside in rejected_bars.jsonl");
                     return true;
                 }
+                if (Volatile.Read(ref stopGen) != gen) return false;   // aborted by a stop: still queued, nothing to report
                 sendError = e.Message;
                 if (!lastFailed) ChartBridgeServer.Log("The Desk did not take bars (" + e.Message + "); they are saved and will be retried every 10 seconds.");
                 lastFailed = true;
                 return false;
             }
+            finally { lock (AbortSync) { if (inFlight == req) inFlight = null; } }
         }
 
         private static string Clean(string s)

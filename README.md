@@ -31,8 +31,10 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
-On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills and the
-**Initial balance** (today's 1-hour IB, 1.5.3) per chart pane, with a search box ("/" opens it), a Recent line, Hide
+On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills, the
+**Initial balance** (today's 1-hour IB, 1.5.3), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
+buys minus market sells below the chart, counted from when the page opens or the trades' sides were measured, and from
+0 again at 18:00 ET; the sides from ChartBridge 0.3.4) per chart pane, with a search box ("/" opens it), a Recent line, Hide
 all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). Hiding
 Fills never hides the open trade (its entry fills, the position line, working orders, stop and target lines). One
 **Account** picker, the order bar's (or, with no order bar, a compact one in the toolbar), chooses the account for
@@ -42,7 +44,23 @@ prices only, picked next to the range size, which is kept per instrument. Every 
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
 `ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
 sees (accounts, fill counts, clock, The Desk queue, since 0.3.3 where each load's backfill met the live
-trades, and since 0.3.4 how each trade's side, buy or sell, was found); see `nt8/PROTOCOL.md`.
+trades, since 0.3.4 how each trade's side, buy or sell, was found, and since 0.3.5 each instrument's session table and
+served window); see `nt8/PROTOCOL.md`.
+
+**Light Range chart, exact profile** (chart 1.8.0 with ChartBridge 0.3.5): a Range or seconds chart opens with the last
+2 hours of trades (`rangeHours`), which ChartBridge asks NinjaTrader for once per session and keeps in memory, so a reload
+or a second page starts from the same trade without asking NinjaTrader again. Range bars are drawn only from the first
+bar proven to be NinjaTrader's own (a session start, or a swing of more than the range each way; `docs/RANGE_BARS.md`),
+never offset bars before it, and once drawn they stay all day. The volume profile comes from ChartBridge's table of the
+session's volume at each price, fed by the live trades, on every view: exact from 18:00 ET. When ChartBridge starts
+after 18:00 it loads the session once, at start, one instrument at a time (`profileRoots`), and the profile says "Volume
+profile building, from HH:MM ET" until then. A NinjaScript compile (F5) restarts ChartBridge, so a compile during the
+session counts as such a start: the session is loaded once more. The Range and seconds windows and these session loads go
+to NinjaTrader one at a time; a minute chart's last-trades request (as in 0.3.3) is not queued behind them. If NinjaTrader
+never answers one of them (or answers at the time limit but its copy does not finish within 30 s more), ChartBridge
+asks for no more tick history (no window, no session load, no minute chart's last
+trades) until NinjaTrader answers it or restarts: meanwhile Range and seconds charts open from ChartBridge's memory or start
+from live trades, and say why. Orders and Flatten work during any load. With ChartBridge 0.3.4 or older the chart loads as before.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
 line; recompile or restart NinjaTrader after a change):
@@ -53,6 +71,9 @@ line; recompile or restart NinjaTrader after a change):
 | `roots` | `MNQ, NQ, MES, ES` | Instruments offered. |
 | `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
+| `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
+| `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
+| `quoteHours` | `0` | ChartBridge 0.3.4.1: hours of historical Bid and Ask a tick chart asks NinjaTrader for, to side its backfill trades: `0` (none; they go by the tick rule, live trades keep their side from the live quote), `1` or `2`. Anything else is `0`. See the changelog. |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
@@ -134,15 +155,17 @@ The Desk tags each trade with the levels around it, and for that it needs the da
   no token, only the market data and this PC's name (`pc`).
 - **When:** a few minutes after the 17:00 close, if NinjaTrader is connected; and when ChartBridge starts
   (about 2 minutes after, once the charts have loaded), any of the last 5 sessions The Desk has not taken
-  yet, so the first run also sends the day before. Weekends and full holidays are skipped.
-- **Never in the way:** the requests run one at a time on their own low-priority thread, wait while a chart
-  is loading, and never touch order entry. A request NinjaTrader does not answer in 2 minutes, or that
-  fails, is logged and tried again 15 minutes later.
+  yet, so the first run also sends the day before. Weekends and full holidays are skipped. Nothing during
+  regular trading hours (09:30 to 16:15 ET) except that catch-up at the start.
+- **Never in the way:** each request goes to NinjaTrader through the same one-at-a-time gate as the Range
+  windows and session backfills (0.3.5), last of all, and only when nothing of the chart's is out, queued,
+  still to come or loading; it never goes beside one, and never touches order entry. A request that fails is
+  logged and tried again 15 minutes later, 3 times at most, then not until the next start.
 - **Like fills:** each message waits in `pending_bars.jsonl` (next to `pending_fills.jsonl`) until The
   Desk takes it (`POST /api/bars` at `deskUrl`, retried every 10 seconds), so a restart or The Desk being
   closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl`. Sessions
   The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
-  sent per contract, how many wait, and the last problem. Details: "Daily bars to The Desk" in
+  sent per contract, how many wait, what it waits for at the gate, and the last problem. Details: "Daily bars to The Desk" in
   `nt8/PROTOCOL.md`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
@@ -150,6 +173,158 @@ Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `
 simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`). The fake has the same PIN; it
 asks for one to be set unless started with `--test-pin=<made-up PIN>`, and `--pin-file=<path>` keeps it
 across fake restarts.
+
+### Keep this PC up to date
+
+`nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
+new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
+
+- **The page updates by itself.** The updater checks when you sign in and once a day at 5:05 PM New York time, while
+  futures are closed. It installs the newest commit on `main` whose CI is green on both ubuntu-latest and
+  windows-latest, and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
+  page keeps running what it loaded, so an open trade is never disturbed.
+- **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
+  flat, then presses F5.
+- **Your clone is never moved.** The updater only fetches `main` and stages what it needs under `updater\staged\`; it
+  never checks out, pulls or merges. Pull the clone yourself when you want to (that changes nothing the task runs).
+- **The task runs its own copy** of the updater, `updater\bin\update-pc.ps1`: always the file of a commit on `main`
+  whose CI is green, checked byte for byte against that commit. It changes only when you run `register` again or
+  `-InstallChartBridge` (never to an older one), and every run checks it is still the file that was pinned (if not, it
+  does nothing and says so in the log). A new commit on `main` never changes it by itself. After setup, run everyday
+  commands with that copy too (below), so they are the same code the task runs.
+- **A cut-off install repairs itself.** If the PC loses power or sleeps while page files are being replaced, the next
+  run finishes the install (or goes back to the previous page) before anything else, even when paused.
+- State and log: `Documents\NinjaTrader 8\ChartBridge\updater\` (`update.log`, `status.json`, `state.json`, the staged
+  files, the previous page, `bin\`). `config.txt` and the PIN file are never touched.
+
+**One-time setup.** Open Windows PowerShell (not as administrator), with NinjaTrader running and ChartBridge compiled.
+Paste each block in turn; each ends in **OK** (go on) or **STOP** (read the line, fix it, paste the block again).
+
+1. The clone, on `main`, up to date. This block never switches branches: if the clone is on another branch or has
+   changes, it stops and says so.
+
+   ```powershell
+   $ce = @("$env:USERPROFILE\chart-engine", 'C:\TheDesk\chart-engine') | Where-Object { Test-Path (Join-Path $_ '.git') } | Select-Object -First 1
+   if (-not $ce) { 'STOP: no chart-engine clone at %USERPROFILE%\chart-engine or C:\TheDesk\chart-engine' } else {
+     Set-Location $ce; $br = git symbolic-ref --short HEAD; $dirty = git status --porcelain --untracked-files=no
+     if ($br -ne 'main') { "STOP: the clone is on '$br', not main. When the work there is saved: git checkout main, then paste this block again" }
+     elseif ($dirty) { 'STOP: the clone has changed files (git status shows them). Commit or put them aside, then paste this block again' }
+     else { git pull --ff-only; if ($LASTEXITCODE -ne 0) { 'STOP: git pull failed (see the lines above)' }
+       elseif ((git symbolic-ref --short HEAD) -eq 'main' -and (Test-Path .\nt8\update-pc.ps1)) { "OK: $ce is on main, up to date" }
+       else { 'STOP: the clone is not on main with nt8\update-pc.ps1' } } }
+   ```
+
+2. What this PC has now. It asks ChartBridge's `/diag` for the version compiled here and saves what /diag reports
+   (in `updater\state.json`, so a page waiting for F5 follows on the next check); it never writes a page or
+   ChartBridge file:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 status
+   ```
+
+   STOP "page folder is missing": this PC never had ChartBridge. While flat, with the NinjaScript Editor closed, run
+   `powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 -InstallChartBridge` (it asks first),
+   open the NinjaScript Editor and press F5, then paste block 2 again. STOP "version is not known": start NinjaTrader
+   (ChartBridge compiled), then paste block 2 again.
+
+3. A dry run (fetches `main`, asks GitHub for CI, changes nothing):
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 check
+   ```
+
+4. The first update, by hand:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 update
+   ```
+
+5. The scheduled task for this Windows user. It checks when you sign in and once a day at 5:05 PM New York time, while
+   futures are closed (`-DailyAt 17:10` for another New York time). It prints that time on this PC's clock. If the PC
+   is off or asleep at 5:05 PM, that day's check is skipped rather than run later in the trading day; the next sign-in
+   or the next day checks. Every check works out 5:05 PM New York time again and moves the daily check if this PC's
+   clock drifted from it (a trip to another time zone, or DST dates that differ from New York's); the log says so.
+   Register pins the updater from the newest green commit on `main` (it fetches first); it refuses a file changed by
+   hand or from a branch, and never goes back to an older updater than the one pinned. Run it from a normal
+   PowerShell window, not as administrator: the task's own run may not be allowed to move the daily check of a task
+   registered from an elevated window (register warns, and `status` shows when a move failed).
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\nt8\update-pc.ps1 register
+   ```
+
+   To check the daily time is kept on this PC's clock (a time with no ending such as `-04:00` or `Z`, for example
+   `2026-09-30T17:05:00`): `(Get-ScheduledTask 'ChartEngine Updater').Triggers | Select StartBoundary`
+
+   On Windows 11, if a console window stays open while the check runs, that is Windows Terminal being the default
+   terminal; the window closes when the run ends.
+
+**Everyday commands, with the task's own copy.** Paste this once per PowerShell window, then use `$u` as below:
+
+```powershell
+$u = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'NinjaTrader 8\ChartBridge\updater\bin\update-pc.ps1'
+if (Test-Path $u) { "OK: $u" } else { 'STOP: no pinned copy yet: do setup block 5 (register) first' }
+```
+
+For example `powershell -NoProfile -ExecutionPolicy Bypass -File $u status`. It knows the clone from its pinned.json.
+
+**What the notices mean.** On the chart page's status line, at the bottom (never over the order bar or the chart, and
+it never moves them; it never reloads anything):
+
+- **Update ready: reload when flat**: new page files are installed. Reload the page when flat to use them.
+- **ChartBridge x.y.z ready to install (flat, then F5)**: a new ChartBridge is staged. Nothing happens until Anthony
+  installs it (below). A Windows notification says the same once, and so do `update.log` and `status.json`.
+- **ChartBridge x.y.z copied: press F5 when flat**: it was copied; it runs after F5 in the NinjaScript Editor.
+- **Page files are being updated: do not reload yet**: files are being replaced right now (a few seconds).
+- **Page update cut off: run update-pc.ps1 status**: an install was cut off (a power loss, a closed lid). Do not
+  reload. The next check repairs it by itself; when flat you can run `repair` (page files only, never ChartBridge).
+- **DO NOT press F5: ChartBridge files are mixed. Run update-pc.ps1 status and report**: `-InstallChartBridge`
+  failed half way (a file held by the NinjaScript Editor, antivirus or OneDrive, or a power loss) and the old files
+  could not all be put back, so `bin\Custom\AddOns` holds new and old ChartBridge files. Do not compile. `status`
+  says which files changed and where the old ones are kept; the notice goes once AddOns holds one whole set again
+  (the old files put back, or `-InstallChartBridge` run again with nothing holding the files).
+- **Updater stopped: run update-pc.ps1 status**: the task's copy of the updater failed its own check (changed, or its
+  `pinned.json` is gone), so the scheduled check does nothing. Run `register` again from the clone.
+
+On a narrow window the notice is shortened ("Update ready"); hovering it shows the whole text.
+
+**Install a new ChartBridge** (while flat in every account, with the NinjaScript Editor closed: an open editor compiles
+as soon as a file changes):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File $u -InstallChartBridge
+```
+
+It installs from `updater\staged\` (the green commit that was announced), never from the clone. It shows the staged
+version and the one compiled here, asks once (type `y`), then writes the add-on files next to the old ones and replaces
+them back to back (the files it replaces are kept in `updater\previous-addons\`). All or nothing: if one file cannot
+be replaced (the NinjaScript Editor, antivirus or OneDrive holds it), every file already replaced is put back and it
+says nothing changed; close what holds the file and run it again. If the put-back fails too, it says **DO NOT press
+F5** (above). Then it says: open the NinjaScript
+Editor and press **F5** while flat, then open `http://localhost:8765/diag` and check `"version"` shows the new one (or
+run `update-pc.ps1 status`), then reload the chart page. A page that needs the new ChartBridge waits until /diag shows
+it: after F5, run `update` (or `status`, which notes the new version for the next check). A page that works with both
+installs at once; if it cannot be written right then, the ChartBridge part still counts and the page follows on the
+next update. `-InstallChartBridge` also moves the task's copy of the updater to that commit (never to an older one).
+
+**Pause, roll back, and the rest:**
+
+| Command (`powershell -NoProfile -ExecutionPolicy Bypass -File $u ...`) | What it does |
+| --- | --- |
+| `status` | what is installed and waiting, and why; it saves what /diag reports (the version compiled here) in `updater\state.json`, and never writes a page or ChartBridge file |
+| `check` | dry run: what `update` would do now |
+| `update` | the automatic path, by hand |
+| `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
+| `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files; the clone's only when its `live/COMPAT.json` allows the ChartBridge compiled here, or it says plainly that it could not check) |
+| `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
+| `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 5:05 PM New York time |
+
+Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
+without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader
+closed and nothing recorded yet); the page needs a newer ChartBridge; paused; or a commit rolled back by hand.
+
+With NinjaTrader closed, the ChartBridge version counted is the newest one `/diag` showed (or the one
+`-InstallChartBridge` copied, once seen), and never above the version in `bin\Custom\AddOns\ChartBridge.cs`.
 
 ## Trading from the chart
 
@@ -175,11 +350,16 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 
 - **Armed** switch. Off after every page load, and it turns itself off when the account or instrument
   changes, the connection drops or ChartBridge turns trading off. While it is on, the bar and the chart are
-  outlined in amber, the legend shows ARMED and the tab title starts with ARMED. **Nothing trades while it
+  outlined in amber, the legend shows ARMED with the account and the tab title starts with ARMED and names the
+  instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
   is off**, and nothing asks for confirmation while it is on: one click sends the order.
-- **Account** (only `tradeAccounts`; Sim101 is chosen first), **Qty** (1 to that instrument's cap). The chart
-  marks this account's fills (1.6.0). With trading off the picker lists every account ChartBridge knows and still
-  switches the fills.
+- **Account** (only `tradeAccounts`), **Qty** (1 to that instrument's cap). The chart marks this account's fills
+  (1.6.0). When trading comes on the bar is on the account this tab was using (1.6.1): after a reconnect or a PIN
+  entry the one it was on, after a reload of the tab the one that tab was on, in a new tab the last one picked on
+  this PC; always only if `tradeAccounts` still has it, else Sim101 with the note "Last account ... not available,
+  on Sim101". The picker is ringed for a moment and a note says which account orders go to. Armed is always off
+  then. Each tab keeps its own account. Other accounts with orders or a position on the instrument are named in the
+  bar. With trading off the picker lists every account ChartBridge knows and still switches the fills.
 - **Buy MKT / Sell MKT**.
 - **Shift+click** a price on the chart to place a limit or stop at that price. The side is the bar's
   Buy / Sell choice; the kind follows from where you click: a better price than the last trade is a limit
@@ -190,7 +370,12 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 - **Flatten** cancels every working order on the chosen account and instrument, then closes the position at
   market. **Cancel all** cancels the working orders and leaves the position; while a position is open it
   keeps every order on the closing side (the position's stop and target, from the chart or NinjaTrader)
-  and says how many it kept. Cancel those one by one with their x, or use Flatten.
+  and says how many it kept. Cancel those one by one with their x, or use Flatten. Its cancels go out by order id,
+  at most 6 order actions in any 1.1 s (ChartBridge allows 10 a second, so Flatten always has room), the newest click
+  first; once clicked it finishes whatever Armed, the account or the instrument shown do next, and the state row
+  names it until the last one is sent ("Cancelling on EVAL-1 MNQ: 12 left", in amber while another account or
+  instrument is shown). Nothing is locked meanwhile. A Flatten ChartBridge refuses for the rate is sent once more. If the connection drops first, a note above the chart names
+  the account, the instrument and how many were not sent, until dismissed or those orders are gone (1.6.1).
 - Working orders show as lines with a label and a price tag (green buy, red sell; stops dashed, limits and
   targets solid). While Armed, drag a label (or its price tag) to move the order, press Escape during the
   drag (or let go outside the chart's plot) to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
@@ -274,6 +459,13 @@ trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET se
 (`setLayers({ vp: true })`, off by default) as bars from the right edge of the plot behind the candles; the chart
 redraws on its own when the profile changes.
 
+Cumulative delta (1.7.0): `new ChartEngine.CumulativeDelta({ sessionStart, seconds, coveredFrom })` counts trades
+(`add(t, v, side, barT, method)`, side 1 buy, -1 sell, 0 or none unknown) into one candle per price bar of the
+running buys minus sells, from 0 at each 18:00 ET session, from `coveredFrom` on (the start of the page's
+window of trades with measured sides). `setDelta(delta | null)` hands one to the chart, drawn in a pane below the plot while the `delta` layer is on;
+`setDeltaView({ mode: 'cum' | 'bar', ratio, note, reason })`, `deltaPane()`, `deltaToY(v)` and
+`on('paneResize', { ratio, height, done })` for the divider.
+
 Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { pointValue })` ·
 `setOrderEditing(bool)` · `setOrderPreview(fn)` · `orderHandles()` · `priceToY(price)` · `yToPrice(y)` ·
 `on('orderMove', { id, price })` · `on('orderCancel', { id })` · `on('orderPlace', { price })`. The chart only
@@ -314,7 +506,7 @@ colors for a page's toolbar on a light ground (null on dark ones), which the liv
 ## Develop
 
 ```sh
-npm test          # unit tests (Node 20+, no install needed)
+npm test          # unit tests (Node 20+, no install needed); with pwsh or Windows PowerShell also the updater's tests
 npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
 npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
@@ -323,10 +515,11 @@ npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reco
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:live-first # the served window and the session table: exact range bars, profile and VWAP against the fake's tape
+npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
-npm run check:orders     # the order gates, the PIN, the seam and trade sides under Mono
-npm run check:bars       # daily bars: session dates, stamps, catch-up, the queue (Mono)
+npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window and the daily bars under Mono
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in
