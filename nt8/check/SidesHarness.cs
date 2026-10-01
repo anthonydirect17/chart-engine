@@ -20,9 +20,29 @@ using NinjaTrader.NinjaScript.AddOns;
 public static class SidesHarness
 {
     static Action<bool, string> Check;
-    // Ten minutes ago, on a whole second: the quote window is counted back from now (QuoteHoursMax), so the made-up trades
-    // and quotes have to be recent.
-    static readonly DateTime T0 = new DateTime(DateTime.Now.AddMinutes(-10).Ticks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond);
+    // The made-up trades and quotes are at T0 plus seconds. The pure rules (Pure, Live, Join) run at a fixed instant in the
+    // middle of a session, Tuesday 2026-09-29 11:00:00 New York time, so they are the same at any hour. They used to run ten
+    // minutes before now: a run that started between about 17:35 and 18:15 ET put trades on both sides of the 18:00 session
+    // start, where the tick rule starts over, and "join, N1" and two "live:" cases failed.
+    static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+    static readonly DateTime MidSession = NtTime(new DateTime(2026, 9, 29, 11, 0, 0, DateTimeKind.Unspecified));
+    static DateTime T0 = MidSession;
+    // A New York wall clock time in NinjaTrader's time zone setting (the stand-in's is the PC's), on a whole second.
+    static DateTime NtTime(DateTime newYork) { return FromUtc(TimeZoneInfo.ConvertTimeToUtc(newYork, NewYork)); }
+    static DateTime FromUtc(DateTime utc)
+    {
+        DateTime t = TimeZoneInfo.ConvertTimeFromUtc(utc, NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo);
+        return new DateTime(t.Ticks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond, DateTimeKind.Unspecified);
+    }
+    // The whole loads (Load) go through ChartBridgeServer, which counts its quote window back from the PC's clock (there is no
+    // clock hook), so their trades and quotes have to be recent: ten minutes before utcNow, or 17:40 ET when that would be
+    // from 17:50 to 18:05 ET, so they never straddle an 18:00 session start either (AnyHour checks every minute of 4 days).
+    static DateTime RecentBase(DateTime utcNow)
+    {
+        DateTime utc = utcNow.AddMinutes(-10), et = TimeZoneInfo.ConvertTimeFromUtc(utc, NewYork);
+        if (et.TimeOfDay >= new TimeSpan(17, 50, 0) && et.TimeOfDay < new TimeSpan(18, 5, 0)) utc = TimeZoneInfo.ConvertTimeToUtc(et.Date.AddHours(17).AddMinutes(40), NewYork);
+        return FromUtc(utc);
+    }
     static DateTime At(double seconds) { return T0.AddTicks((long)Math.Round(seconds * TimeSpan.TicksPerSecond)); }
     const int N = ChartBridgeSides.None, AG = ChartBridgeSides.Aggressor, Q = ChartBridgeSides.BidAsk, TR = ChartBridgeSides.TickRule;
 
@@ -348,6 +368,7 @@ public static class SidesHarness
         // below test the quote path, so they run with quoteHours 2 (their made-up data is from the last 10 minutes); the
         // 0.3.4.1 cases then set it themselves, and it goes back to the default.
         int was = ChartBridgeConfig.QuoteHours;
+        T0 = RecentBase(DateTime.UtcNow);
         try
         {
             ChartBridgeConfig.QuoteHours = 2;
@@ -355,18 +376,41 @@ public static class SidesHarness
             QuoteHoursCases();
             LoadMemory();
         }
-        finally { ChartBridgeConfig.QuoteHours = was; Reset(); }
+        finally { ChartBridgeConfig.QuoteHours = was; Reset(); T0 = MidSession; }
     }
 
     public static void Run(Action<bool, string> check)
     {
         Check = check;
         typeof(ChartBridgeTime).GetField("et", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
+        T0 = MidSession;
+        AnyHour();
         Pure();
         Live();
         Join();
         Session();
         Lanes();
+    }
+
+    // The same at any hour: the pure rules' T0 is mid-session, and the loads' base, worked out for every minute of a winter,
+    // a summer and both clock-change days, has trades from 1 minute before to 5 minutes after it in one session, 5 to 40
+    // minutes before that minute.
+    static void AnyHour()
+    {
+        DateTime ms, me;
+        SessionClock.Bounds(MidSession, out ms, out me);
+        bool mid = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(MidSession), NewYork) == new DateTime(2026, 9, 29, 11, 0, 0) && MidSession - ms > TimeSpan.FromHours(16) && me - MidSession > TimeSpan.FromHours(6);
+        int bad = 0; string first = null;
+        foreach (DateTime day in new[] { new DateTime(2026, 1, 13), new DateTime(2026, 3, 8), new DateTime(2026, 7, 14), new DateTime(2026, 11, 1) })
+            for (int m = 0; m < 24 * 60; m++)
+            {
+                DateTime utc = TimeZoneInfo.ConvertTimeToUtc(day, NewYork).AddMinutes(m);
+                DateTime b = RecentBase(utc), st, en;
+                SessionClock.Bounds(b.AddMinutes(-1), out st, out en);
+                double back = (utc - ChartBridgeTime.ToUtc(b)).TotalMinutes;
+                if (b.AddMinutes(5) >= en || back < 5 || back > 40) { bad++; if (first == null) first = utc.ToString("yyyy-MM-dd HH:mm") + " UTC: base " + b.ToString("HH:mm:ss"); }
+            }
+        Check(mid && bad == 0, "the same at any hour: the pure rules run at 11:00 ET mid-session; the loads' base never straddles 18:00 ET and stays recent, for every minute of 4 days (" + bad + " bad" + (first != null ? ", first " + first : "") + ")");
     }
 
     // ------------------------------------------------------------ the 18:00 ET session (Anthony's ruling, 2026-09-30)
