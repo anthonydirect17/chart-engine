@@ -316,10 +316,12 @@ try {
     main: JSON.parse(localStorage.getItem('desk:live-drawings-v1-MNQ') || '[]').length, pane2: JSON.parse(localStorage.getItem('desk:live-drawings-v1-pane-2-MNQ') || '[]').length }));
   check(drawn.a === 1 && drawn.b === 1 && drawn.main === 1 && drawn.pane2 === 1, 'two panes on MNQ: one price line each, saved per pane: ' + JSON.stringify(drawn));
   await page.click('#paneA .ce-theme-btn'); await page.click('#paneA .ce-preset[data-id="mint"]'); await page.keyboard.press('Escape');
-  await page.click('#paneB .ce-theme-btn'); await page.fill('#paneB .ce-theme-panel input[data-hex="vwap"]', '#ABCDEF'); await page.keyboard.press('Escape');
+  // the VWAP color is set in the VWAP indicator's gear (1.9.0), shared by the panes of one prefix like the Colors panel's
+  await page.click('#paneB [id$="-indBtn"]'); await page.click('#paneB .ind-panel [data-f="gear:vwap"]');
+  await page.fill('#paneB .ind-set[data-id="vwap"] input[data-hk="vwap"]', '#ABCDEF'); await page.keyboard.press('Escape');
   const colorsA = await page.evaluate(() => window.__a.chart.getTheme());
-  const colorsSaved = await page.evaluate(() => JSON.parse(localStorage.getItem('desk:live-colors-v1')));
-  check(colorsSaved.vwap === '#ABCDEF' && colorsSaved.up === colorsA.up.toUpperCase() && colorsSaved.down === colorsA.down.toUpperCase(), 'colors: pane A\'s preset and pane B\'s VWAP both saved: ' + JSON.stringify(colorsSaved));
+  const colorsSaved = await page.evaluate(() => Object.assign(JSON.parse(localStorage.getItem('desk:live-colors-v1')), { vwap: JSON.parse(localStorage.getItem('desk:live-indicator-colors-v1')).vwap }));
+  check(colorsSaved.vwap === '#ABCDEF' && colorsSaved.up === colorsA.up.toUpperCase() && colorsSaved.down === colorsA.down.toUpperCase(), 'colors: pane A\'s preset and pane B\'s VWAP (its gear) both saved: ' + JSON.stringify(colorsSaved));
   const linesBefore = await page.evaluate(() => [window.__a.chart.getDrawings()[0].price, window.__b.chart.getDrawings()[0].price]);
   await page.evaluate(() => { window.__a.destroy(); window.__b.destroy(); });
   await page.reload();

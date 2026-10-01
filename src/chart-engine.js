@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.8.0
+ * chart-engine 1.9.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -239,6 +239,16 @@ function pairTry(a, b, bg, min, to, ordered, sep) {
   if (contrast(sl, bg) >= need && contrast(sd, bg) >= need && ok(sl, sd)) return out(sl, sd, true);
   return out(markOnGround(L, bg, min, to), markOnGround(D, bg, min, to), false);
 }
+/* The IB high and low as drawn (1.5.3; 1.9.0 with colors set in the IB gear, Anthony: the IB high stays the brighter).
+   pairOnGround's ordered pair; if even that leaves the high not the brighter by 1.25:1 (a high picked darker than a
+   very light low), the high moves toward white and the low toward black, a step at a time, until it is. */
+function ibPair(hi, lo, bg, to) {
+  const ordered = (a, b) => luminance(parseColor(a)) > luminance(parseColor(b)) && contrast(a, b) >= PAIR.contrast;
+  const [h, l] = pairOnGround(hi, lo, bg, FLOOR.text, to, true);
+  if (ordered(h, l)) return [h, l];
+  for (let k = 0.05; k < 1; k += 0.05) { const a = mix(h, WHITE, k), b = mix(l, BLACK, k); if (ordered(a, b)) return [a, b]; }
+  return [WHITE, BLACK];
+}
 /** Mix of two colors, k = 0 gives `a`, 1 gives `b`, as #RRGGBB. */
 function mix(a, b, k) {
   const x = parseColor(a), y = parseColor(b);
@@ -343,39 +353,117 @@ function buildTheme(partial) {
 }
 
 /**
- * CSS colors for a page's own chrome (toolbar, menus, status line) on a light ground (1.5.3, Anthony: with a light
- * chart the toolbar and status line go light too), keyed by the live page's CSS variable names; null on the default
- * and dark grounds, where the page keeps its dark house style. Every text color reads at the chart's floors on the
- * darkest surface it sits on (text 7:1, secondary text 4.5:1, accents 4.5:1). Built once per theme change.
+ * CSS colors for a page's own chrome (toolbar, order bar, menus, status line) on any ground but the default, keyed by
+ * the live page's CSS variable names; null on the default ground, where the page keeps its house style exactly.
+ * 1.5.3 (Anthony: with a light chart the toolbar and status line go light too); 1.9.0 (Anthony: the top bar matches
+ * every ground, "white chart, white top bar", Black a black one, Blue-grey a blue-grey one). A dark ground takes the
+ * house dark chrome lifted by the same steps over it; a light ground raised surfaces a mix toward the house near-black.
+ * On a mid ground (CHROME_MID) the chrome's ground is the chart's moved just enough. Every text color reads at the
+ * chart's floors on the surface it sits on that reads worst (text 7:1, secondary text and accents 4.5:1). Built once
+ * per theme change, never per frame.
  */
-const CHROME_LIGHT = 9;                 // the ground against the house near-black #080B10, for the page chrome to go light
+const HOUSE_CHROME = {
+  bg: '#080B10', s2: '#0F151D', s3: '#141C26', line: '#18212C', lineStrong: '#2A3645', panel: '#0B1016',
+  tint: '#1A1230', border: '#3B2A6B', text: '#E6EDF5', head: '#F2F6FA', text2: '#9AA8B8', text3: '#8392A5',
+  accentText: '#B69CFF', accentSoft: '#D8CCFF', loss: '#FF7A7A', profit: '#3DDC97',
+};
+const HOUSE_AMBER = '#E0B45A', HOUSE_BUY = '#3DDC97', HOUSE_SELL = '#FF7A7A';
+/* A mid ground: black or white text reads under 9:1 on it (about the 1.5.3 rule for a light chrome, 9:1 against the
+   house near-black). There the chrome's ground is the chart's, lightened or darkened just enough to reach it, so its
+   text and the Buy and Sell labels keep their colors apart and reading. */
+const CHROME_MID = 9;
 function chromeColors(T) {
-  // only a clearly light ground (review B1): on mid grounds the page keeps its dark chrome
-  if (!T || T.ground !== 'light' || contrast(parseColor(T.bg), parseColor('#080B10')) < CHROME_LIGHT) return null;
-  const bg = T.bg, ink = '#080B10';
-  const s2 = mix(bg, ink, 0.05), s3 = mix(bg, ink, 0.10);           // raised surfaces (buttons, hover)
-  const tint = mix(bg, '#6D28D9', 0.10), border = mix(bg, '#6D28D9', 0.45);
-  const on = (c, min, surface) => legible(c, surface || s3, min, BLACK);
+  if (!T || T.ground === 'default' || !parseColor(T.bg)) return null;
+  const light = T.ground === 'light', end = light ? BLACK : WHITE;
+  const bg = contrast(T.bg, end) >= CHROME_MID ? T.bg : shift(parseColor(T.bg), parseColor(end), CHROME_MID, light ? WHITE : BLACK, 0.01).hex;
+  let S;
+  if (light) {
+    const ink = '#080B10';
+    S = { s2: mix(bg, ink, 0.05), s3: mix(bg, ink, 0.10), line: mix(bg, ink, 0.12), lineStrong: mix(bg, ink, 0.24), panel: bg,
+      tint: mix(bg, '#6D28D9', 0.10), border: mix(bg, '#6D28D9', 0.45), text: T.axisTextStrong, head: T.tagText, text2: T.text2,
+      text3: T.axisText, accentText: '#6D28D9', accentSoft: '#6D28D9', loss: T.loss, profit: T.profit };
+  } else {
+    // the house dark surfaces, each the same step above the chosen ground as above the house ground
+    const g = parseColor(bg), h0 = parseColor(HOUSE_CHROME.bg), cl = x => Math.max(0, Math.min(255, x));
+    const lift = k => { const h = parseColor(HOUSE_CHROME[k]); return toHex({ r: cl(g.r + h.r - h0.r), g: cl(g.g + h.g - h0.g), b: cl(g.b + h.b - h0.b) }); };
+    S = Object.assign({}, HOUSE_CHROME);
+    for (const k of ['s2', 's3', 'line', 'lineStrong', 'panel', 'tint', 'border']) S[k] = lift(k);
+  }
+  const armedBar = mix(bg, HOUSE_AMBER, 0.07);                     // the bar while Armed: the amber tint over the ground
+  const worstOf = list => list.reduce((a, b) => contrast(b, end) < contrast(a, end) ? b : a);
+  const worst = worstOf([bg, S.s2, S.s3, armedBar]), tinted = worstOf([S.tint, S.s2, armedBar]);   // accents sit on the tint and the bar
+  const on = (c, min, surface) => legible(c, surface || worst, min, end);
   const v = {
-    '--bg': bg, '--s2': s2, '--s3': s3, '--line': mix(bg, ink, 0.12), '--line-strong': mix(bg, ink, 0.24),
-    '--text': on(T.axisTextStrong, FLOOR.strong), '--head': on(T.tagText, FLOOR.strong),
-    '--text2': on(T.text2, FLOOR.text), '--text3': on(T.axisText, FLOOR.text),
-    '--accent-tint': tint, '--accent-border': border,
-    '--accent-text': on('#6D28D9', FLOOR.text, tint), '--accent-soft': on('#6D28D9', FLOOR.text, tint),
-    '--crimson-word': on('#E0445E', FLOOR.text, bg), '--info': on('#7FB2FF', FLOOR.text), '--warn': on('#E0B45A', FLOOR.text),
-    '--loss': on(T.loss, FLOOR.text), '--profit': on(T.profit, FLOOR.text), '--panel': bg,
-    '--scheme': 'light',
+    '--bg': bg, '--s2': S.s2, '--s3': S.s3, '--line': S.line, '--line-strong': S.lineStrong,
+    '--text': on(S.text, FLOOR.strong), '--head': on(S.head, FLOOR.strong),
+    '--text2': on(S.text2, FLOOR.text), '--text3': on(S.text3, FLOOR.text),
+    '--accent-tint': S.tint, '--accent-border': S.border,
+    '--accent-text': on(S.accentText, FLOOR.text, tinted), '--accent-soft': on(S.accentSoft, FLOOR.text, tinted),
+    '--crimson-word': on('#E0445E', FLOOR.text, bg), '--info': on('#7FB2FF', FLOOR.text), '--warn': on(HOUSE_AMBER, FLOOR.text),
+    '--loss': on(S.loss, FLOOR.text), '--profit': on(S.profit, FLOOR.text), '--panel': S.panel,
+    '--scheme': light ? 'light' : 'dark',
   };
+  /* The order bar follows the page chrome (1.9.0, Anthony: "white chart, white top bar"). Its Buy and Sell keep a tint
+     of the house green and red, and their text reads on the strongest of those tints (hover, over the bar or the Armed
+     bar). The house amber tints the bar while Armed; the switch and the pill are ground-colored text on --warn. */
+  for (const [side, house] of [['buy', HOUSE_BUY], ['sell', HOUSE_SELL]]) {
+    const hover = worstOf([mix(S.s2, house, 0.16), mix(armedBar, house, 0.16)]), text = legible(on(house, FLOOR.text), hover, FLOOR.text, end);
+    v['--' + side] = text; v['--' + side + '-edge'] = rgba(text, 0.55);
+    v['--' + side + '-tint'] = rgba(house, 0.08); v['--' + side + '-hover'] = rgba(house, 0.16);
+  }
+  v['--warn-tint'] = rgba(HOUSE_AMBER, 0.07);
+  const dim = obarDim(v);
+  v['--obar-off'] = String(dim.off); v['--obar-disabled'] = String(dim.disabled);
   // the Colors button and panel (mountThemePanel reads these, falling back to the dark house colors)
   Object.assign(v, {
-    '--ce-text': v['--text'], '--ce-text2': v['--text2'], '--ce-muted': v['--text3'], '--ce-s2': s2, '--ce-s3': s3,
-    '--ce-line': v['--line-strong'], '--ce-line-soft': v['--line'], '--ce-panel': bg, '--ce-accent': v['--accent-text'],
-    '--ce-tint': tint, '--ce-tint-border': border, '--ce-tint-text': on('#6D28D9', FLOOR.text, tint), '--ce-bad': v['--loss'],
-    '--ce-shadow': '0 12px 32px rgba(8,11,16,.18)', '--ce-scheme': 'light',
+    '--ce-text': v['--text'], '--ce-text2': v['--text2'], '--ce-muted': v['--text3'], '--ce-s2': S.s2, '--ce-s3': S.s3,
+    '--ce-line': v['--line-strong'], '--ce-line-soft': v['--line'], '--ce-panel': S.panel, '--ce-accent': v['--accent-text'],
+    '--ce-tint': S.tint, '--ce-tint-border': S.border, '--ce-tint-text': v['--accent-soft'], '--ce-bad': v['--loss'],
+    '--ce-shadow': light ? '0 12px 32px rgba(8,11,16,.18)' : '0 12px 32px rgba(0,0,0,.45)', '--ce-scheme': light ? 'light' : 'dark',
   });
   return v;
 }
-/** Every CSS variable chromeColors() can set, so a page can clear them when the ground goes dark again. */
+/*
+ * The order bar's dimmed controls (1.9.0, review R2): Buy, Sell, Flatten and Cancel all while disarmed (.is-off), and
+ * every control while trading is off (:disabled), fade with an opacity, 0.45 and 0.4 on the house bar. On another
+ * ground the opacity is raised in 0.05 steps until every one of them reads at least as well as it does on the house
+ * bar (with 0.02 to spare for the browser's rounding), measured as drawn: the text and its button's own surface, both
+ * faded over what is behind them. obarDims lists them as [text, own surface, behind]; the tints are the house bar's
+ * (Buy MKT and Sell MKT 8%, a picked side 10%) or the page's (8% both).
+ */
+const DIM = { off: 0.45, disabled: 0.4 };
+function obarDims(v, sideTint, segTint) {
+  const bar = v['--s2'], armedBar = mix(v['--bg'], HOUSE_AMBER, 0.07);
+  const tint = (house, k, under) => mix(under, house, k);
+  // [text, its own surface, behind it]: Buy MKT, Sell MKT, Flatten and Cancel all (.btn), on the bar
+  const off = [[v['--buy'], tint(HOUSE_BUY, sideTint, bar), bar], [v['--sell'], tint(HOUSE_SELL, sideTint, bar), bar], [v['--text'], bar, bar]];
+  const disabled = [];
+  for (const [under, arm] of [[bar, [v['--text2'], v['--bg']]], [armedBar, [v['--bg'], v['--warn']]]]) {
+    disabled.push([v['--buy'], tint(HOUSE_BUY, sideTint, under), under], [v['--sell'], tint(HOUSE_SELL, sideTint, under), under],
+      [v['--text'], bar, under],                                 // Flatten, Cancel all
+      [arm[0], arm[1], under], [arm[0], arm[1], arm[1]],         // the Armed switch, off or on (its label faded on it too)
+      [v['--text'], v['--bg'], under],                           // Qty and the bracket boxes
+      [v['--text2'], bar, under],                                // the Shift+click side buttons (in their bar-colored group)
+      [v['--buy'], tint(HOUSE_BUY, segTint, bar), under], [v['--sell'], tint(HOUSE_SELL, segTint, bar), under]);   // a side picked
+  }
+  return { off, disabled };
+}
+const fadedContrast = ([fg, surface, under], a) => contrast(mix(under, fg, a), mix(under, surface, a));
+const HOUSE_DIMS = (() => {
+  const h = obarDims({ '--bg': HOUSE_CHROME.bg, '--s2': HOUSE_CHROME.s2, '--text': HOUSE_CHROME.text, '--text2': HOUSE_CHROME.text2,
+    '--buy': HOUSE_BUY, '--sell': HOUSE_SELL, '--warn': HOUSE_AMBER }, 0.08, 0.10);
+  return { off: h.off.map(x => fadedContrast(x, DIM.off)), disabled: h.disabled.map(x => fadedContrast(x, DIM.disabled)) };
+})();
+function obarDim(v) {
+  const d = obarDims(v, 0.08, 0.08), out = {};                     // the page sets --buy-tint and --sell-tint at 8%
+  for (const k of ['off', 'disabled']) {
+    let a = DIM[k];
+    while (a < 1 && !d[k].every((x, i) => fadedContrast(x, a) >= HOUSE_DIMS[k][i] + 0.02)) a = Math.min(1, Math.round((a + 0.05) * 100) / 100);
+    out[k] = a;
+  }
+  return out;
+}
+/** Every CSS variable chromeColors() can set, so a page can clear them when the ground goes back to the default. */
 const CHROME_VARS = Object.keys(chromeColors({ ground: 'light', bg: '#F5F7FA', axisTextStrong: '#333333', tagText: '#111111', text2: '#555555', axisText: '#666666', loss: '#AA0000', profit: '#006600' }));
 
 /* ---------------------------------------------------------------- data helpers */
@@ -445,14 +533,21 @@ function sessionLevels(bars, opts) {
   if (on.length) { res.onh = Math.max(...on.map(b => b.h)); res.onl = Math.min(...on.map(b => b.l)); }
   return res;
 }
-/** sessionLevels() result -> level lines in the house style. */
-function levelLines(lv) {
+/* LEVEL_COLORS with the valid #RRGGBB entries of `colors` over it (1.9.0: the page's indicator colors). */
+function levelColors(colors) {
+  const out = Object.assign({}, LEVEL_COLORS);
+  if (colors) for (const k of Object.keys(LEVEL_COLORS)) if (/^#[0-9a-f]{6}$/i.test(colors[k])) out[k] = colors[k].toUpperCase();
+  return out;
+}
+/** sessionLevels() result -> level lines in the house style, or in `colors` ({ prior, overnight, value, close }). */
+function levelLines(lv, colors) {
   if (!lv) return [];
+  const C = levelColors(colors);
   const L = [
-    ['PDH', lv.pdh, LEVEL_COLORS.prior, [6, 4]], ['VAH', lv.vah, LEVEL_COLORS.value, [3, 4]],
-    ['ONH', lv.onh, LEVEL_COLORS.overnight, [6, 4]], ['Prior close', lv.pc, LEVEL_COLORS.close, [2, 3]],
-    ['ONL', lv.onl, LEVEL_COLORS.overnight, [6, 4]], ['VAL', lv.val, LEVEL_COLORS.value, [3, 4]],
-    ['PDL', lv.pdl, LEVEL_COLORS.prior, [6, 4]],
+    ['PDH', lv.pdh, C.prior, [6, 4]], ['VAH', lv.vah, C.value, [3, 4]],
+    ['ONH', lv.onh, C.overnight, [6, 4]], ['Prior close', lv.pc, C.close, [2, 3]],
+    ['ONL', lv.onl, C.overnight, [6, 4]], ['VAL', lv.val, C.value, [3, 4]],
+    ['PDL', lv.pdl, C.prior, [6, 4]],
   ];
   return L.filter(x => x[1] !== null && x[1] !== undefined).map(([name, price, color, dash]) => ({ name, price, color, dash }));
 }
@@ -640,14 +735,14 @@ const IB_FORMING_DASH = [12, 5];
 /**
  * initialBalance() result -> level lines "IBH" and "IBL", drawn from 9:30 (`from`) to the right edge: long dashes
  * while forming, solid once locked. The high is the brighter orchid (Anthony, 1.5.3); `tone` keeps it the brighter
- * one on any ground.
+ * one on any ground. `colors` ({ ibHigh, ibLow }, 1.9.0) replaces the house orchids.
  */
-function ibLines(ib) {
+function ibLines(ib, colors) {
   if (!ib || ib.high === null || ib.low === null || (ib.state !== 'forming' && ib.state !== 'locked')) return [];
-  const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [];
+  const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [], C = levelColors(colors);
   return [
-    { name: 'IBH', price: ib.high, color: LEVEL_COLORS.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
-    { name: 'IBL', price: ib.low, color: LEVEL_COLORS.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
+    { name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
+    { name: 'IBL', price: ib.low, color: C.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
   ];
 }
 
@@ -729,6 +824,7 @@ const CSS = `
 .ce-row input[type=text]{width:100%;box-sizing:border-box;min-width:0;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:6px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Mono",ui-monospace,monospace;padding:5px 7px;min-height:28px}
 .ce-reset{justify-self:start;background:transparent;border:1px solid var(--ce-line,#2A3645);border-radius:8px;color:var(--ce-text2,#9AA8B8);font:500 12px "IBM Plex Sans",system-ui,sans-serif;padding:4px 10px;min-height:30px;cursor:pointer}
 .ce-note{font-size:11px;color:var(--ce-muted,#8392A5);line-height:1.4}
+.ce-slot{display:grid;gap:10px}.ce-slot:empty{display:none}
 .ce-grounds{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .ce-ground{display:flex;align-items:center;gap:8px;background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line-soft,#18212C);border-radius:8px;padding:5px 8px;color:var(--ce-text,#E6EDF5);font:500 12px "IBM Plex Sans",system-ui,sans-serif;cursor:pointer;min-height:32px;text-align:left}
 .ce-ground[aria-pressed="true"]{border-color:var(--ce-tint-border,#3B2A6B);background:var(--ce-tint,#1A1230);color:var(--ce-tint-text,#D8CCFF)}
@@ -811,10 +907,13 @@ function create(container, options) {
   let levelsShown = [];
   function shadeLevels() {
     levelsShown = levels.map(L => Object.assign({}, L, { color: T.ground === 'default' ? L.color : markOnGround(L.color || T.axisText, T.bg, FLOOR.text, T.to) }));
-    if (T.ground === 'default') return;
-    // the IB high stays the brighter of the pair on every ground
+    // the IB high stays the brighter of the pair on every ground, and with the page's own colors (1.9.0): on the default
+    // ground its colors are drawn as they are unless the high is not the brighter
     const hi = levelsShown.find(L => L.tone === 'high'), lo = levelsShown.find(L => L.tone === 'low');
-    if (hi && lo) [hi.color, lo.color] = pairOnGround(levels[levelsShown.indexOf(hi)].color, levels[levelsShown.indexOf(lo)].color, T.bg, FLOOR.text, T.to, true);
+    if (!hi || !lo) return;
+    const h0 = levels[levelsShown.indexOf(hi)].color, l0 = levels[levelsShown.indexOf(lo)].color;
+    if (T.ground === 'default' && parseColor(h0) && parseColor(l0) && luminance(parseColor(h0)) > luminance(parseColor(l0)) && contrast(h0, l0) >= PAIR.contrast) return;
+    if (parseColor(h0) && parseColor(l0)) [hi.color, lo.color] = ibPair(h0, l0, T.bg, T.to);
   }
   const levelOn = L => !!o.layers[L.layer || 'levels'];
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
@@ -2175,11 +2274,13 @@ function create(container, options) {
  * picker, 1.5.3), reset. Choices are saved in this browser under `storageKey` and applied on load, one color at a
  * time on a fresh read of the key, so two charts or tabs sharing the key never undo each other.
  * `onChange(colors)` runs on load and after every change.
+ * 1.9.0: `vwap: false` leaves the VWAP picker out (the live page sets it in the VWAP indicator's gear); `note` replaces
+ * the line at the bottom; the returned `slot` is an element before Reset where a host adds its own sections.
  */
 function mountThemePanel(chart, host, options) {
-  const opt = Object.assign({ storageKey: 'chart-engine-colors-v1', label: 'Colors' }, options || {});
+  const opt = Object.assign({ storageKey: 'chart-engine-colors-v1', label: 'Colors', vwap: true, note: 'Saved in this browser only.' }, options || {});
   injectStyle();
-  const FIELDS = [['up', 'Bull'], ['down', 'Bear'], ['vwap', 'VWAP'], ['bg', 'Ground']];
+  const FIELDS = [['up', 'Bull'], ['down', 'Bear'], ['vwap', 'VWAP'], ['bg', 'Ground']].filter(([k]) => k !== 'vwap' || opt.vwap);
   const defaults = {}; for (const [k] of FIELDS) defaults[k] = DEFAULT_THEME[k];
   const load = () => { try { return JSON.parse(localStorage.getItem(opt.storageKey) || 'null'); } catch (e) { return null; } };
   const store = v => { try { localStorage.setItem(opt.storageKey, JSON.stringify(v)); } catch (e) { /* storage blocked */ } };
@@ -2201,11 +2302,12 @@ function mountThemePanel(chart, host, options) {
         '<label class="ce-row" for="' + uid + '-' + k + '"><span>' + (k === 'bg' ? 'Any' : name) + '</span>' +
         '<input type="color" id="' + uid + '-' + k + '" data-k="' + k + '"' + (k === 'bg' ? ' aria-label="Background color"' : '') + '>' +
         '<input type="text" data-hex="' + k + '" aria-label="' + (k === 'bg' ? 'Background' : name) + ' hex" maxlength="7" spellcheck="false"></label>').join('') +
+      '<div class="ce-slot"></div>' +
       '<button type="button" class="ce-reset">Reset to default</button>' +
-      '<div class="ce-note">Saved in this browser only.</div>' +
+      '<div class="ce-note">' + opt.note + '</div>' +
     '</div>';
   host.appendChild(wrap);
-  const btn = wrap.querySelector('.ce-theme-btn'), panel = wrap.querySelector('.ce-theme-panel');
+  const btn = wrap.querySelector('.ce-theme-btn'), panel = wrap.querySelector('.ce-theme-panel'), slot = wrap.querySelector('.ce-slot');
   const presetsEl = wrap.querySelector('.ce-presets');
   for (const p of PRESETS) {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'ce-preset'; b.dataset.id = p.id;
@@ -2269,7 +2371,7 @@ function mountThemePanel(chart, host, options) {
   wrap.addEventListener('keydown', e => { if (e.key === 'Escape') { open(false); btn.focus(); } });
   sync(); changed();
   return {
-    element: wrap, get: () => Object.assign({}, cur), set: apply, close: () => open(false),
+    element: wrap, slot, get: () => Object.assign({}, cur), set: apply, close: () => open(false), isOpen: () => !panel.hidden,
     /** Remove the panel and its document listener (for a chart that is taken down, such as an embedded pane). */
     destroy() { document.removeEventListener('pointerdown', outside); wrap.remove(); },
   };
@@ -2703,7 +2805,8 @@ return {
   PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX, PANE_MIN, PRICE_MIN, PANE_GAP,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtExact, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
-    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, distinct, mix, buildTheme, chromeColors, CHROME_VARS, CHROME_LIGHT,
+    parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
+    obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
   },

@@ -493,7 +493,9 @@ formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `build
 
 Defaults: bull `#4B9CD3` (Carolina blue), bear `#6D28D9` (deep purple), VWAP `#B69CFF`.
 `mountThemePanel(chart, host)` adds a **Colors** button with presets and pickers; choices are saved in
-that browser. Trade marks use the house trade colors on purpose: entries are green (long) or red
+that browser. Its options (1.9.0): `vwap: false` leaves the VWAP picker out (the live page sets the VWAP in its gear),
+`note` replaces the line at its foot, and the returned `slot` is an empty element above Reset for a page's own rows
+(the live page's named chart and indicator presets). Trade marks use the house trade colors on purpose: entries are green (long) or red
 (short), results are green (profit) or red (loss). Text drawn in a candle color is lightened
 automatically so it stays readable.
 
@@ -503,7 +505,8 @@ for any color set `theme.bg`. On the default ground every color is the locked pa
 trade and order colors) just enough to read, once per change, never per frame, keeping bull and bear, buy and sell,
 and the IB high and low apart on every ground (buy and sell keep their green and red, outlined where needed). `getTheme()` returns the colors as chosen; `colors()` the colors as
 drawn, including `text2`, `legendBg` and `ground` for a page's own legend; `util.chromeColors(colors())` gives the CSS
-colors for a page's toolbar on a light ground (null on dark ones), which the live page and the demo apply.
+colors for a page's toolbar, and the live page's order bar, on any ground but the default (null there; 1.9.0, before
+only on a light ground), which the live page and the demo apply.
 
 ## Develop
 

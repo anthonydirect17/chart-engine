@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.9.0 (2026-09-30): color presets, indicator colors in their gears, the top bar matches every ground
+
+Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling.
+The Desk gets it with the new `live/live.js`, `live/live.css` and `src/chart-engine.js`. With the default colors the
+chart and the page draw exactly as 1.7.0 (every element's computed style outside the Colors panel is the same, off and
+Armed); the order bar's controls, places and actions are unchanged (only its colors on a ground other than the
+default). No file under `nt8/`, `live/order-ticket.js`, `live/pin.js` or the order tests changes.
+- **Named presets, two groups** (Anthony: "Bar colors and chart color should be a preset. Indicator colors should have
+  their own preset group"). The Colors panel gets **Chart presets** (bull, bear and the background) and **Indicator
+  presets** (every indicator color). Save the colors in use under a name (Enter or Save; a name already used, in any
+  case, is replaced and the button says Replace), pick one to apply it, rename it (the pencil; Enter keeps, Escape
+  cancels) and delete it (the x, a second click confirms). The one matching the colors in use shows as pressed. Up to 24
+  per group, names up to 40 characters. The built-in presets (Carolina, Mint, House, the four grounds) stay as they were.
+- **A chart preset can remember one indicator preset** (Anthony: link the groups). The chart group's save row has
+  **Indicator colors: None / <each indicator preset>**, set at first to the indicator preset holding the colors in use,
+  else None. The chart preset keeps that preset's id, and picking it applies both. A save never makes or changes an
+  indicator preset; a re-save sets the link only as the select says; a full group refuses only its own save, and a
+  refused save writes nothing (the panel lists the store again). An indicator preset deleted since is ignored: the
+  chart preset still works, no message. A link to one deleted while the panel was open refuses the save with a message.
+- **One small store for the presets:** `LivePrefs.localPresetStore(storage)` (`list`, `save`, `rename`, `remove`, each
+  returning a promise, and `shared`), in this browser today (`live-color-presets-v1`, per storage prefix, read fresh on
+  every call so two windows do not undo each other). A store shared by every PC plugs in as `ChartLive.mount`'s
+  `presetStore` option once Anthony chooses one (live/EMBED.md); the panel's foot says where presets are kept.
+  Damaged or blocked storage lists nothing and refuses to save with a plain message; nothing throws. The page cleans
+  every list a store hands back (presets of a bad shape, a bad color or no name are left out), as a shared store will
+  hand over what another PC wrote.
+- **Indicator colors in each indicator's gear** (the brief: editable in that indicator's own settings): a
+  picker and a hex box per color, and Default colors. VWAP (line), Levels (prior day high and low, overnight, value area,
+  prior close), Initial balance (high, low), Volume profile (point of control). Applied at once to the chart, without
+  rebuilding anything from the bars; shared by the charts of one storage prefix (`live-indicator-colors-v1`). The VWAP
+  picker moves out of the Colors panel into the VWAP gear; a VWAP color saved before 1.9.0 is copied into the
+  indicator colors once, on page start, so a ground changed first no longer loses it (review R1). On a ground other
+  than the default the chosen colors move to read as the house ones do. The IB high stays the brighter with any
+  colors (Anthony), on the default ground too: a high picked darker than its low is drawn the brighter
+  (`ibPair`). The volume bars, the delta pane and the fills get no colors of their own (Anthony).
+- **Reset to default in the Colors panel no longer resets the VWAP color:** the VWAP is in its gear now, whose own
+  Default colors resets it.
+- **The top bar matches every ground** (Anthony: "white chart, white top bar", then "the top bar matches every
+  ground"). The toolbar, menus, status line and now the order bar take their colors from `chromeColors` on every
+  ground but the default: Black gives a black top bar, Blue-grey a blue-grey one (the house dark chrome lifted by the
+  same steps over the ground), a light ground the 1.5.3 light chrome (unchanged there). On a mid ground, where black
+  or white text reads under 9:1, the chrome's ground is the chart's lightened or darkened just enough for 9:1
+  (`#808080` gives `#AAAAAA`). Buy and Sell keep a tint of the house green and red with their text in the same hue at
+  4.5:1 (over the bar and over the Armed bar), Armed the chrome's amber at 4.5:1. On the default ground it is exactly
+  the 1.5.2 bar. This reverses the 1.5.3 rule "the order bar never changes with the ground" (review 2, B1), at
+  Anthony's request.
+- **Dimmed controls as strong as on the house bar on every ground** (review R2). Disarmed (Buy, Sell, Flatten, Cancel
+  all at 0.45) and trading off (every control at 0.4) faded further on a light bar (disarmed Buy 1.93:1 on white
+  against 2.85:1 on the house bar). `chromeColors` now raises the two opacities (`--obar-off`, `--obar-disabled`) in
+  0.05 steps until every dimmed control reads at least as on the house bar: 0.75 and 0.65 on Light, 0.5 and 0.45 on
+  Black. Worked out once per ground change.
+- **Engine:** `levelLines(lv, colors)` and `ibLines(ib, colors)` take optional colors over `LEVEL_COLORS`
+  (`levelColors`); `chromeColors` gives colors on every ground but the default and adds `--buy`, `--sell` (with
+  `-edge`, `-tint`, `-hover`), `--warn-tint`, `--obar-off` and `--obar-disabled`; `util.CHROME_LIGHT` is gone (no
+  longer a rule); `util.ibPair`, `util.obarDims`, `util.fadedContrast` and `util.OBAR_DIM` are new; `mountThemePanel`
+  takes `vwap: false`, `note`, and returns `slot` and `isOpen()`. On the live page the Colors panel scrolls when taller
+  than the window (live.css, so other hosts of the engine keep their panel as it was).
+- **Tests:** `test/presets.test.js` (the store, its refusals, damaged storage, prefixes, indicator colors and their
+  migration with a ground changed first, level and IB colors, linked presets and full groups (review 2 S1, S2), every text of the order bar at 4.5:1
+  and every dimmed control at least as on the house bar across review 1's 21 grounds, the greys and 600 random
+  grounds), `test/theme.test.js` (the chrome on every ground, the IB high the brighter with any colors) and
+  `npm run smoke:presets` (the panel, every preset action, linked presets, a chart save making no indicator preset, a
+  refused save writing nothing and a full indicator group keeping a link, a linked preset deleted, the old VWAP after a ground
+  change and a reload, the top bar on the four grounds and custom ones, an in-page contrast sweep of the 21 grounds in
+  four states, the light order bar and its Buy MKT and Flatten, the gears, a second window, a reload). `smoke:ib` now
+  checks the bar is unchanged on the default ground and takes the chrome's ground on every other; `smoke:embed` sets
+  pane B's VWAP in its gear.
+
 ## ChartBridge 0.3.6 (2026-10-01): daily 1-minute bars to The Desk
 
 ChartBridge (nt8/) only, on top of 0.3.5: the page, the engine and the chart version (1.8.0) are unchanged. Ships with

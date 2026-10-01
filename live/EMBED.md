@@ -96,6 +96,7 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
+| `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors, ind), rename(group, id, name), remove(group, id), shared }` (`ind`: a chart preset's linked indicator preset id), each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
 
 Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
 on up to every 5 s. Before the first connection the chart shows "Waiting for ChartBridge"; after a drop it shows
@@ -180,7 +181,9 @@ Every storage key the chart uses is `storagePrefix + <the standalone page's key>
 | `live-account-v1` | the account picked, whose fills are marked (1.6.0; the 1.5 `live-fill-account-v1` is read once when it is missing, its "All accounts" meaning none picked) | all charts with this prefix |
 | `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |
 | `live-drawings-v1-<paneId>-<ROOT>` | drawings per instrument on any other pane | that pane |
-| `live-colors-v1` | candle, VWAP and background colors (Colors panel), saved one color at a time | all charts with this prefix |
+| `live-colors-v1` | candle and background colors (Colors panel), saved one color at a time (and the VWAP before 1.9.0) | all charts with this prefix |
+| `live-indicator-colors-v1` | `{ vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc }` the indicator colors set in their gears (1.9.0; the VWAP of `live-colors-v1` is read while this key is missing) | all charts with this prefix |
+| `live-color-presets-v1` | `{ chart: [{ id, name, colors }], indicator: [...] }` the named presets (1.9.0), unless `presetStore` is passed | all charts with this prefix |
 
 So with `storagePrefix: 'desk:'` The Desk's chart keeps `desk:live-settings-v2` and so on, and never reads or
 writes the standalone page's keys even when both run on the same origin. With no `storagePrefix` a mounted
