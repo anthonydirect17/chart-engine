@@ -25,8 +25,7 @@ order checks work as before.
   left as it is.
 - **Shift+click by mouse button.** Shift + left click buys at the price, Shift + right click sells, and Ctrl + left
   click sells too. Limit or stop by the last price, as before. Ctrl and Shift together send nothing. The Buy / Sell
-  toggle is gone from the order bar. Hold Shift to see the buy, with what a right click would sell. No browser menu
-  over the chart's plot on this page; elsewhere it is unchanged.
+  toggle is gone from the order bar. Hold Shift to see the buy, with what a right click would sell.
 - The order bar stays on one line at 1440 and 1920 px. On a phone the Armed switch keeps its armed width, so arming
   never rewraps the bar.
 - **B/E in paced chunks** (Anthony 2026-10-01: "send in paced chunks"). One click always finishes: as many changes go
