@@ -24,7 +24,9 @@
     "smoke:delta": "node test/delta-smoke.mjs",
     "smoke:update": "node test/update-notice-smoke.mjs",
     "smoke:presets": "node test/presets-smoke.mjs",
+    "smoke:workspace": "node test/workspace-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
+    "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",
     "check:nt8": "sh nt8/check/check.sh",
     "check:orders": "sh nt8/check/orders.sh"
