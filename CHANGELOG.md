@@ -22,7 +22,8 @@ up to date) or `nt8\install.ps1`; both copy the new `ChartBridgeBars.cs` too (it
   backfill still to come or due again, no minute chart's last trades out, no page loading), so nothing piles up there;
   otherwise it waits and `/diag` says what for. A window or backfill asked while a bars request is out waits behind it,
   as behind any request (one contract's minutes, about a second). A bars request NinjaTrader does not answer in 60 s
-  leaves the gate stuck like any other request until NinjaTrader answers it (that late answer is not used). In
+  frees the gate (Anthony: the chart never waits on bars), unlike a window or a backfill, which keep 0.3.5's stuck
+  rule; a window may then go while NinjaTrader still works on it (accepted), and its late answer is not used. In
   regular trading hours (09:30 to 16:15 ET) it asks for nothing, except the catch-up after a start. Nothing on the order
   lane; the order files are byte for byte those of main.
 - **Stop** (F5, closing NinjaTrader): nothing more is asked of NinjaTrader or posted to The Desk. The worker leaves any

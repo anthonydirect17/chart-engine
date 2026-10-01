@@ -770,26 +770,41 @@ public static class BarsHarness
             Drop(a); a = null;
             ChartBridgeServer.WindowTimeoutMs = wtoWas;
 
-            // (e) a bars request NinjaTrader never answers: given up at its limit; it holds the gate like any request (no window beside
-            // it) until NinjaTrader answers, and that late answer is dropped, not copied or queued
+            // (e) Anthony: the chart never waits on bars. A bars request NinjaTrader never answers is given up at its limit and
+            // frees the gate: the next window goes. Its late answer is dropped, not copied or queued, and never frees or changes
+            // another request's stuck state: a window that NinjaTrader does not answer still leaves the gate stuck as in 0.3.5.
             Fresh(dir, "MNQ", EtToUtc(W(2026, 9, 29, 11, 0))).Stop();
             ChartBridgeConfig.DeskUrl = desk.Url;
-            ChartBridgeBars.CatchUpSessions = 2; ChartBridgeBars.RequestTimeoutMs = 300;
+            ChartBridgeBars.CatchUpSessions = 1; ChartBridgeBars.RequestTimeoutMs = 300;
             ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+            ChartBridgeServer.WindowTimeoutMs = 300;
             LiveOn(mnq, tape, 0, 100);
-            BarsRequest.AutoAnswer = r => false;
+            BarsRequest.AutoAnswer = r => false;   // NinjaTrader answers nothing
             m0 = MadeCount();
+            int posts0 = desk.Count;
             ChartBridgeBars.PlanOnce(null);
-            bool barsStuck = Gate().Contains("\"stuck\":\"bars 2026-09-28 MNQ 12-26\"");
-            ChartBridgeBars.PlanOnce(null);
-            int barsAsked = BarsMade(m0).Count;
-            string d = Diag();
+            string g1 = Gate(), d = Diag();
+            bool freed = BarsMade(m0).Count == 1 && g1.Contains("\"now\":null") && g1.Contains("\"stuck\":null") && d.Contains("did not answer within") &&
+                         Logged("bars 2026-09-28 MNQ 12-26: NinjaTrader did not answer in 0 s; given up, the gate goes on");
+            a = Page(954, "4");
+            AnswerChartMinutes(m0);
+            BarsRequest wn = null;
+            bool windowWent = WaitFor(() => (wn = Made(m0).FirstOrDefault(IsWindow)) != null, 3000);
+            bool windowStuck = WaitFor(() => Gate().Contains("\"stuck\":\"window MNQ\""), 3000);   // the window keeps 0.3.5's rule
             BarsRequest late = BarsMade(m0).FirstOrDefault();
-            if (late != null) AnswerBars(late);
+            if (late != null) AnswerBars(late);   // the bars' late answer
             Thread.Sleep(200);
-            Check(barsStuck && barsAsked == 1 && d.Contains("did not answer within") && d.Contains("\"waitingForGate\":\"NinjaTrader has not answered an earlier request (bars 2026-09-28 MNQ 12-26) yet\"") &&
-                  ChartBridgeBarsQueue.Waiting() == 0 && Gate().Contains("\"stuck\":null") && Logged("bars 2026-09-28 MNQ 12-26: NinjaTrader answered after it was given up; not used"),
-                "S5 NeverBesideTheChart: a bars request with no answer marks the gate stuck like any request, the next waits, and the late answer frees it and is not used: " + d);
+            bool stillStuck = Gate().Contains("\"stuck\":\"window MNQ\"");
+            bool dropped = Logged("bars 2026-09-28 MNQ 12-26: NinjaTrader answered after it was given up; not used") && ChartBridgeBarsQueue.Waiting() == 0 &&
+                           !ChartBridgeBarsQueue.IsDone("2026-09-28 MNQ 12-26") && desk.Count == posts0;
+            if (wn != null) wn.Answer(TicksOf(tape, 0, 100), ErrorCode.NoError);   // only the window's own answer frees it
+            bool unstuck = WaitFor(() => Gate().Contains("\"stuck\":null"), 3000);
+            Check(freed && windowWent && windowStuck && stillStuck && dropped && unstuck,
+                "S5 NeverBesideTheChart: a bars request with no answer frees the gate at its limit (" + freed + "); the next window goes (" + windowWent +
+                "); its late answer is dropped, not copied or queued (" + dropped + "), and leaves the window's stuck gate alone (" + stillStuck +
+                "); an unanswered window still leaves the gate stuck as in 0.3.5, freed only by its own answer (" + windowStuck + ", " + unstuck + "): " + d);
+            Drop(a); a = null;
+            ChartBridgeServer.WindowTimeoutMs = wtoWas;
             BarsRequest.AutoAnswer = AnswerLikeNt;
         }
         finally

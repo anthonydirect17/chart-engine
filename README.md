@@ -159,7 +159,9 @@ The Desk tags each trade with the levels around it, and for that it needs the da
   regular trading hours (09:30 to 16:15 ET) except that catch-up at the start.
 - **Never in the way:** each request goes to NinjaTrader through the same one-at-a-time gate as the Range
   windows and session backfills (0.3.5), last of all, and only when nothing of the chart's is out, queued,
-  still to come or loading; it never goes beside one, and never touches order entry. A request that fails is
+  still to come or loading; it never starts beside one, and never touches order entry. A bars request
+  NinjaTrader does not answer in 60 s is given up and the chart's requests go on (the chart never waits on bars;
+  one may then go while NinjaTrader is still working on it). A request that fails is
   logged and tried again 15 minutes later, 3 times at most, then not until the next start.
 - **Like fills:** each message waits in `pending_bars.jsonl` (next to `pending_fills.jsonl`) until The
   Desk takes it (`POST /api/bars` at `deskUrl`, retried every 10 seconds), so a restart or The Desk being

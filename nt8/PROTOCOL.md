@@ -758,8 +758,10 @@ sends each session's 1-minute bars to The Desk (`nt8/ChartBridgeBars.cs`).
   waits behind it (one contract's minutes: about a second). When the gate is not idle nothing is queued and the
   pass ends (`/diag` `bars.waitingForGate` says why); the next minute looks again, so nothing piles up. A request
   queued but not sent within 60 s is taken back. In the gate it is the job `bars <session> <contract>` (`/diag`
-  `books.gate.now`, `barsQueued`); one NinjaTrader does not answer in 60 s is given up and leaves the gate stuck
-  like a window or a backfill (X1), until NinjaTrader answers it (that answer is dropped, not copied). Requests are
+  `books.gate.now`, `barsQueued`); one NinjaTrader does not answer in 60 s is given up and, unlike a window or a backfill (X1), **frees the
+  gate** (Anthony: the chart never waits on bars). Windows and backfills then go as usual, so one may go while
+  NinjaTrader is still working on that bars request (an accepted risk). Its late answer is dropped, not copied, and
+  never frees or changes another request's stuck state (only `gateStuckJob`'s own answer does). Requests are
   2 s apart. A failure (no answer, an error, an empty answer, an unknown instrument) is logged once and tried again
   after 15 minutes, 3 times in all, then not until the next start.
 - **Stop** (F5, closing NinjaTrader): `Stop()` stops the bars before the gate. Nothing more is asked of NinjaTrader

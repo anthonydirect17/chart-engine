@@ -3346,7 +3346,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { j.Start(() => { done.Set(); if (Interlocked.CompareExchange(ref jj.State, 6, 5) == 5) GateUnstuck(jj, jj.Kind + " " + jj.Root); }); }
                 catch (Exception ex) { Log(j.Kind + " request error (" + j.Root + "): " + ex.Message); done.Set(); }
                 bool answered = done.Wait(j.TimeoutMs, stop);
-                if (!answered && Interlocked.CompareExchange(ref j.State, 2, 0) == 0)
+                if (!answered && j.Kind == "bars")
+                {
+                    // 0.3.6 (Anthony): the chart never waits on bars. A bars request not answered in its time limit is given up
+                    // and the gate goes on: it is NOT marked stuck, so windows and backfills go as usual (accepted: one may go
+                    // while NinjaTrader still works on it). Claimed as timed out (3), so its late answer is dropped uncopied,
+                    // and GateUnstuck leaves the gate alone (it is not gateStuckJob). The session is asked again later.
+                    if (Interlocked.CompareExchange(ref j.State, 3, 0) == 0)
+                    {
+                        try { j.OnTimeout(); } catch (Exception ex) { Log("request timeout error: " + ex.Message); }
+                        Log("bars " + j.Root + ": NinjaTrader did not answer in " + (j.TimeoutMs / 1000) + " s; given up, the gate goes on (a late answer is not used)");
+                    }
+                    else if (!done.Wait(AnswerCopyMs, stop)) Log("bars " + j.Root + ": NinjaTrader answered at the time limit, but the copy did not end within " + (AnswerCopyMs / 1000) + " s more; the gate goes on");
+                }
+                else if (!answered && Interlocked.CompareExchange(ref j.State, 2, 0) == 0)
                 {
                     GateTimedOut(j);
                     if (Interlocked.CompareExchange(ref j.State, 3, 2) != 2) GateUnstuck(j, j.Kind + " " + j.Root);   // answered while it was being marked
@@ -3428,10 +3441,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A daily 1-minute bars request goes to NinjaTrader through this gate, last of all. It is queued only while the gate is
         // idle: not stopped or stuck, nothing out, nothing queued, no minute chart's last trades out, no page loading, and no
         // session backfill still to come (queued, waiting for its start, or failed once and due again). It is sent only while
-        // that still holds (no backfill queued, no last trades out, no page loading). So it never goes beside a window or a
-        // backfill: one that comes meanwhile waits behind it, as behind any request, about a second for one contract's minutes.
-        // Like the others it is one at a time with a time limit, and one NinjaTrader never answers leaves the gate stuck until
-        // it does (X1). When the gate is not idle nothing is queued: GateBars says why, and ChartBridgeBars tries next minute.
+        // that still holds (no backfill queued, no last trades out, no page loading). So it never starts beside a window or a
+        // backfill: one that comes meanwhile waits behind it, about a second for one contract's minutes, at most its 60 s limit.
+        // Unlike a window or a backfill, a bars request NinjaTrader does not answer in time does NOT leave the gate stuck: the
+        // chart never waits on bars (Anthony, 0.3.6; GateLoop). When the gate is not idle nothing is queued: GateBars says why,
+        // and ChartBridgeBars tries next minute.
         private static readonly List<GateJob> GateBarJobs = new List<GateJob>();
         private static bool PageLoading() { return Clients.Values.Any(c => !string.IsNullOrEmpty(c.Root) && !c.Ready); }
         // Under GateLock: why the gate is not idle for a bars request, or null.

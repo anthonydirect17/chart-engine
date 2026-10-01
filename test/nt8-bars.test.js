@@ -70,6 +70,11 @@ test('bars: last of all at the gate, never beside a window or a backfill, never 
   assert.match(ask, /string why = BackfillToCome\(\);\s*if \(why != null\) return why;/);
   assert.match(ask, /lock \(GateLock\)\s*\{\s*why = BarsBusyLocked\(\);\s*if \(why != null\) return why;\s*t\.Job = j;\s*GateBarJobs\.Add\(j\);\s*\}/, 'queued only when the gate is idle, checked under its lock');
   assert.match(main, /bars = new List<GateJob>\(GateBarJobs\); GateBarJobs\.Clear\(\);/, 'a stuck gate drops a queued bars request');
+  // Anthony: the chart never waits on bars. An unanswered bars request frees the gate (claimed as timed out, never gateStuck);
+  // windows and backfills keep 0.3.5's stuck rule.
+  const loop = between(main, 'private static void GateLoop(', 'private static void GateTimedOut(');
+  assert.match(loop, /if \(!answered && j\.Kind == "bars"\)\s*\{[\s\S]*?if \(Interlocked\.CompareExchange\(ref j\.State, 3, 0\) == 0\)[\s\S]*?\}\s*else if \(!answered && Interlocked\.CompareExchange\(ref j\.State, 2, 0\) == 0\)\s*\{\s*GateTimedOut\(j\);/);
+  assert.ok(!/GateTimedOut/.test(between(loop, 'j.Kind == "bars"', 'else if (!answered && Interlocked')), 'a bars timeout never marks the gate stuck');
   assert.match(main, /GateWindows\.Clear\(\); GateBackfills\.Clear\(\); GateBarJobs\.Clear\(\); gateStuck = null;/, 'StopGate clears it');
   const plan = between(bars, 'public static void PlanOnce(', 'private static void Later(');
   assert.match(plan, /if \(catchUpDone && InRth\(nowEt\)\)/);
