@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { run as ticketPart } from './workspace-ticket-part.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -495,6 +496,8 @@ try {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.waitForTimeout(1500);
   await shot(page, 'workspace-1920x1080.png');
+  console.log('the order ticket (1.12.0): two windows, trading on');
+  if (!process.env.WORKSPACE_SKIP_TICKET) await ticketPart({ browser, check, fail, shot, root, port: PORT + 1 });
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));
 } finally {
