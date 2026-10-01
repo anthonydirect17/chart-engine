@@ -51,15 +51,18 @@ test('live.js: every order path sends for TR.account, and only after ready() che
   assert.match(PAGE, /send\(\{ type: 'flatten', account, root \}\);/);
   assert.match(PAGE, /if \(ws && ws\.readyState === 1 && TR\.enabled && TR\.account === f\.account && D\.root === f\.root\) \{\n\s+sendFlatten\(f\.account, f\.root, true\);/);
   // ready(): the picker must show TR.account, else nothing is sent
-  const ready = PAGE.slice(PAGE.indexOf('function ready()'), PAGE.indexOf('function sendOrder('));
+  const ready = PAGE.slice(PAGE.indexOf('function ready('), PAGE.indexOf('function sendOrder('));
   assert.match(ready, /if \(\$\('oAcct'\)\.value !== TR\.account\) \{ syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);
   // every path goes through ready(): sendOrder (Buy, Sell, click-trade, Shift+click), cancelAll, Flatten, move, cancel
   assert.match(PAGE.slice(PAGE.indexOf('function sendOrder('), PAGE.indexOf('function workingHere(')), /^\s+if \(!ready\(\)\) return;/m);
   assert.match(PAGE.slice(PAGE.indexOf('function cancelAll('), PAGE.indexOf('function setArmed(')), /^\s+if \(!ready\(\)\) return;/m);
   // Flatten (the button and the Close hotkey, 1.11.0) and Flatten all: ready() first; Flatten all names TR.account then
   assert.match(PAGE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(flattenHere\)\);/);
-  assert.match(PAGE, /function flattenHere\(\) \{\n\s+if \(!ready\(\)\) return;/);
-  assert.match(PAGE, /function flattenAll\(\) \{\n\s+if \(!ready\(\)\) return;\n\s+const account = TR\.account;/);
+  assert.match(PAGE, /function flattenHere\(\) \{\n\s+if \(!ready\(false\)\) return;/);
+  assert.match(PAGE, /function flattenAll\(\) \{\n\s+if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
+  // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
+  assert.deepEqual((PAGE.match(/ready\(false\)/g) || []).length, 2);
+  assert.match(PAGE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
   // the hotkeys call the buttons' own functions (1.11.0): no second order path
   assert.match(PAGE, /actions: \{ buy: \(\) => sendOrder\('buy', 'market', null\), sell: \(\) => sendOrder\('sell', 'market', null\), be: breakEven, close: flattenHere, flattenAll \},/);
   assert.match(PAGE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => sendOrder\('buy', 'market', null\)\)\);/);

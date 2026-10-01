@@ -111,18 +111,28 @@ try {
   await page.keyboard.press('Escape');
   check(await page.isHidden('#setPanel'), 'Escape closes Settings');
 
-  /* ---------------- disarmed: Buy, Sell, B/E, Close and Flatten all send nothing and say why (they need Armed, as the
-     buttons do: the Flatten button refuses while disarmed) */
+  /* ---------------- disarmed: Buy, Sell and B/E send nothing and say why (they need Armed, as their buttons do); Close
+     and Flatten all work while disarmed, as the Flatten button does (Anthony 2026-10-01: Flatten is never blocked) */
   check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off');
-  for (const id of Object.keys(KEYS)) {
+  for (const id of ['buy', 'sell', 'be']) {
     await clearSent();
     await press(KEYS[id]);
     check((await sent()).length === 0 && (await statusNow()) === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'disarmed ' + id + ' hotkey: nothing sent, the note says why');
     await page.waitForTimeout(300);
   }
   // the buttons say the same
+  for (const b of ['#buyMkt', '#sellMkt']) {
+    await clearSent(); await page.click(b);
+    check((await sent()).length === 0 && (await statusNow()) === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'the ' + b + ' button disarmed: nothing sent, the same note');
+    await page.waitForTimeout(450);
+  }
+  await clearSent(); await press(KEYS.close);
+  check(JSON.stringify(await sent()) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'MNQ' }]) && (await statusNow()) === 'Flatten sent for Sim101 MNQ: cancel its orders, close the position at market.', 'disarmed Close hotkey: the flatten goes');
+  await page.waitForTimeout(450);
   await clearSent(); await page.click('#flattenBtn');
-  check((await sent()).length === 0 && (await statusNow()) === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'the Flatten button disarmed: the same note');
+  check(JSON.stringify(await sent()) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'MNQ' }]), 'disarmed Flatten button: the flatten goes');
+  await clearSent(); await press(KEYS.flattenAll);
+  check((await sent()).length === 0 && (await statusNow()) === 'Flatten all: no position or working order on Sim101. Nothing was sent.', 'disarmed Flatten all with nothing open: not refused for Armed, nothing to send');
 
   /* ---------------- armed: each hotkey sends exactly what its button sends */
   await page.click('#armBtn');
@@ -169,6 +179,24 @@ try {
   await until(async () => (await pos()) === 'Flat', 'flat');
   await flatAll();
 
+  // focus return (Anthony 2026-10-01): after a pick in an order bar select or Enter in a bracket box, a hotkey fires at once
+  await page.waitForTimeout(450);
+  await page.focus('#oQty'); await page.selectOption('#oQty', '1');
+  const actQ = await page.evaluate(() => document.activeElement.id || document.activeElement.tagName);
+  await clearSent(); await page.keyboard.press(KEYS.buy); await page.waitForTimeout(200);
+  m = await sent(['order']);
+  check(actQ !== 'oQty' && m.length === 1 && m[0].qty === 1 && m[0].side === 'buy', 'picked Qty 1, then the Buy hotkey fired at once: ' + JSON.stringify({ focus: actQ, m }));
+  await until(async () => (await pos()).startsWith('LONG 1'), 'long 1 after the Qty pick');
+  await page.focus('#bPreset'); await page.selectOption('#bPreset', '1:2');
+  const actP = await page.evaluate(() => document.activeElement.id || document.activeElement.tagName);
+  await page.click('#bStop', { clickCount: 3 }); await page.keyboard.type('30'); await page.keyboard.press('Enter');
+  const actS = await page.evaluate(() => ({ f: document.activeElement.id || document.activeElement.tagName, stop: JSON.parse(localStorage.getItem('live-bracket-v1')).MNQ.stop }));
+  await page.waitForTimeout(450);
+  await clearSent(); await page.keyboard.press(KEYS.sell); await page.waitForTimeout(200);
+  check(actP !== 'bPreset' && actS.f !== 'bStop' && actS.stop === 30 && (await sent(['order'])).length === 1, 'bracket preset pick and Enter in the stop box hand the focus back (stop 30 kept), the Sell hotkey fires: ' + JSON.stringify({ actP, actS }));
+  await until(async () => (await pos()) === 'Flat', 'flat after the focus checks');
+  await flatAll();
+
   // B/E: no position says why; with a position the hotkey sends what the button sends
   await page.waitForTimeout(450);
   await clearSent();
@@ -183,6 +211,15 @@ try {
     await until(async () => (await pos()).startsWith('LONG 1') && (await state()).orders.filter(o => o.role === 'stop').length === 1, 'long 1 with a stop (' + how + ')');
     await control(PORT, 'price', { root: 'MNQ', p: L + 2 });
     await page.waitForTimeout(450);
+    if (how === 'hotkey') {                                     // disarmed with a position: neither B/E sends anything
+      await page.click('#armBtn');
+      await clearSent(); await press(KEYS.be);
+      check((await sent()).length === 0 && (await statusNow()) === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'disarmed B/E hotkey with a position: nothing sent');
+      await page.waitForTimeout(450);
+      await clearSent(); await page.click('#beBtn');
+      check((await sent()).length === 0 && (await statusNow()) === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'disarmed B/E button with a position: nothing sent');
+      await page.click('#armBtn'); await page.waitForTimeout(450);
+    }
     await clearSent();
     if (how === 'button') await page.click('#beBtn'); else await press(KEYS.be);
     await until(async () => (await state()).orders.some(o => o.role === 'stop' && o.price === L), 'stop at break-even (' + how + ')');
@@ -201,13 +238,15 @@ try {
     await page.click('#buyMkt');
     await until(async () => (await pos()).startsWith('LONG 1') && (await state()).orders.length === 1, 'long 1 with a stop (' + how + ')');
     await page.waitForTimeout(450);
+    if (how === 'hotkey') await page.click('#armBtn');         // Close works while disarmed
     await clearSent();
     if (how === 'button') await page.click('#flattenBtn'); else await press(KEYS.close);
     await flatAll();
+    if (how === 'hotkey') await page.click('#armBtn');
     return { msgs: await sent(), note: (await statusSeen()).find(t => /^Flatten sent/.test(t)) };
   };
   const clB = await closeRound('button'), clK = await closeRound('hotkey');
-  check(JSON.stringify(clB) === JSON.stringify(clK) && clK.note === 'Flatten sent for Sim101 MNQ: cancel its orders, close the position at market.' && JSON.stringify(clK.msgs) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'MNQ' }]), 'Close hotkey = the Flatten button: ' + JSON.stringify([clB, clK]));
+  check(JSON.stringify(clB) === JSON.stringify(clK) && clK.note === 'Flatten sent for Sim101 MNQ: cancel its orders, close the position at market.' && JSON.stringify(clK.msgs) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'MNQ' }]), 'Close hotkey (disarmed) = the Flatten button (armed): ' + JSON.stringify([clB, clK]));
 
   // Flatten all: one flatten per instrument with a position or a working order on the account, whatever is shown
   await page.waitForTimeout(450);
@@ -226,13 +265,14 @@ try {
   await control(PORT, 'elsewhere', { account: 'Sim101', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, p: Math.round((await control(PORT, 'state', { root: 'NQ' })).last) - 20 });   // NQ: a working order only
   await page.click('#symSeg >> text="MNQ"');
   await tradingOn(); await page.waitForTimeout(600);
-  await armAgain();
   await until(async () => { const s = await state(); return s.orders.some(o => o.root === 'NQ') && Object.entries(s.positions).filter(([, p]) => p.qty).map(([k]) => k).sort().join() === 'Sim101|ES,Sim101|MNQ'; }, 'MNQ and ES long, an NQ order working');
+  check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'disarmed (the instrument changed) before Flatten all');
   await clearSent();
-  await press(KEYS.flattenAll);
+  await press(KEYS.flattenAll);                                                   // works while disarmed
   await flatAll();
+  await armAgain();
   m = await sent();
-  check(JSON.stringify(m) === JSON.stringify(['MNQ', 'NQ', 'ES'].map(r => ({ type: 'flatten', account: 'Sim101', root: r }))), 'Flatten all: one flatten per instrument with a position or an order: ' + JSON.stringify(m) + ' (ES last ' + esLast + ')');
+  check(JSON.stringify(m) === JSON.stringify(['MNQ', 'NQ', 'ES'].map(r => ({ type: 'flatten', account: 'Sim101', root: r }))), 'Flatten all (disarmed): one flatten per instrument with a position or an order: ' + JSON.stringify(m) + ' (ES last ' + esLast + ')');
   const faNote = (await statusSeen()).filter(t => /^Flatten all/.test(t));
   check(JSON.stringify(faNote) === JSON.stringify(['Flatten all sent for Sim101: MNQ, NQ, ES (cancel their orders, close their positions at market).']), 'Flatten all note: ' + JSON.stringify(faNote));
 

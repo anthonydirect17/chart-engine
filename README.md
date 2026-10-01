@@ -354,7 +354,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   changes, the connection drops or ChartBridge turns trading off. While it is on, the bar and the chart are
   outlined in amber, the legend shows ARMED with the account and the tab title starts with ARMED and names the
   instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
-  is off**, and nothing asks for confirmation while it is on: one click sends the order.
+  is off** (except Flatten, which works with Armed off, 1.11.0), and nothing asks for confirmation while it is on:
+  one click sends the order.
 - **Account** (only `tradeAccounts`), **Qty** (a select, 1 to 9; the choices over that instrument's cap are off and
   the cap shows beside it, "max 5"; the last qty picked is remembered per instrument, 1.10.0). The chart marks this account's fills
   (1.6.0). When trading comes on the bar is on the account this tab was using (1.6.1): after a reconnect or a PIN
@@ -382,7 +383,7 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past
   that price on the profitable side ("Price is not past break-even yet; the stop stays." otherwise). Stops placed in
   NinjaTrader are never touched (the note says so), and a stop already at break-even or past it is left.
-- **Flatten** cancels every working order on the chosen account and instrument, then closes the position at
+- **Flatten** (works with Armed off, 1.11.0) cancels every working order on the chosen account and instrument, then closes the position at
   market. **Cancel all** cancels the working orders and leaves the position; while a position is open it
   keeps every order on the closing side (the position's stop and target, from the chart or NinjaTrader)
   and says how many it kept. Cancel those one by one with their x, or use Flatten. Its cancels go out by order id,
@@ -402,8 +403,10 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   press the keys (it shows them, like `Alt+B`), or Clear. Each calls exactly what its button calls, with the same
   checks and notes: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close is the Flatten button (this
   account and instrument). **Flatten all** sends one Flatten for every instrument with a position or a working order
-  on the order account, within ChartBridge's 10 order actions a second (paced like B/E when needed). All five need
-  Armed, as the buttons do; a refused press says why. Refused as keys, with the reason shown and nothing saved: what
+  on the order account, within ChartBridge's 10 order actions a second (paced like B/E when needed). Buy MKT, Sell MKT
+  and B/E need Armed, as their buttons do; Close and Flatten all work with Armed off, like the Flatten button. A refused
+  press says why. After a pick in an order bar select, or Enter in a bracket box, the focus leaves it, so a hotkey
+  works at once. Refused as keys, with the reason shown and nothing saved: what
   the browser or Windows keeps (Ctrl+W, Ctrl+T, Ctrl+N, Ctrl+Tab, Ctrl+R, F5, Ctrl+L, F12, Alt+F4, Alt+Left, Alt+F,
   Ctrl+1 to Ctrl+9 and the like, any Windows key combo), the chart's own keys (A, + and =, -, /, End, the arrows,
   Delete, Escape, Tab), a modifier alone, a key that is not a letter, digit, F-key, numpad or punctuation key, and a

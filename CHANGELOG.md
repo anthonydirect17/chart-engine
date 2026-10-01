@@ -3,8 +3,12 @@
 ## 1.11.0 (2026-10-01): trading hotkeys
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing
-under `nt8/` changes, and the engine only gets its version number. What Buy MKT, Sell MKT, B/E, Flatten and Cancel all
-do when clicked is unchanged.
+under `nt8/` changes, and the engine only gets its version number. What Buy MKT, Sell MKT, B/E and Cancel all do when
+clicked is unchanged; Flatten now works while disarmed (below).
+- **Flatten works while not Armed** (Anthony 2026-10-01: Flatten is never blocked): the Flatten button, the Close
+  hotkey and Flatten all. Only the Armed check is dropped for them: trading on, connected, signed in, an order account
+  and the picker showing it are still checked, with the repeat guard and the pacing. Buy, Sell, B/E, Shift+click,
+  Ctrl+click and Cancel all still need Armed (buttons, clicks and hotkeys).
 - **Settings, with a Hotkeys section** (Anthony 2026-10-01). A Settings button in the toolbar (the trading page only)
   opens a panel with one row per action: **Buy MKT**, **Sell MKT**, **B/E**, **Close** and **Flatten all**. No action
   has a key until Anthony gives it one: click the box, press the keys (it shows them, like `Alt+B`), or Clear. Saved
@@ -13,8 +17,11 @@ do when clicked is unchanged.
   (the account, Qty and bracket shown), B/E (paced, all its checks), and Close is the Flatten button (this account and
   instrument). **Flatten all** sends one Flatten (the same send as the button's) for every instrument with a position
   or a working order on the order account, whatever instrument is shown; within ChartBridge's 10 order actions a
-  second, the rest paced as B/E is. All five need Armed, as the buttons do today (the Flatten button refuses while
-  disarmed); a refused press says why ("Armed is off: nothing was sent.", "B/E: no open position ...").
+  second, the rest paced as B/E is. Buy MKT, Sell MKT and B/E need Armed, as their buttons do; Close and
+  Flatten all work while disarmed, as the Flatten button now does. A refused press says why ("Armed is off: nothing
+  was sent.", "B/E: no open position ...").
+- **The focus comes back** after a pick in an order bar select (account, Qty, bracket preset) or the t / pt toggle,
+  and Enter in a bracket box commits it and leaves the box, so a hotkey works at once.
 - **Refused as keys**, with the reason shown and nothing saved: what the browser or Windows keeps for itself (Ctrl+W,
   Ctrl+T, Ctrl+N, Ctrl+Shift+T, Ctrl+Tab, Ctrl+R, F5, Ctrl+L, Ctrl+P, Ctrl+S, Ctrl+F, Ctrl+H, Ctrl+J, Ctrl+D, Ctrl+Q,
   Ctrl+Shift+N, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+Delete, F1, F3, F6, F7, F11, F12, Alt+F4, Alt+Tab, Alt+Left,

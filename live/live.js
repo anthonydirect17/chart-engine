@@ -725,7 +725,7 @@ function markup(p, o) {
             <span class="hk-note" id="${p}hkNote-${a.id}" role="status"></span>
           </div>`).join('')}
         </div>
-        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. All need Armed, like the buttons. Never while typing in a box or with a menu open. Saved in this browser.</p>
+        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off, like the Flatten button. Never while typing in a box or with a menu open. Saved in this browser.</p>
       </div>
     </div>`;
   return `
@@ -2025,12 +2025,13 @@ function start(container, opt, PAGE) {
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
   const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;
 
-  /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded. */
-  function ready() {
+  /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded.
+     `armed` false (Flatten and Flatten all only; Anthony 2026-10-01, "Flatten is never blocked"): every check but Armed. */
+  function ready(armed) {
     if (!TRADING) return false;
     if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
-    if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
+    if (!TR.armed && armed !== false) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
     if (!TR.account) { flash('No account yet: nothing was sent.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading
     if ($('oAcct').value !== TR.account) { syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
@@ -2334,9 +2335,10 @@ function start(container, opt, PAGE) {
     return true;
   }
 
-  /* The Flatten button, and the Close hotkey (1.11.0): this account and instrument. Needs Armed, like every order action. */
+  /* The Flatten button, and the Close hotkey (1.11.0): this account and instrument. Works while disarmed (Anthony
+     2026-10-01: Flatten is never blocked); every other check of ready() stays. */
   function flattenHere() {
-    if (!ready()) return;
+    if (!ready(false)) return;
     if (!sameAction('flatten', performance.now())) return;
     sendFlatten(TR.account, D.root);                               // takes its orders off a Cancel all; sent again once if refused for the rate
     flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
@@ -2344,14 +2346,14 @@ function start(container, opt, PAGE) {
   /*
    * Flatten all (1.11.0, the hotkey; Anthony 2026-10-01): one flatten (sendFlatten, as the Flatten button) per instrument
    * of the order account with a position or a working order, whatever instrument is shown. Needs what the Flatten
-   * button needs (ready()). Within ChartBridge's 10 order actions a second: what fits now goes at once, the rest as soon
+   * button needs: every check of ready() but Armed. Within ChartBridge's 10 order actions a second: what fits now goes at once, the rest as soon
    * as it allows (paced like B/E). Once pressed it finishes, like Cancel all: a later flatten goes to the account named
    * at the press while connected and trading is on and that account is still a trade account; otherwise the note says
    * which were not sent. A press while a run is under way sends nothing.
    */
   let faRun = null;                                                // { account, queue: [root], sent: [root] }
   function flattenAll() {
-    if (!ready()) return;
+    if (!ready(false)) return;
     const account = TR.account;
     if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
     const roots = OT.flattenAllRoots([...TR.orders.values()], TR.positions, account, served, ROOTS);
@@ -3154,7 +3156,11 @@ function start(container, opt, PAGE) {
       if (TR.armed) clearAccountNote();                            // it said "Armed is off" (review S2)
       flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
     });
+    /* 1.11.0 (Anthony 2026-10-01): after a pick in an order bar select, or Enter in a bracket box, the focus leaves it,
+       so the hotkeys work at once (they never fire while a box or select has the focus). */
+    const handBack = el => { if (document.activeElement === el) el.blur(); };
     $('oAcct').addEventListener('change', e => {
+      handBack(e.target);
       if (!tradeMode()) { pickViewAccount(e.target.value); return; }   // trading off: it only picks whose fills are marked
       TR.account = e.target.value;
       clearAccountNote();
@@ -3164,6 +3170,7 @@ function start(container, opt, PAGE) {
       applyMarkers();
     });
     $('oQty').addEventListener('change', () => {
+      handBack($('oQty'));
       const v = +$('oQty').value;
       if (Number.isInteger(v) && v >= 1 && v <= OT.QTY_CHOICES) { qtys[D.root] = v; prefs.setQty(D.root, v); }
       renderTrading();
@@ -3210,6 +3217,7 @@ function start(container, opt, PAGE) {
         setBracket(k, n, false);
         renderBracket(D.root);
       });
+      $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });   // commits (change), focus back
       $(id).addEventListener('change', e => {
         setBracket(k, committedTicks(e.target.value, D.root), true);
         e.target.value = fmtUnit(brackets[D.root][k], D.root);
@@ -3218,6 +3226,7 @@ function start(container, opt, PAGE) {
     }
     $('bUnit').addEventListener('click', e => {
       const b = e.target.closest('button');
+      if (b) handBack(b);
       if (!b || b.dataset.v === BK.unit) return;
       for (const id of ['bStop', 'bTarget']) if (document.activeElement === $(id)) $(id).blur();   // commit what was typed, in the old unit
       BK.unit = b.dataset.v === 'pt' ? 'pt' : 't'; prefs.setBracketUnit(BK.unit);
@@ -3257,6 +3266,7 @@ function start(container, opt, PAGE) {
         for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
         pickSel(root, v);
       } else pickSel(root, 'custom');
+      if (v !== 'save') handBack(e.target);                        // Save current... moves the focus to the name box
       bpreKey = '';
       renderBracket(root, true);
     });

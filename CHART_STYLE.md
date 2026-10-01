@@ -279,7 +279,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   "HOTKEYS" caption (caps mono 10px), and a row per action (Buy MKT, Sell MKT, B/E, Close, Flatten all): the name
   (13px), a 150 px read-only key box (mono 600 12px on the ground, a `#B69CFF` border while it takes keys, "None" when
   empty) and a Clear `.btn`; under a row a one-line note (11px: "Saved." in grey, a refusal in amber, blocked storage
-  in red). A grey 11px foot says what the keys do. Escape (outside a key box) or a click outside closes it. No new
+  in red). A grey 11px foot says what the keys do. After a pick in an order bar select or the t / pt toggle, and on Enter in a
+  bracket box, the focus leaves the control so the hotkeys work at once. Flatten (button and hotkeys) works with Armed
+  off; it keeps the dimmed look while disarmed (unchanged). Escape (outside a key box) or a click outside closes it. No new
   colors; the order bar does not change.
 - Drag to pan and throw. Wheel or pinch zooms at the pointer; a sideways trackpad swipe pans.
 - While following the live edge, zoom keeps the live edge in place. Panning away shows "Jump to live";
