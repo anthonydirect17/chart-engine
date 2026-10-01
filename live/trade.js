@@ -197,12 +197,32 @@ function create(env) {
     const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
     if ((b.stop > 0 || b.target > 0) && !reduces) msg.bracket = { stop: b.stop, target: b.target };   // JSON numbers, 0 = none
     send(msg);
+    sentCid = msg.cid;
     flash('Sent ' + side.toUpperCase() + ' ' + (kind === 'market' ? 'MKT' : kind === 'limit' ? 'LMT' : 'STP') + ' ' + qty + ' ' + R +
       (kind === 'market' ? '' : ' @ ' + fmt(price)) + (msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
   }
   /** A click on a chart at a price (Shift+click buys, Shift+right click and Ctrl+click sell): a limit or a stop by the
       last price, as the order bar's chart has always placed it. */
   function placeAt(side, price) { sendOrder(side, OT.placeKind(side, price, lastPrice()), price); }
+  /** The cid of the last order sent (a forwarded order's refusal is matched by it). */
+  let sentCid = '';
+  /**
+   * A click on a chart whose kind the chart worked out from its own price (1.12.0, the workspace: the chart may be in
+   * another window, with a fresher price than this one). Sent as the chart says only when this side's own price says the
+   * same; when it has no recent price or says otherwise, nothing is sent and the note says why (never a flipped kind).
+   * Returns the order's cid when one was sent.
+   */
+  function placeChecked(side, kind, price) {
+    sentCid = '';
+    if (!ready()) return '';
+    const R = root(), last = lastPrice();
+    if (kind !== 'limit' && kind !== 'stop') { flash('No price on that chart yet: nothing was sent. Market orders and Flatten work.', 'warn'); return ''; }
+    if (!(last > 0)) { flash('Not sent: the order ticket has no recent ' + R + ' price to check the click against. Click again in a moment.', 'warn'); return ''; }
+    const mine = OT.placeKind(side, price, last);
+    if (mine !== kind) { flash('Not sent: the chart and the order ticket see ' + R + ' differently (the chart: ' + side.toUpperCase() + ' ' + (kind === 'limit' ? 'LMT' : 'STP') + ', the ticket: ' + (mine === 'limit' ? 'LMT' : 'STP') + ' by ' + fmt(last) + '). Click again.', 'warn'); return ''; }
+    sendOrder(side, kind, price);
+    return sentCid;
+  }
 
   /*
    * B/E (1.10.0, Anthony): one change per working ChartBridge stop leg of this account and instrument, to the average
@@ -646,7 +666,7 @@ function create(env) {
   return {
     TR, brackets, qtys, BK, framed: FRAMED, framedReason: FRAMED_REASON, tradeMode,
     hello, message, lost, signIn, applyTrading,
-    ready, sendOrder, placeAt, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
+    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
     /** for tests (test/order-account.test.js): the inner steps, run on their own */

@@ -119,14 +119,14 @@ export async function run({ browser, check, fail, shot, root, port }) {
       price => shiftClickAt(single, '#chart canvas', price, ''));
     await single.close();
 
-    /* ---------------- two windows; neither takes the ticket by itself */
+    /* ---------------- two windows: the first to open takes the ticket by itself (Anthony), the second never does */
     const A = await openWs('Main');
-    const B = await openWs('Second');
-    check(!(await info(A)).held && !(await info(B)).held && (await info(A)).holder === null, 'two windows open: no window has the ticket until one adds it');
-    await A.click('.ws-panel[data-type="ticket"] [data-tk="take"]');
     await A.waitForSelector('[data-tk-id="buyMkt"]');
+    check((await info(A)).held && !(await info(A)).armed, 'A opens with no other ticket around: it takes the ticket by itself, Armed off');
+    const B = await openWs('Second');
     await B.waitForFunction(() => /Ticket is in the other window/.test(document.querySelector('.ws-panel[data-type="ticket"] .ws-body').textContent));
-    check((await info(A)).held && !(await info(B)).held && (await info(B)).holder.root === 'MNQ', 'A takes it: B shows "Ticket is in the other window"');
+    await wait(500);
+    check((await info(A)).held && !(await info(B)).held && (await info(B)).holder.root === 'MNQ' && !(await B.$('#wsDialog[open]')), 'B opens: it does not take it and does not ask; it shows "Ticket is in the other window"');
     const ticketUi = await A.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="ticket"] [data-tk-id]')].map(e => e.dataset.tkId));
     check(['root', 'oAcct', 'oQty', 'bPreset', 'armBtn', 'buyMkt', 'sellMkt', 'beBtn', 'flattenBtn', 'cancelAllBtn', 'oPos', 'fill'].every(x => ticketUi.includes(x)) && await tk(A, 'flattenBtn').textContent() === 'Close',
       'the ticket: instrument, account, Qty, bracket presets, Armed, Buy MKT, Sell MKT, B/E, Close, Cancel all, position, last fill');
@@ -145,7 +145,8 @@ export async function run({ browser, check, fail, shot, root, port }) {
     const bA = await border(A), bB = await border(B);
     check(bA.every(x => x.startsWith('MNQ') ? x.endsWith('true') : x.endsWith('false')) && bB.every(x => x.startsWith('MNQ') ? x.endsWith('true') : x.endsWith('false')), 'the Armed border on every MNQ chart in both windows, on no other: ' + bA + ' | ' + bB);
     const borderColor = await A.evaluate(id => getComputedStyle(document.querySelector(`.ws-panel[data-id="${id}"] .stage`)).borderTopColor, mnqMain.id);
-    check(borderColor === 'rgb(224, 180, 90)', 'in the existing Armed color (' + borderColor + ')');
+    const glow = await A.evaluate(id => getComputedStyle(document.querySelector(`.ws-panel[data-id="${id}"] .stage`)).boxShadow, mnqMain.id);
+    check(borderColor === 'rgb(123, 92, 255)' && /0\.45\) 0px 0px 8px 1px/.test(glow), 'in the accent purple with a soft glow (Anthony): ' + borderColor + ', ' + glow);
     const clickChart = async (p, id, price) => { await p.evaluate(i => window.workspace.chart(i).goLive(), id); await wait(300); await shiftClickAt(p, `.ws-panel[data-id="${id}"] canvas`, price, id); await wait(500); };
     const workingN = async () => (await state()).orders.length;
     let n0 = await workingN();
@@ -227,6 +228,46 @@ export async function run({ browser, check, fail, shot, root, port }) {
       await flatAll();
       const mine = (await sent(p)).filter(m => m.type === 'flatten'), theirs = (await sent(p === A ? B : A)).length;
       check(JSON.stringify(mine) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'NQ' }]) && !theirs, w + '\'s Flatten all button while disarmed: from ' + w + ' (' + JSON.stringify(mine) + ')');
+    }
+
+    /* ---------------- a forwarded click keeps the kind its chart saw (review S): the ticket visited MES at X, the market fell
+       to X - 40 while it was on NQ; back on MES, B's click at X - 20 is a BUY STOP on B's chart. The ticket never flips it
+       to a limit: it sends the stop, or (no fresh price of its own yet) nothing, with a note. */
+    {
+      const X = Math.round((await control('hold', { root: 'MES' })).last);
+      await control('price', { root: 'MES', p: X });
+      const mesB = (await B.evaluate(() => window.workspace.panels())).find(x => x.type === 'chart' && x.root === 'ES');
+      await B.click(`.ws-panel[data-id="${mesB.id}"] .ws-view`); await B.click('#wsView [data-root="MES"]'); await B.keyboard.press('Escape');
+      await wait(1500);
+      await A.bringToFront();
+      await A.selectOption('[data-tk-id="root"]', 'MES'); await wait(1500);
+      await A.selectOption('[data-tk-id="root"]', 'NQ'); await wait(800);
+      await control('price', { root: 'MES', p: X - 40 });
+      await wait(800);
+      await A.selectOption('[data-tk-id="root"]', 'MES'); await wait(1500);
+      await A.click('[data-tk-id="armBtn"]');
+      await B.waitForFunction(() => window.workspace.ticket().armed && window.workspace.ticket().root === 'MES');
+      await clear(A); await clear(B);
+      await clickChart(B, mesB.id, X - 20);
+      await wait(800);
+      const mo = (await sent(A)).filter(m => m.type === 'order');
+      check(mo.every(m => m.kind === 'stop') && !(await state('MES')).orders.some(o => o.kind === 'limit'), 'B\'s click above the market on MES: never a limit (' + JSON.stringify(mo.map(m => m.kind + ' ' + m.price)) + ', B: ' + await wnote(B) + ')');
+      check(mo.length === 1 || /Not sent: the (order ticket has no recent MES price|chart and the order ticket see MES differently)/.test(await wnote(B)), 'sent as the chart\'s BUY STOP, or refused with a note, never flipped');
+      // ChartBridge refuses one of B's forwarded orders (MES cap 2 counts working orders): the refusal reaches B by its cid
+      let refused = '';
+      for (let i = 0; i < 4 && !refused; i++) {
+        await wait(450);
+        await clickChart(B, mesB.id, X - 45 - i);
+        await wait(700);
+        const n = await wnote(B);
+        if (/^Refused by ChartBridge/.test(n)) refused = n;
+      }
+      check(/^Refused by ChartBridge: .*MES/.test(refused), 'ChartBridge\'s refusal of an order sent for B\'s click shows in B: "' + refused + '"');
+      await A.click('[data-tk-id="armBtn"]');
+      await A.click('#wsFlat'); await flatAll();
+      await A.selectOption('[data-tk-id="root"]', 'MNQ');
+      await B.click(`.ws-panel[data-id="${mesB.id}"] .ws-view`); await B.click('#wsView [data-root="ES"]'); await B.keyboard.press('Escape');
+      await wait(800);
     }
 
     /* ---------------- the ticket's window does not answer: a note, nothing sent */
@@ -314,10 +355,26 @@ export async function run({ browser, check, fail, shot, root, port }) {
     check(!(await sent(A)).some(m => m.type === 'order') && !(await sent(B)).some(m => m.type === 'order') && /Armed is off/.test(await wnote(A)), 'A\'s Buy key now goes to B, disarmed there: nothing sent (' + await wnote(A) + ')');
     await shot(B, 'workspace-ticket-moved.png');
 
+    /* ---------------- Close with no ticket anywhere: the last ticket's instrument, in every window (review B) */
+    await B.bringToFront();
+    await B.selectOption('[data-tk-id="root"]', 'NQ');
+    await B.click('[data-tk-id="armBtn"]'); await wait(450);
+    await B.click('[data-tk-id="buyMkt"]');
+    await until(async () => Object.entries((await state()).positions).some(([k, x]) => k === 'Sim101|NQ' && x.qty), 'NQ long 1 from B');
+    await A.waitForFunction(() => window.workspace.ticket().root === 'NQ');
+
     /* ---------------- the tie-break: both windows add the ticket at the same moment */
     await B.click('.ws-panel[data-type="ticket"] .ws-x');            // B closes it: no window has it
     await A.waitForFunction(() => window.workspace.ticket().holder === null && /No window has the ticket/.test(document.querySelector('.ws-panel[data-type="ticket"] .ws-body').textContent));
     check(!(await info(A)).held && !(await info(B)).held, 'the ticket closed in B: no window has it, A does not take it by itself');
+    await clear(A);
+    await A.bringToFront(); await A.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(400);
+    const keysTip = await A.getAttribute('#wsKeys', 'title');
+    await press(A, 'Alt+C');
+    await until(async () => !Object.values((await state()).positions).some(x => x.qty), 'flat after A\'s Close with no ticket');
+    check(JSON.stringify((await sent(A)).filter(m => m.type === 'flatten')) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'NQ' }]) && /Close: Sim101 NQ/.test(keysTip),
+      'no ticket anywhere: A\'s Close flattens the last ticket\'s instrument (NQ, set in B), and KEYS says so: ' + JSON.stringify(await sent(A)) + ' / ' + keysTip.split('\n').pop());
+    await wait(450);
     await B.click('#wsAdd');
     await Promise.all([A.click('.ws-panel[data-type="ticket"] [data-tk="take"]'), B.click('#wsAddMenu [data-add="ticket"]')]);
     await wait(800);
@@ -328,8 +385,13 @@ export async function run({ browser, check, fail, shot, root, port }) {
     await wait(300);
     check([(await info(A)).held, (await info(B)).held].filter(Boolean).length === 1, 'and after its "no", still exactly one');
 
-    /* ---------------- the ticket's window closes: no window has it; a forward gets the note and sends nothing */
+    /* ---------------- the ticket's window reloads: it takes the ticket back by itself (the other does not); then it closes:
+       no window has it, a forward gets the note and sends nothing */
     const winner = heldNow[0] ? A : B, other = winner === A ? B : A;
+    await winner.reload();
+    await winner.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(winner, TEST_PIN)).catch(() => {});
+    await winner.waitForFunction(() => window.workspace && window.workspace.ticket().held, null, { timeout: 20000 }).catch(() => fail('the reloaded window did not take the ticket back'));
+    check((await info(winner)).held && !(await info(winner)).armed && !(await info(other)).held, 'the ticket\'s window reloads: it has the ticket again, Armed off; the other did not take it meanwhile');
     await winner.close();
     await other.waitForFunction(() => window.workspace.ticket().holder === null && !window.workspace.ticket().held, null, { timeout: 5000 });
     await clear(other);
@@ -343,6 +405,20 @@ export async function run({ browser, check, fail, shot, root, port }) {
     if (await other.$('.ws-panel[data-type="ticket"] [data-tk="take"]')) await other.click('.ws-panel[data-type="ticket"] [data-tk="take"]');
     else { await other.click('#wsAdd'); await other.click('#wsAddMenu [data-add="ticket"]'); }
     await other.waitForSelector('[data-tk-id="buyMkt"]').catch(() => fail('the ticket did not open again'));
+    if ((await info(other)).root !== 'MNQ') await other.selectOption('[data-tk-id="root"]', 'MNQ');
+    await other.click('[data-tk-id="armBtn"]');                     // Armed: the MNQ charts show the purple border
+    /* two windows opening at the same moment: exactly one takes the ticket, neither asks */
+    {
+      await other.click('.ws-panel[data-type="ticket"] .ws-x');
+      const [C, D] = await Promise.all([openWs('Third'), openWs('Fourth')]);
+      await wait(800);
+      const cd = [(await info(C)).held, (await info(D)).held];
+      check(cd.filter(Boolean).length === 1 && !(await C.$('#wsDialog[open]')) && !(await D.$('#wsDialog[open]')), 'two windows opening at once: exactly one takes the ticket, no question asked (' + cd + ')');
+      await C.close(); await D.close();
+      await other.click('#wsAdd'); await other.click('#wsAddMenu [data-add="ticket"]');
+      await other.waitForSelector('[data-tk-id="buyMkt"]');
+      await other.click('[data-tk-id="armBtn"]');
+    }
     for (const [w, h] of [[1920, 1080], [2560, 1440], [1366, 768]]) {
       await other.setViewportSize({ width: w, height: h });
       await wait(900);

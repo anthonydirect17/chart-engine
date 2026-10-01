@@ -110,7 +110,9 @@ try {
       names: [...document.querySelectorAll('.ws-panel .ws-name')].map(e => e.textContent), flattenSlot: !!document.getElementById('wsFlat') && !!document.getElementById('wsKeys'),
       clock: document.getElementById('wsClock').textContent, topH: document.querySelector('.ws-top').offsetHeight };
   }, { ticket: ticket.id, daily: daily.id });
-  check(/No window has the ticket/.test(ui.ticketText) && ui.ticketCtl === 1 && ui.ticketName === 'Order ticket', 'a window does not take the ticket by itself: "No window has the ticket" and one button (' + ui.ticketText.replace(/\s+/g, ' ') + ')');
+  const tkInfo = await page.evaluate(() => window.workspace.ticket());
+  check(tkInfo.held && !tkInfo.armed && /Buy MKT/.test(ui.ticketText) && ui.ticketCtl > 10 && ui.ticketName === 'Order ticket', 'the window opened with no other ticket around: it took the ticket, Armed off (Anthony)');
+  check(/Trading off/.test(ui.ticketText), 'trading is off on this ChartBridge: the ticket says so (' + ui.ticketText.replace(/\s+/g, ' ').slice(-90) + ')');
   check(!ui.obar, 'no order bar inside any chart (the order ticket is its own panel)');
   check(ui.dailyTf === '1 hour' && /ChartBridge 0\.3\.7/.test(ui.dailyTitle), 'the long chart is labelled 1 hour, not Daily (ChartBridge 0.3.7 brings daily bars)');
   check(ui.names.includes('MNQ 12-26') && ui.names.includes('Time and Sales'), 'headers show the contract (' + ui.names.join(', ') + ')');

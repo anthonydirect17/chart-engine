@@ -364,7 +364,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Under the top bar**, only while there is one: ChartBridge's order errors (sell red border and ground) and what was
   not sent (warn amber), each with Dismiss.
 - **Chart panels**: the slim 28 px header, the compact chart. A chart live for orders (the ticket's instrument while
-  Armed) has the Armed outline, the amber `#E0B45A` of the single chart page, on its stage; no new color.
+  Armed) has a purple outline on its stage, the workspace accent `#7B5CFF` (Anthony), with a soft static glow (a
+  1 px ring and an 8 px shadow at 45%); no new color, no animation. The single chart page keeps its amber Armed.
 - **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
   instrument and account; Armed (the amber switch, the bar outlined in amber while Armed); Qty with "max N" and the
   bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Close and Cancel all, a

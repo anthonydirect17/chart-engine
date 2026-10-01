@@ -44,7 +44,8 @@ test('live.js: only the standalone page uses the PIN; ChartLive.mount never does
   assert.match(read('live/trade.js'), /env\.fetch\('\/session', \{ cache: 'no-store', headers: PIN \? PIN\.headers\(\) : \{\} \}\)/);
   assert.match(live, /const T = !TRADING \? null : TC\.create\(\{\n\s+LP, prefs, pin: PIN,/);
   assert.match(live, /function mount\(container, options\) \{ return start\(container, options \|\| \{\}, false\); \}/);
-  assert.match(live, /if \(window\.ChartBridgePin\) window\.ChartBridgePin\.gate\(\)\.then\(\(\) => start\(document\.body, \{\}, true\)\);/, 'the page starts only after the unlock');
+  assert.match(live, /if \(window\.ChartBridgePin\) window\.ChartBridgePin\.gate\(\)\.then\(boot\); else boot\(\);/, 'the page starts only after the unlock');
+  assert.match(live, /const boot = \(\) => \{ if \(!window\.TradeCore\) \{[^\n]*return; \} start\(document\.body, \{\}, true\); \};/, 'and with its order logic (trade.js, fetched when an older single.html did not load it)');
   assert.equal((live.match(/ChartBridgePin/g) || []).length, 3, 'ChartBridgePin used only in the page boot and the PAGE line');
   // the host page and EMBED.md never load pin.js
   assert.ok(!/pin\.js/.test(read('test/embed-host.html')));

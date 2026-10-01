@@ -160,3 +160,29 @@ test('without Web Locks the ticket is never held (one ticket cannot be kept safe
   assert.equal(A.link.held(), false);
   assert.equal(A.link.info().supported, false);
 });
+
+test('review fixes: a forward for another window is not acted on; one stamped in the future is refused; later notes reach the asker', async () => {
+  const W = world(), A = W.win({ wid: 'A' });
+  const notes = [];
+  const B = W.win({ wid: 'B', onNote: t => notes.push(t) });
+  const raw = W.channel(), acks = [];
+  raw.onmessage = m => { if (m.t === 'ack') acks.push(m); };
+  const a = A.link.take(); await W.run(5); await a;
+  A.link.publish({ root: 'MNQ' }); await W.run(5);
+  raw.post({ t: 'fwd', id: 'x1', from: 'R', to: 'Z', at: W.now(), action: { kind: 'buy' } });   // addressed to a window that is not A
+  await W.run(20);
+  assert.equal(A.log.forwards.length, 0, 'not for A: not acted on');
+  assert.equal(acks.length, 0, 'and not answered');
+  raw.post({ t: 'fwd', id: 'x2', from: 'R', to: 'A', at: W.now() + 500, action: { kind: 'buy' } });   // 0.5 s in the future
+  await W.run(20);
+  assert.equal(A.log.forwards.length, 0, 'a stamp from the future: nothing done');
+  assert.deepEqual(acks.map(m => [m.id, m.sent, m.note]), [['x2', 0, TL.BAD_CLOCK]]);
+  raw.post({ t: 'fwd', id: 'x3', from: 'R', to: 'A', at: W.now() + 30, action: { kind: 'buy' } });    // within the 50 ms slack
+  await W.run(20);
+  assert.equal(A.log.forwards.length, 1, 'a few ms ahead is fine');
+  A.link.tell('B', 'Refused by ChartBridge: too far');
+  await W.run(5);
+  assert.deepEqual(notes, ['Refused by ChartBridge: too far']);
+  B.link.tell('A', 'x'); await W.run(5);                 // only the holder tells
+  assert.equal(A.log.late.length, 0);
+});

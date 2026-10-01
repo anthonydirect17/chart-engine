@@ -2876,14 +2876,16 @@ function start(container, opt, PAGE) {
     chart.on('orderMove', e => T.moveOrder(e.id, e.price));
     chart.on('orderCancel', e => T.cancelOrder(e.id));
   } else if (HOST) {
-    /* A host's chart (the workspace): the same mouse rules, handed to the host with this chart's instrument. */
+    /* A host's chart (the workspace): the same mouse rules, handed to the host with this chart's instrument and the kind
+       this chart's own price gives (a limit or a stop, as on the single chart page; null with no price yet). */
     const call = (fn, a) => { try { fn.apply(HOST, a); } catch (e) { setTimeout(() => { throw e; }); } };
+    const kindAt = (side, price) => { const last = lastPrice(); return last > 0 ? OT.placeKind(side, price, last) : null; };
     chart.setOrderPreview(previewAt);
     chart.on('orderPlace', e => {
       if (lastUp && lastUp.ctrlKey) { flash(BOTH_KEYS, 'warn'); return; }
-      if (armedHere()) call(HOST.place, ['buy', e.price, D.root]);
+      if (armedHere()) call(HOST.place, ['buy', e.price, D.root, kindAt('buy', e.price)]);
     });
-    setupSellClicks(price => call(HOST.place, ['sell', price, D.root]));
+    setupSellClicks(price => call(HOST.place, ['sell', price, D.root, kindAt('sell', price)]));
     chart.on('orderMove', e => { if (armedHere()) call(HOST.move, [e.id, e.price, D.root]); else renderHost(); });
     chart.on('orderCancel', e => { if (armedHere()) call(HOST.cancel, [e.id, D.root]); });
   }
@@ -2996,7 +2998,14 @@ function start(container, opt, PAGE) {
 window.ChartLive = { mount, EMBED_PREFIX, hotkeyHandler, HOTKEY_IN_BOX };
 /* The standalone page: behind ChartBridge's PIN (live/pin.js) when ChartBridge has one, nothing started until unlocked. */
 if (SCRIPT && SCRIPT.getAttribute('data-mount') === 'page') {
-  if (window.ChartBridgePin) window.ChartBridgePin.gate().then(() => start(document.body, {}, true));
-  else start(document.body, {}, true);
+  /* The order logic is live/trade.js (1.12.0). A page loaded while the PC updater writes the files can have this live.js
+     with an older single.html that does not load it: it is fetched here before the page starts. */
+  const withTrade = window.TradeCore ? Promise.resolve() : new Promise(res => {
+    const sc = document.createElement('script');
+    sc.src = new URL('trade.js', SCRIPT.src).href; sc.onload = res; sc.onerror = res;
+    document.head.appendChild(sc);
+  });
+  const boot = () => { if (!window.TradeCore) { document.body.textContent = 'The page files are being updated (trade.js is missing). Reload this page when flat.'; return; } start(document.body, {}, true); };
+  withTrade.then(() => { if (window.ChartBridgePin) window.ChartBridgePin.gate().then(boot); else boot(); });
 }
 })();

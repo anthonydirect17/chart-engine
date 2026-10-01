@@ -347,15 +347,16 @@ chart page's order bar (`live/trade.js`), so everything below about the order ba
 
 - **Every chart on the ticket's instrument takes orders while it is Armed**, in every window: Shift + left click buys,
   Shift + right click and Ctrl + left click sell, drag a working order or a bracket leg to move it, its x cancels it.
-  Those charts have the amber Armed border. Charts on other instruments only show their orders, position and fills.
+  Those charts have a purple border with a soft glow. Charts on other instruments only show their orders, position and fills.
 - **Switching the ticket's instrument** turns Armed off; anything still open on the old one shows as "Also open: MNQ
   +2" with its own Close.
-- **One ticket for all windows** of the browser on this PC. Add it in another window and it asks "Move the ticket
-  here?"; after a move Armed is off. When the ticket's window closes or reloads, no window has it until you add it
-  again (its panel says "Use the ticket here"). Only the ticket's window sends orders: a click, drag, Buy, Sell or B/E
+- **One ticket for all windows** of the browser on this PC. The first window to open takes it by itself (Armed off);
+  a reload takes it back. Add it in another window and it asks "Move the ticket here?"; after a move Armed is off.
+  When the ticket's window closes, no other window takes it until you add it there ("Use the ticket here"). Only the ticket's window sends orders: a click, drag, Buy, Sell or B/E
   key in another window is passed to it; if it does not answer within 300 ms nothing is sent and a note says so.
 - **Close, Flatten all and the top bar's Flatten all** go from the window you use, Armed or not, on the ticket's
-  account. Flatten all flattens every instrument with a position or a working order on it.
+  account (with no ticket anywhere: the last ticket's instrument, on the last account picked on this PC; KEYS's
+  tooltip says which). Flatten all flattens every instrument with a position or a working order on it.
 - **KEYS ON** in the top bar means a hotkey pressed now works in this window; KEYS OFF means the window does not have
   the focus, or a box, menu or dialog has it.
 - Chrome or Edge (they keep the one ticket with the Web Locks API).

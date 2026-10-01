@@ -17,9 +17,12 @@
  *   released { wid, id }                ... this, and the asking window takes the lock
  *   fwd { id, from, at, action }        a chart click, drag, cancel or Buy/Sell/B/E key in another window, for the holder
  *   ack { id, to, sent, note }          the holder's answer: what it sent (0 or more order actions) and its note
+ *   note { to, text }                   the holder, later: ChartBridge refused an order a forward sent (matched by its cid)
  * A forward the holder gets later than ACT_MS after it was made is not acted on (answered "too late"); the asking window
  * waits ANSWER_MS for an answer, then says nothing was sent. So a late answer cannot have sent anything, except on a
  * PC so busy that the answer itself takes longer than the gap between the two (it is then shown as it comes: onLate).
+ * The stamps are the browser's own clock (performance.timeOrigin + performance.now(), the same for every window); a
+ * forward stamped more than CLOCK_SLACK_MS in the future is refused too (the clocks cannot be trusted then).
  *
  * No DOM; it also loads in Node for test/ticket-link.test.js (pass `channel`, `locks` and `now`).
  */
@@ -37,11 +40,15 @@ const MOVE_MS = 1500;                        // a move waits this long for the o
 const NO_ANSWER = 'The order ticket\'s window did not answer: nothing was sent.';
 const TOO_LATE = 'The order ticket\'s window got this too late: nothing was sent.';
 const NO_TICKET = 'No window has the order ticket: nothing was sent. Add the ticket (Add panel) to trade.';
+const NO_CHANNEL = 'This browser cannot reach the order ticket\'s window (no BroadcastChannel): nothing was sent.';
+const BAD_CLOCK = 'The order ticket\'s window could not tell when this was made: nothing was sent.';
+const CLOCK_SLACK_MS = 50;
+const browserNow = () => (typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now());
 
 function create(o) {
   const wid = o.wid || ('w' + Math.random().toString(36).slice(2, 10));
   const ch = o.channel, locks = o.locks || null;
-  const now = typeof o.now === 'function' ? o.now : () => Date.now();
+  const now = typeof o.now === 'function' ? o.now : browserNow;
   const later = o.setTimeout || ((fn, ms) => setTimeout(fn, ms));
   const unlater = o.clearTimeout || (id => clearTimeout(id));
   const on = k => (typeof o[k] === 'function' ? o[k] : () => {});
@@ -135,13 +142,16 @@ function create(o) {
         post({ t: 'released', wid, id: m.id });
         break;
       case 'fwd': {
-        if (!held || m.from === wid) break;
+        if (!held || m.from === wid || (m.to && m.to !== wid)) break;   // for this window only
         let r;
-        if (!(now() - m.at <= ACT_MS)) r = { sent: 0, note: TOO_LATE };
+        const age = now() - m.at;
+        if (!(age >= -CLOCK_SLACK_MS)) r = { sent: 0, note: BAD_CLOCK };
+        else if (!(age <= ACT_MS)) r = { sent: 0, note: TOO_LATE };
         else { try { r = on('onForward')(m.action, m.from) || { sent: 0, note: '' }; } catch (e) { r = { sent: 0, note: 'The order ticket\'s window failed: ' + (e && e.message) }; } }
         post({ t: 'ack', id: m.id, to: m.from, sent: r.sent | 0, note: String(r.note || '') });
         break;
       }
+      case 'note': if (m.to === wid && typeof m.text === 'string' && m.text) on('onNote')(m.text); break;
       case 'ack': {
         if (m.to !== wid) break;
         const p = pending.get(m.id);
@@ -162,9 +172,11 @@ function create(o) {
       if (!busy && holder && !held) { holder = null; changed(); }
     }, () => {});
   }
+  /** The holder tells the window a forward came from something that happened since (a refusal by ChartBridge). */
+  function tell(to, text) { if (held && to && to !== wid) post({ t: 'note', to, text: String(text) }); }
   function close() { release(); closed = true; for (const p of pending.values()) unlater(p.timer); pending.clear(); }
 
-  return { wid, take, move, release, publish, forward, check, close, info, held: () => held, onMessage };
+  return { wid, take, move, release, publish, forward, tell, check, close, info, held: () => held, onMessage };
 }
 
 /** A channel for create() from the browser's BroadcastChannel, or null when there is none. */
@@ -176,5 +188,5 @@ function browserChannel(name) {
   return ch;
 }
 
-return { create, browserChannel, LOCK, CHANNEL, ANSWER_MS, ACT_MS, MOVE_MS, NO_ANSWER, TOO_LATE, NO_TICKET };
+return { create, browserChannel, LOCK, CHANNEL, ANSWER_MS, ACT_MS, MOVE_MS, CLOCK_SLACK_MS, NO_ANSWER, TOO_LATE, NO_TICKET, NO_CHANNEL, BAD_CLOCK };
 });

@@ -143,3 +143,30 @@ test('Flatten all paced within ChartBridge\'s 10 a second, and a run finishes on
   assert.deepEqual(R.flattens(), ['Sim101 MNQ', 'Sim101 NQ', 'Sim101 MES', 'Sim101 ES']);
   assert.equal(R.core.busy().flattenAll, false);
 });
+
+test('a chart click from another window: sent with the chart\'s kind only when the ticket\'s own recent price agrees (review S)', () => {
+  const R = rig();
+  R.on(); R.core.setArmed(true);
+  R.last = 100;
+  // the chart (fresh) says a buy at 98 is a limit; the ticket agrees: sent as a limit, the cid returned
+  const cid = R.core.placeChecked('buy', 'limit', 98);
+  const m = R.sent.pop();
+  assert.equal(m.kind, 'limit'); assert.equal(m.price, 98); assert.equal(cid, m.cid);
+  R.advance(500);
+  // the chart saw the market fall to 90 (a buy at 95 is a STOP there); the ticket still has 100 (a limit): refused, not flipped
+  assert.equal(R.core.placeChecked('buy', 'stop', 95), '');
+  assert.equal(R.sent.length, 0);
+  assert.equal(R.notes.pop(), 'warn: Not sent: the chart and the order ticket see MNQ differently (the chart: BUY STP, the ticket: LMT by 100.00). Click again.');
+  // no recent price on the ticket's side: refused
+  R.last = null; R.advance(500);
+  assert.equal(R.core.placeChecked('buy', 'limit', 95), '');
+  assert.match(R.notes.pop(), /^warn: Not sent: the order ticket has no recent MNQ price/);
+  // the chart had no price (no kind): refused, as a click with no price is on one page
+  R.last = 100;
+  assert.equal(R.core.placeChecked('buy', null, 95), '');
+  assert.equal(R.sent.length, 0);
+  // disarmed: the Armed note first, as every order action
+  R.core.setArmed(false);
+  R.core.placeChecked('buy', 'limit', 95);
+  assert.match(R.notes.pop(), /^warn: Armed is off/);
+});

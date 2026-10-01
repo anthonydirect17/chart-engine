@@ -4,8 +4,12 @@
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling (the PC
 updater installs it by itself at sign-in and at 17:05 ET, and the open pages say "Update ready: reload when flat").
-Nothing under `nt8/` changes but `nt8/install-files.json` (two new page files, `trade.js` and `ticket-link.js`), and
-the engine only gets its version number. The single chart page (`/single.html`) keeps its order bar and hotkeys
+Under `nt8/` only the page install changes, no C#: `nt8/install-files.json` gets six new `www` entries
+(`single.html`, `feed.js`, `workspace.js`, `workspace.css`, `trade.js`, `ticket-link.js`), and `nt8/update-pc.ps1`
+writes them in a new order (the engine, the libraries and `trade.js`, `live.js`, then `workspace.js`, the pages, and
+`index.html` last). The scheduled task runs a pinned copy of the updater: the new order applies after Anthony runs
+`update-pc.ps1 register` again from the clone; until then a page loaded during an install fetches `trade.js` and
+`ticket-link.js` itself if the older page did not load them, or says to reload. The engine only gets its version number. The single chart page (`/single.html`) keeps its order bar and hotkeys
 exactly as in 1.11.0 (the same functions now live in `live/trade.js`; `smoke:orders` and `smoke:hotkeys` unchanged
 and green), with the hotkey changes listed last.
 
@@ -22,23 +26,29 @@ and green), with the hotkey changes listed last.
   left click buys, Shift + right click and Ctrl + left click sell, Ctrl and Shift together send nothing), dragging a
   working order or a bracket leg, the x to cancel. Charts on other instruments are display only for orders. Every
   chart shows the working orders, position and fills of its own instrument on the ticket's account, Armed or not.
-- **The Armed border** on each chart that is live for orders, in the Armed color the single chart page uses.
+- **The Armed border** on each chart that is live for orders (Anthony): the accent purple with a soft, static glow.
 - **Switching the ticket's instrument** with a position or orders still open on the old one is allowed: Armed goes
   off, and the ticket shows "Also open: MNQ +2" (or "MNQ 1 order") with its own Close. The old instrument's charts keep
   showing the position and orders and stop taking order clicks.
 - **One ticket across windows** (same PC, same browser; `live/ticket-link.js`). The window holding the browser's lock
   for the ticket (Web Locks) has it; the others show "Ticket is in the other window" with Move the ticket here. Adding
   a ticket while another window has it asks "Move the ticket here?"; on yes the other window's ticket becomes the
-  placeholder, and Armed is off after every move. When the ticket's window closes or reloads no window has it until
-  one adds it ("Use the ticket here"): no window takes it by itself. Two windows adding it at the same moment: the
-  browser gives the lock to exactly one, and the other asks. Only the ticket's window arms and sends Buy, Sell, B/E,
+  placeholder, and Armed is off after every move. A window that opens or reloads with the ticket in its layout takes
+  it by itself when no other window has it (Anthony), Armed off; a window that finds another holding it never asks.
+  When the ticket's window closes, no other window takes it ("Use the ticket here" there). Two windows opening, or
+  adding it, at the same moment: the browser gives the lock to exactly one. Only the ticket's window arms and sends Buy, Sell, B/E,
   chart clicks, drags and cancels; another window's chart click or drag on the ticket's instrument is passed to it
-  (BroadcastChannel) and acted on there with the same checks. If it does not answer within 300 ms the clicking window
-  says "The order ticket's window did not answer: nothing was sent." (and the ticket's window never acts on it later).
+  (BroadcastChannel) and acted on there with the same checks. A click goes as the limit or stop its own chart saw;
+  the ticket's window sends it only when its own recent price (10 s, as the single chart page) says the same, else
+  nothing is sent and the note says why. ChartBridge's refusal of an order sent for another window's click shows in
+  that window too. If the ticket's window does not answer within 300 ms the clicking window says "The order ticket's
+  window did not answer: nothing was sent." (and the ticket's window never acts on it later).
   A browser without Web Locks gets no ticket rather than one that could be in two windows.
 - **Hotkeys work in every window.** Buy MKT, Sell MKT and B/E go to the ticket's window (the same note if it does not
   answer); **Close and Flatten all are sent from the window they are pressed in**, on its own ChartBridge connection,
-  on the ticket's account (with no ticket, the account trading came on with, as on the single chart page).
+  on the ticket's account and instrument. Every window keeps the ticket's instrument and account as the ticket's window
+  says them; with no ticket anywhere, Close is for the last ticket's instrument on the default account (the last one
+  picked on this PC). KEYS's tooltip names what Close and Flatten all would act on.
 - **Flatten all in each window's top bar** (Anthony 2026-10-01): every instrument with a position or a working order
   on the ticket's account, from that window, Armed or not (connected and signed in), paced as the Flatten all hotkey.
 - **KEYS ON / KEYS OFF** in each window's top bar: ON when a key pressed now would fire a hotkey there (the window has

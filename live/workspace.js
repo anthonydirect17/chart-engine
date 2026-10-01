@@ -285,7 +285,17 @@ return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS
 
 
 /* ======================================================================== the page (browser only) */
-if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.ChartLive && window.ChartFeed) (() => {
+/* A window loaded while the PC updater writes the page files can get this workspace.js with an older index.html (which
+   does not load trade.js or ticket-link.js: they are fetched here first) or an older live.js (then nothing would work:
+   the window says to reload instead of breaking). */
+if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.ChartLive && window.ChartFeed) (function boot(page) {
+  const me = document.currentScript;
+  const ok = () => !!window.TradeCore && !!window.TicketLink && typeof window.ChartLive.hotkeyHandler === 'function';
+  const stop = () => { const d = document.createElement('div'); d.className = 'ws-reload'; d.setAttribute('role', 'alert'); d.textContent = 'The page files were being updated as this window opened. Reload it (when flat) to trade from it.'; document.body.prepend(d); };
+  if (ok()) { page(); return; }
+  const load = f => new Promise(res => { const sc = document.createElement('script'); sc.src = new URL(f, me ? me.src : location.href).href; sc.onload = sc.onerror = res; document.head.appendChild(sc); });
+  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js']].filter(([g]) => !window[g]).map(([, f]) => load(f))).then(() => { if (ok()) page(); else stop(); });
+})(() => {
 'use strict';
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
 const PREFIX = '';                                 // the single chart page's prefix (none): its settings are this page's
@@ -391,7 +401,7 @@ const readTicket = () => { try { const v = JSON.parse(store.getItem(TICKET_KEY))
 const TK = {
   root: W.ROOTS.includes(readTicket().root) ? readTicket().root : 'MNQ',   // the ticket's instrument
   bar: null, el: null, view: null,                    // the shared order bar wiring and the ticket's element, while this window holds it
-  price: null, last: {},                              // the ticket's price feed (its instrument's last trade)
+  price: null, last: {}, priceSeq: 0,                // the ticket's price feed: { root: { p, at, seq } } (its instrument's last trade)
   noteTimer: 0, published: '',
 };
 const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
@@ -401,6 +411,17 @@ const tickOf = r => (instruments[r] && +instruments[r].tick) || 0.25;
 const precisionOf = r => W.decimalsOf(tickOf(r));
 const fmtPx = (p, r) => U.fmtPrice(p, precisionOf(r || ticketRoot()));
 let sentCount = 0;                                    // order actions sent here (a forwarded action's answer says how many)
+/* The ticket's last price for root r: from the ticket's current price feed, or seen in the last 10 s (the single chart
+   page's LAST_SEEN_MS); an older one (an earlier visit of the instrument) is no price at all. */
+const LAST_SEEN_MS = 10000;
+function ticketPrice(r) {
+  const x = TK.last[r];
+  if (!x) return null;
+  const current = TK.price && TK.price.root === r && x.seq === TK.priceSeq;
+  return current || Date.now() - x.at < LAST_SEEN_MS ? x.p : null;
+}
+/* the forwards whose orders this window sent: cid -> the window that asked (ChartBridge's refusal goes back to it) */
+const fwdCids = new Map();
 let capture = null;                                   // the notes of a forwarded action, for its answer
 
 /* the ticket as this window knows it: its own, or the one another window announced */
@@ -433,7 +454,7 @@ const core = TC.create({
   send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },
   open: () => !!tws && tws.readyState === 1, sock: () => tws,
   root: () => ticketRoot(),
-  lastPrice: () => { const x = TK.last[ticketRoot()]; return x ? x.p : null; },
+  lastPrice: () => ticketPrice(ticketRoot()),
   qty: () => (holds() && TK.el ? Number(tk('oQty').value === '' ? NaN : +tk('oQty').value) : NaN),
   pickerAccount: () => (holds() && TK.el ? tk('oAcct').value : ticketAccount()),
   /* the ticket's account; with no ticket anywhere, the last account picked on this PC (as the single chart page) */
@@ -472,6 +493,13 @@ function tmessage(m) {
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.text) note('ChartBridge: ' + m.text, m.level === 'warn'); return;
+  }
+  // an order this window sent for a click in another window: ChartBridge's refusal (or NinjaTrader's rejection) goes
+  // back to that window's note too
+  const f = m.cid && fwdCids.get(m.cid);
+  if (f && link && (m.type === 'reject' || (m.type === 'order' && m.state === 'rejected'))) {
+    link.tell(f.from, m.type === 'reject' ? 'Refused by ChartBridge: ' + m.reason : 'Rejected: ' + (m.text || m.name || m.root));
+    fwdCids.delete(m.cid);
   }
   core.message(m);
 }
@@ -524,31 +552,34 @@ function chartAction(action) {
   forward(action);
 }
 function forward(action) {
+  if (!link) { note(TL.NO_CHANNEL, true, 8000); renderCharts(); return; }
   link.forward(action).then(r => {
     if (!r.answered || !r.sent) note(r.note || 'Nothing was sent.', true, 8000);
     else note(r.note, false, 6000);
     renderCharts();                                     // a refused drag puts the line back
   });
 }
-/* Act on a click, drag, cancel or Buy, Sell, B/E key here, in the ticket's window: { sent, note } */
+/* Act on a click, drag, cancel or Buy, Sell, B/E key here, in the ticket's window: { sent, note, cid }. A click is sent
+   with the kind its chart worked out from its own price, re-checked against the ticket's (TradeCore.placeChecked). */
 function actHere(a) {
-  const before = sentCount, notes = [];
+  const before = sentCount, cid0 = core.lastCid(), notes = [];
   const was = capture; capture = notes;
   try {
     const R = ticketRoot();
     if (a.root && a.root !== R && (a.kind === 'place' || a.kind === 'move' || a.kind === 'cancel')) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
     else if ((a.kind === 'move' || a.kind === 'cancel') && core.TR.orders.has(a.id) && core.TR.orders.get(a.id).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
-    else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeAt(a.side, +a.price);
+    else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
     else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) core.moveOrder(a.id, +a.price);
     else if (a.kind === 'cancel' && typeof a.id === 'string') core.cancelOrder(a.id);
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
     else if (a.kind === 'be') core.breakEven();
   } finally { capture = was; }
-  return { sent: sentCount - before, note: notes.length ? notes[notes.length - 1] : '' };
+  const cid = core.lastCid() !== cid0 ? core.lastCid() : '';
+  return { sent: sentCount - before, note: notes.length ? notes[notes.length - 1] : '', cid };
 }
 const tradeHost = {
-  place: (side, price, root) => chartAction({ kind: 'place', side, price, root }),
+  place: (side, price, root, kind) => chartAction({ kind: 'place', side, price, root, orderKind: kind }),
   move: (id, price, root) => chartAction({ kind: 'move', id, price, root }),
   cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
 };
@@ -560,7 +591,12 @@ const link = linkChannel ? TL.create({
   channel: linkChannel, locks,
   onState: () => linkChanged(),
   onRelease: () => { if (core.TR.armed) core.setArmed(false); },   // moved to another window: Armed off before the lock goes
-  onForward: a => { const r = actHere(a); renderOrders(); return r; },
+  onForward: (a, from) => {
+    const r = actHere(a);
+    if (r.cid) { fwdCids.set(r.cid, { from, at: Date.now() }); for (const [c, x] of fwdCids) if (Date.now() - x.at > 60000) fwdCids.delete(c); }
+    renderOrders(); return r;
+  },
+  onNote: text => note(text, true, 12000),
   onLate: a => note('The order ticket\'s window answered late: ' + a.note, true, 12000),
 }) : null;
 let wasHeld = false;
@@ -571,11 +607,24 @@ function linkChanged() {
     if (!h) { if (core.TR.armed) core.setArmed(false); stopTicketPrice(); }
     renderTicketPanel();
   } else if (!h) renderTicketPanel();
-  // another window's ticket: this window's orders go to its account (Close, Flatten all, what the charts show)
+  // another window's ticket: this window's orders go to its instrument and account (Close, Flatten all, the charts),
+  // and keep doing so once no window has it (the last ticket's instrument, live-ticket-v1; the default account)
   const hd = holder();
+  if (!h && hd && W.ROOTS.includes(hd.root)) TK.root = hd.root;
   if (!h && hd && hd.account && hd.account !== core.TR.account && core.TR.accounts.includes(hd.account)) core.pickAccount(hd.account);
+  if (!h && !hd) noTicketAccount();
   renderOrders();
 }
+/* No window has the ticket: Close and Flatten all go on the default account (the last one picked on this PC, as the
+   single chart page's), for the last ticket's instrument. */
+function noTicketAccount() {
+  const TR = core.TR;
+  if (!TR.enabled || holds() || holder()) return;
+  const a = LP.orderAccount(TR.accounts, accountPick()).account;
+  if (a && a !== TR.account) core.pickAccount(a);
+}
+/* What Close and Flatten all here would act on, for KEYS's tooltip and the top bar's Flatten all */
+const closeTarget = () => ticketAccount() + ' ' + ticketRoot();
 function publish() {
   if (!holds()) return;
   const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty() };
@@ -610,7 +659,7 @@ function renderTicketPanel() {
   if (!v) { TK.el = null; TK.bar = null; return; }
   const live = holds();
   if (live && v.mode === 'live') return;
-  if (!live && v.mode !== 'live' && v.mode === placeholderKind()) return;
+  if (!live && v.mode !== 'live' && v.mode === placeholderKind()) { holdLine(v); return; }
   TK.el = null; TK.bar = null; TK.view = null;
   for (const f of v.cleanups.splice(0)) f();
   if (live) { mountTicket(v); return; }
@@ -618,12 +667,20 @@ function renderTicketPanel() {
   const sup = !!(link && locks);
   const hd = holder();
   v.body.innerHTML = !sup ? '<div class="tk-hold" role="note"><b>No order ticket in this browser</b><span>It needs the Web Locks API to keep one ticket across windows. Use Chrome or Edge.</span></div>'
-    : hd ? `<div class="tk-hold" role="note"><b>Ticket is in the other window</b><span>${esc(hd.root || '')} ${esc(hd.account || '')}${hd.armed ? ' · ARMED' : ''}</span><button type="button" class="ws-btn primary" data-tk="take">Move the ticket here</button></div>`
+    : hd ? '<div class="tk-hold" role="note"><b>Ticket is in the other window</b><span data-tk="line"></span><button type="button" class="ws-btn primary" data-tk="take">Move the ticket here</button></div>'
     : '<div class="tk-hold" role="note"><b>Order ticket</b><span>No window has the ticket.</span><button type="button" class="ws-btn primary" data-tk="take">Use the ticket here</button></div>';
   const b = v.body.querySelector('[data-tk="take"]');
   if (b) b.addEventListener('click', () => takeTicket());
+  holdLine(v);
 }
-const placeholderKind = () => !(link && locks) ? 'none' : holder() ? 'elsewhere:' + JSON.stringify(holder()) : 'free';
+/* the other window's ticket in one line, written only when it changed */
+function holdLine(v) {
+  const el = v.body.querySelector('[data-tk="line"]'), hd = holder();
+  if (!el || !hd) return;
+  const t = (hd.root || '') + ' ' + (hd.account || '') + (hd.armed ? ' · ARMED' : '');
+  if (el.textContent !== t) el.textContent = t;
+}
+const placeholderKind = () => !(link && locks) ? 'none' : holder() ? 'elsewhere' : 'free';
 const tk = id => TK.view ? TK.view[id] || null : null;
 function mountTicket(v) {
   v.mode = 'live';
@@ -655,7 +712,7 @@ function mountTicket(v) {
   map.root.value = TK.root;
   TK.bar = TC.wire(id => map[id] || null, core, {
     U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen: (t, type, fn) => { t.addEventListener(type, fn); v.cleanups.push(() => t.removeEventListener(type, fn)); },
-    tick: tickOf, lastPrice: () => { const x = TK.last[TK.root]; return x ? x.p : null; }, pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
+    tick: tickOf, lastPrice: () => (TK.last[TK.root] ? TK.last[TK.root].p : null), pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
     pickViewAccount: a => { store.setItem('live-account-v1', JSON.stringify(a)); renderOrders(); },
     accountPicked: a => { store.setItem('live-account-v1', JSON.stringify(a)); renderOrders(); },
     clearAccountNote: () => { map.oAcctNote.textContent = ''; map.oAcctNote.title = ''; },
@@ -720,6 +777,7 @@ function renderTicketExtras() {
 function startTicketPrice() {
   const root = TK.root;
   if (TK.price && TK.price.root === root) return;
+  TK.priceSeq++;                                         // a price kept from an earlier visit is not this feed's
   if (TK.price) { TK.price.sock.send({ type: 'subscribe', root, days: 1, tickHours: 0 }); TK.price.root = root; return; }
   let sock;
   try { sock = hub.open(root); } catch (e) { return; }
@@ -728,8 +786,8 @@ function startTicketPrice() {
     const m = ev.message;
     if (!m || TK.price !== P) return;
     if (m.type === 'hello') sock.send({ type: 'subscribe', root: P.root, days: 1, tickHours: 0 });
-    else if (m.type === 'tick' && m.root === P.root) TK.last[m.root] = { p: +m.p, at: Date.now() };
-    else if (m.type === 'history' && m.root === P.root && Array.isArray(m.bars) && m.bars.length && !TK.last[m.root]) TK.last[m.root] = { p: +m.bars[m.bars.length - 1][4], at: Date.now() };
+    else if (m.type === 'tick' && m.root === P.root) TK.last[m.root] = { p: +m.p, at: Date.now(), seq: TK.priceSeq };
+    else if (m.type === 'history' && m.root === P.root && Array.isArray(m.bars) && m.bars.length) TK.last[m.root] = { p: +m.bars[m.bars.length - 1][4], at: 0, seq: TK.priceSeq };
   };
   sock.onclose = () => { if (TK.price !== P) return; TK.price = null; P.retry = setTimeout(() => { if (holds() && !TK.price) startTicketPrice(); }, 1000); };
 }
@@ -756,12 +814,13 @@ function keysOn() {
   return !(a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)));
 }
 function syncKeys() {
-  const on = keysOn(), el = $('wsKeys');
-  if (el.dataset.on === String(on)) return;
-  el.dataset.on = String(on);
+  const on = keysOn(), el = $('wsKeys'), k = on + '|' + (core.TR.enabled ? closeTarget() : '');
+  if (el.dataset.on === k) return;
+  el.dataset.on = k;
   el.textContent = on ? 'KEYS ON' : 'KEYS OFF';
   el.className = 'ws-keys' + (on ? ' on' : '');
-  el.title = on ? 'A hotkey pressed now works in this window' : 'Hotkeys do nothing now: this window does not have the focus, or a box, menu or dialog has it. Click the page (not a box) to turn them on.';
+  el.title = (on ? 'A hotkey pressed now works in this window' : 'Hotkeys do nothing now: this window does not have the focus, or a box, menu or dialog has it. Click the page (not a box) to turn them on.') +
+    (core.TR.enabled ? '\nClose: ' + closeTarget() + '. Flatten all: ' + ticketAccount() + '.' : '');
 }
 for (const t of ['focusin', 'focusout', 'pointerup', 'keyup']) document.addEventListener(t, () => setTimeout(syncKeys, 0), true);
 window.addEventListener('focus', syncKeys); window.addEventListener('blur', syncKeys);
@@ -1319,6 +1378,8 @@ window.addEventListener('storage', e => {
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
   else if (k === HKKEY) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
   else if (k === LP.KEYS.bracketPresets && TK.bar) { core.readPresets(); TK.bar.render(); }
+  else if (k === TICKET_KEY && !holds()) { const r = readTicket().root; if (W.ROOTS.includes(r)) TK.root = r; renderOrders(); }
+  else if (k === 'live-account-v1' && !holds() && !holder()) { noTicketAccount(); renderOrders(); }
 });
 window.addEventListener('pagehide', () => { if (layout) save(); });
 
@@ -1330,6 +1391,13 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
   chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; } };
 
-const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); };
+const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake(); };
+/* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
+   2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
+   window that finds another holding it never asks, it shows "Ticket is in the other window". */
+function autoTake() {
+  if (!link || !locks || holds() || !panels.some(p => p.type === 'ticket')) return;
+  link.take().then(r => { if (r === 'held') { TK.published = ''; linkChanged(); } });
+}
 if (PIN) PIN.gate().then(start); else start();
-})();
+});

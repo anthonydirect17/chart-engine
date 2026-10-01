@@ -109,6 +109,9 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-body > .chart-live { flex: 1 1 auto; min-height: 0; padding: 6px 8px 4px; gap: 4px; }
 .ws-panel .chart-live .stage { min-height: 48px; }
 /* delays and fps are in the top bar; a chart's own notes show under it (ChartLive.mount compact: true, live.css) */
+/* a chart live for orders (the ticket's instrument while Armed, 1.12.0, Anthony): the accent purple with a soft glow, a
+   static shadow (no animation, nothing per frame) */
+.ws-panel .chart-live.is-armed .stage { border-color: var(--ws-accent); box-shadow: 0 0 0 1px var(--ws-accent), 0 0 8px 1px color-mix(in srgb, var(--ws-accent) 45%, transparent); }
 
 /* ---------------- top bar (1.12.0): KEYS ON / OFF, the window's Flatten all */
 .ws-keys { flex: none; font: 600 11px var(--ws-mono); letter-spacing: .06em; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
@@ -227,3 +230,6 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-dlg input:focus { outline: 2px solid var(--ws-accent); outline-offset: 0; }
 .ws-err { color: var(--ws-sell); min-height: 1em; }
 .ws-dlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* a window opened while the PC updater wrote the page files (workspace.js, the mid-install guard) */
+.ws-reload { position: relative; z-index: 40; padding: 8px 12px; background: var(--ws-warn-ground); color: var(--ws-warn-text); border-bottom: 1px solid var(--ws-warn); }
