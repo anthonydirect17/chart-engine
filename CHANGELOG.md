@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.10.0 (2026-10-01): order bar essentials
+
+Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing
+under `nt8/` changes, and the engine only gets its version number. Flatten, Cancel all, Armed, dragging orders and the
+order checks work as before.
+- **Bracket presets.** A select before the stop and target boxes: Custom, 1:1, 1:1.5, 1:2, your saved presets, Save
+  current... and Delete. A ratio sets the target to round(stop x ratio) and keeps it linked: change the stop and the
+  target follows. Typing the target (or changing a saved preset's numbers) makes it Custom. Save current... asks for
+  a short name (1 to 24 characters, "12/24t" by default); up to 12 presets, saved in ticks in this browser
+  (`live-bracket-presets-v1`), cleaned on read. The pick is remembered per instrument and survives a reload. A ratio
+  above the 200-tick cap is capped there, with a note (ChartBridge 0.3.6 still takes at most 200).
+- **Ticks or points.** A small t / pt toggle shows and types the stop and target in ticks or points (points are ticks
+  x 0.25 on NQ, MNQ, ES and MES). Points round to the nearest tick when you press Enter or leave the box. Stored in
+  ticks always.
+- **Qty is a select, 1 to 9.** The choices over the instrument's cap are off, never hidden, and the cap shows beside
+  it ("max 5"). The last qty is remembered per instrument. The page's own qty check and ChartBridge's gates are
+  unchanged: a remembered qty over a lower cap stays picked and is refused with the reason.
+- **B/E**, next to Flatten (needs Armed). On only with a position on this account and instrument and a ChartBridge
+  stop working on it. One click moves each ChartBridge stop leg to break-even: the average price on the tick grid,
+  rounded toward safety (long up to the next tick, short down). Only when the last price is past that price on the
+  profitable side; otherwise nothing is sent and the note says "Price is not past break-even yet; the stop stays."
+  Stops placed in NinjaTrader are never touched, and the note says so. A stop already at break-even or past it is
+  left as it is.
+- **Shift+click by mouse button.** Shift + left click buys at the price, Shift + right click sells, and Ctrl + left
+  click sells too. Limit or stop by the last price, as before. Ctrl and Shift together send nothing. The Buy / Sell
+  toggle is gone from the order bar. Hold Shift to see the buy, with what a right click would sell. No browser menu
+  over the chart's plot on this page; elsewhere it is unchanged.
+- The order bar stays on one line at 1440 and 1920 px. On a phone the Armed switch keeps its armed width, so arming
+  never rewraps the bar.
+
 ## 1.9.0 (2026-09-30): color presets, indicator colors in their gears, the top bar matches every ground
 
 Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling.
