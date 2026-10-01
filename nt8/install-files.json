@@ -15,6 +15,9 @@
     { "from": "live/pin.js", "to": "pin.js" },
     { "from": "live/pin.css", "to": "pin.css" },
     { "from": "live/update-notice.js", "to": "update-notice.js" },
+    { "from": "live/workspace.html", "to": "workspace.html" },
+    { "from": "live/workspace.js", "to": "workspace.js" },
+    { "from": "live/workspace.css", "to": "workspace.css" },
     { "from": "src/chart-engine.js", "to": "src/chart-engine.js" }
   ]
 }

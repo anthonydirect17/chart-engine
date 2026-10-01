@@ -1,0 +1,112 @@
+/*
+ * The trading workspace (live/workspace.html): the top bar, the 12 x 6 snap grid and its panels, Time and Sales.
+ * The charts inside the panels keep live.css as it is (their toolbar is not restyled here); only the chart's outer
+ * padding and the 360 px floor of its plot are relaxed, so a short panel still shows its chart.
+ * Colors are the workspace mockup's (2026-10-01), on the house style: dark grounds, purple accent, IBM Plex.
+ */
+:root {
+  color-scheme: dark;
+  --ws-bg: #06080C; --ws-panel: #0B0F15; --ws-line: #18212C; --ws-line2: #2A3645; --ws-row: #121922; --ws-field: #0F151D;
+  --ws-pop: #0F141C; --ws-dots: #1A2230;
+  --ws-text: #E6EDF5; --ws-text2: #9AA8B8; --ws-muted: #7F8C9C; --ws-grip: #4A5566;
+  --ws-accent: #7B5CFF; --ws-accent-deep: #2A1F4D; --ws-tint: #1A1230; --ws-tint-line: #3B2A6B; --ws-soft: #D8CCFF;
+  --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #FFC266; --ws-warn-ground: #2A2110; --ws-warn-text: #FFE2B0;
+  --ws-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ws-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--ws-bg); color: var(--ws-text); font: 12px var(--ws-sans); display: flex; flex-direction: column; overflow: hidden; }
+body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
+[hidden] { display: none !important; }
+
+/* ---------------- top bar, 40 px */
+.ws-top { height: 40px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 16px; padding: 0 12px; border-bottom: 1px solid var(--ws-line); background: var(--ws-panel); white-space: nowrap; min-width: 0; }
+.ws-title { font-weight: 600; letter-spacing: .04em; color: var(--ws-soft); }
+.ws-conn { color: var(--ws-muted); }
+.ws-conn.live { color: var(--ws-buy); }
+.ws-conn.wait { color: var(--ws-warn); }
+.ws-conn.bad { color: var(--ws-sell); }
+.ws-clock { font: 600 13px var(--ws-mono); font-variant-numeric: tabular-nums; }
+.ws-et { color: var(--ws-muted); font-weight: 400; }
+.ws-note { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ws-note.warn { color: var(--ws-warn); }
+.ws-fill { flex: 1 1 auto; min-width: 0; }
+.ws-slot:empty { display: none; }
+.ws-lbl { color: var(--ws-muted); }
+.ws-sel { background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 6px; height: 28px; padding: 0 8px; font: inherit; max-width: 220px; }
+.ws-btn { height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--ws-line2); background: var(--ws-field); color: var(--ws-text2); font: inherit; cursor: pointer; }
+.ws-btn:hover { color: var(--ws-text); }
+.ws-btn.add, .ws-btn.primary { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); font-weight: 500; }
+.ws-btn.ws-gear { width: 28px; padding: 0; }
+.ws-btn[aria-expanded="true"] { border-color: var(--ws-accent); }
+:is(.ws-btn, .ws-sel, .ws-ic, .ws-x):focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+
+/* ---------------- the grid: 12 x 6 cells under the top bar, 6 px gaps, the dot ground */
+.ws-grid { flex: 1 1 auto; min-height: 0; position: relative; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: repeat(6, minmax(0, 1fr));
+  gap: 6px; padding: 6px; background-image: radial-gradient(var(--ws-dots) 1px, transparent 1px); background-size: 20px 20px; }
+.ws-ghost { border: 2px dashed var(--ws-accent); border-radius: 8px; background: color-mix(in srgb, var(--ws-accent-deep) 55%, transparent); pointer-events: none; z-index: 7; }
+.ws-ghost.blocked { border-color: var(--ws-sell); background: color-mix(in srgb, var(--ws-sell-ground) 70%, transparent); }
+
+/* ---------------- panels */
+.ws-panel { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--ws-panel); border: 1px solid var(--ws-line); border-radius: 8px; overflow: hidden; }
+.ws-panel.exec { border: 2px solid var(--ws-accent); box-shadow: 0 0 0 1px var(--ws-accent-deep) inset; }
+.ws-panel.dragging { z-index: 6; opacity: .85; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); will-change: transform; }
+.ws-panel.sizing { z-index: 6; }
+.ws-head { height: 28px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--ws-line); cursor: grab; user-select: none; white-space: nowrap; min-width: 0; touch-action: none; }
+.ws-grip { color: var(--ws-grip); letter-spacing: 2px; }
+.ws-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.ws-tf { color: var(--ws-text2); }
+.ws-tag { color: var(--ws-muted); }
+.ws-tag.exec { padding: 2px 8px; border-radius: 10px; background: var(--ws-tint); color: var(--ws-soft); font-weight: 600; }
+.ws-head .ws-sel { height: 22px; padding: 0 4px; border-radius: 4px; cursor: pointer; }
+.ws-x, .ws-ic { border: 0; background: transparent; color: var(--ws-muted); font: inherit; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+.ws-x:hover, .ws-ic:hover { color: var(--ws-text); background: var(--ws-field); }
+.ws-body { flex: 1 1 auto; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.ws-size { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 4; touch-action: none;
+  background: linear-gradient(135deg, transparent 0 55%, var(--ws-grip) 55% 62%, transparent 62% 72%, var(--ws-grip) 72% 79%, transparent 79%); }
+.ws-size:hover { background: linear-gradient(135deg, transparent 0 55%, var(--ws-accent) 55% 62%, transparent 62% 72%, var(--ws-accent) 72% 79%, transparent 79%); }
+
+/* the mounted chart fills its panel; a short panel keeps a small plot instead of the page's 360 px */
+.ws-panel .chart-live { flex: 1 1 auto; min-height: 0; padding: 6px 8px; gap: 6px; }
+.ws-panel .chart-live .stage { min-height: 48px; }
+
+/* ---------------- Time and Sales */
+.tp-cols, .tp-row { display: grid; grid-template-columns: 62px minmax(0, 1fr) 40px; gap: 6px; padding: 0 8px; }
+.tp-cols { flex: none; padding-top: 4px; padding-bottom: 4px; color: var(--ws-muted); border-bottom: 1px solid var(--ws-line); }
+.tp-cols span:last-child, .tp-v { text-align: right; }
+.tp-list { flex: 1 1 auto; min-height: 0; overflow: hidden; contain: strict; font: 12px var(--ws-mono); font-variant-numeric: tabular-nums; }
+.tp-row { height: 18px; line-height: 18px; color: var(--ws-text); contain: strict; }
+.tp-row > span { overflow: hidden; white-space: nowrap; }
+.tp-t { color: var(--ws-muted); }
+.tp-row.buy .tp-p, .tp-row.buy .tp-v { color: var(--ws-buy); }
+.tp-row.sell .tp-p, .tp-row.sell .tp-v { color: var(--ws-sell); }
+.tp-row.big { background: var(--ws-accent-deep); font-weight: 700; }
+
+/* ---------------- popovers and dialogs */
+.ws-pop { position: fixed; z-index: 50; background: var(--ws-pop); border: 1px solid var(--ws-tint-line); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
+.ws-menu { display: flex; flex-direction: column; padding: 4px; min-width: 160px; }
+.ws-menu button { text-align: left; border: 0; background: transparent; color: var(--ws-text); font: inherit; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.ws-menu button:hover, .ws-menu button:focus-visible { background: var(--ws-tint); color: var(--ws-soft); outline: none; }
+.ws-settings { width: 320px; padding: 4px 0; }
+.ws-gearpop { width: 280px; }
+.ws-sec { padding: 8px 12px; border-bottom: 1px solid var(--ws-line); }
+.ws-sec:last-of-type { border-bottom: 0; }
+.ws-sec h2 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.ws-sec h2 span { color: var(--ws-muted); font-weight: 400; margin-left: 6px; }
+.ws-help, .ws-ver { margin: 6px 0; color: var(--ws-muted); line-height: 1.4; }
+.ws-ver { padding: 0 12px 4px; }
+.fl-row { display: grid; grid-template-columns: 40px 1fr 1fr; gap: 8px; align-items: center; padding: 3px 0; }
+.fl-root { font-weight: 600; }
+.fl-row label { display: flex; align-items: center; gap: 6px; color: var(--ws-muted); }
+.fl-row input { width: 60px; height: 24px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 6px; font: 12px var(--ws-mono); }
+.fl-row input.bad { border-color: var(--ws-sell); }
+.ws-dialog { background: var(--ws-pop); color: var(--ws-text); border: 1px solid var(--ws-tint-line); border-radius: 8px; padding: 0; width: min(360px, calc(100vw - 32px)); box-shadow: 0 12px 32px rgba(0, 0, 0, .55); font: 12px var(--ws-sans); }
+.ws-dialog::backdrop { background: rgba(0, 0, 0, .5); }
+.ws-dlg { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.ws-dlg h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.ws-dlg p { margin: 0; line-height: 1.45; }
+.ws-dlg label { color: var(--ws-muted); }
+.ws-dlg input { height: 28px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 0 8px; font: inherit; }
+.ws-dlg input:focus { outline: 2px solid var(--ws-accent); outline-offset: 0; }
+.ws-err { color: var(--ws-sell); min-height: 1em; }
+.ws-dlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
