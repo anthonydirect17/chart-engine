@@ -316,3 +316,5 @@
   .chart-live .seg button { padding: 4px 7px; }
   .chart-live .ce-live { right: 86px !important; bottom: 34px !important; }
 }
+/* A chart whose host shows its own header (ChartLive.mount toolbar: false, the workspace): no toolbar of its own. */
+.chart-live.slim > header.bar { display: none !important; }

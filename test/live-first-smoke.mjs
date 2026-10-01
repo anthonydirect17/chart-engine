@@ -167,7 +167,7 @@ try {
     const br = await startBridge(off, ['--live-first', '--tick-rate=4', '--live-rate=150', '--window-ms=300']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
     const t0 = Date.now();
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     note('live ' + (Date.now() - t0) + ' ms after opening the page');
     const sub = (await subscribes(p))[0];
     check(sub.liveFirst === true && sub.profile === true && sub.sub > 0 && sub.tickHours > 0, 'the subscribe asks for the served window and the profile: ' + JSON.stringify(sub));
@@ -205,7 +205,7 @@ try {
     const d1 = await p.evaluate(() => { const D = window.liveData(); return { on: !!D.delta, by: D.deltaCov && D.deltaCov.by, legend: document.getElementById('lgDl') ? document.getElementById('lgDl').textContent : '' }; });
     check(d1.on && (d1.by === 'live' || d1.by === 'first'), 'reload from memory: the delta pane counts again from the reload (a page reload is a new page: ' + JSON.stringify(d1) + ')');
     // a second page
-    const p2 = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p2 = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     const d = await exact(p2, br);
     b = await books(br);
     check(b.NQ.asked === 1 && b.NQ.served === 2 && d.firstBar === a.firstBar && !d.barsBad, 'a second page: from memory too, the same first bar (' + JSON.stringify(b.NQ) + ')');
@@ -228,7 +228,7 @@ try {
     await ctx.close();
     // a 1m page: the profile from the table, no tick history
     const ctx2 = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
-    const m = await openPage(ctx2, `http://localhost:${br.port}/live/`);
+    const m = await openPage(ctx2, `http://localhost:${br.port}/live/single.html`);
     await profileOn(m, false);
     await hold(m, br, true);
     const e = await exact(m, br);
@@ -246,7 +246,7 @@ try {
     const off = offsetWhere(10, 45, 0, weekday);
     const br = await startBridge(off, ['--live-first', '--tick-rate=2', '--live-rate=150', '--window-ms=1500', '--table-building=9000', '--profile-roots=NQ,MNQ', '--trading', '--trade-accounts=Sim101', '--max-qty=NQ:2']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await profileOn(p, false);
     await hold(p, br, true);
     const a = await exact(p, br);
@@ -280,7 +280,7 @@ try {
     await hold(p, br, false);
     // an instrument not in profileRoots: no backfill, the profile counts from the live trades, and says since when
     const ctxE = await context(browser, off, { root: 'MES', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
-    const e = await openPage(ctxE, `http://localhost:${br.port}/live/`);
+    const e = await openPage(ctxE, `http://localhost:${br.port}/live/single.html`);
     await profileOn(e, false);
     const en = await e.evaluate(() => document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent);
     check(/^Volume profile since \d+:\d\d ET: .*not in its profileRoots/.test(en), 'MES, not in profileRoots: "' + en + '"');
@@ -305,7 +305,7 @@ try {
     const br = await startBridge(off, ['--live-first', '--range-hours=0.02', '--window-ms=100']);
     await control(br.port, 'hold', { root: 'NQ' });
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' }, { NQ: 200 });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await p.waitForTimeout(600);
     const a = await exact(p, br);
     check(a.bars === 0 && /^Range bars start where they are proven/.test(a.rangeNote), 'no range bar yet, and the note: "' + a.rangeNote + '"');
@@ -325,7 +325,7 @@ try {
     const off = offsetWhere(18, 5, 0, sunday);
     const br = await startBridge(off, ['--live-first', '--calendar', '--live-rate=100']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await profileOn(p, false);
     await hold(p, br, true);
     const a = await exact(p, br);
@@ -342,7 +342,7 @@ try {
     const off = offsetWhere(17, 59, 48, midWeek);
     const br = await startBridge(off, ['--live-first', '--calendar', '--live-rate=100']);
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await profileOn(p, false);
     await p.waitForFunction(() => window.ChartEngine.util.zoneSeconds(Date.now() / 1000) % 86400 > 64803, null, { timeout: 30000, polling: 200 });
     await hold(p, br, true);
@@ -367,7 +367,7 @@ try {
     const br = await startBridge(off, ['--live-first', '--live-rate=100']);
     await control(br.port, 'features', { liveFirst: '0' });
     const ctx = await context(browser, off, { root: 'NQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await profileOn(p, false);
     await hold(p, br, true);
     const a = await exact(p, br);

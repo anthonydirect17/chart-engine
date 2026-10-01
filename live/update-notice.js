@@ -1,6 +1,6 @@
 /*
- * "Update ready: reload when flat" (the per-PC updater, nt8/update-pc.ps1). Only ChartBridge's own page loads this
- * (live/index.html); a mounted chart (The Desk) does not.
+ * "Update ready: reload when flat" (the per-PC updater, nt8/update-pc.ps1). Only ChartBridge's own pages load this (the
+ * workspace, live/index.html, and the single chart page, live/single.html); a mounted chart (The Desk) does not.
  *
  * The updater writes update.json next to the page files. This page reads it when it opens and then about once a
  * minute (no cache) and compares:
@@ -36,15 +36,22 @@
     s.textContent = '.chart-live .status .upd-note { flex: 1 1 0; min-width: 0; margin-left: -16px; text-indent: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); font-family: var(--sans); }' +
       '.chart-live .status .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
       '.chart-live .status .upd-note.upd-stop { color: var(--warn); font-weight: 600; }' +
-      '.chart-live .status .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }';
+      '.chart-live .status .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }' +
+      // a page with its own place for it (the workspace's top bar, data-update-host): there, in the same colours
+      '[data-update-host] .upd-note { display: block; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info, #7FB2FF); }' +
+      '[data-update-host] .upd-note .upd-vis::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 6px; vertical-align: 1px; }' +
+      '[data-update-host] .upd-note.upd-stop { color: var(--warn, #E0B45A); font-weight: 600; }' +
+      '[data-update-host] .upd-note .upd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }';
     document.head.appendChild(s);
   }
 
-  /* The notice lives on the status line (the footer), before its read-only / trading note. */
+  /* The notice lives on the status line (the footer), before its read-only / trading note; on a page with its own place
+     for it (an element with data-update-host, the workspace's top bar) there instead. */
   function spot() {
     if (el && el.isConnected) return el;
-    const footer = document.querySelector('.chart-live footer.status');
-    if (!footer) return null;
+    const host = document.querySelector('[data-update-host]');
+    const footer = host ? null : document.querySelector('.chart-live footer.status');
+    if (!host && !footer) return null;
     style();
     el = document.createElement('span');
     el.className = 'upd-note';
@@ -52,7 +59,7 @@
     el.hidden = true;
     // what a screen reader says: the whole text, changed only when it changes (the visible form is refitted, unread)
     el.innerHTML = '<span class="upd-vis" aria-hidden="true"></span><span class="upd-sr" role="status"></span>';
-    footer.insertBefore(el, footer.querySelector('.ro'));
+    if (host) host.appendChild(el); else footer.insertBefore(el, footer.querySelector('.ro'));
     return el;
   }
 

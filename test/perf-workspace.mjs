@@ -1,20 +1,20 @@
-// Workspace load benchmark: the default layout (4 charts and Time and Sales, live/workspace.html) against the fake
-// bridge feeding a busy tape, compared with the single chart page (live/index.html) on the same feed. Sample data only.
+// Workspace load benchmark: the default layout (4 charts and Time and Sales, live/index.html) against the fake
+// bridge feeding a busy tape, compared with the single chart page (live/single.html) on the same feed. Sample data only.
 // Not part of `npm test`: it takes about 2 minutes per page.
 //
 //   node test/perf-workspace.mjs [--mode=both|workspace|single] [--secs=120] [--warm=10] [--live-rate=300]
-//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|exec-only|exec-tape]
+//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape]
 //
 // --live-rate is trades a second per instrument while a page is subscribed to it (with the fake's bursts of 3 times
 // that for 1.5 s in every 10 s), so the workspace's MNQ, NQ and ES each trade at that rate. The single page shows the
-// execution chart's view (MNQ Range 40, the main pane's indicators); the workspace adds the 1 hour MNQ chart, NQ 5 min,
-// ES 1 min and the MNQ tape. CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser.
+// main chart's view (MNQ Range 40, the main pane's indicators); the workspace adds the 1 hour MNQ chart, NQ 5 min,
+// ES 1 min and the MNQ tape (and the order ticket's place). CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser.
 //
-// Measures over the window after a warm-up: the page's frame intervals (p50, p95, p99, frames over 33 ms), the execution
-// chart's own frame callback (the chart that trades in E2) and all charts' callbacks per frame, the tape's frame
+// Measures over the window after a warm-up: the page's frame intervals (p50, p95, p99, frames over 33 ms), the main
+// chart's own frame callback (MNQ Range 40, the first chart) and all charts' callbacks per frame, the tape's frame
 // callback, main-thread busy % (Chromium's TaskDuration over the window, and its script and layout parts), long tasks, the JS heap at the end (and after a
 // forced GC), and the WebSockets open. --variant opens the workspace with part of the default layout (to see what each
-// part costs): no-tape (the 4 charts), exec-only (the execution chart alone, in its own cells), exec-tape (it and the tape).
+// part costs): no-tape (the 4 charts), main-only (the main chart alone, in its own cells), main-tape (it and the tape).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +44,7 @@ const init = `(() => {
       if (!P.on) return cb(ts);
       const t0 = now(); cb(ts); const dt = now() - t0;
       if (el) {
-        if (cb.__exec === undefined) cb.__exec = !document.querySelector('.ws-panel') || !!el.closest('.ws-panel.exec');
+        if (cb.__exec === undefined) cb.__exec = !document.querySelector('.ws-panel') || el.closest('.ws-panel') === document.querySelector('.ws-panel[data-type="chart"]');
         if (cb.__exec) P.exec.push(dt);
         P.charts.push(dt); frameCost += dt;
       } else if (cb.name === 'drawTape') P.tape.push(dt);
@@ -73,14 +73,15 @@ async function run(mode) {
     if (mode === 'single') await ctx.addInitScript(() => { try { localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'MNQ', tf: 'range', glide: 'smooth', rangeMode: 'nt' })); localStorage.setItem('live-range-v2', JSON.stringify({ MNQ: 40 })); } catch (e) {} });
     if (mode === 'workspace' && VARIANT !== 'default') {
       const W = (await import('../live/workspace.js')).default;
-      const keep = { 'no-tape': p => p.type !== 'tape', 'exec-only': p => p.exec, 'exec-tape': p => p.exec || p.type === 'tape' }[VARIANT];
+      const main = (p, i) => i === 0;
+      const keep = { 'no-tape': p => p.type === 'chart', 'main-only': main, 'main-tape': (p, i) => main(p, i) || p.type === 'tape' }[VARIANT];
       if (!keep) throw new Error('unknown --variant ' + VARIANT);
       const store = JSON.stringify({ v: 1, layouts: { Perf: { panels: W.defaultLayout().panels.filter(keep) } } });
-      await ctx.addInitScript(v => { try { localStorage.setItem('workspace:live-workspace-v1', v); } catch (e) {} }, store);
+      await ctx.addInitScript(v => { try { localStorage.setItem('live-workspace-v1', v); } catch (e) {} }, store);
     }
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     // cross-origin isolated, so performance.now() has 5 microsecond resolution instead of 100 (as perf-live)
-    await ctx.route(/\/live\/(index\.html|workspace\.html)?(\?.*)?$/, async r => {
+    await ctx.route(/\/live\/(index\.html|single\.html)?(\?.*)?$/, async r => {
       const resp = await r.fetch();
       await r.fulfill({ response: resp, headers: Object.assign({}, resp.headers(), { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' }) });
     });
@@ -88,7 +89,7 @@ async function run(mode) {
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const t0 = Date.now();
-    await page.goto(`http://localhost:${PORT}/live/${mode === 'single' ? '' : 'workspace.html?layout=Perf'}`);
+    await page.goto(`http://localhost:${PORT}/live/${mode === 'single' ? 'single.html' : '?layout=Perf'}`);
     await page.waitForSelector('.cb-pin-key', { timeout: 30000 });
     await enterPin(page, TEST_PIN);
     if (mode === 'single') await page.waitForFunction(() => { const e = document.getElementById('connPill'); return e && e.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
@@ -103,7 +104,7 @@ async function run(mode) {
     await page.evaluate(() => { window.__perf.on = true; });
     await page.waitForTimeout(SECS * 1000);
     const P = await page.evaluate(() => { const p = window.__perf; p.iso = self.crossOriginIsolated; p.on = false; return Object.assign({}, p, { sockets: p.sockets.filter(s => s.readyState === 1).length, socketsMade: p.sockets.length,
-      heapEnd: performance.memory.usedJSHeapSize, tapeRows: document.querySelectorAll('.tp-row').length, tapeKept: window.workspace ? (window.workspace.views().find(v => v.type === 'tape') || {}).count : null }); });
+      heapEnd: performance.memory.usedJSHeapSize, feed: window.workspace && window.workspace.feed ? window.workspace.feed() : null, tapeRows: document.querySelectorAll('.tp-row').length, tapeKept: window.workspace ? (window.workspace.views().find(v => v.type === 'tape') || {}).count : null }); });
     const m1 = await metric();
     const heapGc = await page.evaluate(() => { if (window.gc) window.gc(); return performance.memory.usedJSHeapSize; });
 
@@ -120,7 +121,7 @@ async function run(mode) {
       tapeFrameP50: P.tape.length ? r3(q(P.tape, 0.5)) : null, tapeFrameP95: P.tape.length ? r3(q(P.tape, 0.95)) : null, tapeFrames: P.tape.length, tapeRows: P.tapeRows, tapeKept: P.tapeKept,
       mainThreadBusyPct: r2(busyPct), scriptPct: r2(scriptPct), layoutStylePct: r2(layoutPct), longTasks: P.long.length, longTaskMax: r2(Math.max(0, ...P.long)),
       heapStartMB: r2(heapStart / 1048576), heapEndMB: r2(P.heapEnd / 1048576), heapAfterGcMB: r2(heapGc / 1048576),
-      crossOriginIsolated: P.iso, webSockets: P.sockets, webSocketsMade: P.socketsMade, errors,
+      crossOriginIsolated: P.iso, webSockets: P.sockets, webSocketsMade: P.socketsMade, feed: P.feed, errors,
     };
   } finally { await browser.close(); bridge.kill(); }
 }

@@ -48,7 +48,9 @@ test('live.js: only the standalone page uses the PIN; ChartLive.mount never does
   assert.ok(!/pin\.js/.test(read('test/embed-host.html')));
   const vendor = read('live/EMBED.md').split('## Mount')[0];
   assert.ok(!/pin\.js|pin\.css/.test(vendor), 'EMBED.md: pin.js and pin.css are not files to vendor');
-  // the standalone page loads pin.js before live.js
-  const html = read('live/index.html');
-  assert.ok(html.indexOf('src="pin.js"') > 0 && html.indexOf('src="pin.js"') < html.indexOf('src="live.js"'));
+  // the single chart page and the workspace load pin.js before live.js
+  for (const f of ['live/single.html', 'live/index.html']) {
+    const html = read(f);
+    assert.ok(html.indexOf('src="pin.js"') > 0 && html.indexOf('src="pin.js"') < html.indexOf('src="live.js"'), f);
+  }
 });

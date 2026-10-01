@@ -32,7 +32,7 @@ try {
   page.on('pageerror', e => fail('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await page.goto(`http://localhost:${PORT}/live/`);
+  await page.goto(`http://localhost:${PORT}/live/single.html`);
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(1500);
   if (!(await page.isHidden('#obar'))) fail('order bar shown with a read-only ChartBridge');
@@ -257,7 +257,7 @@ try {
       const p2 = await browser.newPage({ viewport: { width: 1440, height: 860 } });
       p2.on('pageerror', e => fail('short history pageerror: ' + e.message));
       await p2.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-      await p2.goto(`http://localhost:${PORT + 1}/live/`);
+      await p2.goto(`http://localhost:${PORT + 1}/live/single.html`);
       await p2.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
       if (await p2.getAttribute('#tfSeg >> text="Range"', 'aria-pressed') !== 'true') { await p2.click('#tfSeg >> text="Range"'); await p2.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 }); }
       await p2.waitForTimeout(500);
@@ -273,7 +273,7 @@ try {
   const phone = await browser.newPage({ viewport: { width: 400, height: 820 }, deviceScaleFactor: 2 });
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));
   await phone.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await phone.goto(`http://localhost:${PORT}/live/`);
+  await phone.goto(`http://localhost:${PORT}/live/single.html`);
   await phone.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   if (await phone.evaluate(() => document.documentElement.scrollWidth) > 400) fail('phone scrolls sideways');
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });

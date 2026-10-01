@@ -8,6 +8,7 @@
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },
+    { "from": "live/single.html", "to": "single.html" },
     { "from": "live/live.js", "to": "live.js" },
     { "from": "live/live.css", "to": "live.css" },
     { "from": "live/bar-builder.js", "to": "bar-builder.js" },
@@ -15,7 +16,7 @@
     { "from": "live/pin.js", "to": "pin.js" },
     { "from": "live/pin.css", "to": "pin.css" },
     { "from": "live/update-notice.js", "to": "update-notice.js" },
-    { "from": "live/workspace.html", "to": "workspace.html" },
+    { "from": "live/feed.js", "to": "feed.js" },
     { "from": "live/workspace.js", "to": "workspace.js" },
     { "from": "live/workspace.css", "to": "workspace.css" },
     { "from": "src/chart-engine.js", "to": "src/chart-engine.js" }

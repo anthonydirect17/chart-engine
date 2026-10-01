@@ -350,7 +350,7 @@ try {
     const sa = await ctx.newPage();
     sa.on('pageerror', e => fail('standalone pageerror: ' + e.message));
     await sa.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-    await sa.goto(`http://localhost:${PORT}/live/`);             // no ticket: the standalone page is refused by --tickets,
+    await sa.goto(`http://localhost:${PORT}/live/single.html`);             // no ticket: the standalone page is refused by --tickets,
     await unlockIfAsked(sa);                                     // (after its PIN, ChartBridge 0.3.2)
     await sa.waitForTimeout(300);                                // but its controls and storage work the same offline
     await sa.click('#symSeg >> text="NQ"'); await sa.click('#tfSeg >> text="Range"');

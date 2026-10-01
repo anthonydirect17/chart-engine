@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased (workspace part 2a, E2a): shared data per instrument, slim chart headers, the workspace is the main page
+
+Page only; no version bump (the release is cut after E2b). Nothing in ChartBridge changes; `nt8/install-files.json`
+(page files) and the updater's write order change. Every workspace chart is still read only.
+- **The workspace is ChartBridge's main page**: `http://localhost:8765/` (`live/index.html`) opens it (the default
+  layout, `?layout=` as before). The single chart page moved unchanged to `/single.html` (`live/single.html`): its order
+  bar, hotkeys and everything else as in 1.11.0. The "Update ready: reload when flat" notice shows in the workspace's top
+  bar too.
+- **One connection per instrument per window** (`live/feed.js`, ChartFeed): every chart and tape showing an instrument
+  takes its trades from one WebSocket and one subscribe, parsed once (E1 opened a socket per panel). A panel added later
+  joins the instrument's load and gets the trades since from the window's own record (no new subscribe, nothing else
+  reloads); a panel that needs more (Range bars on an instrument loaded for minutes) makes one new subscribe for what
+  every panel there needs. A connection with no panel left closes.
+- **Slim chart headers** (Anthony): handle, instrument and bars (a click opens a small picker: instruments, bars, the
+  range size), the chart's Indicators button, a small menu (Trend line, Price line, Clear drawings, Reset view) and the
+  x. The charts' own toolbars are not shown.
+- **Settings holds everything general**: Glide and Range style (every chart, and the single chart page), the trading
+  hotkeys (the 1.11.0 Settings; they act here once the order ticket comes), the large-print floors, Change PIN, the
+  layout reset. **Colors** sit in the top bar and color every chart at once.
+- **Settings shared with the single chart page**: the workspace keeps everything under the same keys (no prefix), so
+  colors, color presets, indicator colors, Glide, Range style, bracket presets, Qty and hotkeys are the same on both
+  pages. Each chart keeps its own instrument, bars and range size in the layout (never in the single chart page's
+  settings) and its own indicators and drawings under its panel id.
+- **Default layout** (12 x 6): MNQ Range 40 (cols 1 to 7, rows 1 to 4), MNQ 1 hour under it (rows 5 to 6; daily bars
+  come with ChartBridge 0.3.7), NQ 5 min and ES 1 min (cols 8 to 10), the order ticket's place (cols 11 to 12, rows 1
+  to 2: "Order ticket: next build") and Time and Sales (rows 3 to 6). No execution chart (Anthony's redesign: the order
+  ticket replaces it in E2b).
+- `ChartLive.mount` options for a host (live/EMBED.md): `feed`, `view`, `onView`, `toolbar: false`, `onColors`, and
+  `setView`, `refreshSettings`, `refreshColors`, `indicators`, `colors` on the returned object. Without them a mounted
+  chart and the single chart page behave exactly as before.
+- The updater writes the workspace's script after `live.js` and the pages last (`index.html` very last).
+
 ## 1.11.0 (2026-10-01): trading hotkeys
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing

@@ -3,29 +3,100 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Live Chart</title>
+<title>Workspace</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
-<style>
-/* Live trading chart fed by ChartBridge (NinjaTrader 8). One screen: toolbar, chart, status line.
-   live.css styles the chart (everything inside .chart-live); the page itself only fills the window.
-   Dark only on purpose: Anthony's house style. */
-:root { color-scheme: dark; }
-html, body { height: 100%; margin: 0; }
-body { background: #080B10; }
-</style>
+<link rel="stylesheet" href="workspace.css">
 </head>
 <body>
-<!-- The page is the same chart a host page mounts with ChartLive.mount (live/EMBED.md); live.js builds it here. -->
+<!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
+     screen, each with its own layout (?layout=Main, ?layout=Second). The single chart page is single.html. -->
+<header class="ws-top">
+  <span class="ws-title">TRADING SCREEN</span>
+  <span class="ws-conn wait" id="wsConn" role="status"><span class="ws-dot" aria-hidden="true">●</span> <span id="wsConnText">CONNECTING · ChartBridge</span></span>
+  <span class="ws-clock"><span id="wsClock">--:--:--</span> <span class="ws-et">ET</span></span>
+  <span class="ws-note" id="wsNote" role="status" hidden></span>
+  <!-- "Update ready: reload when flat" (the update notice, loaded last) shows here -->
+  <span class="ws-upd" id="wsUpdate" data-update-host></span>
+  <span class="ws-fill"></span>
+  <!-- E2b: the window's Flatten button goes in this slot (nothing here yet). -->
+  <span class="ws-slot" id="wsFlattenSlot" data-slot="flatten"></span>
+  <!-- Colors for every chart (one chart's Colors panel, placed here by workspace.js) -->
+  <span class="chart-live ws-lv ws-colors" id="wsColors"></span>
+  <label class="ws-lbl" for="wsLayout">Layout</label>
+  <select class="ws-sel" id="wsLayout"></select>
+  <button type="button" class="ws-btn add" id="wsAdd" aria-haspopup="menu" aria-expanded="false" aria-controls="wsAddMenu">+ Add panel</button>
+  <button type="button" class="ws-btn ws-gear" id="wsSet" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="wsSettings">⚙</button>
+</header>
+
+<main class="ws-grid" id="wsGrid" aria-label="Workspace panels">
+  <div class="ws-ghost" id="wsGhost" hidden></div>
+</main>
+
+<div class="ws-pop ws-menu" id="wsAddMenu" role="menu" aria-label="Add panel" hidden>
+  <button type="button" role="menuitem" data-add="chart">Chart</button>
+  <button type="button" role="menuitem" data-add="tape">Time and Sales</button>
+  <button type="button" role="menuitem" data-add="ticket">Order ticket</button>
+</div>
+
+<div class="ws-pop ws-viewpop" id="wsView" role="dialog" aria-label="Instrument and bars" hidden></div>
+
+<div class="ws-pop ws-menu" id="wsMore" role="menu" aria-label="Drawing tools and view" hidden>
+  <button type="button" role="menuitem" data-tool="trend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
+  <button type="button" role="menuitem" data-tool="hline" aria-pressed="false" title="Horizontal line: click a price">Price line</button>
+  <button type="button" role="menuitem" data-do="clear" title="Remove all drawings on this instrument">Clear drawings</button>
+  <button type="button" role="menuitem" data-do="reset">Reset view</button>
+</div>
+
+<div class="ws-pop ws-settings" id="wsSettings" role="dialog" aria-label="Settings" hidden>
+  <section class="ws-sec">
+    <h2>Charts <span>every chart, and the single chart page</span></h2>
+    <div class="ws-field"><span class="ws-flabel" id="wsGlideLbl">Glide</span>
+      <span class="ws-seg" id="wsGlide" role="group" aria-labelledby="wsGlideLbl"><button type="button" data-v="smooth">Smooth</button><button type="button" data-v="fast">Fast</button><button type="button" data-v="off">Off</button></span></div>
+    <div class="ws-field"><label class="ws-flabel" for="wsRangeMode">Range style</label>
+      <select class="ws-sel" id="wsRangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
+        <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></div>
+  </section>
+  <section class="ws-sec">
+    <h2 id="wsHkCap">Hotkeys <span>the same keys as the single chart page</span></h2>
+    <div class="chart-live ws-lv" id="wsHotkeys"></div>
+    <p class="ws-help">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on that account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off. Never while typing in a box or with a menu open. They work on the single chart page (single.html) now, and here once the order ticket comes (the next build). Saved in this browser.</p>
+  </section>
+  <section class="ws-sec">
+    <h2>Large prints <span>Time and Sales, contracts</span></h2>
+    <p class="ws-help">A trade this size or bigger is highlighted. RTH is 09:30 to 16:15 ET.</p>
+    <div id="wsFloors"></div>
+  </section>
+  <section class="ws-sec" id="wsPinSec" hidden>
+    <h2>ChartBridge PIN</h2>
+    <button type="button" class="ws-btn" id="wsPin">Change PIN</button>
+  </section>
+  <section class="ws-sec">
+    <h2>Layout</h2>
+    <button type="button" class="ws-btn" id="wsReset">Reset "<span id="wsResetName"></span>" to the default</button>
+  </section>
+  <p class="ws-ver" id="wsVersion"></p>
+</div>
+
+<div class="ws-pop ws-settings ws-gearpop" id="wsGear" role="dialog" aria-label="Large prints" hidden>
+  <section class="ws-sec"><h2>Large prints <span>contracts</span></h2><div id="wsGearBody"></div>
+  <p class="ws-help">RTH is 09:30 to 16:15 ET. All floors are in Settings.</p></section>
+</div>
+
+<dialog class="ws-dialog" id="wsDialog"></dialog>
+
 <script src="../src/chart-engine.js"></script>
 <script src="bar-builder.js"></script>
 <script src="order-ticket.js"></script>
-<!-- ChartBridge's PIN (0.3.2): only this page loads it; a mounted chart never asks for the PIN. -->
+<!-- ChartBridge's PIN (0.3.2): this page is served by ChartBridge like the single chart page, so it unlocks the same way. -->
 <script src="pin.js"></script>
-<script src="live.js" data-mount="page"></script>
+<script src="live.js"></script>
+<!-- one connection per instrument for the whole window, shared by every chart and tape -->
+<script src="feed.js"></script>
+<script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>
 </body>

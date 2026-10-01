@@ -58,7 +58,7 @@ try {
   page.on('pageerror', e => fail('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('console: ' + m.text()); });
   const tradingOn = () => until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled && document.getElementById('connPill').textContent === 'LIVE'), 'trading on', 20000);
-  await page.goto(`http://localhost:${PORT}/live/`);
+  await page.goto(`http://localhost:${PORT}/live/single.html`);
   await unlockIfAsked(page); await tradingOn();
   await page.waitForTimeout(500);
 

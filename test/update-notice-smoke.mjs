@@ -39,7 +39,7 @@ const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs
   { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const control = async (what, q = {}) => (await fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q), { method: 'POST' })).json();
-const URL_ = `http://localhost:${PORT}/live/`;
+const URL_ = `http://localhost:${PORT}/live/single.html`;
 
 async function open(browser, width) {
   const page = await browser.newPage({ viewport: { width, height: 860 } });

@@ -1,20 +1,22 @@
 /*
- * The trading workspace (live/workspace.html): independent panels on a 12 x 6 snap grid, one browser window per screen,
- * each window with its own saved layout opened from its URL (?layout=Main, ?layout=Second, any name).
+ * The trading workspace (live/index.html, ChartBridge's main page since E2a; the single chart page is /single.html):
+ * independent panels on a 12 x 6 snap grid, one browser window per screen, each window with its own saved layout opened
+ * from its URL (?layout=Main, ?layout=Second, any name).
  *
- * Panels: charts (each a read-only ChartLive.mount with its own paneId, instrument and timeframe) and Time and Sales
- * tapes (their own WebSocket to ChartBridge, live trades only). One chart per layout can be the execution chart; in this
- * build it is a read-only mount like the others (its order bar comes next).
+ * Panels: charts (each a read-only ChartLive.mount with its own paneId, instrument and timeframe, under a slim header),
+ * Time and Sales tapes, and the order ticket's place (a placeholder in this build; the ticket comes in E2b). Every chart
+ * and tape takes its instrument's data from the window's one connection for that instrument (ChartFeed, live/feed.js).
  *
  * This file has two parts:
  *   WorkspaceCore  the pure parts (layout cleaning, snapping, overlap checks, the largest free rectangle, re-flow, the
  *                  large-print floor by time of day, formatting). No DOM; it also loads in Node for test/workspace.test.js.
- *   the page       runs only in a browser, after live.js (ChartLive) and pin.js (ChartBridgePin).
+ *   the page       runs only in a browser, after live.js (ChartLive), feed.js (ChartFeed) and pin.js (ChartBridgePin).
  *
- * Saved in this browser's localStorage, every key under the page's prefix 'workspace:' (so the workspace's charts keep
- * their own settings apart from the standalone page's):
- *   live-workspace-v1     { v: 1, layouts: { <name>: { panels: [{ id, type: 'chart' | 'tape', exec?: true, root, tf, range?,
- *                         x, y, w, h }] } } }  (x, y from 0; w, h in cells; tapes have no tf)
+ * Saved in this browser's localStorage under the same prefix as the single chart page (none), so colors, color presets,
+ * indicator colors, Glide, Range style, bracket presets, Qty and hotkeys are the same on both pages (each chart keeps its
+ * own indicators and drawings under its paneId, the panel id). The workspace's own keys:
+ *   live-workspace-v1     { v: 1, layouts: { <name>: { panels: [{ id, type: 'chart' | 'tape' | 'ticket', root, tf, range?,
+ *                         x, y, w, h }] } } }  (x, y from 0; w, h in cells; tapes have no tf, the ticket no root)
  *   live-tape-floors-v1   { <root>: { rth, eth } } the large-print floors (Time and Sales), only those set by hand
  * Every write reads the key fresh and changes one layout (or one floor), so two windows never undo each other.
  */
@@ -51,37 +53,37 @@ function layoutName(v) {
 /** A range size in ticks (a whole number 1 to 400), else null. */
 function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null; }
 
+const TYPES = ['chart', 'tape', 'ticket'];
 /** One panel, or null when its shape is bad. Position and size are whole cells; re-flow puts them inside the grid. */
 function cleanPanel(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-  if (p.type !== 'chart' && p.type !== 'tape') return null;
+  if (!TYPES.includes(p.type)) return null;
   if (typeof p.id !== 'string' || !ID_RX.test(p.id)) return null;
-  if (!ROOTS.includes(p.root)) return null;
+  if (p.type !== 'ticket' && !ROOTS.includes(p.root)) return null;
   const { x, y, w, h } = p;
   if (![x, y, w, h].every(Number.isInteger) || x < 0 || y < 0 || w < 1 || h < 1 || x > 99 || y > 99 || w > 99 || h > 99) return null;
   const out = { id: p.id, type: p.type };
   if (p.type === 'chart') {
     if (!TFS.includes(p.tf)) return null;
-    if (p.exec === true) out.exec = true;
     out.root = p.root; out.tf = p.tf;
     const r = parseRange(p.range);
     if (r !== null) out.range = r;
-  } else out.root = p.root;
+  } else if (p.type === 'tape') out.root = p.root;
   return Object.assign(out, { x, y, w, h });
 }
 
-/** A layout as kept: { panels } with bad panels dropped, ids unique, at most 12 panels, at most one exec chart, every
+/** A layout as kept: { panels } with bad panels dropped, ids unique, at most 12 panels, at most one order ticket, every
     panel inside the grid and none overlapping (re-flow). Never throws. */
 function cleanLayout(l) {
   const list = l && typeof l === 'object' && Array.isArray(l.panels) ? l.panels : [];
   const seen = new Set(), panels = [];
-  let exec = false;
+  let ticket = false;
   for (const raw of list) {
     if (panels.length >= MAX_PANELS) break;
     const p = cleanPanel(raw);
     if (!p || seen.has(p.id)) continue;
+    if (p.type === 'ticket') { if (ticket) continue; ticket = true; }
     seen.add(p.id);
-    if (p.exec) { if (exec) delete p.exec; else exec = true; }
     panels.push(p);
   }
   return { panels: reflow(panels) };
@@ -214,17 +216,20 @@ let idSeq = 0;
 /** A new panel id (also the chart's paneId): stable once saved. */
 function newId() { return 'p' + Date.now().toString(36) + (++idSeq).toString(36) + Math.random().toString(36).slice(2, 6); }
 /**
- * The default layout (the mockup Anthony signed off, 2026-10-01): the execution chart top left (cols 1 to 7, rows 1 to 4),
- * a long view under it (cols 1 to 7, rows 5 to 6; 1 hour bars until ChartBridge 0.3.7 brings daily bars), NQ 5 min and
- * ES 1 min stacked in the middle (cols 8 to 10), Time and Sales full height on the right (cols 11 to 12).
+ * The default layout (Anthony, 2026-10-01: the mockup's, with the order ticket in place of the execution chart): MNQ
+ * Range 40 top left (cols 1 to 7, rows 1 to 4), MNQ under it (cols 1 to 7, rows 5 to 6; 1 hour bars until ChartBridge
+ * 0.3.7 brings daily bars), NQ 5 min and ES 1 min stacked in the middle (cols 8 to 10), the order ticket top right
+ * (cols 11 to 12, rows 1 to 2) and Time and Sales under it (cols 11 to 12, rows 3 to 6). The first chart starts with the
+ * single chart page's indicators (the page's main pane defaults); every other new chart with none.
  */
 function defaultLayout(makeId = newId) {
   return { panels: [
-    { id: makeId(), type: 'chart', exec: true, root: 'MNQ', tf: 'range', range: 40, x: 0, y: 0, w: 7, h: 4 },
+    { id: makeId(), type: 'chart', root: 'MNQ', tf: 'range', range: 40, x: 0, y: 0, w: 7, h: 4 },
     { id: makeId(), type: 'chart', root: 'MNQ', tf: 'h1', x: 0, y: 4, w: 7, h: 2 },
     { id: makeId(), type: 'chart', root: 'NQ', tf: 'm5', x: 7, y: 0, w: 3, h: 3 },
     { id: makeId(), type: 'chart', root: 'ES', tf: 'm1', x: 7, y: 3, w: 3, h: 3 },
-    { id: makeId(), type: 'tape', root: 'MNQ', x: 10, y: 0, w: 2, h: 6 },
+    { id: makeId(), type: 'ticket', x: 10, y: 0, w: 2, h: 2 },
+    { id: makeId(), type: 'tape', root: 'MNQ', x: 10, y: 2, w: 2, h: 4 },
   ] };
 }
 
@@ -268,19 +273,23 @@ function setFloor(storage, root, which, value) {
   try { storage.setItem(KEYS.floors, JSON.stringify(out)); return true; } catch (e) { return false; }
 }
 
-return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
+return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor };
 });
 
 
+
+
 /* ======================================================================== the page (browser only) */
-if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.ChartLive) (() => {
+if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.ChartLive && window.ChartFeed) (() => {
 'use strict';
-const W = window.WorkspaceCore, LP = window.LivePrefs, PIN = window.ChartBridgePin || null;
-const PREFIX = 'workspace:';                       // the page's prefix: every key it and its charts keep
+const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
+const PREFIX = '';                                 // the single chart page's prefix (none): its settings are this page's
 const TAPE_MAX = 500, TAPE_ROW = 18;
+const TF_SHORT = { s15: '15s', s30: '30s', m1: '1m', m5: '5m', m15: '15m', h1: '1h', range: 'Range' };
+const H1_NOTE = 'The longest bars ChartBridge sends today. Daily bars come with ChartBridge 0.3.7.';
 
 /* ---------------- storage, wrapped (private windows and blocked site data throw) */
 const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
@@ -288,20 +297,16 @@ const store = {
   getItem: k => { try { return LS ? LS.getItem(PREFIX + k) : null; } catch (e) { return null; } },
   setItem: (k, v) => { try { if (LS) LS.setItem(PREFIX + k, v); } catch (e) { /* full or blocked */ } },
 };
-function patchJSON(k, fn) {
-  let v = null;
-  try { v = JSON.parse(store.getItem(k)); } catch (e) { v = null; }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) v = {};
-  fn(v);
-  store.setItem(k, JSON.stringify(v));
-}
+const prefs = LP.create(store);                    // the single chart page's settings (Glide, Range style, hotkeys)
 
-/* ---------------- ChartBridge: the page's own origin, unlocked with ChartBridge's PIN (0.3.2) like the standalone page */
+/* ---------------- ChartBridge: the page's own origin, unlocked with ChartBridge's PIN (0.3.2) like the single chart page.
+   One connection per instrument for the whole window (live/feed.js), shared by every chart and tape showing it. */
 const BASE_WS = (() => {
   const onBridge = location.protocol.startsWith('http') && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(location.host);
   return onBridge ? 'ws://' + location.host + '/ws' : 'ws://localhost:8765/ws';
 })();
 const wsUrl = () => (PIN ? PIN.wsUrl(BASE_WS) : BASE_WS);
+const hub = window.ChartFeed.create({ wsUrl });
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -319,10 +324,10 @@ tickClock();
 setTimeout(() => { tickClock(); setInterval(tickClock, 1000); }, 1000 - (Date.now() % 1000));
 
 function syncConn() {
-  const states = [...views.values()].map(v => v.state);
+  const states = [...views.values()].filter(v => v.state).map(v => v.state);
   const el = $('wsConn');
   let text, cls;
-  if (!states.length) { text = 'No panels'; cls = ''; }
+  if (!states.length) { text = 'No charts'; cls = ''; }
   else if (states.includes('offline')) { text = 'OFFLINE · ChartBridge'; cls = 'bad'; }
   else if (states.every(s => s === 'live')) { text = 'LIVE · ChartBridge'; cls = 'live'; }
   else { text = (states.includes('loading') ? 'LOADING' : 'CONNECTING') + ' · ChartBridge'; cls = 'wait'; }
@@ -341,104 +346,121 @@ function save() { W.saveLayout(store, layout, { panels }); }
 
 /* ---------------- panels */
 function place(el, r) { el.style.gridColumn = (r.x + 1) + ' / span ' + r.w; el.style.gridRow = (r.y + 1) + ' / span ' + r.h; }
+const chartViews = () => [...views.values()].filter(v => v.pane);
+/* A narrow panel (a 1366 px screen) drops the handle's dots, a narrower one says "Ind" for Indicators (workspace.css). */
+const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(list => {
+  for (const e of list) { const w = e.contentRect.width; e.target.classList.toggle('narrow', w <= 380); e.target.classList.toggle('narrower', w <= 340); }
+}) : null;
+/* A panel whose header menu is open sits above its neighbours (workspace.css .ws-up). */
+const raise = (el, on) => { const p = el && el.closest && el.closest('.ws-panel'); if (p) p.classList.toggle('ws-up', on); };
 
+/* The slim header (Anthony, 2026-10-01): the handle, instrument and bars (a click changes them), the chart's own
+   Indicators button, a small menu with the drawing tools and Reset view, and the x. */
 function headChart(v) {
   const p = v.panel;
   v.nameEl.textContent = v.contract && v.contract.split(' ')[0] === p.root ? v.contract : p.root;
   v.tfEl.textContent = W.tfLabel(p.tf, p.tf === 'range' ? p.range : 0);
-  v.tfEl.title = p.tf === 'h1' ? 'The longest bars ChartBridge sends today. Daily bars come with ChartBridge 0.3.7.' : '';
+  v.viewBtn.title = 'Instrument and bars' + (p.tf === 'h1' ? '. ' + H1_NOTE : '');
+  v.viewBtn.setAttribute('aria-label', 'Instrument and bars: ' + p.root + ', ' + W.tfLabel(p.tf, p.tf === 'range' ? p.range : 0));
 }
 
 function addView(p) {
   const el = document.createElement('section');
-  el.className = 'ws-panel' + (p.exec ? ' exec' : '') + (p.type === 'tape' ? ' tape' : '');
+  el.className = 'ws-panel ' + p.type;
   el.dataset.id = p.id; el.dataset.type = p.type;
-  if (p.exec) el.dataset.exec = 'true';
-  const close = p.exec ? '' : '<button type="button" class="ws-x" data-act="close" aria-label="Close panel" title="Close panel">✕</button>';
-  const tag = p.exec ? '<span class="ws-tag exec">EXECUTION CHART</span>' : p.type === 'chart' ? '<span class="ws-tag">view only</span>' : '';
-  const mid = p.type === 'chart'
-    ? '<span class="ws-name"></span><span class="ws-tf"></span>'
-    : '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
-      W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select>';
-  const gear = p.type === 'tape' ? '<button type="button" class="ws-ic" data-act="gear" aria-label="Large prints" title="Large prints" aria-expanded="false">⚙</button>' : '';
-  el.innerHTML = `<header class="ws-head"><span class="ws-grip" aria-hidden="true">⋮⋮</span>${mid}<span class="ws-fill"></span>${tag}${gear}${close}</header>` +
+  const close = '<button type="button" class="ws-x" data-act="close" aria-label="Close panel" title="Close panel">✕</button>';
+  let mid = '';
+  if (p.type === 'chart') {
+    mid = '<button type="button" class="ws-view" data-act="view" aria-haspopup="dialog" aria-expanded="false"><span class="ws-name"></span><span class="ws-tf"></span><span class="ws-caret" aria-hidden="true"></span></button>' +
+      '<span class="chart-live ws-lv ws-ind"></span><span class="ws-fill"></span>' +
+      '<button type="button" class="ws-ic ws-more" data-act="more" aria-haspopup="menu" aria-expanded="false" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>';
+  } else if (p.type === 'tape') {
+    mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
+      W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
+      '<button type="button" class="ws-ic" data-act="gear" aria-label="Large prints" title="Large prints" aria-expanded="false">⚙</button>';
+  } else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>';
+  el.innerHTML = `<header class="ws-head"><span class="ws-grip" aria-hidden="true">⋮⋮</span>${mid}${close}</header>` +
     '<div class="ws-body"></div><div class="ws-size" aria-hidden="true" title="Resize"></div>';
   place(el, p);
   grid.appendChild(el);
-  const v = { panel: p, el, head: el.querySelector('.ws-head'), body: el.querySelector('.ws-body'), state: 'connecting', destroy: () => {} };
+  if (sizes) sizes.observe(el);
+  const v = { panel: p, el, head: el.querySelector('.ws-head'), body: el.querySelector('.ws-body'), state: null, destroy: () => {} };
   views.set(p.id, v);
-  if (p.type === 'chart') mountChart(v); else mountTape(v);
-  v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input')) startDrag(e, v, 'move'); });
+  if (p.type === 'chart') mountChart(v);
+  else if (p.type === 'tape') mountTape(v);
+  else v.body.innerHTML = '<div class="tk-hold" role="note"><b>Order ticket: next build</b><span>Every chart here is read only until then. Trade from the single chart page (/single.html).</span></div>';
+  // the handle is the whole header, except its buttons and the chart's Indicators menu
+  v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
   el.querySelector('.ws-size').addEventListener('pointerdown', e => startDrag(e, v, 'size'));
   v.head.addEventListener('click', e => {
-    const b = e.target.closest('[data-act]'); if (!b) return;
+    const b = e.target.closest('[data-act]'); if (!b || !v.head.contains(b) || b.closest('.ws-lv')) return;
     if (b.dataset.act === 'close') closePanel(p.id);
     else if (b.dataset.act === 'gear') openTapeGear(v, b);
+    else if (b.dataset.act === 'view') openViewPop(v, b);
+    else if (b.dataset.act === 'more') openMore(v, b);
   });
   return v;
 }
 
-/* A chart: ChartLive.mount reads the instrument, bars and range size from its prefix's settings when it mounts (live/EMBED.md),
-   so the panel's own are written there just before. Changes made in the chart's toolbar are read back from it. */
+/* A chart: a read-only ChartLive.mount on the window's shared feed, with the panel's own instrument, bars and range size
+   (saved in the layout, never in the single chart page's settings), and no toolbar of its own. */
 function mountChart(v) {
   const p = v.panel;
-  v.nameEl = v.head.querySelector('.ws-name'); v.tfEl = v.head.querySelector('.ws-tf');
-  patchJSON('live-settings-v2', s => { s.root = p.root; s.tf = p.tf; });
-  if (p.range) patchJSON('live-range-v2', r => { r[p.root] = p.range; });
-  if (p.exec) seedExecIndicators(p.id);
+  v.state = 'connecting';
+  v.nameEl = v.head.querySelector('.ws-name'); v.tfEl = v.head.querySelector('.ws-tf'); v.viewBtn = v.head.querySelector('.ws-view');
   headChart(v);
   const pane = window.ChartLive.mount(v.body, {
-    wsUrl, paneId: p.id, storagePrefix: PREFIX,
+    feed: hub, paneId: p.id, storagePrefix: PREFIX, toolbar: false,
+    view: { root: p.root, tf: p.tf, range: p.tf === 'range' ? p.range : undefined },
+    onView: nv => viewChanged(v, nv),
+    onColors: () => { for (const o of chartViews()) if (o !== v) o.pane.refreshColors(); },
     onStatus: s => {
       v.state = s.state; syncConn();
-      if (s.state === 'live') { const n = pane && pane.element.querySelector('[id$="lgName"]'); v.contract = n ? n.textContent : ''; headChart(v); }
+      if (s.state === 'live' && v.pane) { const n = v.pane.element.querySelector('[id$="lgName"]'); v.contract = n ? n.textContent : ''; headChart(v); }
     },
   });
   v.pane = pane;
-  const sync = e => { if (e.target.closest && e.target.closest('header.bar')) syncChart(v); };
-  pane.element.addEventListener('click', sync);
-  pane.element.addEventListener('change', sync);
-  v.destroy = () => pane.destroy();
+  v.head.querySelector('.ws-ind').appendChild(pane.indicators);   // the chart's own Indicators button and menu
+  const indBtn = pane.indicators.querySelector('.ind-btn');
+  const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
+  if (mo) mo.observe(indBtn, { attributes: true, attributeFilter: ['aria-expanded'] });
+  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); if (pane.indicators) pane.indicators.remove(); };
 }
-function syncChart(v) {
-  const p = v.panel, q = s => v.pane.element.querySelector(s);
-  const r = q('[id$="symSeg"] [aria-pressed="true"]'), t = q('[id$="tfSeg"] [aria-pressed="true"]');
-  const root = r && W.ROOTS.includes(r.dataset.v) ? r.dataset.v : p.root, tf = t && W.TFS.includes(t.dataset.v) ? t.dataset.v : p.tf;
-  const box = q('[id$="rangeTicks"]'), range = tf === 'range' ? W.parseRange(box && box.value) : null;
-  if (root === p.root && tf === p.tf && (tf !== 'range' || range === null || range === p.range)) return;
-  if (root !== p.root) v.contract = '';
-  p.root = root; p.tf = tf;
-  if (tf === 'range' && range !== null) p.range = range; else if (tf !== 'range') delete p.range;
+function viewChanged(v, nv) {
+  const p = v.panel;
+  if (nv.root !== p.root) v.contract = '';
+  p.root = nv.root; p.tf = nv.tf;
+  if (nv.tf === 'range') p.range = nv.range; else delete p.range;
   headChart(v); save();
 }
-/* The execution chart starts with the trading page's indicators (the main pane's defaults) the first time it is made;
+/* The first chart of a new default layout starts with the single chart page's indicators (its main pane's defaults);
    any other new pane starts with none (Anthony's rule for new panes). */
-function seedExecIndicators(id) {
-  if (!LP || typeof LP.create !== 'function') return;
-  try {
-    const all = JSON.parse(store.getItem('live-indicators-v2'));
-    if (all && typeof all === 'object' && Object.prototype.hasOwnProperty.call(all, id)) return;
-    LP.create(store).updatePane(id, () => LP.defaultPane(LP.MAIN_PANE));
-  } catch (e) { /* the pane keeps the new-pane default */ }
+function seedMainIndicators(l) {
+  const first = l.panels.find(p => p.type === 'chart');
+  if (!first || !LP || typeof LP.create !== 'function') return l;
+  try { prefs.updatePane(first.id, () => LP.defaultPane(LP.MAIN_PANE)); } catch (e) { /* the pane keeps the new-pane default */ }
+  return l;
 }
 
 function closePanel(id) {
-  const v = views.get(id); if (!v || v.panel.exec) return;
+  const v = views.get(id); if (!v) return;
   closePops();
-  v.destroy(); v.el.remove(); views.delete(id);
+  v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); views.delete(id);
   panels = panels.filter(p => p.id !== id);
-  save(); syncConn();
+  save(); syncConn(); placeColors(); syncAddMenu();
 }
 
 function addPanel(type) {
   closePops();
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
+  if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const p = type === 'tape' ? Object.assign({ id: W.newId(), type: 'tape', root: 'MNQ' }, r) : Object.assign({ id: W.newId(), type: 'chart', root: 'MNQ', tf: 'm1' }, r);
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' ? { type: 'ticket' } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
-  save(); syncConn();
+  save(); syncConn(); placeColors(); syncAddMenu();
 }
 
 /* ---------------- drag and resize: the ghost shows the snapped cells; a place that overlaps is refused */
@@ -476,20 +498,21 @@ function startDrag(e, v, mode) {
   target.addEventListener('pointermove', move); target.addEventListener('pointerup', end); target.addEventListener('pointercancel', end);
 }
 
-/* ---------------- Time and Sales: its own WebSocket, live trades from the panel's opening, newest on top. At most 500
-   trades kept; only the rows that fit are in the page. Once per animation frame at most, the bottom rows are refilled
-   with the new trades and moved to the top, so a frame touches only as many rows as trades came in (rewriting every
-   row each frame cost the main thread about a quarter of its time at 300 trades a second, perf:workspace). */
+/* ---------------- Time and Sales: live trades from the window's feed for its instrument (no history is shown), newest on
+   top. At most 500 trades kept; only the rows that fit are in the page. Once per animation frame at most, the bottom rows
+   are refilled with the new trades and moved to the top, so a frame touches only as many rows as trades came in. A tape
+   on an instrument a chart already shows starts with the trades since that chart went live. */
 function mountTape(v) {
   const p = v.panel;
+  v.state = 'connecting';
   const sel = v.head.querySelector('[data-act="root"]');
   sel.value = p.root;
   v.body.innerHTML = '<div class="tp-cols"><span>Time</span><span>Price</span><span>Size</span></div><div class="tp-list" role="log" aria-label="Time and Sales trades" aria-live="off"></div>';
   const list = v.body.querySelector('.tp-list');
   const T = new Float64Array(TAPE_MAX), P = new Float64Array(TAPE_MAX), V = new Float64Array(TAPE_MAX), S = new Int8Array(TAPE_MAX), B = new Uint8Array(TAPE_MAX);
-  let head = -1, count = 0, seq = 0, drawnSeq = 0, full = true, raf = 0, dec = 2, tick = 0.25;
+  let head = -1, count = 0, seq = 0, drawnSeq = 0, full = true, raf = 0, dec = 2;
   const rows = [];                                     // in page order, top first
-  let ws = null, tries = 0, reconnect = 0, destroyed = false, root = p.root, ready = false;
+  let ws = null, tries = 0, reconnect = 0, destroyed = false, root = p.root, ready = false, instruments = [];
   const setState = s => { v.state = s; syncConn(); };
 
   function fitRows() {
@@ -537,50 +560,37 @@ function mountTape(v) {
     schedule();
   }
   function clear() { head = -1; count = 0; full = true; schedule(); }
+  function useInstrument() { const i = instruments.find(x => x && x.root === root); if (i && +i.tick > 0) dec = W.decimalsOf(+i.tick); }
   function subscribe() {
     ready = false; setState('loading');
-    // days 1 and tickHours 0: the least history ChartBridge sends (it is not shown); live trades follow "ready"
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'subscribe', root, days: 1, tickHours: 0 }));
+    // days 1 and tickHours 0: the least history ChartBridge sends (none of it is shown); live trades follow "ready"
+    if (ws && ws.readyState === 1) ws.send({ type: 'subscribe', root, days: 1, tickHours: 0 });
   }
   function connect() {
     reconnect = 0;
     if (destroyed) return;
     setState('connecting');
-    let u;
-    try { u = wsUrl(); } catch (e) { later(); return; }
-    Promise.resolve(u).then(open, later);
-  }
-  function open(u) {
-    if (destroyed) return;
     let sock;
-    try { sock = new WebSocket(u); } catch (e) { later(); return; }
+    try { sock = hub.open(root); } catch (e) { later(); return; }
     ws = sock;
     sock.onopen = () => { if (sock === ws) tries = 0; };
     sock.onmessage = ev => {
       if (sock !== ws) return;
-      const d = ev.data;
-      // only "hello", "ready" and "tick" matter here; history bars are skipped unread
-      if (typeof d !== 'string' || d.startsWith('{"type":"history"')) return;
-      let m; try { m = JSON.parse(d); } catch (e) { return; }
+      const m = ev.message;
+      if (!m) return;
       if (m.type === 'tick') { if (ready && m.root === root) push(m); }
-      else if (m.type === 'hello') {
-        const i = (m.instruments || []).find(x => x && x.root === root);
-        if (i && +i.tick > 0) { tick = +i.tick; dec = W.decimalsOf(tick); }
-        v.instruments = m.instruments || [];
-        subscribe();
-      } else if (m.type === 'ready' && m.root === root) { ready = true; setState('live'); }
+      else if (m.type === 'hello') { instruments = m.instruments || []; useInstrument(); subscribe(); }
+      else if (m.type === 'ready' && m.root === root) { ready = true; setState('live'); }
     };
     sock.onclose = () => { if (sock !== ws) return; ws = null; ready = false; setState('offline'); later(); };
-    sock.onerror = () => { /* onclose follows */ };
   }
   function later() { if (destroyed) return; tries++; reconnect = setTimeout(connect, Math.min(5000, 500 * tries)); }
 
   sel.addEventListener('change', () => {
     if (!W.ROOTS.includes(sel.value) || sel.value === root) return;
     root = p.root = sel.value;
-    const i = (v.instruments || []).find(x => x && x.root === root);
-    if (i && +i.tick > 0) { tick = +i.tick; dec = W.decimalsOf(tick); }
-    clear(); subscribe(); save();
+    useInstrument();
+    clear(); subscribe(); save();                      // the feed moves this tape to the new instrument's connection
   });
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(fitRows) : null;
   if (ro) ro.observe(list);
@@ -590,21 +600,24 @@ function mountTape(v) {
   v.destroy = () => {
     destroyed = true; clearTimeout(reconnect); if (raf) cancelAnimationFrame(raf); raf = 0;
     if (ro) ro.disconnect();
-    if (ws) { const s = ws; ws = null; try { s.close(); } catch (e) { /* closed */ } }
+    if (ws) { const s = ws; ws = null; s.onopen = s.onmessage = s.onclose = null; try { s.close(); } catch (e) { /* closed */ } }
   };
 }
 function refloorTapes() { for (const v of views.values()) if (v.tape) v.tape.refloor(); }
 
-/* ---------------- popovers (Add panel, Settings, a tape's gear): one open at a time; outside click or Esc closes */
+/* ---------------- popovers (Add panel, Settings, a chart's instrument and bars or its menu, a tape's gear): one open at a
+   time; an outside click or Esc closes */
 let pop = null;
-function openPop(el, anchor, onClose) {
+function openPop(el, anchor, onClose, align) {
   closePops();
   el.hidden = false;
   if (anchor) {
-    anchor.setAttribute('aria-expanded', 'true');
+    anchor.setAttribute('aria-expanded', 'true'); raise(anchor, true);
     const a = anchor.getBoundingClientRect(), w = el.offsetWidth;
     el.style.top = Math.round(a.bottom + 6) + 'px';
-    el.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, a.right - w))) + 'px';
+    const x = align === 'left' ? a.left : a.right - w;
+    el.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, x))) + 'px';
+    el.style.maxHeight = Math.max(160, Math.floor(window.innerHeight - a.bottom - 14)) + 'px';
   }
   pop = { el, anchor, onClose };
 }
@@ -612,14 +625,72 @@ function closePops() {
   if (!pop) return;
   const { el, anchor, onClose } = pop; pop = null;
   el.hidden = true;
-  if (anchor) anchor.setAttribute('aria-expanded', 'false');
+  if (anchor) { anchor.setAttribute('aria-expanded', 'false'); raise(anchor, false); }
   if (onClose) onClose();
 }
+const toggle = (el, anchor, open) => { if (pop && pop.anchor === anchor) { closePops(); return; } open(); };
 document.addEventListener('pointerdown', e => { if (pop && !pop.el.contains(e.target) && !(pop.anchor && pop.anchor.contains(e.target))) closePops(); }, true);
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && pop) { closePops(); } });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !pop || e.defaultPrevented) return;
+  const back = pop.anchor; closePops(); if (back && back.isConnected) back.focus();
+});
 
-$('wsAdd').addEventListener('click', e => { if (pop && pop.anchor === e.currentTarget) closePops(); else openPop($('wsAddMenu'), e.currentTarget); });
-$('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b) addPanel(b.dataset.add); });
+$('wsAdd').addEventListener('click', e => toggle($('wsAddMenu'), e.currentTarget, () => { syncAddMenu(); openPop($('wsAddMenu'), e.currentTarget); }));
+$('wsAddMenu').addEventListener('click', e => { const b = e.target.closest('[data-add]'); if (b && !b.disabled) addPanel(b.dataset.add); });
+function syncAddMenu() {
+  const b = $('wsAddMenu').querySelector('[data-add="ticket"]'), has = panels.some(p => p.type === 'ticket');
+  b.disabled = has; b.title = has ? 'This layout has its order ticket' : '';
+}
+
+/* A chart's instrument and bars: the instruments, the bars, and the range size for Range bars. Applied at once. */
+function openViewPop(v, anchor) {
+  toggle($('wsView'), anchor, () => {
+    const p = v.panel, el = $('wsView');
+    el.dataset.id = p.id;
+    el.innerHTML = '<div class="vw-row" role="group" aria-label="Instrument">' + W.ROOTS.map(r => `<button type="button" data-root="${r}" aria-pressed="${r === p.root}">${r}</button>`).join('') + '</div>' +
+      '<div class="vw-row" role="group" aria-label="Bars">' + W.TFS.map(t => `<button type="button" data-tf="${t}" aria-pressed="${t === p.tf}"${t === 'h1' ? ' title="' + esc(H1_NOTE) + '"' : ''}>${TF_SHORT[t]}</button>`).join('') + '</div>' +
+      (p.tf === 'range' ? `<label class="vw-range"><span>Range size</span><input type="number" min="1" max="400" step="1" inputmode="numeric" data-f="range" value="${p.range || ''}" aria-label="Range bar size for ${p.root} in ticks"><span>ticks</span></label>` : '') +
+      (p.tf === 'h1' ? `<p class="ws-help">${esc(H1_NOTE)}</p>` : '');
+    openPop(el, anchor, null, 'left');
+  });
+}
+$('wsView').addEventListener('click', e => {
+  const b = e.target.closest('button'), v = views.get($('wsView').dataset.id);
+  if (!b || !v || !v.pane) return;
+  if (b.dataset.root) v.pane.setView({ root: b.dataset.root, range: b.dataset.root === v.panel.root ? undefined : prefs.range(b.dataset.root) });
+  else if (b.dataset.tf) v.pane.setView({ tf: b.dataset.tf, range: b.dataset.tf === 'range' && !v.panel.range ? prefs.range(v.panel.root) : undefined });
+  const anchor = v.viewBtn;
+  closePops(); openViewPop(v, anchor);              // drawn again for the new choice
+  const box = $('wsView').querySelector('[data-f="range"]');
+  if (box && b.dataset.tf === 'range') box.focus();
+});
+$('wsView').addEventListener('change', e => {
+  const i = e.target.closest('[data-f="range"]'), v = views.get($('wsView').dataset.id);
+  if (!i || !v || !v.pane) return;
+  const n = W.parseRange(i.value);
+  if (n === null) { i.value = v.panel.range || ''; note('Range size: a whole number of ticks, 1 to 400', true); return; }
+  v.pane.setView({ range: n });
+});
+$('wsView').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('[data-f="range"]')) { e.preventDefault(); e.target.dispatchEvent(new Event('change', { bubbles: true })); } });
+
+/* A chart's small menu: the drawing tools (they act on the next clicks on that chart), Clear and Reset view. */
+function openMore(v, anchor) {
+  toggle($('wsMore'), anchor, () => {
+    const el = $('wsMore'), t = v.pane.chart.getTool();
+    el.dataset.id = v.panel.id;
+    for (const b of el.querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', String(t === b.dataset.tool));
+    openPop(el, anchor);
+  });
+}
+$('wsMore').addEventListener('click', e => {
+  const b = e.target.closest('button'), v = views.get($('wsMore').dataset.id);
+  if (!b || !v || !v.pane) return;
+  const c = v.pane.chart;
+  if (b.dataset.tool) c.setTool(c.getTool() === b.dataset.tool ? null : b.dataset.tool);
+  else if (b.dataset.do === 'clear') c.clearDrawings();
+  else if (b.dataset.do === 'reset') c.reset();
+  closePops();
+});
 
 /* Large prints: one table in Settings (every instrument), one row in a tape's gear (its instrument). */
 function floorRow(r) {
@@ -637,22 +708,86 @@ function onFloorBlur(e) { const i = e.target.closest('input[data-w]'); if (i) { 
 for (const el of [$('wsSettings'), $('wsGear')]) { el.addEventListener('input', onFloorInput); el.addEventListener('focusout', onFloorBlur); }
 
 function openTapeGear(v, anchor) {
-  if (pop && pop.anchor === anchor) { closePops(); return; }
-  const r = v.tape.root;
-  $('wsGearBody').innerHTML = floorRow(r);
-  openPop($('wsGear'), anchor);
+  toggle($('wsGear'), anchor, () => { $('wsGearBody').innerHTML = floorRow(v.tape.root); openPop($('wsGear'), anchor); });
 }
 
-/* Settings: small sections, so later builds add their own. */
-function renderSettings() {
-  $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
-  $('wsResetName').textContent = layout;
-  $('wsVersion').textContent = 'Chart ' + (window.ChartEngine ? window.ChartEngine.VERSION : '') + ' · Workspace layouts are kept in this browser.';
+/* ---------------- Settings: everything general (Anthony): Glide and Range style for every chart (and the single chart
+   page), the trading hotkeys (the 1.11.0 Settings), the large-print floors, ChartBridge's PIN, the layout. */
+function renderGeneral() {
+  const s = prefs.settings();
+  for (const b of $('wsGlide').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.glide));
+  $('wsRangeMode').value = s.rangeMode;
 }
-$('wsSet').addEventListener('click', e => { if (pop && pop.anchor === e.currentTarget) { closePops(); return; } renderSettings(); openPop($('wsSettings'), e.currentTarget); });
+$('wsGlide').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b) return;
+  prefs.setSetting('glide', b.dataset.v); renderGeneral();
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
+$('wsRangeMode').addEventListener('change', e => {
+  if (!LP.RANGE_MODES.includes(e.target.value)) return;
+  prefs.setSetting('rangeMode', e.target.value);
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
+
+/* Hotkeys: the single chart page's Settings, the same keys (live-hotkeys-v1). Each box reads the keys pressed in it. */
+const HKKEY = LP.KEYS.hotkeys;
+const readHotkeys = () => OT.cleanHotkeys(prefs.raw.get(HKKEY));
+$('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="wsHkCap">${OT.HOTKEY_ACTIONS.map(a => `
+  <div class="hk-row" data-hk="${a.id}">
+    <label class="hk-name" for="wsHk-${a.id}">${esc(a.name)}</label>
+    <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
+    <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
+    <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
+  </div>`).join('')}</div>`;
+const hkNote = (id, text, level) => { const el = $('wsHkNote-' + id); el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
+function renderHotkeys() { const HK = readHotkeys(); for (const a of OT.HOTKEY_ACTIONS) $('wsHk-' + a.id).value = HK[a.id]; }
+function saveHotkey(id, combo) {
+  const next = Object.assign({}, readHotkeys());
+  if (combo) {
+    const other = OT.HOTKEY_ACTIONS.find(a => a.id !== id && next[a.id] === combo);
+    if (other) { renderHotkeys(); hkNote(id, combo + ' is already ' + other.name + '. Clear it there first.', 'warn'); return; }
+  }
+  next[id] = combo;
+  if (!prefs.raw.set(HKKEY, next)) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
+  renderHotkeys();
+  hkNote(id, combo ? 'Saved.' : 'Cleared.', '');
+}
+$('wsHotkeys').addEventListener('keydown', e => {
+  const id = e.target.classList && e.target.classList.contains('hk-in') ? e.target.dataset.hk : '';
+  if (!id) return;
+  /* the capture box: every key press is read as a hotkey, never typed and never acted on (plain Tab still moves on) */
+  const tab = e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey;
+  if (!tab) { e.preventDefault(); e.stopPropagation(); }
+  if (e.repeat) return;
+  const r = OT.hotkeyFromEvent(e, readHotkeys(), id);
+  if (r.error) { hkNote(id, r.error, r.held ? '' : 'warn'); return; }
+  saveHotkey(id, r.combo);
+});
+$('wsHotkeys').addEventListener('click', e => { const b = e.target.closest('button[data-hk-clear]'); if (b) saveHotkey(b.dataset.hkClear, ''); });
+
+$('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChange(); });
+
+function renderSettings() {
+  renderGeneral(); renderHotkeys();
+  for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', '');
+  $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
+  $('wsPinSec').hidden = !(PIN && PIN.active());
+  $('wsResetName').textContent = layout;
+  $('wsVersion').textContent = 'Chart ' + (window.ChartEngine ? window.ChartEngine.VERSION : '') + ' · Layouts and settings are kept in this browser.';
+}
+$('wsSet').addEventListener('click', e => toggle($('wsSettings'), e.currentTarget, () => { renderSettings(); openPop($('wsSettings'), e.currentTarget); }));
 $('wsReset').addEventListener('click', () => { closePops(); confirmBox('Reset "' + layout + '" to the default layout? Its panels close and the default ones open.', 'Reset', () => {
-  W.saveLayout(store, layout, W.defaultLayout()); openLayout(layout);
+  W.saveLayout(store, layout, seedMainIndicators(W.defaultLayout())); openLayout(layout);
 }); });
+
+/* ---------------- Colors in the top bar: one chart's Colors panel (it changes the colors every chart uses; the others
+   follow at once, onColors). When that chart closes, the next one's takes its place. */
+let colorsOwner = null;
+function placeColors() {
+  if (colorsOwner && views.get(colorsOwner.panel.id) === colorsOwner && colorsOwner.pane.colors.isConnected) return;
+  colorsOwner = chartViews()[0] || null;
+  if (colorsOwner) $('wsColors').appendChild(colorsOwner.pane.colors);
+}
 
 /* ---------------- layouts: the select, New layout..., Rename, Delete */
 function names() { return Object.keys(W.readStore(store).layouts); }
@@ -668,7 +803,7 @@ $('wsLayout').addEventListener('change', e => {
   e.target.value = layout;
   if (v === '\u0001new') askName('New layout', '', name => {
     if (names().includes(name)) return 'A layout with that name exists';
-    if (!W.saveLayout(store, name, W.defaultLayout())) return 'Could not save it in this browser';
+    if (!W.saveLayout(store, name, seedMainIndicators(W.defaultLayout()))) return 'Could not save it in this browser';
     openLayout(name); return '';
   });
   else if (v === '\u0001rename') askName('Rename "' + layout + '"', layout, name => {
@@ -721,27 +856,34 @@ function showDialog(d, onOk) {
 }
 
 /* ---------------- open a layout (from the URL, the select, New, Delete, Reset) */
-function teardown() { closePops(); for (const v of views.values()) { v.destroy(); v.el.remove(); } views.clear(); panels = []; }
+function teardown() { closePops(); for (const v of views.values()) { v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); } views.clear(); panels = []; colorsOwner = null; }
 function openLayout(name) {
   teardown();
   layout = W.layoutName(name) || W.DEFAULT_NAME;
   const s = W.readStore(store);
-  if (!Object.prototype.hasOwnProperty.call(s.layouts, layout)) W.saveLayout(store, layout, W.defaultLayout());
+  if (!Object.prototype.hasOwnProperty.call(s.layouts, layout)) W.saveLayout(store, layout, seedMainIndicators(W.defaultLayout()));
   const got = W.readStore(store).layouts[layout];
   panels = (got || W.cleanLayout(W.defaultLayout())).panels;
   for (const p of panels) addView(p);
-  setUrl(); syncSelect(); syncConn();
+  setUrl(); syncSelect(); syncConn(); placeColors(); syncAddMenu();
 }
 
-/* Another window changed the layouts (names in the select) or the large-print floors. Its open layouts stay its own. */
+/* Another window or the single chart page changed something this page uses. Its open layouts stay its own. */
 window.addEventListener('storage', e => {
-  if (e.key === PREFIX + W.KEYS.store) syncSelect();
-  else if (e.key === PREFIX + W.KEYS.floors) { floors = W.readFloors(store); refloorTapes(); }
+  const k = e.key === null ? null : e.key.slice(PREFIX.length);
+  if (k === null) return;
+  if (k === W.KEYS.store) syncSelect();
+  else if (k === W.KEYS.floors) { floors = W.readFloors(store); refloorTapes(); }
+  else if (k === LP.KEYS.settings) { for (const v of chartViews()) v.pane.refreshSettings(); if (pop && pop.el === $('wsSettings')) renderGeneral(); }
+  else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
+  else if (k === HKKEY && pop && pop.el === $('wsSettings')) renderHotkeys();
 });
 window.addEventListener('pagehide', () => { if (layout) save(); });
 
 /* for tests and the console (read only) */
-window.workspace = { get layout() { return layout; }, panels: () => panels.map(p => Object.assign({}, p)), views: () => [...views.values()].map(v => ({ id: v.panel.id, type: v.panel.type, state: v.state, count: v.tape ? v.tape.count() : null })) };
+window.workspace = { get layout() { return layout; }, panels: () => panels.map(p => Object.assign({}, p)),
+  views: () => [...views.values()].map(v => ({ id: v.panel.id, type: v.panel.type, state: v.state, count: v.tape ? v.tape.count() : null })),
+  feed: () => hub.stats() };
 
 const start = () => openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME);
 if (PIN) PIN.gate().then(start); else start();

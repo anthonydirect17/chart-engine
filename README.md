@@ -28,6 +28,14 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 3. Open `http://localhost:8765/` in Chrome or Edge. The first time on each PC it asks Anthony to **set a
    4-digit PIN** (see [The PIN on ChartBridge's page](#the-pin-on-chartbridges-page)).
 
+`http://localhost:8765/` is the **workspace** (E2a): panels on a 12 x 6 grid, one browser window per screen, each
+window with its own layout (`?layout=Main`, `?layout=Second`). Charts with slim headers (instrument and bars, the
+Indicators menu, drawing tools), Time and Sales, and the order ticket's place; every chart there is read only until the
+order ticket comes (E2b). Each instrument's trades come in once per window, whatever the number of panels showing it.
+Colors sit in the top bar, everything general (Glide, Range style, hotkeys, large prints, the PIN) in Settings, and
+both are shared with the single chart page. The **single chart page** with its order bar and hotkeys is
+`http://localhost:8765/single.html`.
+
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
@@ -170,7 +178,8 @@ The Desk tags each trade with the levels around it, and for that it needs the da
   sent per contract, how many wait, what it waits for at the gate, and the last problem. Details: "Daily bars to The Desk" in
   `nt8/PROTOCOL.md`.
 
-Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
+Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/` (the
+workspace; the single chart page is `http://localhost:8765/live/single.html`)
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
 simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`). The fake has the same PIN; it
 asks for one to be set unless started with `--test-pin=<made-up PIN>`, and `--pin-file=<path>` keeps it

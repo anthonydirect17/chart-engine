@@ -26,13 +26,15 @@ test('install-files.json: one list, every file there, the add-ons are exactly nt
   assert.deepStrictEqual([...manifest.addons].sort(), cs);
   const to = manifest.www.map(f => f.to);
   assert.strictEqual(new Set(to).size, to.length, 'no target twice');
-  assert.ok(to.includes('update-notice.js') && to.includes('index.html') && to.includes('src/chart-engine.js'));
+  assert.ok(to.includes('update-notice.js') && to.includes('index.html') && to.includes('single.html') && to.includes('src/chart-engine.js'));
   assert.ok(!to.includes('update.json'), 'update.json is the updater\'s own file');
   assert.ok(manifest.www.every(f => !f.to.endsWith('.cs') && !f.from.endsWith('.cs')), 'no .cs file goes to www');
-  // every page file index.html loads is installed
-  for (const src of read('live/index.html').match(/<(?:script|link)[^>]+(?:src|href)="([^":]+)"/g).map(t => /(?:src|href)="([^"]+)"/.exec(t)[1])) {
-    const target = src.replace(/^\.\.\//, '');
-    assert.ok(to.includes(target), 'index.html loads ' + src + ', which is not installed');
+  // every page file the workspace (index.html) and the single chart page (single.html) load is installed
+  for (const page of ['index.html', 'single.html']) {
+    for (const src of read('live/' + page).match(/<(?:script|link)[^>]+(?:src|href)="([^":]+)"/g).map(t => /(?:src|href)="([^"]+)"/.exec(t)[1])) {
+      const target = src.replace(/^\.\.\//, '');
+      assert.ok(to.includes(target), page + ' loads ' + src + ', which is not installed');
+    }
   }
 });
 
@@ -42,7 +44,7 @@ test('install.ps1 and update-pc.ps1 read that list; install.ps1 names no file it
   for (const f of manifest.www.concat(manifest.addons.map(a => ({ from: a })))) {
     assert.ok(!code(install).includes(path.basename(f.from)), 'install.ps1 names ' + f.from);
     // the updater names only the files it orders (Get-PageOrder) and the one it reads the version from
-    const named = ['nt8/ChartBridge.cs', 'live/index.html', 'live/live.js', 'live/update-notice.js'];
+    const named = ['nt8/ChartBridge.cs', 'live/index.html', 'live/live.js', 'live/update-notice.js', 'live/workspace.js'];
     assert.ok(!code(updater).includes(path.basename(f.from)) || named.includes(f.from), 'update-pc.ps1 names ' + f.from);
   }
 });
@@ -162,13 +164,15 @@ test('ChartBridge answers /diag to a program on this PC: no PIN, no Origin, only
   assert.match(updater, /"http:\/\/localhost:\$\(Get-ChartBridgePort\)\/diag"/, 'Host localhost:<port>, as HttpListener\'s prefix wants');
 });
 
-test('the page notice never reloads, navigates or sends anything, and only index.html loads it', () => {
+test('the page notice never reloads, navigates or sends anything, and only the two pages load it', () => {
   const js = read('live/update-notice.js');
   assert.ok(!/location\.(reload|assign|replace|href\s*=)|window\.open|\.submit\(|WebSocket|method:\s*'POST'/.test(js));
   assert.deepStrictEqual([...js.matchAll(/fetch\(([^,)]+)/g)].map(m => m[1]), ["'update.json'"]);
   assert.match(js, /cache: 'no-store'/);
-  const html = read('live/index.html');
-  assert.ok(html.indexOf('update-notice.js') > html.indexOf('live.js'), 'after live.js');
+  for (const page of ['live/index.html', 'live/single.html']) {
+    const html = read(page);
+    assert.ok(html.indexOf('update-notice.js') > html.indexOf('live.js'), page + ': after live.js');
+  }
   assert.ok(!read('live/live.js').includes('update-notice'), 'a mounted chart (The Desk) does not load it');
 });
 

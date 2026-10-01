@@ -1,6 +1,10 @@
-// Workspace smoke test (live/workspace.html) against the fake bridge, in Chromium: the default layout's 5 panels, drag
-// and resize snapping to cells, an overlap refused, add and close, the layout kept over a reload, ?layout=Second as a
-// separate layout, New layout / Rename / Delete, the Time and Sales tape (newest first, sides, large prints), only
+// Workspace smoke test (live/index.html, ChartBridge's main page since E2a) against the fake bridge, in Chromium: the
+// default layout (4 charts, the order ticket's place, Time and Sales), one WebSocket per instrument (not per panel) and
+// one subscribe each, the slim chart headers (instrument and bars changed from the header, Indicators, the small menu),
+// Settings (Glide, Range style, hotkeys, large prints, Change PIN), Colors in the top bar for every chart, the update
+// notice in the top bar, settings shared with the single chart page (/single.html), "/" opening the workspace, drag and
+// resize snapping to cells, an overlap refused, add and close, the layout kept over a reload, ?layout=Second as a
+// separate layout, New layout / Rename / Delete, the tape (newest first, sides, large prints), a dropped connection, only
 // read-only messages sent, and a window resize keeping every panel on screen. Sample data only.
 // Screenshots in test/out/ (and SHOTS_DIR when set) at 1920x1080, 2560x1440 and 1366x768.
 //   npm run smoke:workspace        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
@@ -17,7 +21,7 @@ fs.mkdirSync(out, { recursive: true });
 const SHOTS = process.env.SHOTS_DIR || '';
 if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 const PORT = +(process.env.WORKSPACE_SMOKE_PORT || 8814);
-const URL0 = `http://localhost:${PORT}/live/workspace.html`;
+const URL0 = `http://localhost:${PORT}/live/`;
 const errors = [];
 let checks = 0;
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
@@ -29,13 +33,13 @@ async function shot(page, name) {
 }
 const control = async what => (await fetch(`http://127.0.0.1:${PORT}/test/${what}`, { method: 'POST' })).json();
 
-/* Before any page script: record every WebSocket and what it sends. */
+/* Before any page script: record every WebSocket, what it sends and whether it is open. */
 function spies() {
   const S = window.__spy = { sockets: [] };
   const Real = window.WebSocket;
   function Spy(url, protocols) {
     const sock = protocols === undefined ? new Real(url) : new Real(url, protocols);
-    const rec = { url: String(url), sent: [] };
+    const rec = { url: String(url), sent: [], sock };
     const send = sock.send.bind(sock);
     sock.send = d => { rec.sent.push(d); return send(d); };
     S.sockets.push(rec);
@@ -45,6 +49,8 @@ function spies() {
   for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
   window.WebSocket = Spy;
 }
+/* every socket opened since the page loaded: the instruments it subscribed to, open or not */
+const sockets = page => page.evaluate(() => window.__spy.sockets.map(k => ({ open: k.sock.readyState === 1, subs: k.sent.map(d => JSON.parse(d)).filter(m => m.type === 'subscribe').map(m => m.root) })));
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-controls', '--live-rate=150', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
@@ -52,59 +58,207 @@ const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePa
 try {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+  // the per-PC updater installed new page files after this page loaded: "Update ready: reload when flat"
+  await ctx.route(/\/update\.json$/, r => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ schema: 1,
+    page: { version: '1.12.0', build: 'b2', installedAt: Date.now() + 3600000, state: '' }, chartBridge: { compiled: '0.3.5', ready: null, copied: null, mixed: null }, updater: null }) }));
   await ctx.addInitScript(spies);
+  // the single chart page's own instrument and bars, which the workspace must never change
+  await ctx.addInitScript(() => { try { if (!localStorage.getItem('live-settings-v2')) localStorage.setItem('live-settings-v2', JSON.stringify({ root: 'NQ', tf: 'm5', glide: 'smooth', rangeMode: 'nt' })); } catch (e) {} });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
 
-  /* Open a URL, type the PIN on ChartBridge's pad (the page's own origin needs it, like the standalone page), wait for live. */
-  async function open(url) {
-    await page.goto(url);
-    await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
-    await enterPin(page, TEST_PIN);
-    await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  /* Open a URL, type the PIN on ChartBridge's pad (the page's own origin needs it, like the single chart page), wait for live. */
+  async function open(url, p = page) {
+    await p.goto(url);
+    await p.waitForSelector('.cb-pin-key', { timeout: 15000 });
+    await enterPin(p, TEST_PIN);
+    await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
   }
-  const state = () => page.evaluate(() => ({ layout: window.workspace.layout, panels: window.workspace.panels(), views: window.workspace.views(), search: location.search }));
-  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('workspace:live-workspace-v1')));
+  const state = () => page.evaluate(() => ({ layout: window.workspace.layout, panels: window.workspace.panels(), views: window.workspace.views(), search: location.search, feed: window.workspace.feed() }));
+  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('live-workspace-v1')));
   const box = id => page.evaluate(i => { const r = document.querySelector(`.ws-panel[data-id="${i}"]`).getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; }, id);
-  const head = id => page.evaluate(i => { const r = document.querySelector(`.ws-panel[data-id="${i}"] .ws-name`).getBoundingClientRect(); return { x: r.x + 4, y: r.y + r.height / 2 }; }, id);
+  const head = id => page.evaluate(i => { const r = document.querySelector(`.ws-panel[data-id="${i}"] .ws-grip`).getBoundingClientRect(); return { x: r.x + 4, y: r.y + r.height / 2 }; }, id);
   const pitch = () => page.evaluate(() => { const g = document.getElementById('wsGrid'); return { x: (g.clientWidth - 12 - 66) / 12 + 6, y: (g.clientHeight - 12 - 30) / 6 + 6 }; });
+  const allLive = () => page.waitForFunction(() => window.workspace.views().every(v => v.state === null || v.state === 'live'), null, { timeout: 20000 });
+
+  console.log('"/" is the workspace');
+  await open(`http://localhost:${PORT}/`);
+  check(await page.evaluate(() => !!document.getElementById('wsGrid') && !document.getElementById('connPill')), '"/" opens the workspace (index.html)');
 
   console.log('default layout');
   await open(URL0);
   let s = await state();
   check(s.layout === 'Main' && s.search === '?layout=Main', 'no ?layout opens Main and puts it in the URL (' + s.search + ')');
-  check(s.views.length === 5 && s.views.filter(v => v.type === 'chart').length === 4 && s.views.filter(v => v.type === 'tape').length === 1, '5 panels: 4 charts and Time and Sales');
-  check(s.views.every(v => v.state === 'live'), 'every panel live');
-  const byKey = k => s.panels.find(p => p.type + ':' + p.root + ':' + (p.tf || '') === k);
-  const exec = s.panels.find(p => p.exec), nq = byKey('chart:NQ:m5'), es = byKey('chart:ES:m1'), daily = byKey('chart:MNQ:h1'), tape = s.panels.find(p => p.type === 'tape');
-  check(exec && exec.root === 'MNQ' && exec.tf === 'range' && exec.range === 40 && exec.x === 0 && exec.w === 7 && exec.h === 4, 'the execution chart: MNQ Range 40, cols 1 to 7, rows 1 to 4');
-  check(daily && daily.y === 4 && daily.h === 2 && nq && nq.x === 7 && nq.h === 3 && es && es.y === 3 && tape && tape.x === 10 && tape.h === 6, 'the 1 hour chart under it, NQ 5 min and ES 1 min in the middle, the tape on the right');
-  const ui = await page.evaluate(id => {
-    const ex = document.querySelector(`.ws-panel[data-id="${id}"]`);
-    return { tag: ex.querySelector('.ws-tag.exec') && ex.querySelector('.ws-tag.exec').textContent, close: !!ex.querySelector('.ws-x'), obar: !!document.querySelector('[id$="obar"], [id$="armBtn"], [id$="buyMkt"]'),
-      viewOnly: document.querySelectorAll('.ws-panel[data-type="chart"]:not(.exec) .ws-tag').length, border: getComputedStyle(ex).borderTopColor,
-      dailyTf: document.querySelectorAll('.ws-panel .ws-tf')[1].textContent, names: [...document.querySelectorAll('.ws-panel .ws-name')].map(e => e.textContent),
-      flattenSlot: !!document.getElementById('wsFlattenSlot'), clock: document.getElementById('wsClock').textContent, topH: document.querySelector('.ws-top').offsetHeight };
-  }, exec.id);
-  check(ui.tag === 'EXECUTION CHART' && !ui.close && ui.border === 'rgb(123, 92, 255)', 'the execution panel: purple border and tag, no close button');
+  check(s.views.length === 6 && s.views.filter(v => v.type === 'chart').length === 4 && s.views.filter(v => v.type === 'tape').length === 1 && s.views.filter(v => v.type === 'ticket').length === 1, '6 panels: 4 charts, the order ticket, Time and Sales');
+  check(s.views.every(v => v.state === null || v.state === 'live'), 'every chart and the tape live');
+  const byKey = k => s.panels.find(p => p.type + ':' + (p.root || '') + ':' + (p.tf || '') === k);
+  const main = byKey('chart:MNQ:range'), nq = byKey('chart:NQ:m5'), es = byKey('chart:ES:m1'), daily = byKey('chart:MNQ:h1'), tape = byKey('tape:MNQ:'), ticket = byKey('ticket::');
+  check(main && main.range === 40 && main.x === 0 && main.y === 0 && main.w === 7 && main.h === 4, 'MNQ Range 40: cols 1 to 7, rows 1 to 4');
+  check(daily && daily.x === 0 && daily.y === 4 && daily.w === 7 && daily.h === 2, 'MNQ under it: cols 1 to 7, rows 5 to 6');
+  check(nq && nq.x === 7 && nq.y === 0 && nq.w === 3 && nq.h === 3 && es && es.x === 7 && es.y === 3 && es.w === 3 && es.h === 3, 'NQ 5 min (cols 8 to 10, rows 1 to 3) and ES 1 min (rows 4 to 6)');
+  check(ticket && ticket.x === 10 && ticket.y === 0 && ticket.w === 2 && ticket.h === 2, 'the order ticket: cols 11 to 12, rows 1 to 2');
+  check(tape && tape.x === 10 && tape.y === 2 && tape.w === 2 && tape.h === 4, 'Time and Sales: cols 11 to 12, rows 3 to 6');
+  check(s.panels.every(p => !('exec' in p)), 'no execution chart');
+  const ui = await page.evaluate(ids => {
+    const P = id => document.querySelector(`.ws-panel[data-id="${id}"]`);
+    const tk = P(ids.ticket);
+    return { ticketText: tk.querySelector('.ws-body').textContent, ticketCtl: tk.querySelectorAll('.ws-body button, .ws-body input, .ws-body select').length, ticketName: tk.querySelector('.ws-name').textContent,
+      obar: !!document.querySelector('[id$="obar"], [id$="armBtn"], [id$="buyMkt"]'), dailyTf: P(ids.daily).querySelector('.ws-tf').textContent, dailyTitle: P(ids.daily).querySelector('.ws-view').title,
+      names: [...document.querySelectorAll('.ws-panel .ws-name')].map(e => e.textContent), flattenSlot: !!document.getElementById('wsFlattenSlot'),
+      clock: document.getElementById('wsClock').textContent, topH: document.querySelector('.ws-top').offsetHeight };
+  }, { ticket: ticket.id, daily: daily.id });
+  check(/^Order ticket: next build/.test(ui.ticketText) && ui.ticketCtl === 0 && ui.ticketName === 'Order ticket', 'the ticket placeholder says "Order ticket: next build" and has no controls');
   check(!ui.obar, 'no order bar anywhere in this build (every chart is a read-only mount)');
-  check(ui.viewOnly === 3, 'the other three charts say view only');
-  check(ui.dailyTf === '1 hour', 'the long chart is labelled 1 hour, not Daily (ChartBridge 0.3.7 brings daily bars)');
+  check(ui.dailyTf === '1 hour' && /ChartBridge 0\.3\.7/.test(ui.dailyTitle), 'the long chart is labelled 1 hour, not Daily (ChartBridge 0.3.7 brings daily bars)');
   check(ui.names.includes('MNQ 12-26') && ui.names.includes('Time and Sales'), 'headers show the contract (' + ui.names.join(', ') + ')');
-  check(ui.flattenSlot && /^\d\d:\d\d:\d\d$/.test(ui.clock) && ui.topH === 40, 'top bar 40 px, New York clock ' + ui.clock + ', the Flatten slot kept for E2');
+  check(ui.flattenSlot && /^\d\d:\d\d:\d\d$/.test(ui.clock) && ui.topH === 40, 'top bar 40 px, New York clock ' + ui.clock + ', the Flatten slot kept for E2b');
   const paneIds = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"] [data-pane]')].map(e => e.dataset.pane));
   check(paneIds.length === 4 && new Set(paneIds).size === 4 && paneIds.every(id => s.panels.some(p => p.id === id)), 'each chart has its own paneId, the panel id');
-  const ind = await page.evaluate(() => JSON.parse(localStorage.getItem('workspace:live-indicators-v2') || '{}'));
-  check(ind[exec.id] && ind[exec.id].ind.vwap.on && !ind[nq.id], 'the execution chart starts with the trading page\'s indicators, the others with none');
+  const ind = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2') || '{}'));
+  check(ind[main.id] && ind[main.id].ind.vwap.on && !ind[nq.id], 'the first chart starts with the single chart page\'s indicators, the others with none');
+
+  const sessions = async () => (await (await fetch(`http://127.0.0.1:${PORT}/test/received`, { method: 'POST' })).json()).sessionRequests;
+  check(await sessions() === 0, 'no GET /session from the workspace');
+
+  console.log('one connection per instrument');
+  let k = await sockets(page);
+  const subsOf = r => k.flatMap(x => x.subs).filter(x => x === r).length;
+  check(k.length === 3 && k.every(x => x.open), 'three WebSockets for six panels: one per instrument (' + k.map(x => x.subs.join('+')).join(', ') + ')');
+  check(subsOf('MNQ') === 1 && subsOf('NQ') === 1 && subsOf('ES') === 1, 'one subscribe per instrument (MNQ feeds two charts and the tape)');
+  check(s.feed.lines.find(l => l.root === 'MNQ').clients === 3, 'the MNQ connection feeds 3 panels');
+  await page.waitForTimeout(1500);
+  const counts = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"] [id$="ticksSeen"]')].map(e => +e.textContent.replace(/\D/g, '')));
+  check(counts.every(n => n > 0), 'every chart takes live trades from it (' + counts.join(', ') + ')');
+
+  console.log('slim headers');
+  const hd = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => {
+    const h = p.querySelector('.ws-head'), bar = p.querySelector('.chart-live > header.bar');
+    return { grip: !!h.querySelector('.ws-grip'), view: !!h.querySelector('.ws-view .ws-name') && !!h.querySelector('.ws-view .ws-tf'), ind: !!h.querySelector('.ind-btn'), more: !!h.querySelector('[data-act="more"]'), x: !!h.querySelector('[data-act="close"]'),
+      bar: bar ? getComputedStyle(bar).display : 'none', h: h.offsetHeight, colorsInBar: !!p.querySelector('.chart-live > header.bar .ce-theme-btn') };
+  }));
+  check(hd.every(x => x.grip && x.view && x.ind && x.more && x.x), 'every chart header: handle, instrument and bars, Indicators, the small menu, the x');
+  check(hd.every(x => x.bar === 'none' && x.h === 28), 'the chart\'s own toolbar is not shown; the header is 28 px');
+  const ib = `.ws-panel[data-id="${nq.id}"] .ws-head .ind-btn`;
+  await page.click(ib);
+  const im = await page.evaluate(id => { const p = document.querySelector(`.ws-panel[data-id="${id}"] .ind-panel`); const r = p.getBoundingClientRect(); return { open: !p.hidden, w: r.width, right: r.right, vw: innerWidth }; }, nq.id);
+  check(im.open && im.w >= 300 && im.right <= im.vw, 'the header\'s Indicators button opens the chart\'s menu, inside the window (' + Math.round(im.w) + ' px)');
+  await page.keyboard.press('Escape');
+  await page.click(`.ws-panel[data-id="${nq.id}"] [data-act="more"]`);
+  check(await page.evaluate(() => !document.getElementById('wsMore').hidden && [...document.querySelectorAll('#wsMore button')].map(b => b.textContent).join('|') === 'Trend line|Price line|Clear drawings|Reset view'), 'the small menu: Trend line, Price line, Clear drawings, Reset view');
+  await page.click('#wsMore [data-tool="trend"]');
+  await page.click(`.ws-panel[data-id="${nq.id}"] [data-act="more"]`);
+  check(await page.getAttribute('#wsMore [data-tool="trend"]', 'aria-pressed') === 'true', 'Trend line is on for that chart');
+  await page.click('#wsMore [data-do="reset"]');
   await shot(page, 'workspace-1920x1080.png');
 
-  console.log('Time and Sales');
-  await page.evaluate(() => { localStorage.setItem('workspace:live-tape-floors-v1', JSON.stringify({})); });
+  console.log('instrument and bars from the header');
+  await page.click(`.ws-panel[data-id="${nq.id}"] .ws-view`);
+  check(await page.evaluate(() => !document.getElementById('wsView').hidden), 'a click on the instrument opens its picker');
+  await shot(page, 'workspace-view-picker.png');
+  await page.click('#wsView [data-root="ES"]');
+  await page.click('#wsView [data-tf="m15"]');
+  check(await page.evaluate(() => !document.getElementById('wsView').hidden), 'the picker stays open while choosing');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(i => window.workspace.views().find(v => v.id === i).state === 'live', nq.id, { timeout: 15000 }).catch(() => fail('NQ panel not live on ES'));
+  s = await state();
+  let p1 = s.panels.find(p => p.id === nq.id);
+  check(p1.root === 'ES' && p1.tf === 'm15', 'the panel changed to ES 15 min (' + p1.root + ' ' + p1.tf + ')');
+  check((await saved()).layouts.Main.panels.find(p => p.id === nq.id).tf === 'm15', 'and it is saved in the layout');
+  await page.waitForTimeout(500);
+  check(await page.evaluate(i => { const p = document.querySelector(`.ws-panel[data-id="${i}"]`); return p.querySelector('.ws-name').textContent.startsWith('ES') && p.querySelector('.ws-tf').textContent === '15 min'; }, nq.id), 'the header follows');
+  k = await sockets(page);
+  check(k.filter(x => x.open).length === 2 && k.filter(x => x.open && x.subs[0] === 'ES').length === 1, 'NQ has no panel left: its connection closed; ES still one connection (' + k.filter(x => x.open).length + ' open)');
+  check(subsOf('ES') === 1, 'the ES chart joined the ES connection without a second subscribe');
+  await page.click(`.ws-panel[data-id="${nq.id}"] .ws-view`);
+  await page.click('#wsView [data-tf="range"]');
+  await page.fill('#wsView [data-f="range"]', '12');
+  await page.press('#wsView [data-f="range"]', 'Enter');
+  await page.keyboard.press('Escape');
+  s = await state(); p1 = s.panels.find(p => p.id === nq.id);
+  check(p1.tf === 'range' && p1.range === 12, 'Range bars of 12 ticks from the header (' + p1.tf + ' ' + p1.range + ')');
+  check(await page.evaluate(i => document.querySelector(`.ws-panel[data-id="${i}"] .ws-tf`).textContent, nq.id) === 'Range 12', 'the header says Range 12');
+  const single = await page.evaluate(() => ({ s: JSON.parse(localStorage.getItem('live-settings-v2')), r: JSON.parse(localStorage.getItem('live-range-v2') || '{}') }));
+  check(single.s.root === 'NQ' && single.s.tf === 'm5' && single.r.ES !== 12, 'the single chart page\'s instrument, bars and range sizes are untouched (' + single.s.root + ' ' + single.s.tf + ')');
+  await page.click(`.ws-panel[data-id="${nq.id}"] .ws-view`);
+  await page.click('#wsView [data-root="NQ"]');
+  await page.click('#wsView [data-tf="m5"]');
+  await page.keyboard.press('Escape');
+  await allLive();
+
+  console.log('Settings');
+  await page.click('#wsSet');
+  const st = await page.evaluate(() => ({ glide: [...document.querySelectorAll('#wsGlide button')].map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '*' : '')).join('|'),
+    range: [...document.querySelectorAll('#wsRangeMode option')].map(o => o.textContent).join('|'), pin: !document.getElementById('wsPinSec').hidden && document.getElementById('wsPin').textContent,
+    floors: document.querySelectorAll('#wsFloors input').length, hk: [...document.querySelectorAll('#wsHotkeys .hk-name')].map(e => e.textContent).join('|'), reset: !!document.getElementById('wsReset'),
+    fits: (() => { const r = document.getElementById('wsSettings').getBoundingClientRect(); return r.bottom <= innerHeight + 1 && r.left >= 0; })() }));
+  check(st.glide === 'Smooth*|Fast|Off', 'Settings: Glide (' + st.glide + ')');
+  check(st.range === 'NinjaTrader|Traded prices only', 'Settings: Range style');
+  check(st.pin === 'Change PIN', 'Settings: Change PIN (ChartBridge has a PIN)');
+  check(st.floors === 8, 'Settings: the large-print floors, RTH and overnight for 4 instruments');
+  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all', 'Settings: the hotkeys of the single chart page (' + st.hk + ')');
+  check(st.reset && st.fits, 'Settings: Reset layout, and the panel fits the window (it scrolls inside)');
+  await shot(page, 'workspace-settings.png');
+  await page.click('#wsGlide [data-v="fast"]');
+  await page.selectOption('#wsRangeMode', 'traded');
+  await page.click('#wsHk-buy');
+  await page.keyboard.press('Alt+B');
+  check((await page.textContent('#wsHkNote-buy')) === 'Saved.', 'a hotkey is set by pressing it in its box');
+  await page.keyboard.press('Escape');
+  check(!(await page.evaluate(() => document.getElementById('wsSettings').hidden)), 'Escape in a hotkey box is read as a key, Settings stays open');
+  await page.click('#wsGrid', { position: { x: 5, y: 5 } }).catch(() => {});
+  await page.evaluate(() => { localStorage.setItem('live-tape-floors-v1', JSON.stringify({})); });
   await page.click('#wsSet');
   await page.fill('#wsFloors input[data-root="MNQ"][data-w="rth"]', '4');
   await page.fill('#wsFloors input[data-root="MNQ"][data-w="eth"]', '4');
+  await page.click('#wsHk-be');
+  await page.keyboard.press('Tab');
   await page.keyboard.press('Escape');
-  check((await page.evaluate(() => JSON.parse(localStorage.getItem('workspace:live-tape-floors-v1')))).MNQ.rth === 4, 'large-print floors set in Settings are saved');
+  check(await page.evaluate(() => document.getElementById('wsSettings').hidden), 'Escape closes Settings');
+  const kept = await page.evaluate(() => ({ s: JSON.parse(localStorage.getItem('live-settings-v2')), hk: JSON.parse(localStorage.getItem('live-hotkeys-v1')), fl: JSON.parse(localStorage.getItem('live-tape-floors-v1')) }));
+  check(kept.s.glide === 'fast' && kept.s.rangeMode === 'traded' && kept.s.root === 'NQ' && kept.s.tf === 'm5', 'Glide and Range style saved where the single chart page keeps them (its instrument and bars untouched)');
+  check(kept.hk && kept.hk.buy === 'Alt+B', 'the hotkey saved where the single chart page keeps them');
+  check(kept.fl.MNQ.rth === 4, 'large-print floors set in Settings are saved');
+
+  console.log('Colors in the top bar');
+  check(await page.evaluate(() => !!document.querySelector('#wsColors .ce-theme-btn') && document.querySelectorAll('.ws-top .ce-theme-btn').length === 1), 'one Colors button, in the top bar');
+  await page.click('#wsColors .ce-theme-btn');
+  await shot(page, 'workspace-colors.png');
+  const pre = await page.evaluate(() => [...document.querySelectorAll('#wsColors .ce-preset')].map(b => b.dataset.id));
+  await page.click(`#wsColors .ce-preset[data-id="${pre[pre.length - 1]}"]`);
+  await page.waitForTimeout(200);
+  const ups = await page.evaluate(() => [...document.querySelectorAll('.ws-body > .chart-live')].map(e => e.style.getPropertyValue('--up-text')));
+  check(ups.length === 4 && new Set(ups).size === 1 && ups[0] !== '', 'a preset picked there colors every chart at once (' + ups[0] + ')');
+  await page.click('#wsColors .ce-reset');
+  await page.keyboard.press('Escape');
+
+  console.log('the update notice');
+  await page.evaluate(() => window.ChartUpdateNotice && window.ChartUpdateNotice.checkNow());
+  await page.waitForFunction(() => { const n = document.getElementById('updNote'); return n && !n.hidden; }, null, { timeout: 5000 }).catch(() => {});
+  const un = await page.evaluate(() => { const n = document.getElementById('updNote'); return n ? { text: n.querySelector('[role=status]').textContent, top: !!n.closest('#wsUpdate'), inChart: !!n.closest('.chart-live') } : null; });
+  check(un && un.top && !un.inChart && /Update ready: reload when flat/.test(un.text), '"Update ready: reload when flat" in the top bar (' + (un && un.text) + ')');
+
+  console.log('settings shared with the single chart page');
+  const sp = await ctx.newPage();
+  sp.on('pageerror', e => fail('single page error: ' + e.message));
+  await sp.goto(`http://localhost:${PORT}/live/single.html`);
+  await sp.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(sp, TEST_PIN)).catch(() => {});
+  await sp.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 30000 }).catch(() => fail('single page not live'));
+  const sv = await sp.evaluate(() => ({ grid: !!document.getElementById('wsGrid'), sym: document.querySelector('#symSeg [aria-pressed="true"]').dataset.v, tf: document.querySelector('#tfSeg [aria-pressed="true"]').dataset.v,
+    glide: document.querySelector('#glideSeg [aria-pressed="true"]').dataset.v, mode: document.getElementById('rangeMode').value, toolbar: getComputedStyle(document.querySelector('header.bar')).display }));
+  check(!sv.grid && sv.toolbar !== 'none', '/single.html is the single chart page with its toolbar');
+  check(sv.sym === 'NQ' && sv.tf === 'm5', 'it opens on its own instrument and bars (' + sv.sym + ' ' + sv.tf + ')');
+  check(sv.glide === 'fast' && sv.mode === 'traded', 'with the Glide and Range style set in the workspace');
+  // and back: Glide set on the single chart page reaches the workspace's charts
+  await sp.click('#glideSeg [data-v="off"]');
+  await page.waitForTimeout(300);
+  await page.click('#wsSet');
+  check(await page.evaluate(() => document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v) === 'off', 'Glide set on the single chart page shows in the workspace\'s Settings');
+  await page.keyboard.press('Escape');
+  await sp.close();
+  const sess0 = await sessions();                          // the single chart page asks for its session; the workspace never does
+  await page.evaluate(() => { const s = JSON.parse(localStorage.getItem('live-settings-v2')); s.glide = 'smooth'; s.rangeMode = 'nt'; localStorage.setItem('live-settings-v2', JSON.stringify(s)); localStorage.removeItem('live-hotkeys-v1'); });
+
+  console.log('Time and Sales');
   await control('price?root=MNQ&p=12345.25');
   await control('price?root=MNQ&p=12345.5');
   await page.waitForFunction(() => { const r = document.querySelectorAll('.tp-row .tp-p'); return r[0] && r[0].textContent === '12,345.50'; }, null, { timeout: 5000 }).catch(() => {});
@@ -126,9 +280,17 @@ try {
   check(tp.times.every((t, i) => i === 0 || t <= tp.times[i - 1]), 'times run newest first');
   check(tp.buy === 'rgb(61, 220, 151)' && tp.sell === 'rgb(255, 92, 122)', 'buys green, sells red');
   check(tp.big > 0 && tp.bigOk && tp.small && tp.bigBg === 'rgb(42, 31, 77)', 'large prints (size 4 or more here) highlighted purple, ' + tp.big + ' on screen');
-  const kept = await page.evaluate(() => window.workspace.views().find(v => v.type === 'tape').count);
-  check(kept <= 500, 'at most 500 trades kept (' + kept + ')');
+  const keptN = await page.evaluate(() => window.workspace.views().find(v => v.type === 'tape').count);
+  check(keptN <= 500, 'at most 500 trades kept (' + keptN + ')');
   await shot(page, 'workspace-tape.png');
+
+  console.log('a dropped connection');
+  await control('drop');
+  await page.waitForFunction(() => !document.getElementById('wsConn').classList.contains('live'), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 }).catch(() => fail('not live again after the drop'));
+  k = await sockets(page);
+  const openNow = k.filter(x => x.open);
+  check(openNow.length === 3 && new Set(openNow.map(x => x.subs[0])).size === 3, 'back with one connection per instrument (' + openNow.map(x => x.subs.join('+')).join(', ') + ')');
 
   console.log('drag, resize, overlap, close, add');
   let pt = await pitch();
@@ -136,7 +298,7 @@ try {
   await page.mouse.move(h0.x, h0.y); await page.mouse.down();
   await page.mouse.move(h0.x - pt.x * 3, h0.y + 10, { steps: 6 });
   const blocked = await page.evaluate(() => { const g = document.getElementById('wsGhost'); return !g.hidden && g.classList.contains('blocked'); });
-  check(blocked, 'dragging onto the execution chart shows the ghost blocked');
+  check(blocked, 'dragging onto the MNQ chart shows the ghost blocked');
   await shot(page, 'workspace-blocked.png');
   await page.mouse.up();
   s = await state();
@@ -146,8 +308,9 @@ try {
 
   await page.click(`.ws-panel[data-id="${es.id}"] .ws-x`);
   s = await state();
-  check(s.views.length === 4 && !s.panels.some(p => p.id === es.id), 'the ES panel closes with its x');
-  check((await saved()).layouts.Main.panels.length === 4, 'the close is saved');
+  check(s.views.length === 5 && !s.panels.some(p => p.id === es.id), 'the ES panel closes with its x');
+  check((await saved()).layouts.Main.panels.length === 5, 'the close is saved');
+  check(s.feed.lines.every(l => l.root !== 'ES' || l.clients === 0) && (await sockets(page)).filter(x => x.open).length === 2, 'its instrument\'s connection closes with it');
 
   h0 = await head(nq.id);
   await page.mouse.move(h0.x, h0.y); await page.mouse.down();
@@ -167,7 +330,7 @@ try {
   const c2 = await page.evaluate(i => { const r = document.querySelector(`.ws-panel[data-id="${i}"] .ws-size`).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, nq.id);
   await page.mouse.move(c2.x, c2.y); await page.mouse.down();
   await page.mouse.move(c2.x + pt.x * 2, c2.y, { steps: 4 });
-  check(await page.evaluate(() => document.getElementById('wsGhost').classList.contains('blocked')), 'a resize over the tape is blocked');
+  check(await page.evaluate(() => document.getElementById('wsGhost').classList.contains('blocked')), 'a resize over the ticket and the tape is blocked');
   await page.mouse.up();
   s = await state(); nq2 = s.panels.find(p => p.id === nq.id);
   check(nq2.w === 2, 'and put back');
@@ -177,27 +340,33 @@ try {
   s = await state(); nq2 = s.panels.find(p => p.id === nq.id);
   check(nq2.w === 2 && nq2.h === 1, 'never smaller than 2 x 1');
 
-  await page.click('#wsAdd'); await page.click('[data-add="tape"]');
+  await page.click('#wsAdd');
+  check(await page.isDisabled('#wsAddMenu [data-add="ticket"]'), 'Add panel: Order ticket is off while the layout has one');
+  await page.click('[data-add="tape"]');
   s = await state();
   const added = s.panels[s.panels.length - 1];
-  check(s.views.length === 5 && added.type === 'tape' && added.x === 7 && added.y === 2 && added.w === 3 && added.h === 4, 'Add panel puts a tape in the largest free rectangle (' + [added.x, added.y, added.w, added.h] + ')');
+  check(s.views.length === 6 && added.type === 'tape' && added.x === 7 && added.y === 2 && added.w === 3 && added.h === 4, 'Add panel puts a tape in the largest free rectangle (' + [added.x, added.y, added.w, added.h] + ')');
   await page.click('#wsAdd'); await page.click('[data-add="chart"]');
   s = await state();
   const added2 = s.panels[s.panels.length - 1];
-  check(s.views.length === 6 && added2.type === 'chart' && added2.w >= 2, 'Add panel: a chart in what is left (' + [added2.x, added2.y, added2.w, added2.h] + ')');
-  await page.waitForFunction(() => window.workspace.views().every(v => v.state === 'live'), null, { timeout: 20000 }).catch(() => fail('added panels not live'));
+  check(s.views.length === 7 && added2.type === 'chart' && added2.w >= 2, 'Add panel: a chart in what is left (' + [added2.x, added2.y, added2.w, added2.h] + ')');
+  await allLive().catch(() => fail('added panels not live'));
+  check((await sockets(page)).filter(x => x.open).length === 2 && subsOf('MNQ') <= 2, 'the new MNQ panels join the MNQ connection');
   await page.click('#wsAdd'); await page.click('[data-add="chart"]');
   const full = await page.evaluate(() => ({ note: document.getElementById('wsNote').textContent, n: window.workspace.views().length }));
-  check(full.n === 6 && full.note === 'No free space: close or shrink a panel', 'a full grid says so: "' + full.note + '"');
+  check(full.n === 7 && full.note === 'No free space: close or shrink a panel', 'a full grid says so: "' + full.note + '"');
 
   console.log('instrument and timeframe per panel');
-  await page.click(`.ws-panel[data-id="${added2.id}"] [id$="symSeg"] [data-v="ES"]`);
-  await page.click(`.ws-panel[data-id="${added2.id}"] [id$="tfSeg"] [data-v="m15"]`);
+  await page.click(`.ws-panel[data-id="${added2.id}"] .ws-view`);
+  await page.click('#wsView [data-root="ES"]');
+  await page.click('#wsView [data-tf="m15"]');
+  await page.keyboard.press('Escape');
   await page.selectOption(`.ws-panel[data-id="${added.id}"] select[data-act="root"]`, 'NQ');
   s = await state();
   const a2 = s.panels.find(p => p.id === added2.id), a1 = s.panels.find(p => p.id === added.id);
   check(a2.root === 'ES' && a2.tf === 'm15' && a1.root === 'NQ', 'a chart keeps its own instrument and bars, a tape its instrument');
   check(await page.evaluate(i => document.querySelector(`.ws-panel[data-id="${i}"] .ws-tf`).textContent, added2.id) === '15 min', 'the header follows the chart');
+  await allLive().catch(() => fail('not live after the changes'));
   const layoutBefore = (await state()).panels;
 
   console.log('reload');
@@ -206,22 +375,22 @@ try {
   check(JSON.stringify(s.panels) === JSON.stringify(layoutBefore), 'a reload opens the same layout, panels, places and choices');
   const roots = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => p.querySelector('[id$="symSeg"] [aria-pressed="true"]').dataset.v + ':' + p.querySelector('[id$="tfSeg"] [aria-pressed="true"]').dataset.v));
   check(JSON.stringify(roots) === JSON.stringify(s.panels.filter(p => p.type === 'chart').map(p => p.root + ':' + p.tf)), 'each chart mounts on its own instrument and bars (' + roots.join(', ') + ')');
+  k = await sockets(page);
+  check(k.length === 3 && subsOf('MNQ') === 1 && subsOf('NQ') === 1 && subsOf('ES') === 1, 'three instruments, three connections, one subscribe each (' + k.map(x => x.subs.join('+')).join(', ') + ')');
 
   console.log('?layout=Second');
   await open(URL0 + '?layout=Second');
   s = await state();
-  check(s.layout === 'Second' && s.views.length === 5 && s.panels.every(p => !layoutBefore.some(q => q.id === p.id)), 'a new name opens the default layout with its own panel ids');
-  const st = await saved();
-  check(Object.keys(st.layouts).join() === 'Main,Second' && st.layouts.Main.panels.length === 6, 'Main is left as it was');
+  check(s.layout === 'Second' && s.views.length === 6 && s.panels.every(p => !layoutBefore.some(q => q.id === p.id)), 'a new name opens the default layout with its own panel ids');
+  const sto = await saved();
+  check(Object.keys(sto.layouts).join() === 'Main,Second' && sto.layouts.Main.panels.length === 7, 'Main is left as it was');
   check(await page.evaluate(() => [...document.getElementById('wsLayout').options].map(o => o.textContent).join('|')) === 'Main|Second|──────|New layout...|Rename|Delete', 'the Layout select lists both, then New layout..., Rename, Delete');
 
   console.log('read only');
   const sent = await page.evaluate(() => window.__spy.sockets.flatMap(k => k.sent.map(d => JSON.parse(d).type)));
   check(sent.length > 0 && sent.every(t => t === 'subscribe' || t === 'ping'), 'the page sends only subscribe (and ping): ' + [...new Set(sent)].join(', '));
-  const open_ = await page.evaluate(() => window.__spy.sockets.length);
-  check(open_ === 5, 'one WebSocket per panel: ' + open_);
-  const received = await (await fetch(`http://127.0.0.1:${PORT}/test/received`, { method: 'POST' })).json();
-  check(received.sessionRequests === 0, 'no GET /session');
+  check((await page.evaluate(() => window.__spy.sockets.length)) === 3, 'one WebSocket per instrument: 3 for 6 panels');
+  check(await sessions() === sess0, 'no GET /session from the workspace, before or after reloads');
 
   console.log('New layout, Rename, Delete');
   await page.selectOption('#wsLayout', '\u0001new');
@@ -241,7 +410,7 @@ try {
   await page.click('#wsDialog [type="submit"]');
   s = await state();
   check(s.layout === 'Main' && !Object.keys((await saved()).layouts).includes('Left screen'), 'Delete removes it and opens Main');
-  await page.waitForFunction(() => window.workspace.views().every(v => v.state === 'live'), null, { timeout: 20000 }).catch(() => fail('Main not live again'));
+  await allLive().catch(() => fail('Main not live again'));
 
   console.log('screens');
   for (const [w, h] of [[2560, 1440], [1366, 768]]) {
@@ -249,7 +418,8 @@ try {
     await page.waitForTimeout(800);
     const fitOk = await page.evaluate(() => { const g = document.getElementById('wsGrid').getBoundingClientRect(); return [...document.querySelectorAll('.ws-panel')].every(p => { const r = p.getBoundingClientRect(); return r.left >= g.left - 1 && r.top >= g.top - 1 && r.right <= g.right + 1 && r.bottom <= g.bottom + 1 && r.width > 50 && r.height > 50; }) && document.documentElement.scrollWidth <= innerWidth; });
     check(fitOk, w + 'x' + h + ': every panel inside the window, by cells');
-    await shot(page, `workspace-${w}x${h}.png`);
+    const heads = await page.evaluate(() => [...document.querySelectorAll('.ws-head')].every(h => h.offsetHeight === 28 && h.scrollHeight <= 28));
+    check(heads, w + 'x' + h + ': every header one 28 px line');
   }
   // the default layout itself at 2560 and 1366, for Anthony to look at
   await page.setViewportSize({ width: 2560, height: 1440 });
@@ -259,6 +429,9 @@ try {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.waitForTimeout(1500);
   await shot(page, 'workspace-1366x768.png');
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.waitForTimeout(1500);
+  await shot(page, 'workspace-1920x1080.png');
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));
 } finally {

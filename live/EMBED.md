@@ -1,6 +1,7 @@
 # Embedding the live chart (ChartLive.mount)
 
-The live chart page (`live/index.html`, served by ChartBridge at `http://localhost:8765/`) and a host page such
+The single chart page (`live/single.html`, served by ChartBridge at `http://localhost:8765/single.html`), the
+workspace (`live/index.html`, ChartBridge's main page at `http://localhost:8765/`, a host of its own) and a host page such
 as The Desk run the same code. The standalone page boots itself; a host page calls `ChartLive.mount`. Every
 change to the standalone chart therefore shows up in the host as soon as the host vendors the new files.
 
@@ -18,12 +19,12 @@ Copy these five files from one chart-engine commit (all from the same version), 
 
 No bundler, no build step. Scripts 2 to 5 must run in this order (plain `defer` scripts keep document order),
 and `ChartLive.mount` must run after script 5, for example from the host's own deferred or module script.
-Leave out `data-mount="page"`: that attribute is how `live/index.html` boots the standalone page into `body`.
+Leave out `data-mount="page"`: that attribute is how `live/single.html` boots the standalone page into `body`.
 
 Record the chart-engine commit and version (`ChartEngine.VERSION`) in the host's `VENDORED.txt`.
 
 Optional: the IBM Plex fonts the chart uses (IBM Plex Sans, Sans Condensed and Mono, from Google Fonts in
-`live/index.html`). Without them the chart falls back to system fonts.
+`live/single.html`). Without them the chart falls back to system fonts.
 
 If the host sets a Content Security Policy: `connect-src` must allow the WebSocket URLs it passes (for
 example `ws://localhost:8765` and its own relay), and `style-src` must allow inline styles (the engine adds one
@@ -97,6 +98,17 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
 | `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors, ind), rename(group, id, name), remove(group, id), shared }` (`ind`: a chart preset's linked indicator preset id), each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
+| `feed` | none | A `ChartFeed` hub (`live/feed.js`, `ChartFeed.create({ wsUrl })`): the chart takes its data from the hub's one connection per instrument instead of opening its own WebSocket, so several charts (and tapes) of one instrument share one connection and one subscribe. `wsUrl` is then not needed. Added for the workspace (E2a). |
+| `view` | none | `{ root, tf, range }`: the chart's own instrument, bars (`s15` to `h1`, `range`) and range size in ticks. The chart starts on them and never saves them under the prefix; the host keeps them (`onView`). Without it the chart reads and saves them under the prefix as before. |
+| `onView` | none | Called with `{ root, tf, range }` whenever the chart's instrument, bars or range size change (from its toolbar or `setView`). |
+| `toolbar` | `true` | `false`: the chart's toolbar is not shown. The host shows its own header with the chart's Indicators button (the returned `indicators` element, moved into an element with the class `chart-live` so `live.css` styles it) and calls `setView`, `chart.setTool`, `chart.clearDrawings`, `chart.reset`. |
+| `onColors` | none | Called after this chart's Colors panel or an indicator gear changed a color, so a host can call `refreshColors()` on its other charts. |
+
+With these options the returned object also has `setView({ root, tf, range })` (any of the three), `view()`,
+`refreshSettings()` (Glide and Range style read again from storage, for a host whose Settings change them),
+`refreshColors()` (the chart and indicator colors read again from storage), and the elements `indicators` (the
+Indicators button and its menu) and `colors` (the Colors button and panel) for a host to place. None of it changes a
+chart mounted without them.
 
 Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
 on up to every 5 s. Before the first connection the chart shows "Waiting for ChartBridge"; after a drop it shows
@@ -153,7 +165,8 @@ session counted from later than 18:00 with the start ("since 18:05 ET"). A relay
 ## Read-only guarantee
 
 A chart made with `ChartLive.mount` is always read only: there is no option to turn trading on (a `trading`
-option is ignored). Only the standalone page, booted by `live/index.html` with `data-mount="page"`, can trade.
+option is ignored). Only the standalone page, booted by `live/single.html` with `data-mount="page"`, can trade (the
+workspace's charts are read only until its order ticket, E2b).
 
 - The chart never requests `GET /session` and never sends `auth`.
 - Only `subscribe` and `ping` messages ever leave it: `send` drops every other type, whatever calls it.

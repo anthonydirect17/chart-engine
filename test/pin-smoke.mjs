@@ -79,7 +79,7 @@ try {
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('console: ' + m.text()); });
 
   /* ---------------- 1. no PIN on this PC: "Set a PIN", nothing streams, no order UI */
-  await page.goto(`http://localhost:${PORT}/live/`);
+  await page.goto(`http://localhost:${PORT}/live/single.html`);
   await until(async () => await title(page) === 'Set a PIN', '"Set a PIN" shown');
   await page.waitForTimeout(800);
   check(!(await page.$('#connPill')) && !(await page.$('#obar')) && !(await page.$('#chart')), 'no PIN set: no chart, no order bar, nothing behind the pad');
@@ -180,7 +180,7 @@ try {
   await phoneCtx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const phone = await phoneCtx.newPage();
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));
-  await phone.goto(`http://localhost:${PORT}/live/`);
+  await phone.goto(`http://localhost:${PORT}/live/single.html`);
   await until(async () => await title(phone) === 'Enter PIN', 'phone: PIN pad');
   await noSideScroll(phone, 400, 'PIN pad');
   const keys = await phone.locator('.cb-pin-key').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return [r.width, r.height]; }));
@@ -220,7 +220,7 @@ try {
   await until(async () => await pill(page) === 'LIVE', 'live after a drop with a torn pin file (the copy read earlier)', 15000);
   check(!(await page.$('.cb-pin')) && await page.evaluate(() => window.ChartBridgePin.active()), 'torn pin file: the open page reconnects, unlocked, no pad');
   const other = await ctx.newPage();
-  await other.goto(`http://localhost:${PORT}/live/`);
+  await other.goto(`http://localhost:${PORT}/live/single.html`);
   await until(async () => await title(other) === 'Enter PIN', 'a new page with a torn pin file asks for the PIN');
   check(await other.evaluate(async () => (await fetch('/pin/set', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"pin":"0000"}' })).status) === 409,
     'torn pin file: "Enter PIN", not "Set a PIN"; setting a new PIN is refused (409)');

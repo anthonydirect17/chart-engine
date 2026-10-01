@@ -157,7 +157,7 @@ try {
   const off = offsetTo(13, 0);
   const br = await startBridge(off);
   const ctx = await context(off);
-  const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+  const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
   check(await p.textContent('#lgTf') === 'Range 40t' && await p.textContent('#lgName') !== '', 'NQ Range 40 (sample data): ' + await p.textContent('#lgName') + ' ' + await p.textContent('#lgTf'));
 
   /* off by default, listed in the Indicators menu */
@@ -263,7 +263,7 @@ try {
   const pick = async (pg, v) => { await pg.click('#indBtn'); await pg.click('#indBody [data-act="gear"][data-id="vp"]'); await pg.click('#indBody [data-act="opt"][data-id="vp"][data-v="' + v + '"]'); await pg.keyboard.press('Escape'); await pg.waitForTimeout(300); };
   const saved = pg => pg.evaluate(() => ({ opt: JSON.parse(localStorage.getItem('live-indicator-options-v1')), ind: localStorage.getItem('live-indicators-v2'), settings: localStorage.getItem('live-settings-v2') }));
   await pick(p, 'rth');
-  const tabB = await openPage(ctx, `http://localhost:${br.port}/live/`);      // opened while RTH is saved
+  const tabB = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);      // opened while RTH is saved
   await pick(p, 'full');                                                        // tab A saves Session
   await p.evaluate(() => { const o = JSON.parse(localStorage.getItem('live-indicator-options-v1')); o['pane-2'] = { vp: { session: 'rth' } }; localStorage.setItem('live-indicator-options-v1', JSON.stringify(o)); });
   const before = await saved(p);
@@ -275,7 +275,7 @@ try {
   check(after.opt.main.vp.session === 'rth' && b1.rth === true && b1.total === b1.expect.rth, 'tab B clicks RTH, the one it shows: RTH saved and still drawn: ' + JSON.stringify(after.opt));
   check(after.opt['pane-2'].vp.session === 'rth' && Object.keys(after.opt).sort().join() === 'main,pane-2' && after.ind === before.ind && after.settings === before.settings,
     'read, merged, written: another pane\'s option and the other keys kept');
-  const tabC = await openPage(ctx, `http://localhost:${br.port}/live/`), c = await state(tabC);
+  const tabC = await openPage(ctx, `http://localhost:${br.port}/live/single.html`), c = await state(tabC);
   check(c.on === true && c.rth === true && c.total === c.expect.rth, 'a new load draws what tab B showed: RTH, ' + c.total);
   await tabB.close(); await tabC.close();
   await ctx.close(); br.kill();
@@ -291,7 +291,7 @@ try {
         localStorage.setItem('live-indicators-v1', JSON.stringify({ main: { vp: true } }));
       } catch (e) {}
     });
-    const q = await openPage(ctx2, `http://localhost:${br2.port}/live/`);
+    const q = await openPage(ctx2, `http://localhost:${br2.port}/live/single.html`);
     await q.waitForTimeout(1500);
     const m = await state(q);
     check(m.on && m.has && /loads no tick history/.test(m.note) && await q.isVisible('#vpNote'), '1m first load: a quiet note: ' + m.note);
@@ -383,7 +383,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, false);
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     const now0 = await etNowOf(q);
     check(dowOf(now0) === dow && U.tod(now0) >= 12 * 3600 && U.tod(now0) < 12 * 3600 + 120, label + ' clock: ' + U.fmtFull(now0));
     for (const tf of Object.keys(TFS)) for (const session of ['full', 'rth']) {
@@ -411,7 +411,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, true, null, 72);
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await loadOn(q, 'range', session);
     const rth = session === 'rth', sunDay = Math.floor((await etNowOf(q)) / 86400) * 86400, open = sunDay + 18 * 3600;
     let w = await state(q);
@@ -442,7 +442,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, true);
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     await loadOn(q, 'range', 'rth');
     const tueDay = Math.floor((await etNowOf(q)) / 86400) * 86400, open = tueDay + 18 * 3600;
     let w = await state(q);
@@ -466,7 +466,7 @@ try {
     const br = await startBridge(off, NEW_BRIDGE);
     const ctx = await closedContext(off, true);   // live trades held: the counts are compared with the page's
     await vpOn(ctx);
-    const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     for (const tf of ['range', 's15']) {
       await loadOn(q, tf, 'rth');
       const w = await state(q), ask = (await asked(q)).pop();
@@ -490,7 +490,7 @@ try {
       const br = await startBridge(off, NEW_BRIDGE);
       const ctx = await closedContext(off, true);
       await vpOn(ctx);
-      const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+      const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
       const hDay = Math.floor((await etNowOf(q)) / 86400) * 86400;
       for (const tf of ['range', 'm1']) {
         await loadOn(q, tf, 'rth');
@@ -517,7 +517,7 @@ try {
       const br = await startBridge(off, NEW_BRIDGE.concat('--tick-shift-ms=137'));
       const ctx = await closedContext(off, true);
       await vpOn(ctx);
-      const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+      const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
       await loadOn(q, 'range', 'full');
       const w = await state(q), got = await trades(q), exp = lastSession(got, Infinity, false), first = got.length ? got[0][0] : null;
       check(first !== null && Math.abs(U.tod(first) - 64800.137) < 0.0005 && w.total === exp.total && w.total > 0 && new RegExp(' \\(' + exp.day + '\\)$').test(w.legend || '') && w.note === '',
@@ -537,7 +537,7 @@ try {
       const br = await startBridge(off, NEW_BRIDGE.concat('--tick-shift-ms=137'));
       const ctx = await closedContext(off, true, gap ? [need, need + gap] : null);
       await vpOn(ctx);
-      const q = await openPage(ctx, `http://localhost:${br.port}/live/`);
+      const q = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
       await loadOn(q, 'range', 'full');
       const w = await state(q), got = await trades(q), first = got.length ? got[0][0] : null;
       const ok = gap === 0 ? / \(Mon\)$/.test(w.legend || '') && w.note === ''

@@ -18,40 +18,41 @@ test('the lists match live.js (instruments and timeframes)', () => {
   assert.deepStrictEqual(W.TFS, LivePrefs.TFS);
 });
 
-test('default layout: the signed-off mockup on 12 x 6, one execution chart, 4 charts and a tape', () => {
+test('default layout (Anthony, 2026-10-01): 4 charts, the order ticket top right, Time and Sales under it, no execution chart', () => {
   let n = 0;
   const l = W.defaultLayout(() => 'id' + (++n));
   assert.deepStrictEqual(l.panels.map(p => [p.type, p.root, p.tf, p.x + 1, p.x + p.w, p.y + 1, p.y + p.h]), [
-    ['chart', 'MNQ', 'range', 1, 7, 1, 4], ['chart', 'MNQ', 'h1', 1, 7, 5, 6], ['chart', 'NQ', 'm5', 8, 10, 1, 3], ['chart', 'ES', 'm1', 8, 10, 4, 6], ['tape', 'MNQ', undefined, 11, 12, 1, 6]]);
-  assert.strictEqual(l.panels.filter(p => p.exec).length, 1);
-  assert.ok(l.panels[0].exec && l.panels[0].range === 40);
+    ['chart', 'MNQ', 'range', 1, 7, 1, 4], ['chart', 'MNQ', 'h1', 1, 7, 5, 6], ['chart', 'NQ', 'm5', 8, 10, 1, 3], ['chart', 'ES', 'm1', 8, 10, 4, 6],
+    ['ticket', undefined, undefined, 11, 12, 1, 2], ['tape', 'MNQ', undefined, 11, 12, 3, 6]]);
+  assert.ok(l.panels.every(p => !('exec' in p)), 'no execution chart');
+  assert.strictEqual(l.panels[0].range, 40);
   assert.deepStrictEqual(W.cleanLayout(l), l, 'the default is already clean');
   assert.ok(noOverlap(l.panels) && inside(l.panels));
   assert.strictEqual(W.largestFree(l.panels), null, 'it fills the grid');
   const ids = new Set(W.defaultLayout().panels.map(p => p.id));
-  assert.strictEqual(ids.size, 5);
+  assert.strictEqual(ids.size, 6);
   for (const id of ids) assert.match(id, /^[A-Za-z0-9_-]{1,40}$/);
 });
 
 test('cleanPanel: bad shapes dropped, only known fields kept', () => {
-  assert.deepStrictEqual(W.cleanPanel(chart('a', 0, 0, 2, 1, { exec: true, range: 12, junk: 1 })), { id: 'a', type: 'chart', exec: true, root: 'MNQ', tf: 'm1', range: 12, x: 0, y: 0, w: 2, h: 1 });
+  assert.deepStrictEqual(W.cleanPanel(chart('a', 0, 0, 2, 1, { exec: true, range: 12, junk: 1 })), { id: 'a', type: 'chart', root: 'MNQ', tf: 'm1', range: 12, x: 0, y: 0, w: 2, h: 1 }, 'E1\'s exec flag is dropped');
   assert.deepStrictEqual(W.cleanPanel(tape('t', 1, 1, 2, 2)), { id: 't', type: 'tape', root: 'NQ', x: 1, y: 1, w: 2, h: 2 });
-  assert.strictEqual(W.cleanPanel(Object.assign(tape('t', 0, 0, 2, 2), { tf: 'm1', exec: true })).exec, undefined, 'a tape is never the execution chart');
+  assert.deepStrictEqual(W.cleanPanel({ id: 'k', type: 'ticket', root: 'ES', tf: 'm1', x: 10, y: 0, w: 2, h: 2 }), { id: 'k', type: 'ticket', x: 10, y: 0, w: 2, h: 2 }, 'the ticket keeps no instrument (it gets its own in E2b)');
   for (const bad of [null, 1, 'x', [], {}, chart('', 0, 0, 2, 1), chart('a b', 0, 0, 2, 1), chart('a', 0, 0, 2, 1, { type: 'clock' }),
     chart('a', 0, 0, 2, 1, { root: 'CL' }), chart('a', 0, 0, 2, 1, { tf: 'd1' }), chart('a', 0.5, 0, 2, 1), chart('a', -1, 0, 2, 1), chart('a', 0, 0, 0, 1), chart('a', 0, 0, '2', 1)]) {
     assert.strictEqual(W.cleanPanel(bad), null, JSON.stringify(bad));
   }
-  assert.strictEqual(W.cleanPanel(chart('a', 0, 0, 2, 1, { exec: 'yes', range: 401 })).exec, undefined);
   assert.strictEqual(W.cleanPanel(chart('a', 0, 0, 2, 1, { range: 401 })).range, undefined);
 });
 
-test('cleanLayout: unique ids, at most 12 panels, at most one execution chart', () => {
+test('cleanLayout: unique ids, at most 12 panels, at most one order ticket', () => {
   const many = [];
   for (let i = 0; i < 20; i++) many.push(chart('c' + i, (i % 6) * 2, Math.floor(i / 6) % 6, 2, 1));
   const l = W.cleanLayout({ panels: many });
   assert.strictEqual(l.panels.length, 12);
-  const dup = W.cleanLayout({ panels: [chart('a', 0, 0, 2, 1, { exec: true }), chart('a', 2, 0, 2, 1), chart('b', 4, 0, 2, 1, { exec: true })] });
-  assert.deepStrictEqual(dup.panels.map(p => [p.id, !!p.exec]), [['a', true], ['b', false]]);
+  const dup = W.cleanLayout({ panels: [chart('a', 0, 0, 2, 1), chart('a', 2, 0, 2, 1), chart('b', 4, 0, 2, 1),
+    { id: 'k1', type: 'ticket', x: 6, y: 0, w: 2, h: 1 }, { id: 'k2', type: 'ticket', x: 8, y: 0, w: 2, h: 1 }] });
+  assert.deepStrictEqual(dup.panels.map(p => p.id), ['a', 'b', 'k1'], 'a second id and a second ticket dropped');
   assert.deepStrictEqual(W.cleanLayout({ panels: [] }), { panels: [] }, 'an empty layout is kept');
   for (const bad of [null, undefined, 3, 'x', { panels: 'no' }, { panels: [null, 1, 'x'] }]) assert.deepStrictEqual(W.cleanLayout(bad), { panels: [] });
 });
@@ -109,7 +110,7 @@ test('largestFree: biggest free rectangle, top left on a tie, null when full', (
   assert.strictEqual(W.largestFree(full), null);
   const def = W.defaultLayout().panels;
   assert.strictEqual(W.largestFree(def), null);
-  assert.deepStrictEqual(W.largestFree(def.filter(p => p.type !== 'tape')), { x: 10, y: 0, w: 2, h: 6 }, 'closing the tape frees its column');
+  assert.deepStrictEqual(W.largestFree(def.filter(p => p.type !== 'tape')), { x: 10, y: 2, w: 2, h: 4 }, 'closing the tape frees its place');
 });
 
 test('reflow: nothing off the grid, nothing overlapping, nothing lost while there is room', () => {
@@ -159,7 +160,7 @@ test('storage: one layout written at a time, rename keeps the order, floors one 
   const other = JSON.parse(s.getItem(W.KEYS.store)); other.layouts.Main.panels.pop(); s.setItem(W.KEYS.store, JSON.stringify(other));
   W.saveLayout(s, 'Second', { panels: [tape('t', 2, 0, 2, 6)] });
   const now = W.readStore(s);
-  assert.strictEqual(now.layouts.Main.panels.length, 4);
+  assert.strictEqual(now.layouts.Main.panels.length, 5);
   assert.strictEqual(now.layouts.Second.panels[0].x, 2);
   assert.ok(W.saveLayout(s, 'Third', { panels: [] }));
   assert.ok(!W.renameLayout(s, 'Main', 'Second'), 'taken');
@@ -191,16 +192,26 @@ test('formatting: tape clock, prices, timeframe labels', () => {
 });
 
 test('no en or em dashes in the workspace files', () => {
-  for (const f of ['live/workspace.js', 'live/workspace.css', 'live/workspace.html', 'test/workspace.test.js', 'test/workspace-smoke.mjs', 'test/perf-workspace.mjs']) {
+  for (const f of ['live/workspace.js', 'live/workspace.css', 'live/index.html', 'live/feed.js', 'live/update-notice.js', 'test/workspace.test.js', 'test/feed.test.js', 'test/workspace-smoke.mjs', 'test/perf-workspace.mjs']) {
     const p = path.join(__dirname, '..', f);
     if (fs.existsSync(p)) assert.ok(!/[\u2013\u2014]/.test(fs.readFileSync(p, 'utf8')), f);
   }
 });
 
-test('the workspace page files are installed, and the page loads only installed files', () => {
+test('the workspace is the main page (index.html), the single chart page is single.html, both installed', () => {
   const www = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).www;
   const to = www.map(f => f.to);
-  for (const f of ['workspace.html', 'workspace.js', 'workspace.css']) assert.ok(to.includes(f), f);
-  const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.html'), 'utf8');
+  for (const f of ['index.html', 'single.html', 'workspace.js', 'workspace.css', 'feed.js', 'update-notice.js']) assert.ok(to.includes(f), f);
+  assert.ok(!to.includes('workspace.html'), 'no workspace.html any more');
+  assert.deepStrictEqual(www.find(f => f.to === 'index.html').from, 'live/index.html');
+  assert.deepStrictEqual(www.find(f => f.to === 'single.html').from, 'live/single.html');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8');
   for (const m of html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^":]+)"/g)) assert.ok(to.includes(m[1].replace(/^\.\.\//, '')), m[1]);
+  assert.match(html, /id="wsGrid"/, 'index.html is the workspace');
+  const at = f => html.indexOf('src="' + f + '"');
+  assert.ok(at('live.js') < at('feed.js') && at('feed.js') < at('workspace.js') && at('workspace.js') < at('update-notice.js'), 'live.js, feed.js, workspace.js, then the update notice');
+  assert.match(html, /data-update-host/, 'the update notice has its place in the top bar');
+  const single = fs.readFileSync(path.join(__dirname, '..', 'live', 'single.html'), 'utf8');
+  assert.match(single, /<script src="live\.js" data-mount="page"><\/script>/, 'single.html is the trading page');
+  assert.ok(!/workspace|feed\.js/.test(single), 'and nothing of the workspace');
 });

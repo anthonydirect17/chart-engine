@@ -1,7 +1,10 @@
 /*
- * The trading workspace (live/workspace.html): the top bar, the 12 x 6 snap grid and its panels, Time and Sales.
- * The charts inside the panels keep live.css as it is (their toolbar is not restyled here); only the chart's outer
- * padding and the 360 px floor of its plot are relaxed, so a short panel still shows its chart.
+ * The trading workspace (live/index.html): the top bar, the 12 x 6 snap grid and its panels, the slim chart headers,
+ * Time and Sales, the order ticket's place, the popovers and Settings.
+ * The charts inside the panels keep live.css (their own toolbar is not shown: ChartLive.mount toolbar: false); only the
+ * chart's outer padding and the 360 px floor of its plot are relaxed, so a short panel still shows its chart. The chart's
+ * Indicators button and menu, the Colors panel and the hotkey boxes sit in .ws-lv spans that carry the class chart-live
+ * (so live.css styles them) and take no box of their own.
  * Colors are the workspace mockup's (2026-10-01), on the house style: dark grounds, purple accent, IBM Plex.
  */
 :root {
@@ -20,7 +23,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 [hidden] { display: none !important; }
 
 /* ---------------- top bar, 40 px */
-.ws-top { height: 40px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 16px; padding: 0 12px; border-bottom: 1px solid var(--ws-line); background: var(--ws-panel); white-space: nowrap; min-width: 0; }
+.ws-top { position: relative; z-index: 30; height: 40px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 16px; padding: 0 12px; border-bottom: 1px solid var(--ws-line); background: var(--ws-panel); white-space: nowrap; min-width: 0; }
 .ws-title { font-weight: 600; letter-spacing: .04em; color: var(--ws-soft); }
 .ws-conn { color: var(--ws-muted); }
 .ws-conn.live { color: var(--ws-buy); }
@@ -48,11 +51,13 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-ghost.blocked { border-color: var(--ws-sell); background: color-mix(in srgb, var(--ws-sell-ground) 70%, transparent); }
 
 /* ---------------- panels */
-.ws-panel { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--ws-panel); border: 1px solid var(--ws-line); border-radius: 8px; overflow: hidden; }
-.ws-panel.exec { border: 2px solid var(--ws-accent); box-shadow: 0 0 0 1px var(--ws-accent-deep) inset; }
+.ws-panel { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--ws-panel); border: 1px solid var(--ws-line); border-radius: 8px; }
+/* a panel whose header menu is open sits above its neighbours, so the menu can reach over them (a class set by
+   workspace.js: a :has() rule here cost every frame a style pass, perf:workspace) */
+.ws-panel.ws-up { z-index: 8; }
 .ws-panel.dragging { z-index: 6; opacity: .85; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); will-change: transform; }
 .ws-panel.sizing { z-index: 6; }
-.ws-head { height: 28px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--ws-line); cursor: grab; user-select: none; white-space: nowrap; min-width: 0; touch-action: none; }
+.ws-head { position: relative; height: 28px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--ws-line); cursor: grab; user-select: none; white-space: nowrap; min-width: 0; touch-action: none; }
 .ws-grip { color: var(--ws-grip); letter-spacing: 2px; }
 .ws-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .ws-tf { color: var(--ws-text2); }
@@ -61,14 +66,40 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-head .ws-sel { height: 22px; padding: 0 4px; border-radius: 4px; cursor: pointer; }
 .ws-x, .ws-ic { border: 0; background: transparent; color: var(--ws-muted); font: inherit; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
 .ws-x:hover, .ws-ic:hover { color: var(--ws-text); background: var(--ws-field); }
-.ws-body { flex: 1 1 auto; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.ws-body { flex: 1 1 auto; min-height: 0; position: relative; display: flex; flex-direction: column; overflow: hidden; border-radius: 0 0 7px 7px; }
+
+/* the slim chart header: instrument and bars (a button), the chart's Indicators, the small menu */
+.ws-lv.chart-live { display: contents; }
+.ws-view { display: inline-flex; align-items: center; gap: 8px; min-width: 0; height: 22px; padding: 0 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--ws-text); font: inherit; cursor: pointer; }
+.ws-view:hover, .ws-view[aria-expanded="true"] { background: var(--ws-field); border-color: var(--ws-line2); }
+.ws-view .ws-name { color: var(--ws-text); }
+.ws-caret { width: 5px; height: 5px; flex: none; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
+.ws-head .ind { flex: none; }
+.ws-head .ind-btn { min-height: 22px; height: 22px; padding: 0 8px; border-radius: 5px; gap: 6px; font-size: 12px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
+.ws-head .ind-btn:hover { background: var(--ws-field); color: var(--ws-text); }
+.ws-head .ind-panel { white-space: normal; cursor: auto; user-select: text; text-align: left; }
+.ws-more { font-size: 15px; line-height: 1; padding: 1px 6px 3px; }
+/* narrow panels (a 1366 px screen): the header keeps the instrument, bars and buttons on one line. The classes come
+   from workspace.js (a ResizeObserver): container queries made every chart frame slower (perf:workspace). */
+.ws-view, .ws-x, .ws-ic, .ws-head .ws-sel { flex: none; }
+.ws-panel.narrow .ws-grip { display: none; }
+.ws-panel.narrow .ws-head { padding-left: 8px; gap: 6px; }
+.ws-panel.narrower .ws-head .ind-btn { font-size: 0; gap: 4px; }
+.ws-panel.narrower .ws-head .ind-btn::before { content: "Ind"; font-size: 12px; }
+.ws-x[aria-expanded="true"], .ws-ic[aria-expanded="true"] { color: var(--ws-text); background: var(--ws-field); }
 .ws-size { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 4; touch-action: none;
   background: linear-gradient(135deg, transparent 0 55%, var(--ws-grip) 55% 62%, transparent 62% 72%, var(--ws-grip) 72% 79%, transparent 79%); }
 .ws-size:hover { background: linear-gradient(135deg, transparent 0 55%, var(--ws-accent) 55% 62%, transparent 62% 72%, var(--ws-accent) 72% 79%, transparent 79%); }
 
-/* the mounted chart fills its panel; a short panel keeps a small plot instead of the page's 360 px */
-.ws-panel .chart-live { flex: 1 1 auto; min-height: 0; padding: 6px 8px; gap: 6px; }
+/* the mounted chart fills its panel; a short panel keeps a small plot instead of the page's 360 px; its status line is
+   one line (what does not fit is cut, the chart keeps its height) */
+.ws-body > .chart-live { flex: 1 1 auto; min-height: 0; padding: 6px 8px 4px; gap: 4px; }
 .ws-panel .chart-live .stage { min-height: 48px; }
+.ws-body > .chart-live > .status { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; min-width: 0; }
+
+/* ---------------- the order ticket's place (the ticket comes in E2b) */
+.tk-hold { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px; text-align: center; color: var(--ws-muted); line-height: 1.4; }
+.tk-hold b { color: var(--ws-text2); font-weight: 600; letter-spacing: .02em; }
 
 /* ---------------- Time and Sales */
 .tp-cols, .tp-row { display: grid; grid-template-columns: 62px minmax(0, 1fr) 40px; gap: 6px; padding: 0 8px; }
@@ -87,7 +118,27 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-menu { display: flex; flex-direction: column; padding: 4px; min-width: 160px; }
 .ws-menu button { text-align: left; border: 0; background: transparent; color: var(--ws-text); font: inherit; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
 .ws-menu button:hover, .ws-menu button:focus-visible { background: var(--ws-tint); color: var(--ws-soft); outline: none; }
-.ws-settings { width: 320px; padding: 4px 0; }
+.ws-menu button[aria-pressed="true"] { color: var(--ws-soft); background: var(--ws-tint); }
+.ws-menu button:disabled { color: var(--ws-muted); background: transparent; cursor: default; }
+.ws-pop { overflow-y: auto; overscroll-behavior: contain; }
+.ws-settings { width: 400px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 4px 0; }
+.ws-settings .hk-list { padding: 0; }
+.ws-field { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.ws-flabel { width: 84px; color: var(--ws-muted); }
+.ws-seg, .vw-row { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.ws-seg button, .vw-row button { height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--ws-line2); background: var(--ws-field); color: var(--ws-text2); font: inherit; cursor: pointer; }
+.ws-seg button:hover, .vw-row button:hover { color: var(--ws-text); }
+.ws-seg button[aria-pressed="true"], .vw-row button[aria-pressed="true"] { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); font-weight: 500; }
+:is(.ws-seg, .vw-row) button:focus-visible, .vw-range input:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+.ws-viewpop { display: flex; flex-direction: column; gap: 8px; padding: 10px; width: max-content; max-width: calc(100vw - 16px); box-sizing: border-box; }
+.vw-range { display: flex; align-items: center; gap: 8px; color: var(--ws-muted); }
+.vw-range input { width: 64px; height: 26px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 0 6px; font: 12px var(--ws-mono); }
+.ws-viewpop .ws-help { margin: 0; max-width: 300px; }
+
+/* top bar: the Colors panel (one chart's, for every chart) and the update notice */
+.ws-colors .ce-theme-btn { min-height: 28px; height: 28px; padding: 0 10px 0 8px; border-radius: 6px; }
+.ws-upd { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.ws-upd:empty { display: none; }
 .ws-gearpop { width: 280px; }
 .ws-sec { padding: 8px 12px; border-bottom: 1px solid var(--ws-line); }
 .ws-sec:last-of-type { border-bottom: 0; }

@@ -617,7 +617,7 @@ return api;
 
 
 /*
- * ChartLive: the live chart as a mountable piece. The standalone page (live/index.html, served by ChartBridge) and a
+ * ChartLive: the live chart as a mountable piece. The standalone page (live/single.html, served by ChartBridge) and a
  * host page such as The Desk run this same code:
  *   ChartLive.mount(container, { wsUrl, trading, paneId, storagePrefix, onStatus, brand })  ->  { destroy(), chart, element, paneId }
  * live/EMBED.md lists the files a host loads and what each option does. Everything a chart needs is kept inside
@@ -856,6 +856,18 @@ const pageWsUrl = () => {
  *   brand          show The Desk logo and "Live chart" in the toolbar (default false).
  *   presetStore    where the Colors panel's named presets live (1.9.0): an object with LivePrefs.localPresetStore's
  *                  interface (list, save, rename, remove, shared). Default: this browser's storage, under the prefix.
+ * Added for the workspace (live/index.html, E2a); each is optional and changes nothing when left out:
+ *   feed           a ChartFeed hub (live/feed.js): the chart takes its instrument's data from the window's one connection
+ *                  for that instrument instead of opening its own WebSocket (wsUrl is then not needed).
+ *   view           { root, tf, range }: the chart's own instrument, bars and range size. The chart starts on them and
+ *                  never saves them under the prefix (the host keeps them, onView tells it of a change).
+ *   onView         called with { root, tf, range } when the chart's instrument, bars or range size change.
+ *   toolbar        false: the chart's toolbar is not shown; the host shows its own header with the chart's Indicators
+ *                  button (the returned `indicators` element) and calls setView, chart.setTool, chart.reset.
+ *   onColors       called after the Colors panel or an indicator gear changed a color (the host refreshes its other charts).
+ * The returned object then also has setView(view), view(), refreshSettings() (Glide and Range style read again from
+ * storage), refreshColors() (the colors read again from storage), `indicators` and `colors` (the Indicators and Colors
+ * elements, for a host to place).
  * A mounted chart is always read only, whatever the options say: no GET /session, no auth, no order messages ever,
  * no order bar, no Armed switch, no Shift+click orders, no draggable order lines. Only the standalone page
  * (data-mount="page") can trade, and only when ChartBridge allows it.
@@ -864,7 +876,12 @@ function mount(container, options) { return start(container, options || {}, fals
 
 function start(container, opt, PAGE) {
   if (!container || container.nodeType !== 1) throw new Error('ChartLive.mount needs a container element');
-  if (!PAGE && !opt.wsUrl) throw new Error('ChartLive.mount needs options.wsUrl');
+  const FEED = !PAGE && opt.feed && typeof opt.feed.open === 'function' ? opt.feed : null;   // the window's shared data (live/feed.js)
+  if (!PAGE && !opt.wsUrl && !FEED) throw new Error('ChartLive.mount needs options.wsUrl');
+  const VIEW = !PAGE && opt.view && typeof opt.view === 'object' ? opt.view : null;           // the host keeps root, tf and range
+  const SLIM = !PAGE && opt.toolbar === false;                                               // the host shows its own header
+  const onView = typeof opt.onView === 'function' ? opt.onView : null;
+  const onColors = typeof opt.onColors === 'function' ? opt.onColors : null;
   const TRADING = PAGE;                          // trading only on ChartBridge's own page, never through mount()
   const PANE = typeof opt.paneId === 'string' && opt.paneId ? opt.paneId : LP.MAIN_PANE;
   const PREFIX = typeof opt.storagePrefix === 'string' ? opt.storagePrefix : PAGE ? '' : EMBED_PREFIX;
@@ -875,7 +892,7 @@ function start(container, opt, PAGE) {
 
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
-  rootEl.className = 'chart-live';
+  rootEl.className = 'chart-live' + (SLIM ? ' slim' : '');
   rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN });
   container.appendChild(rootEl);
   const els = {};
@@ -894,7 +911,15 @@ function start(container, opt, PAGE) {
   const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta') } });   // layers: what is drawn
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
-  const saveSetting = k => prefs.setSetting(k, S[k]);
+  if (VIEW) {                                            // the host's own view: nothing of it is saved here
+    if (ROOTS.includes(VIEW.root)) S.root = VIEW.root;
+    if (LP.TFS.includes(VIEW.tf)) S.tf = VIEW.tf;
+    const n = LP.parseRange(VIEW.range);
+    if (n !== null) ranges[S.root] = n;
+  }
+  const saveSetting = k => { if (!(VIEW && (k === 'root' || k === 'tf'))) prefs.setSetting(k, S[k]); };
+  const saveRange = (root, n) => { if (!VIEW) prefs.setRange(root, n); };
+  const viewChanged = () => { if (onView) { try { onView({ root: S.root, tf: S.tf, range: ranges[S.root] }); } catch (e) { setTimeout(() => { throw e; }); } } };
   /* Drawings are kept per pane and instrument; the main pane keeps the key the standalone page always used. */
   const drawingsKey = root => 'live-drawings-v1-' + (PANE === LP.MAIN_PANE ? '' : PANE + '-') + root;
   const store = {                                  // single-value keys (fill account, drawings), try/catch inside
@@ -1599,10 +1624,12 @@ function start(container, opt, PAGE) {
     return true;
   }
 
-  function onReady() {
+  /* readyAt (ms): when the shared feed's load became ready, for a chart that joins it later (live/feed.js); else now */
+  function onReady(readyAt) {
+    const nowEt = typeof readyAt === 'number' && isFinite(readyAt) && readyAt > 0 ? readyAt / 1000 + etOffset : etNow();
     // With ticks: 1m history up to the start of the current minute, and the forming minute rebuilt from
     // ticks. Without ticks: keep NinjaTrader's forming minute and let live ticks continue it.
-    const cutoff = D.tickHours > 0 ? Math.floor(etNow() / 60) * 60 : Infinity;
+    const cutoff = D.tickHours > 0 ? Math.floor(nowEt / 60) * 60 : Infinity;
     const seen = new Map();
     for (const b of D.hist) if (b.t < cutoff) seen.set(b.t, b);
     const hist = [...seen.values()].sort((a, b) => a.t - b.t);
@@ -1613,7 +1640,7 @@ function start(container, opt, PAGE) {
       D.ticks.feed(D.m1, 0, Math.max(cutoff, lastHist));
     }
     D.ready = true;
-    D.liveFrom = etNow();
+    D.liveFrom = nowEt;
     if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: nowMs() };
     D.backfill = D.ticks.length;
     if (!K.started || K.root !== D.root) countStart();   // the count begins with this instrument's first load (round 5)
@@ -1790,6 +1817,7 @@ function start(container, opt, PAGE) {
     if (destroyed) return;
     setConn('connecting');
     const seq = ++connectSeq;
+    if (FEED) { openSocket(''); return; }               // the window's connection for this instrument (live/feed.js)
     let url;
     try { url = typeof WS_URL === 'function' ? WS_URL() : WS_URL; } catch (e) { scheduleReconnect(); return; }
     if (url && typeof url.then === 'function') url.then(u => { if (!destroyed && seq === connectSeq) openSocket(u); }, () => { if (!destroyed && seq === connectSeq) scheduleReconnect(); });
@@ -1798,10 +1826,11 @@ function start(container, opt, PAGE) {
   function openSocket(url) {
     lastUrl = url ? String(url) : '';
     let sock;
-    try { sock = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
+    try { sock = FEED ? FEED.open(S.root) : new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
     ws = sock;
     sock.onopen = () => { if (sock !== ws) return; wsTries = 0; everConnected = true; setStatus('', ''); };
-    sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } handle(m); };
+    // the shared feed hands the message over parsed (once for every chart of the instrument)
+    sock.onmessage = ev => { if (sock !== ws) return; let m = ev.message; if (!m) { try { m = JSON.parse(ev.data); } catch (e) { return; } } handle(m); };
     sock.onclose = () => { if (sock !== ws) return; ws = null; D.ready = false; setConn('offline'); tradingLost('Not connected to ChartBridge.'); scheduleReconnect(); };
     sock.onerror = () => { /* onclose follows */ };
   }
@@ -1838,6 +1867,14 @@ function start(container, opt, PAGE) {
   /* A message of an older subscribe of this page (ChartBridge 0.3.5 echoes the page's id; one already on its way when the
      page subscribed again can still arrive). Only checked when the page sent an id. */
   const stale = m => D.sub > 0 && m.sub !== undefined && m.sub !== null && +m.sub !== D.sub;
+  /* The shared feed's load can hold more than this chart asked for (another chart of the instrument needs ticks): the
+     chart takes it as it is, as if it had asked for it (the tick hours, the served window, where the ticks begin). */
+  function adoptLoad(l) {
+    if (!l || typeof l !== 'object') return;
+    D.tickHours = +l.tickHours > 0 ? +l.tickHours : 0;
+    D.window = !!l.window && D.tickHours > 0;
+    D.tickFrom = typeof l.tickFrom === 'number' && isFinite(l.tickFrom) ? l.tickFrom / 1000 + etOffset : Infinity;
+  }
 
   function handle(m) {
     switch (m.type) {
@@ -1855,12 +1892,14 @@ function start(container, opt, PAGE) {
         break;
       case 'history':
         if (m.root !== D.root || stale(m)) return;
+        if (m.load) adoptLoad(m.load);
         if (m.name) { D.name = m.name; $('lgName').textContent = m.name; }
         for (const b of m.bars) D.hist.push({ t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] });
         setStatus('Loading ' + D.root + ' history: ' + D.hist.length.toLocaleString() + ' minutes', '');
         break;
       case 'ticks':
         if (m.root !== D.root || stale(m)) return;
+        if (m.load) adoptLoad(m.load);
         D.ticks.pushAll(m.ticks);
         // 0.3.4: [t, p, v, s, sm]. ChartBridge 0.3.5's served window sends [t, p, v] (no side) though its live trades carry
         // sides: then the first live trade says (onTick)
@@ -1869,8 +1908,9 @@ function start(container, opt, PAGE) {
         break;
       case 'ready':
         if (m.root !== D.root || stale(m)) return;
+        if (m.load) adoptLoad(m.load);
         setStatus('', '');
-        onReady();
+        onReady(m.readyAt);
         break;
       case 'profile':
         // with this load's id before its "ready"; without one when the table's backfill made it whole (only once live)
@@ -2580,12 +2620,15 @@ function start(container, opt, PAGE) {
   chart.on('tool', t => { $('toolTrend').setAttribute('aria-pressed', String(t === 'trend')); $('toolHline').setAttribute('aria-pressed', String(t === 'hline')); });
 
   let PR = null;                                         // the preset groups in the Colors panel, below (1.9.0)
+  /* onColors (a host's other charts follow): only for a change made here, never for the start or a refreshColors() */
+  let colorsLive = false, colorsQuiet = false;
+  const colorsChanged = () => { if (onColors && colorsLive && !colorsQuiet) { try { onColors(); } catch (e) { setTimeout(() => { throw e; }); } } };
   const presetStore = opt.presetStore && typeof opt.presetStore.list === 'function' ? opt.presetStore
     : LP.localPresetStore(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   const themePanel = CE.mountThemePanel(chart, $('colorsHost'), {
     storageKey: PREFIX + 'live-colors-v1', vwap: false,
     note: presetStore.shared ? 'Presets are shared by every PC. The colors in use are saved in this browser.' : 'Colors and presets are saved in this browser only.',
-    onChange: () => { paintColors(); if (PR) renderPresets(); },
+    onChange: () => { paintColors(); if (PR) renderPresets(); colorsChanged(); },
   });
   /* The page's colors from the chart's theme and the indicator colors: the legend, the swatches, and on any ground but
      the default the toolbar, the order bar, the menus and the status line (chromeColors). Once per change. */
@@ -2775,6 +2818,7 @@ function start(container, opt, PAGE) {
     prefs.setIndicatorColors(set);
     applyIndicatorColors();
     if (PR && themePanel.isOpen()) renderPresets();
+    colorsChanged();
   }
 
   function syncButtons() {
@@ -2792,12 +2836,14 @@ function start(container, opt, PAGE) {
     S.root = b.dataset.v; saveSetting('root'); syncButtons();
     if (TR.armed) { setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
     subscribe(S.root);
+    viewChanged();
   });
   $('tfSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b || b.dataset.v === S.tf) return;
     S.tf = b.dataset.v; saveSetting('tf'); syncButtons();
     if (ticksMissing()) subscribe(S.root);      // the tick backfill does not reach back far enough for this view: fetch it
     else rebuild();
+    viewChanged();
   });
 
   /* Range size, per root. The chart rebuilds only when the size is committed (Enter, the arrows, or leaving the box),
@@ -2806,15 +2852,15 @@ function start(container, opt, PAGE) {
      size back in storage. A page closed or reloaded mid-typing saves the box with the same rule as Enter
      (450 becomes 400), never a stale prefix. */
   let rangeTyped = null;                                   // { root, n }: typed, saved, not committed
-  const rangeTypedSave = LP.debounce(() => { if (rangeTyped) prefs.setRange(rangeTyped.root, rangeTyped.n); }, 350);
+  const rangeTypedSave = LP.debounce(() => { if (rangeTyped) saveRange(rangeTyped.root, rangeTyped.n); }, 350);
   function rangeTypedDrop() {
     rangeTypedSave.cancel();
-    if (rangeTyped) { prefs.setRange(rangeTyped.root, ranges[rangeTyped.root]); rangeTyped = null; }
+    if (rangeTyped) { saveRange(rangeTyped.root, ranges[rangeTyped.root]); rangeTyped = null; }
   }
   function commitRange(root, n) {                          // n from clampRange; null puts the committed size back
     rangeTypedSave.cancel(); rangeTyped = null;
-    if (n === null) { prefs.setRange(root, ranges[root]); return false; }
-    prefs.setRange(root, n);
+    if (n === null) { saveRange(root, ranges[root]); return false; }
+    saveRange(root, n);
     if (ranges[root] === n) return false;
     ranges[root] = n;
     return true;
@@ -2829,6 +2875,7 @@ function start(container, opt, PAGE) {
     const changed = commitRange(S.root, LP.clampRange(e.target.value));
     e.target.value = ranges[S.root];
     if (changed && S.tf === 'range') rebuild();
+    if (changed) viewChanged();
   });
   $('rangeMode').addEventListener('change', e => {
     if (!LP.RANGE_MODES.includes(e.target.value)) return;
@@ -3031,6 +3078,16 @@ function start(container, opt, PAGE) {
     /* It opens below the order bar when there is one, so the Armed switch, the account and the position readout stay
        in view (review N5); its list scrolls inside when the space is short. */
     const place = () => {
+      if (SLIM) {                                                // in the host's header: the window is the room it has
+        const b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+        panel.style.top = Math.round(b.bottom - w.top + 6) + 'px';
+        panel.style.maxWidth = Math.max(220, Math.floor(window.innerWidth - 16)) + 'px';
+        panel.style.maxHeight = Math.max(200, Math.floor(window.innerHeight - b.bottom - 14)) + 'px';
+        panel.style.left = '0px';
+        const over = panel.getBoundingClientRect().right - (window.innerWidth - 8);
+        if (over > 0) panel.style.left = -Math.ceil(Math.min(over, w.left - 8)) + 'px';
+        return;
+      }
       const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
       const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;
       panel.style.top = Math.round(below - w.top + 6) + 'px';
@@ -3111,7 +3168,7 @@ function start(container, opt, PAGE) {
       const a = document.activeElement;
       if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
       const onBody = !a || a === document.body || a === document.documentElement;
-      if (!onBody && !rootEl.contains(a)) return;                   // the focus is elsewhere (a host dialog, another chart)
+      if (!onBody && !rootEl.contains(a) && !wrap.contains(a)) return;   // the focus is elsewhere (a host dialog, another chart)
       const mine = !onBody || (hoverRoot ? hoverRoot === rootEl : mountedRoots.size === 1);
       if (!mine) return;
       e.preventDefault();
@@ -3390,7 +3447,7 @@ function start(container, opt, PAGE) {
     if (document.activeElement === box) {                  // mid-typing: save what Enter would commit
       const n = LP.clampRange(box.value);
       rangeTypedSave.cancel(); rangeTyped = null;
-      prefs.setRange(S.root, n === null ? ranges[S.root] : n);
+      saveRange(S.root, n === null ? ranges[S.root] : n);
     }
     bracketSaved.stop.flush(); bracketSaved.target.flush();
   };
@@ -3438,7 +3495,53 @@ function start(container, opt, PAGE) {
     if (PAGE && window.liveChart === chart) { delete window.liveChart; delete window.liveData; }
     rootEl.remove();
   }
-  return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}) };
+  /* ---------------- for a host (the workspace): the view, the general settings and the colors (see mount above) */
+  function setView(v) {
+    if (destroyed || !v || typeof v !== 'object') return;
+    const root = ROOTS.includes(v.root) ? v.root : S.root, tf = LP.TFS.includes(v.tf) ? v.tf : S.tf;
+    const n = v.range === undefined || v.range === null ? null : LP.parseRange(v.range);
+    const rootNew = root !== S.root, tfNew = tf !== S.tf, rangeNew = n !== null && n !== ranges[root];
+    if (!rootNew && !tfNew && !rangeNew) return;
+    if (n !== null) { ranges[root] = n; saveRange(root, n); }
+    S.root = root; S.tf = tf;
+    if (rootNew) saveSetting('root');
+    if (tfNew) saveSetting('tf');
+    syncButtons();
+    if (rootNew) {
+      if (TR.armed) { setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
+      subscribe(S.root);
+    } else if (tfNew && ticksMissing()) subscribe(S.root);
+    else if (tfNew || (rangeNew && S.tf === 'range')) rebuild();
+    viewChanged();
+  }
+  function refreshSettings() {
+    if (destroyed) return;
+    const s = prefs.settings();
+    if (s.glide !== S.glide) { S.glide = s.glide; chart.setMotion(GLIDE[S.glide]); }
+    if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
+    syncButtons();
+  }
+  function refreshColors() {
+    if (destroyed) return;
+    colorsQuiet = true;
+    try {
+      const ic = prefs.indicatorColors();
+      if (LP.IND_COLOR_KEYS.some(k => ic[k] !== IC[k])) { IC = ic; applyIndicatorColors(); }
+      let saved = null;
+      try { saved = JSON.parse(window.localStorage.getItem(PREFIX + 'live-colors-v1')); } catch (e) { saved = null; }
+      const cur = themePanel.get(), diff = {};
+      for (const k of ['up', 'down', 'bg']) {
+        const v = saved && typeof saved[k] === 'string' && /^#[0-9a-f]{6}$/i.test(saved[k]) ? saved[k].toUpperCase() : CE.DEFAULT_THEME[k];
+        if (v && v !== cur[k]) diff[k] = v;
+      }
+      if (Object.keys(diff).length) themePanel.set(diff);
+      else if (PR) renderPresets();
+    } finally { colorsQuiet = false; }
+  }
+  colorsLive = true;
+  return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}),
+    setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors,
+    indicators: $('indWrap'), colors: themePanel.element };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX };
