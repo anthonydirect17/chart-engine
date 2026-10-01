@@ -397,7 +397,20 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   shows as a light line at the average price with open P&L in points and dollars.
 - Confirmations and refusals show in the status line; a refusal is in red with ChartBridge's reason. An
   error from ChartBridge (for example a bracket leg NinjaTrader rejected) stays on screen until dismissed.
-- No keyboard shortcuts place or change orders (only Escape, which cancels a drag in progress), and the
+- **Hotkeys** (1.11.0): **Settings** in the toolbar has a **Hotkeys** section with five actions, **Buy MKT**,
+  **Sell MKT**, **B/E**, **Close** and **Flatten all**, and none has a key until you give it one: click the box and
+  press the keys (it shows them, like `Alt+B`), or Clear. Each calls exactly what its button calls, with the same
+  checks and notes: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close is the Flatten button (this
+  account and instrument). **Flatten all** sends one Flatten for every instrument with a position or a working order
+  on the order account, within ChartBridge's 10 order actions a second (paced like B/E when needed). All five need
+  Armed, as the buttons do; a refused press says why. Refused as keys, with the reason shown and nothing saved: what
+  the browser or Windows keeps (Ctrl+W, Ctrl+T, Ctrl+N, Ctrl+Tab, Ctrl+R, F5, Ctrl+L, F12, Alt+F4, Alt+Left, Alt+F,
+  Ctrl+1 to Ctrl+9 and the like, any Windows key combo), the chart's own keys (A, + and =, -, /, End, the arrows,
+  Delete, Escape, Tab), a modifier alone, a key that is not a letter, digit, F-key, numpad or punctuation key, and a
+  combo another action has. A hotkey never fires while you type in a box or a select, while a menu or Settings is
+  open, or from a held key's repeats, and the 0.4 s repeat guard applies. Kept in this browser
+  (`live-hotkeys-v1`). Only the trading page has them; a mounted chart ignores them.
+- Apart from the hotkeys, no key places or changes orders (only Escape, which cancels a drag in progress), and the
   order buttons act on a mouse or touch click only: Enter or Space on a focused button sends nothing.
 - A limit on the wrong side of the market (a buy limit above the last price) is refused, since it would
   fill at once; a Shift+click above the market while buying places a stop, below it a limit.
@@ -529,6 +542,7 @@ npm i && npm run smoke   # drives the demo in Chromium, screenshots in test/out/
 npm run smoke:live       # the live page against the fake bridge as ChartBridge 0.2 (read only)
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
+npm run smoke:hotkeys    # trading hotkeys: set in Settings, each sends what its button sends, refused combos, typing, reload, mounted
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames

@@ -253,5 +253,146 @@ function repeatGuard(ms) {
   };
 }
 
-return { MAX_BRACKET_TICKS, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
+/*
+ * Flatten all (1.11.0, Anthony 2026-10-01): the instruments of one account that have a position or a working order, one
+ * flatten each. `positions` is a Map of 'account|root' -> { qty }; `served` (optional) says whether ChartBridge serves a
+ * root. In `order` (the page's instrument list) first, then any other root by name.
+ */
+function flattenAllRoots(orders, positions, account, served, order) {
+  const set = new Set();
+  for (const o of orders || []) if (isWorking(o) && o.account === account && o.root) set.add(o.root);
+  for (const [k, p] of positions || []) {
+    const i = k.lastIndexOf('|');
+    if (i > 0 && k.slice(0, i) === account && p && +p.qty) set.add(k.slice(i + 1));
+  }
+  const ok = [...set].filter(r => !served || served(r));
+  const rank = r => { const i = (order || []).indexOf(r); return i < 0 ? Infinity : i; };
+  return ok.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/*
+ * Trading hotkeys (1.11.0, Anthony 2026-10-01). Five actions, each with a key Anthony assigns in Settings; none has a
+ * default. A combo is kept as text, the modifiers in a fixed order then the key: "Alt+B", "Ctrl+Shift+F9", "Num1".
+ * The key is the physical key (KeyboardEvent.code), so Shift never changes it ("Shift+1", not "!"). Only letters,
+ * digits, F-keys, the numpad (not its Enter) and the punctuation keys can be hotkeys; Meta (the Windows key) never.
+ */
+const HOTKEY_ACTIONS = [
+  { id: 'buy', name: 'Buy MKT' }, { id: 'sell', name: 'Sell MKT' }, { id: 'be', name: 'B/E' },
+  { id: 'close', name: 'Close' }, { id: 'flattenAll', name: 'Flatten all' },
+];
+const HOTKEY_IDS = HOTKEY_ACTIONS.map(a => a.id);
+const PUNCT = { Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Backslash: '\\', Backquote: '`' };
+const NUMPAD = { NumpadAdd: 'Num+', NumpadSubtract: 'Num-', NumpadMultiply: 'Num*', NumpadDivide: 'Num/', NumpadDecimal: 'Num.' };
+const MOD_CODES = /^(Shift|Control|Alt|Meta|OS)(Left|Right)?$|^(AltGraph|CapsLock|NumLock|ScrollLock|Fn|FnLock|Hyper|Super|Symbol|SymbolLock)$/;
+const MOD_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'OS', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock', 'Fn', 'Hyper', 'Super'];
+/** The key part of a combo for a KeyboardEvent.code: a hotkey key, another key's code (refused later), or '' for a modifier or no code. */
+function hotkeyKeyName(code) {
+  if (typeof code !== 'string' || !code || MOD_CODES.test(code)) return '';
+  let m;
+  if ((m = /^Key([A-Z])$/.exec(code))) return m[1];
+  if ((m = /^Digit([0-9])$/.exec(code))) return m[1];
+  if ((m = /^Numpad([0-9])$/.exec(code))) return 'Num' + m[1];
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+  if (NUMPAD[code]) return NUMPAD[code];
+  if (PUNCT[code]) return PUNCT[code];
+  return code;                                                    // Enter, Space, ArrowLeft, Escape, ...: refused by hotkeyRefused
+}
+const HOTKEY_KEY = /^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Num[0-9]|Num[-+*/.]|[-=[\];',./\\`])$/;
+/** The combo of a KeyboardEvent ({ code, key, ctrlKey, altKey, shiftKey, metaKey }), or '' for a modifier pressed alone. */
+function hotkeyCombo(e) {
+  if (!e) return '';
+  const k = hotkeyKeyName(e.code) || (typeof e.key === 'string' && !MOD_KEYS.includes(e.key) && /^[a-z0-9]$/i.test(e.key) ? e.key.toUpperCase() : '');
+  if (!k) return '';
+  return (e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.metaKey ? 'Meta+' : '') + k;
+}
+/** { ctrl, alt, shift, meta, key } of a combo text, or null when it is not one. */
+function parseHotkey(s) {
+  if (typeof s !== 'string') return null;
+  const m = /^(Ctrl\+)?(Alt\+)?(Shift\+)?(Meta\+)?(.+)$/.exec(s);
+  return m ? { ctrl: !!m[1], alt: !!m[2], shift: !!m[3], meta: !!m[4], key: m[5] } : null;
+}
+/* Kept by the browser or Windows (Anthony's list, and a few more of the same kind: Ctrl+Shift+W, Ctrl+Shift+R,
+   Ctrl+Shift+Q, Ctrl+F4, Ctrl+0 to Ctrl+9 and F10). Exact combos; the F-keys below go with any modifiers. */
+const RESERVED = {
+  'Ctrl+W': 'closes the tab', 'Ctrl+Shift+W': 'closes the window', 'Ctrl+T': 'opens a tab', 'Ctrl+N': 'opens a window',
+  'Ctrl+Shift+T': 'opens the last closed tab', 'Ctrl+R': 'reloads the page', 'Ctrl+Shift+R': 'reloads the page',
+  'Ctrl+L': 'goes to the address bar', 'Ctrl+P': 'prints', 'Ctrl+S': 'saves the page', 'Ctrl+F': 'finds on the page',
+  'Ctrl+H': 'opens the history', 'Ctrl+J': 'opens the downloads', 'Ctrl+D': 'bookmarks the page', 'Ctrl+Q': 'quits the browser',
+  'Ctrl+Shift+Q': 'quits the browser', 'Ctrl+Shift+N': 'opens a private window', 'Ctrl+Shift+I': 'opens the developer tools',
+  'Ctrl+Shift+J': 'opens the console', 'Ctrl+F4': 'closes the tab', 'Alt+F4': 'closes the window', 'Alt+D': 'goes to the address bar',
+  'Alt+E': 'opens the browser menu', 'Alt+F': 'opens the browser menu', 'Ctrl+0': 'resets the page zoom',
+  'Ctrl+Tab': 'switches browser tabs', 'Ctrl+Shift+Tab': 'switches browser tabs', 'Ctrl+Shift+Delete': 'clears browsing data',
+  'Alt+Tab': 'switches windows in Windows', 'Alt+ArrowLeft': 'goes back', 'Alt+ArrowRight': 'goes forward', 'Alt+Home': 'opens the home page',
+};
+for (let n = 1; n <= 9; n++) RESERVED['Ctrl+' + n] = 'switches browser tabs';
+const RESERVED_F = { F1: 'opens help', F3: 'finds on the page', F5: 'reloads the page', F6: 'goes to the address bar', F7: 'turns on caret browsing', F10: 'opens the browser menu', F11: 'goes full screen', F12: 'opens the developer tools' };
+/* The chart's own keys, as the engine and the page read them: with any modifiers unless noted. */
+const CHART_KEYS = { A: 'A fits the price axis', '=': '+ and = zoom in', 'Num+': '+ zooms in', '-': '- zooms out', 'Num-': '- zooms out' };
+const OTHER_KEYS = {
+  Escape: 'Escape cancels a drag and closes menus', Tab: 'Tab moves the focus', End: 'End jumps the chart to live',
+  ArrowLeft: 'the arrow keys pan the chart', ArrowRight: 'the arrow keys pan the chart', Delete: 'Delete removes the selected drawing',
+  Backspace: 'Backspace removes the selected drawing',
+};
+/** Whether a KeyboardEvent is one of the chart's own keys, read as the chart reads it (e.key, so any keyboard layout). */
+function isChartKey(e) {
+  if (!e || typeof e.key !== 'string') return false;
+  if (['a', 'A', '+', '=', '-', '_', 'End', 'ArrowLeft', 'ArrowRight', 'Delete', 'Backspace', 'Escape'].includes(e.key)) return true;
+  return e.key === '/' && !e.ctrlKey && !e.altKey && !e.metaKey;
+}
+/**
+ * Why a combo cannot be a hotkey ('' when it can). `e`, when given, is the KeyboardEvent it came from: its e.key is
+ * checked against the chart's own keys too (a layout where another key gives "a" or "/").
+ */
+function hotkeyRefused(combo, e) {
+  const c = parseHotkey(combo);
+  if (!c || !c.key) return 'Press a key.';
+  if (c.meta || (e && e.metaKey)) return 'The Windows key is kept by Windows.';
+  if (RESERVED[combo]) return combo + ' is kept by the browser (it ' + RESERVED[combo] + ').';
+  if (RESERVED_F[c.key]) return c.key + ' is kept by the browser (it ' + RESERVED_F[c.key] + ').';
+  if (CHART_KEYS[c.key]) return combo + ' is the chart\'s: ' + CHART_KEYS[c.key] + '.';
+  if ((c.key === '/' || c.key === 'Num/') && !c.ctrl && !c.alt) return combo + ' is the chart\'s: / opens the Indicators menu.';
+  if (OTHER_KEYS[c.key]) return combo + ' is kept: ' + OTHER_KEYS[c.key] + '.';
+  if (e && isChartKey(e)) return combo + ' gives "' + e.key + '" on this keyboard, one of the chart\'s own keys.';
+  if (!HOTKEY_KEY.test(c.key)) return c.key + ' cannot be a hotkey: use a letter, a digit, an F-key, the numpad or a punctuation key.';
+  return '';
+}
+/** Hotkeys as read from storage: { buy, sell, be, close, flattenAll }, each a combo or ''. A combo that is refused, or
+    already given to an action before it in the list, is dropped. Never throws. */
+function cleanHotkeys(v) {
+  const out = {}, used = new Set();
+  for (const id of HOTKEY_IDS) {
+    let c = '';
+    try { c = v && typeof v === 'object' && !Array.isArray(v) && typeof v[id] === 'string' ? v[id] : ''; } catch (e) { c = ''; }
+    if (c && (c.length > 32 || hotkeyRefused(c) || used.has(c))) c = '';
+    if (c) used.add(c);
+    out[id] = c;
+  }
+  return out;
+}
+/**
+ * Setting a hotkey from a key press: { combo, error, held }. `held` is true for a modifier pressed alone (the field
+ * shows it while the key is held). `keys` are the hotkeys in use, `id` the action being set.
+ */
+function hotkeyFromEvent(e, keys, id) {
+  const combo = hotkeyCombo(e);
+  if (!combo) {
+    const mods = [e && e.ctrlKey ? 'Ctrl' : '', e && e.altKey ? 'Alt' : '', e && e.shiftKey ? 'Shift' : ''].filter(Boolean);
+    if (e && (e.metaKey || e.key === 'Meta' || e.key === 'OS')) return { combo: '', error: 'The Windows key is kept by Windows.', held: false };
+    return { combo: '', error: (mods.length ? mods.join('+') + ' alone is' : 'A modifier alone is') + ' not a hotkey: hold it and press a key.', held: true };
+  }
+  const why = hotkeyRefused(combo, e);
+  if (why) return { combo, error: why, held: false };
+  const other = HOTKEY_ACTIONS.find(a => a.id !== id && keys && keys[a.id] === combo);
+  if (other) return { combo, error: combo + ' is already ' + other.name + '. Clear it there first.', held: false };
+  return { combo, error: '', held: false };
+}
+/** The action a combo fires ('' for none). */
+function hotkeyAction(keys, combo) {
+  if (!combo || !keys) return '';
+  const a = HOTKEY_ACTIONS.find(x => keys[x.id] === combo);
+  return a ? a.id : '';
+}
+
+return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
+  MAX_BRACKET_TICKS, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
 });

@@ -56,7 +56,15 @@ test('live.js: every order path sends for TR.account, and only after ready() che
   // every path goes through ready(): sendOrder (Buy, Sell, click-trade, Shift+click), cancelAll, Flatten, move, cancel
   assert.match(PAGE.slice(PAGE.indexOf('function sendOrder('), PAGE.indexOf('function workingHere(')), /^\s+if \(!ready\(\)\) return;/m);
   assert.match(PAGE.slice(PAGE.indexOf('function cancelAll('), PAGE.indexOf('function setArmed(')), /^\s+if \(!ready\(\)\) return;/m);
-  assert.match(PAGE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(\(\) => \{\n\s+if \(!ready\(\)\) return;/);
+  // Flatten (the button and the Close hotkey, 1.11.0) and Flatten all: ready() first; Flatten all names TR.account then
+  assert.match(PAGE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(flattenHere\)\);/);
+  assert.match(PAGE, /function flattenHere\(\) \{\n\s+if \(!ready\(\)\) return;/);
+  assert.match(PAGE, /function flattenAll\(\) \{\n\s+if \(!ready\(\)\) return;\n\s+const account = TR\.account;/);
+  // the hotkeys call the buttons' own functions (1.11.0): no second order path
+  assert.match(PAGE, /actions: \{ buy: \(\) => sendOrder\('buy', 'market', null\), sell: \(\) => sendOrder\('sell', 'market', null\), be: breakEven, close: flattenHere, flattenAll \},/);
+  assert.match(PAGE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => sendOrder\('buy', 'market', null\)\)\);/);
+  assert.match(PAGE, /\$\('sellMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => sendOrder\('sell', 'market', null\)\)\);/);
+  assert.match(PAGE, /\$\('beBtn'\)\.addEventListener\('click', pointerOnly\(breakEven\)\);/);
   assert.match(PAGE, /chart\.on\('orderMove', e => \{\n\s+if \(!ready\(\)\) \{ renderTrading\(\); return; \}\n\s+if \(notShown\(e\.id\)\) return;/);
   assert.match(PAGE, /chart\.on\('orderCancel', e => \{\n\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(e\.id\)\) return;/);
   assert.match(PAGE, /const notShown = id => \{ const o = TR\.orders\.get\(id\); if \(o && o\.account === TR\.account\) return false;/);
