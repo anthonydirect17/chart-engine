@@ -6,7 +6,7 @@ Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\instal
 under `nt8/` changes, and the engine only gets its version number. What Buy MKT, Sell MKT, B/E and Cancel all do when
 clicked is unchanged; Flatten now works while disarmed (below).
 - **Flatten works while not Armed** (Anthony 2026-10-01: Flatten is never blocked): the Flatten button, the Close
-  hotkey and Flatten all. Only the Armed check is dropped for them: trading on, connected, signed in, an order account
+  hotkey and Flatten all, and the Flatten button no longer dims while disarmed. Only the Armed check is dropped for them: trading on, connected, signed in, an order account
   and the picker showing it are still checked, with the repeat guard and the pacing. Buy, Sell, B/E, Shift+click,
   Ctrl+click and Cancel all still need Armed (buttons, clicks and hotkeys).
 - **Settings, with a Hotkeys section** (Anthony 2026-10-01). A Settings button in the toolbar (the trading page only)
