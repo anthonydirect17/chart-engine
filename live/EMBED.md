@@ -135,6 +135,13 @@ A read-only chart sends only these messages (nt8/PROTOCOL.md), so a relay in bet
 | `subscribe` | `root`: `MNQ`, `NQ`, `MES` or `ES`. `days`: always `5` (1-minute history). `tickHours`: `0` for 1m bars and longer, `8` for 15s and 30s, and for Range bars the hours back to a session start, today `9` to `33` depending on the time of day (the chart never asks for more than `48`, ChartBridge's own cap). Sent on connect and on every instrument change, and when a new view needs more tick history. |
 | `ping` | `c` (the page clock). Allowed, but the chart does not send it today. |
 
+To ChartBridge 0.3.5 or later, whose `hello` lists `liveFirst` and `profile` in `features` (1.8.0), the `subscribe` also
+carries `sub` (the chart's subscribe id), `profile: true`, and on seconds and range views `liveFirst: true` with
+`tickHours` 2 (the served window, nt8/PROTOCOL.md). A relay that passes `hello` without `features` (The Desk's does) never
+sees them: the chart subscribes as before, and ChartBridge 0.3.5 answers its tick subscribes with the served window (the
+last 2 hours) all the same. For the exact session profile in The Desk, the relay needs to pass `features` in `hello` and
+the `profile` message to the page, and The Desk to vendor chart 1.8.0.
+
 A relay may clamp `tickHours` to a lower cap instead of refusing the subscribe. The chart then works as with a PC
 that has little tick history: Range bars start where the ticks start, and the status line says "Range bars start
 at <time> ET: NinjaTrader sent less tick history than asked, so bars until the next 18:00 session may differ from

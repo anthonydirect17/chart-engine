@@ -44,7 +44,23 @@ prices only, picked next to the range size, which is kept per instrument. Every 
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
 `ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
 sees (accounts, fill counts, clock, The Desk queue, since 0.3.3 where each load's backfill met the live
-trades, and since 0.3.4 how each trade's side, buy or sell, was found); see `nt8/PROTOCOL.md`.
+trades, since 0.3.4 how each trade's side, buy or sell, was found, and since 0.3.5 each instrument's session table and
+served window); see `nt8/PROTOCOL.md`.
+
+**Light Range chart, exact profile** (chart 1.8.0 with ChartBridge 0.3.5): a Range or seconds chart opens with the last
+2 hours of trades (`rangeHours`), which ChartBridge asks NinjaTrader for once per session and keeps in memory, so a reload
+or a second page starts from the same trade without asking NinjaTrader again. Range bars are drawn only from the first
+bar proven to be NinjaTrader's own (a session start, or a swing of more than the range each way; `docs/RANGE_BARS.md`),
+never offset bars before it, and once drawn they stay all day. The volume profile comes from ChartBridge's table of the
+session's volume at each price, fed by the live trades, on every view: exact from 18:00 ET. When ChartBridge starts
+after 18:00 it loads the session once, at start, one instrument at a time (`profileRoots`), and the profile says "Volume
+profile building, from HH:MM ET" until then. A NinjaScript compile (F5) restarts ChartBridge, so a compile during the
+session counts as such a start: the session is loaded once more. The Range and seconds windows and these session loads go
+to NinjaTrader one at a time; a minute chart's last-trades request (as in 0.3.3) is not queued behind them. If NinjaTrader
+never answers one of them (or answers at the time limit but its copy does not finish within 30 s more), ChartBridge
+asks for no more tick history (no window, no session load, no minute chart's last
+trades) until NinjaTrader answers it or restarts: meanwhile Range and seconds charts open from ChartBridge's memory or start
+from live trades, and say why. Orders and Flatten work during any load. With ChartBridge 0.3.4 or older the chart loads as before.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
 line; recompile or restart NinjaTrader after a change):
@@ -55,6 +71,8 @@ line; recompile or restart NinjaTrader after a change):
 | `roots` | `MNQ, NQ, MES, ES` | Instruments offered. |
 | `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
+| `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
+| `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
 | `quoteHours` | `0` | ChartBridge 0.3.4.1: hours of historical Bid and Ask a tick chart asks NinjaTrader for, to side its backfill trades: `0` (none; they go by the tick rule, live trades keep their side from the live quote), `1` or `2`. Anything else is `0`. See the changelog. |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
@@ -469,6 +487,7 @@ npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reco
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:live-first # the served window and the session table: exact range bars, profile and VWAP against the fake's tape
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 ```

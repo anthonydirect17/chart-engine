@@ -10,7 +10,7 @@ import fs from 'node:fs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
 fs.mkdirSync(out, { recursive: true });
-const PORT = 8799;
+const PORT = +(process.env.LIVE_SMOKE_PORT || 8799);   // LIVE_SMOKE_PORT: another port when 8799 is taken (a shared host)
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v1'], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const errors = [];

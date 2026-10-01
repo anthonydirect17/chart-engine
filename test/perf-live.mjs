@@ -4,7 +4,7 @@
 //
 //   node test/perf-live.mjs [--view=range|m1] [--secs=30] [--root=DIR] [--label=main] [--port=8830]
 //                           [--tick-rate=15] [--live-rate=100] [--range=40] [--et=HH:MM] [--second-tab] [--embed]
-//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--delta=0]
+//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--delta=0] [--live-first]
 //
 // --root serves the page from another checkout (the bridge is always this one), so an older version can be measured
 // on the same feed. It sets the saved settings (NQ, the view, Range 40, NinjaTrader style) in both the 1.3 and the
@@ -13,6 +13,7 @@
 // standalone page. CHROMIUM_PATH=/path/to/chrome uses a preinstalled browser. --vp turns the volume profile on
 // (1.6.0; --vp=rth for its RTH choice), so its build at load and its drawing are measured too. The delta pane (1.7.0)
 // is on by default on the main pane, so it is measured unless --delta=0 turns it off (saved as off before the load).
+// --live-first (1.8.0, ChartBridge 0.3.5) makes the bridge serve the last 2 hours of trades (the served window) and the session table.
 //
 // Measures, over the window after a warm-up: requestAnimationFrame intervals (frames over 16.7 ms and 33 ms), the
 // chart's own frame callback (step and draw), long tasks, each live tick message (JSON, onTick, the bar builders,
@@ -44,10 +45,11 @@ const OFFSET = (() => {
 const HEADED = !!arg('headed', false), EMBED = !!arg('embed', false);   // a real window (run under xvfb-run on a server)
 const SECOND = !!arg('second-tab', false), PROFILE = !!arg('profile', false), WARM = +arg('warm', 5);
 const VP = arg('vp', false);               // true, or 'rth'
+const LIVE_FIRST = !!arg('live-first', false);
 const DELTA_OFF = arg('delta', '1') === '0';
 
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
-  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(LIVE_FIRST ? ['--live-first'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
 
 const settings = { root: 'NQ', tf: VIEW === 'm1' ? 'm1' : 'range', glide: 'smooth' };

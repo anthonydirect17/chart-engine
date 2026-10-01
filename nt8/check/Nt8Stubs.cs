@@ -23,12 +23,17 @@ namespace NinjaTrader.Code
     public static class Output
     {
         public static readonly List<string> Lines = new List<string>();
-        public static void Process(string s, NinjaTrader.NinjaScript.PrintTo t) { lock (Lines) Lines.Add(s); Console.WriteLine(s); }
+        public static Action<string> OnLine;   // the harness: sees each line on the thread that writes it
+        public static void Process(string s, NinjaTrader.NinjaScript.PrintTo t) { lock (Lines) Lines.Add(s); Console.WriteLine(s); Action<string> h = OnLine; if (h != null) h(s); }
     }
 }
 namespace NinjaTrader.Core
 {
-    public class GeneralOptionsClass { public TimeZoneInfo TimeZoneInfo { get { return TimeZoneInfo.Local; } } }
+    public class GeneralOptionsClass
+    {
+        public static TimeZoneInfo Zone;   // the harness may set NinjaTrader's time zone; the PC's otherwise
+        public TimeZoneInfo TimeZoneInfo { get { return Zone ?? TimeZoneInfo.Local; } }
+    }
     public static class Globals
     {
         private static string userDataDir = "/tmp/nt8/";
@@ -76,12 +81,13 @@ namespace NinjaTrader.Cbi
         public string OrderId { get; set; }
     }
     public enum ConnectionStatus { Connected, Connecting, ConnectionLost, Disconnected, Disconnecting }
-    public class ConnectionStatusEventArgs : EventArgs { public Connection Connection { get; set; } public ConnectionStatus Status { get; set; } public ConnectionStatus PreviousStatus { get; set; } }
+    public class ConnectionStatusEventArgs : EventArgs { public Connection Connection { get; set; } public ConnectionStatus Status { get; set; } public ConnectionStatus PreviousStatus { get; set; } public ConnectionStatus PriceStatus { get; set; } public ConnectionStatus PreviousPriceStatus { get; set; } }
     public class Connection
     {
         public ConnectionStatus Status { get; set; }
         public static event EventHandler<ConnectionStatusEventArgs> ConnectionStatusUpdate;
         public static void FireStatus(Connection c, ConnectionStatus previous) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status, PreviousStatus = previous }); }
+        public static void FirePrice(Connection c, ConnectionStatus previous, ConnectionStatus now) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status, PreviousStatus = c.Status, PriceStatus = now, PreviousPriceStatus = previous }); }
     }
     public enum OrderAction { Buy, BuyToCover, Sell, SellShort }
     public enum OrderType { Limit, Market, MIT, StopMarket, StopLimit }
@@ -169,7 +175,8 @@ namespace NinjaTrader.Data
         public double GetHigh(int i) { return Ohlc[i][1]; }
         public double GetLow(int i) { return Ohlc[i][2]; }
         public double GetClose(int i) { return Ohlc[i][3]; }
-        public long GetVolume(int i) { return Volumes[i]; }
+        public System.Threading.ManualResetEventSlim Hold;   // the harness: a copy that does not end until it is set
+        public long GetVolume(int i) { if (Hold != null) Hold.Wait(); return Volumes[i]; }
         // The bid and ask stamped on each trade of a tick series (0 when the harness sets none).
         public readonly List<double> Bids = new List<double>(), Asks = new List<double>();
         public double GetBid(int i) { return i < Bids.Count ? Bids[i] : 0; }
@@ -181,12 +188,13 @@ namespace NinjaTrader.Data
         public static readonly List<BarsRequest> Made = new List<BarsRequest>();
         public DateTime From, To;
         public int BarsBack = -1;
+        public NinjaTrader.Cbi.Instrument Instrument;
         public Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> Callback;
         public bool Answered;
         // Harness hook: when set and it returns true for a request, it has answered that request itself (inside Request).
         public static Func<BarsRequest, bool> AutoAnswer;
-        public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { From = from; To = to; lock (Made) Made.Add(this); }
-        public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { BarsBack = barsBack; lock (Made) Made.Add(this); }
+        public BarsRequest(NinjaTrader.Cbi.Instrument i, DateTime from, DateTime to) { Instrument = i; From = from; To = to; lock (Made) Made.Add(this); }
+        public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { Instrument = i; BarsBack = barsBack; lock (Made) Made.Add(this); }
         public BarsPeriod BarsPeriod { get; set; }
         public TradingHours TradingHours { get; set; }
         public Bars Bars { get; set; }

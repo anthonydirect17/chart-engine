@@ -299,3 +299,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Anything not real is labelled on the chart (legend "sample data", SIM pill).
 - Levels, VWAP, the Initial Balance and trade marks are computed from bars, never typed in. A level that cannot be
   computed exactly is not drawn (the IB says why on the status line).
+- Served window (1.8.0): range bars are drawn only from the first bar proven to be NinjaTrader's own; before it the chart
+  is empty and the status line says "Range bars start where they are proven to match NinjaTrader's" in the quiet grey.
+  Range and seconds bars carry no VWAP while ChartBridge's session table is still building (legend "VWAP -"), and the
+  profile's note reads "Volume profile building, from 10:45 ET" until it is whole.
