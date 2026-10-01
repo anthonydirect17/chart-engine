@@ -520,7 +520,7 @@ $('wsFlat').addEventListener('click', e => {
 /* A chart's click, drag or cancel (ChartLive.mount's `trade`): in the ticket's window straight to TradeCore, else
    forwarded to it. Either way only for the ticket's instrument. */
 function chartAction(action) {
-  if (holds()) { const r = actHere(action); if (r.note && !capture) { /* the note is on the ticket already */ } renderOrders(); return; }
+  if (holds()) { actHere(action); renderOrders(); return; }  // its note is on the ticket's notes line
   forward(action);
 }
 function forward(action) {
