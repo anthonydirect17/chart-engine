@@ -664,7 +664,11 @@ function hotkeyHandler(o) {
     const id = OT.hotkeyAction(o.keys(), OT.hotkeyCombo(e));
     if (!id || typeof o.actions[id] !== 'function') return;
     const a = document.activeElement;
-    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) {
+      // Close and Flatten all say why nothing happened (1.12.0, the 1.11.0 review); the box keeps the key
+      if ((id === 'close' || id === 'flattenAll') && !e.repeat && typeof o.ignored === 'function' && o.root.contains(a) && !o.busy()) o.ignored(id);
+      return;
+    }
     const onBody = !a || a === document.body || a === document.documentElement;
     if (!onBody && !o.root.contains(a)) return;
     if (o.busy() || OT.isChartKey(e)) return;
@@ -673,6 +677,9 @@ function hotkeyHandler(o) {
     o.actions[id]();
   };
 }
+
+/* A Close or Flatten all key pressed while a box has the focus fires nothing and says so (1.12.0). */
+const HOTKEY_IN_BOX = 'Hotkey ignored: a box has the focus.';
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -1737,6 +1744,7 @@ function start(container, opt, PAGE) {
   /** The account whose fills are marked (and, while trading, the order account). */
   function account() {
     if (tradeMode()) return TR.account;
+    if (HOST && HT.account) return HT.account;                    // a host's chart: the host's order account (the workspace's ticket)
     return viewAccount || OT.defaultAccount(knownAccounts().names, '');
   }
   /* Both pickers from the state; the fills follow. */
@@ -1787,7 +1795,7 @@ function start(container, opt, PAGE) {
     const mine = acc ? [...fills.values()].filter(f => f.root === D.root && f.account === acc) : [];
     let list = mine;
     if (!S.layers.fills) {
-      const pos = tradeMode() ? TR.positions.get(acc + '|' + D.root) : null;
+      const pos = tradeMode() ? TR.positions.get(acc + '|' + D.root) : HOST && HT.root === D.root ? HT.position : null;
       list = OT.openEntryFills(mine, pos ? pos.qty : undefined);
     }
     chart.setMarkers(list);
@@ -1850,9 +1858,8 @@ function start(container, opt, PAGE) {
   const READ_ONLY_TYPES = ['subscribe', 'ping'];
   function send(obj) {
     if (!TRADING && !READ_ONLY_TYPES.includes(obj && obj.type)) return;
-    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); if (ORDER_ACTIONS.includes(obj.type)) actionSent(); }
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));   // order actions go through TradeCore, which counts them
   }
-  const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten'];   // what ChartBridge counts, 10 a second at most
   function subscribe(root) {
     loadSeq++;
     if (root !== K.root) countReset(root);             // a new instrument: a new count; the same one keeps its count (round 5)
@@ -1892,7 +1899,7 @@ function start(container, opt, PAGE) {
         bridgeVersion = typeof m.version === 'string' ? m.version : '';
         syncAccounts(m.accounts || []);
         subscribe(S.root);
-        if (m.trading && TRADING) { applyTrading(m.trading); signIn(); }   // protocol v2; ChartBridge 0.2 has no trading field
+        if (T) T.hello(m);                                 // protocol v2 (m.trading): sign in; ChartBridge 0.2 has no trading field
         break;
       case 'history':
         if (m.root !== D.root || stale(m)) return;
@@ -1926,88 +1933,49 @@ function start(container, opt, PAGE) {
       case 'exec': addFill(m); applyMarkers(); break;
       case 'status': if (m.level === 'error') alertLoud(m.text); else setStatus(m.text, m.level); break;
     }
-    if (TRADING) switch (m.type) {
-      case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); break;
-      case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); unsentCheck(); renderTrading(); break;
-      case 'order': onOrder(m); break;
-      case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); renderTrading(); applyMarkers(); break;
-      case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); renderTrading(); break;
-    }
+    if (T) T.message(m);                               // trading, orders, order, position, reject (live/trade.js)
   }
 
-  /* ---------------- trading (protocol v2); none of this runs on a read-only chart (TRADING false) */
-  const TR = {
-    v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false,
-    armed: false,                        // never saved: Armed is off after every page load
-    account: '',
-    orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
-    positions: new Map(),                // 'account|root' -> { qty, avgPrice }
-  };
-  const brackets = {};
-  for (const r of ROOTS) brackets[r] = OT.cleanBracket(prefs.bracket(r));
-  /* 1.10.0: the qty picked last per root (1 to 9), the bracket preset picked per root, and the bracket unit. */
-  const qtys = {};
-  for (const r of ROOTS) qtys[r] = prefs.qty(r);
-  const BK = { sel: {}, unit: prefs.bracketUnit(), presets: OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets)) };
-  for (const r of ROOTS) BK.sel[r] = prefs.bracketSel(r);
-  const sameAction = OT.repeatGuard(400);
-  let cidSeq = 0;
-  const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
-
+  /* ---------------- trading (protocol v2). The order logic is TradeCore's (live/trade.js, 1.12.0): the 1.11.0 code moved
+     out of this file unchanged, so the workspace's order ticket calls the very same functions. None of it runs on a
+     read-only chart (TRADING false); a chart mounted with `trade` (the workspace) hands its order clicks and drags to the
+     host, which sends them through its own TradeCore (HOST, below). */
+  const TC = window.TradeCore;
   const served = r => !Object.keys(instruments).length || !!instruments[r];
   /* Clickjacking guard: never trade from inside another page's frame (ChartBridge also sends X-Frame-Options DENY). */
   const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
   const FRAMED_REASON = 'This chart is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own tab.';
+  /* The last price: the chart's, or while a view loads the last one seen for the instrument (1.8.0: orders keep working). */
+  const LAST_SEEN_MS = 10000;                           // review 3 N-2: an older price (another instrument's visit, a long load) is unknown
+  const lastPrice = () => {
+    if (D.m1 && D.m1.last) return D.m1.last.c;
+    const x = lastSeen[D.root];
+    return x && nowMs() - x.at < LAST_SEEN_MS ? x.p : null;
+  };
+  const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
+  const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;
+  let BAR = null;                                        // the order bar's controls (TradeCore.wire), on the trading page
+  const T = !TRADING ? null : TC.create({
+    LP, prefs, pin: PIN, framed: FRAMED, framedReason: FRAMED_REASON, fetch: (u, o) => fetch(u, o),
+    send: obj => ws.send(JSON.stringify(obj)), open: () => !!ws && ws.readyState === 1, sock: () => ws,
+    root: () => D.root, lastPrice, qty: qtyNow, pickerAccount: () => $('oAcct').value, wantedAccount: () => viewAccount,
+    tick: tickOf, served, fmt: p => U.fmtPrice(p, precisionOf()), flash, later, destroyed: () => destroyed,
+    changed: () => renderTrading(), armed: armedUi,
+    applied: (pick, cameOn) => { syncAccounts(); if (TR.enabled && TR.account && (cameOn || pick.missed)) accountNote(pick, cameOn); },
+    lost: was => { if (was) lastOrderAccount = was; clearAccountNote(); },   // it named an account and "Armed is off" (review S2)
+    syncAccounts: () => syncAccounts(), batch: () => { if (BAR) BAR.renderBatch(); }, unsent: () => { if (BAR) BAR.renderUnsent(); },
+    positionChanged: () => applyMarkers(),
+  });
+  const TR = T ? T.TR : { v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false, armed: false, account: '', orders: new Map(), positions: new Map() };
+  /* A host's chart (ChartLive.mount's `trade`, the workspace): the host says what to show (its order account's working
+     orders and position on this chart's instrument) and whether the chart is live for orders (the ticket's instrument
+     while Armed); the chart hands it Shift+click, Shift+right click, Ctrl+click, drags and the x. The host sends them
+     through its TradeCore with every check, or forwards them to the window that has the ticket. The chart itself still
+     sends only subscribe and ping. */
+  const HOST = !TRADING && opt.trade && typeof opt.trade.place === 'function' && typeof opt.trade.move === 'function' && typeof opt.trade.cancel === 'function' ? opt.trade : null;
+  const HT = { root: '', live: false, account: '', orders: [], position: null, pointValue: 0, qty: 1 };
+  const armedHere = () => TRADING ? TR.armed : HT.live && HT.root === D.root;
 
-  /* Sign in: read the session token from GET /session (same origin as this page) and send auth. */
-  function signIn() {
-    if (!TRADING) return;
-    TR.signInStarted = true;
-    if (FRAMED) { applyTrading({ enabled: false, reason: FRAMED_REASON }); return; }
-    const sock = ws;
-    fetch('/session', { cache: 'no-store', headers: PIN ? PIN.headers() : {} })
-      .then(r => r.ok ? r.text() : Promise.reject(new Error('GET /session answered ' + r.status)))
-      .then(body => {
-        let token = null;
-        try { const j = JSON.parse(body); token = typeof j === 'string' ? j : j && j.token; } catch (e) { token = body.trim(); }
-        if (!token) throw new Error('no token in GET /session');
-        if (sock === ws) send({ type: 'auth', token });
-      })
-      .catch(e => {
-        if (sock !== ws) return;
-        if (!PIN) { applyTrading({ enabled: false, reason: 'Could not sign in to ChartBridge (' + e.message + '). Open the chart from ChartBridge itself to trade.' }); return; }
-        /* With the PIN (0.3.2): ask ChartBridge again in 2 s. Still unlocked: sign in again. The unlock is gone: drop
-           the connection, and the reconnect shows the PIN pad. */
-        applyTrading({ enabled: false, reason: 'Signing in to ChartBridge for orders again (' + e.message + ')' });
-        later(() => {
-          if (destroyed || sock !== ws) return;
-          PIN.check().then(st => {
-            if (destroyed || sock !== ws) return;
-            if (st === 'none' || st === 'set') { try { sock.close(); } catch (err) { /* already closed */ } }
-            else signIn();
-          });
-        }, 2000);
-      });
-  }
-  function applyTrading(t) {
-    if (!TRADING) return;
-    TR.v2 = true;
-    TR.enabled = !!t.enabled && !FRAMED;
-    TR.reason = FRAMED ? FRAMED_REASON : t.enabled ? '' : (t.reason || 'Trading is not enabled in ChartBridge.');
-    TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
-    TR.maxQty = t.maxQty || {};
-    // a Cancel all under way stops for what ChartBridge would refuse: all of it while trading is off, and the orders of
-    // an account no longer on its list (review 2 S1; they cannot be cancelled from the page then)
-    if (!TR.enabled) batchStop(() => true, 'trading went off (' + TR.reason.replace(/\.$/, '') + ')');
-    else batchStop(e => !TR.accounts.includes(e.account), 'the account is no longer a trade account in ChartBridge');
-    const was = TR.account, cameOn = TR.enabled && !was;           // trading comes on: a load, a PIN entry, a reconnect
-    const pick = LP.orderAccount(TR.accounts, TR.enabled ? viewAccount : '');
-    TR.account = TR.enabled ? pick.account : '';                   // no order account while trading is off
-    if (cameOn || !TR.enabled || TR.account !== was) setArmed(false);   // Armed always starts off; never restored
-    renderTrading();
-    syncAccounts();
-    if (TR.enabled && TR.account && (cameOn || pick.missed)) accountNote(pick, cameOn);
-  }
   /* Trading came on, or the account in use is no longer allowed: say which account orders go to and make the picker
      stand out for a moment (1.6.1, Anthony trades account to account). The picker already shows it (syncAccounts). */
   let sessionsOn = 0, noteSeq = 0, lastOrderAccount = '';
@@ -2037,136 +2005,8 @@ function start(container, opt, PAGE) {
     try { opened = !!window.opener; } catch (e) { opened = true; }
     return opened ? ', the account of the tab that opened this one' : ', the account this tab\'s session was on';
   }
-  function clearAccountNote() { noteSeq++; $('oAcctNote').textContent = ''; $('oAcctNote').title = ''; $('oAcct').classList.remove('acct-flash', 'warn'); }
-  function tradingLost(reason) {
-    TR.signInStarted = false;
-    if (!TR.v2) return;
-    batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
-    TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
-    if (TR.account) lastOrderAccount = TR.account;
-    TR.account = '';                                               // the tab's account stays in viewAccount (syncAccounts)
-    clearAccountNote();                                            // it named an account and "Armed is off" (review S2)
-    setArmed(false); renderTrading(); syncAccounts();
-  }
-  function onOrder(o) {
-    if (!served(o.root)) return;
-    const prev = TR.orders.get(o.id) || null;
-    const ev = OT.orderEvent(o, prev, p => U.fmtPrice(p, precisionOf()));
-    if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
-    if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
-    if (!OT.isWorking(o) && unsent.delete(o.id)) renderUnsent();
-    renderTrading();
-  }
-
-  /* The last price: the chart's, or while a view loads the last one seen for the instrument (1.8.0: orders keep working). */
-  const LAST_SEEN_MS = 10000;                           // review 3 N-2: an older price (another instrument's visit, a long load) is unknown
-  const lastPrice = () => {
-    if (D.m1 && D.m1.last) return D.m1.last.c;
-    const x = lastSeen[D.root];
-    return x && nowMs() - x.at < LAST_SEEN_MS ? x.p : null;
-  };
-  const capNow = () => OT.maxQtyFor(TR, D.root);
-  const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
-  const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;
-
-  /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded.
-     `armed` false (Flatten and Flatten all only; Anthony 2026-10-01, "Flatten is never blocked"): every check but Armed. */
-  function ready(armed) {
-    if (!TRADING) return false;
-    if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
-    if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
-    if (!TR.armed && armed !== false) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
-    if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
-    if (!TR.account) { flash('No account yet: nothing was sent.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading
-    if ($('oAcct').value !== TR.account) { syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
-    return true;
-  }
-  function sendOrder(side, kind, price) {
-    if (!ready()) return;
-    // a price order needs the last price to be a limit or a stop (OT.placeKind): until one is known, only market orders
-    if (kind !== 'market' && !(lastPrice() > 0)) { flash('No price yet: nothing was sent. Market orders and Flatten work.', 'warn'); return; }
-    const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), D.root);
-    if (bad) { flash('Not sent: ' + bad, 'error'); return; }
-    if (!sameAction.call(null, [side, kind, price, qty].join('|'), performance.now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
-    const msg = { type: 'order', cid: newCid(), account: TR.account, root: D.root, side, kind, qty };
-    if (kind !== 'market') msg.price = price;
-    const b = brackets[D.root], pos = TR.positions.get(TR.account + '|' + D.root);
-    const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
-    if ((b.stop > 0 || b.target > 0) && !reduces) msg.bracket = { stop: b.stop, target: b.target };   // JSON numbers, 0 = none
-    send(msg);
-    flash('Sent ' + side.toUpperCase() + ' ' + (kind === 'market' ? 'MKT' : kind === 'limit' ? 'LMT' : 'STP') + ' ' + qty + ' ' + D.root +
-      (kind === 'market' ? '' : ' @ ' + U.fmtPrice(price, precisionOf())) + (msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
-  }
-  /*
-   * B/E (1.10.0, Anthony): one change per working ChartBridge stop leg of this account and instrument, to the average
-   * price on the tick grid, rounded toward safety (OT.breakEvenPrice). Only when the last price is past it on the
-   * profitable side (ChartBridge would refuse a stop through the market). Stops placed in NinjaTrader are never touched;
-   * a leg already at break-even or past it is left (moving it would loosen it). Needs Armed, like every order action.
-   * Paced (Anthony 2026-10-01): as many changes go at once as ChartBridge's 10 a second allows (counting the order
-   * actions of the last 1.1 s), the rest as soon as it allows, so one click always finishes. Before each later chunk
-   * the page must still be Armed, connected and signed in, and the last price still past break-even, else the rest is
-   * not sent; a leg no longer a working ChartBridge stop behind break-even (or in a Cancel all) is skipped. A note
-   * says what happened. A click while a run is under way sends nothing.
-   */
-  const BE_LIMIT = 10;
-  let beRun = null;                                                // { account, root, be, qty, queue: [id], sent, skipped, notes }
-  function breakEven() {
-    if (!ready()) return;
-    if (beRun) { flash('B/E under way on ' + beRun.account + ' ' + beRun.root + ': ' + beRun.queue.length + ' left. Nothing new was sent.', 'warn'); return; }
-    const account = TR.account, root = D.root, pos = TR.positions.get(account + '|' + root);
-    if (!pos || !pos.qty) { flash('B/E: no open position on ' + account + ' ' + root + '. Nothing was sent.', 'warn'); renderTrading(); return; }
-    const be = OT.breakEvenPrice(pos.avgPrice, pos.qty, tickOf(root)), fmt = p => U.fmtPrice(p, precisionOf());
-    if (be === null) { flash('B/E: the position has no average price yet. Nothing was sent.', 'warn'); return; }
-    const last = lastPrice();
-    if (!(last > 0)) { flash('No price yet: nothing was sent.', 'warn'); return; }
-    if (!OT.breakEvenAllowed(pos.qty, be, last)) { flash('Price is not past break-even yet; the stop stays.', 'warn'); return; }
-    const legs = OT.breakEvenLegs([...TR.orders.values()], account, root, pos.qty, be);
-    const ids = legs.ids.filter(id => !inCancelAll(id)), inCancel = legs.ids.length - ids.length;
-    const plural = (n, w) => n + ' ' + w + (n > 1 ? 's' : '');
-    const notes = (legs.done ? ' ' + plural(legs.done, 'stop') + ' already at break-even or past it left as ' + (legs.done > 1 ? 'they are' : 'it is') + '.' : '') +
-      (inCancel ? ' ' + plural(inCancel, 'stop') + ' in the Cancel all under way left.' : '') +
-      (legs.other ? ' ' + plural(legs.other, 'stop') + ' placed in NinjaTrader left alone.' : '');
-    if (!ids.length) { flash('B/E: no ChartBridge stop to move; nothing was sent.' + notes, 'warn'); renderTrading(); return; }
-    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
-    if (!sameAction('be|' + account + '|' + root + '|' + be, now)) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
-    const chunks = OT.paceChunks(ids, recent, BE_LIMIT), first = chunks[0];
-    for (const id of first) send({ type: 'change', id, price: be });
-    const left = ids.length - first.length;
-    flash('Moving ' + plural(ids.length, 'stop') + ' to break-even ' + fmt(be) + ' · ' + account + '.' +
-      (left ? ' ' + first.length + ' now, ' + left + ' as ChartBridge\'s 10 a second allows.' : '') + notes, '');
-    if (!left) return;
-    beRun = { account, root, be, qty: pos.qty, queue: ids.slice(first.length), sent: first.length, skipped: 0, notes };
-    bePump();
-  }
-  /* The rest of a paced B/E: each later chunk once the budget allows, re-checked before it goes (see breakEven). */
-  function bePump() {
-    const r = beRun;
-    if (!r) return;
-    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
-    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
-    if (room) {
-      const why = !TRADING || FRAMED || !TR.enabled ? 'trading went off' : !ws || ws.readyState !== 1 ? 'the connection to ChartBridge dropped' :
-        !TR.armed ? 'Armed went off' : D.root !== r.root ? 'the instrument changed' : !OT.breakEvenAllowed(r.qty, r.be, lastPrice()) ? 'the last price is no longer past break-even' : '';
-      if (why) { beDone(r.queue.length + ' not sent: ' + why + '.'); return; }
-      let n = 0;
-      while (r.queue.length && n < room) {
-        const id = r.queue.shift(), o = TR.orders.get(id);
-        const behind = o && OT.isWorking(o) && o.role === 'stop' && typeof o.price === 'number' && (r.qty > 0 ? o.price < r.be : o.price > r.be);
-        if (!behind || inCancelAll(id)) { r.skipped++; continue; }
-        send({ type: 'change', id, price: r.be }); r.sent++; n++;
-      }
-    }
-    if (!r.queue.length) { beDone(''); return; }
-    const oldest = actionTimes.find(t => t > now - CANCEL_GAP);
-    later(() => { if (beRun === r) bePump(); }, Math.max(20, (oldest === undefined ? now : oldest) + CANCEL_GAP - now));
-  }
-  function beDone(notSent) {
-    const r = beRun;
-    beRun = null;
-    const skipped = r.skipped ? ' ' + r.skipped + ' skipped: no longer a working stop behind break-even.' : '';
-    flash('B/E: ' + r.sent + ' change' + (r.sent === 1 ? '' : 's') + ' sent to break-even ' + U.fmtPrice(r.be, precisionOf()) + ' · ' + r.account + ' ' + r.root + '.' +
-      skipped + (notSent ? ' ' + notSent : '') + r.notes, skipped || notSent ? 'warn' : '');
-  }
+  function clearAccountNote() { if (!TRADING) return; noteSeq++; $('oAcctNote').textContent = ''; $('oAcctNote').title = ''; $('oAcct').classList.remove('acct-flash', 'warn'); }
+  function tradingLost(reason) { if (T) T.lost(reason); }
 
   /*
    * Selling by mouse button (1.10.0): Shift + right click, or Ctrl + left click, on the plot sells at the price, a limit
@@ -2174,11 +2014,12 @@ function start(container, opt, PAGE) {
    * or tag (those drag or cancel the order), and only for a click that does not move; the keys must still be held at the
    * release. Such a press is kept from the chart (no pan, no drawing picked). Ctrl and Shift together send nothing. The
    * browser's menu never opens anywhere on the chart on this page (plot, price and time axes, delta pane). `lastUp`:
-   * the keys of the last release, read by orderPlace.
+   * the keys of the last release, read by orderPlace. On a host's chart (the workspace) "Armed" is the host's: the chart
+   * is live for orders.
    */
   const BOTH_KEYS = 'Ctrl and Shift together: nothing was sent. Shift+click buys; Shift+right click or Ctrl+click sells.';
   let lastUp = null;
-  function setupSellClicks() {
+  function setupSellClicks(sell) {
     const host = $('chart'), cv = host.querySelector('canvas');
     host.addEventListener('contextmenu', e => e.preventDefault());   // the whole chart: plot, axes, delta pane (Anthony 2026-10-01)
     if (!cv) return;
@@ -2192,7 +2033,7 @@ function start(container, opt, PAGE) {
     host.addEventListener('pointerdown', e => {
       if (e.target !== cv || e.pointerType === 'touch') return;
       if (!((e.button === 0 && e.ctrlKey) || (e.button === 2 && e.shiftKey))) return;
-      if (!TR.armed || chart.getTool()) return;
+      if (!armedHere() || chart.getTool()) return;
       const pt = plotAt(e);
       if (!pt || onOrder(pt)) return;
       e.stopPropagation();                                         // the chart never sees it: no pan, no drawing picked
@@ -2212,234 +2053,15 @@ function start(container, opt, PAGE) {
       if (!pt) return;
       if (!(pr.button === 0 ? e.ctrlKey : e.shiftKey)) return;    // let go of the key first: nothing, like Shift+click
       if (e.ctrlKey && e.shiftKey) { flash(BOTH_KEYS, 'warn'); return; }
-      if (!TR.armed) return;
-      const price = U.roundTo(chart.yToPrice(pt.y), D.tick);
-      sendOrder('sell', OT.placeKind('sell', price, lastPrice()), price);
+      if (!armedHere()) return;
+      sell(U.roundTo(chart.yToPrice(pt.y), D.tick));
     };
     host.addEventListener('pointerup', up, true);
     host.addEventListener('pointercancel', up, true);
   }
 
-  function workingHere() { return [...TR.orders.values()].filter(o => o.account === TR.account && o.root === D.root && OT.isWorking(o)); }
-
-  /*
-   * Cancel all (review 2 S1, S2, N1; review 3 S1, S4, N1): one cancel per order id (a bracket leg takes its pair), sent
-   * while fewer than 6 order actions of any kind (orders, changes, cancels, Flatten) went out in the last 1.1 s:
-   * ChartBridge refuses more than 10 a second, and this leaves Anthony 4 for his own clicks (Flatten above all). The
-   * ids are the working orders of the account and instrument shown at Anthony's click, after ready(). From then on
-   * the rest go out by id whatever Armed, the picker or the instrument show: Anthony asked for those cancels, a cancel
-   * only takes an order away, and each goes to that order's own account. Nothing is locked while they go out: Armed,
-   * the picker, the instrument and Flatten all work. Each click is its own queue and the newest click goes first, so a
-   * Cancel all on the account shown never waits behind an earlier one on another account (review 3 S1). The state
-   * row says "Cancelling on EVAL-1 MNQ: 12 left" until the last one is sent, in the warning color while that account
-   * or instrument is not the one shown. Each send skips an id that is no longer working (filled, cancelled, or taken
-   * by Flatten). A Cancel all adds only the ids not queued and not cancelled in the last 5 s (a second click sends
-   * nothing new); a cancel ChartBridge refused can be sent again at once (review 3 N1). It stops only for what
-   * ChartBridge would refuse: the connection drops, trading goes off, or the account leaves ChartBridge's list. Then a
-   * note that stays until Anthony dismisses it, or until those orders are no longer working, names the account, the
-   * instrument and how many cancels were not sent.
-   */
-  const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
-  let batch = null;                                                // { groups: [{ account, root, queue: [id] }] (oldest click first), timer }
-  const unsent = new Map();                                        // id -> { account, root, why }: for the note
-  let flattenMiss = '';                                            // a refused Flatten that was not sent again: for the note
-  const actionTimes = [];                                          // when the last order actions went out (any kind)
-  function actionSent() { actionTimes.push(performance.now()); if (actionTimes.length > 64) actionTimes.shift(); }
-  const cancelSent = new Map();                                    // id -> when its cancel went out (a second click sends it again only after 5 s)
-  const inCancelAll = id => batchItems().some(e => e.id === id) || (cancelSent.has(id) && performance.now() - cancelSent.get(id) < CANCEL_AGAIN);
-  const batchItems = () => batch ? batch.groups.flatMap(g => g.queue.map(id => ({ id, account: g.account, root: g.root }))) : [];
-  function cancelAll() {
-    if (!ready()) return;
-    const account = TR.account, root = D.root, pos = TR.positions.get(account + '|' + root), now = performance.now();
-    const ids = OT.cancelAllIds([...TR.orders.values()], account, root, pos ? pos.qty : 0);
-    const keptNote = ids.kept ? ' Kept ' + ids.kept + ' order' + (ids.kept > 1 ? 's' : '') + ' protecting the open position (cancel those one by one, or Flatten).' : '';
-    if (!ids.length) { flash('Nothing to cancel on ' + account + ' ' + root + '.' + keptNote, ''); return; }
-    for (const [id, t] of cancelSent) if (t < now - CANCEL_AGAIN) cancelSent.delete(id);
-    const queued = new Set(batchItems().map(e => e.id));
-    const fresh = ids.filter(id => !queued.has(id) && !cancelSent.has(id));
-    const left = ids.filter(id => queued.has(id)).length;
-    if (!fresh.length) { flash((left ? 'Still cancelling on ' + account + ' ' + root + ': ' + left + ' left.' : 'Those cancels went out a moment ago.') + ' Nothing new to send.' + keptNote, 'warn'); return; }
-    const running = !!batch;
-    if (!batch) batch = { groups: [], timer: false };
-    batch.groups.push({ account, root, queue: fresh });            // the newest click goes first (cancelPump)
-    flash((running ? 'Added ' + fresh.length + ' to the cancels under way, first in line, on ' : 'Cancelling ' + fresh.length + ' order' + (fresh.length > 1 ? 's' : '') + ' on ') + account + ' ' + root + '.' + keptNote, '');
-    cancelPump();                                                  // as many as the pace allows now, the rest in turn
-  }
-  function cancelPump() {
-    const b = batch;
-    if (!b) return;
-    const now = performance.now();
-    while (actionTimes.length && actionTimes[0] <= now - CANCEL_GAP) actionTimes.shift();
-    for (;;) {
-      while (b.groups.length && !b.groups[b.groups.length - 1].queue.length) b.groups.pop();
-      if (!b.groups.length || actionTimes.length >= CANCEL_CHUNK) break;
-      if (!ws || ws.readyState !== 1 || !TR.enabled) { batchStop(() => true, 'the connection to ChartBridge dropped'); return; }
-      const id = b.groups[b.groups.length - 1].queue.shift();      // the newest click's first
-      if (!TR.orders.has(id)) continue;                            // no longer working: nothing to send
-      send({ type: 'cancel', id });                                // counted in actionTimes by send
-      cancelSent.set(id, now);
-    }
-    if (!b.groups.length) batch = null;
-    else if (!b.timer) { b.timer = true; later(() => { b.timer = false; if (batch === b) cancelPump(); }, Math.max(20, actionTimes[0] + CANCEL_GAP - now)); }
-    renderBatch();
-  }
-  /* Take cancels out of the batch. With `why`, those still working go to the note (not sent); without it (Flatten,
-     the x) they are taken care of another way. */
-  function batchStop(match, why) {
-    if (!batch) return;
-    let out = 0;
-    for (const g of batch.groups) {
-      const keep = [];
-      for (const id of g.queue) {
-        const e = { id, account: g.account, root: g.root };
-        if (!match(e)) { keep.push(id); continue; }
-        out++;
-        if (why && TR.orders.has(id)) unsent.set(id, { account: g.account, root: g.root, why });
-      }
-      g.queue = keep;
-    }
-    if (!out) return;
-    if (why) renderUnsent();
-    batch.groups = batch.groups.filter(g => g.queue.length);
-    if (!batch.groups.length) batch = null;
-    renderBatch();
-  }
-  const countBy = (list, key) => { const g = new Map(); for (const e of list) { const k = key(e); g.set(k, (g.get(k) || 0) + 1); } return g; };
-  /* The batch line in the state row: in the warning color while cancels go out for an account or instrument that is
-     not the one shown (review 3 S2). */
-  function renderBatch() {
-    const el = $('oCancel'), items = batchItems(), g = countBy(items.slice().reverse(), e => e.account + ' ' + e.root);
-    const text = g.size ? 'Cancelling on ' + [...g].map(([k, n]) => k + ': ' + n + ' left').join(', ') + ' (6 a second).' : '';
-    if (el.textContent !== text) { el.textContent = text; el.title = text; }
-    el.classList.toggle('away', items.some(e => e.account !== TR.account || e.root !== D.root));
-  }
-  /* The note for cancels (or a Flatten) that were not sent: it stays until dismissed, or until those orders are no
-     longer working. */
-  function renderUnsent() {
-    const g = countBy(unsent.values(), e => e.account + ' ' + e.root + '|' + e.why);
-    $('unsentBar').hidden = !g.size && !flattenMiss;
-    $('unsentText').textContent = [flattenMiss].concat(!g.size ? [] : [...g].map(([k, n]) => {
-      const [where, why] = k.split('|');
-      return n + ' cancel' + (n > 1 ? 's' : '') + ' on ' + where + (n > 1 ? ' were' : ' was') + ' not sent: ' + why + '.';
-    }).concat('Those orders may still be working. Check them, then Cancel all again on that account and instrument (or in NinjaTrader).')).filter(Boolean).join('\n');
-  }
-  /* After a full orders list: an unsent cancel whose order is no longer working needs no note. The orders of an account
-     ChartBridge no longer allows are not in that list, so those stay. */
-  function unsentCheck() {
-    let changed = false;
-    for (const [id, e] of unsent) if (TR.accounts.includes(e.account) && !TR.orders.has(id)) { unsent.delete(id); changed = true; }
-    if (changed) renderUnsent();
-  }
-  /*
-   * Flatten is never blocked (review 3 S4). It goes out at once, and takes its account and instrument off a Cancel all
-   * under way (ChartBridge's Flatten cancels those itself, so no "No working order" follows). If ChartBridge refuses it
-   * for the rate (more than 10 order actions a second), it is sent once more 1.1 s later, while the same account and
-   * instrument are still shown and trading is on; otherwise the note says it was not sent. A second Flatten finds the
-   * account flat, so sending it twice is harmless.
-   */
-  const RATE_REFUSAL = /order actions/i;
-  let lastFlatten = null;                                          // { account, root, at, again }
-  function sendFlatten(account, root, again) {
-    send({ type: 'flatten', account, root });
-    batchStop(e => e.account === account && e.root === root);
-    lastFlatten = { account, root, at: performance.now(), again: !!again };
-  }
-  /* A refusal from ChartBridge. Returns true when handled here (a Flatten or a Cancel all's cancel sent again), else the
-     page shows it. */
-  const requeued = new Set();                                      // batch cancels already sent again once after a rate refusal
-  function onRefused(m) {
-    const wasBatch = typeof m.id === 'string' && cancelSent.has(m.id);
-    if (typeof m.id === 'string') cancelSent.delete(m.id);         // a refused cancel can go again at once (review 3 N1)
-    /* A Cancel all's cancel refused for the rate (the page keeps 6 in 1.1 s, but a busy PC can deliver two of its
-       seconds close together): it goes again once, first in line, at the pace. */
-    const o = wasBatch && TR.orders.get(m.id);
-    if (o && RATE_REFUSAL.test(m.reason || '') && !requeued.has(m.id)) {
-      requeued.add(m.id);
-      if (!batch) batch = { groups: [], timer: false };
-      batch.groups.push({ account: o.account, root: o.root, queue: [m.id] });
-      flash('ChartBridge refused a cancel for the rate (more than 10 order actions a second): it goes again in turn.', 'warn');
-      cancelPump();
-      return true;
-    }
-    const f = lastFlatten;
-    if (m.id || m.cid || !f || f.again || !RATE_REFUSAL.test(m.reason || '') || performance.now() - f.at > 3000) return false;
-    lastFlatten = null;
-    const where = f.account + ' ' + f.root;
-    flash('ChartBridge refused Flatten for ' + where + ' (more than 10 order actions a second): sending it again in 1 s.', 'warn');
-    later(() => {
-      if (ws && ws.readyState === 1 && TR.enabled && TR.account === f.account && D.root === f.root) {
-        sendFlatten(f.account, f.root, true);
-        flash('Flatten sent again for ' + where + '.', 'warn');
-      } else {
-        flattenMiss = 'Flatten for ' + where + ' was refused by ChartBridge (more than 10 order actions a second) and not sent again: ' +
-          (!ws || ws.readyState !== 1 || !TR.enabled ? 'trading went off.' : 'the account or instrument shown changed.') + ' The position may still be open. Flatten again.';
-        renderUnsent();
-      }
-    }, CANCEL_GAP);
-    return true;
-  }
-
-  /* The Flatten button, and the Close hotkey (1.11.0): this account and instrument. Works while disarmed (Anthony
-     2026-10-01: Flatten is never blocked); every other check of ready() stays. */
-  function flattenHere() {
-    if (!ready(false)) return;
-    if (!sameAction('flatten', performance.now())) return;
-    sendFlatten(TR.account, D.root);                               // takes its orders off a Cancel all; sent again once if refused for the rate
-    flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
-  }
-  /*
-   * Flatten all (1.11.0, the hotkey; Anthony 2026-10-01): one flatten (sendFlatten, as the Flatten button) per instrument
-   * of the order account with a position or a working order, whatever instrument is shown. Needs what the Flatten
-   * button needs: every check of ready() but Armed. Within ChartBridge's 10 order actions a second: what fits now goes at once, the rest as soon
-   * as it allows (paced like B/E). Once pressed it finishes, like Cancel all: a later flatten goes to the account named
-   * at the press while connected and trading is on and that account is still a trade account; otherwise the note says
-   * which were not sent. A press while a run is under way sends nothing.
-   */
-  let faRun = null;                                                // { account, queue: [root], sent: [root] }
-  function flattenAll() {
-    if (!ready(false)) return;
-    const account = TR.account;
-    if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
-    const roots = OT.flattenAllRoots([...TR.orders.values()], TR.positions, account, served, ROOTS);
-    if (!roots.length) { flash('Flatten all: no position or working order on ' + account + '. Nothing was sent.', ''); return; }
-    const now = performance.now();
-    if (!sameAction('flattenAll|' + account, now)) return;
-    const recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
-    const first = OT.paceChunks(roots, recent, BE_LIMIT)[0];
-    for (const r of first) sendFlatten(account, r);
-    const rest = roots.slice(first.length);
-    flash(first.length ? 'Flatten all sent for ' + account + ': ' + first.join(', ') + ' (cancel their orders, close their positions at market).' +
-      (rest.length ? ' ' + rest.join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
-      : 'Flatten all for ' + account + ': ' + rest.join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
-    if (!rest.length) return;
-    faRun = { account, queue: rest, sent: first.slice() };
-    faPump();
-  }
-  function faPump() {
-    const r = faRun;
-    if (!r) return;
-    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
-    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
-    if (room) {
-      const why = !TRADING || FRAMED || !TR.enabled ? 'trading went off' : !ws || ws.readyState !== 1 ? 'the connection to ChartBridge dropped' :
-        !TR.accounts.includes(r.account) ? r.account + ' is no longer a trade account in ChartBridge' : '';
-      if (why) {                                                   // a note that stays until dismissed, as for a Flatten not sent
-        faRun = null;
-        flattenMiss = 'Flatten all on ' + r.account + ': ' + (r.sent.length ? r.sent.join(', ') + ' sent; ' : '') + r.queue.join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';
-        renderUnsent(); flash(flattenMiss, 'error');
-        return;
-      }
-      for (const root of r.queue.splice(0, room)) { sendFlatten(r.account, root); r.sent.push(root); }
-    }
-    if (!r.queue.length) { faRun = null; flash('Flatten all sent for ' + r.account + ': ' + r.sent.join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
-    const oldest = actionTimes.find(t => t > now - CANCEL_GAP);
-    later(() => { if (faRun === r) faPump(); }, Math.max(20, (oldest === undefined ? now : oldest) + CANCEL_GAP - now));
-  }
-
-  function setArmed(on) {
-    if (!TRADING) return;
-    const v = !!on && TR.enabled;
-    TR.armed = v;
+  /* setArmed's page part: the switch, the bar, the chart's border and ARMED pill, order editing on the chart. */
+  function armedUi(v) {
     const btn = $('armBtn');
     btn.setAttribute('aria-checked', String(v));
     $('armText').textContent = v ? 'ARMED: one click trades' : 'Armed off';
@@ -2447,127 +2069,48 @@ function start(container, opt, PAGE) {
     rootEl.classList.toggle('is-armed', v);
     $('armPill').hidden = !v;
     chart.setOrderEditing(v);
-    renderTrading();
   }
-  function syncTradeAccounts() {
-    const sel = $('oAcct');
-    sel.replaceChildren(...TR.accounts.map(a => new Option(a, a)));
-    sel.value = TR.account;
-    sel.disabled = !TR.accounts.length;                            // enabled again after a trading-off spell with no accounts (review 2, S1); never locked by a Cancel all (review 2 S1)
-  }
+  function syncTradeAccounts() { if (BAR) BAR.syncTradeAccounts(); }
   /* Order bar, order lines, position line; also run on every instrument switch and order message. */
   function renderTrading() {
-    if (!TRADING || !TR.v2) return;
-    const bar = $('obar'); bar.hidden = false;
-    const on = TR.enabled, root = D.root || S.root, cap = OT.maxQtyFor(TR, root);
-    for (const el of bar.querySelectorAll('button, input, select')) if (el !== $('oAcct')) el.disabled = !on;   // the account picker works with trading off too (it drives the fills); nothing is locked by a Cancel all (review 2 S1)
+    if (HOST) { renderHost(); return; }
+    if (!TRADING || !TR.v2 || !BAR) return;
+    BAR.render();
+    const on = TR.enabled, root = D.root || S.root;
     // the tab title and the ARMED pill name the account (review S5): two tabs on two accounts are by design now
     if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
     $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
-    renderQty(root, cap);
-    for (const id of ['buyMkt', 'sellMkt', 'beBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why (Flatten works disarmed, so it never dims: Anthony 2026-10-01)
-    $('oOff').textContent = on ? '' : 'Trading off: ' + TR.reason;
-    $('oOff').hidden = on;
-    renderBracket(root);
-    renderBreakEven(root, on);
     $('statusRo').textContent = on ? 'Trading through ChartBridge. Live CME data is for this screen only.' : 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.';
-    chart.setOrders(on ? workingHere() : []);
-    renderBatch();                                                 // its color follows the account and instrument shown
+    chart.setOrders(on ? T.working(TR.account, D.root) : []);
     const pos = on ? TR.positions.get(TR.account + '|' + root) : null;
     const inst = instruments[root] || {};
     chart.setPosition(pos && pos.qty ? pos : null, { pointValue: inst.pointValue || 0 });
-    renderPositionInfo();
   }
-  /* Qty (1.10.0): a select 1 to 9; the choices over the root's cap are off, and the cap is shown beside it. The qty
-     picked last for this root stays picked even over the cap, so a click says why it is not sent (checkQty). */
-  function renderQty(root, cap) {
-    const q = $('oQty'), opts = OT.qtyOptions(cap);
-    for (const o of opts) q.options[o.n - 1].disabled = !o.ok;
-    q.value = String(qtys[root] || 1);
-    const capped = cap < OT.QTY_CHOICES;
-    $('oQtyCap').textContent = capped ? 'max ' + cap : '';
-    q.title = root + ' cap ' + cap + ' (maxQty in ChartBridge)' + (capped ? ': ' + (cap + 1) + ' and up are off' : '');
+  /* A host's chart: its lines as the host said, only for the instrument it said them for (a switch clears them until the
+     host speaks again); live for orders only then. */
+  let hostLive = false;
+  function renderHost() {
+    const mine = !!HT.root && HT.root === D.root;
+    const live = mine && HT.live;
+    if (live !== hostLive) { hostLive = live; rootEl.classList.toggle('is-armed', live); chart.setOrderEditing(live); }
+    chart.setOrders(mine ? HT.orders : []);
+    chart.setPosition(mine && HT.position && HT.position.qty ? HT.position : null, { pointValue: HT.pointValue });
   }
-  /* Bracket (1.10.0): the preset select, the stop and target boxes in ticks or points, and the unit toggle. */
-  const fmtUnit = (ticks, root) => BK.unit === 'pt' ? String(Math.round(ticks * tickOf(root) * 1e6) / 1e6) : String(ticks);
-  /* The preset picked for a root, as shown: a ratio or a saved preset only while the stop and target still match it. */
-  function bracketSelShown(root) {
-    const sel = BK.sel[root] || 'custom', br = brackets[root] || { stop: 0, target: 0 }, k = OT.ratioOf(sel);
-    if (k !== null) return OT.ratioBracket(br.stop, k).target === br.target ? sel : 'custom';
-    if (sel.startsWith('p:')) {
-      const pr = BK.presets.find(x => x.name === sel.slice(2));
-      return pr && pr.stop === br.stop && pr.target === br.target ? sel : 'custom';
-    }
-    return 'custom';
-  }
-  let bpreKey = '';
-  function renderBracket(root, force) {                // force: the boxes too while one has the focus (a preset or unit picked)
-    const br = brackets[root] || { stop: 0, target: 0 }, pt = BK.unit === 'pt', tick = tickOf(root);
-    for (const [id, k, what] of [['bStop', 'stop', 'stop'], ['bTarget', 'target', 'target']]) {
-      const el = $(id);
-      el.step = pt ? String(tick) : '1'; el.max = pt ? String(OT.MAX_BRACKET_TICKS * tick) : String(OT.MAX_BRACKET_TICKS);
-      if (force || document.activeElement !== el) el.value = fmtUnit(br[k], root);
-      el.setAttribute('aria-label', 'Bracket ' + what + ' for ' + root + ' in ' + (pt ? 'points' : 'ticks') + ', 0 for none');
-      el.title = (what === 'stop' ? 'Stop' : 'Target') + ', ' + (pt ? 'points' : 'ticks') + ' from the fill (0 = none)' + (pt ? ': ' + br[k] + ' ticks' : '');
-    }
-    for (const b of $('bUnit').children) b.setAttribute('aria-pressed', String(b.dataset.v === BK.unit));
-    const shown = bracketSelShown(root), sel = $('bPreset');
-    const key = BK.presets.map(x => x.name + '|' + x.stop + '|' + x.target).join(',') + '#' + (shown.startsWith('p:') ? shown : '') + '#' + BK.unit + tick;
-    if (key !== bpreKey) {
-      bpreKey = key;
-      const opt = (v, text) => new Option(text, v);
-      const list = [opt('custom', 'Custom')].concat(OT.BRACKET_RATIOS.map(r => opt(r.id, r.id)));
-      if (BK.presets.length) {
-        const g = document.createElement('optgroup'); g.label = 'Saved';
-        for (const x of BK.presets) g.append(opt('p:' + x.name, x.name));
-        list.push(g);
-      }
-      list.push(opt('save', 'Save current...'));
-      if (shown.startsWith('p:')) list.push(opt('delete', 'Delete ' + shown.slice(2)));
-      sel.replaceChildren(...list);
-    }
-    if (sel.value !== shown) sel.value = shown;
-  }
-  /* B/E (1.10.0): on only with a position on this account and instrument and a ChartBridge stop leg on its closing side. */
-  function renderBreakEven(root, on) {
-    const btn = $('beBtn'), pos = on ? TR.positions.get(TR.account + '|' + root) : null;
-    const legs = pos && pos.qty ? OT.breakEvenLegs(TR.orders.values(), TR.account, root, pos.qty, null) : null;
-    const ok = !!legs && legs.ids.length > 0;
-    btn.disabled = !on || !ok;
-    btn.title = ok ? 'Move the ChartBridge stop' + (legs.ids.length > 1 ? 's' : '') + ' of this position to break-even (the average price, rounded a tick toward safety)'
-      : 'B/E needs an open position here with a ChartBridge stop working';
-  }
-
-  /* Position and other accounts in the bar (P&L refreshes with the status line). */
-  function renderPositionInfo() {
-    if (!TRADING) return;
-    const el = $('oPos'), other = $('oOther'), legsEl = $('oLegs');
-    if (!TR.v2 || !TR.enabled) { el.textContent = ''; other.textContent = ''; legsEl.textContent = ''; return; }
-    const root = D.root, pos = TR.positions.get(TR.account + '|' + root), dp = precisionOf();
-    if (pos && pos.qty) {
-      const pnl = U.openPnl(pos.qty, pos.avgPrice, lastPrice(), (instruments[root] || {}).pointValue || 0);
-      const cls = pnl.points > 0 ? 'profit' : pnl.points < 0 ? 'loss' : '';
-      el.innerHTML = '';
-      const side = document.createElement('span'); side.className = pos.qty > 0 ? 'long' : 'short'; side.textContent = (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty);
-      const res = document.createElement('span'); res.className = cls; res.textContent = U.fmtSigned(pnl.points, dp) + ' pt' + (pnl.dollars !== null ? ' ' + U.fmtMoney(pnl.dollars) : '');
-      el.append(side, ' @ ' + U.fmtPrice(pos.avgPrice, dp) + ' ', res);
-    } else el.textContent = 'Flat';
-    /* stop and target coverage, from the working orders already here (a filled-in-pieces entry has one pair per fill) */
-    const legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, root, pos.qty) : null;
-    legsEl.textContent = legs ? legs.text : '';
-    legsEl.classList.toggle('uncovered', !!legs && legs.level === 'error');
-    legsEl.classList.toggle('over', !!legs && legs.level === 'warn');
-    legsEl.title = legs ? legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working' +
-      (legs.stopsShort ? '. Stops cover less than the position.' : legs.level === 'warn' ? '. More than the position: if it all fills, the position reverses.' : '') : '';
-    /* Other accounts on this instrument, by name (review S3): a live trade on another account is never only a count.
-       In the warning color while one has a position; on one line (cut short, the whole text in its tooltip). */
-    const others = new Map(), of = a => others.get(a) || others.set(a, { pos: 0, n: 0 }).get(a);
-    for (const [k, v] of TR.positions) { const a = k.slice(0, k.lastIndexOf('|')); if (v.qty && k.endsWith('|' + root) && a !== TR.account) of(a).pos = v.qty; }
-    for (const o of TR.orders.values()) if (o.root === root && o.account !== TR.account && OT.isWorking(o)) of(o.account).n++;
-    const parts = [...others].map(([a, x]) => a + ': ' + [x.pos ? (x.pos > 0 ? 'LONG ' : 'SHORT ') + Math.abs(x.pos) : '', x.n ? x.n + ' order' + (x.n > 1 ? 's' : '') : ''].filter(Boolean).join(', '));
-    other.textContent = parts.length ? 'Other accounts on ' + root + ': ' + parts.join(' · ') : '';
-    other.title = other.textContent;
-    other.classList.toggle('live', [...others.values()].some(x => x.pos));
+  /** For the host: { root, live, account, orders, position, pointValue, qty }; null clears. */
+  function setTrade(t) {
+    if (!HOST || destroyed) return;
+    const x = t && typeof t === 'object' ? t : {};
+    HT.root = typeof x.root === 'string' ? x.root : '';
+    HT.live = !!x.live;
+    HT.orders = Array.isArray(x.orders) ? x.orders : [];
+    HT.position = x.position && +x.position.qty ? x.position : null;
+    HT.pointValue = +x.pointValue || 0;
+    HT.qty = Number.isInteger(x.qty) ? x.qty : 1;
+    const acct = typeof x.account === 'string' ? x.account : '';
+    const acctNew = acct !== HT.account;
+    HT.account = acct;
+    renderHost();
+    if (acctNew) syncAccounts(); else applyMarkers();
   }
 
   /* ---------------- UI */
@@ -2847,7 +2390,7 @@ function start(container, opt, PAGE) {
   $('symSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b || b.dataset.v === S.root) return;
     S.root = b.dataset.v; saveSetting('root'); syncButtons();
-    if (TR.armed) { setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
+    if (TR.armed) { T.setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
     subscribe(S.root);
     viewChanged();
   });
@@ -3245,164 +2788,22 @@ function start(container, opt, PAGE) {
   syncAccounts();
 
   /* order bar and order actions on the chart: only on a trading chart (a read-only one has no order bar at all) */
-  /* typed bracket ticks are saved after a pause, each field on its own (a ratio changes the target with the stop) */
-  const bracketSaved = { stop: LP.debounce(root => prefs.setBracketField(root, 'stop', brackets[root].stop), 350),
-    target: LP.debounce(root => prefs.setBracketField(root, 'target', brackets[root].target), 350) };
   const KIND_TEXT = { limit: 'LMT', stop: 'STP' };
+  const qtyShown = () => HOST ? HT.qty : qtyNow();
   /* Shift held over the chart (1.10.0): a click buys here, a right click sells; the preview shows the buy and says what
      the right click would place. */
   const previewAt = price => {
-    const qty = qtyNow(), last = lastPrice();
+    const qty = qtyShown(), last = lastPrice();
     return { side: 'buy', kind: OT.placeKind('buy', price, last), qty: isFinite(qty) ? qty : 0, note: 'click · right click: SELL ' + KIND_TEXT[OT.placeKind('sell', price, last)] };
   };
   if (TRADING) {
-    $('armBtn').addEventListener('click', () => {
-      if (FRAMED) { flash(FRAMED_REASON, 'error'); return; }
-      if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return; }
-      setArmed(!TR.armed);
-      if (TR.armed) clearAccountNote();                            // it said "Armed is off" (review S2)
-      flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
+    /* The order bar's controls (live/trade.js, shared with the workspace's order ticket): Armed, Account, Qty, Buy and
+       Sell MKT, the bracket, Flatten, B/E, Cancel all, the state row. */
+    BAR = TC.wire($, T, {
+      U, LP, prefix: PREFIX, root: () => D.root || S.root, flash, render: () => renderTrading(), listen,
+      pickViewAccount, clearAccountNote, tick: tickOf, lastPrice, pointValue: r => (instruments[r] || {}).pointValue || 0, precision: precisionOf,
+      accountPicked: a => { viewAccount = a; store.set('live-account-v1', a); saveTabAccount(a); applyMarkers(); },
     });
-    /* 1.11.0 (Anthony 2026-10-01): after a pick in an order bar select, or Enter in a bracket box, the focus leaves it,
-       so the hotkeys work at once (they never fire while a box or select has the focus). */
-    const handBack = el => { if (document.activeElement === el) el.blur(); };
-    $('oAcct').addEventListener('change', e => {
-      handBack(e.target);
-      if (!tradeMode()) { pickViewAccount(e.target.value); return; }   // trading off: it only picks whose fills are marked
-      TR.account = e.target.value;
-      clearAccountNote();
-      if (TR.armed) { setArmed(false); flash('Armed turned off: the account changed.', 'warn'); }
-      renderTrading();
-      viewAccount = TR.account; store.set('live-account-v1', TR.account); saveTabAccount(TR.account);
-      applyMarkers();
-    });
-    $('oQty').addEventListener('change', () => {
-      handBack($('oQty'));
-      const v = +$('oQty').value;
-      if (Number.isInteger(v) && v >= 1 && v <= OT.QTY_CHOICES) { qtys[D.root] = v; prefs.setQty(D.root, v); }
-      renderTrading();
-    });
-    /* Order buttons act on a real mouse or touch click only: a key press (Enter or Space on a focused button,
-       e.detail 0) never sends an order, and the button gives up focus after a click. */
-    const pointerOnly = fn => e => { e.currentTarget.blur(); if (e.detail === 0) { flash('Order buttons work by click only, not by keyboard.', 'warn'); return; } fn(e); };
-    $('buyMkt').addEventListener('click', pointerOnly(() => sendOrder('buy', 'market', null)));
-    $('sellMkt').addEventListener('click', pointerOnly(() => sendOrder('sell', 'market', null)));
-    /* Bracket ticks per root: saved as typed (whole ticks 0 to 200, or points on the tick grid; anything else waits),
-       and at once on Enter or leaving the box, where points round to the nearest tick. Each save writes one field. */
-    const typedTicks = (text, root) => {
-      const v = String(text).trim();
-      if (BK.unit === 't') return /^\d+$/.test(v) && +v <= OT.MAX_BRACKET_TICKS ? +v : null;
-      if (!/^(\d+\.?\d*|\.\d+)$/.test(v)) return null;
-      const t = +v / tickOf(root), n = Math.round(t);
-      return Math.abs(t - n) < 1e-6 && n <= OT.MAX_BRACKET_TICKS ? n : null;
-    };
-    const committedTicks = (text, root) => {
-      const v = String(text).trim();
-      if (BK.unit === 't' || v === '') return v;                     // cleanBracket rounds and caps, as before 1.10.0
-      return Math.round(+v / tickOf(root));
-    };
-    /* Set one field for the root shown. A ratio picked keeps the target linked to the stop; typing the target, or the
-       stop of a saved preset, makes it Custom. `now`: save at once (a commit), else after a pause (typing). */
-    function setBracket(k, ticks, now) {
-      const root = D.root, sel = bracketSelShown(root), ratio = OT.ratioOf(sel);
-      brackets[root] = OT.cleanBracket(Object.assign({}, brackets[root], { [k]: ticks }));
-      const fields = [k];
-      if (k === 'stop' && ratio !== null) {
-        const linked = OT.ratioBracket(brackets[root].stop, ratio);
-        if (Math.round(brackets[root].stop * ratio) > OT.MAX_BRACKET_TICKS) flash('Target capped at ' + OT.MAX_BRACKET_TICKS + ' ticks, the most ChartBridge takes.', 'warn');
-        brackets[root].target = linked.target; fields.push('target');
-      } else if (sel !== 'custom') { BK.sel[root] = 'custom'; prefs.setBracketSel(root, 'custom'); }
-      for (const f of fields) {
-        if (now) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
-        else bracketSaved[f](root);
-      }
-    }
-    for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
-      $(id).addEventListener('input', e => {
-        const n = typedTicks(e.target.value, D.root);
-        if (n === null) return;
-        setBracket(k, n, false);
-        renderBracket(D.root);
-      });
-      $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });   // commits (change), focus back
-      $(id).addEventListener('change', e => {
-        setBracket(k, committedTicks(e.target.value, D.root), true);
-        e.target.value = fmtUnit(brackets[D.root][k], D.root);
-        renderBracket(D.root);
-      });
-    }
-    $('bUnit').addEventListener('click', e => {
-      const b = e.target.closest('button');
-      if (b) handBack(b);
-      if (!b || b.dataset.v === BK.unit) return;
-      for (const id of ['bStop', 'bTarget']) if (document.activeElement === $(id)) $(id).blur();   // commit what was typed, in the old unit
-      BK.unit = b.dataset.v === 'pt' ? 'pt' : 't'; prefs.setBracketUnit(BK.unit);
-      renderBracket(D.root, true);
-    });
-    /* The preset select: a ratio sets the target from the stop; a saved preset sets both; Save current... names the
-       stop and target as they are; Delete removes the saved preset shown. */
-    const readPresets = () => { BK.presets = OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets)); };
-    const pickSel = (root, v) => { BK.sel[root] = v; prefs.setBracketSel(root, v); };
-    function closeSaveBox() { $('bSaveBox').hidden = true; $('bPreset').hidden = false; }
-    $('bPreset').addEventListener('focus', () => { readPresets(); renderBracket(D.root); });
-    $('bPreset').addEventListener('change', e => {
-      const root = D.root, v = e.target.value, shown = bracketSelShown(root);
-      readPresets();
-      if (v === 'save') {
-        const br = brackets[root];
-        $('bSaveName').value = OT.defaultPresetName(br.stop, br.target);
-        $('bPreset').hidden = true; $('bSaveBox').hidden = false;
-        $('bSaveName').focus(); $('bSaveName').select();
-      } else if (v === 'delete') {
-        const name = shown.startsWith('p:') ? shown.slice(2) : '';
-        const next = BK.presets.filter(x => x.name !== name);
-        if (name && prefs.raw.set(LP.KEYS.bracketPresets, next)) { BK.presets = next; flash('Deleted bracket preset ' + name + '. The stop and target stay as they are.', ''); }
-        pickSel(root, 'custom');
-      } else if (v.startsWith('p:')) {
-        const pr = BK.presets.find(x => x.name === v.slice(2));
-        if (!pr) { flash('That bracket preset is gone (deleted in another window).', 'warn'); pickSel(root, 'custom'); }
-        else {
-          brackets[root] = OT.cleanBracket(pr);
-          for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
-          pickSel(root, v);
-        }
-      } else if (OT.ratioOf(v) !== null) {
-        const k = OT.ratioOf(v);
-        if (Math.round(brackets[root].stop * k) > OT.MAX_BRACKET_TICKS) flash('Target capped at ' + OT.MAX_BRACKET_TICKS + ' ticks, the most ChartBridge takes.', 'warn');
-        brackets[root] = OT.ratioBracket(brackets[root].stop, k);   // the target follows the stop
-        for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
-        pickSel(root, v);
-      } else pickSel(root, 'custom');
-      if (v !== 'save') handBack(e.target);                        // Save current... moves the focus to the name box
-      bpreKey = '';
-      renderBracket(root, true);
-    });
-    function savePreset() {
-      const root = D.root, br = brackets[root], name = OT.bracketPresetName($('bSaveName').value) || OT.defaultPresetName(br.stop, br.target);
-      readPresets();
-      const list = BK.presets.slice(), same = list.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
-      if (same < 0 && list.length >= OT.BRACKET_PRESET_MAX) { flash('Not saved: ' + OT.BRACKET_PRESET_MAX + ' bracket presets is the most. Delete one first.', 'warn'); return; }
-      const pr = { name, stop: br.stop, target: br.target };
-      if (same >= 0) list[same] = pr; else list.push(pr);
-      if (!prefs.raw.set(LP.KEYS.bracketPresets, list)) { flash('Not saved: this browser blocks site storage.', 'error'); return; }
-      BK.presets = OT.cleanBracketPresets(list);
-      pickSel(root, 'p:' + name);
-      closeSaveBox(); bpreKey = ''; renderBracket(root);
-      flash((same >= 0 ? 'Replaced' : 'Saved') + ' bracket preset ' + name + ': ' + br.stop + ' / ' + br.target + ' ticks.', '');
-    }
-    $('bSaveOk').addEventListener('click', savePreset);
-    $('bSaveNo').addEventListener('click', () => { closeSaveBox(); renderBracket(D.root); });
-    $('bSaveName').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); savePreset(); }
-      else if (e.key === 'Escape') { e.preventDefault(); closeSaveBox(); renderBracket(D.root); }
-    });
-    /* another tab saved or deleted a preset, or picked one */
-    listen(window, 'storage', e => {
-      if (e.key === PREFIX + LP.KEYS.bracketPresets) { readPresets(); renderBracket(D.root); }
-    });
-    $('flattenBtn').addEventListener('click', pointerOnly(flattenHere));
-    $('beBtn').addEventListener('click', pointerOnly(breakEven));
-    $('cancelAllBtn').addEventListener('click', pointerOnly(cancelAll));
 
     /* Trading hotkeys (1.11.0, Anthony 2026-10-01): set in Settings, none by default; each calls what its button calls. */
     const HKKEY = LP.KEYS.hotkeys;
@@ -3459,9 +2860,9 @@ function start(container, opt, PAGE) {
     listen(document, 'keydown', hotkeyHandler({
       keys: () => HK, root: rootEl,
       busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),
-      actions: { buy: () => sendOrder('buy', 'market', null), sell: () => sendOrder('sell', 'market', null), be: breakEven, close: flattenHere, flattenAll },
+      actions: { buy: () => T.sendOrder('buy', 'market', null), sell: () => T.sendOrder('sell', 'market', null), be: T.breakEven, close: () => T.flattenHere(), flattenAll: T.flattenAll },
+      ignored: () => flash(HOTKEY_IN_BOX, 'warn'),
     }));
-    $('unsentClose').addEventListener('click', () => { unsent.clear(); flattenMiss = ''; renderUnsent(); });
 
     /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
     chart.setOrderPreview(previewAt);
@@ -3469,26 +2870,22 @@ function start(container, opt, PAGE) {
        orderPlace), Shift + right click or Ctrl + left click sells. Both keys at once are unclear: nothing is sent. */
     chart.on('orderPlace', e => {
       if (lastUp && lastUp.ctrlKey) { flash(BOTH_KEYS, 'warn'); return; }
-      sendOrder('buy', OT.placeKind('buy', e.price, lastPrice()), e.price);
+      T.sendOrder('buy', OT.placeKind('buy', e.price, lastPrice()), e.price);
     });
-    setupSellClicks();
-    const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash(o ? 'Not sent: that order is not on ' + TR.account + '.' : 'Not sent: that order is no longer working.', o ? 'error' : 'warn'); renderTrading(); return true; };
-    chart.on('orderMove', e => {
-      if (!ready()) { renderTrading(); return; }
-      if (notShown(e.id)) return;
-      /* An order in a Cancel all under way (queued, or its cancel just sent) is not moved: Cancel all wins and cancels
-         it (Anthony 2026-09-30), and no change goes out that could cross its cancel. The line goes back. */
-      if (inCancelAll(e.id)) { renderTrading(); flash('Not moved: order ' + e.id + ' is in the Cancel all under way, which cancels it.', 'warn'); return; }
-      send({ type: 'change', id: e.id, price: e.price });
-      flash('Moving order ' + e.id + ' to ' + U.fmtPrice(e.price, precisionOf()), '');
+    setupSellClicks(price => T.sendOrder('sell', OT.placeKind('sell', price, lastPrice()), price));
+    chart.on('orderMove', e => T.moveOrder(e.id, e.price));
+    chart.on('orderCancel', e => T.cancelOrder(e.id));
+  } else if (HOST) {
+    /* A host's chart (the workspace): the same mouse rules, handed to the host with this chart's instrument. */
+    const call = (fn, a) => { try { fn.apply(HOST, a); } catch (e) { setTimeout(() => { throw e; }); } };
+    chart.setOrderPreview(previewAt);
+    chart.on('orderPlace', e => {
+      if (lastUp && lastUp.ctrlKey) { flash(BOTH_KEYS, 'warn'); return; }
+      if (armedHere()) call(HOST.place, ['buy', e.price, D.root]);
     });
-    chart.on('orderCancel', e => {
-      if (!ready()) return;
-      if (notShown(e.id)) return;
-      send({ type: 'cancel', id: e.id });
-      batchStop(x => x.id === e.id);                               // sent now, not again with a Cancel all under way
-      flash('Cancelling order ' + e.id, '');
-    });
+    setupSellClicks(price => call(HOST.place, ['sell', price, D.root]));
+    chart.on('orderMove', e => { if (armedHere()) call(HOST.move, [e.id, e.price, D.root]); else renderHost(); });
+    chart.on('orderCancel', e => { if (armedHere()) call(HOST.cancel, [e.id, D.root]); });
   }
 
   /* Anything typed but not yet saved is saved when the page is closed, reloaded or hidden, and on destroy(). */
@@ -3499,7 +2896,7 @@ function start(container, opt, PAGE) {
       rangeTypedSave.cancel(); rangeTyped = null;
       saveRange(S.root, n === null ? ranges[S.root] : n);
     }
-    bracketSaved.stop.flush(); bracketSaved.target.flush();
+    if (T) T.flushBrackets();
   };
   listen(window, 'pagehide', saveWaiting);
   listen(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') saveWaiting(); });
@@ -3512,7 +2909,7 @@ function start(container, opt, PAGE) {
     const s = chart.stats();
     $('fps').textContent = s.idle ? 'idle' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms/frame';
     $('ticksSeen').textContent = ticksSeen.toLocaleString() + ' live ticks';
-    renderPositionInfo();
+    if (BAR) BAR.renderPositionInfo();
     // the clock crossing 9:30, 10:30 or 18:00, with or without trades; also while offline, when minutes missing
     // since the drop hide the IB (a 'gap') rather than leave a stale one up
     if (D.m1) updateIB(false);
@@ -3536,7 +2933,7 @@ function start(container, opt, PAGE) {
     clearTimeout(reconnectTimer); clearTimeout(flashTimer);
     for (const id of timers) clearTimeout(id);
     timers.clear();
-    rangeTypedSave.cancel(); bracketSaved.stop.cancel(); bracketSaved.target.cancel();
+    rangeTypedSave.cancel(); if (T) T.cancelBrackets();
     for (const undo of cleanups.splice(0).reverse()) undo();
     const sock = ws; ws = null; connectSeq++;
     if (sock) { sock.onopen = sock.onmessage = sock.onclose = sock.onerror = null; try { sock.close(); } catch (e) { /* already closed */ } }
@@ -3558,7 +2955,7 @@ function start(container, opt, PAGE) {
     if (tfNew) saveSetting('tf');
     syncButtons();
     if (rootNew) {
-      if (TR.armed) { setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
+      if (TR.armed) { T.setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
       subscribe(S.root);
     } else if (tfNew && ticksMissing()) subscribe(S.root);
     else if (tfNew || (rangeNew && S.tf === 'range')) rebuild();
@@ -3590,13 +2987,13 @@ function start(container, opt, PAGE) {
   }
   colorsLive = true;
   return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}),
-    setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors,
+    setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors, setTrade,
     indicators: $('indWrap'), chips: $('indChips'), colors: themePanel.element,
     /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
     stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), chart: chart.stats() }) };
 }
 
-window.ChartLive = { mount, EMBED_PREFIX };
+window.ChartLive = { mount, EMBED_PREFIX, hotkeyHandler, HOTKEY_IN_BOX };
 /* The standalone page: behind ChartBridge's PIN (live/pin.js) when ChartBridge has one, nothing started until unlocked. */
 if (SCRIPT && SCRIPT.getAttribute('data-mount') === 'page') {
   if (window.ChartBridgePin) window.ChartBridgePin.gate().then(() => start(document.body, {}, true));

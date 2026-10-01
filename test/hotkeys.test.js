@@ -44,13 +44,27 @@ test('hotkeyRefused: the browser and Windows keys, the chart keys, other keys; a
   for (const c of ['Space', 'Enter', 'NumpadEnter', 'ArrowUp', 'PageDown', 'Home', 'Insert', 'ContextMenu', 'IntlBackslash'])
     assert.notEqual(OT.hotkeyRefused(c), '', c + ' should be refused');
   // allowed: other letters, digits, F-keys and the numpad, with or without Ctrl, Alt, Shift; plain keys the chart does not use
-  for (const c of ['B', 'Alt+B', 'Ctrl+B', 'Ctrl+Alt+Shift+B', 'Shift+S', '1', 'Alt+1', 'Shift+1', 'F2', 'F4', 'Ctrl+F9', 'Shift+F8', 'Num1', 'Ctrl+Num5', 'Num*', 'Num.',
+  for (const c of ['B', 'Alt+B', 'Ctrl+B', 'Ctrl+Alt+Shift+B', 'Shift+S', '1', 'Alt+1', 'Shift+1', 'F2', 'F8', 'Ctrl+F9', 'Shift+F8', 'Num1', 'Ctrl+Num5', 'Num*', 'Num.',
     'Ctrl+/', 'Alt+Num/', '[', ';', 'Alt+W', 'Ctrl+Alt+W', 'Ctrl+F2'])
     assert.equal(OT.hotkeyRefused(c), '', c + ' should be allowed');
   assert.equal(OT.hotkeyRefused('Ctrl+W'), 'Ctrl+W is kept by the browser (it closes the tab).');
   assert.equal(OT.hotkeyRefused('Shift+A'), 'Shift+A is the chart\'s: A fits the price axis.');
   assert.equal(OT.hotkeyRefused('Meta+B'), 'The Windows key is kept by Windows.');
   assert.equal(OT.hotkeyRefused(''), 'Press a key.');
+});
+
+test('hotkeyRefused, 1.12.0 (the 1.11.0 review): more the browser keeps, each with its reason; near ones still allowed', () => {
+  const more = { 'Ctrl+Shift+C': 'opens the developer tools', 'Ctrl+O': 'opens a file', 'Ctrl+U': 'shows the page source', 'Ctrl+G': 'finds the next match',
+    'Ctrl+K': 'searches from the address bar', 'Ctrl+E': 'searches from the address bar', 'Ctrl+Shift+B': 'shows or hides the bookmarks bar',
+    'Ctrl+Shift+O': 'opens the bookmarks', 'Alt+Shift+I': 'opens the feedback form' };
+  for (const [c, why] of Object.entries(more)) assert.equal(OT.hotkeyRefused(c), c + ' is kept by the browser (it ' + why + ').');
+  for (const c of ['F4', 'Shift+F4', 'Alt+Shift+F4']) assert.equal(OT.hotkeyRefused(c), 'F4 is kept by the browser (it opens the address bar list).', c);
+  assert.equal(OT.hotkeyRefused('Ctrl+F4'), 'Ctrl+F4 is kept by the browser (it closes the tab).');
+  assert.equal(OT.hotkeyRefused('Alt+F4'), 'Alt+F4 is kept by the browser (it closes the window).');
+  for (const c of ['Alt+C', 'Ctrl+Alt+C', 'Shift+O', 'Alt+U', 'Alt+G', 'Alt+K', 'Ctrl+Alt+E', 'Ctrl+Alt+B', 'Alt+I', 'Shift+I'])
+    assert.equal(OT.hotkeyRefused(c), '', c + ' should still be allowed');
+  // a saved key that is refused now is cleaned away on read (the next load), the others kept
+  assert.deepEqual(OT.cleanHotkeys({ buy: 'Ctrl+K', sell: 'Alt+S', be: 'F4', close: 'Alt+C', flattenAll: 'Ctrl+Shift+O' }), { buy: '', sell: 'Alt+S', be: '', close: 'Alt+C', flattenAll: '' });
 });
 
 test('hotkeyRefused with the event: a layout where another key gives a chart key', () => {
