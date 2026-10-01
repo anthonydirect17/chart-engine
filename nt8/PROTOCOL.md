@@ -192,7 +192,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement}]` (`settlement` 0.3.7: NinjaTrader's prior settlement for that contract, or null when NinjaTrader has none), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
@@ -201,7 +201,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
-| `settlement` | `root`, `p` (0.3.7) | when NinjaTrader's settlement for a served contract changes (its first value comes in `hello` when it is known by then) |
+| `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
 | `htfBar` | `root`, `tf`, `bars`: one or two `[t,o,h,l,c,v]` (0.3.7) | while a page has asked for that root and timeframe, at most once a second when its forming bar changed: the forming bar, after the closed bar's final values when a new bar began |
 | `weekProfile` | `root`, `id` (or null), `tick`, `sessions`: `[{date, from, whole, coveredFrom, drop, rows: [[priceTicks, v], ...]}` or `{date, missing}]` oldest first, `rows` (the sessions present, added up), `error` (null, or why there is nothing) (0.3.7) | the answer to a `weekProfile` request |
@@ -401,9 +401,8 @@ Bid and Ask updates.
 0.3.4.1: off by default after it froze NinjaTrader on the trading PC) went with that load: since 0.3.5 the served window's
 trades are `[t, p, v]` (no side) and the delta pane counts live trades from the page's open, so nothing asked for it any
 more. A `quoteHours` line in `config.txt` is now only noted once in the Output window ("no longer used") and does nothing.
-The join's rules (the last bid and ask stamped strictly before each trade, the 60 s stale test, the thinned quote rows) stay
-in the code as pure functions with their harness cases (`ChartBridgeSides.ClassifyBackfill`, `QuoteSeries`), called by no
-request, should a sided history ever come back.
+The backfill's side join (`ClassifyBackfill`, `QuoteSeries`, `ContinueTickRule`, `BackfillSides`) is removed with it; the
+rules above now apply to live trades only.
 
 **Two send lanes to the page, and when a page is closed** (review 2 S1). The page's WebSocket carries market data and
 order traffic, and a load's release (`ready` and the held trades after it, one outbox entry) can take seconds to
@@ -648,20 +647,36 @@ serve is answered with an `error` and no bars.
 
 ### Prior settlement
 
-- **Where it comes from:** NinjaTrader's own settlement for the served contract. NinjaTrader 8's `MarketData` object (the one
-  ChartBridge already subscribes to for trades) holds a snapshot of each market data type, `MarketData.Settlement` among
-  them (a `MarketDataEventArgs`; NinjaTrader's help, MarketData: "Snapshot data is provided right on subscription"), and its
-  `Update` event delivers `MarketDataType.Settlement` events. ChartBridge reads the snapshot when it subscribes and takes
-  every Settlement event after that (a reset event is never one; `LastClose`, the prior session's close, is not used).
-- **Only NinjaTrader's value:** a price above 0. With none, `hello` says `"settlement": null` and nothing is sent: never an
-  estimate, never the last close.
-- **To pages:** in `hello`, per instrument; and `{"type":"settlement","root":"MNQ","p":21456.25}` to every page whenever
-  the value changes. Each value is noted in the Output window with NinjaTrader's stamp on it, and `/diag` `settlements`
-  shows it.
-- **Which day's:** whatever NinjaTrader holds as Settlement. CME publishes the day's settlement in the afternoon (around
-  15:00 CT); if the connection passes it on then, the value changes before 18:00 to that day's settlement, which is the
-  prior settlement of the next session. Whether and when Tradovate's feed updates it is a live check (the Output lines
-  and `/diag` `settlements.ntTime` show it).
+- **What it is:** the settlement of the session before the current trading session. Sessions run 18:00 to 17:00 ET and
+  are named by the date they end on (the CME rules above: weekends and CME holidays have none). The current session is the
+  one begun last: in the 17:00 to 18:00 break, a weekend or a holiday it is still the one that just ended. So on Tuesday
+  the prior is Monday's until Tuesday 18:00; from Sunday 18:00 to Monday 17:00 (and to 18:00) it is Friday's; across Good
+  Friday it is Thursday's from Sunday 18:00.
+- **Where the values come from:** NinjaTrader's own settlement for the served contract. NinjaTrader 8's `MarketData` object
+  (the one ChartBridge already subscribes to for trades) holds a snapshot of each market data type, `MarketData.Settlement`
+  among them (a `MarketDataEventArgs`; NinjaTrader's help, MarketData: "Snapshot data is provided right on subscription"),
+  and its `Update` event delivers `MarketDataType.Settlement` events. ChartBridge reads the snapshot when it subscribes and
+  takes every Settlement event after that. Only a price above 0 counts; a reset event is never one; `LastClose` (the prior
+  session's close) is never used.
+- **Each value is dated** with the trading date it settles, from NinjaTrader's time on it: a date-only stamp (00:00) is that
+  date; otherwise the latest session day whose settlement could be out by then (16:00 ET, or 12:00 ET on an NYSE holiday or
+  early close, when CME halts early), as long as the next session has not opened (its 18:00 ET open; a weekend or a CME
+  holiday in between counts as before it). A value stamped inside a later session (a snapshot stamped when it was read,
+  say) could settle any earlier day: it is not used (one Output line says so; `/diag` shows it with `day` null), and with no
+  other dated value the prior is null rather than a wrong one.
+- **Today's settlement after the afternoon close** (in from about 16:15 ET) is kept and shown in `/diag`, but the prior
+  stays the day before's until the next session starts at 18:00 ET; then today's becomes the prior and every page gets a
+  `settlement` message. ChartBridge checks every second, so the roll reaches pages within a second of 18:00.
+- **To pages:** in `hello`, per instrument, `settlement` (or null) and `settlementDate`; and
+  `{"type":"settlement","root":"MNQ","p":21456.25,"date":"2026-09-28"}` to every page whenever the prior changes (`p` null
+  when ChartBridge has no value for that date). Each new dated value is noted in the Output window with NinjaTrader's stamp.
+  `/diag` `settlements`: per root, `prior` (`date`, `p`), `byDate` (the dated values kept), `last` (the latest value
+  NinjaTrader gave: `p`, `ntTime`, `day` or null, `from` `snapshot` or `update`, `receivedUtcMs`).
+- **Restarts:** the last two dated values per root are kept in `settlements.txt` in ChartBridge's folder (`ROOT yyyy-MM-dd
+  price`, replaced through a temp file), read at the start before market data is subscribed, so a restart in the evening
+  still knows the prior (and, before 18:00, the day before's).
+- **Live check:** whether Tradovate's feed gives a Settlement value, and the time NinjaTrader stamps on it (the snapshot
+  at subscription especially), is to be seen on the trading PC: the Output lines and `/diag` `settlements.last`.
 
 ### Higher-timeframe bars (4h, 1D, 1W)
 

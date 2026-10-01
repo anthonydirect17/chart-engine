@@ -173,8 +173,9 @@ The Desk tags each trade with the levels around it, and for that it needs the da
 
 ### Settlement, 4h, 1D and 1W bars, and the weekly profile (ChartBridge 0.3.7, data side)
 
-For the page's day % change, its 4h, 1D and 1W charts and the weekly profile, ChartBridge sends NinjaTrader's prior
-settlement (in `hello` and when it changes; none when NinjaTrader has none), answers a page's `htf` request with
+For the page's day % change, its 4h, 1D and 1W charts and the weekly profile, ChartBridge sends the prior session's
+settlement from NinjaTrader with the date it settles (in `hello` and when it changes, including the 18:00 roll; null when
+it has no reliably dated value; kept in `settlements.txt` across restarts), answers a page's `htf` request with
 NinjaTrader's own 240-minute, day or week bars (asked once per instrument and timeframe through the gate, last, never
 beside a chart load; kept in memory for other pages and reloads; the forming bar follows the live trades), and answers
 `weekProfile` with the last 5 sessions' volume at price from its session tables (never a NinjaTrader request; a missing

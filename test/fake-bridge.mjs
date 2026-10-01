@@ -93,12 +93,12 @@
 // (sm 2); every trade before them gets a tick-rule side (sm 3), as when NinjaTrader is asked for no historical quotes
 // there. 0 is 0.3.4.1's default (no measured side in the backfill); without the flag, every backfill trade is measured
 // like 0.3.4's (its quote history covered the whole window).
-// --data-037 (ChartBridge 0.3.7, data side, see nt8/PROTOCOL.md): hello lists a sample prior settlement per instrument
+// --data-037 (ChartBridge 0.3.7, data side, see nt8/PROTOCOL.md): hello lists a sample prior settlement and its date per instrument
 //   (made-up sample data, as everything here) and the features "settlement", "htf", "weekProfile"; the page's strict
 //   "htf" request is answered with 4h, 1D or 1W bars made from the sample minutes and kept live by the fake trades
 //   ("htfBar" at most once a second), and "weekProfile" with the last 5 sessions' volume at price of the sample minutes
 //   (one listed "missing", as a session ChartBridge has no table for). With --test-controls, POST
-//   /test/settlement?root=MNQ&p=21456.25 sends a "settlement" message to every page.
+//   /test/settlement?root=MNQ&p=21456.25&date=2026-09-28 sends a "settlement" message to every page (p=null: none known).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -386,8 +386,12 @@ function onMessage(c, text) {
   else if (['order', 'change', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
-const settlement = {};
-for (const r of Object.keys(INSTR)) { const b = data[r], day = CE.util.tradeDay(b[b.length - 1].t, 64800); const prior = b.filter(x => CE.util.tradeDay(x.t, 64800) < day); settlement[r] = prior.length ? prior[prior.length - 1].c : null; }
+const settlement = {}, settlementDate = {};       // the prior session's settlement and its trading date (sample: its last close)
+for (const r of Object.keys(INSTR)) {
+  const b = data[r], day = CE.util.tradeDay(b[b.length - 1].t, 64800), prior = b.filter(x => CE.util.tradeDay(x.t, 64800) < day);
+  settlement[r] = prior.length ? prior[prior.length - 1].c : null;
+  settlementDate[r] = new Date((prior.length ? CE.util.tradeDay(prior[prior.length - 1].t, 64800) : day - 1) * 86400000).toISOString().slice(0, 10);
+}
 const HTF_FRAMES = ['4h', '1D', '1W'];
 function htfStart(tf, t) {                       // as ChartBridge.HtfStart: 4h from the 18:00 ET open, 1D the trading day, 1W its Monday
   const day = Math.floor((t + 21600) / 86400);
@@ -606,7 +610,10 @@ const server = http.createServer((req, res) => {
         positions: Object.fromEntries(desk.positions) }));
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
-    else if (p === '/test/settlement' && DATA_037) { settlement[r] = +q.get('p'); for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r] }); }
+    else if (p === '/test/settlement' && DATA_037) {
+      settlement[r] = q.get('p') === 'null' ? null : +q.get('p'); if (q.get('date')) settlementDate[r] = q.get('date');
+      for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
+    }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
@@ -664,7 +671,7 @@ server.on('upgrade', (req, sock) => {
   if (!V1) hello.trading = desk.helloTrading(c);
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
   if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
-    for (const i of hello.instruments) i.settlement = settlement[i.root];
+    for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
   send(c, hello);

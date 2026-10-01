@@ -683,9 +683,9 @@ test('fake bridge --data-037 (ChartBridge 0.3.7 data side): settlement, strict h
     const ws = await wsConnect(port, 'http://localhost:' + port, await unlockFor(port));
     const hello = await ws.next('hello');
     assert.ok(hello.features.includes('settlement') && hello.features.includes('htf') && hello.features.includes('weekProfile'));
-    assert.ok(hello.instruments.every(i => i.settlement === null || typeof i.settlement === 'number'), 'settlement: a number, or null when none');
-    await pinPost(port, '/test/settlement?root=MNQ&p=21456.25', {});
-    assert.deepEqual(await ws.next('settlement'), { type: 'settlement', root: 'MNQ', p: 21456.25 });
+    assert.ok(hello.instruments.every(i => (i.settlement === null || typeof i.settlement === 'number') && /^\d{4}-\d\d-\d\d$/.test(i.settlementDate)), 'settlement: a number or null, and the date it settles');
+    await pinPost(port, '/test/settlement?root=MNQ&p=21456.25&date=2026-09-28', {});
+    assert.deepEqual(await ws.next('settlement'), { type: 'settlement', root: 'MNQ', p: 21456.25, date: '2026-09-28' });
     ws.send({ type: 'htf', root: 'MNQ', tf: '4h', id: 7 });
     const h = await ws.next('htf');
     assert.equal(h.id, 7); assert.equal(h.error, null); assert.ok(h.bars.length > 0 && h.bars.every(b => b.length === 6));

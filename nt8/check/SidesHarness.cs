@@ -1,11 +1,10 @@
 // The side of every trade (ChartBridge 0.3.4), run for real on Mono. First the rules as pure functions
 // (ChartBridgeSides.Classify: at, above, below the quote, between, no quote, crossed; the tick rule over sequences), the
 // live tagger fed by timestamped Bid and Ask updates (the trade's own update first, one stamped after the trade, stale,
-// reset, a burst), live and backfill agreeing on the same trades, the as-of join of the backfill on the Bid and Ask
-// history (ties, missing history, shorter history at either end, a hole, whole-second quotes, NinjaTrader's own stamps)
-// and the thinned quote series. Then whole loads through ChartBridgeServer's Subscribe and OnMarketData with the
-// stand-in BarsRequest: minute charts, the live {.., s, sm}, resets, the outbox and a 600,000-trade served window, and
-// /diag. (0.3.7: the by-date tick load with its Bid and Ask history is gone, and its load cases with it.)
+// reset, a burst, the delivery order), the 18:00 ET session. Then whole loads through ChartBridgeServer's Subscribe and
+// OnMarketData with the stand-in BarsRequest: minute charts, the live {.., s, sm}, resets, the outbox and a 600,000-trade
+// served window, and /diag. (0.3.7: the by-date tick load, its Bid and Ask history and the backfill's side join are gone,
+// and their cases with them.)
 // Made-up prices; nothing here is market data.
 using System;
 using System.Collections.Generic;
@@ -45,22 +44,7 @@ public static class SidesHarness
     static DateTime At(double seconds) { return T0.AddTicks((long)Math.Round(seconds * TimeSpan.TicksPerSecond)); }
     const int N = ChartBridgeSides.None, AG = ChartBridgeSides.Aggressor, Q = ChartBridgeSides.BidAsk, TR = ChartBridgeSides.TickRule;
 
-    // ------------------------------------------------------------ the stand-in's quote answers
-    // Used as BarsRequest.AutoAnswer for the whole seam and sides run: each Bid or Ask request is answered at once with
-    // NextBid or NextAsk (null: no history, an empty answer), unless Manual, when the case answers it itself.
-    public static Bars NextBid, NextAsk;
-    public static ErrorCode NextCode = ErrorCode.NoError;
-    public static bool Manual;
-
-    public static bool QuoteAnswer(BarsRequest r)
-    {
-        if (r.BarsPeriod == null || r.BarsPeriod.MarketDataType == MarketDataType.Last || Manual) return false;
-        Bars b = r.BarsPeriod.MarketDataType == MarketDataType.Bid ? NextBid : NextAsk;
-        r.Answer(b ?? new Bars(), NextCode);
-        return true;
-    }
-
-    static void Reset() { NextBid = null; NextAsk = null; NextCode = ErrorCode.NoError; Manual = false; }
+    static void Reset() { }
 
     // ------------------------------------------------------------ pure rules
     static string C(double p, double bid, double ask, bool hasPrev, double prev, int prevSide)
@@ -164,10 +148,10 @@ public static class SidesHarness
         Check(Tag(t, 100.25, 6.0, 0, 0) == "1/2", "live: 800 updates at the trade's own time: the quote from before them (100 / 100.25) still decides");
         Check(Tag(t, 100.5, 6.5, 0, 0) == "-1/2", "live: and the next trade uses the last of them (bid 100.5 / ask 101.25: at the bid, a sell)");
 
-        // S3: live and backfill now classify the same trades the same way (the same quotes, the reorder live).
+        // S3: the reorder live (updates at a trade's time delivered first): each trade by the quote stamped before it (the
+        // sides the removed backfill join gave the same trades, 0.3.4 to 0.3.6).
         double[][] qb = { R(1, 100), R(3, 100.25), R(4, 100) }, qa = { R(1, 100.25), R(3, 100.5), R(4, 100.25) };
         double[][] tr = { R(2, 100.25), R(3, 100.25), R(3.5, 100.25), R(3.6, 100.375), R(4, 100.25), R(4.2, 100) };
-        BackfillSides bf = J(tr, qb, qa);
         t = new LiveSideTagger();
         List<string> live = new List<string>();
         int qi = 0;
@@ -176,161 +160,10 @@ public static class SidesHarness
             while (qi < qb.Length && qb[qi][0] <= x[0]) { Q2(t, qb[qi][0], qb[qi][1], qa[qi][1]); qi++; }   // updates at the trade's time delivered first
             live.Add(Tag(t, x[1], x[0], 0, 0));
         }
-        Check(string.Join(" ", live) == Out(bf), "live and backfill agree on the same trades (live " + string.Join(" ", live) + ", backfill " + Out(bf) + ")");
+        Check(string.Join(" ", live) == "1/2 1/2 -1/2 1/3 -1/2 -1/2", "live: each trade by the quote stamped before it, whatever the delivery order (" + string.Join(" ", live) + ")");
     }
 
-    // ------------------------------------------------------------ the as-of join
-    static BackfillSides J(double[][] trades, double[][] bids, double[][] asks)
-    {
-        return ChartBridgeSides.ClassifyBackfill(trades.Select(x => At(x[0])).ToArray(), trades.Select(x => x[1]).ToArray(), trades.Length,
-            bids == null ? null : bids.Select(x => At(x[0])).ToArray(), bids == null ? null : bids.Select(x => x[1]).ToArray(), bids == null ? 0 : bids.Length,
-            asks == null ? null : asks.Select(x => At(x[0])).ToArray(), asks == null ? null : asks.Select(x => x[1]).ToArray(), asks == null ? 0 : asks.Length,
-            null, null, 0, 0.25);
-    }
-    static QuoteSeries Thin(double[][] rows) { Bars b = new Bars(); foreach (double[] x in rows) b.Add(At(x[0]), x[1], x[1], x[1], x[1], 1); return QuoteSeries.From(b, DateTime.MinValue); }
-    static BackfillSides JQ(double[][] trades, QuoteSeries bq, QuoteSeries aq)
-    {
-        return ChartBridgeSides.ClassifyBackfill(trades.Select(x => At(x[0])).ToArray(), trades.Select(x => x[1]).ToArray(), trades.Length,
-            bq.Time, bq.Price, bq.Seen, bq.Count, aq.Time, aq.Price, aq.Seen, aq.Count, null, null, 0, 0.25);
-    }
-    static string Out(BackfillSides r) { return string.Join(" ", Enumerable.Range(0, r.Trades).Select(i => r.Side[i] + "/" + r.Method[i])); }
     static double[] R(double t, double p) { return new double[] { t, p }; }
-
-    static void Join()
-    {
-        // Millisecond times throughout. Quote 100 / 100.25 from 0.001; the ask moves to 100.5 at 2.001.
-        double[][] bids = { R(0.001, 100), R(3.001, 100.25) };
-        double[][] asks = { R(0.001, 100.25), R(2.001, 100.5), R(5.001, 100.75) };
-        double[][] trades = { R(1.001, 100.25), R(1.502, 100), R(2.501, 100.25), R(2.601, 100.5), R(4.001, 100.25), R(4.5, 100.5) };
-        BackfillSides r = J(trades, bids, asks);
-        Check(Out(r) == "1/2 -1/2 1/3 1/2 -1/2 1/2" && r.Quoted == 6 && r.BetweenQuotes == 1 && r.Counts[Q] == 5 && r.Counts[TR] == 1,
-            "join: each trade by the quote in force at its time (" + Out(r) + ")");
-        Check(r.ResolutionOk(), "join: millisecond trades and quotes compared by millisecond");
-
-        // Tie: at 5.000 the ask 100.25 is lifted and in the same millisecond the ask moves to 100.5 and the bid steps up to 100.25.
-        r = J(new[] { R(3.5, 100), R(5, 100.25), R(5.5, 100.25) }, new[] { R(1, 100), R(5, 100.25) }, new[] { R(1, 100.25), R(5, 100.5) });
-        Check(r.Side[1] == 1 && r.Method[1] == Q && r.TieChanged == 1,
-            "join, tie: a quote stamped in the trade's own millisecond is not used (the lifted ask 100.25 stands): a buy; tieChanged counts it (" + Out(r) + ", tieChanged " + r.TieChanged + ")");
-        Check(r.Side[2] == -1 && r.Method[2] == Q, "join, tie: the next millisecond does use the new quote (100.25 is the bid: a sell)");
-
-        // Never a quote from after the trade.
-        r = J(new[] { R(1, 100.25), R(2, 100.5) }, new[] { R(3, 100) }, new[] { R(3, 100.25) });
-        Check(Out(r) == "0/0 1/3" && r.BeforeQuotes == 2 && r.Quoted == 0, "join: quotes that start after the trades are never used (no look-ahead): the tick rule");
-
-        // No quote history at all, or one side missing.
-        r = J(trades, null, null);
-        Check(r.Counts[Q] == 0 && r.Counts[TR] + r.Counts[N] == 6 && r.BeforeQuotes == 6 && !r.HasBid, "join, missing history: every trade by the tick rule");
-        r = J(trades, bids, null);
-        Check(r.Counts[Q] == 0 && r.BeforeQuotes == 6, "join, only bids came back: every trade by the tick rule");
-        r = J(new double[0][], bids, asks);
-        Check(r.Trades == 0 && r.Side.Length == 0, "join: no trades: nothing");
-
-        // Shorter history: the quotes end at 3 (a stale quote is never carried past the end).
-        double[] lt = { 1.5, 2.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5 };
-        double[][] longTrades = lt.Select((t, i) => R(t, i % 2 == 0 ? 100.25 : 100)).ToArray();
-        r = J(longTrades, new[] { R(0.2, 100), R(3, 100) }, new[] { R(0.2, 100.25), R(3, 100.25) });
-        Check(r.Quoted == 2 && r.AfterQuotes == 6 && Enumerable.Range(0, 2).All(i => r.Method[i] == Q) && Enumerable.Range(2, 6).All(i => r.Method[i] == TR),
-            "join, shorter history (ends early): trades over 5 s past its end go by the tick rule (" + Out(r) + ")");
-        r = J(new[] { R(1.5, 100.25), R(7.9, 100.25), R(8.1, 100) }, new[] { R(0.2, 100), R(3, 100) }, new[] { R(0.2, 100.25), R(3, 100.25) });
-        Check(r.Quoted == 2 && r.AfterQuotes == 1 && Out(r) == "1/2 1/2 -1/3", "join: within 5 s of the quote history's end the last quote still stands; after that, the tick rule (" + Out(r) + ")");
-        r = J(longTrades, new[] { R(4.9, 100), R(20, 100) }, new[] { R(4.9, 100.25), R(20, 100.25) });
-        Check(r.BeforeQuotes == 2 && r.Quoted == 6 && Enumerable.Range(2, 6).All(i => r.Method[i] == Q), "join, shorter history (starts late): trades before its start go by the tick rule");
-        r = J(longTrades, new[] { R(0.2, 100), R(20, 100) }, new[] { R(0.2, 100.25), R(3, 100.25) });
-        Check(r.AfterQuotes == 6, "join: the quote history ends where the shorter side (bids or asks) ends");
-
-        // N1: a hole in the middle of the quote history (30 minutes missing): trades in it do not use the quote from before it.
-        r = J(new[] { R(5, 104), R(1000, 103.75), R(1900, 103.5), R(1901, 103.75) }, new[] { R(0, 103.75), R(10, 103.75), R(1900.5, 103.5) }, new[] { R(0, 104), R(10, 104), R(1900.5, 103.75) });
-        Check(Out(r) == "1/2 -1/3 -1/3 1/2" && r.StaleQuotes == 2 && r.Quoted == 2,
-            "join, N1: a quote over 60 s old is stale (a hole in the history): the tick rule, counted (" + Out(r) + ", stale " + r.StaleQuotes + ")");
-
-        // Whole-second quotes against millisecond trades: compared by whole second, so a quote in the trade's second is a tie.
-        double[][] wsb = Enumerable.Range(0, 25).Select(i => R(i, 100)).ToArray(), wsa = Enumerable.Range(0, 25).Select(i => R(i, 100.25)).ToArray();
-        wsa[10] = R(10, 101);   // at 10 s the ask jumps (say, a sweep in that second)
-        r = J(new[] { R(10.4, 100.25), R(11.2, 100.25) }, wsb, wsa);
-        Check(r.UnitTicks == TimeSpan.TicksPerSecond && r.QuoteResolution == TimeSpan.TicksPerSecond && r.Side[0] == 1 && r.Method[0] == Q && r.Side[1] == 1,
-            "join: whole-second quotes: compared by second; a quote in the trade's own second is not used (" + Out(r) + ")");
-
-        // NinjaTrader's own stamps on the trades (diag only): real ones checked against the join, filled-in ones (Bid = Last,
-        // Ask = Bid + 1 tick) and missing ones counted.
-        DateTime[] tt = trades.Select(x => At(x[0])).ToArray(); double[] tp = trades.Select(x => x[1]).ToArray();
-        double[] sb = { 100, 100, 0, 100.25, 100.25, 100.5 }, sa = { 100.25, 100.25, 0, 100.5, 100.5, 100.75 };
-        double[] synB = tp.ToArray(), synA = tp.Select(p => p + 0.25).ToArray();
-        r = ChartBridgeSides.ClassifyBackfill(tt, tp, 6, bids.Select(x => At(x[0])).ToArray(), bids.Select(x => x[1]).ToArray(), 2, asks.Select(x => At(x[0])).ToArray(), asks.Select(x => x[1]).ToArray(), 3, sb, sa, 0, 0.25);
-        Check(r.StampUsable == 5 && r.StampMissing == 1 && r.StampLikeFillIn == 3 && r.StampAgree == 4 && r.StampDisagree == 1 && Out(r) == "1/2 -1/2 1/3 1/2 -1/2 1/2",
-            "join: NinjaTrader's stamps compared with the join (usable " + r.StampUsable + ", like fill-in " + r.StampLikeFillIn + ", agree " + r.StampAgree + ", disagree " + r.StampDisagree + "); the join's sides unchanged");
-        r = ChartBridgeSides.ClassifyBackfill(tt, tp, 6, null, null, 0, null, null, 0, synB, synA, 0, 0.25);
-        Check(r.StampLikeFillIn == 6 && r.StampUsable == 6 && r.Counts[Q] == 0, "join: stamps all like the fill-in (Bid = Last, Ask = Bid + 1 tick) are counted, never used");
-
-        // S2: the quote series keeps time and price only, and only the rows that can matter: the first of each run at one
-        // price, one every 5 s within a run (so a quote's age is known), and the last row.
-        Bars raw = new Bars();
-        double[][] rows = { R(0, 100), R(0.1, 100), R(0.2, 100), R(0.3, 100.25), R(0.4, 100.25), R(6, 100.25), R(7, 100.25), R(12.5, 100.25), R(13, 100), R(13.2, 100) };
-        foreach (double[] x in rows) raw.Add(At(x[0]), x[1], x[1], x[1], x[1], 7);
-        QuoteSeries qs = QuoteSeries.From(raw, At(-1));
-        string kept = string.Join(" ", qs.Time.Select(x => ((x - T0).TotalSeconds).ToString("0.#"))), seen = string.Join(" ", qs.Seen.Select(x => ((x - T0).TotalSeconds).ToString("0.#")));
-        Check(kept == "0 0.3 6 12.5 13" && seen == "0.2 0.4 7 12.5 13.2" && qs.RawRows == 10,
-            "quotes: size-only rows dropped (first of each price and a 5 s heartbeat kept), each kept row remembers its last update (kept " + kept + ", seen " + seen + ")");
-        Check(QuoteSeries.From(raw, At(0.25)).RawRows == 7 && QuoteSeries.From(raw, At(0.25)).Time[0] == At(0.3), "quotes: rows before the quote window are skipped");
-        // The same sides from the thinned series as from every row.
-        double[][] full = Enumerable.Range(0, 400).Select(i => R(i * 0.05, 100 + (i / 7 % 3) * 0.25)).ToArray();
-        double[][] fullA = full.Select(x => R(x[0], x[1] + 0.25)).ToArray();
-        double[][] tq = Enumerable.Range(0, 150).Select(i => R(i * 0.13 + 0.01, 100 + (i % 4) * 0.25)).ToArray();
-        Bars fb = new Bars(), fa = new Bars();
-        foreach (double[] x in full) fb.Add(At(x[0]), x[1], x[1], x[1], x[1], 3);
-        foreach (double[] x in fullA) fa.Add(At(x[0]), x[1], x[1], x[1], x[1], 3);
-        QuoteSeries tb = QuoteSeries.From(fb, At(-1)), ta = QuoteSeries.From(fa, At(-1));
-        BackfillSides thin = JQ(tq, tb, ta);
-        Check(Out(thin) == Out(J(tq, full, fullA)) && tb.Count < full.Length / 3, "quotes: the thinned series gives the same sides as every row (" + tb.Count + " of " + full.Length + " rows kept)");
-        // Review 2 N1: the thinned series must not move a quote's age at the 60 s stale edge. Bid 100 at 0 s and a size-only
-        // update at 4 s (dropped), the bid moves at 70 s; a trade at 63 s at the bid, up-tick: every row says fresh (a sell by
-        // the quote); the kept row alone said stale (a buy by the tick rule). With Seen it is the same.
-        double[][] nb = { R(0, 100), R(4, 100), R(70, 100.25) }, na = { R(0, 100.25), R(4, 100.25), R(70, 100.5) };
-        double[][] nt2 = { R(1, 99.75), R(63, 100) };
-        Check(Out(JQ(nt2, Thin(nb), Thin(na))) == Out(J(nt2, nb, na)) && Out(J(nt2, nb, na)) == "-1/2 -1/2",
-            "quotes, N1: at the 60 s edge the thinned series gives the same sides as every row (" + Out(JQ(nt2, Thin(nb), Thin(na))) + ")");
-        // And over many made-up histories with gaps around 60 s, size-only runs and trades at every distance: never a different side.
-        int diffs = 0, tradesChecked = 0;
-        for (int seed = 1; seed <= 200; seed++)
-        {
-            Random rnd = new Random(seed);
-            List<double[]> hb = new List<double[]>(), ha = new List<double[]>(), ht = new List<double[]>();
-            double t = 0, bid = 100;
-            for (int i = 0; i < 60; i++)
-            {
-                double gap = rnd.Next(4) == 0 ? 50 + rnd.NextDouble() * 20 : rnd.NextDouble() * 6;   // often near 60 s
-                t += Math.Round(gap, 3);
-                if (rnd.Next(3) == 0) bid += (rnd.Next(2) == 0 ? -0.25 : 0.25);
-                hb.Add(R(t, bid)); ha.Add(R(t, bid + 0.25));
-                double tx = t + Math.Round(rnd.NextDouble() * 70, 3);
-                ht.Add(R(tx, bid + (rnd.Next(3) - 1) * 0.25));
-            }
-            double[][] trs = ht.OrderBy(x => x[0]).ToArray();
-            string a = Out(JQ(trs, Thin(hb.ToArray()), Thin(ha.ToArray()))), b = Out(J(trs, hb.ToArray(), ha.ToArray()));
-            tradesChecked += trs.Length;
-            if (a != b) diffs++;
-        }
-        Check(diffs == 0, "quotes, N1: 200 made-up histories (" + tradesChecked + " trades) around the 60 s edge: thinned and every row agree on every side (" + diffs + " differ)");
-        // Cost of the copy on NinjaTrader's answer thread: 1,000,000 Bid rows (about 1 in 6 changes price).
-        Bars big = new Bars();
-        for (int i = 0; i < 1000000; i++) { double px = 100 + (i / 6 % 8) * 0.25; big.Add(At(i * 0.0288), px, px, px, px, 1 + i % 5); }
-        System.Diagnostics.Stopwatch cw = System.Diagnostics.Stopwatch.StartNew();
-        QuoteSeries bigQ = QuoteSeries.From(big, At(-1));
-        cw.Stop();
-        Console.WriteLine("     (1,000,000 quote rows copied and thinned to " + bigQ.Count + ": " + cw.Elapsed.TotalMilliseconds.ToString("0") + " ms, about " + (bigQ.Count * 16 / 1024) + " KB kept)");
-        Check(bigQ.RawRows == 1000000 && bigQ.Count < 200000 && cw.Elapsed.TotalMilliseconds < 3000, "cost: 1,000,000 quote rows copied and thinned in " + cw.Elapsed.TotalMilliseconds.ToString("0") + " ms (" + bigQ.Count + " kept)");
-
-        // Cost on ChartBridge's side: 300,000 trades against 1,000,000 bids and 1,000,000 asks (a busy 8 hours, roughly).
-        int nt = 300000, nq = 1000000;
-        DateTime[] ct = new DateTime[nt], cb = new DateTime[nq], ca = new DateTime[nq];
-        double[] cp = new double[nt], cbp = new double[nq], cap = new double[nq];
-        for (int i = 0; i < nq; i++) { cb[i] = At(i * 0.0288); ca[i] = At(i * 0.0288 + 0.0005); cbp[i] = 100 + (i / 50 % 8) * 0.25; cap[i] = cbp[i] + 0.25; }
-        for (int i = 0; i < nt; i++) { ct[i] = At(i * 0.096 + 0.001); cp[i] = 100 + (i / 15 % 8) * 0.25 + (i % 2) * 0.25; }
-        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-        r = ChartBridgeSides.ClassifyBackfill(ct, cp, nt, cb, cbp, nq, ca, cap, nq, null, null, 0, 0.25);
-        sw.Stop();
-        Console.WriteLine("     (300,000 trades joined on 2,000,000 quotes: " + sw.Elapsed.TotalMilliseconds.ToString("0") + " ms)");
-        Check(r.Trades == nt && r.Quoted == nt && sw.Elapsed.TotalMilliseconds < 5000, "cost: 300,000 trades joined on 2,000,000 quotes in " + sw.Elapsed.TotalMilliseconds.ToString("0") + " ms");
-    }
 
     // ------------------------------------------------------------ whole loads
     static ChartBridgeClient client;
@@ -371,7 +204,6 @@ public static class SidesHarness
         AnyHour();
         Pure();
         Live();
-        Join();
         Session();
         Lanes();
     }
@@ -408,7 +240,7 @@ public static class SidesHarness
     static void Session()
     {
         // The review's reopen print: 100.25 at 16:59:59 ET (a buy at the ask), then the 18:00:00 reopening print at 101 with
-        // no fresh quote. Nothing carries across the break: side 0, live, in the backfill, and in the seam continuation.
+        // no fresh quote. Nothing carries across the break: side 0.
         DateTime close = Et(2026, 9, 29, 16, 59, 59), open = Et(2026, 9, 29, 18, 0, 0);
         LiveSideTagger t = new LiveSideTagger();
         t.NoteQuote(true, 100, close.AddSeconds(-1)); t.NoteQuote(false, 100.25, close.AddSeconds(-1));
@@ -417,19 +249,6 @@ public static class SidesHarness
         int m3; int s3 = t.Tag(101.25, open.AddSeconds(1), 0, 0, out m3);
         Check(s1 == 1 && m1 == Q && s2 == 0 && m2 == N && s3 == 1 && m3 == TR,
             "session, live: the 18:00 ET reopening print with no fresh quote is side 0 (not a buy against the previous session); the next up-tick a buy (" + s2 + "/" + m2 + ", " + s3 + "/" + m3 + ")");
-        BackfillSides r = ChartBridgeSides.ClassifyBackfill(new[] { close, open, open.AddSeconds(1) }, new[] { 100.25, 101.0, 101.25 }, 3,
-            new List<DateTime> { close.AddSeconds(-1) }, new List<double> { 100 }, 1, new List<DateTime> { close.AddSeconds(-1) }, new List<double> { 100.25 }, 1, null, null, 0, 0.25);
-        Check(Out(r) == "1/2 0/0 1/3" && r.SessionStarts == 1, "session, backfill: the same (" + Out(r) + "), live and backfill agree");
-        List<SeamTick> rel = new List<SeamTick> {
-            new SeamTick { Time = open, Price = 101, Volume = 1, Side = 1, Method = TR, Json = "{\"type\":\"tick\",\"p\":101,\"s\":1,\"sm\":3}" },
-            new SeamTick { Time = open.AddSeconds(1), Price = 101, Volume = 1, Side = 1, Method = TR, Json = "{\"type\":\"tick\",\"p\":101,\"s\":1,\"sm\":3}" } };
-        DateTime et2; double ep; int es;
-        List<SeamTick> cont = ChartBridgeSides.ContinueTickRule(rel, close, 100.25, 1, out et2, out ep, out es);
-        Check(cont[0].Side == 0 && cont[0].Method == N && cont[0].Json.EndsWith("\"s\":0,\"sm\":0}") && cont[1].Side == 0 && es == 0,
-            "session, seam: released trades after the break start over too (" + cont[0].Json + " " + cont[1].Json + ")");
-        cont = ChartBridgeSides.ContinueTickRule(rel, open.AddSeconds(-0.5 + 0.5), 100.5, -1, out et2, out ep, out es);
-        Check(cont[0].Side == 1 && cont[1].Side == 1, "session, seam: within one session the chain continues (up from 100.5: a buy)");
-
         // DST: the boundary is 18:00 New York time on the day, whatever the offset.
         foreach (int[] d in new[] { new[] { 2026, 3, 8 }, new[] { 2026, 11, 1 }, new[] { 2026, 3, 9 }, new[] { 2026, 11, 2 } })
         {
@@ -920,7 +739,6 @@ public static class SidesHarness
     static void LoadOutbox()
     {
         Reset();
-        Manual = true;
         var clients = (System.Collections.Concurrent.ConcurrentDictionary<int, ChartBridgeClient>)typeof(ChartBridgeServer).GetField("Clients", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
         foreach (int n in new[] { 6000, 20000 })
         {
@@ -1001,7 +819,4 @@ public static class SidesHarness
     }
 }
 
-static class BackfillSidesCheck
-{
-    public static bool ResolutionOk(this BackfillSides r) { return r.UnitTicks == TimeSpan.TicksPerMillisecond; }
-}
+

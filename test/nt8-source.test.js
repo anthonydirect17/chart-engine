@@ -469,7 +469,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   // re-review: the heldAtAnswer gate only at whole seconds; sub echoed as canonical digits
   assert.match(code, /if \(i < heldAtAnswer \|\| unit < Second\) \{ r\.DroppedSameTime\+\+; continue; \}/);
   assert.match(code, /long\.Parse\(sm\.Groups\[1\]\.Value, CultureInfo\.InvariantCulture\)\.ToString\(CultureInfo\.InvariantCulture\)/);
-  for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, BackfillSides sides, int from)']) {
+  for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) {
     const body = bodyOf(code, f);
     assert.equal((body.match(/L\.Client\.Send\(/g) || []).length, (body.match(/Current\(L\)/g) || []).length, f + ': a Current check for every send');
   }
@@ -491,8 +491,8 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ "\}"/);
   // backfill trades: t, p, v first, then s and sm
   // (0.3.5: written by AppendTrade with no string per number; WindowHarness.cs checks the text is 0.3.4's)
-  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, BackfillSides sides, int from)'), /AppendTrade\(b, bars, sides, i, et\);/);
-  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*if \(sides != null\) \{ b\.Append\(','\); CbJson\.AppendLong\(b, sides\.Side\[i\]\); b\.Append\(','\); CbJson\.AppendLong\(b, sides\.Method\[i\]\); \}/);
+  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et\);/);
+  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed)
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
   assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
@@ -508,7 +508,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   // review 4: a close always ends the connection; the page's own bulk sends are not lag; a load queues few chunks ahead
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
-  for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, BackfillSides sides, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
+  for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
   assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" \};/);
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
@@ -638,7 +638,7 @@ test('0.3.5: a HEAD request gets headers only (HttpListener refuses a body on a 
 
 // ---- 0.3.7: quoteHours went with the by-date tick load (removed; 0.3.5 replaced it with the served window)
 test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a quoteHours line is only noted', () => {
-  for (const gone of ['RequestTickHistory', 'RequestQuotes', 'BeginQuotes', 'QuoteAnswered', 'QuotesOutstanding', 'QuoteWindowHours', 'ParseQuoteHours', 'ByDateTickLoads', 'ClassifyLoad', 'ContinueSides', 'NoteSides', 'LastLoadSides', 'CopyTicks', 'TickToMargin;'])
+  for (const gone of ['RequestTickHistory', 'RequestQuotes', 'BeginQuotes', 'QuoteAnswered', 'QuotesOutstanding', 'QuoteWindowHours', 'ParseQuoteHours', 'ByDateTickLoads', 'ClassifyLoad', 'ContinueSides', 'NoteSides', 'LastLoadSides', 'CopyTicks', 'TickToMargin;', 'ClassifyBackfill', 'QuoteSeries', 'ContinueTickRule', 'BackfillSides', 'QuoteEndSlack'])
     assert.ok(!code.includes(gone), gone + ' is gone');
   assert.ok(!/public static int QuoteHours/.test(code), 'no quoteHours setting');
   assert.match(bodyOf(code, 'public static void Load()'), /else if \(key == "quoteHours"\) ChartBridgeServer\.Log\("config\.txt: quoteHours is no longer used/);
@@ -654,6 +654,9 @@ test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a qu
 test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only through the gate, the weekly profile never asks', () => {
   const note = bodyOf(code, 'public static void NoteSettlement(');
   assert.match(note, /!\(price > 0\)\) return;/, 'only a real price');
+  assert.match(note, /DateTime\? day = SettlementDay\(ntTime\);/, 'every value dated from NinjaTrader\'s time on it');
+  assert.match(bodyOf(code, 'private static void PriorSettlement('), /ChartBridgeCme\.PreviousSession\(ChartBridgeCme\.CurrentSession\(/);
+  assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlements\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);
   assert.match(bodyOf(code, 'private static void SubscribeMarketData('), /MarketDataEventArgs st = md\.Settlement;/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   assert.ok(md.indexOf('if (e.IsReset)') < md.indexOf('MarketDataType.Settlement'), 'a reset is never a settlement');

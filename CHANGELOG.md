@@ -5,10 +5,13 @@
 Draft for the 0.3.7 release, which the coordinator cuts when the order side joins: the version in `ChartBridge.cs` stays
 0.3.6 until then, and nothing here changes the order path. Recompile (F5) when installed. Old pages ignore every new
 message; the page that uses them is a later build.
-- **Prior settlement.** NinjaTrader's own settlement for each served contract (`MarketData.Settlement`, read when market
-  data is subscribed, and every Settlement update after). In `hello` per instrument (`settlement`, null when NinjaTrader has
-  none: never an estimate), and `{"type":"settlement","root","p"}` to every page when it changes. Output window line and
-  `/diag` `settlements` show each value with NinjaTrader's stamp.
+- **Prior settlement.** The settlement of the session before the current one (sessions 18:00 to 17:00 ET), from
+  NinjaTrader's own settlement for each served contract (`MarketData.Settlement` at subscription, and every Settlement
+  update). Each value is dated with the session it settles from NinjaTrader's stamp; one stamped inside a later session is
+  not used (null, never a guess). Today's settlement, in after the close, becomes the prior at 18:00 (over a weekend,
+  Friday's from Sunday 18:00; across a CME holiday, the last session's). In `hello` per instrument (`settlement`,
+  `settlementDate`), and `{"type":"settlement","root","p","date"}` to every page when the prior changes. The last two dated
+  values per root are kept in `settlements.txt`, so a restart in the evening still knows the prior. `/diag` `settlements`.
 - **4h, 1D and 1W bars on request.** `{"type":"htf","root","tf","id"}` (strict). NinjaTrader's own 240-minute, day and week
   bars, 300 by count, through the gate last (only with no chart loading, no window or backfill out or queued, no minute
   chart's last trades out); not answered in 60 s, it is given up and frees the gate. Kept per root and timeframe: a second
@@ -21,7 +24,9 @@ message; the page that uses them is a later build.
   table that is not whole says so.
 - **The old by-date tick load is removed** (replaced by the served window in 0.3.5): its request, the Bid and Ask history
   (`quoteHours`), the quote wait and their `/diag` fields (`sides.lastLoad`, `quotesOutstanding`, `seams.tickToAheadMin`,
-  `tickRetriedEndingNow`). A `quoteHours` line in `config.txt` is now noted once and does nothing. The pure side rules stay.
+  `tickRetriedEndingNow`), and the backfill's side join that only it used (`ClassifyBackfill`, `QuoteSeries`,
+  `ContinueTickRule`, `BackfillSides`). A `quoteHours` line in `config.txt` is now noted once and does nothing. Live
+  trades keep their sides as before.
 - **Review follow-ups.** The gate's stop edges (lf7 N1 to N3): a request dropped at a stop answers its waiting pages and a
   start clears what it left, a timeout after the stop never marks the gate stuck again, and a stop is checked right before
   a taken request is sent (a request that still slips out in the last instructions has its answer dropped uncopied). `MarketClosedNow` knows the CME holidays by the page's own rules
