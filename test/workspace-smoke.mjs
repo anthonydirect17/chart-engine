@@ -50,7 +50,9 @@ function spies() {
   window.WebSocket = Spy;
 }
 /* every socket opened since the page loaded: the instruments it subscribed to, open or not */
-const sockets = page => page.evaluate(() => window.__spy.sockets.map(k => ({ open: k.sock.readyState === 1, subs: k.sent.map(d => JSON.parse(d)).filter(m => m.type === 'subscribe').map(m => m.root) })));
+const allSockets = page => page.evaluate(() => window.__spy.sockets.map(k => ({ open: k.sock.readyState === 1, subs: k.sent.map(d => JSON.parse(d)).filter(m => m.type === 'subscribe').map(m => m.root), auth: k.sent.some(d => JSON.parse(d).type === 'auth') })));
+/* the instruments' connections (1.12.0: each window also has its own order connection, which subscribes to nothing) */
+const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--test-controls', '--live-rate=150', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
@@ -96,34 +98,35 @@ try {
   check(main && main.range === 40 && main.x === 0 && main.y === 0 && main.w === 7 && main.h === 4, 'MNQ Range 40: cols 1 to 7, rows 1 to 4');
   check(daily && daily.x === 0 && daily.y === 4 && daily.w === 7 && daily.h === 2, 'MNQ under it: cols 1 to 7, rows 5 to 6');
   check(nq && nq.x === 7 && nq.y === 0 && nq.w === 3 && nq.h === 3 && es && es.x === 7 && es.y === 3 && es.w === 3 && es.h === 3, 'NQ 5 min (cols 8 to 10, rows 1 to 3) and ES 1 min (rows 4 to 6)');
-  check(ticket && ticket.x === 10 && ticket.y === 0 && ticket.w === 2 && ticket.h === 2, 'the order ticket: cols 11 to 12, rows 1 to 2');
-  check(tape && tape.x === 10 && tape.y === 2 && tape.w === 2 && tape.h === 4, 'Time and Sales: cols 11 to 12, rows 3 to 6');
+  check(ticket && ticket.x === 10 && ticket.y === 0 && ticket.w === 2 && ticket.h === 3, 'the order ticket: cols 11 to 12, rows 1 to 3 (1.12.0: it fits at 1366x768)');
+  check(tape && tape.x === 10 && tape.y === 3 && tape.w === 2 && tape.h === 3, 'Time and Sales: cols 11 to 12, rows 4 to 6 (it gives up a row)');
   check(s.panels.every(p => !('exec' in p)), 'no execution chart');
   const ui = await page.evaluate(ids => {
     const P = id => document.querySelector(`.ws-panel[data-id="${id}"]`);
     const tk = P(ids.ticket);
     return { ticketText: tk.querySelector('.ws-body').textContent, ticketCtl: tk.querySelectorAll('.ws-body button, .ws-body input, .ws-body select').length, ticketName: tk.querySelector('.ws-name').textContent,
       obar: !!document.querySelector('[id$="obar"], [id$="armBtn"], [id$="buyMkt"]'), dailyTf: P(ids.daily).querySelector('.ws-tf').textContent, dailyTitle: P(ids.daily).querySelector('.ws-view').title,
-      names: [...document.querySelectorAll('.ws-panel .ws-name')].map(e => e.textContent), flattenSlot: !!document.getElementById('wsFlattenSlot'),
+      names: [...document.querySelectorAll('.ws-panel .ws-name')].map(e => e.textContent), flattenSlot: !!document.getElementById('wsFlat') && !!document.getElementById('wsKeys'),
       clock: document.getElementById('wsClock').textContent, topH: document.querySelector('.ws-top').offsetHeight };
   }, { ticket: ticket.id, daily: daily.id });
-  check(/^Order ticket: next build/.test(ui.ticketText) && ui.ticketCtl === 0 && ui.ticketName === 'Order ticket', 'the ticket placeholder says "Order ticket: next build" and has no controls');
-  check(!ui.obar, 'no order bar anywhere in this build (every chart is a read-only mount)');
+  check(/No window has the ticket/.test(ui.ticketText) && ui.ticketCtl === 1 && ui.ticketName === 'Order ticket', 'a window does not take the ticket by itself: "No window has the ticket" and one button (' + ui.ticketText.replace(/\s+/g, ' ') + ')');
+  check(!ui.obar, 'no order bar inside any chart (the order ticket is its own panel)');
   check(ui.dailyTf === '1 hour' && /ChartBridge 0\.3\.7/.test(ui.dailyTitle), 'the long chart is labelled 1 hour, not Daily (ChartBridge 0.3.7 brings daily bars)');
   check(ui.names.includes('MNQ 12-26') && ui.names.includes('Time and Sales'), 'headers show the contract (' + ui.names.join(', ') + ')');
-  check(ui.flattenSlot && /^\d\d:\d\d:\d\d$/.test(ui.clock) && ui.topH === 40, 'top bar 40 px, New York clock ' + ui.clock + ', the Flatten slot kept for E2b');
+  check(ui.flattenSlot && /^\d\d:\d\d:\d\d$/.test(ui.clock) && ui.topH === 40, 'top bar 40 px, New York clock ' + ui.clock + ', Flatten all and KEYS in it');
   const paneIds = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"] [data-pane]')].map(e => e.dataset.pane));
   check(paneIds.length === 4 && new Set(paneIds).size === 4 && paneIds.every(id => s.panels.some(p => p.id === id)), 'each chart has its own paneId, the panel id');
   const ind = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2') || '{}'));
   check(ind[main.id] && ind[main.id].ind.vwap.on && !ind[nq.id], 'the first chart starts with the single chart page\'s indicators, the others with none');
 
   const sessions = async () => (await (await fetch(`http://127.0.0.1:${PORT}/test/received`, { method: 'POST' })).json()).sessionRequests;
-  check(await sessions() === 0, 'no GET /session from the workspace');
+  check(await sessions() === 2, 'each window load signs in once for its own order connection (GET /session): ' + await sessions());
 
   console.log('one connection per instrument');
   let k = await sockets(page);
   const subsOf = r => k.flatMap(x => x.subs).filter(x => x === r).length;
   check(k.length === 3 && k.every(x => x.open), 'three WebSockets for six panels: one per instrument (' + k.map(x => x.subs.join('+')).join(', ') + ')');
+  check((await allSockets(page)).filter(x => x.auth && x.open && !x.subs.length).length === 1, 'and one order connection for the window, which subscribes to nothing');
   check(subsOf('MNQ') === 1 && subsOf('NQ') === 1 && subsOf('ES') === 1, 'one subscribe per instrument (MNQ feeds two charts and the tape)');
   check(s.feed.lines.find(l => l.root === 'MNQ').clients === 3, 'the MNQ connection feeds 3 panels');
   await page.waitForTimeout(1500);
@@ -271,7 +274,7 @@ try {
   check(await page.evaluate(() => document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v) === 'off', 'Glide set on the single chart page shows in the workspace\'s Settings');
   await page.keyboard.press('Escape');
   await sp.close();
-  const sess0 = await sessions();                          // the single chart page asks for its session; the workspace never does
+  const sess0 = await sessions();                          // each page load (the workspace's and the single chart page's) signs in once
   await page.evaluate(() => { const s = JSON.parse(localStorage.getItem('live-settings-v2')); s.glide = 'smooth'; s.rangeMode = 'nt'; localStorage.setItem('live-settings-v2', JSON.stringify(s)); localStorage.removeItem('live-hotkeys-v1'); });
 
   console.log('Time and Sales');
@@ -403,10 +406,12 @@ try {
   check(await page.evaluate(() => [...document.getElementById('wsLayout').options].map(o => o.textContent).join('|')) === 'Main|Second|──────|New layout...|Rename|Delete', 'the Layout select lists both, then New layout..., Rename, Delete');
 
   console.log('read only');
-  const sent = await page.evaluate(() => window.__spy.sockets.flatMap(k => k.sent.map(d => JSON.parse(d).type)));
-  check(sent.length > 0 && sent.every(t => t === 'subscribe' || t === 'ping'), 'the page sends only subscribe (and ping): ' + [...new Set(sent)].join(', '));
-  check((await page.evaluate(() => window.__spy.sockets.length)) === 3, 'one WebSocket per instrument: 3 for 6 panels');
-  check(await sessions() === sess0, 'no GET /session from the workspace, before or after reloads');
+  const sent = await page.evaluate(() => window.__spy.sockets.map(k => k.sent.map(d => JSON.parse(d).type)));
+  const feedSent = sent.filter(l => !l.includes('auth')).flat(), orderSent = sent.filter(l => l.includes('auth')).flat();
+  check(feedSent.length > 0 && feedSent.every(t => t === 'subscribe' || t === 'ping'), 'the instruments\' connections send only subscribe (and ping): ' + [...new Set(feedSent)].join(', '));
+  check(orderSent.length === 1 && orderSent[0] === 'auth', 'the order connection signs in and sends nothing else (trading is off on this ChartBridge): ' + orderSent.join(', '));
+  check((await page.evaluate(() => window.__spy.sockets.length)) === 4, 'one WebSocket per instrument (3 for 6 panels) and the order connection');
+  check(await sessions() === sess0 + 3, 'one GET /session per order connection: the reconnect after the drop and two loads: ' + (await sessions() - sess0));
 
   console.log('New layout, Rename, Delete');
   await page.selectOption('#wsLayout', '\u0001new');

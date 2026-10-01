@@ -436,7 +436,8 @@ const core = TC.create({
   lastPrice: () => { const x = TK.last[ticketRoot()]; return x ? x.p : null; },
   qty: () => (holds() && TK.el ? Number(tk('oQty').value === '' ? NaN : +tk('oQty').value) : NaN),
   pickerAccount: () => (holds() && TK.el ? tk('oAcct').value : ticketAccount()),
-  wantedAccount: () => { const h = holder(); return !holds() && h && h.account ? h.account : readTicket().account || accountPick(); },
+  /* the ticket's account; with no ticket anywhere, the last account picked on this PC (as the single chart page) */
+  wantedAccount: () => { const h = holder(); return holds() ? readTicket().account || accountPick() : h && h.account ? h.account : accountPick(); },
   tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
   flash: tnote, later: tlater, destroyed: () => false,
   changed: () => renderOrders(), armed: on => ticketArmedUi(on),
@@ -1318,7 +1319,10 @@ window.addEventListener('pagehide', () => { if (layout) save(); });
 /* for tests and the console (read only) */
 window.workspace = { get layout() { return layout; }, panels: () => panels.map(p => Object.assign({}, p)),
   views: () => [...views.values()].map(v => ({ id: v.panel.id, type: v.panel.type, state: v.state, count: v.tape ? v.tape.count() : null })),
-  feed: () => hub.stats() };
+  feed: () => hub.stats(),
+  /* 1.12.0: the ticket as this window knows it, and a chart's engine (read it; orders still go through the checks) */
+  ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
+  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; } };
 
 const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); };
 if (PIN) PIN.gate().then(start); else start();
