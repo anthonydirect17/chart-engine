@@ -3,7 +3,8 @@
   "addons": [
     "nt8/ChartBridge.cs",
     "nt8/ChartBridgeOrders.cs",
-    "nt8/ChartBridgePin.cs"
+    "nt8/ChartBridgePin.cs",
+    "nt8/ChartBridgeBars.cs"
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },

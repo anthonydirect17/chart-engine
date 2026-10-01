@@ -23,6 +23,11 @@ const tradeDay = (t, s) => s ? Math.floor((t + DAY - s) / DAY) : Math.floor(t / 
  *   'traded': traded prices only. The trade that breaks out opens the next bar at its own price, so a jump
  *     over the boundary leaves the finished bar short of the full range. Nothing is invented.
  * Both start a new bar at the first trade of each session (NinjaTrader's Break at EOD).
+ * vwapSeed (1.8.0, served window): a build from the last hours of trades, not from the session's first. Left out, the
+ * VWAP is worked out from the trades fed, as always. { day, pv, vol }: the session VWAP of trade day `day` starts from
+ * the price times volume and the volume of that session's trades before the first one fed (ChartBridge's session
+ * table, less the trades the page holds); bars of earlier days get none (vw null, which the chart does not draw).
+ * null: no VWAP at all (the session's trades before the window are not known yet).
  */
 class BarBuilder {
   constructor(opts) {
@@ -33,16 +38,21 @@ class BarBuilder {
     this.rangeTicks = Math.max(1, o.rangeTicks || 20);
     this.rangeMode = o.rangeMode === 'traded' ? 'traded' : 'nt';
     this.sessionStart = o.sessionStart === undefined ? 18 * 3600 : o.sessionStart;
+    this.vwapSeed = o.vwapSeed;
     this.reset();
   }
-  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.lastT = -Infinity; this._dayBar = null; this._barDay = null; this._fast = null; }
+  reset() { this.bars = []; this.day = null; this.pv = 0; this.vol = 0; this.vwOff = false; this.lastT = -Infinity; this._dayBar = null; this._barDay = null; this._fast = null; }
   get last() { return this.bars[this.bars.length - 1]; }
 
   _vwap(t, price, v) {
     const d = tradeDay(t, this.sessionStart);
-    if (d !== this.day) { this.day = d; this.pv = 0; this.vol = 0; }
+    if (d !== this.day) {
+      const s = this.vwapSeed;
+      this.day = d; this.pv = 0; this.vol = 0; this.vwOff = s === null || (s !== undefined && d < s.day);
+      if (s && d === s.day) { this.pv = s.pv; this.vol = s.vol; }
+    }
     this.pv += price * v; this.vol += v;
-    return this.vol > 0 ? this.pv / this.vol : price;
+    return this.vwOff ? null : this.vol > 0 ? this.pv / this.vol : price;
   }
 
   /** Seed with finished bars (e.g. 1-minute history). VWAP continues from their typical prices. */
@@ -81,7 +91,7 @@ class BarBuilder {
       const P = Math.round(price / this.tick);
       if (P <= f.lo + this.rangeTicks && P >= f.hi - this.rangeTicks) {
         this.pv += price * v; this.vol += v;
-        const vw = this.vol > 0 ? this.pv / this.vol : price, bar = f.bar;
+        const vw = this.vwOff ? null : this.vol > 0 ? this.pv / this.vol : price, bar = f.bar;
         if (t > this.lastT) this.lastT = t;
         if (price > bar.h) { bar.h = price; f.hi = P; }
         if (price < bar.l) { bar.l = price; f.lo = P; }
@@ -277,6 +287,12 @@ class TickStore {
     if (whole) { this.blocks.splice(0, whole); this.sides.splice(0, whole); this.start &= MASK; }
     if (!this.length) this.clear();
   }
+  /** The index of the first trade at or after time t (the store is in time order), or length. */
+  indexAt(t) {
+    let lo = 0, hi = this.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (this.time(m) < t) lo = m + 1; else hi = m; }
+    return lo;
+  }
   /** Feed trades from index `from` (with t >= minT, when given) to builder.add(t, p, v), oldest first. */
   feed(builder, from, minT) {
     const min = minT === undefined ? -Infinity : minT;
@@ -364,6 +380,55 @@ const timeAt = (ticks, i) => typeof ticks.time === 'function' ? ticks.time(i) : 
 const sessionStartOf = (t, s) => s ? (tradeDay(t, s) - 1) * DAY + s : tradeDay(t, s) * DAY;
 
 /*
+ * RangeSync (1.8.0, served window): where range bars built from a window of recent trades become exactly the bars a build
+ * from the session's first trade gives, without the trades before the window. Range bars depend on where the build
+ * starts, but two builds meet for good once they close a bar on the same trade with the same edge; from that trade on
+ * every bar is the same (the bar it opens, and all after it). That happens, whatever the build before the window did:
+ *   - at the first trade of a new session seen inside the window (both open a new bar there, Break at EOD);
+ *   - after a swing of more than the range each way: when the price has risen more than the range from the window's low
+ *     so far to a high, and then falls more than the range below that high (before any higher high), both builds close
+ *     their bar down on the same trade from the same high. (The rise forces both to have opened a bar after the low, so
+ *     neither bar can hold a price above that high: in NinjaTrader style a bar opened by a down close starts below the
+ *     bar before it, and one opened by an up close starts at its trade. So both highs are that high.) And the mirror:
+ *     a fall of more than the range from the high so far to a low, then a rise of more than the range above that low.
+ * Both range styles close on the same test (a price past the far side by more than the range, in whole ticks), so the
+ * rule holds for both. step(t, price), fed every trade of the window in order, returns true for the trade from which
+ * the two builds agree; the bars from the one that trade opens on are exact. test/live-first.test.js checks it against
+ * full builds from many made-up histories.
+ */
+class RangeSync {
+  constructor(rangeTicks, tick, sessionStart) {
+    this.R = Math.max(1, rangeTicks | 0); this.tick = tick || 0.25; this.sessionStart = sessionStart === undefined ? 18 * 3600 : sessionStart;
+    this.day = null; this.found = false;
+  }
+  _reset(P) { this.min = P; this.max = P; this.peak = P; this.trough = P; }   // peak: highest since the low; trough: lowest since the high
+  step(t, price) {
+    if (this.found) return false;
+    const P = Math.round(price / this.tick), d = tradeDay(t, this.sessionStart);
+    if (this.day === null) { this.day = d; this._reset(P); return false; }
+    if (d !== this.day) { this.day = d; this._reset(P); return (this.found = true); }
+    const R = this.R;
+    if ((this.peak - this.min > R && P < this.peak - R) || (this.max - this.trough > R && P > this.trough + R)) return (this.found = true);
+    if (P < this.min) { this.min = P; this.peak = P; } else if (P > this.peak) this.peak = P;
+    if (P > this.max) { this.max = P; this.trough = P; } else if (P < this.trough) this.trough = P;
+    return false;
+  }
+}
+
+/*
+ * trimCount (1.8.0): how many of the oldest trades the page drops when its store is over `cap`: the trades of sessions
+ * before the one holding `now`, but the last of them (so a range build from the store's first trade still sees the
+ * session start, RangeSync). The current session's trades are never dropped (range bars stay all day), unless the store
+ * passes `hard` (a memory limit only; far above a busy session): then the oldest `step`.
+ */
+function trimCount(ticks, now, s, cap, hard, step) {
+  if (ticks.length <= cap) return 0;
+  const n = ticks.indexAt(sessionStartOf(now, s)) - 1;
+  if (n > 0) return n;
+  return ticks.length > hard ? Math.min(step, ticks.length) : 0;
+}
+
+/*
  * Range bars depend on where the build starts, so the page builds them from a session's first trade, like
  * NinjaTrader (Break at EOD). rangeHistoryFrom: the earliest session start the tick backfill has to reach: this
  * session's, or the one before while this session is under 8 hours old (so the evening still shows the day).
@@ -401,5 +466,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, RangeReplay };
+return { BarBuilder, TickStore, RangeSync, trimCount, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, RangeReplay };
 });

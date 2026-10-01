@@ -44,7 +44,23 @@ prices only, picked next to the range size, which is kept per instrument. Every 
 this browser as soon as it is made. The same chart can be mounted in another page (The Desk) with
 `ChartLive.mount`, read only; see `live/EMBED.md`. `http://localhost:8765/diag` shows what ChartBridge
 sees (accounts, fill counts, clock, The Desk queue, since 0.3.3 where each load's backfill met the live
-trades, and since 0.3.4 how each trade's side, buy or sell, was found); see `nt8/PROTOCOL.md`.
+trades, since 0.3.4 how each trade's side, buy or sell, was found, and since 0.3.5 each instrument's session table and
+served window); see `nt8/PROTOCOL.md`.
+
+**Light Range chart, exact profile** (chart 1.8.0 with ChartBridge 0.3.5): a Range or seconds chart opens with the last
+2 hours of trades (`rangeHours`), which ChartBridge asks NinjaTrader for once per session and keeps in memory, so a reload
+or a second page starts from the same trade without asking NinjaTrader again. Range bars are drawn only from the first
+bar proven to be NinjaTrader's own (a session start, or a swing of more than the range each way; `docs/RANGE_BARS.md`),
+never offset bars before it, and once drawn they stay all day. The volume profile comes from ChartBridge's table of the
+session's volume at each price, fed by the live trades, on every view: exact from 18:00 ET. When ChartBridge starts
+after 18:00 it loads the session once, at start, one instrument at a time (`profileRoots`), and the profile says "Volume
+profile building, from HH:MM ET" until then. A NinjaScript compile (F5) restarts ChartBridge, so a compile during the
+session counts as such a start: the session is loaded once more. The Range and seconds windows and these session loads go
+to NinjaTrader one at a time; a minute chart's last-trades request (as in 0.3.3) is not queued behind them. If NinjaTrader
+never answers one of them (or answers at the time limit but its copy does not finish within 30 s more), ChartBridge
+asks for no more tick history (no window, no session load, no minute chart's last
+trades) until NinjaTrader answers it or restarts: meanwhile Range and seconds charts open from ChartBridge's memory or start
+from live trades, and say why. Orders and Flatten work during any load. With ChartBridge 0.3.4 or older the chart loads as before.
 
 Settings live in `Documents\NinjaTrader 8\ChartBridge\config.txt` (optional, one `key = value` per
 line; recompile or restart NinjaTrader after a change):
@@ -55,10 +71,15 @@ line; recompile or restart NinjaTrader after a change):
 | `roots` | `MNQ, NQ, MES, ES` | Instruments offered. |
 | `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
+| `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
+| `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
 | `quoteHours` | `0` | ChartBridge 0.3.4.1: hours of historical Bid and Ask a tick chart asks NinjaTrader for, to side its backfill trades: `0` (none; they go by the tick rule, live trades keep their side from the live quote), `1` or `2`. Anything else is `0`. See the changelog. |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
+| `bars` | off | `on` sends each session's 1-minute bars to The Desk after the close (ChartBridge 0.3.6, see below). |
+| `barsRoots` | `NQ, MNQ, ES, MES` | Whose bars `bars = on` sends. |
+| `pc` | the Windows computer name | This PC's name in the bars messages, e.g. `HOME` or `WORK`. |
 | `trading` | `false` | `true` turns on order entry from the chart (see below). |
 | `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
@@ -121,6 +142,33 @@ Anthony out of a trade:
   in The Desk (`ChartLive.mount`) never shows the PIN pad.
 
 Details: "PIN" in `nt8/PROTOCOL.md`.
+
+### Daily bars to The Desk (`bars = on`, ChartBridge 0.3.6, off by default)
+
+The Desk tags each trade with the levels around it, and for that it needs the day's 1-minute bars. With
+`bars = on` in `config.txt`, ChartBridge sends them from NinjaTrader's own data:
+
+- **What:** every finished 1-minute bar (open, high, low, close, volume, exactly as NinjaTrader has them) of
+  the session, 18:00 to 17:00 New York time (the Sunday evening counts as Monday), for NQ, MNQ, ES and MES.
+  One message per contract per session: the front month the chart uses, plus any other contract of that
+  root you had fills in that session. Each bar carries its start time. Nothing else: no account, no PIN,
+  no token, only the market data and this PC's name (`pc`).
+- **When:** a few minutes after the 17:00 close, if NinjaTrader is connected; and when ChartBridge starts
+  (about 2 minutes after, once the charts have loaded), any of the last 5 sessions The Desk has not taken
+  yet, so the first run also sends the day before. Weekends and full holidays are skipped. Nothing during
+  regular trading hours (09:30 to 16:15 ET) except that catch-up at the start.
+- **Never in the way:** each request goes to NinjaTrader through the same one-at-a-time gate as the Range
+  windows and session backfills (0.3.5), last of all, and only when nothing of the chart's is out, queued,
+  still to come or loading; it never starts beside one, and never touches order entry. A bars request
+  NinjaTrader does not answer in 60 s is given up and the chart's requests go on (the chart never waits on bars;
+  one may then go while NinjaTrader is still working on it). A request that fails is
+  logged and tried again 15 minutes later, 3 times at most, then not until the next start.
+- **Like fills:** each message waits in `pending_bars.jsonl` (next to `pending_fills.jsonl`) until The
+  Desk takes it (`POST /api/bars` at `deskUrl`, retried every 10 seconds), so a restart or The Desk being
+  closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl`. Sessions
+  The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
+  sent per contract, how many wait, what it waits for at the gate, and the last problem. Details: "Daily bars to The Desk" in
+  `nt8/PROTOCOL.md`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
@@ -472,8 +520,11 @@ npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reco
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
+npm run smoke:live-first # the served window and the session table: exact range bars, profile and VWAP against the fake's tape
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
+npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
+npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window and the daily bars under Mono
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in

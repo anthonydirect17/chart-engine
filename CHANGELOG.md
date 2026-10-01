@@ -68,6 +68,179 @@ default). No file under `nt8/`, `live/order-ticket.js`, `live/pin.js` or the ord
   checks the bar is unchanged on the default ground and takes the chrome's ground on every other; `smoke:embed` sets
   pane B's VWAP in its gear.
 
+## ChartBridge 0.3.6 (2026-10-01): daily 1-minute bars to The Desk
+
+ChartBridge (nt8/) only, on top of 0.3.5: the page, the engine and the chart version (1.8.0) are unchanged. Ships with
+0.3.5 as one install. **Needs a recompile:** while flat, run `update-pc.ps1 -InstallChartBridge` (README: Keep this PC
+up to date) or `nt8\install.ps1`; both copy the new `ChartBridgeBars.cs` too (it is listed in `nt8/install-files.json`;
+`install.ps1` itself is unchanged), then compile in NinjaTrader (F5). **Off** until `bars = on` is in `config.txt`.
+- **What it sends** (contract v1, approved by Anthony 2026-09-30): after each session closes (17:00 New York time, plus
+  5 minutes), if NinjaTrader's price feed is connected, every finished 1-minute bar of that session (18:00 the day before
+  to 17:00; the Sunday evening counts as Monday) for NQ, MNQ, ES and MES, from NinjaTrader's own data, to The Desk's
+  `POST /api/bars`. One message per contract per session: the front month the chart uses (or `contract.<ROOT>`), plus
+  any other contract of that root with fills that session. Each bar is `[t, o, h, l, c, v]`, `t` its open in UTC
+  milliseconds (NinjaTrader stamps a bar at its close; ChartBridge takes a minute off), sorted, one per minute,
+  `complete: true`. Only market data and the PC name (`pc`, default the Windows computer name) leave the PC.
+- **Catch-up:** at the start (2 minutes in, and only once the gate below is idle) any of the last 5 sessions The Desk
+  has not taken yet is sent, so the first run also delivers the day before. Weekends and the template's full holidays
+  are skipped. A session NinjaTrader has no bars for (or that fails) is asked 3 times, 15 minutes apart, then not
+  until the next start: nothing is looped on.
+- **Never beside the chart's data work:** each bars request goes to NinjaTrader through 0.3.5's gate, last of all. It
+  is queued only when the gate is idle (not stopped or stuck, no Range window or session backfill out or queued, no
+  backfill still to come or due again, no minute chart's last trades out, no page loading), so nothing piles up there;
+  otherwise it waits and `/diag` says what for. A window or backfill asked while a bars request is out waits behind it,
+  as behind any request (one contract's minutes, about a second). A bars request NinjaTrader does not answer in 60 s
+  frees the gate (Anthony: the chart never waits on bars), unlike a window or a backfill, which keep 0.3.5's stuck
+  rule; a window may then go while NinjaTrader still works on it (accepted), and its late answer is not used. In
+  regular trading hours (09:30 to 16:15 ET) it asks for nothing, except the catch-up after a start. Nothing on the order
+  lane; the order files are byte for byte those of main.
+- **Stop** (F5, closing NinjaTrader): nothing more is asked of NinjaTrader or posted to The Desk. The worker leaves any
+  wait at once, a post in flight is aborted (the message stays queued), an answer that comes later is not copied, and
+  Stop waits 250 ms for the worker, as the gate's Stop does.
+- **Like fills:** messages wait in `pending_bars.jsonl` until The Desk takes them (10 s per request, retried every 10 s);
+  ones The Desk calls malformed (400, 422) are set aside in `rejected_bars.jsonl`; `sent_bars.txt` records what was
+  taken. The Desk stores by (contract, minute), so a resend is harmless.
+- **`/diag`:** a `bars` section (`enabled`, `state`, `waitingForGate`, `lastSent` per contract, `waiting`, `setAside`,
+  `gaveUp`, `lastRequest`, `lastError`), and the gate shows `barsQueued`.
+- **Settings:** `bars = on`, `barsRoots = NQ, MNQ, ES, MES`, `pc = HOME`.
+- **Checks:** `nt8/check/BarsHarness.cs` runs inside `npm run check:orders` (Mono, 112 checks): the session rules, then
+  the failure scenarios through the real gate with a stand-in Desk (S1 off by default, S2 one session including both
+  daylight saving changes and a Sunday open, S3 The Desk unreachable, S4 catch-up, S5 never beside a window or backfill
+  and a stuck gate, S6 a stop during a request and during a post, S7 contracts per root, S8 `/diag`, RTH). A real
+  post to The Desk (its `POST /api/bars` from a local run) stored the rows, refused bad input with a 400 and refused
+  the tunnel's headers with a 403. `test/nt8-bars.test.js` guards the source in CI.
+
+## 1.8.0 and ChartBridge 0.3.5 (2026-09-30): a light Range chart, an exact volume profile
+
+Page, bar builder, fake bridge and ChartBridge; the engine only changes its version. **Needs a recompile:** run
+`nt8\install.ps1` again (it copies `ChartBridge.cs` and the page files), then compile in NinjaTrader (F5). Why: on WORK
+(2026-09-30 RTH) each Range page load pulled 16 to 17 hours of MNQ trades (2.8 to 2.96 million, 33 to 72 s) plus 0.3.4's
+quote history, NinjaTrader showed 8.5 to 10.9 s "high latency" stalls across all its windows while Anthony was in a trade,
+and pages that reconnected ran the heavy load again. Anthony's rules: the Range chart only needs the last 2 hours at open
+and its bars then stay all day; the volume profile must be exact from 18:00 ET; delta runs live from page open (its own
+PR); nothing about trades or range bars kept past the session; don't over engineer. Chart 1.8.0 because the delta pane's
+branch claims 1.7.0. The quote requests themselves go with ChartBridge 0.3.4.1 (`quoteHours`, branch hotfix-no-quotes),
+merged in here from main (quoteHours exactly as 0.3.4.1 defines it: default 0; a served window and the session backfill
+never ask for quotes).
+- **The served window** (nt8/PROTOCOL.md, Served window and session table): ChartBridge's `hello` lists
+  `features: ["liveFirst", "profile"]`; a Range or seconds chart then subscribes with `liveFirst` and gets the last
+  `rangeHours` of trades (config.txt, default 2), asked of NinjaTrader **by count** (a request by date returns whole
+  trading days), sized from the live trade rate and asked once more, larger (two asks at most), when the answer does not reach back
+  far enough. ChartBridge keeps that window, extended by every live trade, in memory for the session: a reload, a second
+  page or a view switch gets its trades from there, from the same first trade, and NinjaTrader is not asked again. Dropped
+  at the next 18:00 ET session; never written to disk.
+- **The served windows and the session backfills go to NinjaTrader one at a time** (review 2 B1, B2): windows first, a
+  window's second ask ahead of any backfill (review 3 S-D); a session backfill only with nothing else out (no window, no
+  other backfill, no minute chart's last-trades request). A minute chart's last-trades request (20,000 by count, made since
+  0.3.3) is not queued behind them, as before: it can go beside a window or another minute chart's, and is skipped (the
+  forming minute as NinjaTrader sent it) while a backfill is out (review 4 S3). A window request is shared by every load of
+  that instrument that comes while it is out, kept whatever load is current, asked at most twice (the second time larger),
+  and after a failure not asked again for 60 s. When over 500,000 live trades come while it is out, its loads go live at
+  once with no trades and a note, nothing more is held for it, and the next load asks again (review 4 B2). Every tick
+  subscribe gets the served window, with or without `liveFirst` (a 1.6.x page, The Desk's relay): 0.3.5 never runs 0.3.4's
+  by-date tick load (review 2 S6).
+- **One unanswered request** (review 3 X1, review 4 B1, S1, S2, S4): a window or a backfill NinjaTrader does not answer in
+  time (120 s, 5 min) is given up for its pages but stays outstanding, so ChartBridge asks for no tick history (no window,
+  no backfill, no minute chart's last trades) until NinjaTrader answers it (the late answer is dropped uncopied) or
+  restarts. Nothing waits on it: a Range or seconds load, queued or new, gets the served window from memory when there is
+  one (with its gap, if a feed drop left one; the gap is asked again only when the ask can go out), else goes live at once
+  with no trades and says NinjaTrader has not answered an earlier request; its live trades are not held. Queued backfills
+  say they wait (the profile and VWAP notes, `/diag` state "waiting: ..."), not "building", a queued retry too, and run as
+  usual once it answers, a retry with its "failed once" state back (review 5 S1). An answer and the time limit are decided
+  once (Interlocked), so an answer at the limit never leaves it stuck (a late answer that comes while the time limit is
+  being acted on frees the gate once it is marked stuck, not before: review 5's race2 probe caught one run in 36 left
+  stuck for good); an answer that claimed it at the limit has 30 s more
+  to finish its copy, then it is treated as unanswered (one Output line, `gate.stuck` set) until the copy ends (review 5 N2).
+  `/diag` `gate.stuck` and `stuckSinceUtcMs`; only the request that made it stuck frees it (review 6 N1). Stopping
+  ChartBridge clears it and the instruments' tables and marks the gate stopped until the next start (review 6 S1): after
+  it no tick request goes to NinjaTrader (nothing is queued, no worker starts, no minute chart's last trades are asked, a
+  second ask is not made), an answer that comes later is dropped uncopied, and any backfill retry still to come is
+  cancelled with its timer (a failure answered after the stop schedules none). So no timer of the gate outlives the stop.
+  The gate's worker has its own thread (review 6 N2); its waits end at the stop, and Stop, on NinjaTrader's thread, waits
+  for it at most 250 ms (review 6 S2). A worker still inside a NinjaTrader call by then ends when that call returns and
+  sends nothing more (one Output line says so). Review 5 N6: one harness run in 12 exited with code 1 after ALL PASSED,
+  when Mono's timer thread was aborted at exit; the harness now waits 5 s for the worker before it exits.
+- **The session table:** per instrument, the session's volume at each price per half hour of New York time, fed by the live
+  trades. Whole when ChartBridge and the feed were up before 18:00, however late the first trade (review 3 S-A). When
+  ChartBridge starts after 18:00 (NinjaTrader started, or the add-on recompiled), and only then, ONE backfill of the session
+  per instrument in `profileRoots` (config, default MNQ, NQ, ES, MES, in that order whatever order their first trades come
+  in): once the feed has been up a minute and no page is loading (review 3 S-E), one at a time,
+  once per session, never for a page load, never while the market is closed. It asks by date from 18:00; NinjaTrader's help
+  says a by-date request covers whole days from midnight, so the answer also holds the previous day's hours before 18:00,
+  which are copied and then left out. On NinjaTrader's callback thread only the copy (timed, `/diag` `callbackMs`); the rest
+  on a worker, joined to the live trades by the 0.3.3 seam. On an error or an empty answer it is asked once more after 60 s,
+  then given up with a note; at most 500,000 live trades are kept for it, none once it fails or times out (review 2 S1). At
+  18:00 a new table starts; the finished one is kept (one small file per instrument, `profile-MNQ.txt`, not used when over 4
+  days old) for the weekend's "last session" profile and a later weekly profile. A trade more than 2 minutes off the clock
+  never opens a session (review 2 S7).
+- **A feed drop** (review 2 S2): when a price feed goes from Connected to anything else, or a market data reset arrives, while
+  the market is open, the table is not whole for the rest of the session ("Volume profile missing trades: the data
+  connection was down at HH:MM ET"), the served window keeps the gap and is asked again at a load at most once in 10
+  minutes (review 3 S-G), and live pages get the profile again. A drop while the market is closed marks nothing, and the page
+  shows a drop only inside the trading its profile counts (review 3 S-B). Range and seconds views keep their VWAP (the
+  table's sums plus the page's trades) and say what it misses; with no table from 18:00 they say why there is none (review
+  3 S-C). A feed down across 18:00 with ChartBridge running: the table counts from the first trade and says so, no backfill.
+- **No formatting under the market data lock** (review 2 S4): the `profile` message, the saved file and its read are made
+  from copies with no lock held.
+- **The `profile` message:** the table before `ready` (exactly up to the page's last trade), again when the backfill makes
+  it whole. The page's volume profile is its rows plus every trade after them, on Range and minute views alike: equal to
+  the profile of every trade of the session (Session and RTH). While the backfill is to come the profile says "Volume
+  profile building, from HH:MM ET"; with none (not in `profileRoots`, or it failed) "Volume profile since HH:MM ET".
+- **With 1.6.1's kept profile** (merged from main): the profile is built from ChartBridge's table when the page's own trades
+  are not of a later session; an RTH profile with nothing of today's RTH yet is kept from the table's `last` (the finished
+  session), so a minute view overnight or on a weekend shows the last session exactly with no tick history. 1.6.1's order
+  account check is kept; 1.8.0 drops only its "Still loading" block (orders and Flatten work during any load).
+- **With 1.7.0's delta pane** (merged from main): the served window's trades carry no side, so the pane counts live trades
+  from the page's open, as it does with 0.3.4.1's default; a window with no sides does not read as an old ChartBridge (the
+  first live trade says whether sides come). A reconnect or a view switch served from ChartBridge's memory is a later load
+  of the same instrument: the pane's count and its "missed N s" carry on. Its range-bar replay starts where the window's
+  range bars are built from (the window's first trade).
+- **Range bars start where they match** (docs/RANGE_BARS.md, Served window): the page draws range bars only from the first
+  bar proven to be NinjaTrader's own (`RangeSync`: a session start, or a swing of more than the range each way), never
+  offset bars before it; a quiet window shows none, with a note, until one is proven. A window that starts with its
+  session's first trade is proven from it (the table says no trade of the session came before). Once drawn, bars stay all
+  day: over 2.5 million trades the page drops only earlier sessions' trades (`trimCount`). Seconds bars start at the first
+  whole bar.
+- **VWAP** of range and seconds bars starts from the table (its price times volume less the page's trades, in whole
+  ticks): the VWAP of every trade from 18:00. None while the table builds.
+- **HEAD requests** (WORK W17): `HEAD /` and a HEAD for any page file got a 500 and a "request failed" line in the Output
+  window (ChartBridge wrote the body, which HttpListener refuses on a HEAD reply). Now the same status, Content-Type and
+  Content-Length as GET, and no body.
+- **Orders keep working during any load:** order actions no longer wait for a view's load; a price order (click to place)
+  needs a known last price (the last seen for the instrument is kept across loads), market orders and Flatten never wait.
+  The order path itself is unchanged (`ChartBridgeOrders.cs`, `ChartBridgePin.cs`, `live/order-ticket.js`, `live/pin.js`,
+  `install.ps1`, the fake bridge's order handling).
+- **Gone** from the live-first branch's first design: the older history pulled after `ready` (`more`, `olderTicks`,
+  `recentTicks`, the fill join and its harness cases, the 1-minute stand-ins, the reload button, the 120 hour tick cap,
+  `quotes: false`, the quote start of review 1).
+- **Old bridges and relays:** ChartBridge 0.3.4 and older get the subscribe of 1.6.0 and its full load. A 1.6.x page and
+  The Desk's relay (which passes no `features` and drops `profile`) get the served window from 0.3.5, with their own
+  profile note; The Desk gets the exact profile once its relay passes both and it vendors chart 1.8.0.
+- **`/diag`:** `books` (per instrument: the table, the last one, the backfill with its state, time from the ask, time on
+  NinjaTrader's thread and trade count, the served window and its request, the live trade rate; then the gate,
+  `profileRoots` and `backfillTotalMs`) and `windows` (the last 20 served-window loads).
+- Tests: `nt8/check/WindowHarness.cs` (in `npm run check:orders`): the table exact per half hour and price, RTH edges,
+  the profile message, the 18:00 rollover, the weekend, NinjaTrader in four time zones across the DST weeks, the whole
+  rule (a minute), profileRoots, a stale last trade at start, the bounded live list, a mid-session start whose backfill
+  joins the live trades exactly and is never asked again (with the time on the callback thread), the backfill waiting for a
+  window request that is out, its one retry and its time limit, the served window by count with its second ask (never a
+  third), a 1.6.x-style subscribe and a reload from memory with no request, two pages and a resubscribe sharing one request,
+  no re-ask right after a failure, a feed drop, the text format; review 4's probes: a window queued behind a stuck request,
+  later loads while stuck, a gapped window while stuck, backfills waiting then running, a minute page and its last trades
+  beside a window, the 500,000 trade cap, an answer racing the time limit (1.5 million trades at 240 to 305 ms of a 300 ms
+  limit), and the requests counted for a mid-session start with two Range pages and a reconnect storm; review 5's: a retry
+  queued behind a stuck request, an answer whose copy never ends, an answer while the gate is being marked stuck, and a
+  stop while a request is out and a retry is to come; review 6's: a window answered after the stop with a second ask
+  due, a load whose minute history is answered after the stop, an old answer after a stop and a start, and a stop while
+  the worker is inside a slow NinjaTrader call; all on a simulated
+  clock (review 2 N7). `test/live-first.test.js`:
+  `RangeSync` on 240 made-up histories, the VWAP seed, the trim, the profile from rows equal to the profile from every trade
+  (Session and RTH, an early close, both DST changes), and the fake bridge's protocol against its tape.
+  `npm run smoke:live-first`: NQ Range 40 in a busy market (trades, bars, VWAP and the profile equal to the tape's), a
+  reload and a second page from memory with the same first bar, 15s, a 1m profile with no tick history, a building table
+  then its push, an instrument not in profileRoots ("since"), a feed drop and a reload after it, a market order and Flatten
+  during a Range load, a quiet market, the Sunday open, the 18:00 rollover, an old bridge.
+
 ## 1.7.0 (2026-09-30): the cumulative delta pane
 
 Page and engine; works with ChartBridge 0.3.4 (trade sides) and draws nothing but a note with 0.3.3 and older, no

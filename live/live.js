@@ -759,6 +759,7 @@ ${obar}
     <span id="${p}ticksSeen">0 ticks</span>
     <span class="ibnote" id="${p}ibNote" hidden></span>
     <span class="ibnote" id="${p}vpNote" hidden></span>
+    <span class="ibnote" id="${p}rangeNote" hidden></span>
     <span class="msg" id="${p}statusMsg"></span>
     <span class="ro" id="${p}statusRo">Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.</span>
   </footer>
@@ -848,23 +849,34 @@ function start(container, opt, PAGE) {
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
   if (PAGE) window.liveChart = chart;  // for tests and the console; order actions still go through the checks below
+  if (PAGE) window.liveData = () => D;  // the page's data, for tests and the console (read it; changing it breaks the chart)
 
   /* ---------------- per-instrument data */
   const D = { root: null, name: null, tick: 0.25, ready: false, hist: [], ticks: new BB.TickStore(), m1: null, cur: null, day: null, tickHours: 0, tickFrom: Infinity, trimmed: false,
     lv: [], lvSrc: null, ib: null, ibKey: '', vp: null, liveFrom: null, delta: null, sides: null,
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
-    backfill: 0, deltaCov: null };
+    backfill: 0, deltaCov: null,
+    sub: 0, window: false, table: null, vpTable: null, sync: null };   // served window and session table (1.8.0): see "Served window" below
   let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
-     Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js). */
-  // The delta pane loads nothing of its own (Anthony, round 4): every view asks for the ticks it asked for before 1.7.0.
-  const ticksWanted = () => TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
-  const ticksMissing = () => TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
-  /* 1.6.1 loads no tick history beyond the view's (as 1.6.0; Anthony 2026-09-30, after ChartBridge's big loads froze
-     NinjaTrader during RTH): the volume profile counts the ticks the view loaded and the live trades. Its whole
-     session on minute views, and the last session's profile after a weekend load, come with chart 1.8.0's session
-     volume-at-price table from ChartBridge 0.3.5. */
+     Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js).
+     With ChartBridge 0.3.5 (hello "liveFirst") seconds and range views get ChartBridge's served window instead: the last
+     rangeHours of trades (its config, default 2), whatever tickHours says (any number above 0 asks for it). */
+  const tickView = () => TF[S.tf].mode === 'range' || TF[S.tf].sec < 60;
+  const WINDOW_TICK_HOURS = 2;
+  const viewTicksWanted = () => LIVE_FIRST ? (tickView() ? WINDOW_TICK_HOURS : 0) : TF[S.tf].mode === 'range' ? BB.rangeTickHours(etNow(), SESSION) : TF[S.tf].sec < 60 ? 8 : 0;
+  const viewTicksMissing = () => LIVE_FIRST ? tickView() && D.tickHours === 0
+    : TF[S.tf].mode === 'range' ? BB.rangeNeedsReload(D.tickFrom, etNow(), SESSION, D.trimmed) : TF[S.tf].sec < 60 && D.tickHours === 0;
+  // The delta pane loads nothing of its own (Anthony, round 4): it counts live trades from the page's open, on any view.
+  /* Each rule for ticks as its own function; the load asks for the most any of them wants (another rule joins as one
+     more term of the max). 1.6.1 loads no tick history beyond the view's (as 1.6.0; Anthony 2026-09-30, after ChartBridge's
+     big loads froze NinjaTrader during RTH); the volume profile's whole session, and the last session's after a weekend
+     load, come from ChartBridge 0.3.5's session table (vpBuild). */
+  const ticksWanted = () => viewTicksWanted();
+  const ticksMissing = () => viewTicksMissing();
+  /* The last price seen per instrument, kept across loads: click-to-place orders work while a view loads (1.8.0). */
+  const lastSeen = {};                                   // root -> { p, at }: a price older than LAST_SEEN_MS is not used
   let instruments = {};
   const fills = new Map();            // id -> fill, all instruments
   /* The account (1.6.0, Anthony: one picker for both). On a trading page the order bar's Account picker is the only
@@ -902,6 +914,7 @@ function start(container, opt, PAGE) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
+    D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
     const inst = instruments[root];
@@ -923,11 +936,15 @@ function start(container, opt, PAGE) {
     const tf = TF[S.tf];
     let rangeFrom;                                        // where the range bars start, handed to the delta (review 2 N2)
     chart.setBarSeconds(tf.sec);
+    D.sync = null; rangeNote();                          // a range view's proven point (buildWindow)
     if (tf.mode === 'time' && tf.sec >= 60) {
       D.cur = null;
       const bars = tf.sec === 60 ? D.m1.bars : U.aggregate(D.m1.bars, tf.sec);
       chart.setBars(bars, { barSeconds: tf.sec });
       chart.setCountdown(null);
+    } else if (D.window) {
+      buildWindow(tf);
+      rangeFrom = 0;                                     // the window's range bars are built from its first trade (the delta's too)
     } else {
       D.cur = tf.mode === 'range' ? rangeBuilder() : new BarBuilder({ mode: 'time', seconds: tf.sec, tick: D.tick, sessionStart: SESSION });
       const from = rangeFrom = tf.mode === 'range' ? BB.rangeStartIndex(D.ticks, D.tickFrom, SESSION) : 0;
@@ -943,6 +960,97 @@ function start(container, opt, PAGE) {
     updateLevels();
     applyMarkers();
     legendKey = '';
+  }
+
+  /*
+   * Served window (1.8.0, ChartBridge 0.3.5; nt8/PROTOCOL.md "Served window"). A seconds or range view starts with the last
+   * rangeHours of trades (2 by default), which ChartBridge keeps for the session: a reload or a second page gets the same
+   * trades, from the same first one. Range bars depend on where the build starts, so the view draws them only from the
+   * first bar proven to be NinjaTrader's own (RangeSync in bar-builder.js: a session start, or a swing of more than the
+   * range each way), and none before it; once drawn they stay all day (the store keeps the session's trades, onTick).
+   * Seconds bars start at the first whole bar. The session VWAP starts from ChartBridge's session table (vwapSeed): its
+   * price times volume and volume, less the trades the page holds; while the table is still building there is no VWAP
+   * on these views (the table's backfill sends a new "profile" when it is whole, and the view is built again).
+   */
+  function newBuilder(tf, seed) {
+    return tf.mode === 'range'
+      ? new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION, vwapSeed: seed })
+      : new BarBuilder({ mode: 'time', seconds: tf.sec, tick: D.tick, sessionStart: SESSION, vwapSeed: seed });
+  }
+  function buildWindow(tf) {
+    if (tf.mode === 'time') {
+      const t0 = D.ticks.length ? D.ticks.time(0) : Infinity;
+      // the first bar the window holds whole: the one after the bar of its first trade
+      const from = isFinite(t0) ? D.ticks.indexAt((Math.floor(t0 / tf.sec) + 1) * tf.sec) : 0;
+      D.cur = newBuilder(tf, vwapSeed(from));
+      D.ticks.feed(D.cur, from);
+      chart.setBars(D.cur.bars, { barSeconds: tf.sec });
+      chart.setCountdown(null);
+    } else {
+      const seed = vwapSeed(0), b = newBuilder(tf, seed), sync = { rs: new BB.RangeSync(ranges[D.root], D.tick, SESSION), bar: -1 };
+      // the window starts with its session's first trade (the table has no trade of that session before it, a page opened
+      // soon after 18:00 ET): the bar it opens is NinjaTrader's (Break at EOD)
+      if (seed && seed.vol === 0 && D.ticks.length && U.tradeDay(D.ticks.time(0), SESSION) === seed.day) sync.bar = 0;
+      D.cur = b;
+      D.sync = sync;
+      D.ticks.feed({ addQuiet(t, p, v) { const n0 = b.bars.length; b.addQuiet(t, p, v); if (sync.bar < 0 && sync.rs.step(t, p)) sync.bar = n0; } }, 0);
+      showRange();
+    }
+    if (!D.ticks.length) setStatus('No tick history came back from NinjaTrader, so ' + tf.label + ' bars start with the next live tick.', 'warn');
+  }
+  /* The range bars from the first proven one (none until one is proven). */
+  function showRange() {
+    const sync = D.sync, on = sync.bar >= 0;
+    chart.setBars(on ? D.cur.bars.slice(sync.bar) : [], { barSeconds: TF[S.tf].sec });
+    chart.setCountdown(on ? () => { const r = D.cur && D.cur.rangeLeft(); return r ? '▲' + r.up + ' ▼' + r.down : ''; } : null);
+    rangeNote();
+  }
+  function rangeNote() {
+    const el = $('rangeNote'); if (!el) return;
+    let text = D.ready && D.sync && D.sync.bar < 0
+      ? 'Range bars start where they are proven to match NinjaTrader\'s: after a swing of more than the range each way, or at the next 18:00 ET session.' : '';
+    // review 3 S-C: the VWAP of a served-window view never goes silently: after a feed drop it is kept (the table's sums and
+    // the page's trades) and says what it misses; with no table from 18:00 it is not drawn and says why
+    const T = D.table;
+    if (!text && D.ready && D.window && tickView() && S.layers.vwap && T && T.day === U.tradeDay(etNow(), SESSION)) {
+      if (T.drop && T.coveredFrom <= T.from + 1) text = 'VWAP and ' + (TF[S.tf].mode === 'range' ? 'range bars after ' + U.fmtHM(T.drop.at) + ' ET miss' : 'bars miss') + ' the trades while the data connection was down (' + U.fmtHM(T.drop.at) + ' ET).';
+      else if (!T.whole) text = /^(wanted|queued|asked|failed once)/.test(T.backfill) ? 'VWAP: shown once ChartBridge has loaded this session from 18:00 ET (building).'
+        : /^waiting/.test(T.backfill) ? 'VWAP not shown yet: loading this session waits for NinjaTrader, which has not answered an earlier tick request.'
+        : 'VWAP not shown: ChartBridge has this session\'s trades only since ' + U.fmtHM(T.coveredFrom) + ' ET.';
+    }
+    if (el.textContent !== text) el.textContent = text;
+    el.hidden = !text;
+  }
+  /* The session VWAP's start for a build fed from store index `from`: the session table's price times volume and volume
+     (every trade of its session up to the table's store index `at`), less the trades of that session in [from, at), or
+     plus those in [at, from). null while the table is not whole, or unknown. Whole ticks, so the sums are exact. */
+  function vwapSeed(from) {
+    const T = D.table;
+    if (!T || !(T.whole || (T.drop && T.coveredFrom <= T.from + 1))) return null;   // after a feed drop: every trade seen (the note says what is missing)
+    let pv = T.pvTicks, vol = T.vol;
+    const lo = Math.min(from, T.at), hi = Math.min(Math.max(from, T.at), D.ticks.length), sign = from < T.at ? -1 : 1;
+    for (let i = lo; i < hi; i++) {
+      if (U.tradeDay(D.ticks.time(i), SESSION) !== T.day) continue;
+      const v = D.ticks.volume(i);
+      pv += sign * Math.round(D.ticks.price(i) / T.tick) * v; vol += sign * v;
+    }
+    return vol >= 0 && pv >= 0 ? { day: T.day, pv: pv * T.tick, vol } : null;
+  }
+  /* ChartBridge's "profile" (0.3.5): the session's volume at each price per half hour, exactly the trades before the store's
+     current end (the ones after come as live ticks). */
+  function onProfile(m) {
+    const s = m.session, tick = +m.tick > 0 ? +m.tick : D.tick;
+    if (!s || !Array.isArray(s.rows)) { D.table = null; return; }
+    let pvTicks = 0, vol = 0;
+    for (const r of s.rows) { pvTicks += r[1] * r[2]; vol += r[2]; }
+    D.table = { from: +s.from, day: U.tradeDay(+s.from + 1, SESSION), whole: s.whole === true, coveredFrom: +s.coveredFrom, rows: s.rows,
+      backfill: typeof s.backfill === 'string' ? s.backfill : '', drop: s.drop && +s.drop.at > 0 ? { at: +s.drop.at, why: String(s.drop.why || '') } : null, tick, pvTicks, vol, at: D.ticks.length,
+      // the finished session's table (an RTH profile kept overnight and over a weekend, as 1.6.1 keeps it)
+      last: m.last && Array.isArray(m.last.rows) ? { from: +m.last.from, day: U.tradeDay(+m.last.from + 1, SESSION), whole: m.last.whole === true, coveredFrom: +m.last.coveredFrom, rows: m.last.rows, backfill: 'done', drop: null } : null };
+    if (D.ready) {
+      vpBuild();
+      if (D.window && tickView()) rebuild();              // the VWAP from the table now (the backfill made it whole)
+    }
   }
 
   function updateLevels() {
@@ -1021,14 +1129,34 @@ function start(container, opt, PAGE) {
    * so, and says when the tick history does not reach back to 18:00 (or 9:30 for RTH).
    */
   function vpBuild() {
-    D.vp = null;
+    D.vp = null; D.vpTable = null;
     if (S.layers.vp && D.ready) {
       const opts = { tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth', keep: true };
-      const vp = CE.VolumeProfile.fromStore(D.ticks, opts);   // the last session with trades, kept until the next one's first
+      let vp = CE.VolumeProfile.fromStore(D.ticks, opts);   // the last session with trades, kept until the next one's first
+      // 1.8.0: ChartBridge's session table (or, with nothing of its session counted yet, the last session's: an RTH profile
+      // kept overnight), unless the page's own trades are of a later session (it was open across 18:00)
+      const tv = vpFromTable(opts);
+      if (tv && !tv.vp.empty && !(vp.day !== null && vp.day > tv.vp.day)) { vp = tv.vp; D.vpTable = tv.table; }
       D.vp = vp;
     }
     chart.setProfile(D.vp);
     vpNote(); vpLegend();
+  }
+  /* ChartBridge's table as a profile (1.8.0): its rows (a row's time is the start of its half hour of New York time, and
+     9:30, 13:00 and 16:00 are half hour edges, so RTH takes exactly its rows too), then the trades the store got after it.
+     When that counts nothing (an RTH profile before today's 9:30), the last session's table, kept as 1.6.1 keeps it. */
+  function vpFromTable(opts) {
+    const T = D.table;
+    if (!T) return null;
+    const make = tab => {
+      const v = new CE.VolumeProfile(opts);
+      for (const r of tab.rows) v.add(r[0], +(r[1] * T.tick).toFixed(10), r[2]);
+      D.ticks.feed(v, T.at, v.startOfDay(tab.day));
+      return v;
+    };
+    let v = make(T), tab = T;
+    if (v.empty && T.last) { v = make(T.last); tab = T.last; }
+    return { vp: v, table: tab };
   }
   /* What the profile holds against what its session needs: the session held (kept after it ends), or while there is
      none yet the clock's; and from when every trade is known: the tick backfill's start (later when NinjaTrader sent
@@ -1043,12 +1171,16 @@ function start(container, opt, PAGE) {
        page loaded (review 3 S3): none with volume between the start and the first tick's minute, and that minute's
        ticks hold its bar's volume (2% for rounding). With no bar to check against, only within 5 s of the start. */
     const sessionFirst = !D.trimmed && D.tickFrom <= need && t0 >= need && openWhole(need, t0);
-    const coveredFrom = D.tickHours > 0 ? (sessionFirst ? Math.min(D.tickFrom, need) : Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity)) : D.liveFrom;
+    const tab = D.vpTable;                             // 1.8.0: from ChartBridge's table, it says itself from when it is whole
+    const coveredFrom = tab ? (tab.whole ? Math.min(tab.from, need) : tab.coveredFrom) : D.tickHours > 0 ? (sessionFirst ? Math.min(D.tickFrom, need) : Math.max(Math.min(D.tickFrom, t0), D.trimmed || t0 - 600 > D.tickFrom ? t0 : -Infinity)) : D.liveFrom;
     const partial = held && coveredFrom > need, t = Math.min(coveredFrom, now), hm = U.fmtHM(t);
     // where the ticks start, to the second when that is in the session's first minute ("from 18:00:45", review 3 S3)
     const fromText = partial && hm === U.fmtHM(need) ? hm + ':' + String(Math.floor(U.tod(t) % 60)).padStart(2, '0') : hm;
     return { now, held, need, coveredFrom, partial, fromText };
   }
+  /* The end of the trading the profile counts (review 3 S-B: a drop after it misses nothing): the RTH close (16:00, 13:00 on
+     an early close) for RTH, else 17:00 ET, the session's close. */
+  const vpEnd = need => D.vp && D.vp.rth ? Math.floor(need / 86400) * 86400 + (U.rthClose(need) || 57600) : need + 23 * 3600;
   let openChecked = { key: '', whole: false };
   function openWhole(need, t0) {
     const key = need + '|' + t0 + '|' + D.hist.length;
@@ -1079,6 +1211,13 @@ function start(container, opt, PAGE) {
       }
       else if (!held) text = D.tickHours === 0 ? 'Volume profile from ' + U.fmtHM(Math.min(coveredFrom, now)) + ' ET: this view loads no tick history, so it counts the live trades from then on.'
         : 'Volume profile: no trades of the last session in the tick history this view loaded.';
+      else if (D.vpTable && D.vpTable.drop && D.vpTable.drop.at >= need && D.vpTable.drop.at < vpEnd(need)) text = 'Volume profile missing trades: the data connection was down at ' + U.fmtHM(D.vpTable.drop.at) + ' ET, and the trades while it was down are not in it.';
+      else if (partial && D.vpTable) {                 // 1.8.0: ChartBridge's table: its one backfill still to come (building), or none (since)
+        const T = D.vpTable, building = /^(wanted|queued|asked|failed once)/.test(T.backfill);
+        text = building ? 'Volume profile building, from ' + fromText + ' ET: ChartBridge started after ' + from + ' ET and loads the session once, in the background.'
+          : /^waiting/.test(T.backfill) ? 'Volume profile since ' + fromText + ' ET: loading this session waits for NinjaTrader, which has not answered an earlier tick request.'   // review 4 S2
+          : 'Volume profile since ' + fromText + ' ET: ChartBridge started after ' + from + ' ET' + (/^none \(not in profileRoots/.test(T.backfill) ? ' and this instrument is not in its profileRoots.' : ' and could not load the session' + (T.backfill ? ' (' + T.backfill + ').' : '.'));
+      }
       else if (partial) {                              // the session held is only partly in the tick history
         text = D.tickHours > 0 ? 'Volume profile from ' + fromText + ' ET: the tick history does not reach back to ' + from + ' ET.'
           : 'Volume profile from ' + fromText + ' ET: this view loads no tick history, so it counts the live trades from then on.';
@@ -1405,6 +1544,7 @@ function start(container, opt, PAGE) {
     }
     D.ready = true;
     D.liveFrom = etNow();
+    if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: nowMs() };
     D.backfill = D.ticks.length;
     if (!K.started || K.root !== D.root) countStart();   // the count begins with this instrument's first load (round 5)
     rebuild();
@@ -1414,6 +1554,7 @@ function start(container, opt, PAGE) {
   }
 
   function onTick(m) {
+    if (m.root === D.root) lastSeen[m.root] = { p: m.p, at: nowMs() };   // ChartBridge holds live trades during a load: this is the price when it began
     // the count takes every live trade of its instrument, also one that arrives while a later load of it is on its way
     const countDropped = K.started && m.root === K.root && countAdd(m);
     if (m.root !== D.root || !D.ready) return;
@@ -1426,8 +1567,13 @@ function start(container, opt, PAGE) {
       D.sides = typeof m.s === 'number';
       if (bridgeSides() !== before && IS.ind.delta.on) { deltaStart(); deltaFed = true; }   // built from the store, this trade in it
     }
-    if (D.ticks.length > 2500000) {                      // the first session left is partial now
-      D.ticks.dropFirst(500000); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true; D.backfill = Math.max(0, D.backfill - 500000); countStoreTrimmed(500000);
+    // Over 2.5 million trades the trades of earlier sessions go (the first session left is partial now); the current
+    // session's never do, so range bars built from the store stay all day (1.8.0; BB.trimCount).
+    const drop = D.ticks.length > TRIM_CAP ? BB.trimCount(D.ticks, etNow(), SESSION, TRIM_CAP, TRIM_HARD, 500000) : 0;
+    if (drop > 0) {
+      D.ticks.dropFirst(drop); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true;
+      if (D.table) D.table.at = Math.max(0, D.table.at - drop);
+      D.backfill = Math.max(0, D.backfill - drop); countStoreTrimmed(drop);
       if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store (or the count's part of it) moved under a build: start it over
     }
     if (countDropped && deltaBuilding() && deltaJob.cov.journal) { deltaStart(); deltaFed = true; }   // the count moved under a build
@@ -1454,7 +1600,12 @@ function start(container, opt, PAGE) {
     const tf = TF[S.tf];
     let barT;                                          // the start of the chart bar this trade made (for the delta pane)
     if (tf.mode === 'time' && tf.sec >= 60) { chart.update(tf.sec === 60 ? r1.bar : U.foldLast(D.m1.bars, tf.sec)); barT = Math.floor(r1.bar.t / tf.sec) * tf.sec; }
-    else if (D.cur) { const r = D.cur.add(t, p, v), ch = r.changed; for (let i = 0; i < ch.length; i++) chart.update(ch[i]); barT = r.bar.t; }   // a finished range bar, phantom bars, the new bar
+    else if (D.cur) {
+      const n0 = D.cur.bars.length, r = D.cur.add(t, p, v), ch = r.changed;
+      if (D.sync && D.sync.bar < 0) { if (D.sync.rs.step(t, p)) { D.sync.bar = n0; showRange(); } }   // the first proven range bar
+      else for (let i = 0; i < ch.length; i++) chart.update(ch[i]);   // a finished range bar, phantom bars, the new bar
+      barT = r.bar.t;
+    }
     if (D.delta && !deltaFed) D.delta.add(t, v, m.s, barT, m.sm);   // one trade, one bar: never a rebuild per trade
     const now = nowMs();
     pushDelay(delays.feed, m.rx - m.u);
@@ -1463,6 +1614,7 @@ function start(container, opt, PAGE) {
     else if (D.ib && t >= D.ib.start && t < D.ib.end && (D.ib.high === null || p > D.ib.high || p < D.ib.low)) updateIB(false);
   }
 
+  const TRIM_CAP = 2500000, TRIM_HARD = 8000000;       // trades; 8 million is some 190 MB, far above a busy session
   function pushDelay(arr, v) { if (isFinite(v)) { arr.push(v); if (arr.length > 300) arr.shift(); } }
   function median(arr) { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
 
@@ -1557,6 +1709,10 @@ function start(container, opt, PAGE) {
   /* The URL is asked for again on every connect when wsUrl is a function (a relay needs a new single-use ticket each
      time). A query string is never shown on screen. */
   let ws = null, wsTries = 0, everConnected = false, reconnectTimer = 0, connectSeq = 0, lastUrl = '';
+  /* ChartBridge 0.3.5 lists "liveFirst" and "profile" in hello's `features`. Only then does the page send its subscribe id,
+     ask for the served window on seconds and range views, and ask for the session table ("profile"); ChartBridge 0.3.4 and
+     older, and The Desk's relay (which passes no `features`), get the subscribe of 1.6.0. */
+  let LIVE_FIRST = false, PROFILE = false, subSeq = 0;
   const shownUrl = u => u ? String(u).split('?')[0] : 'ChartBridge';
 
   function connect() {
@@ -1602,13 +1758,23 @@ function start(container, opt, PAGE) {
     setConn('loading');
     D.tickHours = ticksWanted();
     D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
-    send({ type: 'subscribe', root, days: 5, tickHours: D.tickHours });
+    const msg = { type: 'subscribe', root, days: 5, tickHours: D.tickHours };
+    D.sub = LIVE_FIRST || PROFILE ? ++subSeq : 0;
+    if (D.sub) msg.sub = D.sub;
+    if (LIVE_FIRST && D.tickHours > 0) { msg.liveFirst = true; D.window = true; }
+    if (PROFILE) msg.profile = true;
+    send(msg);
   }
+  /* A message of an older subscribe of this page (ChartBridge 0.3.5 echoes the page's id; one already on its way when the
+     page subscribed again can still arrive). Only checked when the page sent an id. */
+  const stale = m => D.sub > 0 && m.sub !== undefined && m.sub !== null && +m.sub !== D.sub;
 
   function handle(m) {
     switch (m.type) {
       case 'hello':
         helloSeen = true;
+        LIVE_FIRST = Array.isArray(m.features) && m.features.includes('liveFirst');
+        PROFILE = Array.isArray(m.features) && m.features.includes('profile');
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
@@ -1618,21 +1784,28 @@ function start(container, opt, PAGE) {
         if (m.trading && TRADING) { applyTrading(m.trading); signIn(); }   // protocol v2; ChartBridge 0.2 has no trading field
         break;
       case 'history':
-        if (m.root !== D.root) return;
+        if (m.root !== D.root || stale(m)) return;
         if (m.name) { D.name = m.name; $('lgName').textContent = m.name; }
         for (const b of m.bars) D.hist.push({ t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] });
         setStatus('Loading ' + D.root + ' history: ' + D.hist.length.toLocaleString() + ' minutes', '');
         break;
       case 'ticks':
-        if (m.root !== D.root) return;
+        if (m.root !== D.root || stale(m)) return;
         D.ticks.pushAll(m.ticks);
-        if (D.sides === null && m.ticks && m.ticks.length) { const x = m.ticks[0]; D.sides = typeof x[3] === 'number'; }   // 0.3.4: [t, p, v, s, sm]
+        // 0.3.4: [t, p, v, s, sm]. ChartBridge 0.3.5's served window sends [t, p, v] (no side) though its live trades carry
+        // sides: then the first live trade says (onTick)
+        if (D.sides === null && m.ticks && m.ticks.length && !D.window) { const x = m.ticks[0]; D.sides = typeof x[3] === 'number'; }
         setStatus('Loading ' + D.root + ' ticks: ' + D.ticks.length.toLocaleString(), '');
         break;
       case 'ready':
-        if (m.root !== D.root) return;
+        if (m.root !== D.root || stale(m)) return;
         setStatus('', '');
         onReady();
+        break;
+      case 'profile':
+        // with this load's id before its "ready"; without one when the table's backfill made it whole (only once live)
+        if (m.root !== D.root || (m.sub !== undefined && m.sub !== null ? stale(m) : !D.ready)) return;
+        onProfile(m);
         break;
       case 'tick': onTick(m); break;
       case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
@@ -1766,7 +1939,13 @@ function start(container, opt, PAGE) {
     renderTrading();
   }
 
-  const lastPrice = () => (D.m1 && D.m1.last ? D.m1.last.c : null);
+  /* The last price: the chart's, or while a view loads the last one seen for the instrument (1.8.0: orders keep working). */
+  const LAST_SEEN_MS = 10000;                           // review 3 N-2: an older price (another instrument's visit, a long load) is unknown
+  const lastPrice = () => {
+    if (D.m1 && D.m1.last) return D.m1.last.c;
+    const x = lastSeen[D.root];
+    return x && nowMs() - x.at < LAST_SEEN_MS ? x.p : null;
+  };
   const capNow = () => OT.maxQtyFor(TR, D.root);
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
 
@@ -1777,12 +1956,14 @@ function start(container, opt, PAGE) {
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
     if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
-    if (!D.ready || !TR.account) { flash('Still loading: nothing was sent.', 'warn'); return false; }
+    if (!TR.account) { flash('No account yet: nothing was sent.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading
     if ($('oAcct').value !== TR.account) { syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
   function sendOrder(side, kind, price) {
     if (!ready()) return;
+    // a price order needs the last price to be a limit or a stop (OT.placeKind): until one is known, only market orders
+    if (kind !== 'market' && !(lastPrice() > 0)) { flash('No price yet: nothing was sent. Market orders and Flatten work.', 'warn'); return; }
     const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), D.root);
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
     if (!sameAction.call(null, [side, kind, price, qty].join('|'), performance.now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
@@ -2073,7 +2254,7 @@ function start(container, opt, PAGE) {
     chgEl.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
     $('lgV').textContent = U.fmtVolume(b.v);
     $('lgVwWrap').hidden = !S.layers.vwap;
-    $('lgVw').textContent = b.vw !== undefined ? fmt(U.roundTo(b.vw, D.tick)) : '-';
+    $('lgVw').textContent = b.vw !== undefined && b.vw !== null ? fmt(U.roundTo(b.vw, D.tick)) : '-';   // null: not known yet (served window)
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
@@ -2753,7 +2934,7 @@ function start(container, opt, PAGE) {
     // or a holiday it keeps the last session until the next session's first trade, and RTH never moves on the clock
     // (1.6.1, the engine's keep)
     if (D.vp && D.vp.advance(etNow())) vpLegend();
-    vpNote(); vpLegend();
+    vpNote(); vpLegend(); rangeNote();
   }, 500);
 
   if (document.fonts && document.fonts.load) {
@@ -2775,7 +2956,7 @@ function start(container, opt, PAGE) {
     if (sock) { sock.onopen = sock.onmessage = sock.onclose = sock.onerror = null; try { sock.close(); } catch (e) { /* already closed */ } }
     themePanel.destroy();
     chart.destroy();
-    if (PAGE && window.liveChart === chart) delete window.liveChart;
+    if (PAGE && window.liveChart === chart) { delete window.liveChart; delete window.liveData; }
     rootEl.remove();
   }
   return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}) };

@@ -177,13 +177,15 @@ test('fromStore: nothing that counts gives an empty profile, never an error', ()
   assert.equal(vp.day, null);
 });
 
-test('1.6.1 loads no tick history beyond the view\'s: ticksWanted and ticksMissing as in 1.6.0; nt8/ as on main', () => {
+test('1.6.1 loads no tick history beyond the view\'s: ticksWanted and ticksMissing as in 1.6.0 (1.8.0: with a bridge that has no served window); the tick cap 48', () => {
   const fs = require('node:fs'), path = require('node:path');
   const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8');
   assert.match(cs, /int tickHours = hm\.Success \? Math\.Max\(0, Math\.Min\(48, int\.Parse\(hm\.Groups\[1\]\.Value\)\)\) : ChartBridgeConfig\.DefaultTickHours;/);
   const js = fs.readFileSync(path.join(__dirname, '..', 'live', 'live.js'), 'utf8').replace(/\r\n/g, '\n');
-  assert.match(js, /\n  const ticksWanted = \(\) => TF\[S\.tf\]\.mode === 'range' \? BB\.rangeTickHours\(etNow\(\), SESSION\) : TF\[S\.tf\]\.sec < 60 \? 8 : 0;\n/);
-  assert.match(js, /\n  const ticksMissing = \(\) => TF\[S\.tf\]\.mode === 'range' \? BB\.rangeNeedsReload\(D\.tickFrom, etNow\(\), SESSION, D\.trimmed\) : TF\[S\.tf\]\.sec < 60 && D\.tickHours === 0;\n/);
+  // 1.8.0: with ChartBridge 0.3.5 (hello "liveFirst") tick views get the served window; otherwise exactly 1.6.0's rules
+  assert.match(js, /\n  const viewTicksWanted = \(\) => LIVE_FIRST \? \(tickView\(\) \? WINDOW_TICK_HOURS : 0\) : TF\[S\.tf\]\.mode === 'range' \? BB\.rangeTickHours\(etNow\(\), SESSION\) : TF\[S\.tf\]\.sec < 60 \? 8 : 0;\n/);
+  assert.match(js, /\n    : TF\[S\.tf\]\.mode === 'range' \? BB\.rangeNeedsReload\(D\.tickFrom, etNow\(\), SESSION, D\.trimmed\) : TF\[S\.tf\]\.sec < 60 && D\.tickHours === 0;\n/);
+  assert.match(js, /\n  const ticksWanted = \(\) => viewTicksWanted\(\);\n  const ticksMissing = \(\) => viewTicksMissing\(\);\n/);
   assert.doesNotMatch(js, /closedFrom|VP_CLOSED_HOURS|bridgeTickHours|tickCapped|install\.ps1 again/);
   assert.equal(typeof new VolumeProfile({}).closedFrom, 'undefined');
 });

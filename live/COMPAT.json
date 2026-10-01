@@ -4,6 +4,7 @@
   "minChartBridge": "0.3.2",
   "history": [
     { "page": "1.9.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.9.0: color presets, indicator colors in the gears and the order bar following a light chrome; page and engine only, no recompile" },
+    { "page": "1.8.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.8.0: the served window and the session table with ChartBridge 0.3.5; with 0.3.2 to 0.3.4.1 it loads as 1.6.0 did" },
     { "page": "1.7.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.7.0: the delta pane needs ChartBridge 0.3.4 for its sides (older: the pane shows a note, nothing else changes); 0.3.4.1 recommended (no historical quote requests)" },
     { "page": "1.6.1", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.6.1: page and engine only, works with ChartBridge 0.3.2, 0.3.3 and 0.3.4, no recompile" },
     { "page": "1.6.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.6.0: works with ChartBridge 0.3.2 and 0.3.3, no recompile" }
