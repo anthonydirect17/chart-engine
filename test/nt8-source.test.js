@@ -652,11 +652,18 @@ test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a qu
 
 // ---- 0.3.7 data side (behaviour: nt8/check/DataHarness.cs under Mono)
 test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only through the gate, the weekly profile never asks', () => {
-  const note = bodyOf(code, 'public static void NoteSettlement(');
+  const note = bodyOf(code, 'public static void NoteSettlement(string root, string contract,');
   assert.match(note, /!\(price > 0\)\) return;/, 'only a real price');
   assert.match(note, /DateTime\? day = SettlementDay\(ntTime\);/, 'every value dated from NinjaTrader\'s time on it');
   assert.match(bodyOf(code, 'private static void PriorSettlement('), /ChartBridgeCme\.PreviousSession\(ChartBridgeCme\.CurrentSession\(/);
-  assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlements\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);
+  assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlementsSoon\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);   // read off NinjaTrader's thread
+  // review B2: answers built outside HtfLock, one waiter per page, the 15 s limit
+  assert.match(code, /HtfTimeoutMs = 15000/);
+  for (const f of ['private static void HtfAnswered(', 'private static void HtfFailed(', 'private static void HtfServe(']) {
+    const b = bodyOf(code, f), lockAt = b.indexOf('lock (HtfLock)'), lockBody = b.slice(lockAt, b.indexOf('\n            }', lockAt));
+    assert.ok(!/HtfJson\(|HtfBarsText\(/.test(lockBody), f + ' formats nothing under HtfLock');
+  }
+  assert.match(bodyOf(code, 'private static void AddWaiter('), /if \(s\.Waiters\[i\]\.Key == client\)/);
   assert.match(bodyOf(code, 'private static void SubscribeMarketData('), /MarketDataEventArgs st = md\.Settlement;/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   assert.ok(md.indexOf('if (e.IsReset)') < md.indexOf('MarketDataType.Settlement'), 'a reset is never a settlement');

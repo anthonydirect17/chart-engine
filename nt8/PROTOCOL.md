@@ -659,7 +659,7 @@ serve is answered with an `error` and no bars.
   takes every Settlement event after that. Only a price above 0 counts; a reset event is never one; `LastClose` (the prior
   session's close) is never used.
 - **Each value is dated** with the trading date it settles, from NinjaTrader's time on it: a date-only stamp (00:00) is that
-  date; otherwise the latest session day whose settlement could be out by then (16:00 ET, or 12:00 ET on an NYSE holiday or
+  date, once that date's settlement time (below) has passed (before it, the day has not settled: not used); otherwise the latest session day whose settlement could be out by then (16:00 ET, or 12:00 ET on an NYSE holiday or
   early close, when CME halts early), as long as the next session has not opened (its 18:00 ET open; a weekend or a CME
   holiday in between counts as before it). A value stamped inside a later session (a snapshot stamped when it was read,
   say) could settle any earlier day: it is not used (one Output line says so; `/diag` shows it with `day` null), and with no
@@ -673,8 +673,12 @@ serve is answered with an `error` and no bars.
   `/diag` `settlements`: per root, `prior` (`date`, `p`), `byDate` (the dated values kept), `last` (the latest value
   NinjaTrader gave: `p`, `ntTime`, `day` or null, `from` `snapshot` or `update`, `receivedUtcMs`).
 - **Restarts:** the last two dated values per root are kept in `settlements.txt` in ChartBridge's folder (`ROOT yyyy-MM-dd
-  price`, replaced through a temp file), read at the start before market data is subscribed, so a restart in the evening
-  still knows the prior (and, before 18:00, the day before's).
+  price CONTRACT`, replaced through a temp file, written off NinjaTrader's thread, one write at a time), read at the start off
+  NinjaTrader's thread (pages connected meanwhile get a `settlement` message once it is read), so a restart in the evening
+  still knows the prior (and, before 18:00, the day before's). A line for another contract than the one served now (the
+  contract before a roll) is ignored, so a restart on the roll day never gives the old contract's settlement as the new
+  one's prior; the prior is then null until NinjaTrader gives the new contract's own value. Pages are told in order, one
+  check at a time.
 - **Live check:** whether Tradovate's feed gives a Settlement value, and the time NinjaTrader stamps on it (the snapshot
   at subscription especially), is to be seen on the trading PC: the Output lines and `/diag` `settlements.last`.
 
@@ -686,9 +690,11 @@ serve is answered with an `error` and no bars.
 - **Through the gate, last:** queued behind windows and backfills and sent only when no window or backfill is out or
   queued, no minute chart's last trades are out and no page is loading (as the daily bars, which go after it). So it never
   starts beside a chart load; a chart load that comes while it is out waits behind it (one small request). A request
-  NinjaTrader does not answer in 60 s (`HtfTimeoutMs`) is given up and **frees the gate** (as the daily bars: the chart never
-  waits); its pages get the reason, and its late answer is dropped uncopied. A request still queued after 120 s (the chart's
-  requests kept going first) is taken back with the reason. While the gate is stuck on an unanswered window or backfill, a
+  NinjaTrader does not answer in 15 s (`HtfTimeoutMs`, Anthony 2026-10-01) is given up and **frees the gate** (as the daily
+  bars: the chart never waits); its pages get the plain reason ("NinjaTrader did not answer within 15 s"), its late answer is
+  dropped uncopied, and that root and timeframe is asked again no sooner than 60 s later. A request still queued after 120 s
+  (the chart's requests kept going first) is taken back ("not asked: the chart's own requests kept NinjaTrader busy for 120
+  s; ask again"). While the gate is stuck on an unanswered window or backfill, a
   request is answered at once with the reason. After a failure the same root and timeframe is not asked again for 60 s.
 - **The answer:** `{"type":"htf","root","tf","id","name","bars":[[t,o,h,l,c,v],...],"error":null}`, oldest first, the last
   bar forming, prices and volume as NinjaTrader has them. `t` is the bar's start in bar-time seconds (New York wall clock),
@@ -701,9 +707,12 @@ serve is answered with an `error` and no bars.
   was open, or after a failure (the bars in memory are sent meanwhile, when there are any). Dropped at a stop.
 - **The forming bar, live:** every live trade ChartBridge already gets (no NinjaTrader request per trade) goes into the
   forming bar of each kept series of its root (high, low, close, volume; a new bar when its start is later). Trades that
-  come while NinjaTrader's answer is being copied are kept and added after it. A page that asked for a root and timeframe
-  gets `{"type":"htfBar","root","tf","bars":[...]}` at most once a second while it changes: the forming bar, after the closed
-  bar's final values when a new bar began. At most 12 series per page.
+  come while NinjaTrader's answer is being copied are kept and added after it. A page that has a root and timeframe's bars
+  (its `htf` answer had them) gets `{"type":"htfBar","root","tf","bars":[...]}` at most once a second while it changes: the
+  forming bar, after the closed bar's final values when a new bar began. At most 12 series per page.
+- **A page asking again and again** (review B2 S2): while a request is out a page waits on it once (its latest `id` is
+  answered); an answer is formatted once, with no lock held, from a copy taken in microseconds (the closed bars' text is
+  kept between answers, only the forming bar is new), so live trades never wait on it.
 - **Accepted edges:** the forming bar's volume can differ from NinjaTrader's by trades in the moment NinjaTrader took its
   answer (milliseconds), until the series is asked again the next trading day. NinjaTrader's 240-minute bars are believed to
   start at the session's 18:00 ET open with its US index futures template; a live check compares the `htf` answer with a
@@ -716,7 +725,9 @@ serve is answered with an `error` and no bars.
   by the CME rules above, whose 17:00 ET close has passed; the session running now is the page's own `profile`). Each finished
   table is kept in memory and written to `profile-<ROOT>-<yyyy-MM-dd>.txt` (its trading day) in ChartBridge's folder, kept 14
   days, so a restart still has the earlier sessions; the file also records a feed drop. Files are read and the answer made
-  off NinjaTrader's thread.
+  off NinjaTrader's thread. One answer per page is in progress at a time: requests meanwhile fold into one more answer (the
+  latest `id`). The answer is kept per root while the same tables answer it, so a repeat copies nothing; finished tables
+  never change and are read with no lock (only a just-finished current table is copied under the book's lock).
 - **The answer:** `{"type":"weekProfile","root","id","tick","sessions":[...],"rows":[[priceTicks,v],...],"error":null}`.
   `sessions`, oldest first, each `{date, from, whole, coveredFrom, drop, rows}` (as in `profile`: `from` the 18:00 start,
   `whole` whether every trade of it is in, `coveredFrom` from when it is, `drop` null or `{at, why}`; `rows` the volume at

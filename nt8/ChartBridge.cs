@@ -1271,7 +1271,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly object sync = new object();
         private readonly LiveQuoteSide bids = new LiveQuoteSide(), asks = new LiveQuoteSide();
         private double lastPrice;
-        private DateTime lastTime;
         private bool hasLast;
         private int lastSide;
         private readonly SessionClock session = new SessionClock();
@@ -1315,16 +1314,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeSides.QuoteUsable(eventBid, eventAsk)) eventNone++;
                 else if (ChartBridgeSides.PriceKey(eventBid) == ChartBridgeSides.PriceKey(bids.Latest) && ChartBridgeSides.PriceKey(eventAsk) == ChartBridgeSides.PriceKey(asks.Latest)) eventSame++;
                 else eventDiffers++;
-                hasLast = true; lastPrice = price; lastTime = time; lastSide = s;
+                hasLast = true; lastPrice = price; lastSide = s;
                 return s;
             }
-        }
-
-        // After a load's seam (N3): the trade the tick rule continues from is the backfill's copy (or the last released
-        // one), whose side can differ from the dropped live twin's. Only when that trade is still the last one here.
-        public void FixLast(DateTime time, double price, int side)
-        {
-            lock (sync) { if (hasLast && lastTime == time && ChartBridgeSides.PriceKey(lastPrice) == ChartBridgeSides.PriceKey(price)) lastSide = side; }
         }
 
         public string DiagJson()
@@ -1356,6 +1348,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
         public volatile bool WantsProfile;      // 0.3.5: the page's subscribe asked for "profile" messages (set under the Pending lock)
         public readonly Dictionary<string, ChartBridgeServer.HtfWatch> Htf = new Dictionary<string, ChartBridgeServer.HtfWatch>();   // 0.3.7: higher-timeframe series this page asked for (lock it)
+        public bool WeekBusy, WeekAgain; public string WeekAgainRoot, WeekAgainId;   // 0.3.7: one weekProfile answer in progress per page (under the Htf lock)
         // Two lanes (0.3.4). The order lane (OrderLane: hello, trading, orders, order, position, reject, exec, execs, status,
         // pong) is a FIFO checked before every message, so these go out at the next message boundary, ahead of any market
         // data queued before them; the data lane (history, ticks, ready, tick, and anything else) is the FIFO outbox. Order
@@ -1815,7 +1808,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         ? "order entry is ON for " + ChartBridgeOrders.TradeAccounts.Count + " account(s): " + string.Join(", ", ChartBridgeOrders.TradeAccounts)
                         : "order entry is off (read only)");
                     Log(ChartBridgePin.IsSet ? "ChartBridge's page is locked with a PIN (pin.txt)" : "no PIN is set yet: ChartBridge's page asks for one before it shows anything");
-                    LoadSettlements();      // 0.3.7: the prior settlement known before this start (settlements.txt)
+                    LoadSettlementsSoon();  // 0.3.7: the prior settlement known before this start (settlements.txt), read off this thread
                     SubscribeMarketData();
                     WatchFeed();   // 0.3.5 S2
                     if (ChartBridgeConfig.PostFills) ChartBridgeDesk.Load();
@@ -1863,6 +1856,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 StopGate(250);   // nothing carries over to the next start (review 3 N-9); the worker ends, the retries' timers go (review 5 N6); a short wait on NinjaTrader's thread (review 6 S2)
                 lock (Books) Books.Clear();
                 HtfReset();                                // 0.3.7: nothing kept; a start asks again
+                lock (WeekCache) WeekCache.Clear();
                 lock (Settlements) Settlements.Clear();
                 Unwatch();
                 ChartBridgeOrders.UnwatchConnections();
@@ -2211,7 +2205,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Feeds.Add(md);
                 // 0.3.7: the settlement NinjaTrader already has (its help: snapshot data is there right on subscription); later
                 // ones come as Settlement events (OnMarketData)
-                try { MarketDataEventArgs st = md.Settlement; if (st != null) NoteSettlement(kv.Key, st.Price, st.Time, "snapshot"); }
+                try { MarketDataEventArgs st = md.Settlement; if (st != null) NoteSettlement(kv.Key, kv.Value.FullName, st.Price, st.Time, "snapshot"); }
                 catch (Exception ex) { Log("settlement snapshot not read for " + kv.Key + ": " + ex.Message); }
             }
         }
@@ -2260,8 +2254,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (type == MarketDataType.Settlement)
             {
                 // 0.3.7: NinjaTrader's settlement for the contract (a reset is never one: handled above). Rare: off this thread.
-                string sr = RootOf(e.Instrument); double sp = e.Price; DateTime stime = e.Time;
-                Task.Run(() => NoteSettlement(sr, sp, stime, "update"));
+                string sr = RootOf(e.Instrument), sc = e.Instrument != null ? e.Instrument.FullName : null; double sp = e.Price; DateTime stime = e.Time;
+                Task.Run(() => NoteSettlement(sr, sc, sp, stime, "update"));
                 return;
             }
             if (type != MarketDataType.Last) return;
@@ -2851,7 +2845,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // timed out; 6: that copy ended, the gate freed (review 5 N2).
         // OnDropped (0.3.7, lf7 N1): the job will never go out (ChartBridge stopped before it was sent): its waiters are answered.
         // FreesGate (0.3.6 bars, 0.3.7 higher-timeframe bars): not answered in time, it is given up and the gate goes on.
-        private class GateJob { public string Kind, Root; public RootBook Book; public Action<Action> Start; public Action OnTimeout; public Action<string> OnStuck; public Action OnDropped; public bool FreesGate; public double QueuedMs; public int TimeoutMs; public int State; public CancellationToken Stop; }
+        private class GateJob { public string Kind, Root; public RootBook Book; public Action<Action> Start; public Action OnTimeout; public Action<string> OnStuck; public Action OnDropped; public Action<string> OnExpire; public bool FreesGate; public double QueuedMs; public int TimeoutMs; public int State; public CancellationToken Stop; }
         private static bool Claim(GateJob j) { return Interlocked.CompareExchange(ref j.State, 1, 0) == 0; }
         // An answer that lost to the timeout: true when the gate is already marked stuck, so the caller frees it (GateUnstuck).
         private static bool LateAnswer(GateJob j) { return Interlocked.CompareExchange(ref j.State, 4, 2) != 2; }
@@ -3221,6 +3215,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Books) Books.Clear();
             lock (GateLock) { GateWindows.Clear(); GateBackfills.Clear(); GateBarJobs.Clear(); GateHtfJobs.Clear(); gateStuck = null; gateStuckJob = null; tailsOut = 0; gateStopped = false; }   // the harness: as after a start
             HtfReset();
+            lock (WeekCache) WeekCache.Clear();
             Interlocked.Exchange(ref listeningSinceUtcTicks, listeningSinceUtc.Ticks);
             Interlocked.Exchange(ref feedUpSinceUtcTicks, listeningSinceUtc.Ticks); Interlocked.Exchange(ref feedDown, 0);
             Interlocked.Exchange(ref firstTradeUtcTicks, 0);
@@ -3593,16 +3588,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         // waits until the next session starts at 18:00 (over a weekend or a CME holiday, until the next session's 18:00 open);
         // then it is the prior. With no dated value for that day the prior is null: never an estimate. Pages get it in
         // "hello" (each instrument's "settlement" and "settlementDate") and as {"type":"settlement","root","p","date"}
-        // whenever it changes (a new value for that day, or the 18:00 roll). The last two dated values per root are kept in
-        // settlements.txt in ChartBridge's folder, so a restart in the evening still knows the prior.
+        // whenever it changes (a new value for that day, or the 18:00 roll). The last two dated values per contract are kept
+        // in settlements.txt in ChartBridge's folder, so a restart in the evening still knows the prior; each line names its
+        // contract, and a line for another contract than the one served now (the roll) is ignored (review B2 S1).
         private class SettleRoot
         {
+            public string Contract;                  // the contract the values are for (a new one starts over)
             public readonly SortedDictionary<DateTime, double> ByDate = new SortedDictionary<DateTime, double>();   // trading day -> settlement
             public double RawP = double.NaN; public DateTime RawNt; public string RawFrom; public DateTime? RawDay; public double RawAtUtcMs = -1;
             public bool Sent; public DateTime SentDay; public double SentP = double.NaN;   // the prior the pages were last told
         }
         private static readonly Dictionary<string, SettleRoot> Settlements = new Dictionary<string, SettleRoot>();
-        private static readonly object SettleFileLock = new object();
+        private static readonly object SettleFileLock = new object(), SettleTickLock = new object();
+        private static volatile bool settleLoaded = true;   // false from Start until settlements.txt is read (nothing is written before)
+        private static int settleSaveQueued;
         public const int SettlementsKept = 2;
         private static string SettlementFile { get { return Path.Combine(ChartBridgeConfig.Folder, "settlements.txt"); } }
         private static bool SameP(double a, double b) { return double.IsNaN(a) ? double.IsNaN(b) : !double.IsNaN(b) && ChartBridgeSides.PriceKey(a) == ChartBridgeSides.PriceKey(b); }
@@ -3613,9 +3612,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         // by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early), and only while the next session
         // has not opened yet (its 18:00 ET open; a weekend or a CME holiday in between counts as before it). A value stamped
         // inside a later session (a snapshot stamped when it was read, say) could be any earlier day's: null, not used.
-        public static DateTime? SettlementDay(DateTime ntTime)
+        public static DateTime? SettlementDay(DateTime ntTime) { return SettlementDay(ntTime, NowNt()); }
+        // nowNt: a date-only stamp for a day counts only once that day's settlement time has passed (review B2 N1).
+        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt)
         {
-            if (ntTime.TimeOfDay == TimeSpan.Zero) { DateTime d0 = ntTime.Date; return ChartBridgeCme.SessionDay(d0) ? d0 : (DateTime?)null; }
+            if (ntTime.TimeOfDay == TimeSpan.Zero)
+            {
+                DateTime d0 = ntTime.Date;
+                if (!ChartBridgeCme.SessionDay(d0)) return null;
+                try { if (TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nowNt), ChartBridgeTime.Eastern) < d0.Add(ChartBridgeCme.EarliestSettlement(d0))) return null; }
+                catch (Exception) { return null; }
+                return d0;
+            }
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(ntTime), ChartBridgeTime.Eastern);
             for (DateTime d = et.Date; d > et.Date.AddDays(-14); d = d.AddDays(-1))
             {
@@ -3629,18 +3637,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             day = ChartBridgeCme.PreviousSession(ChartBridgeCme.CurrentSession(TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nowNt), ChartBridgeTime.Eastern)));
             p = double.NaN;
-            lock (Settlements) { SettleRoot s; double v; if (Settlements.TryGetValue(root, out s) && s.ByDate.TryGetValue(day, out v)) p = v; }
+            Instrument inst = InstrumentFor(root);
+            string contract = inst != null ? inst.FullName : null;
+            lock (Settlements) { SettleRoot s; double v; if (Settlements.TryGetValue(root, out s) && s.Contract == contract && s.ByDate.TryGetValue(day, out v)) p = v; }
         }
 
-        public static void NoteSettlement(string root, double price, DateTime ntTime, string from)
+        public static void NoteSettlement(string root, double price, DateTime ntTime, string from) { NoteSettlement(root, null, price, ntTime, from); }
+        // contract: the instrument the value came with (null: the contract served for root now).
+        public static void NoteSettlement(string root, string contract, double price, DateTime ntTime, string from)
         {
             if (root == null || double.IsNaN(price) || double.IsInfinity(price) || !(price > 0)) return;
+            if (contract == null) { Instrument inst = InstrumentFor(root); contract = inst != null ? inst.FullName : null; }
             DateTime? day = SettlementDay(ntTime);
             bool stored = false, undated = false;
             lock (Settlements)
             {
                 SettleRoot s;
                 if (!Settlements.TryGetValue(root, out s)) { s = new SettleRoot(); Settlements[root] = s; }
+                if (s.Contract != contract) { s.Contract = contract; s.ByDate.Clear(); }   // another contract (a roll): its own values only
                 bool again = SameP(s.RawP, price) && s.RawNt == ntTime;
                 s.RawP = price; s.RawNt = ntTime; s.RawFrom = from; s.RawDay = day; s.RawAtUtcMs = ChartBridgeTime.NowUtcMs();
                 if (day.HasValue)
@@ -3656,14 +3670,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (stored)
             {
-                SaveSettlements();
+                SaveSettlementsSoon();
                 Log(root + " settlement " + CbJson.Num(price) + " for the session of " + Day(day.Value) + " (NinjaTrader's, " + from + ", stamped " + EtText(ntTime) + " ET)");
             }
             if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") is stamped " + EtText(ntTime) + " ET, inside a later session: which session it settles is not known, so it is not used");
             SettlementTick();
         }
         // Pages get the prior when it changes: a new value for its day, or the next session's start (every second, HtfPushMs).
-        private static void SettlementTick()
+        private static void SettlementTick() { lock (SettleTickLock) SettlementTickLocked(); }   // one at a time: compare and send in order (N2)
+        private static void SettlementTickLocked()
         {
             DateTime now = NowNt();
             List<string> roots = Instruments.Keys.ToList();
@@ -3692,16 +3707,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             PriorSettlement(root, NowNt(), out day, out p);
             return ",\"settlement\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"settlementDate\":" + CbJson.Str(Day(day));
         }
-        // settlements.txt: "ROOT yyyy-MM-dd price", the last SettlementsKept days per root, replaced through a temp file.
+        // settlements.txt: "ROOT yyyy-MM-dd price CONTRACT" (the contract last, it has a space), the last SettlementsKept days
+        // per root, replaced through a temp file. Written off NinjaTrader's thread, one writer at a time, each from the state
+        // as it is then (so the last write is the newest), and never before the file was read at a start (N2, N3).
+        private static void SaveSettlementsSoon()
+        {
+            if (!settleLoaded) return;   // the load writes it once done
+            if (Interlocked.Exchange(ref settleSaveQueued, 1) == 0) Task.Run(() => { Interlocked.Exchange(ref settleSaveQueued, 0); SaveSettlements(); });
+        }
         private static void SaveSettlements()
         {
-            List<string> lines = new List<string>();
-            lock (Settlements)
-                foreach (KeyValuePair<string, SettleRoot> kv in Settlements.OrderBy(x => x.Key, StringComparer.Ordinal))
-                    foreach (KeyValuePair<DateTime, double> d in kv.Value.ByDate.Skip(Math.Max(0, kv.Value.ByDate.Count - SettlementsKept)))
-                        lines.Add(kv.Key + " " + Day(d.Key) + " " + CbJson.Num(d.Value));
             lock (SettleFileLock)
             {
+                List<string> lines = new List<string>();
+                lock (Settlements)
+                    foreach (KeyValuePair<string, SettleRoot> kv in Settlements.OrderBy(x => x.Key, StringComparer.Ordinal))
+                        if (kv.Value.Contract != null)
+                            foreach (KeyValuePair<DateTime, double> d in kv.Value.ByDate.Skip(Math.Max(0, kv.Value.ByDate.Count - SettlementsKept)))
+                                lines.Add(kv.Key + " " + Day(d.Key) + " " + CbJson.Num(d.Value) + " " + kv.Value.Contract);
                 try
                 {
                     string f = SettlementFile;
@@ -3713,26 +3736,37 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception ex) { Log("settlements.txt not saved: " + ex.Message); }
             }
         }
-        // At Start (a few lines; read before market data is subscribed, so the first hello already has the prior).
+        // At Start, off NinjaTrader's thread (N3): the values kept before, for the contracts served now only (a line for another
+        // contract, the one before a roll, is ignored: S1). Then the pages get the prior if it changed, and the file is written
+        // once with whatever came in meanwhile.
+        private static void LoadSettlementsSoon() { settleLoaded = false; Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleLoaded = true; } }); }
         private static void LoadSettlements()
         {
-            string[] lines;
+            string[] lines = new string[0];
             lock (SettleFileLock)
             {
-                try { lines = File.Exists(SettlementFile) ? File.ReadAllLines(SettlementFile) : new string[0]; }
-                catch (Exception ex) { Log("settlements.txt not read: " + ex.Message); return; }
+                try { if (File.Exists(SettlementFile)) lines = File.ReadAllLines(SettlementFile); }
+                catch (Exception ex) { Log("settlements.txt not read: " + ex.Message); }
             }
+            int ignored = 0;
             lock (Settlements)
                 foreach (string line in lines)
                 {
-                    string[] f = line.Trim().Split(' ');
+                    string[] f = line.Trim().Split(new[] { ' ' }, 4);
                     DateTime d; double p;
-                    if (f.Length != 3 || !DateTime.TryParseExact(f[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d)
-                        || !double.TryParse(f[2], NumberStyles.Float, CultureInfo.InvariantCulture, out p) || !(p > 0)) continue;
+                    if (f.Length != 4 || !DateTime.TryParseExact(f[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d)
+                        || !double.TryParse(f[2], NumberStyles.Float, CultureInfo.InvariantCulture, out p) || !(p > 0)) { ignored++; continue; }
+                    Instrument inst = InstrumentFor(f[0]);
+                    if (inst == null || inst.FullName != f[3]) { ignored++; continue; }   // not the contract served now
                     SettleRoot s;
                     if (!Settlements.TryGetValue(f[0], out s)) { s = new SettleRoot(); Settlements[f[0]] = s; }
+                    if (s.Contract != f[3]) { s.Contract = f[3]; s.ByDate.Clear(); }
                     if (!s.ByDate.ContainsKey(d)) s.ByDate[d] = p;
                 }
+            if (ignored > 0) Log("settlements.txt: " + ignored + " line(s) not for a contract served now (or unreadable) ignored");
+            settleLoaded = true;
+            SaveSettlements();
+            SettlementTick();
         }
         private static string SettlementsJson()
         {
@@ -3769,7 +3803,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // kept live from the live trades ChartBridge already has (no NinjaTrader request per trade). Asked again at a request
         // in a later trading day (18:00 ET), after a feed drop, or after a failure (not within HtfRetryMs of it). A page that
         // asked gets "htfBar" with the forming bar at most once a second while it changes (HtfPushMs).
-        public static int HtfBarsBack = 300, HtfTimeoutMs = 60000, HtfQueueMs = 120000, HtfRetryMs = 60000, HtfPushMs = 1000;
+        public static int HtfBarsBack = 300, HtfTimeoutMs = 15000, HtfQueueMs = 120000, HtfRetryMs = 60000, HtfPushMs = 1000;
         public const int HtfKeep = 400, HtfWatchMax = 12, HtfCollectMax = 500000;
         public static readonly string[] HtfFrames = { "4h", "1D", "1W" };
         private class HtfSeries
@@ -3779,9 +3813,62 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool Asking, Stale; public DateTime Day; public int Version, Asks, Served; public double AskedMs = -1, AnsweredMs = -1, CallbackMs = -1, FailedMs = -1;
             public string Error;
             public List<SeamTick> Collect;           // live trades from the answer's callback until its bars are in (applied then)
-            public readonly List<KeyValuePair<ChartBridgeClient, string>> Waiters = new List<KeyValuePair<ChartBridgeClient, string>>();
+            public readonly List<KeyValuePair<ChartBridgeClient, string>> Waiters = new List<KeyValuePair<ChartBridgeClient, string>>();   // one per page (its latest id)
+            public int Gen;                          // bumped when Bars is replaced by a new answer
+            public string PrefixKey, PrefixText;     // the closed bars' text (they never change), cached; only the forming bar is new each time
         }
-        public class HtfWatch { public string Root, Tf; public int Version = -1; public double LastT = double.MinValue; }
+        // A page's series: HasHistory once it was sent bars (only then does it get "htfBar", review B2 N5).
+        public class HtfWatch { public string Root, Tf; public int Version = -1; public double LastT = double.MinValue; public bool HasHistory; }
+        // What an answer needs, copied under HtfLock in microseconds and formatted with no lock held (review B2 S2): the closed bars'
+        // cached text, or a copy of them when it is not cached yet, and a copy of the forming bar.
+        private class HtfSnap { public string Name, Key, Prefix; public double[][] Closed; public double[] Last; public int Version; }
+        private static HtfSnap HtfSnapLocked(HtfSeries s)
+        {
+            HtfSnap n = new HtfSnap { Name = s.Name, Version = s.Version };
+            int c = s.Bars != null ? s.Bars.Count : 0;
+            if (c == 0) { n.Prefix = ""; return n; }
+            n.Key = s.Gen + "|" + c + "|" + s.Bars[0][0].ToString("R", CultureInfo.InvariantCulture) + "|" + s.Bars[c - 1][0].ToString("R", CultureInfo.InvariantCulture);
+            if (s.PrefixKey == n.Key) n.Prefix = s.PrefixText;
+            else { n.Closed = new double[c - 1][]; for (int i = 0; i < c - 1; i++) n.Closed[i] = (double[])s.Bars[i].Clone(); }
+            n.Last = (double[])s.Bars[c - 1].Clone();
+            return n;
+        }
+        // The "bars" array text of a snapshot, built with no lock held; the closed bars' text is kept for the next answer.
+        private static string HtfBarsText(HtfSeries s, HtfSnap n)
+        {
+            if (n.Last == null) return "[]";
+            string prefix = n.Prefix;
+            if (prefix == null)
+            {
+                StringBuilder pb = new StringBuilder(n.Closed.Length * 56);
+                foreach (double[] x in n.Closed) { if (pb.Length > 0) pb.Append(','); AppendHtfBar(pb, x); }
+                prefix = pb.ToString();
+                lock (HtfLock) { s.PrefixKey = n.Key; s.PrefixText = prefix; }
+            }
+            StringBuilder b = new StringBuilder(prefix.Length + 80);
+            b.Append('[').Append(prefix);
+            if (prefix.Length > 0) b.Append(',');
+            AppendHtfBar(b, n.Last);
+            return b.Append(']').ToString();
+        }
+        private static void AppendHtfBar(StringBuilder b, double[] x)
+        {
+            b.Append('['); CbJson.AppendNum3(b, x[0]);
+            for (int k = 1; k < 5; k++) { b.Append(','); CbJson.AppendNum(b, x[k]); }
+            b.Append(','); CbJson.AppendLong(b, (long)x[5]); b.Append(']');
+        }
+        // The page now has this series' bars as of the snapshot: htfBar follows from there.
+        private static void HtfHasHistory(ChartBridgeClient c, string root, string tf, HtfSnap n)
+        {
+            if (n == null || n.Last == null) return;
+            lock (c.Htf) { HtfWatch w; if (c.Htf.TryGetValue(root + " " + tf, out w)) { w.HasHistory = true; w.Version = n.Version; w.LastT = n.Last[0]; } }
+        }
+        private static void AddWaiter(HtfSeries s, ChartBridgeClient client, string id)
+        {
+            for (int i = 0; i < s.Waiters.Count; i++)
+                if (s.Waiters[i].Key == client) { s.Waiters[i] = new KeyValuePair<ChartBridgeClient, string>(client, id); return; }   // one per page: its latest id
+            s.Waiters.Add(new KeyValuePair<ChartBridgeClient, string>(client, id));
+        }
         private static readonly object HtfLock = new object();
         private static readonly Dictionary<string, HtfSeries> Htf = new Dictionary<string, HtfSeries>();
         private static readonly List<GateJob> GateHtfJobs = new List<GateJob>();
@@ -3873,7 +3960,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void HtfServe(ChartBridgeClient client, Instrument inst, string root, string tf, string id)
         {
-            string reply = null, error = null; bool ask = false; HtfSeries s;
+            string error = null; bool ask = false; HtfSeries s; HtfSnap snap = null;
             DateTime today = ChartBridgeCme.TradingDay(TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern));
             string stuck; lock (GateLock) stuck = gateStuck;
             lock (HtfLock)
@@ -3882,43 +3969,26 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!Htf.TryGetValue(key, out s)) { s = new HtfSeries { Root = root, Tf = tf, Name = inst.FullName }; Htf[key] = s; }
                 bool fresh = s.Bars != null && !s.Stale && s.Day == today;
                 bool backoff = s.FailedMs >= 0 && ChartBridgeTime.NowUtcMs() - s.FailedMs < HtfRetryMs;
-                if (fresh || (s.Bars != null && (backoff || stuck != null) && !s.Asking)) { reply = HtfJson(root, tf, id, s.Name, s.Bars, null); s.Served++; }
-                else if (s.Asking) s.Waiters.Add(new KeyValuePair<ChartBridgeClient, string>(client, id));
+                if (fresh || (s.Bars != null && (backoff || stuck != null) && !s.Asking)) { snap = HtfSnapLocked(s); s.Served++; }
+                else if (s.Asking) AddWaiter(s, client, id);
                 else if (stuck != null) error = "NinjaTrader has not answered an earlier request (" + stuck + ") yet; asked again once it has";
                 else if (backoff) error = "the last request failed (" + s.Error + "); asked again " + (HtfRetryMs / 1000) + " s after it at the earliest";
-                else { s.Asking = true; s.Name = inst.FullName; s.Waiters.Add(new KeyValuePair<ChartBridgeClient, string>(client, id)); ask = true; }
+                else { s.Asking = true; s.Name = inst.FullName; AddWaiter(s, client, id); ask = true; }
             }
-            if (reply != null) { client.Send(reply); return; }
+            if (snap != null) { client.Send(HtfJson(root, tf, id, snap.Name, HtfBarsText(s, snap), null)); HtfHasHistory(client, root, tf, snap); return; }
             if (error != null) { client.Send(HtfJson(root, tf, id, null, null, error)); return; }
             if (ask) HtfAsk(s, inst, today);
         }
 
         // The page's answer: bars (or none, with the error), the request's id echoed (null when the page sent none).
-        private static string HtfJson(string root, string tf, string id, string name, List<double[]> bars, string error)
+        private static string HtfJson(string root, string tf, string id, string name, string barsText, string error)
         {
-            StringBuilder b = new StringBuilder(64 + (bars != null ? bars.Count * 56 : 0));
+            StringBuilder b = new StringBuilder(96 + (barsText != null ? barsText.Length : 2));
             b.Append("{\"type\":\"htf\",\"root\":").Append(CbJson.Str(root)).Append(",\"tf\":").Append(CbJson.Str(tf)).Append(",\"id\":").Append(id ?? "null");
-            b.Append(",\"name\":").Append(name != null ? CbJson.Str(name) : "null").Append(",\"bars\":");
-            AppendHtfBars(b, bars, double.MinValue);
+            b.Append(",\"name\":").Append(name != null ? CbJson.Str(name) : "null").Append(",\"bars\":").Append(barsText ?? "[]");
             b.Append(",\"error\":").Append(error != null ? CbJson.Str(error) : "null").Append('}');
             return b.ToString();
         }
-        private static void AppendHtfBars(StringBuilder b, List<double[]> bars, double fromT)
-        {
-            b.Append('[');
-            bool first = true;
-            if (bars != null)
-                foreach (double[] x in bars)
-                {
-                    if (x[0] < fromT) continue;
-                    if (!first) b.Append(','); first = false;
-                    b.Append('['); CbJson.AppendNum3(b, x[0]);
-                    for (int k = 1; k < 5; k++) { b.Append(','); CbJson.AppendNum(b, x[k]); }
-                    b.Append(','); CbJson.AppendLong(b, (long)x[5]); b.Append(']');
-                }
-            b.Append(']');
-        }
-
         private static void HtfAsk(HtfSeries s, Instrument inst, DateTime today)
         {
             GateJob j = new GateJob { Kind = "htf", Root = s.Root + " " + s.Tf, TimeoutMs = HtfTimeoutMs, FreesGate = true };
@@ -3927,6 +3997,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             j.OnTimeout = () => HtfFailed(s, "NinjaTrader did not answer within " + (HtfTimeoutMs / 1000) + " s");
             j.OnStuck = stuck => HtfFailed(s, "NinjaTrader has not answered an earlier request (" + stuck + ") yet");
             j.OnDropped = () => HtfFailed(s, "ChartBridge stopped before the request went out");
+            j.OnExpire = why => HtfFailed(s, why);
             j.QueuedMs = queuedMs;
             string stuckNow; bool stopped;
             lock (GateLock)
@@ -3978,12 +4049,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { bars = HtfFromBars(s.Tf, raw); }
             catch (Exception ex) { HtfFailed(s, "could not read the bars: " + ex.Message); return; }
             List<KeyValuePair<ChartBridgeClient, string>> waiters;
-            string name;
+            HtfSnap snap;
             lock (HtfLock)
             {
                 if (!s.Asking) { s.Collect = null; return; }   // stopped meanwhile (Stop clears the series)
                 while (bars.Count > HtfKeep) bars.RemoveAt(0);
-                s.Bars = bars; s.Day = today; s.Stale = false; s.Error = null; s.FailedMs = -1; s.CallbackMs = cbMs; s.AnsweredMs = ChartBridgeTime.NowUtcMs();
+                s.Bars = bars; s.Gen++; s.Day = today; s.Stale = false; s.Error = null; s.FailedMs = -1; s.CallbackMs = cbMs; s.AnsweredMs = ChartBridgeTime.NowUtcMs();
                 if (s.Collect != null)
                 {
                     ChartBridgeTime.EtCache et = new ChartBridgeTime.EtCache();
@@ -3992,30 +4063,31 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 s.Asking = false; s.Version++;
                 waiters = new List<KeyValuePair<ChartBridgeClient, string>>(s.Waiters); s.Waiters.Clear();
-                name = s.Name; s.Served += waiters.Count;
+                s.Served += waiters.Count;
+                snap = HtfSnapLocked(s);
             }
-            foreach (KeyValuePair<ChartBridgeClient, string> w in waiters)
-            {
-                string json; lock (HtfLock) json = HtfJson(s.Root, s.Tf, w.Value, name, s.Bars, null);
-                w.Key.Send(json);
-            }
+            string text = HtfBarsText(s, snap);   // once, with no lock held (review B2 S2)
+            foreach (KeyValuePair<ChartBridgeClient, string> w in waiters) { w.Key.Send(HtfJson(s.Root, s.Tf, w.Value, snap.Name, text, null)); HtfHasHistory(w.Key, s.Root, s.Tf, snap); }
         }
 
         // A request that failed: its pages get the bars ChartBridge already has (kept live), or none and the reason.
         private static void HtfFailed(HtfSeries s, string why)
         {
             List<KeyValuePair<ChartBridgeClient, string>> waiters;
+            HtfSnap snap = null;
             lock (HtfLock)
             {
                 if (!s.Asking) return;
                 s.Asking = false; s.Collect = null; s.Error = why; s.FailedMs = ChartBridgeTime.NowUtcMs();
                 waiters = new List<KeyValuePair<ChartBridgeClient, string>>(s.Waiters); s.Waiters.Clear();
+                if (s.Bars != null) snap = HtfSnapLocked(s);
             }
             Log("higher-timeframe bars " + s.Root + " " + s.Tf + ": " + why);
+            string text = snap != null ? HtfBarsText(s, snap) : null;
             foreach (KeyValuePair<ChartBridgeClient, string> w in waiters)
             {
-                string json; lock (HtfLock) json = s.Bars != null ? HtfJson(s.Root, s.Tf, w.Value, s.Name, s.Bars, null) : HtfJson(s.Root, s.Tf, w.Value, null, null, why);
-                w.Key.Send(json);
+                if (snap != null) { w.Key.Send(HtfJson(s.Root, s.Tf, w.Value, snap.Name, text, null)); HtfHasHistory(w.Key, s.Root, s.Tf, snap); }
+                else w.Key.Send(HtfJson(s.Root, s.Tf, w.Value, null, null, why));
             }
         }
 
@@ -4029,20 +4101,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (c.Htf) { if (c.Htf.Count == 0) continue; watches = c.Htf.Values.ToList(); }
                 foreach (HtfWatch w in watches)
                 {
-                    string json = null;
+                    List<double[]> bars = new List<double[]>(2);
+                    int version; double lastT;
+                    lock (c.Htf) { if (!w.HasHistory) continue; }   // N5: only a page that has this series' bars
                     lock (HtfLock)
                     {
                         HtfSeries s;
                         if (!Htf.TryGetValue(w.Root + " " + w.Tf, out s) || s.Bars == null || s.Bars.Count == 0 || s.Version == w.Version) continue;
-                        double lastT = s.Bars[s.Bars.Count - 1][0];
+                        lastT = s.Bars[s.Bars.Count - 1][0];
                         double from = w.LastT == double.MinValue ? lastT : Math.Min(w.LastT, lastT);
-                        StringBuilder b = new StringBuilder(160);
-                        b.Append("{\"type\":\"htfBar\",\"root\":").Append(CbJson.Str(w.Root)).Append(",\"tf\":").Append(CbJson.Str(w.Tf)).Append(",\"bars\":");
-                        AppendHtfBars(b, s.Bars, from);
-                        json = b.Append('}').ToString();
-                        w.Version = s.Version; w.LastT = lastT;
+                        for (int i = Math.Max(0, s.Bars.Count - 3); i < s.Bars.Count; i++) if (s.Bars[i][0] >= from) bars.Add((double[])s.Bars[i].Clone());
+                        version = s.Version;
                     }
-                    c.Send(json);
+                    StringBuilder b = new StringBuilder(200);
+                    b.Append("{\"type\":\"htfBar\",\"root\":").Append(CbJson.Str(w.Root)).Append(",\"tf\":").Append(CbJson.Str(w.Tf)).Append(",\"bars\":[");
+                    for (int i = 0; i < bars.Count; i++) { if (i > 0) b.Append(','); AppendHtfBar(b, bars[i]); }
+                    b.Append("]}");
+                    lock (c.Htf) { w.Version = version; w.LastT = lastT; }
+                    c.Send(b.ToString());
                 }
             }
         }
@@ -4058,7 +4134,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<GateJob> old = new List<GateJob>();
             double now = ChartBridgeTime.NowUtcMs();
             lock (GateLock) { old = GateHtfJobs.Where(x => now - x.QueuedMs > HtfQueueMs).ToList(); foreach (GateJob x in old) GateHtfJobs.Remove(x); }
-            foreach (GateJob x in old) { try { x.OnStuck("none: the chart's own requests kept the gate busy for " + (HtfQueueMs / 1000) + " s"); } catch (Exception) { } }
+            foreach (GateJob x in old) { try { if (x.OnExpire != null) x.OnExpire("not asked: the chart's own requests kept NinjaTrader busy for " + (HtfQueueMs / 1000) + " s; ask again"); } catch (Exception) { } }
         }
         private static string HtfDiagJson()
         {
@@ -4104,14 +4180,35 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (root == null || (d.ContainsKey("id") && id == null)) { RefuseRequest(client, "weekProfile", "root must be a string, id a whole number"); return; }
             Instrument inst = InstrumentFor(root);
             if (inst == null) { client.Send("{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(root) + ",\"id\":" + (id ?? "null") + ",\"tick\":null,\"sessions\":[],\"rows\":[],\"error\":" + CbJson.Str("ChartBridge does not serve " + root) + "}"); return; }
-            RootBook book = BookOf(root, inst);
-            DateTime nowEt = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern);
+            // review B2 S2: one answer in progress per page; requests meanwhile are folded into one more answer (the latest id)
+            lock (client.Htf)
+            {
+                if (client.WeekBusy) { client.WeekAgain = true; client.WeekAgainRoot = root; client.WeekAgainId = id; return; }
+                client.WeekBusy = true;
+            }
             Task.Run(() =>
             {
-                try { client.Send(WeekProfileJson(book, id, nowEt)); }
-                catch (Exception ex) { Log("weekly profile error: " + ex.Message); client.Send("{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(root) + ",\"id\":" + (id ?? "null") + ",\"tick\":null,\"sessions\":[],\"rows\":[],\"error\":" + CbJson.Str(ex.Message) + "}"); }
+                string r = root, i = id;
+                while (true)
+                {
+                    try
+                    {
+                        Instrument ri = InstrumentFor(r);
+                        if (ri == null) client.Send("{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(r) + ",\"id\":" + (i ?? "null") + ",\"tick\":null,\"sessions\":[],\"rows\":[],\"error\":" + CbJson.Str("ChartBridge does not serve " + r) + "}");
+                        else client.Send(WeekProfileJson(BookOf(r, ri), i, TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern)));
+                    }
+                    catch (Exception ex) { Log("weekly profile error: " + ex.Message); client.Send("{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(r) + ",\"id\":" + (i ?? "null") + ",\"tick\":null,\"sessions\":[],\"rows\":[],\"error\":" + CbJson.Str(ex.Message) + "}"); }
+                    lock (client.Htf)
+                    {
+                        if (!client.WeekAgain) { client.WeekBusy = false; return; }
+                        client.WeekAgain = false; r = client.WeekAgainRoot; i = client.WeekAgainId;
+                    }
+                }
             });
         }
+        // The answer's body after its id, per root, kept while the same session tables answer (review B2 S2): a repeat is
+        // served from here, with nothing copied under the book's lock.
+        private static readonly Dictionary<string, string[]> WeekCache = new Dictionary<string, string[]>();   // root -> {key, body}
         // The last `count` finished sessions at New York time nowEt: days with a Globex session whose 17:00 ET close has passed.
         public static List<DateTime> FinishedSessions(DateTime nowEt, int count)
         {
@@ -4142,20 +4239,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                     book.PastLoaded = true;
                 }
             }
-            // per session: price -> volume, copied under the book's lock (a finished table never changes; the running one is
-            // never listed), summed with no lock held
+            // which table answers each day, found under the book's lock (a few lookups); the cache key says which they are
             List<SessionTable> tables = new List<SessionTable>();
+            SessionTable live = null; long liveTrades = 0;
+            StringBuilder kb = new StringBuilder();
             lock (book.Sync)
+            {
                 foreach (DateTime d in days)
                 {
                     SessionTable t;
                     if (!book.Past.TryGetValue(d, out t)) t = null;
-                    if (t == null && book.Table != null && SessionTable.TradingDate(book.Table.StartEt) == d) t = book.Table;   // finished, the next not begun yet
+                    if (t == null && book.Table != null && SessionTable.TradingDate(book.Table.StartEt) == d) { t = book.Table; live = t; liveTrades = t.Trades; }   // finished, the next not begun yet
                     if (t == null && book.Last != null && SessionTable.TradingDate(book.Last.StartEt) == d) t = book.Last;
                     tables.Add(t);
+                    kb.Append(d.ToString("yyyyMMdd", CultureInfo.InvariantCulture)).Append(':').Append(t == null ? "-" : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(t) + "/" + t.Volume + "/" + t.Vol.Count + "/" + (t.Whole ? 1 : 0) + (t.Dropped ? "d" : "")).Append(t == live ? "/" + liveTrades : "").Append(';');
                 }
+            }
+            string key = kb.ToString(), head = "{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(book.Root) + ",\"id\":" + (id ?? "null");
+            lock (WeekCache) { string[] c; if (WeekCache.TryGetValue(book.Root, out c) && c[0] == key) return head + c[1]; }
+            // per session: price -> volume. A finished table that is Last or kept in Past never changes and is read with no lock;
+            // only the book's current table (finished, in the 17:00 break) is copied under the book's lock. Summed with none held.
             StringBuilder b = new StringBuilder(4096);
-            b.Append("{\"type\":\"weekProfile\",\"root\":").Append(CbJson.Str(book.Root)).Append(",\"id\":").Append(id ?? "null").Append(",\"tick\":").Append(CbJson.Num(book.Tick));
+            b.Append(",\"tick\":").Append(CbJson.Num(book.Tick));
             b.Append(",\"sessions\":[");
             Dictionary<long, long> all = new Dictionary<long, long>();
             for (int i = 0; i < days.Count; i++)
@@ -4166,7 +4271,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (t == null) { b.Append(",\"missing\":").Append(CbJson.Str("no table: ChartBridge was not running for this session, or its file is gone")).Append('}'); continue; }
                 Dictionary<long, long> rows = new Dictionary<long, long>();
                 long[] keys, vals;
-                lock (book.Sync) { keys = t.Vol.Keys.ToArray(); vals = t.Vol.Values.ToArray(); }
+                if (t == live) lock (book.Sync) { keys = t.Vol.Keys.ToArray(); vals = t.Vol.Values.ToArray(); }
+                else { keys = t.Vol.Keys.ToArray(); vals = t.Vol.Values.ToArray(); }
                 for (int k = 0; k < keys.Length; k++)
                 {
                     long p = (long)(uint)(keys[k] & 0xFFFFFFFFL), was;   // as the profile rows read it
@@ -4181,7 +4287,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 b.Append('}');
             }
             b.Append("],\"rows\":"); AppendPriceRows(b, all);
-            return b.Append(",\"error\":null}").ToString();
+            string body = b.Append(",\"error\":null}").ToString();
+            lock (WeekCache) WeekCache[book.Root] = new[] { key, body };
+            return head + body;
         }
         private static void AppendPriceRows(StringBuilder b, Dictionary<long, long> rows)
         {

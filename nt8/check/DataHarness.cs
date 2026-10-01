@@ -182,7 +182,7 @@ public static class DataHarness
     static void Settlement()
     {
         // which session a value settles, from NinjaTrader's time on it; and which session's settlement is the prior now
-        Func<DateTime, string> SD = nt => { DateTime? d = ChartBridgeServer.SettlementDay(nt); return d.HasValue ? d.Value.ToString("yyyy-MM-dd") : "null"; };
+        Func<DateTime, string> SD = nt => { DateTime? d = ChartBridgeServer.SettlementDay(nt, Et(2026, 10, 5, 11, 0, 0)); return d.HasValue ? d.Value.ToString("yyyy-MM-dd") : "null"; };
         Check(SD(Et(2026, 9, 28, 16, 15, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 17, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 10, 0, 0)) == "null" && SD(Et(2026, 9, 28, 18, 30, 0)) == "null"
               && SD(Et(2026, 9, 28, 15, 0, 0)) == "null",
             "settlement day: stamped 16:15 or 17:59 ET is that day's; stamped inside a later session (10:00 the next day, 18:30) or before 16:00 is not known (null)");
@@ -190,6 +190,9 @@ public static class DataHarness
             "settlement day: over a weekend (Saturday, Sunday 17:59) it is Friday's; after Sunday's 18:00 open it is not known");
         Check(SD(Et(2026, 4, 3, 12, 0, 0)) == "2026-04-02" && SD(Et(2026, 1, 19, 13, 30, 0)) == "2026-01-19" && SD(new DateTime(2026, 9, 28)) == "2026-09-28" && SD(new DateTime(2026, 10, 3)) == "null",
             "settlement day: Good Friday 2026 (no session) is Thursday's; MLK Day's halt settles at noon; a date-only stamp is its date (a Saturday is none)");
+        DateTime? early = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 10, 0, 0)), late = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 16, 30, 0));
+        Check(!early.HasValue && late.HasValue && late.Value == new DateTime(2026, 9, 29),
+            "settlement day (review B2 N1): a date-only stamp for today counts only once today's settlement time has passed (10:00: not known; 16:30: today's)");
         Func<int, int, int, int, int, string> PR = (y, mo, d, h, mi) => ChartBridgeCme.PreviousSession(ChartBridgeCme.CurrentSession(new DateTime(y, mo, d, h, mi, 0))).ToString("yyyy-MM-dd");
         Check(PR(2026, 9, 29, 11, 0) == "2026-09-28" && PR(2026, 9, 29, 16, 20) == "2026-09-28" && PR(2026, 9, 29, 17, 59) == "2026-09-28" && PR(2026, 9, 29, 18, 0) == "2026-09-29",
             "prior: on Tuesday, Monday's until 18:00 (the 16:15 to 18:00 window included), then Tuesday's");
@@ -250,8 +253,9 @@ public static class DataHarness
             Check(sat.EndsWith(SetOf("MNQ", "21480", "2026-10-01")) && sun.EndsWith(SetOf("MNQ", "21500", "2026-10-02")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "21500", "2026-10-02"))
                   && Of(a, "settlement").Contains(Msg("MNQ", "21500", "2026-10-02")),
                 "settlement, weekend: Saturday still Thursday's; from Sunday 18:00 to Monday 17:00 Friday's (" + sat + " | " + sun + ")");
-            string[] file = File.ReadAllLines(SettleFile());
-            Check(file.Length == 2 && file[0] == "MNQ 2026-10-01 21480" && file[1] == "MNQ 2026-10-02 21500", "settlement: settlements.txt keeps the last two dated values per root: " + string.Join(" | ", file));
+            string[] file = new string[0];
+            WaitFor(() => { try { file = File.Exists(SettleFile()) ? File.ReadAllLines(SettleFile()) : new string[0]; } catch (IOException) { } return file.Length == 2 && file[1].StartsWith("MNQ 2026-10-02"); });
+            Check(file.Length == 2 && file[0] == "MNQ 2026-10-01 21480 MNQ 12-26" && file[1] == "MNQ 2026-10-02 21500 MNQ 12-26", "settlement: settlements.txt keeps the last two dated values per root, each with its contract (written off NinjaTrader's thread): " + string.Join(" | ", file));
             // a restart on Sunday evening: the prior comes from the file
             ResetSettlements(false);
             simNow = Et(2026, 10, 4, 19, 0, 0);
@@ -260,6 +264,23 @@ public static class DataHarness
             Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21500", "2026-10-02")), "settlement, restart: read back from settlements.txt, a restart on Sunday evening still knows Friday's");
             simNow = Et(2026, 10, 4, 17, 0, 0);
             Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21480", "2026-10-01")), "settlement, restart: and before Sunday's open, Thursday's (both days are kept)");
+            // review B2 S1: a restart on the roll day. settlements.txt has the old contract's values: they are not the new one's prior
+            Instrument mar = Inst("MNQ 03-27", "MNQ", 0.25);
+            Named()["MNQ"] = mar;
+            try
+            {
+                ResetSettlements(false);
+                File.WriteAllLines(SettleFile(), new[] { "MNQ 2026-12-08 21000 MNQ 12-26", "MNQ 2026-12-09 21010.5 MNQ 12-26", "NQ 2026-12-09 25000 NQ 12-26", "ES 2026-12-09 6000" });
+                simNow = Et(2026, 12, 10, 10, 0, 0);
+                Priv("LoadSettlements");
+                Check(HelloOf("MNQ").Contains("\"name\":\"MNQ 03-27\"") && HelloOf("MNQ").EndsWith(SetOf("MNQ", "null", "2026-12-09")) && HelloOf("NQ").EndsWith(SetOf("NQ", "25000", "2026-12-09")),
+                    "settlement, restart on the roll day (review B2 S1): MNQ 12-26's values in settlements.txt are not MNQ 03-27's prior (null); NQ, still 12-26, keeps its own; an old line without its contract is ignored: " + HelloOf("MNQ"));
+                Check(Logged("settlements.txt: 3 line(s) not for a contract served now (or unreadable) ignored"), "settlement: the ignored lines are said in the Output window");
+                SettleEvent(mar, 21250.75, Et(2026, 12, 9, 16, 15, 0), false);
+                Thread.Sleep(200);
+                Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21250.75", "2026-12-09")), "settlement: the new contract's own value for the day before is its prior");
+            }
+            finally { Named()["MNQ"] = mnq; ResetSettlements(true); }
 
             // a holiday: Good Friday 2026 has no session; Thursday's settlement is the prior from Sunday 18:00
             ResetSettlements(true);
@@ -339,7 +360,8 @@ public static class DataHarness
             int m0 = MadeCount();
             // a Range chart is loading (its minute history not answered yet): the 4h request waits
             Msg(load, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"days\":5,\"tickHours\":2,\"sub\":1,\"liveFirst\":true}");
-            Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"4h\",\"id\":42}");
+            for (int r = 0; r < 50; r++) Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"4h\",\"id\":" + (r == 49 ? 42 : 100 + r) + "}");   // a page repeating itself
+            Check(((string)Priv("HtfDiagJson")).Contains("\"waiting\":1,"), "htf (review B2 S2): 50 requests from one page while it waits: one waiter (its latest id)");
             Thread.Sleep(700);
             Check(!Made(m0).Any(IsHtf) && Gate().Contains("\"htfQueued\":1"), "htf: while a chart is loading the 4h request waits at the gate (never beside a chart load): " + Gate());
             foreach (BarsRequest r in Made(m0).Where(IsMinute1)) r.Answer(new Bars(), ErrorCode.NoError);
@@ -358,6 +380,8 @@ public static class DataHarness
             Check(Gate().Contains("\"now\":\"htf MNQ 4h\""), "htf: /diag shows it at the gate: " + Gate());
             h.Answer(FourHours(), ErrorCode.NoError);
             Check(WaitFor(() => Of(la, "htf").Count == 1), "htf: the page gets its answer");
+            Thread.Sleep(100);
+            Check(Of(la, "htf").Count == 1, "htf: one answer for the 50 requests, not 50");
             string ans = Of(la, "htf")[0];
             Check(ans.StartsWith("{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"4h\",\"id\":42,\"name\":\"MNQ 12-26\",\"bars\":[[" + N(Wall(2026, 9, 25, 10, 0)) + ",25000,25010,24990,25005,1000],[" + N(Wall(2026, 9, 25, 14, 0)) + ",25001,")
                   && ans.Contains("[" + N(Wall(2026, 9, 27, 18, 0)) + ",25002,") && ans.Contains("[" + N(Wall(2026, 9, 29, 10, 0)) + ",25012,25022,25002,25017,1012]]") && ans.EndsWith(",\"error\":null}"),
@@ -411,11 +435,20 @@ public static class DataHarness
             // a later trading day: asked again (the session's bars are NinjaTrader's again)
             simNow = Et(2026, 9, 30, 9, 0, 0);
             int m4 = MadeCount();
+            List<string> ln = new List<string>(); ChartBridgeClient fresh = Page(5205, ln);
             Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"4h\",\"id\":44}");
+            Msg(fresh, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"4h\"}");   // a new page, waiting on the same request
             BarsRequest h2 = null;
             Check(WaitFor(() => (h2 = Made(m4).FirstOrDefault(IsHtf)) != null), "htf: a request in the next trading day asks NinjaTrader again");
+            Trade(mnq, Et(2026, 9, 30, 9, 0, 0.5), 25003, 1);
+            Priv("HtfPush");
+            Check(Of(ln, "htfBar").Count == 0, "htf (review B2 N5): a page still waiting for its bars gets no htfBar");
             if (h2 != null) h2.Answer(FourHours(), ErrorCode.NoError);
-            Check(WaitFor(() => Of(la, "htf").Any(x => x.Contains("\"id\":44"))), "htf: and answers");
+            Check(WaitFor(() => Of(la, "htf").Any(x => x.Contains("\"id\":44"))) && WaitFor(() => Of(ln, "htf").Count == 1), "htf: and answers both pages");
+            Trade(mnq, Et(2026, 9, 30, 9, 0, 1), 25004, 1);
+            Priv("HtfPush");
+            Check(Of(ln, "htfBar").Count == 1, "htf: once it has the bars, it gets htfBar");
+            Drop(fresh);
             // 1D and 1W: Day 1 and Week 1 requests
             int m5 = MadeCount();
             Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"1D\"}");
@@ -451,6 +484,7 @@ public static class DataHarness
         DateTime t0 = Et(2026, 9, 29, 11, 0, 0);
         simNow = t0;
         ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        Check(ChartBridgeServer.HtfTimeoutMs == 15000 && ChartBridgeServer.HtfRetryMs == 60000, "htf (Anthony, 2026-10-01): given up after 15 s, asked again no sooner than 60 s later");
         int toWas = ChartBridgeServer.HtfTimeoutMs, fgWas = ChartBridgeServer.WindowFirstGuess;
         ChartBridgeServer.HtfTimeoutMs = 1000; ChartBridgeServer.WindowFirstGuess = 1000;
         List<string> la = new List<string>(), ll = new List<string>();
@@ -538,10 +572,20 @@ public static class DataHarness
                 "\"rows\":[[99999,4],[100000,8],[100001,3],[100002,12]],\"error\":null}";
             Check(w == expect, "week: 5 sessions oldest first, from memory, the last session, and the dated files; 10-02 said missing; a session with a drop says so; rows by price and their sum: " + (w == expect ? "as expected" : w + " AGAINST " + expect));
             Check(Made(m0).Count == 0, "week: no NinjaTrader request");
+            // a page repeating itself: one answer in progress, the requests meanwhile folded into one more (the latest id); the
+            // repeat comes from the cached answer, the same text
+            for (int r = 0; r < 200; r++) Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\",\"id\":" + (1000 + r) + "}");
+            WaitFor(() => Of(la, "weekProfile").Any(x => x.Contains("\"id\":1199,")));
+            Thread.Sleep(100);
+            List<string> wl = Of(la, "weekProfile");
+            string body0 = w.Substring(w.IndexOf(",\"tick\""));
+            Check(wl.Count >= 2 && wl.Count <= 201 && wl.Last().Contains("\"id\":1199,") && wl.Skip(1).All(x => x.Substring(x.IndexOf(",\"tick\"")) == body0),
+                "week (review B2 S2): 200 requests from one page, one answer in progress at a time: " + (wl.Count - 1) + " answers (the rest folded in), the last with the latest id, all the cached text");
+            int weekCount = wl.Count;
             Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\",\"days\":7}");
             Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\",\"id\":1.5}");
             Thread.Sleep(100);
-            Check(Of(la, "status").Count == 2 && Of(la, "status").All(x => x.Contains("ChartBridge refused a weekProfile message")) && Of(la, "weekProfile").Count == 1, "week: another key or a fraction is refused");
+            Check(Of(la, "status").Count == 2 && Of(la, "status").All(x => x.Contains("ChartBridge refused a weekProfile message")) && Of(la, "weekProfile").Count == weekCount, "week: another key or a fraction is refused");
 
             // a session that finishes live is kept, and written to its dated file for after a restart
             Trade(mnq, Et(2026, 10, 8, 16, 59, 0), 25000, 4);
@@ -552,8 +596,8 @@ public static class DataHarness
             ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow).AddDays(-30));   // a restart: nothing in memory
             simNow = Et(2026, 10, 9, 11, 0, 0);
             Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\"}");
-            Check(WaitFor(() => Of(la, "weekProfile").Count == 2), "week: answered after a restart");
-            string w2 = Of(la, "weekProfile")[1];
+            Check(WaitFor(() => Of(la, "weekProfile").Count == weekCount + 1), "week: answered after a restart");
+            string w2 = Of(la, "weekProfile")[weekCount];
             Check(w2.Contains("{\"date\":\"2026-10-08\",\"from\":") && w2.Contains("\"rows\":[[100000,4]]") && w2.Contains("{\"date\":\"2026-10-07\",\"missing\":") && w2.Contains("\"id\":null"),
                 "week: after a restart the sessions come from their files (10-08 here; 10-07 was only in memory, so missing)");
         }

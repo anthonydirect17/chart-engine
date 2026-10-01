@@ -11,17 +11,20 @@ message; the page that uses them is a later build.
   not used (null, never a guess). Today's settlement, in after the close, becomes the prior at 18:00 (over a weekend,
   Friday's from Sunday 18:00; across a CME holiday, the last session's). In `hello` per instrument (`settlement`,
   `settlementDate`), and `{"type":"settlement","root","p","date"}` to every page when the prior changes. The last two dated
-  values per root are kept in `settlements.txt`, so a restart in the evening still knows the prior. `/diag` `settlements`.
+  values per root are kept in `settlements.txt` with their contract (a line for another contract, as after a roll, is
+  ignored), read and written off NinjaTrader's thread, so a restart in the evening still knows the prior. `/diag` `settlements`.
 - **4h, 1D and 1W bars on request.** `{"type":"htf","root","tf","id"}` (strict). NinjaTrader's own 240-minute, day and week
   bars, 300 by count, through the gate last (only with no chart loading, no window or backfill out or queued, no minute
-  chart's last trades out); not answered in 60 s, it is given up and frees the gate. Kept per root and timeframe: a second
+  chart's last trades out); not answered in 15 s (Anthony), it is given up with the reason, frees the gate, and is asked
+  again no sooner than 60 s later. A page waits on a request once, answers are formatted once and outside the locks the
+  live trades take, and `htfBar` goes only to pages that have the bars. Kept per root and timeframe: a second
   page or a reload is served from memory; asked again on a later trading day or after a feed drop. The forming bar follows
   the live trades ChartBridge already has (no request per trade); a page that asked gets `htfBar` at most once a second
   while it changes. Bars are start-stamped (4h from the 18:00 ET open; 1D on the trading day; 1W on its Monday).
 - **Weekly volume profile on request.** `{"type":"weekProfile","root","id"}` (strict): the last 5 finished sessions' volume
   at price from the session tables, never a NinjaTrader request. Each finished table is now also kept as
   `profile-<ROOT>-<date>.txt` (14 days) so a restart still has the week; a session with no table is listed as missing, a
-  table that is not whole says so.
+  table that is not whole says so. One answer per page at a time, cached per root while the tables are the same.
 - **The old by-date tick load is removed** (replaced by the served window in 0.3.5): its request, the Bid and Ask history
   (`quoteHours`), the quote wait and their `/diag` fields (`sides.lastLoad`, `quotesOutstanding`, `seams.tickToAheadMin`,
   `tickRetriedEndingNow`), and the backfill's side join that only it used (`ClassifyBackfill`, `QuoteSeries`,
