@@ -1,11 +1,11 @@
 // The seam between the backfill and the live trades (ChartBridge 0.3.3), run for real on Mono.
 // First ChartBridgeSeam.Dedupe and TailFromTicks as pure functions (overlap, no overlap, a multiset at the last
 // time, all held older, none older, empty backfill, empty hold, whole-second backfill against millisecond live
-// trades, float noise in prices). Then the whole load through ChartBridgeServer's own Subscribe and OnMarketData,
-// with the stand-in BarsRequest answered by hand the way NinjaTrader calls back: what goes on the wire and in
-// what order, the tick request asking past now, a refused request asked again ending now, minute charts, and a
-// load for an older subscribe sending nothing. Then the fixes from the review of 0.3.3 (S1 to S4: trades held
-// after NinjaTrader answered, the minute boundary, a resubscribe mid-send and the subscribe id, an empty answer).
+// trades, float noise in prices). Then minute chart loads through ChartBridgeServer's own Subscribe and OnMarketData,
+// with the stand-in BarsRequest answered by hand the way NinjaTrader calls back: what goes on the wire and in what
+// order, the forming minute rebuilt from the last trades, a load for an older subscribe sending nothing, an empty
+// answer, a resubscribe mid-send and the subscribe id. (0.3.7: the by-date tick load and its cases are gone; the
+// served window's seam is in WindowHarness.)
 // Made-up prices; nothing here is market data.
 using System;
 using System.Collections.Generic;
@@ -39,11 +39,11 @@ public static class SeamHarness
     {
         Check = check;
         ChartBridgeServer.BackfillOn = false;   // 0.3.5: only WindowHarness's own case runs the session backfill
-        ChartBridgeServer.ByDateTickLoads = true;   // 0.3.5 never runs 0.3.4's by-date tick load; these cases test it (WindowHarness turns it off)
         Pure();
         Load();
         WindowHarness.Run(Check);   // 0.3.5: the session tables and the trade text (check/WindowHarness.cs)
         BarsHarness.Run(Check);     // 0.3.6: the daily 1-minute bars to The Desk, through the gate (check/BarsHarness.cs)
+        DataHarness.Run(Check);     // 0.3.7: settlement, higher-timeframe bars, the weekly profile, the gate's stop edges, CME holidays (check/DataHarness.cs)
     }
 
     // ------------------------------------------------------------ the pure functions
@@ -139,8 +139,7 @@ public static class SeamHarness
     }
     static List<string> Sent() { lock (sent) return sent.ToList(); }
     static bool WaitFor(Func<bool> ok) { for (int i = 0; i < 300 && !ok(); i++) Thread.Sleep(10); return ok(); }
-    // Since 0.3.4 a tick chart also asks for historical Bid and Ask ticks. Req and Reqs count only the minute and trade
-    // requests, so the 0.3.3 cases read as before; the quote requests are answered by QuoteAnswer (SidesHarness.cs).
+    // Req and Reqs count only the minute and trade requests (0.3.7: no quote request is ever made now; kept as a guard).
     static bool IsQuote(BarsRequest r) { return r.BarsPeriod != null && r.BarsPeriod.MarketDataType != MarketDataType.Last; }
     static List<BarsRequest> TradeReqs() { lock (BarsRequest.Made) return BarsRequest.Made.Where(r => !IsQuote(r)).ToList(); }
     static BarsRequest Req(int i) { List<BarsRequest> l = TradeReqs(); return l.Count > i ? l[i] : null; }
@@ -163,56 +162,14 @@ public static class SeamHarness
         client = new ChartBridgeClient(null, 77);
         client.Tap = s => { lock (sent) sent.Add(s); };
         clients[77] = client;
-        BarsRequest.AutoAnswer = SidesHarness.QuoteAnswer;   // no quote history unless a case sets one
-        try { TickChart(); MinuteChart(); Refused(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); WindowHarness.Load(Check, inst); }
+        BarsRequest.AutoAnswer = null;
+        try { MinuteChart(); Stale(); Empty(); ReviewFixes(); ReReview(); SidesHarness.Load(Check, client, inst, sent); WindowHarness.Load(Check, inst); }
         finally
         {
             BarsRequest.AutoAnswer = null;
             ChartBridgeClient gone; clients.TryRemove(77, out gone);
             if (was != null) instruments["MNQ"] = was; else instruments.Remove("MNQ");
         }
-    }
-
-    static void TickChart()
-    {
-        lock (sent) sent.Clear();
-        int r0 = Reqs();
-        DateTime before = DateTime.Now;
-        Priv("Subscribe", client, "MNQ", 5, 8);
-        BarsRequest minutes = Req(r0);
-        Check(minutes != null && minutes.To >= before.AddSeconds(-1) && minutes.To <= DateTime.Now.AddSeconds(1), "load: the minute request ends now (unchanged)");
-        Live(1.0, 21440.5, 4);      // delivered after the hold began, also in the backfill
-        Live(1.2, 21440.75, 1);     // after the backfill's end
-        Check(Sent().Count == 0 && !client.Ready, "load: live trades are held while the backfill loads");
-        minutes.Answer(Minutes(new double[] { 0, 21430, 21439, 21429, 21438, 50 }, new double[] { 60, 21438, 21441, 21437, 21439, 7 }), ErrorCode.NoError);
-        BarsRequest ticks = Req(r0 + 1);
-        Check(ticks != null && ticks.BarsBack < 0 && ticks.To >= minutes.To.AddMinutes(ChartBridgeServer.TickToMarginMinutes).AddSeconds(-1),
-            "load: the tick request asks " + ChartBridgeServer.TickToMarginMinutes + " minutes past now");
-        Check(ticks != null && ticks.From <= minutes.To.AddHours(-8).AddSeconds(1) && ticks.From >= minutes.To.AddHours(-8).AddSeconds(-1), "load: the tick request starts tickHours back");
-        Live(1.3, 21441, 2);        // still held
-        ticks.Answer(Ticks(new double[] { -30, 21438, 3 }, new double[] { 0, 21440, 2 }, new double[] { 0.5, 21440.25, 3 }, new double[] { 1.0, 21440.5, 4 }), ErrorCode.NoError);
-        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "load: ready is sent");
-        Thread.Sleep(30);
-        List<string> l = Sent();
-        int hist1 = Index(l, "\"type\":\"history\""), hist2 = l.FindLastIndex(s => s.Contains("\"type\":\"history\"")), tk = Index(l, "\"type\":\"ticks\""), rd = Index(l, "\"type\":\"ready\"");
-        Check(hist1 >= 0 && hist1 < hist2 && hist2 < tk && tk < rd, "load: order on the wire: minute history, its last bar, ticks, ready");
-        Check(l[hist1].Contains("\"done\":false") && !l[hist1].Contains("21441,") && l[hist2].Contains("\"done\":true"),
-            "load: the forming minute is held back from the first history message; the last one says done");
-        // The forming bar (close 10:01) rebuilt from the ticks after 10:00:00.000 (the one at exactly 10:00 is in the bar
-        // ending then): O 21440.25 H 21440.5 L 21440.25 C 21440.5 V 7, not under NinjaTrader's 7.
-        Check(l[hist2].Contains(",21440.25,21440.5,21440.25,21440.5,7]"), "load: the forming minute rebuilt from the ticks (" + l[hist2] + ")");
-        List<string> after = l.Skip(rd + 1).ToList();
-        Check(after.Count == 2 && after[0].Contains("\"p\":21440.75") && after[1].Contains("\"p\":21441"),
-            "load: after ready only the held trades not in the backfill, in order (" + after.Count + " sent)");
-        Live(1.4, 21441.25, 1);
-        Check(Sent().Last().Contains("\"p\":21441.25") && client.Ready, "load: then live trades go straight out");
-        WaitFor(() => Seams() != "[]");   // MarkReady notes the seam just after it marks the page ready (the test can get there first)
-        string seams = Seams();
-        Check(seams.Contains("\"held\":3") && seams.Contains("\"droppedAsDuplicate\":1") && seams.Contains("\"released\":2") && seams.Contains("\"lastBackfillTick\":\"2026-09-29 ")
-              && seams.Contains("\"tickToAheadMin\":60") && seams.Contains("\"minuteTailRebuilt\":1") && seams.Contains("\"resolutionMs\":1") && seams.Contains("\"overlapMs\":0"),
-            "diag: the seam is in /diag (" + seams + ")");
-        string diag = (string)Priv("DiagJson");
-        Check(diag.Contains("\"seams\":[{"), "diag: /diag has seams");
     }
 
     static void MinuteChart()
@@ -250,72 +207,42 @@ public static class SeamHarness
             "minute chart, short ticks: NinjaTrader's minute kept and every held trade released (as 0.3.2)");
     }
 
-    static void Refused()
-    {
-        lock (sent) sent.Clear();
-        int r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);
-        Live(1.2, 21440.75, 1);
-        Req(r0).Answer(Minutes(new double[] { 60, 21438, 21441, 21437, 21439, 7 }), ErrorCode.NoError);
-        Req(r0 + 1).Answer(new Bars(), ErrorCode.Panic);
-        BarsRequest again = Req(r0 + 2);
-        Check(again != null && again.To <= DateTime.Now.AddSeconds(1) && again.To >= DateTime.Now.AddMinutes(-1), "refused: a tick request ending in the future that fails is asked again ending now");
-        Check(Index(Sent(), "Tick history failed") < 0, "refused: no warning for the first refusal");
-        again.Answer(Ticks(new double[] { 0, 21440, 2 }, new double[] { 1.0, 21440.5, 4 }), ErrorCode.NoError);
-        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Seams().Contains("\"tickRetriedEndingNow\":true"), "refused: loads, and /diag says it was asked again");
-
-        lock (sent) sent.Clear();
-        r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);
-        Live(1.2, 21440.75, 1);
-        Req(r0).Answer(Minutes(new double[] { 60, 21438, 21441, 21437, 21439, 7 }), ErrorCode.NoError);
-        Req(r0 + 1).Answer(new Bars(), ErrorCode.Panic);
-        Req(r0 + 2).Answer(new Bars(), ErrorCode.Panic);
-        Check(Reqs() == r0 + 3, "refused twice: asked again only once");
-        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "refused twice: ready is still sent");
-        Thread.Sleep(30);
-        List<string> l = Sent();
-        int rd = Index(l, "\"type\":\"ready\"");
-        Check(Index(l, "Tick history failed") >= 0 && l.Skip(rd + 1).Count() == 1 && l.Take(rd).Any(s => s.Contains(",21438,21441,21437,21439,7]")),
-            "refused twice: the warning, NinjaTrader's minute, and the held trade released (as 0.3.2)");
-    }
-
+    // 0.3.7: the by-date tick load is gone (every tick chart gets the served window, WindowHarness), so the load cases here run
+    // on minute charts: the minute history, then the last trades for the forming minute.
     static void Stale()
     {
         lock (sent) sent.Clear();
         int r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);   // the page then asks again (say for more tick hours)
+        Priv("Subscribe", client, "MNQ", 5, 0);   // the page then asks again
         Live(1.0, 21440.5, 4);
-        Priv("Subscribe", client, "MNQ", 5, 33);
+        Priv("Subscribe", client, "MNQ", 5, 0);
         Check(client.Pending.Count == 0, "stale: a new subscribe starts a fresh hold");
         Live(1.2, 21440.75, 1);
         Req(r0).Answer(Minutes(new double[] { 60, 1, 1, 1, 1, 1 }), ErrorCode.NoError);   // the old load answers first
         Thread.Sleep(50);
-        Check(Sent().Count == 0 && Reqs() == r0 + 2, "stale: the older load sends nothing and asks for no ticks");
-        Req(r0 + 1).Answer(Minutes(new double[] { 60, 21438, 21441, 21437, 21439, 7 }), ErrorCode.NoError);
-        Req(r0 + 2).Answer(Ticks(new double[] { 0, 21440, 2 }, new double[] { 1.0, 21440.5, 4 }), ErrorCode.NoError);
+        Check(Sent().Count == 0 && Reqs() == r0 + 2, "stale: the older load sends nothing and asks for no trades");
+        Req(r0 + 1).Answer(Minutes(new double[] { 0, 21430, 21439, 21429, 21438, 50 }, new double[] { 60, 21438, 21441, 21437, 21439, 7 }), ErrorCode.NoError);
+        Req(r0 + 2).Answer(Ticks(new double[] { -30, 21438, 3 }, new double[] { 0.5, 21440.25, 3 }, new double[] { 1.0, 21440.5, 4 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "stale: the newer load completes");
         Thread.Sleep(30);
         List<string> l = Sent();
         Check(l.Count(s => s.Contains("\"type\":\"ready\"")) == 1 && !l.Any(s => s.Contains("[1,1,1,1,1]") || s.Contains(",1,1,1,1,1]")), "stale: one ready, nothing from the older load");
-        Check(l.Skip(Index(l, "\"type\":\"ready\"") + 1).Count() == 1, "stale: the held trade from before the new subscribe is not sent (it is in the new backfill)");
+        Check(l.Skip(Index(l, "\"type\":\"ready\"") + 1).Count() == 1, "stale: the held trade from before the new subscribe is not sent (only the one after it)");
     }
 
     static void Empty()
     {
         lock (sent) sent.Clear();
         int r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);
+        Priv("Subscribe", client, "MNQ", 5, 0);
         Live(1.0, 21440.5, 4);
         Live(1.2, 21440.75, 1);
         Req(r0).Answer(new Bars(), ErrorCode.NoError);
-        Req(r0 + 1).Answer(new Bars(), ErrorCode.NoError);   // empty from the request ending in the future: asked again (S4)
-        Req(r0 + 2).Answer(new Bars(), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "empty: ready is sent");
         Thread.Sleep(30);
         List<string> l = Sent();
-        Check(l.Skip(Index(l, "\"type\":\"ready\"") + 1).Count() == 2 && l.Any(s => s.Contains("\"bars\":[],\"done\":true")) && l.Any(s => s.Contains("\"ticks\":[],\"done\":true")),
-            "empty: an empty history and backfill say done, and every held trade is released");
+        Check(Reqs() == r0 + 1 && l.Skip(Index(l, "\"type\":\"ready\"") + 1).Count() == 2 && l.Any(s => s.Contains("\"bars\":[],\"done\":true")),
+            "empty: an empty minute history says done, no last trades are asked, and every held trade is released");
     }
 
     // ------------------------------------------------------------ fixes from the review of 0.3.3 (review_seam.md S1 to S4)
@@ -324,29 +251,6 @@ public static class SeamHarness
 
     static void ReviewFixes()
     {
-        // S1: whole-second backfill answered inside its last second. a (pre-hold) and b are in it at second 10;
-        // c came after NinjaTrader answered, with the same price and size: a real trade, never a duplicate.
-        lock (sent) sent.Clear();
-        int r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);
-        Live(10.3, 100, 1);                                   // b: held before the answer
-        Req(r0).Answer(Minutes(new double[] { 0, 1, 1, 1, 1, 1 }, new double[] { 60, 90, 100, 90, 100, 30 }), ErrorCode.NoError);
-        List<double[]> back = WholeSeconds(20, -10).ToList();
-        back.Add(new double[] { 10, 100, 1 }); back.Add(new double[] { 10, 100, 1 });   // a and b, stamped 10
-        lock (client.Pending)   // MarkReady waits for this lock, so c and d are held after the answer, before ready
-        {
-            Req(r0 + 1).Answer(Ticks(back.ToArray()), ErrorCode.NoError);
-            Live(10.8, 100, 1);                               // c: after the answer, same price and size as a and b
-            Live(11.2, 100.25, 1);                            // d
-        }
-        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "S1: ready is sent");
-        Thread.Sleep(30);
-        List<string> l = Sent();
-        List<string> after = l.Skip(Index(l, "\"type\":\"ready\"") + 1).ToList();
-        Check(after.Count == 2 && after[0].Contains("\"p\":100,") && after[1].Contains("\"p\":100.25"),
-            "S1: a trade held after NinjaTrader answered never matches at T (whole seconds): c and d released, b dropped (" + after.Count + " sent)");
-        Check(Seams().Contains("\"droppedAfterAnswer\":1") && Seams().Contains("\"heldAtAnswer\":1"), "S1: /diag says how many were held at the answer and what the old rule would have dropped");
-
         // S1 NIT: one held trade that lands on .000 by chance does not make the comparison whole-second.
         DateTime[] msBack = Enumerable.Range(0, 30).Select(i => At(i + 0.5)).ToArray();
         SeamResult r = ChartBridgeSeam.Dedupe(msBack, msBack.Select(t => 1.0).ToArray(), msBack.Select(t => 1L).ToArray(), msBack.Length, new List<SeamTick> { H(31, 1, 1) });
@@ -382,14 +286,14 @@ public static class SeamHarness
         Check(tail != null && tail.Count == 1 && tail.Volume[0] == 1 && tail.Open[0] == 7, "S2: a trade at exactly the minute's start stays in the bar that ends then (rebuilt volume " + (tail != null ? tail.Volume[0] : -1) + ")");
         // Rebuilt from ticks with less volume than NinjaTrader's own bar (tick data lagging): NinjaTrader's bar is kept.
         lock (sent) sent.Clear();
-        r0 = Reqs();
+        int r0 = Reqs();
         Priv("Subscribe", client, "MNQ", 5, 0);
         Live(1.0, 21440.5, 4);
         Req(r0).Answer(Minutes(new double[] { 0, 1, 1, 1, 1, 1 }, new double[] { 60, 21438, 21441, 21437, 21439, 50 }), ErrorCode.NoError);
         Req(r0 + 1).Answer(Ticks(new double[] { -30, 21438, 3 }, new double[] { 0.5, 21440.25, 3 }, new double[] { 1.0, 21440.5, 4 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "S2: ready is sent");
         Thread.Sleep(30);
-        l = Sent();
+        List<string> l = Sent();
         int rd = Index(l, "\"type\":\"ready\"");
         Check(l.Take(rd).Any(x => x.Contains(",21438,21441,21437,21439,50]")) && l.Skip(rd + 1).Count() == 1,
             "S2: rebuilt volume (7) under NinjaTrader's (50): NinjaTrader's bar kept, held trades all released");
@@ -407,12 +311,12 @@ public static class SeamHarness
             {
                 resubbed = true;
                 lock (sent) afterResub = sent.Count;
-                Priv("Subscribe", client, "MNQ", 5, 33);
+                Priv("Subscribe", client, "MNQ", 5, 0);
             }
         };
         try
         {
-            Priv("Subscribe", client, "MNQ", 5, 8);
+            Priv("Subscribe", client, "MNQ", 5, 0);
             Req(r0).Answer(Minutes(new double[] { 0, 1, 1, 1, 1, 1 }, new double[] { 60, 2, 2, 2, 2, 2 }), ErrorCode.NoError);
             Req(r0 + 1).Answer(Ticks(new double[] { -5, 3, 1 }, new double[] { 1, 3, 1 }), ErrorCode.NoError);
             WaitFor(() => resubbed);
@@ -420,30 +324,20 @@ public static class SeamHarness
         }
         finally { client.Tap = x => { lock (sent) sent.Add(x); }; }
         l = Sent();
-        Check(resubbed && afterResub >= 0 && !l.Skip(afterResub).Any(x => x.Contains("\"type\":\"ticks\"") || x.Contains("\"type\":\"ready\"")),
-            "S3: after a resubscribe mid-send, no more ticks or ready from the old load");
+        Check(resubbed && afterResub >= 0 && !l.Skip(afterResub).Any(x => x.Contains("\"type\":\"ready\"")),
+            "S3: after a resubscribe mid-send, no ready from the old load");
         // The subscribe id: the page's own (echoed), or ChartBridge's count when the page sends none.
         lock (sent) sent.Clear();
         r0 = Reqs();
-        Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"days\":5,\"tickHours\":8,\"sub\":42}");
+        Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"days\":5,\"tickHours\":0,\"sub\":42}");
         Req(r0).Answer(Minutes(new double[] { 0, 1, 1, 1, 1, 1 }, new double[] { 60, 2, 2, 2, 2, 2 }), ErrorCode.NoError);
         Req(r0 + 1).Answer(Ticks(new double[] { -5, 3, 1 }, new double[] { 1, 3, 1 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "S3: ready is sent");
         Thread.Sleep(30);
         l = Sent();
-        Check(l.Where(x => x.Contains("\"type\":\"history\"") || x.Contains("\"type\":\"ticks\"") || x.Contains("\"type\":\"ready\"")).All(x => x.Contains("\"sub\":42")) && l.Count(x => x.Contains("\"sub\":42")) >= 3,
-            "S3: history, ticks and ready carry the page's subscribe id");
+        Check(l.Where(x => x.Contains("\"type\":\"history\"") || x.Contains("\"type\":\"ready\"")).All(x => x.Contains("\"sub\":42")) && l.Count(x => x.Contains("\"sub\":42")) >= 3,
+            "S3: history and ready carry the page's subscribe id");
 
-        // S4: the tick request ending in the future is answered with nothing: asked again ending now.
-        lock (sent) sent.Clear();
-        r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);
-        Req(r0).Answer(Minutes(new double[] { 60, 2, 2, 2, 2, 2 }), ErrorCode.NoError);
-        Req(r0 + 1).Answer(new Bars(), ErrorCode.NoError);
-        BarsRequest again = Req(r0 + 2);
-        Check(again != null && again.To <= DateTime.Now.AddSeconds(1) && again.To >= DateTime.Now.AddMinutes(-1), "S4: zero trades from the future-dated request: asked again ending now");
-        if (again != null) again.Answer(new Bars(), ErrorCode.NoError);
-        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0) && Reqs() == r0 + 3, "S4: an empty answer ending now is final (one retry only)");
     }
 
     // ------------------------------------------------------------ the re-review (review_seam2.md R1, N1, N2)
@@ -468,33 +362,15 @@ public static class SeamHarness
         r = D2(ms, 2, H(10.1, 100, 1), H(10.25, 100.25, 2));
         Check(r.OlderAfterAnswer == 0 && r.DroppedAfterAnswer == 0 && r.Release.Count == 0, "R1: trades held before the answer count in neither");
 
-        // R1 through the load: millisecond backfill, the last trade delivered live after the answer.
-        lock (sent) sent.Clear();
-        int r0 = Reqs();
-        Priv("Subscribe", client, "MNQ", 5, 8);
-        Req(r0).Answer(Minutes(new double[] { 0, 1, 1, 1, 1, 1 }, new double[] { 60, 100, 100.25, 100, 100.25, 3 }), ErrorCode.NoError);
-        lock (client.Pending)
-        {
-            Req(r0 + 1).Answer(Ticks(new double[] { -1.5, 99, 1 }, new double[] { 10.1, 100, 1 }, new double[] { 10.25, 100.25, 2 }), ErrorCode.NoError);
-            Live(10.25, 100.25, 2);   // in the backfill, handed over after the answer
-            Live(10.4, 100.5, 1);
-        }
-        Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "R1: ready is sent");
-        Thread.Sleep(30);
-        List<string> l = Sent();
-        List<string> after = l.Skip(Index(l, "\"type\":\"ready\"") + 1).ToList();
-        Check(after.Count == 1 && after[0].Contains("\"p\":100.5") && Seams().Contains("\"heldAtAnswer\":0") && Seams().Contains("\"droppedAfterAnswer\":1") && Seams().Contains("\"olderAfterAnswer\":0"),
-            "R1: load: at milliseconds the late copy of the backfill's last trade is not sent twice; /diag shows it");
-
         // N1: a subscribe id with leading zeros is echoed as canonical digits (007 is not JSON).
         lock (sent) sent.Clear();
-        r0 = Reqs();
-        Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"tickHours\":8,\"sub\":007}");
+        int r0 = Reqs();
+        Priv("OnClientMessage", client, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"tickHours\":0,\"sub\":007}");
         Req(r0).Answer(Minutes(new double[] { 60, 2, 2, 2, 2, 2 }), ErrorCode.NoError);
         Req(r0 + 1).Answer(Ticks(new double[] { -5, 3, 1 }, new double[] { 1, 3, 1 }), ErrorCode.NoError);
         Check(WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0), "N1: ready is sent");
         Thread.Sleep(30);
-        l = Sent();
+        List<string> l = Sent();
         Check(l.Any(x => x.Contains("\"type\":\"ready\"") && x.Contains("\"sub\":7}")) && !l.Any(x => x.Contains("\"sub\":0")) && !Seams().Contains("\"sub\":007"),
             "N1: \"sub\":007 is echoed as 7 on the wire and in /diag");
 

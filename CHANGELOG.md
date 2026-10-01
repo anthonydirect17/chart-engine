@@ -1,5 +1,41 @@
 # Changelog
 
+## ChartBridge 0.3.7 (data side): settlement, 4h, 1D and 1W bars, the weekly profile (draft)
+
+Draft for the 0.3.7 release, which the coordinator cuts when the order side joins: the version in `ChartBridge.cs` stays
+0.3.6 until then, and nothing here changes the order path. Recompile (F5) when installed. Old pages ignore every new
+message; the page that uses them is a later build.
+- **Prior settlement.** NinjaTrader's own settlement for each served contract (`MarketData.Settlement`, read when market
+  data is subscribed, and every Settlement update after). In `hello` per instrument (`settlement`, null when NinjaTrader has
+  none: never an estimate), and `{"type":"settlement","root","p"}` to every page when it changes. Output window line and
+  `/diag` `settlements` show each value with NinjaTrader's stamp.
+- **4h, 1D and 1W bars on request.** `{"type":"htf","root","tf","id"}` (strict). NinjaTrader's own 240-minute, day and week
+  bars, 300 by count, through the gate last (only with no chart loading, no window or backfill out or queued, no minute
+  chart's last trades out); not answered in 60 s, it is given up and frees the gate. Kept per root and timeframe: a second
+  page or a reload is served from memory; asked again on a later trading day or after a feed drop. The forming bar follows
+  the live trades ChartBridge already has (no request per trade); a page that asked gets `htfBar` at most once a second
+  while it changes. Bars are start-stamped (4h from the 18:00 ET open; 1D on the trading day; 1W on its Monday).
+- **Weekly volume profile on request.** `{"type":"weekProfile","root","id"}` (strict): the last 5 finished sessions' volume
+  at price from the session tables, never a NinjaTrader request. Each finished table is now also kept as
+  `profile-<ROOT>-<date>.txt` (14 days) so a restart still has the week; a session with no table is listed as missing, a
+  table that is not whole says so.
+- **The old by-date tick load is removed** (replaced by the served window in 0.3.5): its request, the Bid and Ask history
+  (`quoteHours`), the quote wait and their `/diag` fields (`sides.lastLoad`, `quotesOutstanding`, `seams.tickToAheadMin`,
+  `tickRetriedEndingNow`). A `quoteHours` line in `config.txt` is now noted once and does nothing. The pure side rules stay.
+- **Review follow-ups.** The gate's stop edges (lf7 N1 to N3): a request dropped at a stop answers its waiting pages and a
+  start clears what it left, a timeout after the stop never marks the gate stuck again, and a stop is checked right before
+  a taken request is sent (a request that still slips out in the last instructions has its answer dropped uncopied). `MarketClosedNow` knows the CME holidays by the page's own rules
+  (lf7 N4: no session on New Year's Day, Good Friday and Christmas; the 13:00 halt on other NYSE holidays and 13:15 on
+  early closes). Daily bars (bars1): a queued message older than 40 days is dropped, a session The Desk refused is not
+  asked again after a restart either (`refused_bars.txt`, N1), and the queue files are read on the bars thread, not
+  NinjaTrader's (N7). The updater (`update-pc.ps1 -InstallChartBridge`, N2) takes out an add-on file the previous install
+  had and the new commit no longer lists (a revert of daily bars, say), inside the same all-or-nothing copy, and records
+  each install's file list.
+- Unchanged from the reviews, still open: bars1 N3 (`contract.<ROOT>` applies to every catch-up session), N4 (two README
+  wording points), N5 (Stop can block up to 500 ms in the worst case), N6 (a minute chart's last trades can go beside a bars
+  request); lf7 N4's other points (the "failed once" text after an unstuck, `feedDown` set by any connection, tails not
+  gated: Anthony's call).
+
 ## 1.10.0 (2026-10-01): order bar essentials
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing

@@ -73,7 +73,7 @@ line; recompile or restart NinjaTrader after a change):
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
 | `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
 | `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
-| `quoteHours` | `0` | ChartBridge 0.3.4.1: hours of historical Bid and Ask a tick chart asks NinjaTrader for, to side its backfill trades: `0` (none; they go by the tick rule, live trades keep their side from the live quote), `1` or `2`. Anything else is `0`. See the changelog. |
+| `quoteHours` | none | No longer used (ChartBridge 0.3.7 removed the by-date tick load it served; since 0.3.5 every Range and seconds chart gets the served window). The line is noted once in the Output window and does nothing; it can go. |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
@@ -165,10 +165,21 @@ The Desk tags each trade with the levels around it, and for that it needs the da
   logged and tried again 15 minutes later, 3 times at most, then not until the next start.
 - **Like fills:** each message waits in `pending_bars.jsonl` (next to `pending_fills.jsonl`) until The
   Desk takes it (`POST /api/bars` at `deskUrl`, retried every 10 seconds), so a restart or The Desk being
-  closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl`. Sessions
-  The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
+  closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl` and, since 0.3.7,
+  listed in `refused_bars.txt`, so it is not asked for again after a restart either; a waiting message more than
+  40 days old is dropped. Sessions The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
   sent per contract, how many wait, what it waits for at the gate, and the last problem. Details: "Daily bars to The Desk" in
   `nt8/PROTOCOL.md`.
+
+### Settlement, 4h, 1D and 1W bars, and the weekly profile (ChartBridge 0.3.7, data side)
+
+For the page's day % change, its 4h, 1D and 1W charts and the weekly profile, ChartBridge sends NinjaTrader's prior
+settlement (in `hello` and when it changes; none when NinjaTrader has none), answers a page's `htf` request with
+NinjaTrader's own 240-minute, day or week bars (asked once per instrument and timeframe through the gate, last, never
+beside a chart load; kept in memory for other pages and reloads; the forming bar follows the live trades), and answers
+`weekProfile` with the last 5 sessions' volume at price from its session tables (never a NinjaTrader request; a missing
+session is said). Old pages ignore all of it. Details: "Settlement, higher-timeframe bars and the weekly profile" in
+`nt8/PROTOCOL.md`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
@@ -537,7 +548,7 @@ npm run smoke:live-first # the served window and the session table: exact range 
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
-npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window and the daily bars under Mono
+npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window, the daily bars and the 0.3.7 data side under Mono
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in

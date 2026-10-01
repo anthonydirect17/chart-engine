@@ -391,7 +391,6 @@ public static class WindowHarness
         Func<BarsRequest, bool> was = BarsRequest.AutoAnswer;
         BarsRequest.AutoAnswer = null;
         int gapWas = ChartBridgeServer.BackfillGapMs, startWas = ChartBridgeServer.BackfillStartMs, retryWas = ChartBridgeServer.BackfillRetryMs, toWas = ChartBridgeServer.BackfillTimeoutMs, wretryWas = ChartBridgeServer.WindowRetryMs, wtoWas = ChartBridgeServer.WindowTimeoutMs;
-        ChartBridgeServer.ByDateTickLoads = false;
         ChartBridgeServer.ClockForHarness = () => simNow;
         Priv("WatchFeed");
         Dictionary<string, Instrument> named = (Dictionary<string, Instrument>)typeof(ChartBridgeServer).GetField("Instruments", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
@@ -431,7 +430,7 @@ public static class WindowHarness
         {
             ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillGapMs = gapWas; ChartBridgeServer.BackfillStartMs = startWas; ChartBridgeServer.BackfillRetryMs = retryWas;
             ChartBridgeServer.BackfillTimeoutMs = toWas; ChartBridgeServer.WindowRetryMs = wretryWas; ChartBridgeServer.WindowTimeoutMs = wtoWas;
-            ChartBridgeServer.ClockForHarness = null; ChartBridgeServer.ByDateTickLoads = true;
+            ChartBridgeServer.ClockForHarness = null;
             Priv("UnwatchFeed");
             if (!hadNq) named.Remove("NQ");
             if (!hadEs) named.Remove("ES");

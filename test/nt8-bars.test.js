@@ -39,7 +39,10 @@ test('bars: off by default, on only with bars = on', () => {
   assert.match(bars, /public static bool Enabled;/);
   assert.match(bars, /public static void ResetConfig\(\) \{ Enabled = false;/);
   assert.match(bars, /Enabled = v == "on" \|\| v == "true" \|\| v == "1";/);
-  assert.match(between(bars, 'public static void Start()', 'public static void Stop()'), /if \(!Enabled\) return;\s*try\s*\{\s*ChartBridgeBarsQueue\.Load\(\);/);
+  assert.match(between(bars, 'public static void Start()', 'public static void Stop()'), /if \(!Enabled\) return;\s*try\s*\{/);
+  // 0.3.7 (review bars1 N7): the files are read on the bars thread (Run), never in Start (NinjaTrader's thread)
+  assert.ok(!/ChartBridgeBarsQueue\.Load\(\)/.test(between(bars, 'public static void Start()', 'public static void Stop()')), 'Start reads no file');
+  assert.match(between(bars, 'private static void Run(', 'private static bool Nap('), /if \(stopping\(\)\) return;\s*try\s*\{\s*ChartBridgeBarsQueue\.Load\(\);/);
   assert.match(between(bars, 'public static void Flush(Func<bool> stopping)', 'private static bool SendOne('), /if \(!ChartBridgeBars\.Enabled\) return;/);
   assert.match(between(bars, 'public static void PlanOnce(', 'private static void Later('), /if \(!Enabled\) \{ state = "off"; return; \}\s*if \(!IsConnected\(\)\)/);
 });
@@ -73,9 +76,10 @@ test('bars: last of all at the gate, never beside a window or a backfill, never 
   // Anthony: the chart never waits on bars. An unanswered bars request frees the gate (claimed as timed out, never gateStuck);
   // windows and backfills keep 0.3.5's stuck rule.
   const loop = between(main, 'private static void GateLoop(', 'private static void GateTimedOut(');
-  assert.match(loop, /if \(!answered && j\.Kind == "bars"\)\s*\{[\s\S]*?if \(Interlocked\.CompareExchange\(ref j\.State, 3, 0\) == 0\)[\s\S]*?\}\s*else if \(!answered && Interlocked\.CompareExchange\(ref j\.State, 2, 0\) == 0\)\s*\{\s*GateTimedOut\(j\);/);
-  assert.ok(!/GateTimedOut/.test(between(loop, 'j.Kind == "bars"', 'else if (!answered && Interlocked')), 'a bars timeout never marks the gate stuck');
-  assert.match(main, /GateWindows\.Clear\(\); GateBackfills\.Clear\(\); GateBarJobs\.Clear\(\); gateStuck = null;/, 'StopGate clears it');
+  assert.match(loop, /if \(!answered && j\.FreesGate\)\s*\{[\s\S]*?if \(Interlocked\.CompareExchange\(ref j\.State, 3, 0\) == 0\)[\s\S]*?\}\s*else if \(!answered && Interlocked\.CompareExchange\(ref j\.State, 2, 0\) == 0\)\s*\{\s*GateTimedOut\(j\);/);
+  assert.ok(!/GateTimedOut/.test(between(loop, 'j.FreesGate)', 'else if (!answered && Interlocked')), 'a bars timeout never marks the gate stuck');
+  assert.match(main, /GateJob j = new GateJob \{ Kind = "bars", Root = what, TimeoutMs = timeoutMs, FreesGate = true \};/, 'bars requests free the gate (0.3.7: so do higher-timeframe ones)');
+  assert.match(main, /GateWindows\.Clear\(\); GateBackfills\.Clear\(\); GateBarJobs\.Clear\(\); GateHtfJobs\.Clear\(\); gateStuck = null;/, 'StopGate clears it');
   const plan = between(bars, 'public static void PlanOnce(', 'private static void Later(');
   assert.match(plan, /if \(catchUpDone && InRth\(nowEt\)\)/);
   assert.match(plan, /if \(o == Outcome\.Wait\) return;/, 'a busy gate ends the pass: nothing piles up');
@@ -116,7 +120,7 @@ test('bars: the fills queue\'s rules (file first, atomic, 10 s, deskUrl, set asi
 test('bars: ChartBridge.cs hooks it in (config, start, stop, /diag) and runs its requests through the gate; version 0.3.6', () => {
   assert.match(main, /public const string Version = "0\.3\.6";/);
   assert.match(src, /^\/\/ ChartBridge 0\.3\.6 for NinjaTrader 8/);
-  assert.match(main, /QuoteHours = 0;\s*ChartBridgeBars\.ResetConfig\(\);/);
+  assert.match(main, /AllowOrigins = new List<string>\(\);\s*ChartBridgeBars\.ResetConfig\(\);/);
   assert.match(main, /else if \(ChartBridgeBars\.ReadConfig\(key, val\)\) \{ \}[^\n]*\n\s*else ChartBridgeOrders\.ReadConfig\(key, val\);/);
   assert.match(main, /StartListening\(cts\.Token, 0\);\s*ChartBridgeBars\.Start\(\);/);
   assert.match(main, /b\.Append\(",\\"bars\\":"\)\.Append\(ChartBridgeBars\.DiagJson\(\)\);/);
@@ -127,11 +131,12 @@ test('bars: ChartBridge.cs hooks it in (config, start, stop, /diag) and runs its
 test('bars: installed, compile-checked, harnessed in check:orders', () => {
   assert.ok(JSON.parse(read('nt8', 'install-files.json')).addons.includes('nt8/ChartBridgeBars.cs'));
   assert.match(read('nt8', 'check', 'check.sh'), /ChartBridgePin\.cs ChartBridgeBars\.cs/);
-  assert.match(read('nt8', 'check', 'orders.sh'), /ChartBridgeBars\.cs[\s\S]*check\/BarsHarness\.cs/);
+  assert.match(read('nt8', 'check', 'orders.sh'), /ChartBridgeBars\.cs[\s\S]*check\/BarsHarness\.cs check\/DataHarness\.cs/);
   assert.match(read('nt8', 'check', 'SeamHarness.cs'), /BarsHarness\.Run\(Check\);/);
+  assert.match(read('nt8', 'check', 'SeamHarness.cs'), /DataHarness\.Run\(Check\);/);
 });
 
 test('bars: no em or en dashes in the new files', () => {
-  for (const f of [['nt8', 'ChartBridgeBars.cs'], ['nt8', 'check', 'BarsHarness.cs'], ['test', 'nt8-bars.test.js']])
+  for (const f of [['nt8', 'ChartBridgeBars.cs'], ['nt8', 'check', 'BarsHarness.cs'], ['nt8', 'check', 'DataHarness.cs'], ['test', 'nt8-bars.test.js']])
     assert.ok(!/[\u2013\u2014]/.test(read(...f)), f.join('/'));
 });

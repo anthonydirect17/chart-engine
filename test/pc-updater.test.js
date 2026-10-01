@@ -70,7 +70,10 @@ test('the automatic path never copies add-on files: only -InstallChartBridge, af
   // the only place anything is written under AddOns is Install-AddOnFiles; Get-AddOnVersion only reads
   const fnOf = i => src.slice(src.lastIndexOf('function ', i), src.lastIndexOf('function ', i) + 40).split(/[\s(]/)[1];
   const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => fnOf(m.index));
-  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
+  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Get-RetiredAddOns', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
+  const retired = src.slice(src.indexOf('function Get-RetiredAddOns'), src.indexOf('function Install-AddOnFiles'));
+  assert.ok(retired.length > 0 && !/Copy-Item|Move-|Write-[^L]|Set-Content|Remove-Item|Replace\(/.test(retired), 'Get-RetiredAddOns only reads');
+  assert.match(retired, /'\^ChartBridge\[A-Za-z0-9_\]\*\\\.cs\$'/, 'only ChartBridge*.cs files are ever taken out');
   const reader = src.slice(src.indexOf('function Get-AddOnVersion'), src.indexOf('function Get-LowerVersion'));
   assert.ok(!/Copy-Item|Move-|Write|Set-Content|Remove-Item|Replace\(/.test(reader), 'Get-AddOnVersion only reads');
   const hashes = src.slice(src.indexOf('function Get-AddOnHashes'), src.indexOf('function Test-SameHashes'));
@@ -79,6 +82,9 @@ test('the automatic path never copies add-on files: only -InstallChartBridge, af
   const copy = src.slice(src.indexOf('function Install-AddOnFiles'), src.indexOf('function Update-MixedAddOns'));
   assert.match(copy, /\$State\['chartBridge'\]\['copying'\] = [\s\S]*Save-State \$State[\s\S]*foreach \(\$n in \$names\) \{\s*Move-FileAtomic/, 'the copy is recorded before the first replace');
   assert.match(copy, /\} catch \{[\s\S]*foreach \(\$n in @\(\$replaced\)\)[\s\S]*Move-FileAtomic "\$dest\.upd-restore" \$dest/, 'a failure puts the replaced files back');
+  // 0.3.7 (review bars1 N2): a file the commit drops is backed up and taken out inside the same copy, and put back with the rest
+  assert.match(copy, /\$retired = @\(Get-RetiredAddOns \$State \$names\)\s*\$all = @\(\$names\) \+ @\(\$retired\)/);
+  assert.match(copy, /Save-State \$State\s*foreach \(\$n in \$retired\) \{\s*Remove-Item -LiteralPath \(Join-Path \$script:P\.AddOns \$n\) -Force[^\n]*\s*\[void\]\$replaced\.Add\(\$n\)/, 'taken out after the record, counted as replaced (so a failure puts it back)');
   const inst = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Repair'));
   assert.ok(!/Copy-Item|Move-FileAtomic/.test(inst.replace(/Install-AddOnFiles|Install-PinnedUpdater|Install-PageFiles/g, '')), '-InstallChartBridge writes AddOns only through Install-AddOnFiles');
 });

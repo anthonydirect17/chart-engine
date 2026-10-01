@@ -675,3 +675,31 @@ test('server (0.3.2 PIN, review B1): a pin file that exists but cannot be read i
     assert.deepEqual((await status()).json, { set: false, unlocked: false }, 'deleted: no PIN, at once');
   } finally { child.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('fake bridge --data-037 (ChartBridge 0.3.7 data side): settlement, strict htf and weekProfile requests, htfBar', async () => {
+  const port = 18900 + Math.floor(Math.random() * 90);
+  const child = await startBridge(port, ['--data-037', '--test-controls', '--test-pin=' + TEST_PIN]);
+  try {
+    const ws = await wsConnect(port, 'http://localhost:' + port, await unlockFor(port));
+    const hello = await ws.next('hello');
+    assert.ok(hello.features.includes('settlement') && hello.features.includes('htf') && hello.features.includes('weekProfile'));
+    assert.ok(hello.instruments.every(i => i.settlement === null || typeof i.settlement === 'number'), 'settlement: a number, or null when none');
+    await pinPost(port, '/test/settlement?root=MNQ&p=21456.25', {});
+    assert.deepEqual(await ws.next('settlement'), { type: 'settlement', root: 'MNQ', p: 21456.25 });
+    ws.send({ type: 'htf', root: 'MNQ', tf: '4h', id: 7 });
+    const h = await ws.next('htf');
+    assert.equal(h.id, 7); assert.equal(h.error, null); assert.ok(h.bars.length > 0 && h.bars.every(b => b.length === 6));
+    assert.ok(h.bars.every(b => ((b[0] + 21600) % 14400) === 0), '4h bars start on the 18:00 ET grid');
+    const bar = await ws.next('htfBar', 4000);
+    assert.ok(bar && bar.root === 'MNQ' && bar.tf === '4h' && bar.bars.length >= 1, 'the forming bar follows the trades');
+    ws.send({ type: 'htf', root: 'MNQ', tf: '5m' });
+    assert.match((await ws.next('status')).text, /refused a htf message: tf must be 4h, 1D or 1W/);
+    ws.send({ type: 'htf', root: 'MNQ', tf: '1D', extra: 1 });
+    assert.match((await ws.next('status')).text, /unknown key extra/);
+    ws.send({ type: 'weekProfile', root: 'MNQ', id: 3 });
+    const w = await ws.next('weekProfile');
+    assert.equal(w.id, 3); assert.equal(w.error, null); assert.equal(w.sessions.length, 5);
+    assert.ok(w.sessions.some(s => s.missing) && w.sessions.filter(s => !s.missing).every(s => s.rows.length > 0 && s.whole === true));
+    ws.close();
+  } finally { child.kill(); }
+});
