@@ -414,16 +414,23 @@ try {
     check((await state()).orders.length === 3 && /^Ctrl and Shift together: nothing was sent/.test((await status(page)).text), '1.10.0 Ctrl + Shift: nothing sent: ' + (await status(page)).text);
     await page.click('#cancelAllBtn');
     await until(async () => (await state()).orders.length === 0, '1.10.0 the three orders cancelled');
-    // no browser menu over the plot (right click with or without Shift; disarmed, so nothing is placed); elsewhere it is
+    // no browser menu anywhere on the chart (Anthony 2026-10-01): plot (right click with or without Shift; disarmed, so
+    // nothing is placed), price axis, delta pane, time axis; the order bar and the rest of the page keep it
     await page.click('#armBtn');
     await page.evaluate(() => { window.__cm = []; window.addEventListener('contextmenu', e => { window.__cm.push(e.defaultPrevented); }); });
     box = await cbox();
     await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.3, { button: 'right' });
     await page.keyboard.down('Shift'); await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.35, { button: 'right' }); await page.keyboard.up('Shift');
     await page.mouse.click(box.x + box.width - 20, box.y + box.height * 0.3, { button: 'right' });   // the price axis
+    const dp = await page.evaluate(() => window.liveChart.deltaPane());
+    check(dp.on && dp.height > 20, '1.10.0 the delta pane is on for the menu check: ' + JSON.stringify({ on: dp.on, top: dp.top, height: dp.height }));
+    await page.mouse.click(box.x + box.width * 0.4, box.y + dp.top + dp.height / 2, { button: 'right' });   // the delta pane
+    await page.mouse.click(box.x + box.width - 20, box.y + dp.top + dp.height / 2, { button: 'right' });    // the delta pane's axis
+    await page.mouse.click(box.x + box.width * 0.4, box.y + box.height - 6, { button: 'right' });           // the time axis
+    await page.click('#oPos', { button: 'right' });                                                     // the order bar
     await page.click('#statusRo', { button: 'right' });                                                 // the page
     const cm = await page.evaluate(() => window.__cm);
-    check(JSON.stringify(cm) === '[true,true,false,false]', '1.10.0 no browser menu over the plot, the menu elsewhere: ' + JSON.stringify(cm));
+    check(JSON.stringify(cm) === '[true,true,true,true,true,true,false,false]', '1.10.0 no browser menu anywhere on the chart, the menu on the order bar and the page: ' + JSON.stringify(cm));
     check((await state()).orders.length === 0, '1.10.0 disarmed right clicks placed nothing');
     await page.click('#armBtn');
 
@@ -914,6 +921,54 @@ try {
     await A.evaluate(() => { document.getElementById('cancelAllBtn').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); document.getElementById('armBtn').click(); });
     await until(async () => await evalWorking() === 0, 'N1 the three cancelled');
     check((await sentOf('cancel')).length === 3 && await A.getAttribute('#armBtn', 'aria-checked') === 'false', 'review 2 N1: 3 of 3 sent though Armed went off in the same task');
+    // B/E in paced chunks (Anthony 2026-10-01): with 12 ChartBridge stop legs one click sends 10 at once and the last 2
+    // once ChartBridge's 10 a second allows; a second click while it runs sends nothing; never over 10 in any second
+    const brKept = [await A.inputValue('#bStop'), await A.inputValue('#bTarget')];
+    const commitA = async (id, v) => { await A.fill(id, v); await A.press(id, 'Tab'); };
+    const stopLegs = async () => (await state5()).orders.filter(o => o.account === 'DEMO-EVAL' && o.root === 'MNQ' && o.role === 'stop');
+    const changesSent = () => A.evaluate(() => window.__sent.filter(m => m.type === 'change').map(m => ({ id: m.id, price: m.price, at: m.__at })));
+    const legs12 = async what => {
+      await control(P5, 'price', { root: 'MNQ', p: L5 });
+      await A.selectOption('#oQty', '1');
+      await armOn();
+      for (let i = 0; i < 12; i++) { await A.click('#buyMkt'); await A.waitForTimeout(450); }
+      await until(async () => (await stopLegs()).length === 12 && (await A.textContent('#oPos')).startsWith('LONG 12'), what, 8000);
+      await control(P5, 'price', { root: 'MNQ', p: L5 + 2 });                        // past break-even (L5, every fill at L5)
+      await A.waitForTimeout(1200);                                                   // the buys out of ChartBridge's last second
+      await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; window.__statusSeen.length = 0; });
+    };
+    const flatA = async what => { await armOn(); await A.click('#flattenBtn'); await until(async () => (await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0, what); };
+    await commitA('#bStop', '40'); await commitA('#bTarget', '0');
+    await legs12('B/E paced: long 12 with 12 stop legs');
+    await A.click('#beBtn');
+    await A.waitForTimeout(500);
+    await A.click('#beBtn');                                                          // while the run is under way: absorbed
+    await until(async () => (await stopLegs()).filter(o => o.price === L5).length === 12, 'B/E paced: all 12 stop legs at break-even', 6000);
+    await A.waitForTimeout(1300);                                                     // anything more would have gone by now
+    const ch12 = await changesSent(), at12 = ch12.map(x => x.at);
+    const most12 = Math.max(...at12.map(t => at12.filter(u => u >= t && u < t + 1000).length)), span12 = Math.max(...at12) - Math.min(...at12);
+    const seen12 = await A.evaluate(() => window.__statusSeen.slice()), rej12 = await A.evaluate(() => window.__rejects.slice());
+    check(ch12.length === 12 && new Set(ch12.map(x => x.id)).size === 12 && ch12.every(x => x.price === L5) && span12 > 1000 && most12 <= 10 && rej12.length === 0,
+      'B/E paced: 12 changes, each leg once, over ' + Math.round(span12) + ' ms, at most ' + most12 + ' in any second, rejects ' + JSON.stringify(rej12) + ' (' + ch12.length + ' sent)');
+    check(seen12.some(t => /^Moving 12 stops to break-even [\d,.]+ · DEMO-EVAL\. 10 now, 2 as ChartBridge's 10 a second allows\.$/.test(t)) &&
+      seen12.some(t => /^B\/E under way on DEMO-EVAL MNQ: 2 left\. Nothing new was sent\.$/.test(t)) &&
+      seen12.some(t => /^B\/E: 12 changes sent to break-even [\d,.]+ · DEMO-EVAL MNQ\.$/.test(t)),
+      'B/E paced: the notes (start, the second click absorbed, done): ' + JSON.stringify(seen12));
+    await flatA('B/E paced: flat after the 12');
+    // Armed off while the run waits: the last 2 are not sent, and the note says so
+    await legs12('B/E paced: long 12 again');
+    await A.click('#beBtn');
+    await A.waitForTimeout(300);
+    await armOff();
+    await A.waitForTimeout(1600);
+    const chOff = await changesSent(), seenOff = await A.evaluate(() => window.__statusSeen.slice());
+    const atBe = (await stopLegs()).filter(o => o.price === L5).length;
+    check(chOff.length === 10 && atBe === 10 && seenOff.some(t => /^B\/E: 10 changes sent to break-even [\d,.]+ · DEMO-EVAL MNQ\. 2 not sent: Armed went off\.$/.test(t)),
+      'B/E paced: Armed off mid-run stops the rest (' + chOff.length + ' changes, ' + atBe + ' legs moved): ' + JSON.stringify(seenOff));
+    await flatA('B/E paced: flat after the disarm test');
+    await commitA('#bStop', brKept[0]); await commitA('#bTarget', brKept[1]);
+    await armOff();
+
     // a phone: the note never wraps the order bar
     await B.setViewportSize({ width: 400, height: 860 });
     await reloadTab(B);

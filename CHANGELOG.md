@@ -29,6 +29,13 @@ order checks work as before.
   over the chart's plot on this page; elsewhere it is unchanged.
 - The order bar stays on one line at 1440 and 1920 px. On a phone the Armed switch keeps its armed width, so arming
   never rewraps the bar.
+- **B/E in paced chunks** (Anthony 2026-10-01: "send in paced chunks"). One click always finishes: as many changes go
+  at once as ChartBridge's 10 a second allows, the rest as soon as it allows. Before each later chunk the page must
+  still be Armed, connected and signed in, with the last price still past break-even; a leg no longer a working
+  ChartBridge stop behind break-even is skipped. A note says what was sent and what was not. A click while a run is
+  under way sends nothing.
+- **No browser menu anywhere on the chart** on the trading page (Anthony 2026-10-01): the plot, the price and time
+  axes and the delta pane. The toolbar, the order bar and the menus keep it. What every click does is unchanged.
 
 ## 1.9.0 (2026-09-30): color presets, indicator colors in their gears, the top bar matches every ground
 

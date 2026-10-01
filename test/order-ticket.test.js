@@ -275,3 +275,17 @@ test('qtyOptions: 1 to 9, the ones over the cap off', () => {
   assert.equal(OT.qtyOptions(20).every(o => o.ok), true);
   assert.equal(OT.qtyOptions(9).length, 9);
 });
+
+test('paceChunks: B/E split by the per-second budget, what fits now first, then a second at a time', () => {
+  const ids = Array.from({ length: 12 }, (_, i) => 'o' + i);
+  assert.deepEqual(OT.paceChunks(ids, 0, 10).map(c => c.length), [10, 2]);
+  assert.deepEqual(OT.paceChunks(ids, 3, 10).map(c => c.length), [7, 5]);
+  assert.deepEqual(OT.paceChunks(ids, 10, 10).map(c => c.length), [0, 10, 2]);   // no room now: nothing goes at once
+  assert.deepEqual(OT.paceChunks(ids, 14, 10).map(c => c.length), [0, 10, 2]);   // over the budget counts as none left
+  assert.deepEqual(OT.paceChunks(ids, -2, 10).map(c => c.length), [10, 2]);      // never more than the budget at once
+  assert.deepEqual(OT.paceChunks(ids.slice(0, 4), 2, 10), [ids.slice(0, 4)]);       // all fit: one chunk
+  assert.deepEqual(OT.paceChunks(ids, 0, 10).flat(), ids);                        // every id once, in order
+  assert.deepEqual(OT.paceChunks(Array.from({ length: 25 }, (_, i) => i), 9, 10).map(c => c.length), [1, 10, 10, 4]);
+  assert.deepEqual(OT.paceChunks([], 0, 10), [[]]);
+  assert.deepEqual(OT.paceChunks(null, 0, 10), [[]]);
+});

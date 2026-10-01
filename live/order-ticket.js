@@ -231,6 +231,19 @@ function breakEvenAllowed(posQty, price, last) {
   return posQty > 0 ? last > price : last < price;
 }
 
+/**
+ * B/E in paced chunks (1.10.0, Anthony 2026-10-01): `items` split by ChartBridge's budget of `limit` order actions a
+ * second, with `recent` of them already sent in the last second. The first chunk is what fits now (it may be empty),
+ * each later chunk a full second's worth. Every item is in exactly one chunk, in order.
+ */
+function paceChunks(items, recent, limit) {
+  const list = Array.from(items || []), cap = Math.max(1, Math.floor(limit) || 0);
+  const room = Math.min(cap, Math.max(0, cap - (Math.floor(recent) || 0)));
+  const out = [list.slice(0, room)];
+  for (let i = room; i < list.length; i += cap) out.push(list.slice(i, i + cap));
+  return out;
+}
+
 /** Ignores the same action repeated within `ms` (a double click), so one click sends one order. */
 function repeatGuard(ms) {
   let lastKey = null, lastAt = -Infinity;
@@ -240,5 +253,5 @@ function repeatGuard(ms) {
   };
 }
 
-return { MAX_BRACKET_TICKS, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
+return { MAX_BRACKET_TICKS, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
 });

@@ -2010,9 +2010,17 @@ function start(container, opt, PAGE) {
    * price on the tick grid, rounded toward safety (OT.breakEvenPrice). Only when the last price is past it on the
    * profitable side (ChartBridge would refuse a stop through the market). Stops placed in NinjaTrader are never touched;
    * a leg already at break-even or past it is left (moving it would loosen it). Needs Armed, like every order action.
+   * Paced (Anthony 2026-10-01): as many changes go at once as ChartBridge's 10 a second allows (counting the order
+   * actions of the last 1.1 s), the rest as soon as it allows, so one click always finishes. Before each later chunk
+   * the page must still be Armed, connected and signed in, and the last price still past break-even, else the rest is
+   * not sent; a leg no longer a working ChartBridge stop behind break-even (or in a Cancel all) is skipped. A note
+   * says what happened. A click while a run is under way sends nothing.
    */
+  const BE_LIMIT = 10;
+  let beRun = null;                                                // { account, root, be, qty, queue: [id], sent, skipped, notes }
   function breakEven() {
     if (!ready()) return;
+    if (beRun) { flash('B/E under way on ' + beRun.account + ' ' + beRun.root + ': ' + beRun.queue.length + ' left. Nothing new was sent.', 'warn'); return; }
     const account = TR.account, root = D.root, pos = TR.positions.get(account + '|' + root);
     if (!pos || !pos.qty) { flash('B/E: no open position on ' + account + ' ' + root + '. Nothing was sent.', 'warn'); renderTrading(); return; }
     const be = OT.breakEvenPrice(pos.avgPrice, pos.qty, tickOf(root)), fmt = p => U.fmtPrice(p, precisionOf());
@@ -2028,10 +2036,44 @@ function start(container, opt, PAGE) {
       (legs.other ? ' ' + plural(legs.other, 'stop') + ' placed in NinjaTrader left alone.' : '');
     if (!ids.length) { flash('B/E: no ChartBridge stop to move; nothing was sent.' + notes, 'warn'); renderTrading(); return; }
     const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
-    if (recent + ids.length > 10) { flash('Not sent: B/E needs ' + plural(ids.length, 'order action') + ' and ChartBridge takes 10 a second. Click B/E again in a moment.', 'warn'); return; }
     if (!sameAction('be|' + account + '|' + root + '|' + be, now)) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
-    for (const id of ids) send({ type: 'change', id, price: be });
-    flash('Moving ' + plural(ids.length, 'stop') + ' to break-even ' + fmt(be) + ' · ' + account + '.' + notes, '');
+    const chunks = OT.paceChunks(ids, recent, BE_LIMIT), first = chunks[0];
+    for (const id of first) send({ type: 'change', id, price: be });
+    const left = ids.length - first.length;
+    flash('Moving ' + plural(ids.length, 'stop') + ' to break-even ' + fmt(be) + ' · ' + account + '.' +
+      (left ? ' ' + first.length + ' now, ' + left + ' as ChartBridge\'s 10 a second allows.' : '') + notes, '');
+    if (!left) return;
+    beRun = { account, root, be, qty: pos.qty, queue: ids.slice(first.length), sent: first.length, skipped: 0, notes };
+    bePump();
+  }
+  /* The rest of a paced B/E: each later chunk once the budget allows, re-checked before it goes (see breakEven). */
+  function bePump() {
+    const r = beRun;
+    if (!r) return;
+    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
+    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
+    if (room) {
+      const why = !TRADING || FRAMED || !TR.enabled ? 'trading went off' : !ws || ws.readyState !== 1 ? 'the connection to ChartBridge dropped' :
+        !TR.armed ? 'Armed went off' : D.root !== r.root ? 'the instrument changed' : !OT.breakEvenAllowed(r.qty, r.be, lastPrice()) ? 'the last price is no longer past break-even' : '';
+      if (why) { beDone(r.queue.length + ' not sent: ' + why + '.'); return; }
+      let n = 0;
+      while (r.queue.length && n < room) {
+        const id = r.queue.shift(), o = TR.orders.get(id);
+        const behind = o && OT.isWorking(o) && o.role === 'stop' && typeof o.price === 'number' && (r.qty > 0 ? o.price < r.be : o.price > r.be);
+        if (!behind || inCancelAll(id)) { r.skipped++; continue; }
+        send({ type: 'change', id, price: r.be }); r.sent++; n++;
+      }
+    }
+    if (!r.queue.length) { beDone(''); return; }
+    const oldest = actionTimes.find(t => t > now - CANCEL_GAP);
+    later(() => { if (beRun === r) bePump(); }, Math.max(20, (oldest === undefined ? now : oldest) + CANCEL_GAP - now));
+  }
+  function beDone(notSent) {
+    const r = beRun;
+    beRun = null;
+    const skipped = r.skipped ? ' ' + r.skipped + ' skipped: no longer a working stop behind break-even.' : '';
+    flash('B/E: ' + r.sent + ' change' + (r.sent === 1 ? '' : 's') + ' sent to break-even ' + U.fmtPrice(r.be, precisionOf()) + ' · ' + r.account + ' ' + r.root + '.' +
+      skipped + (notSent ? ' ' + notSent : '') + r.notes, skipped || notSent ? 'warn' : '');
   }
 
   /*
@@ -2039,12 +2081,14 @@ function start(container, opt, PAGE) {
    * or a stop by the last price as with Shift+click. Only while Armed and with no drawing tool, never on an order's label
    * or tag (those drag or cancel the order), and only for a click that does not move; the keys must still be held at the
    * release. Such a press is kept from the chart (no pan, no drawing picked). Ctrl and Shift together send nothing. The
-   * browser's menu never opens over the plot on this page. `lastUp`: the keys of the last release, read by orderPlace.
+   * browser's menu never opens anywhere on the chart on this page (plot, price and time axes, delta pane). `lastUp`:
+   * the keys of the last release, read by orderPlace.
    */
   const BOTH_KEYS = 'Ctrl and Shift together: nothing was sent. Shift+click buys; Shift+right click or Ctrl+click sells.';
   let lastUp = null;
   function setupSellClicks() {
     const host = $('chart'), cv = host.querySelector('canvas');
+    host.addEventListener('contextmenu', e => e.preventDefault());   // the whole chart: plot, axes, delta pane (Anthony 2026-10-01)
     if (!cv) return;
     const plotAt = e => {
       const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
@@ -2082,7 +2126,6 @@ function start(container, opt, PAGE) {
     };
     host.addEventListener('pointerup', up, true);
     host.addEventListener('pointercancel', up, true);
-    cv.addEventListener('contextmenu', e => { if (plotAt(e)) e.preventDefault(); });
   }
 
   function workingHere() { return [...TR.orders.values()].filter(o => o.account === TR.account && o.root === D.root && OT.isWorking(o)); }
