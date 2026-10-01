@@ -107,7 +107,7 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
   // only PlaceOrderLocked and PlaceLegs create orders; the rest of the upkeep only cancels or shrinks
-  for (const f of ['ChangeOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries'])
+  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries'])
     assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
   assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) return PlaceOrderLocked\(/);
   // legs are GTC and named for their bracket and fill increment; the upkeep touches ChartBridge's own legs only
@@ -116,6 +116,7 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(legs, /"CB#" \+ br\.Tag \+ " stop" \+ mark/);
   assert.match(legs, /"CB#" \+ br\.Tag \+ " target" \+ mark/);
   assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/);   // a stop through the market becomes a market exit
+  assert.match(legs, /bool byFill = hasStop && br\.Priced && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
   const keep = fnBody('KeepBracket');
   assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
   assert.match(keep, /Bracket rec = Recover\(entry, out pairs\);\s*lock \(Sync\)/);   // Recover reads account orders outside Sync
@@ -146,8 +147,9 @@ test('bracket upkeep runs even with trading off; pages hear only about tradable 
 });
 
 test('strict messages: known keys only, bracket must be an object', () => {
-  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" \} \}/);
+  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket", "stopPrice", "targetPrice" \} \}/);
   assert.match(ocode, /\{ "change", new\[\] \{ "type", "cid", "id", "price" \} \}/);
+  assert.match(ocode, /\{ "plan", new\[\] \{ "type", "cid", "id", "stopPrice", "targetPrice" \} \}/);   // 0.3.7
   assert.match(ocode, /\{ "cancel", new\[\] \{ "type", "cid", "id" \} \}/);
   assert.match(ocode, /\{ "flatten", new\[\] \{ "type", "cid", "account", "root" \} \}/);
   assert.match(ocode, /BracketKeys = \{ "stop", "target" \}/);
@@ -190,7 +192,18 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.match(fnBody('PendingOrders'), /MayFill\(o\.OrderState\)/);
   assert.match(fnBody('PendingOrders'), /foreach \(Order o in Ours\)/);
   assert.match(fnBody('PlaceOrderLocked'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);
-  assert.match(fnBody('PlaceOrderLocked'), /if \(\(stopTicks > 0 \|\| targetTicks > 0\) && reduces\) return/);
+  assert.match(fnBody('PlaceOrderLocked'), /bool wantsLegs = stopTicks > 0 \|\| targetTicks > 0 \|\| stopPx > 0 \|\| targetPx > 0;/);
+  assert.match(fnBody('PlaceOrderLocked'), /if \(wantsLegs && reduces\) return/);
+  // 0.3.7: a planned stop or target is checked against the entry's price at placement, on a plan change and on an entry move
+  assert.match(fnBody('PlaceOrderLocked'), /PlanProblem\(tick, isBuy, price, stopPx, targetPx\)/);
+  assert.match(fnBody('PlanOrder'), /PlanProblem\(tick, buy, entryPx, newSp, newTp\)/);
+  assert.match(fnBody('ChangeOrder'), /cannot move to or past its own planned stop/);
+  for (const f of ['ChangeOrder', 'PlanOrder']) {
+    assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
+    assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
+  }
+  // a plan change that cannot be saved changes nothing
+  assert.match(fnBody('PlanOrder'), /string err = SavePlan\(br\.Tag, newSp, newTp\);\s*if \(err != null\) return "could not save the planned prices/);
   assert.match(fnBody('ChangeOrder'), /OrderType\.StopLimit\) return/);
   assert.match(fnBody('PlaceOrderLocked'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
   assert.match(fnBody('ChangeOrder'), /PriceProblem\(/);
@@ -198,6 +211,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
+  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten"\)\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
   // /session: the Host check, then (0.3.2) the PIN unlock, then the order sign-in token
   assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*if \(!ChartBridgePin\.TokenValid\(ctx\.Request\.Headers\[ChartBridgePin\.Header\]\)\) \{ Refuse\(ctx\); return; \}[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);

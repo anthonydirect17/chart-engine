@@ -95,10 +95,10 @@ test('gate 3: qty cap per root (default 1), and the cap also limits the position
   assert.equal(reasonOf(d.order({ side: 'sell', qty: 5 })), null);    // selling reduces: allowed
 });
 
-test('gate 5: tick grid, 200 ticks from the last price, stops on the right side (orders and changes)', async () => {
-  const d = await makeDesk(); d.auth();
+test('gate 5: tick grid, maxTicksAway from the last price when config.txt sets it, stops on the right side (orders and changes)', async () => {
+  const d = await makeDesk({ maxTicksAway: 200 }); d.auth();
   assert.match(reasonOf(d.order({ kind: 'limit', price: 25390.1 })), /not on the MNQ tick grid/);
-  assert.match(reasonOf(d.order({ kind: 'limit', price: 25349.75 })), /201 ticks from the last price 25,400.00; the limit is 200/);
+  assert.match(reasonOf(d.order({ kind: 'limit', price: 25349.75 })), /201 ticks from the last price 25,400.00; the limit is 200 \(maxTicksAway in config.txt\)/);
   assert.equal(reasonOf(d.order({ kind: 'limit', price: 25350 })), null);           // exactly 200
   assert.match(reasonOf(d.order({ kind: 'stop', price: 25399.75 })), /buy stop must be above/);
   assert.match(reasonOf(d.order({ kind: 'stop', price: 25400 })), /buy stop must be above/);
@@ -270,13 +270,86 @@ test('brackets: JSON whole numbers only, and only on an order that opens or adds
   assert.match(reasonOf(d.order({ bracket: { stop: '8', target: 8 } })), /Bracket stop must be a whole number/);
   assert.match(reasonOf(d.order({ bracket: { stop: 8, target: null } })), /Bracket target must be a whole number/);
   assert.match(reasonOf(d.order({ bracket: { stop: 8 } })), /Bracket target/);
-  assert.match(reasonOf(d.order({ bracket: { stop: 201, target: 0 } })), /0 to 200/);
+  assert.match(reasonOf(d.order({ bracket: { stop: -1, target: 0 } })), /0 or more/);
   assert.match(reasonOf(d.order({ bracket: null })), /must be \{/);
   assert.equal(reasonOf(d.order({ bracket: { stop: 0, target: 0 } })), null);   // long 1, no legs
   assert.equal(d.working().length, 0);
   assert.equal(reasonOf(d.order({ bracket: { stop: 8, target: 8 } })), null);   // adds: long 2
   assert.equal(reasonOf(d.order({ side: 'sell', bracket: { stop: 0, target: 0 } })), null);   // reduces, no bracket: fine
   assert.match(reasonOf(d.order({ side: 'sell', bracket: { stop: 8, target: 8 } })), /^A bracket can only go on an order that opens or adds to a position\.$/);
+});
+
+test('0.3.7: no distance limits unless config.txt sets them (maxTicksAway, maxBracketTicks)', async () => {
+  const d = await makeDesk({ maxQty: { MNQ: 5 } }); d.auth();
+  assert.equal(reasonOf(d.order({ kind: 'limit', price: 25150, bracket: { stop: 500, target: 500 } })), null);   // 1000 ticks away, 500-tick bracket
+  const e = d.working().find(o => o.role === 'entry');
+  assert.deepEqual(e.planned, { stop: 25025, target: 25275 });
+  assert.equal(reasonOf(d.order({ bracket: { stop: 500, target: 1000 } })), null);                              // market: ticks from the fill
+  assert.deepEqual(d.working().filter(o => o.role !== 'entry').map(o => o.price).sort(), [25275, 25650]);
+  const l = await makeDesk({ maxTicksAway: 400, maxBracketTicks: 300 }); l.auth();
+  assert.deepEqual(l.desk.tradingMsg(l.conn).maxTicksAway, 400);
+  assert.match(reasonOf(l.order({ kind: 'limit', price: 25150 })), /1000 ticks .* the limit is 400 \(maxTicksAway in config.txt\)/);
+  assert.match(reasonOf(l.order({ bracket: { stop: 301, target: 0 } })), /from 0 to 300 ticks \(maxBracketTicks in config.txt\)/);
+  assert.match(reasonOf(l.order({ kind: 'limit', price: 25390, stopPrice: 25290 })), /more than 300 ticks from the entry price/);
+});
+
+test('0.3.7: a resting entry\'s stop and target are prices; its legs go there at any fill price', async () => {
+  const d = await makeDesk({ maxQty: { MNQ: 5 } }); d.auth();
+  const placed = d.order({ kind: 'limit', price: 25390, qty: 3, stopPrice: 25380, targetPrice: 25420 });
+  const entryMsg = placed.find(m => m.type === 'order' && m.role === 'entry');
+  assert.deepEqual(entryMsg.planned, { stop: 25380, target: 25420 }, 'the order event carries the planned prices');
+  const entry = d.working()[0];
+  d.desk.fill(entry, 1, 25390); d.desk.fill(entry, 1, 25385); d.desk.fill(entry, 1, 25388);   // at the limit, a gap better, another price
+  const legs = d.working().filter(o => o.role !== 'entry');
+  assert.deepEqual(legs.map(o => o.role + ' ' + o.qty + ' ' + o.price).sort(), ['stop 1 25380', 'stop 1 25380', 'stop 1 25380', 'target 1 25420', 'target 1 25420', 'target 1 25420']);
+  // old page: bracket ticks on a limit become prices from its price; on a stop entry slippage does not move them
+  d.order({ kind: 'stop', price: 25410, bracket: { stop: 8, target: 16 } });
+  const se = d.working().find(o => o.role === 'entry');
+  assert.deepEqual(se.planned, { stop: 25408, target: 25414 });
+  d.tick(25411);                                                     // the stop triggers: fills at 25411 (slippage)
+  assert.equal(se.avgFill, 25411);
+  assert.deepEqual(d.working().filter(o => o.parent === se.id).map(o => o.price).sort(), [25408, 25414]);
+  // a gap through the planned stop at the fill: the market exit, with its alarm
+  const g = await makeDesk(); g.auth();
+  g.order({ kind: 'limit', price: 25390, stopPrice: 25380, targetPrice: 25420 });
+  g.take();
+  g.desk.fill(g.working()[0], 1, 25378);
+  const out = g.take();
+  assert.equal(g.working().length, 0);
+  assert.ok(out.some(m => m.type === 'status' && m.level === 'error' && /passed the stop level 25,380.00 \(filled at 25,378.00\)/.test(m.text)));
+  assert.match(reasonOf(g.order({ qty: 1, stopPrice: 25380 })), /market entry's stop and target are ticks from the fill/);
+  assert.match(reasonOf(g.order({ kind: 'limit', price: 25390, stopPrice: 25395 })), /buy entry's stop must be below its price 25,390.00/);
+  assert.match(reasonOf(g.order({ kind: 'limit', price: 25390, stopPrice: 25380, bracket: { stop: 8, target: 8 } })), /not both/);
+});
+
+test('0.3.7: moving a resting entry keeps its planned prices; plan adds, moves and removes them before the fill', async () => {
+  const d = await makeDesk({ maxQty: { MNQ: 5 } }); d.auth();
+  d.order({ kind: 'limit', price: 25390, qty: 2, stopPrice: 25380, targetPrice: 25420 });
+  const e = d.working()[0];
+  assert.equal(reasonOf(d.act({ type: 'change', id: e.id, price: 25385 })), null);
+  assert.deepEqual(e.planned, { stop: 25380, target: 25420 });
+  assert.match(reasonOf(d.act({ type: 'change', id: e.id, price: 25380 })), /cannot move to or past its own planned stop 25,380.00/);
+  let r = d.act({ type: 'plan', cid: 'p1', id: e.id, stopPrice: 25370 });
+  assert.equal(reasonOf(r), null);
+  assert.deepEqual(r.find(m => m.type === 'order').planned, { stop: 25370, target: 25420 });
+  assert.match(reasonOf(d.act({ type: 'plan', id: e.id, stopPrice: 25390 })), /stop must be below its price 25,385.00/);
+  assert.match(reasonOf(d.act({ type: 'plan', id: e.id, targetPrice: 25420.1 })), /not on the MNQ tick grid/);
+  assert.match(reasonOf(d.act({ type: 'plan', id: e.id })), /plan needs stopPrice or targetPrice/);
+  assert.match(reasonOf(d.act({ type: 'plan', id: e.id, stopPrice: '25370' })), /stopPrice must be a plain price/);
+  assert.match(reasonOf(d.act({ type: 'plan', id: e.id, stop: 25370 })), /Unknown key "stop" in plan/);
+  d.desk.fill(e, 1, 25385);                                          // part filled: the first contract's pair
+  assert.equal(reasonOf(d.act({ type: 'plan', id: e.id, targetPrice: null })), null);   // remove the target: for what is still to fill
+  d.desk.fill(e, 1, 25385);
+  const legs = d.working().filter(o => o.parent === e.id).map(o => o.role + ' ' + o.price + ' ' + (o.oco ? 'oco' : 'lone')).sort();
+  assert.deepEqual(legs, ['stop 25370 lone', 'stop 25370 oco', 'target 25420 oco'], 'the first pair untouched, the second fill a lone stop');
+  const leg = d.working().find(o => o.role === 'stop');
+  assert.match(reasonOf(d.act({ type: 'plan', id: leg.id, stopPrice: 25375 })), /Only a ChartBridge entry/);
+  d.order({ kind: 'limit', price: 25390 });                          // placed with no bracket: a target added later
+  const n = d.working().find(o => o.role === 'entry');
+  assert.deepEqual(n.planned, { stop: null, target: null });
+  assert.equal(reasonOf(d.act({ type: 'plan', id: n.id, targetPrice: 25400 })), null);
+  d.desk.fill(n, 1, 25390);
+  assert.deepEqual(d.working().filter(o => o.parent === n.id).map(o => o.role + ' ' + o.price), ['target 25400']);
 });
 
 test('stale last price refuses limit and stop prices, not market; stop-limits cannot move', async () => {

@@ -5,6 +5,9 @@
 //   --trading                       trading = true (off by default, like ChartBridge)
 //   --trade-accounts=Sim101,DEMO-EVAL   tradeAccounts
 //   --max-qty=MNQ:5,NQ:2            maxQty.MNQ = 5 and so on (default 1)
+//   --max-ticks-away=400            maxTicksAway = 400 (ChartBridge 0.3.7: a limit or stop price at most this many ticks from
+//                                   the last price; default none)
+//   --max-bracket-ticks=300         maxBracketTicks = 300 (0.3.7: a bracket stop or target at most this many ticks; default none)
 //   --v1                            behave like ChartBridge 0.2 (protocol v1, read only: no trading, no /session)
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
 //                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/elsewhere
@@ -135,6 +138,8 @@ const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
   maxQty: Object.fromEntries(flagValue('max-qty').split(',').filter(Boolean).map(x => { const [r, n] = x.split(':'); return [r.trim(), +n]; })),
+  maxTicksAway: Math.max(0, Math.floor(+flagValue('max-ticks-away') || 0)),       // 0.3.7: 0 = no limit, as an absent config.txt line
+  maxBracketTicks: Math.max(0, Math.floor(+flagValue('max-bracket-ticks') || 0)),
   port: PORT,
   // ChartBridge 0.3.1: exact scheme://host[:port], lower-cased (the real parser also drops a default port and
   // a trailing slash, and skips wildcards; the fake takes the list as given)
@@ -375,7 +380,7 @@ function onMessage(c, text) {
   if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
   if (m.type === 'subscribe') subscribe(c, m);
   else if (m.type === 'auth') desk.auth(c, m.token);
-  else if (['order', 'change', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);
+  else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7
 }
 const tickCache = new Map();             // --tick-rate: millions of ticks, made once per root and hours
 function subscribe(c, m) {

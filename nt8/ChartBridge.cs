@@ -2212,7 +2212,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 StartLoad(client, root, days, tickHours, sm.Success ? long.Parse(sm.Groups[1].Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture) : null,   // canonical digits: "007" is not JSON
                           LiveFirstRx.IsMatch(text), ProfileRx.IsMatch(text));
             }
-            else if (type == "auth" || type == "order" || type == "change" || type == "cancel" || type == "flatten")
+            else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
         }
 

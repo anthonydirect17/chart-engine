@@ -1,5 +1,43 @@
 # Changelog
 
+## ChartBridge 0.3.7 (order side) (draft, not released; version not bumped)
+
+ChartBridge (nt8/) order paths only, Anthony's rulings of 2026-10-01; the page is unchanged (chart 1.11.0 works against
+it as it is; the page side comes later). The data side of 0.3.7 is a separate section. **Needs a recompile** (while
+flat, or with no resting entry that matters: an entry placed by 0.3.6 keeps its tick bracket, see below).
+- **No 200-tick limits.** A limit or stop price may be any distance from the last price, and bracket ticks any whole
+  number of 0 or more. Every other gate stays (tick grid, last price under 300 seconds old, stops and limits on the
+  right side of the market, the cap, the rate, strict messages, accounts, the token). Optional limits in `config.txt`:
+  `maxTicksAway = 400` and `maxBracketTicks = 300` (absent means no limit; a value that is not a whole number of 1 or
+  more is ignored with a line in the Output window); when set, the `trading` message names them. Order names take any
+  number of digits (`CB#1a2b3c4d s1200 t2400` recovers after a recompile). A bracket that would put a leg at or below
+  zero is refused.
+- **A resting entry's stop and target are prices.** A limit or stop entry's planned stop and target are prices, where
+  Anthony sees them: every fill increment's legs go there at any fill price (better on a gap, worse on slippage), not
+  at a tick distance from the fill. Today's page still sends `bracket` in ticks: for a limit or stop entry ChartBridge
+  turns it into prices once, at placement, from the entry's own price. A market entry keeps ticks from its fill. A
+  planned stop that has already traded at the fill (a fresh trade, or the fill itself, at or through it) takes the
+  market exit path with its alarm; a planned target already reached goes in as a limit through the market (it fills
+  at once at the target or better) with a `status` `warn`.
+- **Moving a resting entry leaves its planned stop and target where they are**; a move to or past its own planned
+  stop or target is refused with a plain reason.
+- **New `plan` message**: add, move or remove a resting entry's planned stop and target before the fill
+  (`{"type":"plan","id":"o5","stopPrice":24975.5}`, `"targetPrice":null` removes). Checked against the entry's price
+  (wrong side and off-grid refused), counted in the 10 actions a second, the same gates as `change`. After a part
+  fill it applies to the contracts still to fill; legs already working move with `change`, as B/E does. `order`
+  also takes `stopPrice` and `targetPrice` (prices) instead of `bracket` on a limit or stop entry. Every `order`
+  message for such an entry carries `"planned": {"stop": ..., "target": ...}` (pages before 0.3.7 ignore it).
+- **Survives a recompile or a restart**: the planned prices are in the entry's name at placement and in
+  `planned_brackets.txt` in ChartBridge's folder (every change; removed when the entry is done). A recovered entry
+  whose record is missing uses the prices in its name (as placed), never a guess, with an alarm at recovery and at
+  the fill.
+- **Entries placed by 0.3.6 and still resting at the recompile** keep their tick bracket (ticks from each fill, as
+  they were placed); `plan` refuses them (cancel and place again to get prices).
+- Checks: `npm run check:orders` (OrdersHarness, the 0.3.7 section), `test/fake-orders.mjs` and `test/fake-bridge.mjs`
+  speak the new keys (`--max-ticks-away`, `--max-bracket-ticks`), `test/fake-bridge.test.js`, the source guards in
+  `test/nt8-source.test.js`. `test/orders-smoke.mjs` starts the fake bridge with `--max-ticks-away=200` for its
+  refusal check.
+
 ## 1.11.0 (2026-10-01): trading hotkeys
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing
