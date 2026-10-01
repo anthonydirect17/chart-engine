@@ -1924,6 +1924,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     StartGate();   // review 6 S1: tick requests may go out again
                     ResolveInstruments();
                     ChartBridgeOrders.NewToken();
+                    ChartBridgeOrders.StartPlans();   // 0.3.7: planned_brackets.txt, read on a pool thread before the accounts are watched
                     Log(ChartBridgeOrders.Enabled
                         ? "order entry is ON for " + ChartBridgeOrders.TradeAccounts.Count + " account(s): " + string.Join(", ", ChartBridgeOrders.TradeAccounts)
                         : "order entry is off (read only)");

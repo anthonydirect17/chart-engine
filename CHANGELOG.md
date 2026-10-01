@@ -31,6 +31,15 @@ flat, or with no resting entry that matters: an entry placed by 0.3.6 keeps its 
   `planned_brackets.txt` in ChartBridge's folder (every change; removed when the entry is done). A recovered entry
   whose record is missing uses the prices in its name (as placed), never a guess, with an alarm at recovery and at
   the fill.
+- **Review fixes (same draft).** A `plan` is set in memory with the check that no reported fill waits, before
+  the file is written; a plan racing a fill NinjaTrader has reported is refused, saying how many contracts get the
+  old prices (and NO STOP alarmed when there was none); a failed save keeps the plan, with an alarm. A plan is
+  checked against a move still waiting for NinjaTrader too. After a recompile an estimated increment price never
+  triggers the market exit (only a fresh trade does). planned_brackets.txt is read on a pool thread before the
+  accounts are watched and written outside every lock; NinjaTrader's thread only reads memory, and legs wait
+  (never guessed) until the file has been read. A `bracket` object on `plan`, `change` or `cancel` is refused
+  (still ignored on `flatten`). A mistyped `maxTicksAway`/`maxBracketTicks` is also told to the pages. The check
+  harness reads the Output window under its lock (SidesHarness flake).
 - **Entries placed by 0.3.6 and still resting at the recompile** keep their tick bracket (ticks from each fill, as
   they were placed); `plan` refuses them (cancel and place again to get prices).
 - Checks: `npm run check:orders` (OrdersHarness, the 0.3.7 section), `test/fake-orders.mjs` and `test/fake-bridge.mjs`

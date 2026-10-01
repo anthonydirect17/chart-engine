@@ -134,12 +134,22 @@ function sideOf(p, prev, prevSide) {
   if (p < prev - 1e-9) return [-1, 2];
   return prevSide ? [prevSide, 3] : [0, 0];
 }
+// 0.3.7: a limit that is not a whole number of 1 or more is no limit, and the pages are warned (Anthony, 2026-10-01).
+const limitWarnings = [];
+function limitFlag(name, key) {
+  const v = flagValue(name);
+  if (v === '') return 0;
+  if (/^[0-9]+$/.test(v) && +v >= 1) return +v;
+  limitWarnings.push('config.txt: ' + key + ' = ' + v + ' is not a whole number of 1 or more; it is ignored, so there is NO ' + key + ' limit');
+  return 0;
+}
 const config = {
   trading: !V1 && !!flag('trading'),
   tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
   maxQty: Object.fromEntries(flagValue('max-qty').split(',').filter(Boolean).map(x => { const [r, n] = x.split(':'); return [r.trim(), +n]; })),
-  maxTicksAway: Math.max(0, Math.floor(+flagValue('max-ticks-away') || 0)),       // 0.3.7: 0 = no limit, as an absent config.txt line
-  maxBracketTicks: Math.max(0, Math.floor(+flagValue('max-bracket-ticks') || 0)),
+  maxTicksAway: limitFlag('max-ticks-away', 'maxTicksAway'),            // 0.3.7: 0 = no limit, as an absent config.txt line
+  maxBracketTicks: limitFlag('max-bracket-ticks', 'maxBracketTicks'),
+  warnings: limitWarnings,                                              // told to every page as it signs in, as ChartBridge does
   port: PORT,
   // ChartBridge 0.3.1: exact scheme://host[:port], lower-cased (the real parser also drops a default port and
   // a trailing slash, and skips wildcards; the fake takes the list as given)

@@ -290,7 +290,11 @@ test('0.3.7: no distance limits unless config.txt sets them (maxTicksAway, maxBr
   assert.deepEqual(l.desk.tradingMsg(l.conn).maxTicksAway, 400);
   assert.match(reasonOf(l.order({ kind: 'limit', price: 25150 })), /1000 ticks .* the limit is 400 \(maxTicksAway in config.txt\)/);
   assert.match(reasonOf(l.order({ bracket: { stop: 301, target: 0 } })), /from 0 to 300 ticks \(maxBracketTicks in config.txt\)/);
-  assert.match(reasonOf(l.order({ kind: 'limit', price: 25390, stopPrice: 25290 })), /more than 300 ticks from the entry price/);
+  assert.match(reasonOf(l.order({ kind: 'limit', price: 25390, stopPrice: 25290 })), /more than 300 ticks from the entry price/);  const w = await makeDesk({ warnings: ['config.txt: maxTicksAway = 4OO is not a whole number of 1 or more; it is ignored, so there is NO maxTicksAway limit'] });
+  const signedIn = w.auth();
+  assert.ok(signedIn.some(m => m.type === 'status' && m.level === 'warn' && /NO maxTicksAway limit/.test(m.text)), 'a mistyped limit is told to the page as it signs in');
+  assert.equal(reasonOf(w.act({ type: 'flatten', account: 'Sim101', root: 'MNQ', bracket: { stop: 8, target: 8 } })), null, 'a bracket on flatten is ignored, never a reason to refuse it');
+  assert.match(reasonOf(w.act({ type: 'cancel', id: 'NT1', bracket: { stop: 8, target: 8 } })), /Unknown key "bracket" in cancel/);
 });
 
 test('0.3.7: a resting entry\'s stop and target are prices; its legs go there at any fill price', async () => {

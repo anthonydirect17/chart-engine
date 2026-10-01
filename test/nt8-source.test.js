@@ -109,17 +109,21 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   // only PlaceOrderLocked and PlaceLegs create orders; the rest of the upkeep only cancels or shrinks
   for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries'])
     assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
-  assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) return PlaceOrderLocked\(/);
+  assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) why = PlaceOrderLocked\(/);
+  // 0.3.7: planned_brackets.txt is written outside PlaceLock, and only WritePlans touches it; NinjaTrader's paths only read memory
+  assert.ok(!/WritePlans\(|File\./.test(fnBody('PlaceOrderLocked')), 'no file I/O inside PlaceLock');
+  for (const f of ['KeepBracket', 'Recover', 'OrderJson', 'BracketFor', 'PlaceLegs', 'OnOrderUpdate'])
+    assert.ok(!/WritePlans\(|LoadPlans|File\./.test(fnBody(f)), f + ' does file I/O');
   // legs are GTC and named for their bracket and fill increment; the upkeep touches ChartBridge's own legs only
   const legs = fnBody('PlaceLegs');
   assert.equal((legs.match(/TimeInForce\.Gtc/g) || []).length, 2);
   assert.match(legs, /"CB#" \+ br\.Tag \+ " stop" \+ mark/);
   assert.match(legs, /"CB#" \+ br\.Tag \+ " target" \+ mark/);
   assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/);   // a stop through the market becomes a market exit
-  assert.match(legs, /bool byFill = hasStop && br\.Priced && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
+  assert.match(legs, /bool byFill = hasStop && br\.Priced && !br\.ValueEstimated && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
   const keep = fnBody('KeepBracket');
   assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
-  assert.match(keep, /Bracket rec = Recover\(entry, out pairs\);\s*lock \(Sync\)/);   // Recover reads account orders outside Sync
+  assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)[^\n]*return; \}[^\n]*\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
   // from an order event the legs are placed in full, never sized from a position read at fill time;
   // only the scan path (a gap that lasted SettleMs) reads the settled position
   assert.match(keep, /if \(fromScan\) \{ KeepBracketFromScan\(entry, br, now\); return; \}/);
@@ -203,7 +207,11 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
   // a plan change that cannot be saved changes nothing
-  assert.match(fnBody('PlanOrder'), /string err = SavePlan\(br\.Tag, newSp, newTp\);\s*if \(err != null\) return "could not save the planned prices/);
+  // a plan is set in memory with the check that no fill waits, under Sync; the file is written afterwards, outside the locks
+  assert.match(fnBody('PlanOrder'), /lock \(Sync\)\s*\{\s*waiting = o\.Filled - br\.Covered;\s*if \(waiting <= 0\) \{ br\.StopPx = newSp; br\.TargetPx = newTp;/);
+  const plan = fnBody('PlanOrder');
+  assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.lastIndexOf('SetPlan(br.Tag, newSp, newTp);') && plan.lastIndexOf('SetPlan(') > 0, 'the file is written after the plan is set');
+  assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.indexOf('lock (PlanLock)') && /\}\s*ChartBridgeServer\.Log\("planned bracket set/.test(plan), 'and after PlanLock is released');
   assert.match(fnBody('ChangeOrder'), /OrderType\.StopLimit\) return/);
   assert.match(fnBody('PlaceOrderLocked'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
   assert.match(fnBody('ChangeOrder'), /PriceProblem\(/);

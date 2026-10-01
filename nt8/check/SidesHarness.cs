@@ -497,6 +497,8 @@ public static class SidesHarness
         public double MsAt(string has) { lock (Got) { int i = Got.FindIndex(x => x.Contains(has)); return i < 0 ? -1 : At[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency; } }
     }
     static int laneId = 70000;
+    // A copy of the Output window's lines, taken under its lock (other threads log while a check reads them).
+    static List<string> OutputLines() { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.ToList(); }
     static bool ClosedLog(int id) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Any(x => x.Contains("Client " + id + " is not keeping up")); }
     static string LaneTick(int i) { return "{\"type\":\"tick\",\"root\":\"MNQ\",\"t\":1.000,\"u\":1.000,\"rx\":1.000,\"p\":20000.25,\"v\":1,\"s\":1,\"sm\":2,\"i\":" + i + "}"; }
 
@@ -1031,7 +1033,7 @@ public static class SidesHarness
         string d = Diag();
         Check(d.Contains("\"quotedTrades\":1") && d.Contains("\"beforeQuotes\":1") && d.Contains("\"afterQuotes\":2") && d.Contains("\"note\":\"the bid/ask history does not cover every trade: 1 trade(s) before it (quotes are asked for the last 2 hours, quoteHours in config.txt), 2 after it and 0 with a quote over 60 s old went by the tick rule\""),
             "shorter: trades outside the quote history counted and named in /diag (" + Snip(d) + ")");
-        Check(NinjaTrader.Code.Output.Lines.Any(x => x.Contains("MNQ trade sides: the bid/ask history does not cover every trade")), "shorter: and a line in the Output window");
+        Check(OutputLines().Any(x => x.Contains("MNQ trade sides: the bid/ask history does not cover every trade")), "shorter: and a line in the Output window");
         Reset();
     }
 
@@ -1221,8 +1223,8 @@ public static class SidesHarness
         foreach (MarketDataType ty in new[] { MarketDataType.Last, MarketDataType.Bid, MarketDataType.Ask, MarketDataType.DailyVolume })
             Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = inst, MarketDataType = ty, Price = 0, Volume = 0, Time = At(2.5), IsReset = true });
         Check(OrdersLast() == 25000.25 && Sent().Count == n, "reset: IsReset events (Last, Bid, Ask, other, price 0) never reach the order code's last price or the page");
-        Check(Diag().Contains("\"quoteResets\":") && NinjaTrader.Code.Output.Lines.Count(x => x.Contains("market data reset (IsReset) on MNQ: type Last, price 0")) == 1
-              && NinjaTrader.Code.Output.Lines.Count(x => x.Contains("market data reset (IsReset)")) == 1, "reset: the first reset is logged once, with its type and price");
+        Check(Diag().Contains("\"quoteResets\":") && OutputLines().Count(x => x.Contains("market data reset (IsReset) on MNQ: type Last, price 0")) == 1
+              && OutputLines().Count(x => x.Contains("market data reset (IsReset)")) == 1, "reset: the first reset is logged once, with its type and price");
         Trade(3.0, 0, 5);
         Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = inst, MarketDataType = MarketDataType.Last, Price = -1, Volume = 1, Time = At(3.1) });
         Check(OrdersLast() == 25000.25 && Sent().Count == n, "reset: a Last event at price 0 or below is not a trade: not to the order code, not to the page");

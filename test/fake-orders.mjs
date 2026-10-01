@@ -35,8 +35,9 @@ export const KEYS = {
 function checkKeys(m) {
   const allowed = KEYS[m.type];
   if (!allowed) return 'Unknown message type ' + m.type + '.';
-  for (const k of Object.keys(m)) if (!allowed.includes(k)) return 'Unknown key "' + k + '" in ' + m.type + '.';
+  for (const k of Object.keys(m)) if (!allowed.includes(k) && !(m.type === 'flatten' && k === 'bracket')) return 'Unknown key "' + k + '" in ' + m.type + '.';   // as ChartBridge: a bracket on flatten is ignored, never a reason to refuse it
   for (const [k, v] of Object.entries(m)) if (k !== 'bracket' && v !== null && typeof v === 'object') return 'The message has an unexpected nested object or list.';
+  if (m.type === 'flatten') return null;
   if (m.bracket !== undefined && m.bracket !== null && typeof m.bracket === 'object' && !Array.isArray(m.bracket))
     for (const k of Object.keys(m.bracket)) if (k !== 'stop' && k !== 'target') return 'Unknown key "' + k + '" in bracket.';
   if (m.cid !== undefined && typeof m.cid !== 'string') return 'cid must be a string.';
@@ -107,6 +108,7 @@ export class OrderDesk {
     }
     conn.authed = true;
     this.send(conn, this.tradingMsg(conn));
+    for (const w of this.config.warnings || []) this.send(conn, { type: 'status', level: 'warn', text: w });   // 0.3.7: e.g. a mistyped maxTicksAway
     this.send(conn, { type: 'orders', list: [...this.orders.values()].filter(o => isWorking(o) && this.accounts.includes(o.account)).map(o => this.orderMsg(o)) });
     for (const [k, p] of this.positions) if (p.qty && this.accounts.includes(k.split('|')[0])) { const [account, root] = k.split('|'); this.send(conn, { type: 'position', account, root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
   }
