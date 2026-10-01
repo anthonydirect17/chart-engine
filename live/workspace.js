@@ -497,6 +497,12 @@ function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
   renderCharts();
   renderFlat();
+  syncTitle();
+}
+/* The window's title says when this window's ticket is Armed, and on which account (as the single chart page's tab). */
+function syncTitle() {
+  const t = (holds() && core.TR.armed ? 'ARMED · ' + ticketRoot() + ' · ' + core.TR.account + ' · ' : '') + (layout || W.DEFAULT_NAME) + ' · Workspace';
+  if (document.title !== t) document.title = t;
 }
 function renderFlat() {
   const b = $('wsFlat'), a = ticketAccount(), on = core.TR.enabled && !!a;
@@ -1249,7 +1255,7 @@ function setUrl() {
   const u = new URL(location.href);
   u.searchParams.set('layout', layout);
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
-  document.title = layout + ' · Workspace';
+  syncTitle();
 }
 
 /* A small dialog for a name, and one to confirm. */

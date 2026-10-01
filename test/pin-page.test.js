@@ -40,7 +40,9 @@ test('pin.js asks for the PIN again only when ChartBridge says the unlock is gon
 test('live.js: only the standalone page uses the PIN; ChartLive.mount never does', () => {
   assert.match(live, /const PIN = PAGE \? window\.ChartBridgePin \|\| null : null;/);
   assert.match(live, /const WS_URL = opt\.wsUrl \|\| \(PIN \? \(\) => PIN\.wsUrl\(pageWsUrl\(\)\) : pageWsUrl\(\)\);/);
-  assert.match(live, /fetch\('\/session', \{ cache: 'no-store', headers: PIN \? PIN\.headers\(\) : \{\} \}\)/);
+  // 1.12.0: the sign-in is TradeCore's (live/trade.js), created only on the page (TRADING), with the page's PIN
+  assert.match(read('live/trade.js'), /env\.fetch\('\/session', \{ cache: 'no-store', headers: PIN \? PIN\.headers\(\) : \{\} \}\)/);
+  assert.match(live, /const T = !TRADING \? null : TC\.create\(\{\n\s+LP, prefs, pin: PIN,/);
   assert.match(live, /function mount\(container, options\) \{ return start\(container, options \|\| \{\}, false\); \}/);
   assert.match(live, /if \(window\.ChartBridgePin\) window\.ChartBridgePin\.gate\(\)\.then\(\(\) => start\(document\.body, \{\}, true\)\);/, 'the page starts only after the unlock');
   assert.equal((live.match(/ChartBridgePin/g) || []).length, 3, 'ChartBridgePin used only in the page boot and the PAGE line');

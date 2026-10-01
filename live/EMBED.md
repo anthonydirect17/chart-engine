@@ -15,6 +15,7 @@ Copy these five files from one chart-engine commit (all from the same version), 
 | 2 | `src/chart-engine.js` | `<script>` or `<script defer>` | `window.ChartEngine` |
 | 3 | `live/bar-builder.js` | `<script>` or `<script defer>` | `window.BarBuilder` |
 | 4 | `live/order-ticket.js` | `<script>` or `<script defer>` | `window.OrderTicket` (needed even read only: `live.js` reads it at load) |
+| (4b) | `live/trade.js` | `<script>` before `live.js` | `window.TradeCore`, the order logic (1.12.0): only for a page that trades (the single chart page and the workspace load it); a read-only host does not need it |
 | 5 | `live/live.js` | `<script>` or `<script defer>`, **without** `data-mount` | `window.LivePrefs`, `window.ChartLive` |
 
 No bundler, no build step. Scripts 2 to 5 must run in this order (plain `defer` scripts keep document order),
@@ -104,14 +105,16 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `toolbar` | `true` | `false`: the chart's toolbar is not shown. The host shows its own header with the chart's Indicators button and its pinned chips (the returned `indicators` and `chips` elements, moved into an element with the class `chart-live` so `live.css` styles them; the chips are then 2-letter, and those that do not fit the room left go behind a "+N" chip with a small list) and calls `setView`, `chart.setTool`, `chart.clearDrawings`, `chart.reset`. |
 | `compact` | `false` | `true`: for a small panel. The legend is at most 2 lines (no source and version line, no LIVE pill, no bar time; the close and change first, then VWAP, delta, O H L, volume, the last fill) and the status line shows only while it carries a note (loading, the range, IB and profile notes, warnings), with no delays or fps. |
 | `onColors` | none | Called after this chart's Colors panel or an indicator gear changed a color, so a host can call `refreshColors()` on its other charts. |
+| `trade` | none | 1.12.0, the workspace: `{ place(side, price, root), move(id, price, root), cancel(id, root) }`. The chart shows what `setTrade({ root, live, account, orders, position, pointValue, qty })` gives it (only while `root` is its instrument: the working orders and position lines, the account's fills, and while `live` the Armed outline and order editing) and hands Shift + left click (buy), Shift + right click and Ctrl + left click (sell), a drag and an x to the host, which checks and sends them. `setTrade(null)` clears. The browser's menu is off on such a chart. |
 
 With these options the returned object also has `setView({ root, tf, range })` (any of the three), `view()`,
 `refreshSettings()` (Glide and Range style read again from storage, for a host whose Settings change them),
 `refreshColors()` (the chart and indicator colors read again from storage), `stats()` (`{ root, feed, local, chart }`:
 the median feed and local delays in ms and the engine's frame stats, for a host's own status line), and the elements
 `indicators` (the Indicators button and its menu), `chips` (the pinned chips) and `colors` (the Colors button and
-panel) for a host to place. None of it changes a
-chart mounted without them.
+panel) for a host to place, and `setTrade` (with `trade`). None of it changes a
+chart mounted without them. `ChartLive.hotkeyHandler(o)` is the trading hotkeys' one keydown handler (1.11.0), which
+the workspace uses for its window.
 
 Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
 on up to every 5 s. Before the first connection the chart shows "Waiting for ChartBridge"; after a drop it shows
@@ -168,14 +171,18 @@ session counted from later than 18:00 with the start ("since 18:05 ET"). A relay
 ## Read-only guarantee
 
 A chart made with `ChartLive.mount` is always read only: there is no option to turn trading on (a `trading`
-option is ignored). Only the standalone page, booted by `live/single.html` with `data-mount="page"`, can trade (the
-workspace's charts are read only until its order ticket, E2b).
+option is ignored). Only the standalone page, booted by `live/single.html` with `data-mount="page"`, trades itself.
+The workspace (1.12.0) trades through its own order connection and TradeCore (`live/trade.js`), never through a chart:
+its charts are mounted with `trade` (below), which only hands the host the clicks; every point here still holds for
+the chart itself.
 
 - The chart never requests `GET /session` and never sends `auth`.
 - Only `subscribe` and `ping` messages ever leave it: `send` drops every other type, whatever calls it.
   Messages about trading from ChartBridge (`trading`, `orders`, `order`, `position`, `reject`) are ignored.
 - There is no order bar, no Armed switch and no ARMED pill in the page at all, no Shift+click order preview or
-  placing, and no draggable order lines (order editing is never turned on in the chart).
+  placing, and no draggable order lines (order editing is never turned on in the chart). With `trade` (the workspace)
+  order editing is on only while the host's `setTrade` says the chart is live, and a click, drag or x calls the host's
+  `place`, `move` or `cancel`; the chart sends nothing for them.
 - On top of that, ChartBridge itself refuses orders from any page but its own (the WebSocket Origin must be
   `http://localhost:<port>`, and trading needs the session token only that page can read).
 

@@ -355,6 +355,25 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   "Bars"), 1.5.1.
 - The legend's source line names both versions: "NinjaTrader via ChartBridge 0.3.4 · chart 1.7.0" (1.5.1).
 
+## The workspace (1.12.0)
+
+- **Top bar**, 40 px: TRADING SCREEN, the connection, the New York clock, one status line for the window (worst feed
+  and local delay, frame rate), notes, then on the right **KEYS ON / KEYS OFF** (mono 11 px in a 1 px box: ON in the
+  buy green, OFF muted), **Flatten all** (the sell red on its dark ground, semibold; dimmed only while not connected or
+  not signed in, never for Armed), Colors, Layout, + Add panel, Settings.
+- **Under the top bar**, only while there is one: ChartBridge's order errors (sell red border and ground) and what was
+  not sent (warn amber), each with Dismiss.
+- **Chart panels**: the slim 28 px header, the compact chart. A chart live for orders (the ticket's instrument while
+  Armed) has the Armed outline, the amber `#E0B45A` of the single chart page, on its stage; no new color.
+- **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
+  instrument and account; Armed (the amber switch, the bar outlined in amber while Armed); Qty with "max N" and the
+  bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Close and Cancel all, a
+  third each; then the position and P&L, the stop and target cover, the last fill (buy green, sell red), "Also open"
+  lines in warn amber each with its Close, the account note, the Cancel all line and the notes line (11 px; warn and
+  loss colors). It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel scrolls inside. The placeholder
+  in another window says "Ticket is in the other window" with Move the ticket here; with no ticket anywhere "No window
+  has the ticket" with Use the ticket here.
+
 ## Honesty rules
 
 - Anything not real is labelled on the chart (legend "sample data", SIM pill).

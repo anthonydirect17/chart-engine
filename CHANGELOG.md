@@ -1,9 +1,67 @@
 # Changelog
 
-## Unreleased (workspace part 2a, E2a): shared data per instrument, slim chart headers, the workspace is the main page
+## 1.12.0 (2026-10-01): the workspace and its order ticket
 
-Page only; no version bump (the release is cut after E2b). Nothing in ChartBridge changes; `nt8/install-files.json`
-(page files) and the updater's write order change. Every workspace chart is still read only.
+Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling (the PC
+updater installs it by itself at sign-in and at 17:05 ET, and the open pages say "Update ready: reload when flat").
+Nothing under `nt8/` changes but `nt8/install-files.json` (two new page files, `trade.js` and `ticket-link.js`), and
+the engine only gets its version number. The single chart page (`/single.html`) keeps its order bar and hotkeys
+exactly as in 1.11.0 (the same functions now live in `live/trade.js`; `smoke:orders` and `smoke:hotkeys` unchanged
+and green), with the hotkey changes listed last.
+
+### The order ticket (E2b)
+- **The order ticket panel** (Anthony 2026-10-01) replaces the placeholder: instrument (the roots ChartBridge serves),
+  account, Armed, Qty (1 to 9, the cap beside it), the bracket presets (the same list as the single chart page) with
+  the stop and target in ticks or points, Buy MKT, Sell MKT, B/E, **Close** (this instrument: the single chart page's
+  Flatten), Cancel all, and the position, its P&L, the stop and target cover and the last fill of its instrument, as
+  the order bar shows them. It is not tied to a chart. A notes line under it says what was sent or why not.
+- **One order path.** The order bar's logic moved out of `live.js` into `live/trade.js` (TradeCore) unchanged; the
+  ticket and the single chart page call the very same functions with the same checks, repeat guard and pacing.
+  `smoke:workspace` runs one sequence on `/single.html` and on the ticket and compares the messages sent.
+- **Every chart on the ticket's instrument takes orders while Armed**, in any window: the 1.10.0 mouse rules (Shift +
+  left click buys, Shift + right click and Ctrl + left click sell, Ctrl and Shift together send nothing), dragging a
+  working order or a bracket leg, the x to cancel. Charts on other instruments are display only for orders. Every
+  chart shows the working orders, position and fills of its own instrument on the ticket's account, Armed or not.
+- **The Armed border** on each chart that is live for orders, in the Armed color the single chart page uses.
+- **Switching the ticket's instrument** with a position or orders still open on the old one is allowed: Armed goes
+  off, and the ticket shows "Also open: MNQ +2" (or "MNQ 1 order") with its own Close. The old instrument's charts keep
+  showing the position and orders and stop taking order clicks.
+- **One ticket across windows** (same PC, same browser; `live/ticket-link.js`). The window holding the browser's lock
+  for the ticket (Web Locks) has it; the others show "Ticket is in the other window" with Move the ticket here. Adding
+  a ticket while another window has it asks "Move the ticket here?"; on yes the other window's ticket becomes the
+  placeholder, and Armed is off after every move. When the ticket's window closes or reloads no window has it until
+  one adds it ("Use the ticket here"): no window takes it by itself. Two windows adding it at the same moment: the
+  browser gives the lock to exactly one, and the other asks. Only the ticket's window arms and sends Buy, Sell, B/E,
+  chart clicks, drags and cancels; another window's chart click or drag on the ticket's instrument is passed to it
+  (BroadcastChannel) and acted on there with the same checks. If it does not answer within 300 ms the clicking window
+  says "The order ticket's window did not answer: nothing was sent." (and the ticket's window never acts on it later).
+  A browser without Web Locks gets no ticket rather than one that could be in two windows.
+- **Hotkeys work in every window.** Buy MKT, Sell MKT and B/E go to the ticket's window (the same note if it does not
+  answer); **Close and Flatten all are sent from the window they are pressed in**, on its own ChartBridge connection,
+  on the ticket's account (with no ticket, the account trading came on with, as on the single chart page).
+- **Flatten all in each window's top bar** (Anthony 2026-10-01): every instrument with a position or a working order
+  on the ticket's account, from that window, Armed or not (connected and signed in), paced as the Flatten all hotkey.
+- **KEYS ON / KEYS OFF** in each window's top bar: ON when a key pressed now would fire a hotkey there (the window has
+  the focus, no box, select, menu or dialog has it). The focus comes back to the page after every pick in the ticket
+  (its selects, a step of the stop or target spinner, its buttons), so KEYS is ON again at once.
+- **Each window has its own order connection** (signed in with the PIN like the single chart page; it subscribes to
+  nothing). ChartBridge's order errors ("the position may have NO STOP") show under the top bar until dismissed, as do
+  cancels and Flattens that were not sent. The title starts with ARMED in the ticket's window while it is Armed.
+- **Default layout**: the ticket takes rows 1 to 3 and Time and Sales rows 4 to 6, so the whole ticket shows at
+  1366x768 (Time and Sales gives up a row). Layouts saved before keep their sizes; Settings, Reset gets the new one.
+- `ChartLive.mount` option `trade` (live/EMBED.md): a host's chart hands its order clicks, drags and x to the host and
+  shows what `setTrade` gives it; the chart itself still sends only subscribe and ping. `ChartLive.hotkeyHandler`.
+
+### Hotkeys (the 1.11.0 review), on both pages
+- **More refused as keys**: Ctrl+Shift+C, Ctrl+O, Ctrl+U, Ctrl+G, Ctrl+K, Ctrl+E, Ctrl+Shift+B, Ctrl+Shift+O,
+  Alt+Shift+I and F4 (with any modifiers). One saved before is cleaned away on the next load.
+- **Flatten all keeps every instrument it sent**: refusals for the rate (more than 10 order actions a second) are
+  matched to the newest Flattens and each refused one is sent again 1.1 s later, the note naming them all (1.11.0 kept
+  only the last). The Flatten button and Close keep the 1.11.0 rule and notes.
+- **A Close or Flatten all key pressed while a box has the focus** says "Hotkey ignored: a box has the focus." instead
+  of nothing (nothing is sent; the box keeps the key).
+
+### The workspace (E2a)
 - **The workspace is ChartBridge's main page**: `http://localhost:8765/` (`live/index.html`) opens it (the default
   layout, `?layout=` as before). The single chart page moved unchanged to `/single.html` (`live/single.html`): its order
   bar, hotkeys and everything else as in 1.11.0. The "Update ready: reload when flat" notice shows in the workspace's top
@@ -25,16 +83,15 @@ Page only; no version bump (the release is cut after E2b). Nothing in ChartBridg
   LIVE pill (the top bar has it), no bar time; the close and change first (`compact: true`). The single chart page
   keeps its full legend and status line.
 - **Settings holds everything general**: Glide and Range style (every chart, and the single chart page), the trading
-  hotkeys (the 1.11.0 Settings; they act here once the order ticket comes), the large-print floors, Change PIN, the
+  hotkeys (the 1.11.0 Settings, acting on the order ticket), the large-print floors, Change PIN, the
   layout reset. **Colors** sit in the top bar and color every chart at once.
 - **Settings shared with the single chart page**: the workspace keeps everything under the same keys (no prefix), so
   colors, color presets, indicator colors, Glide, Range style, bracket presets, Qty and hotkeys are the same on both
   pages. Each chart keeps its own instrument, bars and range size in the layout (never in the single chart page's
   settings) and its own indicators and drawings under its panel id.
 - **Default layout** (12 x 6): MNQ Range 40 (cols 1 to 7, rows 1 to 4), MNQ 1 hour under it (rows 5 to 6; daily bars
-  come with ChartBridge 0.3.7), NQ 5 min and ES 1 min (cols 8 to 10), the order ticket's place (cols 11 to 12, rows 1
-  to 2: "Order ticket: next build") and Time and Sales (rows 3 to 6). No execution chart (Anthony's redesign: the order
-  ticket replaces it in E2b).
+  come with ChartBridge 0.3.7), NQ 5 min and ES 1 min (cols 8 to 10), the order ticket (cols 11 to 12, rows 1 to 3)
+  and Time and Sales (rows 4 to 6). No execution chart (Anthony's redesign: the order ticket replaces it).
 - `ChartLive.mount` options for a host (live/EMBED.md): `feed`, `view`, `onView`, `toolbar: false`, `compact`, `onColors`, and
   `setView`, `refreshSettings`, `refreshColors`, `stats`, `indicators`, `chips`, `colors` on the returned object. Without them a mounted
   chart and the single chart page behave exactly as before.
@@ -46,7 +103,7 @@ Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\instal
 under `nt8/` changes, and the engine only gets its version number. What Buy MKT, Sell MKT, B/E and Cancel all do when
 clicked is unchanged; Flatten now works while disarmed (below).
 - **Flatten works while not Armed** (Anthony 2026-10-01: Flatten is never blocked): the Flatten button, the Close
-  hotkey and Flatten all, and the Flatten button no longer dims while disarmed. Only the Armed check is dropped for them: trading on, connected, signed in, an order account
+  hotkey and Flatten all. The Flatten button no longer dims while disarmed. Only the Armed check is dropped for them: trading on, connected, signed in, an order account
   and the picker showing it are still checked, with the repeat guard and the pacing. Buy, Sell, B/E, Shift+click,
   Ctrl+click and Cancel all still need Armed (buttons, clicks and hotkeys).
 - **Settings, with a Hotkeys section** (Anthony 2026-10-01). A Settings button in the toolbar (the trading page only)

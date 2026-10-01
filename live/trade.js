@@ -649,6 +649,8 @@ function create(env) {
     ready, sendOrder, placeAt, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
+    /** for tests (test/order-account.test.js): the inner steps, run on their own */
+    _t: { batchStop, unsentCheck, actionSent, sendFlatten, onRefused, get batch() { return batch; } },
     /** for tests: the order actions sent in the last 1.1 s, and whether a B/E, Flatten all or Flatten retry is under way */
     busy: () => ({ be: !!beRun, flattenAll: !!faRun, retry: retry ? retry.list.map(f => f.account + ' ' + f.root) : [], recent: actionTimes.filter(x => x > now() - CANCEL_GAP).length }),
   };
