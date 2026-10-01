@@ -16,7 +16,8 @@ if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 const BASE = +(process.env.ORDERS_SMOKE_PORT || 8796);
 const errors = [];
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
-const check = (ok, m) => { if (!ok) fail(m); };
+let checks = 0;
+const check = (ok, m) => { checks++; if (!ok) fail(m); };
 const bridges = [];
 
 async function startBridge(port, flags) {
@@ -79,7 +80,11 @@ try {
   await shot(page, 'orders-1440-account-picker.png');
   await page.selectOption('#oAcct', 'Sim101'); await page.waitForTimeout(200);
   check(await markAccounts(page) === 'Sim101', 'back to Sim101');
-  check(await page.getAttribute('#oQty', 'max') === '5', 'qty max 5');
+  // 1.10.0: Qty is a select 1 to 9; above the MNQ cap of 5 the choices are off, never hidden, and the cap shows beside it
+  {
+    const q = await page.evaluate(() => ({ tag: document.getElementById('oQty').tagName, opts: [...document.getElementById('oQty').options].map(o => o.value + (o.disabled ? '-' : '+')).join(), cap: document.getElementById('oQtyCap').textContent, title: document.getElementById('oQty').title }));
+    check(q.tag === 'SELECT' && q.opts === '1+,2+,3+,4+,5+,6-,7-,8-,9-' && q.cap === 'max 5' && /MNQ cap 5/.test(q.title), 'qty select 1 to 9, 6 to 9 off over the cap of 5: ' + JSON.stringify(q));
+  }
   check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after load');
   check(/Trading through ChartBridge/.test(await page.textContent('#statusRo')), 'footer says trading');
 
@@ -104,7 +109,7 @@ try {
   check(await page.isVisible('#armPill'), 'ARMED pill on the chart legend');
   await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
   await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');
-  await page.fill('#oQty', '2');
+  await page.selectOption('#oQty', '2');
   await page.click('#buyMkt');
   await until(async () => (await page.textContent('#oPos')).startsWith('LONG 2'), 'position LONG 2 in the bar');
   let s = await until(async () => { const x = await state(); return x.orders.length === 2 ? x : null; }, 'two bracket legs');
@@ -208,11 +213,10 @@ try {
   check(lim && lim.side === 'buy' && lim.kind === 'limit' && lim.qty === 2 && Math.abs(lim.price - (L - 15)) <= 0.5, 'Shift+click buy limit near L - 15: ' + JSON.stringify(lim));
   check(lim && lim.cid && lim.cid.startsWith('p'), 'order carries the page cid');
 
-  // Sell side below the market: a sell stop. Long 2 with a 40 / 80 bracket set: the page sends no bracket on this
-  // reducing order (ChartBridge would refuse one), so it is accepted.
-  await page.click('#sideSeg >> text="Sell"');
+  // Sell side below the market: a sell stop (1.10.0: Shift + right click sells). Long 2 with a 40 / 80 bracket set: the
+  // page sends no bracket on this reducing order (ChartBridge would refuse one), so it is accepted.
   box = await cbox();
-  await page.keyboard.down('Shift'); await page.mouse.click(px, box.y + await yAt(L - 5)); await page.keyboard.up('Shift');
+  await page.keyboard.down('Shift'); await page.mouse.click(px, box.y + await yAt(L - 5), { button: 'right' }); await page.keyboard.up('Shift');
   s = await until(async () => { const x = await state(); return x.orders.length === 2 ? x : null; }, 'Shift+click sell stop');
   const sst = s && s.orders.find(o => o.side === 'sell');
   check(sst && sst.kind === 'stop', 'sell below the market is a stop: ' + JSON.stringify(sst));
@@ -226,8 +230,7 @@ try {
   await until(() => page.evaluate(() => !window.liveChart.getPosition() && window.liveChart.getOrders().length === 0), 'position and orders gone from the chart');
 
   // a 2-lot limit that fills in two pieces gets two stop and target pairs; the bar sums them up (item 4)
-  await page.click('#sideSeg >> text="Buy"');
-  await page.fill('#oQty', '2');
+  await page.selectOption('#oQty', '2');
   await page.evaluate(() => window.liveChart.goLive());
   for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt(L - 3); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await page.waitForTimeout(200); }
   box = await cbox();
@@ -244,7 +247,7 @@ try {
   await page.waitForTimeout(300);
   await shot(page, 'orders-1440-legs.png');
   // close 1 by hand: long 1 with two pairs working, more than the position: the warning color and why
-  await page.fill('#oQty', '1');
+  await page.selectOption('#oQty', '1');
   await page.click('#sellMkt');
   await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1'), 'long 1 after selling 1');
   const overText = await until(async () => { const t = await page.textContent('#oLegs'); return /^stops cover 2 of 1, targets cover 2 of 1 · .*over the position/.test(t) ? t : null; }, 'leg summary over the position');
@@ -275,14 +278,14 @@ try {
   check((await page.textContent('#oLegs')) === '', 'no leg summary when flat');
   await control(PORT, 'price', { root: 'MNQ', p: L });
 
-  // rejects: qty over the cap (stopped in the page), and a ChartBridge refusal (more than 200 ticks away)
-  await page.fill('#oQty', '9');
+  // rejects: qty over the cap (stopped in the page: a qty remembered over a lower cap stays picked and is refused), and a
+  // ChartBridge refusal (more than 200 ticks away)
+  await page.evaluate(() => { const q = document.getElementById('oQty'); q.value = '9'; q.dispatchEvent(new Event('change')); });
   await page.click('#buyMkt');
   st = await status(page);
   check(/Not sent: Qty 9 is over the MNQ cap of 5/.test(st.text) && /error/.test(st.cls), 'over-cap qty refused: ' + st.text);
   await shot(page, 'orders-1440-reject-qty.png');
-  await page.fill('#oQty', '1');
-  await page.click('#sideSeg >> text="Buy"');
+  await page.selectOption('#oQty', '1');
   for (let k = 0; k < 20 && (await page.evaluate(() => window.liveChart.yToPrice(12))) < L + 60; k++) {
     await page.mouse.move(box.x + box.width - 30, box.y + box.height * 0.5); await page.mouse.wheel(0, 240); await page.waitForTimeout(60);
   }
@@ -313,6 +316,187 @@ try {
   check(!(await page.title()).startsWith('ARMED'), 'title not ARMED after reload');
   check(await page.inputValue('#bStop') === '40', 'bracket kept after reload');
   await noSideScroll(page, 1440);
+
+  /* ---------------- 1.10.0 order bar essentials: bracket presets, qty select, B/E, Shift+click by mouse button */
+  {
+    const reloadPage = async () => {
+      await page.reload(); await unlockIfAsked(page);
+      await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
+      await until(() => page.evaluate(() => !document.getElementById('buyMkt').disabled), 'trading after reload');
+    };
+    const saved = () => page.evaluate(() => ({ br: JSON.parse(localStorage.getItem('live-bracket-v1')).MNQ, sel: JSON.parse(localStorage.getItem('live-bracket-sel-v1') || '{}').MNQ, presets: JSON.parse(localStorage.getItem('live-bracket-presets-v1') || 'null') }));
+    const boxes = async () => [await page.inputValue('#bPreset'), await page.inputValue('#bStop'), await page.inputValue('#bTarget')].join(' ');
+    const commit = async (id, v) => { await page.fill(id, v); await page.press(id, 'Tab'); };
+    const received = async () => (await control(PORT, 'received')).types.change || 0;
+
+    // qty: the pick is remembered per root
+    await page.selectOption('#oQty', '3');
+    check(JSON.parse(await page.evaluate(() => localStorage.getItem('live-qty-v1'))).MNQ === 3, '1.10.0 qty 3 saved for MNQ');
+    await reloadPage();
+    check(await page.inputValue('#oQty') === '3', '1.10.0 qty 3 back after a reload');
+    await page.selectOption('#oQty', '1');
+
+    // presets: a ratio sets the target and stays linked to the stop; typing the target makes it Custom
+    check(JSON.stringify(await page.$$eval('#bPreset option', os => os.map(o => o.value))) === '["custom","1:1","1:1.5","1:2","save"]', '1.10.0 preset choices: ' + JSON.stringify(await page.$$eval('#bPreset option', os => os.map(o => o.value))));
+    await commit('#bStop', '12');
+    check(await boxes() === 'custom 12 80', '1.10.0 Custom 12 / 80: ' + await boxes());
+    await page.selectOption('#bPreset', '1:2');
+    check(await boxes() === '1:2 12 24', '1.10.0 1:2 sets the target to 24: ' + await boxes());
+    await page.fill('#bStop', '15');                                          // typing, not committed yet: linked at once
+    check(await boxes() === '1:2 15 30', '1.10.0 the stop typed, the target follows: ' + await boxes());
+    await page.press('#bStop', 'Tab');
+    let sv = await saved();
+    check(sv.br.stop === 15 && sv.br.target === 30 && sv.sel === '1:2', '1.10.0 1:2 saved: ' + JSON.stringify(sv));
+    await page.selectOption('#bPreset', '1:1.5');
+    check(await boxes() === '1:1.5 15 23', '1.10.0 1:1.5 of 15 is round(22.5) = 23: ' + await boxes());
+    await commit('#bTarget', '40');
+    check(await boxes() === 'custom 15 40', '1.10.0 typing the target makes it Custom: ' + await boxes());
+    // Save current... with a name; it is picked, and survives a reload
+    await page.selectOption('#bPreset', 'save');
+    check(await page.isVisible('#bSaveBox') && await page.inputValue('#bSaveName') === '15/40t', '1.10.0 the save box opens with the numbers as the name');
+    await page.fill('#bSaveName', 'Scalp'); await page.press('#bSaveName', 'Enter');
+    sv = await saved();
+    check(await page.isHidden('#bSaveBox') && await boxes() === 'p:Scalp 15 40' && JSON.stringify(sv.presets) === '[{"name":"Scalp","stop":15,"target":40}]', '1.10.0 preset Scalp saved and picked: ' + await boxes() + ' ' + JSON.stringify(sv.presets));
+    await commit('#bStop', '20'); await commit('#bTarget', '60');               // Custom again, then back to the preset
+    check(await boxes() === 'custom 20 60', '1.10.0 typing the stop of a saved preset makes it Custom: ' + await boxes());
+    await page.selectOption('#bPreset', 'p:Scalp');
+    check(await boxes() === 'p:Scalp 15 40', '1.10.0 the preset sets stop and target: ' + await boxes());
+    await reloadPage();
+    check(await boxes() === 'p:Scalp 15 40', '1.10.0 the preset pick survives a reload: ' + await boxes());
+    await page.selectOption('#bPreset', '1:2');
+    await reloadPage();
+    check(await boxes() === '1:2 15 30', '1.10.0 the ratio pick survives a reload: ' + await boxes());
+    // points: shown and typed in points, stored in ticks, rounded to the nearest tick on commit
+    await page.click('#bUnit >> text="pt"');
+    check(await boxes() === '1:2 3.75 7.5', '1.10.0 in points: ' + await boxes());
+    await commit('#bStop', '2.6');                                            // 10.4 ticks: rounds to 10
+    sv = await saved();
+    check(await boxes() === '1:2 2.5 5' && sv.br.stop === 10 && sv.br.target === 20, '1.10.0 2.6 pt commits as 10 ticks, the target linked: ' + await boxes() + ' ' + JSON.stringify(sv.br));
+    await reloadPage();
+    check(await boxes() === '1:2 2.5 5', '1.10.0 the unit survives a reload: ' + await boxes());
+    await page.click('#bUnit >> text="t"');
+    check(await boxes() === '1:2 10 20', '1.10.0 back in ticks: ' + await boxes());
+    // delete the saved preset; the stop and target stay
+    await page.selectOption('#bPreset', 'p:Scalp');
+    await page.selectOption('#bPreset', 'delete');
+    sv = await saved();
+    check(await boxes() === 'custom 15 40' && JSON.stringify(sv.presets) === '[]', '1.10.0 preset deleted: ' + await boxes() + ' ' + JSON.stringify(sv.presets));
+    await shot(page, 'orders-1440-presets.png');
+    await commit('#bStop', '40'); await commit('#bTarget', '80');
+
+    // Shift+click by mouse button, armed: Shift + left buys, Shift + right and Ctrl + left sell; Ctrl and Shift together
+    // send nothing
+    await page.click('#armBtn');
+    await control(PORT, 'price', { root: 'MNQ', p: L });
+    await page.evaluate(() => window.liveChart.goLive());
+    for (let k = 0, prev = -1, calm = 0; k < 40 && calm < 3; k++) { const y = await yAt(L - 5); calm = Math.abs(y - prev) < 0.25 ? calm + 1 : 0; prev = y; await page.waitForTimeout(200); }
+    const clickAt = async (price, keys, button) => {
+      box = await cbox();
+      for (const k of keys) await page.keyboard.down(k);
+      await page.mouse.click(box.x + box.width * 0.45, box.y + await yAt(price), { button: button || 'left' });
+      for (const k of keys) await page.keyboard.up(k);
+    };
+    const newest = async n => { const x = await until(async () => { const v = await state(); return v.orders.length === n ? v : null; }, n + ' working orders'); return x ? x.orders[x.orders.length - 1] : null; };
+    await clickAt(L - 5, ['Shift']);
+    let o = await newest(1);
+    check(o && o.side === 'buy' && o.kind === 'limit' && Math.abs(o.price - (L - 5)) <= 0.5, '1.10.0 Shift + left click buys (a limit below): ' + JSON.stringify(o));
+    await page.waitForTimeout(450);
+    await clickAt(L + 5, ['Shift'], 'right');
+    o = await newest(2);
+    check(o && o.side === 'sell' && o.kind === 'limit' && Math.abs(o.price - (L + 5)) <= 0.5, '1.10.0 Shift + right click sells (a limit above): ' + JSON.stringify(o));
+    await page.waitForTimeout(450);
+    await clickAt(L - 6, ['Control']);
+    o = await newest(3);
+    check(o && o.side === 'sell' && o.kind === 'stop' && Math.abs(o.price - (L - 6)) <= 0.5, '1.10.0 Ctrl + left click sells (a stop below): ' + JSON.stringify(o));
+    await page.waitForTimeout(450);
+    await clickAt(L - 7, ['Control', 'Shift']);
+    await page.waitForTimeout(500);
+    check((await state()).orders.length === 3 && /^Ctrl and Shift together: nothing was sent/.test((await status(page)).text), '1.10.0 Ctrl + Shift: nothing sent: ' + (await status(page)).text);
+    await page.click('#cancelAllBtn');
+    await until(async () => (await state()).orders.length === 0, '1.10.0 the three orders cancelled');
+    // no browser menu anywhere on the chart (Anthony 2026-10-01): plot (right click with or without Shift; disarmed, so
+    // nothing is placed), price axis, delta pane, time axis; the order bar and the rest of the page keep it
+    await page.click('#armBtn');
+    await page.evaluate(() => { window.__cm = []; window.addEventListener('contextmenu', e => { window.__cm.push(e.defaultPrevented); }); });
+    box = await cbox();
+    await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.3, { button: 'right' });
+    await page.keyboard.down('Shift'); await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.35, { button: 'right' }); await page.keyboard.up('Shift');
+    await page.mouse.click(box.x + box.width - 20, box.y + box.height * 0.3, { button: 'right' });   // the price axis
+    const dp = await page.evaluate(() => window.liveChart.deltaPane());
+    check(dp.on && dp.height > 20, '1.10.0 the delta pane is on for the menu check: ' + JSON.stringify({ on: dp.on, top: dp.top, height: dp.height }));
+    await page.mouse.click(box.x + box.width * 0.4, box.y + dp.top + dp.height / 2, { button: 'right' });   // the delta pane
+    await page.mouse.click(box.x + box.width - 20, box.y + dp.top + dp.height / 2, { button: 'right' });    // the delta pane's axis
+    await page.mouse.click(box.x + box.width * 0.4, box.y + box.height - 6, { button: 'right' });           // the time axis
+    await page.click('#oPos', { button: 'right' });                                                     // the order bar
+    await page.click('#statusRo', { button: 'right' });                                                 // the page
+    const cm = await page.evaluate(() => window.__cm);
+    check(JSON.stringify(cm) === '[true,true,true,true,true,true,false,false]', '1.10.0 no browser menu anywhere on the chart, the menu on the order bar and the page: ' + JSON.stringify(cm));
+    check((await state()).orders.length === 0, '1.10.0 disarmed right clicks placed nothing');
+    await page.click('#armBtn');
+
+    // B/E: off while flat; one change per ChartBridge stop leg, to the average price rounded up a tick (long), only past it
+    check(await page.isDisabled('#beBtn'), '1.10.0 B/E off while flat');
+    await commit('#bStop', '40'); await commit('#bTarget', '0');
+    await page.click('#buyMkt');
+    await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1') && (await state()).orders.length === 1, '1.10.0 long 1 with a stop');
+    await control(PORT, 'price', { root: 'MNQ', p: L + 0.25 });
+    await page.waitForTimeout(450);
+    await page.click('#buyMkt');                                              // a second fill a tick higher: average L + 0.125
+    await until(async () => (await page.textContent('#oPos')).startsWith('LONG 2') && (await state()).orders.filter(x => x.role === 'stop').length === 2, '1.10.0 long 2, two stop legs');
+    await control(PORT, 'elsewhere', { account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'stop', qty: 1, p: L - 20 });   // a stop placed in NinjaTrader
+    await until(async () => (await state()).orders.length === 3, '1.10.0 the NinjaTrader stop is working');
+    await until(() => page.evaluate(() => !document.getElementById('beBtn').disabled), '1.10.0 B/E on with a position and a stop leg');
+    const be = L + 0.25;
+    // underwater and at break-even: nothing sent
+    for (const last of [L - 1, be]) {
+      await control(PORT, 'price', { root: 'MNQ', p: last });
+      await page.waitForTimeout(450);
+      const c0 = await received();
+      await page.click('#beBtn');
+      await page.waitForTimeout(400);
+      check(await received() === c0 && (await status(page)).text === 'Price is not past break-even yet; the stop stays.', '1.10.0 B/E with the last price at ' + last + ' sends nothing: ' + (await status(page)).text);
+    }
+    await shot(page, 'orders-1440-be-not-yet.png');
+    await control(PORT, 'price', { root: 'MNQ', p: L + 2 });
+    await page.waitForTimeout(450);
+    const c0 = await received();
+    await page.evaluate(() => { const el = document.getElementById('statusMsg'); window.__msgs = []; new MutationObserver(() => window.__msgs.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); });
+    await page.click('#beBtn');
+    s = await until(async () => { const x = await state(); return x.orders.filter(q => q.role === 'stop' && q.price === be).length === 2 ? x : null; }, '1.10.0 both stop legs at break-even');
+    check(await received() === c0 + 2, '1.10.0 B/E sent one change per stop leg: ' + (await received() - c0));
+    const other = s && s.orders.find(q => q.role === 'other');
+    check(other && other.price === L - 20, '1.10.0 the NinjaTrader stop was not touched: ' + JSON.stringify(other));
+    const msgs = await page.evaluate(() => window.__msgs);
+    check(msgs.some(t => t === 'Moving 2 stops to break-even ' + be.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ' · Sim101. 1 stop placed in NinjaTrader left alone.'), '1.10.0 the B/E note: ' + JSON.stringify(msgs));
+    await page.waitForTimeout(450);
+    // a second click: the legs are at break-even already, nothing more is sent
+    const c1 = await received();
+    await page.click('#beBtn');
+    await page.waitForTimeout(400);
+    check(await received() === c1, '1.10.0 a second B/E sends nothing: ' + (await status(page)).text);
+    await shot(page, 'orders-1440-be.png');
+
+    // the order bar on one line at 1920 and 1440 (it may wrap below about 1200, as before); screenshots at 1920, 1440, 1280
+    const oneLine = () => page.evaluate(() => {
+      const kids = [...document.getElementById('obar').children].filter(c => !c.classList.contains('ostate'));
+      const tops = kids.map(k => k.getBoundingClientRect().top), bottoms = kids.map(k => k.getBoundingClientRect().bottom);
+      return { spread: Math.max(...tops) - Math.min(...tops), height: Math.max(...bottoms) - Math.min(...tops) };
+    });
+    for (const w of [1920, 1440, 1280]) {
+      await page.setViewportSize({ width: w, height: 860 });
+      await page.waitForTimeout(300);
+      const ol = await oneLine();
+      if (w >= 1440) check(ol.spread < 4 && ol.height < 40, '1.10.0 the order bar is one line at ' + w + ': ' + JSON.stringify(ol));
+      await page.locator('.obar-ground').screenshot({ path: path.join(out, 'orders-' + w + '-order-bar.png') });
+      if (SHOTS) fs.copyFileSync(path.join(out, 'orders-' + w + '-order-bar.png'), path.join(SHOTS, 'orders-' + w + '-order-bar.png'));
+    }
+    await page.setViewportSize({ width: 1440, height: 860 });
+    await page.click('#flattenBtn');
+    await until(async () => (await page.textContent('#oPos')) === 'Flat' && (await state()).orders.length === 0, '1.10.0 flat after the B/E test');
+    await page.click('#armBtn');
+    await control(PORT, 'price', { root: 'MNQ', p: L });
+    await commit('#bStop', '40'); await commit('#bTarget', '80');
+  }
 
   // 400 px: armed with a position and a bracket
   const phone = await open(browser, PORT, 400, 860);
@@ -737,6 +921,54 @@ try {
     await A.evaluate(() => { document.getElementById('cancelAllBtn').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })); document.getElementById('armBtn').click(); });
     await until(async () => await evalWorking() === 0, 'N1 the three cancelled');
     check((await sentOf('cancel')).length === 3 && await A.getAttribute('#armBtn', 'aria-checked') === 'false', 'review 2 N1: 3 of 3 sent though Armed went off in the same task');
+    // B/E in paced chunks (Anthony 2026-10-01): with 12 ChartBridge stop legs one click sends 10 at once and the last 2
+    // once ChartBridge's 10 a second allows; a second click while it runs sends nothing; never over 10 in any second
+    const brKept = [await A.inputValue('#bStop'), await A.inputValue('#bTarget')];
+    const commitA = async (id, v) => { await A.fill(id, v); await A.press(id, 'Tab'); };
+    const stopLegs = async () => (await state5()).orders.filter(o => o.account === 'DEMO-EVAL' && o.root === 'MNQ' && o.role === 'stop');
+    const changesSent = () => A.evaluate(() => window.__sent.filter(m => m.type === 'change').map(m => ({ id: m.id, price: m.price, at: m.__at })));
+    const legs12 = async what => {
+      await control(P5, 'price', { root: 'MNQ', p: L5 });
+      await A.selectOption('#oQty', '1');
+      await armOn();
+      for (let i = 0; i < 12; i++) { await A.click('#buyMkt'); await A.waitForTimeout(450); }
+      await until(async () => (await stopLegs()).length === 12 && (await A.textContent('#oPos')).startsWith('LONG 12'), what, 8000);
+      await control(P5, 'price', { root: 'MNQ', p: L5 + 2 });                        // past break-even (L5, every fill at L5)
+      await A.waitForTimeout(1200);                                                   // the buys out of ChartBridge's last second
+      await A.evaluate(() => { window.__sent.length = 0; window.__rejects.length = 0; window.__statusSeen.length = 0; });
+    };
+    const flatA = async what => { await armOn(); await A.click('#flattenBtn'); await until(async () => (await A.textContent('#oPos')) === 'Flat' && await evalWorking() === 0, what); };
+    await commitA('#bStop', '40'); await commitA('#bTarget', '0');
+    await legs12('B/E paced: long 12 with 12 stop legs');
+    await A.click('#beBtn');
+    await A.waitForTimeout(500);
+    await A.click('#beBtn');                                                          // while the run is under way: absorbed
+    await until(async () => (await stopLegs()).filter(o => o.price === L5).length === 12, 'B/E paced: all 12 stop legs at break-even', 6000);
+    await A.waitForTimeout(1300);                                                     // anything more would have gone by now
+    const ch12 = await changesSent(), at12 = ch12.map(x => x.at);
+    const most12 = Math.max(...at12.map(t => at12.filter(u => u >= t && u < t + 1000).length)), span12 = Math.max(...at12) - Math.min(...at12);
+    const seen12 = await A.evaluate(() => window.__statusSeen.slice()), rej12 = await A.evaluate(() => window.__rejects.slice());
+    check(ch12.length === 12 && new Set(ch12.map(x => x.id)).size === 12 && ch12.every(x => x.price === L5) && span12 > 1000 && most12 <= 10 && rej12.length === 0,
+      'B/E paced: 12 changes, each leg once, over ' + Math.round(span12) + ' ms, at most ' + most12 + ' in any second, rejects ' + JSON.stringify(rej12) + ' (' + ch12.length + ' sent)');
+    check(seen12.some(t => /^Moving 12 stops to break-even [\d,.]+ · DEMO-EVAL\. 10 now, 2 as ChartBridge's 10 a second allows\.$/.test(t)) &&
+      seen12.some(t => /^B\/E under way on DEMO-EVAL MNQ: 2 left\. Nothing new was sent\.$/.test(t)) &&
+      seen12.some(t => /^B\/E: 12 changes sent to break-even [\d,.]+ · DEMO-EVAL MNQ\.$/.test(t)),
+      'B/E paced: the notes (start, the second click absorbed, done): ' + JSON.stringify(seen12));
+    await flatA('B/E paced: flat after the 12');
+    // Armed off while the run waits: the last 2 are not sent, and the note says so
+    await legs12('B/E paced: long 12 again');
+    await A.click('#beBtn');
+    await A.waitForTimeout(300);
+    await armOff();
+    await A.waitForTimeout(1600);
+    const chOff = await changesSent(), seenOff = await A.evaluate(() => window.__statusSeen.slice());
+    const atBe = (await stopLegs()).filter(o => o.price === L5).length;
+    check(chOff.length === 10 && atBe === 10 && seenOff.some(t => /^B\/E: 10 changes sent to break-even [\d,.]+ · DEMO-EVAL MNQ\. 2 not sent: Armed went off\.$/.test(t)),
+      'B/E paced: Armed off mid-run stops the rest (' + chOff.length + ' changes, ' + atBe + ' legs moved): ' + JSON.stringify(seenOff));
+    await flatA('B/E paced: flat after the disarm test');
+    await commitA('#bStop', brKept[0]); await commitA('#bTarget', brKept[1]);
+    await armOff();
+
     // a phone: the note never wraps the order bar
     await B.setViewportSize({ width: 400, height: 860 });
     await reloadTab(B);
@@ -834,4 +1066,4 @@ try {
   for (const b of bridges) b.kill();
 }
 if (errors.length) { console.error('FAIL\n' + errors.join('\n')); process.exit(1); }
-console.log('orders smoke: ok');
+console.log('orders smoke: ok (' + checks + ' checks)');

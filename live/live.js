@@ -27,6 +27,11 @@
  *                       since 1.7.0 what the delta pane shows)
  *   live-pane-heights-v1  { <paneId>: { delta: 0.2 } } the delta pane's share of the chart height, per pane (1.7.0)
  *   live-bracket-v1     { MNQ: { stop, target }, ... } (format unchanged since 1.3.0)
+ *   live-bracket-presets-v1  [{ name, stop, target }] the saved bracket presets (1.10.0), ticks, at most 12; cleaned on
+ *                       read by OrderTicket.cleanBracketPresets
+ *   live-bracket-sel-v1 { MNQ: 'custom' | '1:1' | '1:1.5' | '1:2' | 'p:<preset name>', ... } the preset picked per root
+ *   live-bracket-unit-v1  't' | 'pt' the bracket boxes in ticks or points (1.10.0; stored in ticks always)
+ *   live-qty-v1         { MNQ: 2, ... } the qty picked last per root, 1 to 9 (1.10.0)
  *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
  *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
  *                       live-colors-v1 up to 1.8 is copied in once, on page start, when this key has no VWAP.
@@ -138,7 +143,14 @@ const PRESET_MAX = 24, PRESET_NAME_MAX = 40;
 function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, PRESET_NAME_MAX).trim() : ''; }
 
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
-  paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1' };
+  paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
+  bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1' };
+const BRACKET_SELS = ['custom', '1:1', '1:1.5', '1:2'];
+/** A bracket preset pick as kept: Custom, a ratio, or 'p:' and a saved preset's name (1 to 24 characters); else Custom. */
+function cleanBracketSel(v) {
+  if (BRACKET_SELS.includes(v)) return v;
+  return typeof v === 'string' && /^p:\S/.test(v) && v.length <= 26 ? v : 'custom';
+}
 const OLD = { settings: 'live-settings-v1', range: 'live-range-v1', indicators: 'live-indicators-v1' };
 
 /** A whole number of ticks from 1 to 400, or null when the text is not one (half typed, empty, 0, 4.5). */
@@ -474,6 +486,15 @@ function create(storage) {
       return raw.set(KEYS.indicatorColors, Object.assign(savedIndColors(), set));
     },
     bracket(root) { return obj(KEYS.bracket)[root]; },
+    /** The qty picked last for a root (1.10.0): a whole number 1 to 9, else 1. */
+    qty(root) { const v = obj(KEYS.qty)[root]; return Number.isInteger(v) && v >= 1 && v <= 9 ? v : 1; },
+    setQty(root, n) { if (!ROOTS.includes(root) || !Number.isInteger(n) || n < 1 || n > 9) return false; return patch(KEYS.qty, root, n); },
+    /** The bracket preset picked for a root (1.10.0): see cleanBracketSel. */
+    bracketSel(root) { return cleanBracketSel(obj(KEYS.bracketSel)[root]); },
+    setBracketSel(root, v) { if (!ROOTS.includes(root)) return false; return patch(KEYS.bracketSel, root, cleanBracketSel(v)); },
+    /** The bracket boxes' unit (1.10.0): 't' (ticks, the default) or 'pt' (points). */
+    bracketUnit() { return raw.get(KEYS.bracketUnit) === 'pt' ? 'pt' : 't'; },
+    setBracketUnit(u) { return raw.set(KEYS.bracketUnit, u === 'pt' ? 'pt' : 't'); },
     /** Set one bracket field ('stop' or 'target', whole ticks 0 to 200) for one root; the other field is kept. */
     setBracketField(root, field, ticks) {
       if (!ROOTS.includes(root) || (field !== 'stop' && field !== 'target') || !Number.isInteger(ticks) || ticks < 0 || ticks > 200) return false;
@@ -586,7 +607,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { create, debounce, orderAccount, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+api = { create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -639,21 +660,22 @@ function markup(p, o) {
 `;
   const obar = !o.trading ? '' : `
   <div class="obar-ground"><section class="obar" id="${p}obar" aria-label="Order entry" hidden>
-    <button type="button" class="arm" id="${p}armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every page load."><span class="knob" aria-hidden="true"></span><span id="${p}armText">Armed off</span></button>
+    <button type="button" class="arm" id="${p}armBtn" role="switch" aria-checked="false" title="Armed: one click trades, no confirmation. Off after every page load."><span class="knob" aria-hidden="true"></span><span class="arm-text"><span id="${p}armText">Armed off</span><span class="arm-room" aria-hidden="true">ARMED: one click trades</span></span></button>
     <label class="ofield"><span class="glabel">Account</span><select class="acct-sel acct-main" id="${p}oAcct" aria-label="Account: orders go to it and the chart marks its fills" title="Orders go to this account, and the chart marks its fills"></select></label>
-    <label class="ofield"><span class="glabel">Qty</span><input class="oin" id="${p}oQty" type="number" min="1" max="1" step="1" value="1" inputmode="numeric" aria-label="Order quantity"></label>
+    <label class="ofield"><span class="glabel">Qty</span><select class="acct-sel oqty" id="${p}oQty" aria-label="Order quantity">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select><span class="ounit" id="${p}oQtyCap"></span></label>
     <span class="ofield">
       <button type="button" class="obtn buy" id="${p}buyMkt">Buy MKT</button>
       <button type="button" class="obtn sell" id="${p}sellMkt">Sell MKT</button>
     </span>
-    <span class="ofield"><span class="glabel" id="${p}sideLabel" title="Shift+click a price on the chart places a limit or stop on this side">Shift+click</span>
-      <span class="seg sans side-seg" id="${p}sideSeg" role="group" aria-labelledby="${p}sideLabel"><button type="button" data-v="buy">Buy</button><button type="button" data-v="sell">Sell</button></span></span>
     <span class="ofield"><span class="glabel">Bracket</span>
-      <input class="oin" id="${p}bStop" type="number" min="0" max="200" step="1" inputmode="numeric" aria-label="Bracket stop in ticks, 0 for none" title="Stop, ticks from the fill (0 = none)">
-      <input class="oin" id="${p}bTarget" type="number" min="0" max="200" step="1" inputmode="numeric" aria-label="Bracket target in ticks, 0 for none" title="Target, ticks from the fill (0 = none)">
-      <span class="ounit">stop / target ticks</span></span>
+      <select class="acct-sel bpre" id="${p}bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
+      <span class="bsave" id="${p}bSaveBox" hidden><input class="oin bname" id="${p}bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" id="${p}bSaveOk">Save</button><button type="button" class="btn" id="${p}bSaveNo" aria-label="Do not save">x</button></span>
+      <input class="oin" id="${p}bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
+      <input class="oin" id="${p}bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
+      <span class="seg sans bunit" id="${p}bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span></span>
     <span class="ofield">
       <button type="button" class="btn" id="${p}flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
+      <button type="button" class="btn" id="${p}beBtn" title="Move the stop to break-even">B/E</button>
       <button type="button" class="btn" id="${p}cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button>
     </span>
     <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" id="${p}oCancel" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
@@ -840,8 +862,9 @@ function start(container, opt, PAGE) {
   const nowMs = () => (performance.timeOrigin || Date.now() - performance.now()) + performance.now();
 
   let IC = prefs.indicatorColors();                    // the indicators' colors (1.9.0), set in their gears
+  const AXIS_W = 78;                                   // the price axis width (the engine's default), so the page knows where the plot ends
   const chart = CE.create($('chart'), {
-    barSeconds: 60, precision: 2, tick: 0.25,
+    barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
     layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false },
     motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc },
@@ -1825,12 +1848,17 @@ function start(container, opt, PAGE) {
   const TR = {
     v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
-    account: '', side: 'buy',
+    account: '',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
   };
   const brackets = {};
   for (const r of ROOTS) brackets[r] = OT.cleanBracket(prefs.bracket(r));
+  /* 1.10.0: the qty picked last per root (1 to 9), the bracket preset picked per root, and the bracket unit. */
+  const qtys = {};
+  for (const r of ROOTS) qtys[r] = prefs.qty(r);
+  const BK = { sel: {}, unit: prefs.bracketUnit(), presets: OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets)) };
+  for (const r of ROOTS) BK.sel[r] = prefs.bracketSel(r);
   const sameAction = OT.repeatGuard(400);
   let cidSeq = 0;
   const newCid = () => 'p' + Date.now().toString(36) + '-' + (++cidSeq);
@@ -1948,6 +1976,7 @@ function start(container, opt, PAGE) {
   };
   const capNow = () => OT.maxQtyFor(TR, D.root);
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
+  const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;
 
   /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded. */
   function ready() {
@@ -1976,6 +2005,129 @@ function start(container, opt, PAGE) {
     flash('Sent ' + side.toUpperCase() + ' ' + (kind === 'market' ? 'MKT' : kind === 'limit' ? 'LMT' : 'STP') + ' ' + qty + ' ' + D.root +
       (kind === 'market' ? '' : ' @ ' + U.fmtPrice(price, precisionOf())) + (msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
   }
+  /*
+   * B/E (1.10.0, Anthony): one change per working ChartBridge stop leg of this account and instrument, to the average
+   * price on the tick grid, rounded toward safety (OT.breakEvenPrice). Only when the last price is past it on the
+   * profitable side (ChartBridge would refuse a stop through the market). Stops placed in NinjaTrader are never touched;
+   * a leg already at break-even or past it is left (moving it would loosen it). Needs Armed, like every order action.
+   * Paced (Anthony 2026-10-01): as many changes go at once as ChartBridge's 10 a second allows (counting the order
+   * actions of the last 1.1 s), the rest as soon as it allows, so one click always finishes. Before each later chunk
+   * the page must still be Armed, connected and signed in, and the last price still past break-even, else the rest is
+   * not sent; a leg no longer a working ChartBridge stop behind break-even (or in a Cancel all) is skipped. A note
+   * says what happened. A click while a run is under way sends nothing.
+   */
+  const BE_LIMIT = 10;
+  let beRun = null;                                                // { account, root, be, qty, queue: [id], sent, skipped, notes }
+  function breakEven() {
+    if (!ready()) return;
+    if (beRun) { flash('B/E under way on ' + beRun.account + ' ' + beRun.root + ': ' + beRun.queue.length + ' left. Nothing new was sent.', 'warn'); return; }
+    const account = TR.account, root = D.root, pos = TR.positions.get(account + '|' + root);
+    if (!pos || !pos.qty) { flash('B/E: no open position on ' + account + ' ' + root + '. Nothing was sent.', 'warn'); renderTrading(); return; }
+    const be = OT.breakEvenPrice(pos.avgPrice, pos.qty, tickOf(root)), fmt = p => U.fmtPrice(p, precisionOf());
+    if (be === null) { flash('B/E: the position has no average price yet. Nothing was sent.', 'warn'); return; }
+    const last = lastPrice();
+    if (!(last > 0)) { flash('No price yet: nothing was sent.', 'warn'); return; }
+    if (!OT.breakEvenAllowed(pos.qty, be, last)) { flash('Price is not past break-even yet; the stop stays.', 'warn'); return; }
+    const legs = OT.breakEvenLegs([...TR.orders.values()], account, root, pos.qty, be);
+    const ids = legs.ids.filter(id => !inCancelAll(id)), inCancel = legs.ids.length - ids.length;
+    const plural = (n, w) => n + ' ' + w + (n > 1 ? 's' : '');
+    const notes = (legs.done ? ' ' + plural(legs.done, 'stop') + ' already at break-even or past it left as ' + (legs.done > 1 ? 'they are' : 'it is') + '.' : '') +
+      (inCancel ? ' ' + plural(inCancel, 'stop') + ' in the Cancel all under way left.' : '') +
+      (legs.other ? ' ' + plural(legs.other, 'stop') + ' placed in NinjaTrader left alone.' : '');
+    if (!ids.length) { flash('B/E: no ChartBridge stop to move; nothing was sent.' + notes, 'warn'); renderTrading(); return; }
+    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
+    if (!sameAction('be|' + account + '|' + root + '|' + be, now)) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
+    const chunks = OT.paceChunks(ids, recent, BE_LIMIT), first = chunks[0];
+    for (const id of first) send({ type: 'change', id, price: be });
+    const left = ids.length - first.length;
+    flash('Moving ' + plural(ids.length, 'stop') + ' to break-even ' + fmt(be) + ' · ' + account + '.' +
+      (left ? ' ' + first.length + ' now, ' + left + ' as ChartBridge\'s 10 a second allows.' : '') + notes, '');
+    if (!left) return;
+    beRun = { account, root, be, qty: pos.qty, queue: ids.slice(first.length), sent: first.length, skipped: 0, notes };
+    bePump();
+  }
+  /* The rest of a paced B/E: each later chunk once the budget allows, re-checked before it goes (see breakEven). */
+  function bePump() {
+    const r = beRun;
+    if (!r) return;
+    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
+    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
+    if (room) {
+      const why = !TRADING || FRAMED || !TR.enabled ? 'trading went off' : !ws || ws.readyState !== 1 ? 'the connection to ChartBridge dropped' :
+        !TR.armed ? 'Armed went off' : D.root !== r.root ? 'the instrument changed' : !OT.breakEvenAllowed(r.qty, r.be, lastPrice()) ? 'the last price is no longer past break-even' : '';
+      if (why) { beDone(r.queue.length + ' not sent: ' + why + '.'); return; }
+      let n = 0;
+      while (r.queue.length && n < room) {
+        const id = r.queue.shift(), o = TR.orders.get(id);
+        const behind = o && OT.isWorking(o) && o.role === 'stop' && typeof o.price === 'number' && (r.qty > 0 ? o.price < r.be : o.price > r.be);
+        if (!behind || inCancelAll(id)) { r.skipped++; continue; }
+        send({ type: 'change', id, price: r.be }); r.sent++; n++;
+      }
+    }
+    if (!r.queue.length) { beDone(''); return; }
+    const oldest = actionTimes.find(t => t > now - CANCEL_GAP);
+    later(() => { if (beRun === r) bePump(); }, Math.max(20, (oldest === undefined ? now : oldest) + CANCEL_GAP - now));
+  }
+  function beDone(notSent) {
+    const r = beRun;
+    beRun = null;
+    const skipped = r.skipped ? ' ' + r.skipped + ' skipped: no longer a working stop behind break-even.' : '';
+    flash('B/E: ' + r.sent + ' change' + (r.sent === 1 ? '' : 's') + ' sent to break-even ' + U.fmtPrice(r.be, precisionOf()) + ' · ' + r.account + ' ' + r.root + '.' +
+      skipped + (notSent ? ' ' + notSent : '') + r.notes, skipped || notSent ? 'warn' : '');
+  }
+
+  /*
+   * Selling by mouse button (1.10.0): Shift + right click, or Ctrl + left click, on the plot sells at the price, a limit
+   * or a stop by the last price as with Shift+click. Only while Armed and with no drawing tool, never on an order's label
+   * or tag (those drag or cancel the order), and only for a click that does not move; the keys must still be held at the
+   * release. Such a press is kept from the chart (no pan, no drawing picked). Ctrl and Shift together send nothing. The
+   * browser's menu never opens anywhere on the chart on this page (plot, price and time axes, delta pane). `lastUp`:
+   * the keys of the last release, read by orderPlace.
+   */
+  const BOTH_KEYS = 'Ctrl and Shift together: nothing was sent. Shift+click buys; Shift+right click or Ctrl+click sells.';
+  let lastUp = null;
+  function setupSellClicks() {
+    const host = $('chart'), cv = host.querySelector('canvas');
+    host.addEventListener('contextmenu', e => e.preventDefault());   // the whole chart: plot, axes, delta pane (Anthony 2026-10-01)
+    if (!cv) return;
+    const plotAt = e => {
+      const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      return x >= 0 && x < r.width - AXIS_W && y >= 0 && y < chart.deltaPane().plotHeight ? { x, y } : null;
+    };
+    const inR = (r, pt) => !!r && pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h;
+    const onOrder = pt => chart.orderHandles().some(h => inR(h.box, pt) || inR(h.xbox, pt) || inR(h.tag, pt));
+    let press = null;
+    host.addEventListener('pointerdown', e => {
+      if (e.target !== cv || e.pointerType === 'touch') return;
+      if (!((e.button === 0 && e.ctrlKey) || (e.button === 2 && e.shiftKey))) return;
+      if (!TR.armed || chart.getTool()) return;
+      const pt = plotAt(e);
+      if (!pt || onOrder(pt)) return;
+      e.stopPropagation();                                         // the chart never sees it: no pan, no drawing picked
+      press = { id: e.pointerId, button: e.button, x: e.clientX, y: e.clientY, moved: false };
+      try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }, true);
+    host.addEventListener('pointermove', e => {
+      if (press && e.pointerId === press.id && Math.abs(e.clientX - press.x) + Math.abs(e.clientY - press.y) > 2) press.moved = true;
+    }, true);
+    const up = e => {
+      if (e.target === cv) lastUp = { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, button: e.button };
+      if (!press || e.pointerId !== press.id) return;
+      const pr = press; press = null;
+      e.stopPropagation();
+      if (e.type === 'pointercancel' || pr.moved) return;
+      const pt = plotAt(e);
+      if (!pt) return;
+      if (!(pr.button === 0 ? e.ctrlKey : e.shiftKey)) return;    // let go of the key first: nothing, like Shift+click
+      if (e.ctrlKey && e.shiftKey) { flash(BOTH_KEYS, 'warn'); return; }
+      if (!TR.armed) return;
+      const price = U.roundTo(chart.yToPrice(pt.y), D.tick);
+      sendOrder('sell', OT.placeKind('sell', price, lastPrice()), price);
+    };
+    host.addEventListener('pointerup', up, true);
+    host.addEventListener('pointercancel', up, true);
+  }
+
   function workingHere() { return [...TR.orders.values()].filter(o => o.account === TR.account && o.root === D.root && OT.isWorking(o)); }
 
   /*
@@ -2163,17 +2315,12 @@ function start(container, opt, PAGE) {
     // the tab title and the ARMED pill name the account (review S5): two tabs on two accounts are by design now
     if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
     $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
-    const q = $('oQty'); q.max = String(cap);
-    if (!q.value) q.value = '1';
-    for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
+    renderQty(root, cap);
+    for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'beBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
     $('oOff').textContent = on ? '' : 'Trading off: ' + TR.reason;
     $('oOff').hidden = on;
-    for (const b of $('sideSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === TR.side));
-    const br = brackets[root] || { stop: 0, target: 0 };
-    if (document.activeElement !== $('bStop')) $('bStop').value = br.stop;
-    if (document.activeElement !== $('bTarget')) $('bTarget').value = br.target;
-    $('bStop').setAttribute('aria-label', 'Bracket stop for ' + root + ' in ticks, 0 for none');
-    $('bTarget').setAttribute('aria-label', 'Bracket target for ' + root + ' in ticks, 0 for none');
+    renderBracket(root);
+    renderBreakEven(root, on);
     $('statusRo').textContent = on ? 'Trading through ChartBridge. Live CME data is for this screen only.' : 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.';
     chart.setOrders(on ? workingHere() : []);
     renderBatch();                                                 // its color follows the account and instrument shown
@@ -2182,6 +2329,66 @@ function start(container, opt, PAGE) {
     chart.setPosition(pos && pos.qty ? pos : null, { pointValue: inst.pointValue || 0 });
     renderPositionInfo();
   }
+  /* Qty (1.10.0): a select 1 to 9; the choices over the root's cap are off, and the cap is shown beside it. The qty
+     picked last for this root stays picked even over the cap, so a click says why it is not sent (checkQty). */
+  function renderQty(root, cap) {
+    const q = $('oQty'), opts = OT.qtyOptions(cap);
+    for (const o of opts) q.options[o.n - 1].disabled = !o.ok;
+    q.value = String(qtys[root] || 1);
+    const capped = cap < OT.QTY_CHOICES;
+    $('oQtyCap').textContent = capped ? 'max ' + cap : '';
+    q.title = root + ' cap ' + cap + ' (maxQty in ChartBridge)' + (capped ? ': ' + (cap + 1) + ' and up are off' : '');
+  }
+  /* Bracket (1.10.0): the preset select, the stop and target boxes in ticks or points, and the unit toggle. */
+  const fmtUnit = (ticks, root) => BK.unit === 'pt' ? String(Math.round(ticks * tickOf(root) * 1e6) / 1e6) : String(ticks);
+  /* The preset picked for a root, as shown: a ratio or a saved preset only while the stop and target still match it. */
+  function bracketSelShown(root) {
+    const sel = BK.sel[root] || 'custom', br = brackets[root] || { stop: 0, target: 0 }, k = OT.ratioOf(sel);
+    if (k !== null) return OT.ratioBracket(br.stop, k).target === br.target ? sel : 'custom';
+    if (sel.startsWith('p:')) {
+      const pr = BK.presets.find(x => x.name === sel.slice(2));
+      return pr && pr.stop === br.stop && pr.target === br.target ? sel : 'custom';
+    }
+    return 'custom';
+  }
+  let bpreKey = '';
+  function renderBracket(root, force) {                // force: the boxes too while one has the focus (a preset or unit picked)
+    const br = brackets[root] || { stop: 0, target: 0 }, pt = BK.unit === 'pt', tick = tickOf(root);
+    for (const [id, k, what] of [['bStop', 'stop', 'stop'], ['bTarget', 'target', 'target']]) {
+      const el = $(id);
+      el.step = pt ? String(tick) : '1'; el.max = pt ? String(OT.MAX_BRACKET_TICKS * tick) : String(OT.MAX_BRACKET_TICKS);
+      if (force || document.activeElement !== el) el.value = fmtUnit(br[k], root);
+      el.setAttribute('aria-label', 'Bracket ' + what + ' for ' + root + ' in ' + (pt ? 'points' : 'ticks') + ', 0 for none');
+      el.title = (what === 'stop' ? 'Stop' : 'Target') + ', ' + (pt ? 'points' : 'ticks') + ' from the fill (0 = none)' + (pt ? ': ' + br[k] + ' ticks' : '');
+    }
+    for (const b of $('bUnit').children) b.setAttribute('aria-pressed', String(b.dataset.v === BK.unit));
+    const shown = bracketSelShown(root), sel = $('bPreset');
+    const key = BK.presets.map(x => x.name + '|' + x.stop + '|' + x.target).join(',') + '#' + (shown.startsWith('p:') ? shown : '') + '#' + BK.unit + tick;
+    if (key !== bpreKey) {
+      bpreKey = key;
+      const opt = (v, text) => new Option(text, v);
+      const list = [opt('custom', 'Custom')].concat(OT.BRACKET_RATIOS.map(r => opt(r.id, r.id)));
+      if (BK.presets.length) {
+        const g = document.createElement('optgroup'); g.label = 'Saved';
+        for (const x of BK.presets) g.append(opt('p:' + x.name, x.name));
+        list.push(g);
+      }
+      list.push(opt('save', 'Save current...'));
+      if (shown.startsWith('p:')) list.push(opt('delete', 'Delete ' + shown.slice(2)));
+      sel.replaceChildren(...list);
+    }
+    if (sel.value !== shown) sel.value = shown;
+  }
+  /* B/E (1.10.0): on only with a position on this account and instrument and a ChartBridge stop leg on its closing side. */
+  function renderBreakEven(root, on) {
+    const btn = $('beBtn'), pos = on ? TR.positions.get(TR.account + '|' + root) : null;
+    const legs = pos && pos.qty ? OT.breakEvenLegs(TR.orders.values(), TR.account, root, pos.qty, null) : null;
+    const ok = !!legs && legs.ids.length > 0;
+    btn.disabled = !on || !ok;
+    btn.title = ok ? 'Move the ChartBridge stop' + (legs.ids.length > 1 ? 's' : '') + ' of this position to break-even (the average price, rounded a tick toward safety)'
+      : 'B/E needs an open position here with a ChartBridge stop working';
+  }
+
   /* Position and other accounts in the bar (P&L refreshes with the status line). */
   function renderPositionInfo() {
     if (!TRADING) return;
@@ -2826,10 +3033,15 @@ function start(container, opt, PAGE) {
   syncAccounts();
 
   /* order bar and order actions on the chart: only on a trading chart (a read-only one has no order bar at all) */
-  const bracketSaved = LP.debounce((root, k) => prefs.setBracketField(root, k, brackets[root][k]), 350);
+  /* typed bracket ticks are saved after a pause, each field on its own (a ratio changes the target with the stop) */
+  const bracketSaved = { stop: LP.debounce(root => prefs.setBracketField(root, 'stop', brackets[root].stop), 350),
+    target: LP.debounce(root => prefs.setBracketField(root, 'target', brackets[root].target), 350) };
+  const KIND_TEXT = { limit: 'LMT', stop: 'STP' };
+  /* Shift held over the chart (1.10.0): a click buys here, a right click sells; the preview shows the buy and says what
+     the right click would place. */
   const previewAt = price => {
-    const qty = qtyNow();
-    return { side: TR.side, kind: OT.placeKind(TR.side, price, lastPrice()), qty: isFinite(qty) ? qty : 0, note: 'click to place' };
+    const qty = qtyNow(), last = lastPrice();
+    return { side: 'buy', kind: OT.placeKind('buy', price, last), qty: isFinite(qty) ? qty : 0, note: 'click · right click: SELL ' + KIND_TEXT[OT.placeKind('sell', price, last)] };
   };
   if (TRADING) {
     $('armBtn').addEventListener('click', () => {
@@ -2849,43 +3061,144 @@ function start(container, opt, PAGE) {
       applyMarkers();
     });
     $('oQty').addEventListener('change', () => {
-      const q = $('oQty'), v = Math.round(+q.value);
-      if (isFinite(v) && v >= 1) q.value = String(v);
+      const v = +$('oQty').value;
+      if (Number.isInteger(v) && v >= 1 && v <= OT.QTY_CHOICES) { qtys[D.root] = v; prefs.setQty(D.root, v); }
+      renderTrading();
     });
     /* Order buttons act on a real mouse or touch click only: a key press (Enter or Space on a focused button,
        e.detail 0) never sends an order, and the button gives up focus after a click. */
     const pointerOnly = fn => e => { e.currentTarget.blur(); if (e.detail === 0) { flash('Order buttons work by click only, not by keyboard.', 'warn'); return; } fn(e); };
     $('buyMkt').addEventListener('click', pointerOnly(() => sendOrder('buy', 'market', null)));
     $('sellMkt').addEventListener('click', pointerOnly(() => sendOrder('sell', 'market', null)));
-    $('sideSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; TR.side = b.dataset.v; renderTrading(); chart.setOrderPreview(previewAt); });
-    /* Bracket ticks per root: saved as typed (whole numbers 0 to 200; anything else waits), and at once on Enter or
-       leaving the box. Each save writes only this one field (stop or target) for this root. */
+    /* Bracket ticks per root: saved as typed (whole ticks 0 to 200, or points on the tick grid; anything else waits),
+       and at once on Enter or leaving the box, where points round to the nearest tick. Each save writes one field. */
+    const typedTicks = (text, root) => {
+      const v = String(text).trim();
+      if (BK.unit === 't') return /^\d+$/.test(v) && +v <= OT.MAX_BRACKET_TICKS ? +v : null;
+      if (!/^(\d+\.?\d*|\.\d+)$/.test(v)) return null;
+      const t = +v / tickOf(root), n = Math.round(t);
+      return Math.abs(t - n) < 1e-6 && n <= OT.MAX_BRACKET_TICKS ? n : null;
+    };
+    const committedTicks = (text, root) => {
+      const v = String(text).trim();
+      if (BK.unit === 't' || v === '') return v;                     // cleanBracket rounds and caps, as before 1.10.0
+      return Math.round(+v / tickOf(root));
+    };
+    /* Set one field for the root shown. A ratio picked keeps the target linked to the stop; typing the target, or the
+       stop of a saved preset, makes it Custom. `now`: save at once (a commit), else after a pause (typing). */
+    function setBracket(k, ticks, now) {
+      const root = D.root, sel = bracketSelShown(root), ratio = OT.ratioOf(sel);
+      brackets[root] = OT.cleanBracket(Object.assign({}, brackets[root], { [k]: ticks }));
+      const fields = [k];
+      if (k === 'stop' && ratio !== null) {
+        const linked = OT.ratioBracket(brackets[root].stop, ratio);
+        if (Math.round(brackets[root].stop * ratio) > OT.MAX_BRACKET_TICKS) flash('Target capped at ' + OT.MAX_BRACKET_TICKS + ' ticks, the most ChartBridge takes.', 'warn');
+        brackets[root].target = linked.target; fields.push('target');
+      } else if (sel !== 'custom') { BK.sel[root] = 'custom'; prefs.setBracketSel(root, 'custom'); }
+      for (const f of fields) {
+        if (now) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
+        else bracketSaved[f](root);
+      }
+    }
     for (const [id, k] of [['bStop', 'stop'], ['bTarget', 'target']]) {
       $(id).addEventListener('input', e => {
-        const v = e.target.value.trim();
-        if (!/^\d+$/.test(v) || +v > OT.MAX_BRACKET_TICKS) return;
-        brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: v }));
-        bracketSaved(D.root, k);
+        const n = typedTicks(e.target.value, D.root);
+        if (n === null) return;
+        setBracket(k, n, false);
+        renderBracket(D.root);
       });
       $(id).addEventListener('change', e => {
-        brackets[D.root] = OT.cleanBracket(Object.assign({}, brackets[D.root], { [k]: e.target.value }));
-        e.target.value = brackets[D.root][k];
-        bracketSaved.cancel();
-        prefs.setBracketField(D.root, k, brackets[D.root][k]);
+        setBracket(k, committedTicks(e.target.value, D.root), true);
+        e.target.value = fmtUnit(brackets[D.root][k], D.root);
+        renderBracket(D.root);
       });
     }
+    $('bUnit').addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b || b.dataset.v === BK.unit) return;
+      for (const id of ['bStop', 'bTarget']) if (document.activeElement === $(id)) $(id).blur();   // commit what was typed, in the old unit
+      BK.unit = b.dataset.v === 'pt' ? 'pt' : 't'; prefs.setBracketUnit(BK.unit);
+      renderBracket(D.root, true);
+    });
+    /* The preset select: a ratio sets the target from the stop; a saved preset sets both; Save current... names the
+       stop and target as they are; Delete removes the saved preset shown. */
+    const readPresets = () => { BK.presets = OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets)); };
+    const pickSel = (root, v) => { BK.sel[root] = v; prefs.setBracketSel(root, v); };
+    function closeSaveBox() { $('bSaveBox').hidden = true; $('bPreset').hidden = false; }
+    $('bPreset').addEventListener('focus', () => { readPresets(); renderBracket(D.root); });
+    $('bPreset').addEventListener('change', e => {
+      const root = D.root, v = e.target.value, shown = bracketSelShown(root);
+      readPresets();
+      if (v === 'save') {
+        const br = brackets[root];
+        $('bSaveName').value = OT.defaultPresetName(br.stop, br.target);
+        $('bPreset').hidden = true; $('bSaveBox').hidden = false;
+        $('bSaveName').focus(); $('bSaveName').select();
+      } else if (v === 'delete') {
+        const name = shown.startsWith('p:') ? shown.slice(2) : '';
+        const next = BK.presets.filter(x => x.name !== name);
+        if (name && prefs.raw.set(LP.KEYS.bracketPresets, next)) { BK.presets = next; flash('Deleted bracket preset ' + name + '. The stop and target stay as they are.', ''); }
+        pickSel(root, 'custom');
+      } else if (v.startsWith('p:')) {
+        const pr = BK.presets.find(x => x.name === v.slice(2));
+        if (!pr) { flash('That bracket preset is gone (deleted in another window).', 'warn'); pickSel(root, 'custom'); }
+        else {
+          brackets[root] = OT.cleanBracket(pr);
+          for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
+          pickSel(root, v);
+        }
+      } else if (OT.ratioOf(v) !== null) {
+        const k = OT.ratioOf(v);
+        if (Math.round(brackets[root].stop * k) > OT.MAX_BRACKET_TICKS) flash('Target capped at ' + OT.MAX_BRACKET_TICKS + ' ticks, the most ChartBridge takes.', 'warn');
+        brackets[root] = OT.ratioBracket(brackets[root].stop, k);   // the target follows the stop
+        for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
+        pickSel(root, v);
+      } else pickSel(root, 'custom');
+      bpreKey = '';
+      renderBracket(root, true);
+    });
+    function savePreset() {
+      const root = D.root, br = brackets[root], name = OT.bracketPresetName($('bSaveName').value) || OT.defaultPresetName(br.stop, br.target);
+      readPresets();
+      const list = BK.presets.slice(), same = list.findIndex(x => x.name.toLowerCase() === name.toLowerCase());
+      if (same < 0 && list.length >= OT.BRACKET_PRESET_MAX) { flash('Not saved: ' + OT.BRACKET_PRESET_MAX + ' bracket presets is the most. Delete one first.', 'warn'); return; }
+      const pr = { name, stop: br.stop, target: br.target };
+      if (same >= 0) list[same] = pr; else list.push(pr);
+      if (!prefs.raw.set(LP.KEYS.bracketPresets, list)) { flash('Not saved: this browser blocks site storage.', 'error'); return; }
+      BK.presets = OT.cleanBracketPresets(list);
+      pickSel(root, 'p:' + name);
+      closeSaveBox(); bpreKey = ''; renderBracket(root);
+      flash((same >= 0 ? 'Replaced' : 'Saved') + ' bracket preset ' + name + ': ' + br.stop + ' / ' + br.target + ' ticks.', '');
+    }
+    $('bSaveOk').addEventListener('click', savePreset);
+    $('bSaveNo').addEventListener('click', () => { closeSaveBox(); renderBracket(D.root); });
+    $('bSaveName').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); savePreset(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeSaveBox(); renderBracket(D.root); }
+    });
+    /* another tab saved or deleted a preset, or picked one */
+    listen(window, 'storage', e => {
+      if (e.key === PREFIX + LP.KEYS.bracketPresets) { readPresets(); renderBracket(D.root); }
+    });
     $('flattenBtn').addEventListener('click', pointerOnly(() => {
       if (!ready()) return;
       if (!sameAction('flatten', performance.now())) return;
       sendFlatten(TR.account, D.root);                             // takes its orders off a Cancel all; sent again once if refused for the rate
       flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
     }));
+    $('beBtn').addEventListener('click', pointerOnly(breakEven));
     $('cancelAllBtn').addEventListener('click', pointerOnly(cancelAll));
     $('unsentClose').addEventListener('click', () => { unsent.clear(); flattenMiss = ''; renderUnsent(); });
 
     /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */
     chart.setOrderPreview(previewAt);
-    chart.on('orderPlace', e => sendOrder(TR.side, OT.placeKind(TR.side, e.price, lastPrice()), e.price));
+    /* Shift+click by mouse button (1.10.0, Anthony): Shift + left click buys at the price (the chart's own Shift+click,
+       orderPlace), Shift + right click or Ctrl + left click sells. Both keys at once are unclear: nothing is sent. */
+    chart.on('orderPlace', e => {
+      if (lastUp && lastUp.ctrlKey) { flash(BOTH_KEYS, 'warn'); return; }
+      sendOrder('buy', OT.placeKind('buy', e.price, lastPrice()), e.price);
+    });
+    setupSellClicks();
     const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash(o ? 'Not sent: that order is not on ' + TR.account + '.' : 'Not sent: that order is no longer working.', o ? 'error' : 'warn'); renderTrading(); return true; };
     chart.on('orderMove', e => {
       if (!ready()) { renderTrading(); return; }
@@ -2913,7 +3226,7 @@ function start(container, opt, PAGE) {
       rangeTypedSave.cancel(); rangeTyped = null;
       prefs.setRange(S.root, n === null ? ranges[S.root] : n);
     }
-    bracketSaved.flush();
+    bracketSaved.stop.flush(); bracketSaved.target.flush();
   };
   listen(window, 'pagehide', saveWaiting);
   listen(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') saveWaiting(); });
@@ -2950,7 +3263,7 @@ function start(container, opt, PAGE) {
     clearTimeout(reconnectTimer); clearTimeout(flashTimer);
     for (const id of timers) clearTimeout(id);
     timers.clear();
-    rangeTypedSave.cancel(); bracketSaved.cancel();
+    rangeTypedSave.cancel(); bracketSaved.stop.cancel(); bracketSaved.target.cancel();
     for (const undo of cleanups.splice(0).reverse()) undo();
     const sock = ws; ws = null; connectSeq++;
     if (sock) { sock.onopen = sock.onmessage = sock.onclose = sock.onerror = null; try { sock.close(); } catch (e) { /* already closed */ } }

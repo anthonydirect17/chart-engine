@@ -231,8 +231,15 @@
 .chart-live .obtn.sell { color: var(--sell, #FF7A7A); border-color: var(--sell-edge, rgba(255, 122, 122, 0.55)); background: var(--sell-tint, rgba(255, 122, 122, 0.08)); }
 .chart-live .obtn.buy:hover { background: var(--buy-hover, rgba(61, 220, 151, 0.16)); }
 .chart-live .obtn.sell:hover { background: var(--sell-hover, rgba(255, 122, 122, 0.16)); }
-.chart-live .side-seg button[data-v="buy"][aria-pressed="true"] { color: var(--buy, #3DDC97); background: var(--buy-tint, rgba(61, 220, 151, 0.10)); box-shadow: inset 0 0 0 1px var(--buy-edge, rgba(61, 220, 151, 0.5)); }
-.chart-live .side-seg button[data-v="sell"][aria-pressed="true"] { color: var(--sell, #FF7A7A); background: var(--sell-tint, rgba(255, 122, 122, 0.10)); box-shadow: inset 0 0 0 1px var(--sell-edge, rgba(255, 122, 122, 0.5)); }
+/* 1.10.0: the Qty select (1 to 9, the cap beside it), the bracket preset select, its Save box and the t / pt toggle */
+.chart-live .acct-sel.oqty { font: 500 12px var(--mono); padding: 4px 6px; }
+.chart-live .acct-sel.bpre { font: 500 12px var(--mono); max-width: 120px; padding: 4px 6px; }
+.chart-live .bsave { display: inline-flex; align-items: center; gap: 4px; }
+.chart-live .bsave[hidden] { display: none; }
+.chart-live .oin.bname { width: 96px; font-family: var(--mono); }
+.chart-live .bsave .btn { min-height: 30px; padding: 4px 8px; }
+.chart-live .seg.bunit button { min-height: 24px; padding: 2px 7px; }
+.chart-live .arm-room { display: none; }
 /* dimmed while disarmed and while trading is off: 0.45 and 0.4 on the house bar, raised on another ground until each
    control reads at least as well as it does there (chromeColors, 1.9.0) */
 .chart-live .obar .is-off { opacity: var(--obar-off, 0.45); }
@@ -278,6 +285,10 @@
 @media (max-width: 720px) {
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
   .chart-live .obtn { padding: 4px 10px; }
+  /* a phone (1.10.0): the Armed switch keeps the width of its armed text, so arming never rewraps the bar or moves the chart */
+  .chart-live .arm-text { display: inline-grid; }
+  .chart-live .arm-text > span { grid-area: 1 / 1; }
+  .chart-live .arm-room { display: block; visibility: hidden; }
   .chart-live .legend { max-width: calc(100% - 100px); padding: 5px 8px; font-size: 11px; }
   .chart-live .lg1 .dim, .chart-live .lg3 { display: none; }
   .chart-live .lg2 { font-size: 11px; gap: 0 8px; }

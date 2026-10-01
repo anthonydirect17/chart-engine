@@ -355,7 +355,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   outlined in amber, the legend shows ARMED with the account and the tab title starts with ARMED and names the
   instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
   is off**, and nothing asks for confirmation while it is on: one click sends the order.
-- **Account** (only `tradeAccounts`), **Qty** (1 to that instrument's cap). The chart marks this account's fills
+- **Account** (only `tradeAccounts`), **Qty** (a select, 1 to 9; the choices over that instrument's cap are off and
+  the cap shows beside it, "max 5"; the last qty picked is remembered per instrument, 1.10.0). The chart marks this account's fills
   (1.6.0). When trading comes on the bar is on the account this tab was using (1.6.1): after a reconnect or a PIN
   entry the one it was on, after a reload of the tab the one that tab was on, in a new tab the last one picked on
   this PC; always only if `tradeAccounts` still has it, else Sim101 with the note "Last account ... not available,
@@ -363,12 +364,24 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   then. Each tab keeps its own account. Other accounts with orders or a position on the instrument are named in the
   bar. With trading off the picker lists every account ChartBridge knows and still switches the fills.
 - **Buy MKT / Sell MKT**.
-- **Shift+click** a price on the chart to place a limit or stop at that price. The side is the bar's
-  Buy / Sell choice; the kind follows from where you click: a better price than the last trade is a limit
-  (buy below, sell above), a worse one is a stop (buy above, sell below). Hold Shift over the chart to see
-  what one click would place. A plain click, a drag or a Shift+drag never places anything.
-- **Bracket**: stop and target in ticks from each fill, remembered per instrument in this browser (0 means
-  none). The bracket goes on orders that open or add to a position, never on one that reduces it.
+- **Shift+click** a price on the chart to place a limit or stop at that price (1.10.0: the mouse button picks the
+  side): **Shift + left click buys**, **Shift + right click sells**, and **Ctrl + left click sells** too. Ctrl and
+  Shift together send nothing. The kind follows from where you click: a better price than the last trade is a limit
+  (buy below, sell above), a worse one is a stop (buy above, sell below). Hold Shift over the chart to see what a
+  click would buy (the label also names what a right click would sell). A plain click, a drag or a Shift+drag never
+  places anything. The browser's right-click menu does not open over the chart's plot on this page.
+- **Bracket**: stop and target from each fill, remembered per instrument in this browser (0 means none). The
+  bracket goes on orders that open or add to a position, never on one that reduces it. 1.10.0: a preset select before
+  the boxes: **Custom**, **1:1**, **1:1.5**, **1:2** (the target is the stop times the ratio, rounded, and follows the
+  stop while the ratio is picked; typing the target makes it Custom), your saved presets, **Save current...** (a
+  name, default like "12/24t"; up to 12) and **Delete** for the saved preset picked. A **t / pt** toggle shows and
+  types the values in ticks or points (points round to the nearest tick); they are kept in ticks. Still at most 200
+  ticks (ChartBridge 0.3.6).
+- **B/E** (1.10.0, next to Flatten, needs Armed): moves the stop of the open position to break-even, the average
+  price rounded a tick toward safety (long up, short down). On only with a position on this account and instrument
+  and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past
+  that price on the profitable side ("Price is not past break-even yet; the stop stays." otherwise). Stops placed in
+  NinjaTrader are never touched (the note says so), and a stop already at break-even or past it is left.
 - **Flatten** cancels every working order on the chosen account and instrument, then closes the position at
   market. **Cancel all** cancels the working orders and leaves the position; while a position is open it
   keeps every order on the closing side (the position's stop and target, from the chart or NinjaTrader)

@@ -176,3 +176,116 @@ test('openEntryFills (1.6.0): the fills of the trade still open, so hiding Fills
   assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 2)], -1)), [], 'the other side: fills missing, show none');
   assert.deepEqual(ids(OT.openEntryFills([f(1, 'buy', 0), { t: 2, side: 'x', qty: 1 }, null])), []);
 });
+
+/* ---------------- 1.10.0 order bar essentials */
+test('breakEvenPrice: the average on the tick grid, rounded toward safety', () => {
+  assert.equal(OT.breakEvenPrice(21000.25, 1, 0.25), 21000.25);      // on the grid: kept, long
+  assert.equal(OT.breakEvenPrice(21000.25, -2, 0.25), 21000.25);     // and short
+  assert.equal(OT.breakEvenPrice(21000.125, 2, 0.25), 21000.25);     // long: up to the next tick
+  assert.equal(OT.breakEvenPrice(21000.125, -2, 0.25), 21000);       // short: down
+  assert.equal(OT.breakEvenPrice(21000.01, 1, 0.25), 21000.25);
+  assert.equal(OT.breakEvenPrice(21000.24, -1, 0.25), 21000);
+  assert.equal(OT.breakEvenPrice(5432.1 + 0.15, 1, 0.25), 5432.25);  // float noise near the grid does not jump a tick
+  assert.equal(OT.breakEvenPrice(21000.250000001, 1, 0.25), 21000.25);
+  assert.equal(OT.breakEvenPrice(21000.1, 0, 0.25), null);           // flat
+  assert.equal(OT.breakEvenPrice(null, 1, 0.25), null);
+  assert.equal(OT.breakEvenPrice(0, 1, 0.25), null);
+  assert.equal(OT.breakEvenPrice(21000, 1, 0), null);
+});
+
+test('breakEvenLegs: ChartBridge stop legs on the closing side only; NinjaTrader stops counted, never moved', () => {
+  const o = (id, x) => Object.assign({ id, account: 'Sim101', root: 'MNQ', state: 'working', side: 'sell', kind: 'stop', role: 'stop', price: 20990 }, x);
+  const orders = [
+    o('s1'), o('s2', { state: 'partFilled', price: 20995 }),
+    o('t1', { role: 'target', kind: 'limit', price: 21020 }),            // a target: never
+    o('n1', { role: 'other' }), o('n2', { role: 'other', kind: 'stopLimit' }), o('n3', { role: 'other', kind: 'limit', price: 21030 }),
+    o('b1', { side: 'buy' }),                                             // the opening side: never
+    o('e1', { account: 'DEMO-EVAL' }), o('r1', { root: 'NQ' }),          // another account or root: never
+    o('x1', { state: 'cancelled' }), o('x2', { state: 'filled' }),       // not working: never
+    o('a1', { price: 21000.25 }), o('a2', { price: 21001 }),             // already at break-even or past it: left
+  ];
+  assert.deepEqual(OT.breakEvenLegs(orders, 'Sim101', 'MNQ', 2, 21000.25), { ids: ['s1', 's2'], done: 2, other: 2 });
+  assert.deepEqual(OT.breakEvenLegs(orders, 'Sim101', 'MNQ', 2, null), { ids: ['s1', 's2', 'a1', 'a2'], done: 0, other: 2 });
+  assert.deepEqual(OT.breakEvenLegs(orders, 'Sim101', 'MNQ', 0, 21000), { ids: [], done: 0, other: 0 });
+  // short: the buy stops close it; one already at or under break-even is left
+  const short = [o('s1', { side: 'buy', price: 21010 }), o('s2', { side: 'buy', price: 20999.75 }), o('s3', { side: 'buy', price: 21000 }), o('n1', { side: 'buy', role: 'other' }), o('k1')];
+  assert.deepEqual(OT.breakEvenLegs(short, 'Sim101', 'MNQ', -1, 21000), { ids: ['s1'], done: 2, other: 1 });
+});
+
+test('breakEvenAllowed: only with the last price past break-even on the profitable side', () => {
+  assert.equal(OT.breakEvenAllowed(1, 21000.25, 21001), true);
+  assert.equal(OT.breakEvenAllowed(1, 21000.25, 21000.25), false);   // at it: not past
+  assert.equal(OT.breakEvenAllowed(1, 21000.25, 20999), false);
+  assert.equal(OT.breakEvenAllowed(-1, 21000, 20999.75), true);
+  assert.equal(OT.breakEvenAllowed(-1, 21000, 21000), false);
+  assert.equal(OT.breakEvenAllowed(-1, 21000, 21001), false);
+  assert.equal(OT.breakEvenAllowed(1, 21000, null), false);          // no price: nothing
+  assert.equal(OT.breakEvenAllowed(1, null, 21001), false);
+  assert.equal(OT.breakEvenAllowed(0, 21000, 21001), false);
+});
+
+test('bracket ratios: target = round(stop x ratio), capped like any bracket', () => {
+  assert.deepEqual(OT.BRACKET_RATIOS.map(r => r.id), ['1:1', '1:1.5', '1:2']);
+  assert.equal(OT.ratioOf('1:1.5'), 1.5);
+  assert.equal(OT.ratioOf('custom'), null);
+  assert.equal(OT.ratioOf('p:12/24t'), null);
+  assert.deepEqual(OT.ratioBracket(12, 1), { stop: 12, target: 12 });
+  assert.deepEqual(OT.ratioBracket(15, 1.5), { stop: 15, target: 23 });   // 22.5 rounds up
+  assert.deepEqual(OT.ratioBracket(13, 1.5), { stop: 13, target: 20 });   // 19.5 rounds up
+  assert.deepEqual(OT.ratioBracket(12, 2), { stop: 12, target: 24 });
+  assert.deepEqual(OT.ratioBracket(0, 2), { stop: 0, target: 0 });
+  assert.deepEqual(OT.ratioBracket(120, 2), { stop: 120, target: 200 });  // the 200-tick cap, as cleanBracket
+  assert.deepEqual(OT.ratioBracket('40', 2), { stop: 40, target: 80 });
+  assert.deepEqual(OT.ratioBracket(300, 1), { stop: 200, target: 200 });
+});
+
+test('cleanBracketPresets: bad shapes dropped, names 1 to 24, at most 12, never throws', () => {
+  assert.deepEqual(OT.cleanBracketPresets(null), []);
+  assert.deepEqual(OT.cleanBracketPresets({ name: 'x', stop: 1, target: 2 }), []);
+  assert.deepEqual(OT.cleanBracketPresets('[]'), []);
+  const list = OT.cleanBracketPresets([
+    { name: '12/24t', stop: 12, target: 24 },
+    null, 5, 'x', [1, 2], {},
+    { name: '', stop: 1, target: 2 }, { name: '   ', stop: 1, target: 2 }, { name: 7, stop: 1, target: 2 },
+    { name: 'str', stop: '12', target: 24 }, { name: 'nan', stop: NaN, target: 24 }, { name: 'inf', stop: 8, target: Infinity }, { name: 'none', stop: 8 },
+    { name: '12/24T', stop: 1, target: 1 },                               // the same name in another case: kept once
+    { name: '  wide   gap  ', stop: 8.6, target: 400 },                   // ticks rounded and capped
+    { name: 'x'.repeat(30), stop: 4, target: 8 },                         // cut to 24
+    { name: 'neg', stop: -5, target: 10 },
+  ]);
+  assert.deepEqual(list, [
+    { name: '12/24t', stop: 12, target: 24 },
+    { name: 'wide gap', stop: 9, target: 200 },
+    { name: 'x'.repeat(24), stop: 4, target: 8 },
+    { name: 'neg', stop: 0, target: 10 },
+  ]);
+  const many = Array.from({ length: 20 }, (_, i) => ({ name: 'p' + i, stop: i, target: 2 * i }));
+  const kept = OT.cleanBracketPresets(many);
+  assert.equal(kept.length, 12);
+  assert.equal(kept[11].name, 'p11');
+  const weird = [{ get name() { return 'a'; }, stop: 1, target: 2 }, Object.create(null)];
+  assert.doesNotThrow(() => OT.cleanBracketPresets(weird));
+  assert.equal(OT.bracketPresetName('  a   b '), 'a b');
+  assert.equal(OT.defaultPresetName(12, 24), '12/24t');
+});
+
+test('qtyOptions: 1 to 9, the ones over the cap off', () => {
+  assert.deepEqual(OT.qtyOptions(5).map(o => o.n + (o.ok ? '+' : '-')).join(), '1+,2+,3+,4+,5+,6-,7-,8-,9-');
+  assert.deepEqual(OT.qtyOptions(1).filter(o => o.ok).map(o => o.n), [1]);
+  assert.equal(OT.qtyOptions(20).every(o => o.ok), true);
+  assert.equal(OT.qtyOptions(9).length, 9);
+});
+
+test('paceChunks: B/E split by the per-second budget, what fits now first, then a second at a time', () => {
+  const ids = Array.from({ length: 12 }, (_, i) => 'o' + i);
+  assert.deepEqual(OT.paceChunks(ids, 0, 10).map(c => c.length), [10, 2]);
+  assert.deepEqual(OT.paceChunks(ids, 3, 10).map(c => c.length), [7, 5]);
+  assert.deepEqual(OT.paceChunks(ids, 10, 10).map(c => c.length), [0, 10, 2]);   // no room now: nothing goes at once
+  assert.deepEqual(OT.paceChunks(ids, 14, 10).map(c => c.length), [0, 10, 2]);   // over the budget counts as none left
+  assert.deepEqual(OT.paceChunks(ids, -2, 10).map(c => c.length), [10, 2]);      // never more than the budget at once
+  assert.deepEqual(OT.paceChunks(ids.slice(0, 4), 2, 10), [ids.slice(0, 4)]);       // all fit: one chunk
+  assert.deepEqual(OT.paceChunks(ids, 0, 10).flat(), ids);                        // every id once, in order
+  assert.deepEqual(OT.paceChunks(Array.from({ length: 25 }, (_, i) => i), 9, 10).map(c => c.length), [1, 10, 10, 4]);
+  assert.deepEqual(OT.paceChunks([], 0, 10), [[]]);
+  assert.deepEqual(OT.paceChunks(null, 0, 10), [[]]);
+});

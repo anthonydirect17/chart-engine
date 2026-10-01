@@ -101,6 +101,15 @@ frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
   (`--obar-off`, `--obar-disabled`) in 0.05 steps until each dimmed control reads at least as well as on the house
   bar (disarmed Buy 2.85:1, Sell 2.28:1, Flatten and Cancel all 4.01:1; trading off Buy 2.51:1, as measured in the
   page). Worked out once per change of the ground, never per frame.
+- **Order bar essentials (1.10.0, Anthony).** In order: Armed, Account, **Qty** (a select 1 to 9 in the select style,
+  mono 12px; the choices over the root's cap disabled, never hidden, and "max 5" in the `.ounit` grey beside it), Buy
+  MKT, Sell MKT, **Bracket** (a preset select, mono 12px: Custom, 1:1, 1:1.5, 1:2, a "Saved" group, Save current...,
+  and Delete for the saved preset picked; Save current... swaps the select for a name box with Save and x), the stop
+  and target boxes, a **t / pt** toggle in the segmented style), then Flatten, **B/E** (a `.btn` like Flatten, dimmed
+  with it while disarmed, disabled with no position or no ChartBridge stop) and Cancel all. The Shift+click Buy / Sell
+  toggle and the "stop / target ticks" text are gone. No new colors. One line at 1440 and 1920 px; it wraps below about
+  1280 as before. On a phone (720 px and less) the Armed switch keeps the width of its armed text, so arming never
+  rewraps the bar.
 - Saved per browser with the other colors (`live-colors-v1`, one field at a time, per storage prefix, so The
   Desk's embedded chart keeps its own).
 
@@ -276,6 +285,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   the x cancels. Order labels take the pointer before drawings (not while a drawing tool is active).
   Shift+click without moving places an order at the snapped price (the page picks side and kind); hold
   Shift to see a dotted preview line and label. A plain click, a drag or a Shift+drag never places one.
+  Live page (1.10.0): the mouse button picks the side, so the order bar has no Buy / Sell toggle. Shift + left click
+  buys; Shift + right click and Ctrl + left click sell (the page handles those two, while Armed, with no drawing tool,
+  never on an order's label or tag; such a press does not pan or pick a drawing). Ctrl and Shift together send nothing.
+  The preview shows the buy and names the sell ("click · right click: SELL STP"). No browser menu over the plot.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
 - Live page, **Indicators menu "E2"** (1.6.0, as Anthony approved it in the design canvas): one per chart pane, a
   `.btn` showing shown/on-this-chart ("4/5"), opening a 460 px panel (never wider than the pane) on `#0B1016` with a

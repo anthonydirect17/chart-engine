@@ -153,6 +153,97 @@ function legSummary(orders, account, root, posQty) {
   };
 }
 
+/*
+ * Bracket presets (1.10.0, Anthony). A ratio sets target = round(stop x ratio) and stays linked to the stop while it is
+ * picked. Saved presets are { name, stop, target } in ticks: at most 12, names 1 to 24 characters, unique (any case).
+ */
+const BRACKET_RATIOS = [{ id: '1:1', k: 1 }, { id: '1:1.5', k: 1.5 }, { id: '1:2', k: 2 }];
+const BRACKET_PRESET_MAX = 12, BRACKET_PRESET_NAME_MAX = 24;
+/** The multiplier of a ratio id ('1:1.5' gives 1.5), or null for anything else. */
+function ratioOf(id) { const r = BRACKET_RATIOS.find(x => x.id === id); return r ? r.k : null; }
+/** The bracket a ratio gives for a stop: the target is round(stop x ratio), both cleaned (and capped) by cleanBracket. */
+function ratioBracket(stop, ratio) {
+  const s = cleanBracket({ stop, target: 0 }).stop;
+  return cleanBracket({ stop: s, target: Math.round(s * ratio) });
+}
+/** A preset name as kept: trimmed, inner spaces as one, at most 24 characters; '' when nothing is left. */
+function bracketPresetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, BRACKET_PRESET_NAME_MAX).trim() : ''; }
+/** The name a new preset gets when none is typed: "12/24t". */
+function defaultPresetName(stop, target) { return stop + '/' + target + 't'; }
+/** Saved presets as read: bad shapes, names and non-numbers dropped, a name used twice (any case) kept once, at most
+    12, ticks cleaned by cleanBracket. Never throws. */
+function cleanBracketPresets(v) {
+  const out = [], names = new Set();
+  if (!Array.isArray(v)) return out;
+  for (const p of v) {
+    if (out.length >= BRACKET_PRESET_MAX) break;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
+    const name = bracketPresetName(p.name);
+    if (!name || names.has(name.toLowerCase())) continue;
+    if (typeof p.stop !== 'number' || typeof p.target !== 'number' || !isFinite(p.stop) || !isFinite(p.target)) continue;
+    names.add(name.toLowerCase());
+    out.push(Object.assign({ name }, cleanBracket(p)));
+  }
+  return out;
+}
+
+/** The quantity choices (1.10.0): 1 to 9, each with whether the root's cap allows it. */
+const QTY_CHOICES = 9;
+function qtyOptions(cap) {
+  const out = [];
+  for (let n = 1; n <= QTY_CHOICES; n++) out.push({ n, ok: n <= cap });
+  return out;
+}
+
+/*
+ * Break-even (1.10.0, Anthony). The price is the position's average price on the tick grid, rounded toward safety:
+ * long up to the next tick, short down (a price already on the grid is kept). Only ChartBridge's own stop legs
+ * (role 'stop') on the closing side are moved; orders placed in NinjaTrader (role 'other') never are.
+ */
+function breakEvenPrice(avgPrice, posQty, tick) {
+  if (!posQty || !(tick > 0) || typeof avgPrice !== 'number' || !isFinite(avgPrice) || !(avgPrice > 0)) return null;
+  const k = avgPrice / tick, r = Math.round(k);
+  const steps = Math.abs(k - r) < 1e-6 ? r : posQty > 0 ? Math.ceil(k) : Math.floor(k);
+  return Math.round(steps * tick * 1e9) / 1e9;
+}
+/**
+ * Which stops a B/E click moves, for one account and root: `ids`, the working ChartBridge stop legs on the closing side
+ * that are not yet at the B/E price or past it; `done`, those already there or past it (moving them would loosen the
+ * stop, so they are left); `other`, working stop or stop-limit orders on the closing side placed in NinjaTrader (left
+ * alone). With no `price` (null), every stop leg is in `ids`.
+ */
+function breakEvenLegs(orders, account, root, posQty, price) {
+  const out = { ids: [], done: 0, other: 0 };
+  if (!posQty) return out;
+  const closing = posQty > 0 ? 'sell' : 'buy';
+  for (const o of orders || []) {
+    if (!isWorking(o) || o.account !== account || o.root !== root || o.side !== closing) continue;
+    if (o.role === 'stop') {
+      const there = price !== null && price !== undefined && typeof o.price === 'number' && (posQty > 0 ? o.price >= price : o.price <= price);
+      if (there) out.done++; else out.ids.push(o.id);
+    } else if (o.role === 'other' && (o.kind === 'stop' || o.kind === 'stopLimit')) out.other++;
+  }
+  return out;
+}
+/** Whether the last price is past the B/E price on the profitable side (long: above it, short: below it). */
+function breakEvenAllowed(posQty, price, last) {
+  if (!posQty || price === null || price === undefined || !(last > 0)) return false;
+  return posQty > 0 ? last > price : last < price;
+}
+
+/**
+ * B/E in paced chunks (1.10.0, Anthony 2026-10-01): `items` split by ChartBridge's budget of `limit` order actions a
+ * second, with `recent` of them already sent in the last second. The first chunk is what fits now (it may be empty),
+ * each later chunk a full second's worth. Every item is in exactly one chunk, in order.
+ */
+function paceChunks(items, recent, limit) {
+  const list = Array.from(items || []), cap = Math.max(1, Math.floor(limit) || 0);
+  const room = Math.min(cap, Math.max(0, cap - (Math.floor(recent) || 0)));
+  const out = [list.slice(0, room)];
+  for (let i = room; i < list.length; i += cap) out.push(list.slice(i, i + cap));
+  return out;
+}
+
 /** Ignores the same action repeated within `ms` (a double click), so one click sends one order. */
 function repeatGuard(ms) {
   let lastKey = null, lastAt = -Infinity;
@@ -162,5 +253,5 @@ function repeatGuard(ms) {
   };
 }
 
-return { MAX_BRACKET_TICKS, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
+return { MAX_BRACKET_TICKS, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
 });
