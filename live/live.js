@@ -32,6 +32,8 @@
  *   live-bracket-sel-v1 { MNQ: 'custom' | '1:1' | '1:1.5' | '1:2' | 'p:<preset name>', ... } the preset picked per root
  *   live-bracket-unit-v1  't' | 'pt' the bracket boxes in ticks or points (1.10.0; stored in ticks always)
  *   live-qty-v1         { MNQ: 2, ... } the qty picked last per root, 1 to 9 (1.10.0)
+ *   live-hotkeys-v1     { buy, sell, be, close, flattenAll } the trading hotkeys set in Settings (1.11.0), each a combo
+ *                       such as "Alt+B" or ''; none by default; cleaned on read by OrderTicket.cleanHotkeys
  *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
  *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
  *                       live-colors-v1 up to 1.8 is copied in once, on page start, when this key has no VWAP.
@@ -144,7 +146,8 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
-  bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1' };
+  bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
+  hotkeys: 'live-hotkeys-v1' };
 const BRACKET_SELS = ['custom', '1:1', '1:1.5', '1:2'];
 /** A bracket preset pick as kept: Custom, a ratio, or 'p:' and a saved preset's name (1 to 24 characters); else Custom. */
 function cleanBracketSel(v) {
@@ -645,6 +648,31 @@ const mountedRoots = new Set();
 /* Charts on one page that share a storage prefix follow each other's account pick (review 2, N6). */
 const accountPeers = new Set();
 
+/*
+ * Trading hotkeys (1.11.0): the one keydown handler, so a later page with several charts can use it for its execution
+ * chart. `o.keys()` gives the hotkeys in use ({ buy: 'Alt+B', ... }), `o.actions` the function each one calls (the very
+ * functions the order bar's buttons call), `o.root` the chart's element, `o.busy()` whether a menu or dialog of the
+ * page is open. Nothing fires while the focus is in a box (input, textarea, select, editable), while a menu or dialog is
+ * open, while the focus is outside this chart (a host's own fields), on a key the chart reads as its own, or after
+ * another handler took the key. A hotkey that matches calls preventDefault, so the browser does not act on it too;
+ * a held key's repeats (e.repeat) never fire an action.
+ */
+function hotkeyHandler(o) {
+  return e => {
+    if (e.defaultPrevented || e.isComposing) return;
+    const id = OT.hotkeyAction(o.keys(), OT.hotkeyCombo(e));
+    if (!id || typeof o.actions[id] !== 'function') return;
+    const a = document.activeElement;
+    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) return;
+    const onBody = !a || a === document.body || a === document.documentElement;
+    if (!onBody && !o.root.contains(a)) return;
+    if (o.busy() || OT.isChartKey(e)) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    o.actions[id]();
+  };
+}
+
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /* The chart's markup. `p` prefixes every id ('' on the standalone page, so its ids are the ones it always had).
@@ -682,6 +710,24 @@ function markup(p, o) {
   </section></div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
+  /* Settings (1.11.0): the trading hotkeys. Only on the trading page; a mounted chart has none. */
+  const settings = !o.trading ? '' : `
+    <div class="set-wrap" id="${p}setWrap">
+      <button type="button" class="btn set-btn" id="${p}setBtn" aria-expanded="false" aria-controls="${p}setPanel" aria-haspopup="dialog" title="Settings: trading hotkeys">Settings <span class="ind-caret" aria-hidden="true"></span></button>
+      <div class="set-panel" id="${p}setPanel" role="dialog" aria-label="Settings" hidden>
+        <div class="ind-head"><span class="ind-title">Settings</span></div>
+        <div class="ind-cap" id="${p}hkCap">Hotkeys</div>
+        <div class="hk-list" id="${p}hkList" role="group" aria-labelledby="${p}hkCap">${OT.HOTKEY_ACTIONS.map(a => `
+          <div class="hk-row" data-hk="${a.id}">
+            <label class="hk-name" for="${p}hk-${a.id}">${esc(a.name)}</label>
+            <input class="hk-in" id="${p}hk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="${p}hkNote-${a.id}">
+            <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
+            <span class="hk-note" id="${p}hkNote-${a.id}" role="status"></span>
+          </div>`).join('')}
+        </div>
+        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off, like the Flatten button. Never while typing in a box or with a menu open. Saved in this browser.</p>
+      </div>
+    </div>`;
   return `
   <header class="bar">${brand}
     <div class="seg" id="${p}symSeg" role="group" aria-label="Instrument">
@@ -748,6 +794,7 @@ function markup(p, o) {
     </div>
 
     <span id="${p}colorsHost"></span>
+${settings}
     <button type="button" class="btn" id="${p}resetBtn">Reset view</button>${o.pin ? `
     <button type="button" class="btn" id="${p}pinBtn" title="Change this PC's ChartBridge PIN" hidden>PIN</button>` : ''}
   </header>
@@ -1978,12 +2025,13 @@ function start(container, opt, PAGE) {
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
   const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;
 
-  /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded. */
-  function ready() {
+  /* Everything that sends an order action goes through here: trading enabled, Armed on, connected, data loaded.
+     `armed` false (Flatten and Flatten all only; Anthony 2026-10-01, "Flatten is never blocked"): every check but Armed. */
+  function ready(armed) {
     if (!TRADING) return false;
     if (FRAMED) { flash(FRAMED_REASON, 'error'); return false; }
     if (!TR.enabled) { flash(TR.reason || 'Trading is not enabled.', 'error'); return false; }
-    if (!TR.armed) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
+    if (!TR.armed && armed !== false) { flash('Armed is off: nothing was sent. Turn Armed on to trade.', 'warn'); return false; }
     if (!ws || ws.readyState !== 1) { flash('Not connected to ChartBridge: nothing was sent.', 'error'); return false; }
     if (!TR.account) { flash('No account yet: nothing was sent.', 'warn'); return false; }   // 1.8.0: never blocked by a view loading
     if ($('oAcct').value !== TR.account) { syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
@@ -2287,6 +2335,63 @@ function start(container, opt, PAGE) {
     return true;
   }
 
+  /* The Flatten button, and the Close hotkey (1.11.0): this account and instrument. Works while disarmed (Anthony
+     2026-10-01: Flatten is never blocked); every other check of ready() stays. */
+  function flattenHere() {
+    if (!ready(false)) return;
+    if (!sameAction('flatten', performance.now())) return;
+    sendFlatten(TR.account, D.root);                               // takes its orders off a Cancel all; sent again once if refused for the rate
+    flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
+  }
+  /*
+   * Flatten all (1.11.0, the hotkey; Anthony 2026-10-01): one flatten (sendFlatten, as the Flatten button) per instrument
+   * of the order account with a position or a working order, whatever instrument is shown. Needs what the Flatten
+   * button needs: every check of ready() but Armed. Within ChartBridge's 10 order actions a second: what fits now goes at once, the rest as soon
+   * as it allows (paced like B/E). Once pressed it finishes, like Cancel all: a later flatten goes to the account named
+   * at the press while connected and trading is on and that account is still a trade account; otherwise the note says
+   * which were not sent. A press while a run is under way sends nothing.
+   */
+  let faRun = null;                                                // { account, queue: [root], sent: [root] }
+  function flattenAll() {
+    if (!ready(false)) return;
+    const account = TR.account;
+    if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
+    const roots = OT.flattenAllRoots([...TR.orders.values()], TR.positions, account, served, ROOTS);
+    if (!roots.length) { flash('Flatten all: no position or working order on ' + account + '. Nothing was sent.', ''); return; }
+    const now = performance.now();
+    if (!sameAction('flattenAll|' + account, now)) return;
+    const recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
+    const first = OT.paceChunks(roots, recent, BE_LIMIT)[0];
+    for (const r of first) sendFlatten(account, r);
+    const rest = roots.slice(first.length);
+    flash(first.length ? 'Flatten all sent for ' + account + ': ' + first.join(', ') + ' (cancel their orders, close their positions at market).' +
+      (rest.length ? ' ' + rest.join(', ') + ' as ChartBridge\'s 10 a second allows.' : '')
+      : 'Flatten all for ' + account + ': ' + rest.join(', ') + ' as ChartBridge\'s 10 a second allows.', '');
+    if (!rest.length) return;
+    faRun = { account, queue: rest, sent: first.slice() };
+    faPump();
+  }
+  function faPump() {
+    const r = faRun;
+    if (!r) return;
+    const now = performance.now(), recent = actionTimes.filter(t => t > now - CANCEL_GAP).length;
+    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
+    if (room) {
+      const why = !TRADING || FRAMED || !TR.enabled ? 'trading went off' : !ws || ws.readyState !== 1 ? 'the connection to ChartBridge dropped' :
+        !TR.accounts.includes(r.account) ? r.account + ' is no longer a trade account in ChartBridge' : '';
+      if (why) {                                                   // a note that stays until dismissed, as for a Flatten not sent
+        faRun = null;
+        flattenMiss = 'Flatten all on ' + r.account + ': ' + (r.sent.length ? r.sent.join(', ') + ' sent; ' : '') + r.queue.join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';
+        renderUnsent(); flash(flattenMiss, 'error');
+        return;
+      }
+      for (const root of r.queue.splice(0, room)) { sendFlatten(r.account, root); r.sent.push(root); }
+    }
+    if (!r.queue.length) { faRun = null; flash('Flatten all sent for ' + r.account + ': ' + r.sent.join(', ') + ' (cancel their orders, close their positions at market).', ''); return; }
+    const oldest = actionTimes.find(t => t > now - CANCEL_GAP);
+    later(() => { if (faRun === r) faPump(); }, Math.max(20, (oldest === undefined ? now : oldest) + CANCEL_GAP - now));
+  }
+
   function setArmed(on) {
     if (!TRADING) return;
     const v = !!on && TR.enabled;
@@ -2316,7 +2421,7 @@ function start(container, opt, PAGE) {
     if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
     $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
     renderQty(root, cap);
-    for (const id of ['buyMkt', 'sellMkt', 'flattenBtn', 'beBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why
+    for (const id of ['buyMkt', 'sellMkt', 'beBtn', 'cancelAllBtn']) $(id).classList.toggle('is-off', !TR.armed);   // dimmed while disarmed; a click says why (Flatten works disarmed, so it never dims: Anthony 2026-10-01)
     $('oOff').textContent = on ? '' : 'Trading off: ' + TR.reason;
     $('oOff').hidden = on;
     renderBracket(root);
@@ -3051,7 +3156,11 @@ function start(container, opt, PAGE) {
       if (TR.armed) clearAccountNote();                            // it said "Armed is off" (review S2)
       flash(TR.armed ? 'Armed: one click places an order on ' + TR.account + ', with no confirmation.' : 'Armed off.', TR.armed ? 'warn' : '');
     });
+    /* 1.11.0 (Anthony 2026-10-01): after a pick in an order bar select, or Enter in a bracket box, the focus leaves it,
+       so the hotkeys work at once (they never fire while a box or select has the focus). */
+    const handBack = el => { if (document.activeElement === el) el.blur(); };
     $('oAcct').addEventListener('change', e => {
+      handBack(e.target);
       if (!tradeMode()) { pickViewAccount(e.target.value); return; }   // trading off: it only picks whose fills are marked
       TR.account = e.target.value;
       clearAccountNote();
@@ -3061,6 +3170,7 @@ function start(container, opt, PAGE) {
       applyMarkers();
     });
     $('oQty').addEventListener('change', () => {
+      handBack($('oQty'));
       const v = +$('oQty').value;
       if (Number.isInteger(v) && v >= 1 && v <= OT.QTY_CHOICES) { qtys[D.root] = v; prefs.setQty(D.root, v); }
       renderTrading();
@@ -3107,6 +3217,7 @@ function start(container, opt, PAGE) {
         setBracket(k, n, false);
         renderBracket(D.root);
       });
+      $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });   // commits (change), focus back
       $(id).addEventListener('change', e => {
         setBracket(k, committedTicks(e.target.value, D.root), true);
         e.target.value = fmtUnit(brackets[D.root][k], D.root);
@@ -3115,6 +3226,7 @@ function start(container, opt, PAGE) {
     }
     $('bUnit').addEventListener('click', e => {
       const b = e.target.closest('button');
+      if (b) handBack(b);
       if (!b || b.dataset.v === BK.unit) return;
       for (const id of ['bStop', 'bTarget']) if (document.activeElement === $(id)) $(id).blur();   // commit what was typed, in the old unit
       BK.unit = b.dataset.v === 'pt' ? 'pt' : 't'; prefs.setBracketUnit(BK.unit);
@@ -3154,6 +3266,7 @@ function start(container, opt, PAGE) {
         for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(root, f, brackets[root][f]); }
         pickSel(root, v);
       } else pickSel(root, 'custom');
+      if (v !== 'save') handBack(e.target);                        // Save current... moves the focus to the name box
       bpreKey = '';
       renderBracket(root, true);
     });
@@ -3180,14 +3293,67 @@ function start(container, opt, PAGE) {
     listen(window, 'storage', e => {
       if (e.key === PREFIX + LP.KEYS.bracketPresets) { readPresets(); renderBracket(D.root); }
     });
-    $('flattenBtn').addEventListener('click', pointerOnly(() => {
-      if (!ready()) return;
-      if (!sameAction('flatten', performance.now())) return;
-      sendFlatten(TR.account, D.root);                             // takes its orders off a Cancel all; sent again once if refused for the rate
-      flash('Flatten sent for ' + TR.account + ' ' + D.root + ': cancel its orders, close the position at market.', '');
-    }));
+    $('flattenBtn').addEventListener('click', pointerOnly(flattenHere));
     $('beBtn').addEventListener('click', pointerOnly(breakEven));
     $('cancelAllBtn').addEventListener('click', pointerOnly(cancelAll));
+
+    /* Trading hotkeys (1.11.0, Anthony 2026-10-01): set in Settings, none by default; each calls what its button calls. */
+    const HKKEY = LP.KEYS.hotkeys;
+    let HK = OT.cleanHotkeys(prefs.raw.get(HKKEY));
+    const readHotkeys = () => { HK = OT.cleanHotkeys(prefs.raw.get(HKKEY)); return HK; };
+    const setPanel = $('setPanel'), setWrap = $('setWrap');
+    const hkNote = (id, text, level) => { const el = $('hkNote-' + id); el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
+    const renderHotkeys = () => { for (const a of OT.HOTKEY_ACTIONS) $('hk-' + a.id).value = HK[a.id]; };
+    const openSettings = v => {
+      if (v) { readHotkeys(); renderHotkeys(); for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', ''); }
+      setPanel.hidden = !v; $('setBtn').setAttribute('aria-expanded', String(v));
+      if (v) { setPanel.classList.remove('set-left'); if (setPanel.getBoundingClientRect().left < 8) setPanel.classList.add('set-left'); }
+    };
+    /* Save one action's hotkey (or '' to clear it): read fresh, so another tab's keys are kept; a combo another action
+       took meanwhile is refused. Never saved when storage is blocked. */
+    const saveHotkey = (id, combo) => {
+      const next = Object.assign({}, readHotkeys());
+      if (combo) {
+        const other = OT.HOTKEY_ACTIONS.find(a => a.id !== id && next[a.id] === combo);
+        if (other) { renderHotkeys(); hkNote(id, combo + ' is already ' + other.name + '. Clear it there first.', 'warn'); return; }
+      }
+      next[id] = combo;
+      if (!prefs.raw.set(HKKEY, next)) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
+      HK = OT.cleanHotkeys(next); renderHotkeys();
+      hkNote(id, combo ? 'Saved.' : 'Cleared.', '');
+    };
+    $('setBtn').addEventListener('click', () => openSettings(setPanel.hidden));
+    listen(document, 'pointerdown', e => { if (!setPanel.hidden && !setWrap.contains(e.target)) openSettings(false); });
+    /* Escape closes Settings (but not from a key box, which reads Escape as a key and says it is kept) */
+    listen(document, 'keydown', e => {
+      if (setPanel.hidden || e.key !== 'Escape' || e.defaultPrevented) return;
+      const a = document.activeElement, onBody = !a || a === document.body || a === document.documentElement;
+      if (!onBody && !setWrap.contains(a)) return;
+      e.preventDefault(); openSettings(false); $('setBtn').focus();
+    });
+    setWrap.addEventListener('keydown', e => {
+      if (setPanel.hidden) return;
+      const id = e.target.classList && e.target.classList.contains('hk-in') ? e.target.dataset.hk : '';
+      if (!id) return;
+      /* the capture box: every key press is read as a hotkey, never typed and never acted on (plain Tab still moves on) */
+      const tab = e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey;
+      if (!tab) { e.preventDefault(); e.stopPropagation(); }
+      if (e.repeat) return;
+      const r = OT.hotkeyFromEvent(e, readHotkeys(), id);
+      if (r.error) { hkNote(id, r.error, r.held ? '' : 'warn'); return; }
+      saveHotkey(id, r.combo);
+    });
+    setPanel.addEventListener('click', e => {
+      const b = e.target.closest('button[data-hk-clear]');
+      if (b) saveHotkey(b.dataset.hkClear, '');
+    });
+    /* another tab set or cleared a hotkey */
+    listen(window, 'storage', e => { if (e.key === PREFIX + HKKEY) { readHotkeys(); renderHotkeys(); } });
+    listen(document, 'keydown', hotkeyHandler({
+      keys: () => HK, root: rootEl,
+      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),
+      actions: { buy: () => sendOrder('buy', 'market', null), sell: () => sendOrder('sell', 'market', null), be: breakEven, close: flattenHere, flattenAll },
+    }));
     $('unsentClose').addEventListener('click', () => { unsent.clear(); flattenMiss = ''; renderUnsent(); });
 
     /* chart: drag an order label to move it, x to cancel, Shift+click to place (all only while Armed) */

@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.11.0 (2026-10-01): trading hotkeys
+
+Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing
+under `nt8/` changes, and the engine only gets its version number. What Buy MKT, Sell MKT, B/E and Cancel all do when
+clicked is unchanged; Flatten now works while disarmed (below).
+- **Flatten works while not Armed** (Anthony 2026-10-01: Flatten is never blocked): the Flatten button, the Close
+  hotkey and Flatten all, and the Flatten button no longer dims while disarmed. Only the Armed check is dropped for them: trading on, connected, signed in, an order account
+  and the picker showing it are still checked, with the repeat guard and the pacing. Buy, Sell, B/E, Shift+click,
+  Ctrl+click and Cancel all still need Armed (buttons, clicks and hotkeys).
+- **Settings, with a Hotkeys section** (Anthony 2026-10-01). A Settings button in the toolbar (the trading page only)
+  opens a panel with one row per action: **Buy MKT**, **Sell MKT**, **B/E**, **Close** and **Flatten all**. No action
+  has a key until Anthony gives it one: click the box, press the keys (it shows them, like `Alt+B`), or Clear. Saved
+  in this browser (`live-hotkeys-v1`, under the page's storage prefix), cleaned on read, kept on reload.
+- **Each hotkey calls what its button calls**, with the same checks, repeat guard and notes: Buy MKT and Sell MKT
+  (the account, Qty and bracket shown), B/E (paced, all its checks), and Close is the Flatten button (this account and
+  instrument). **Flatten all** sends one Flatten (the same send as the button's) for every instrument with a position
+  or a working order on the order account, whatever instrument is shown; within ChartBridge's 10 order actions a
+  second, the rest paced as B/E is. Buy MKT, Sell MKT and B/E need Armed, as their buttons do; Close and
+  Flatten all work while disarmed, as the Flatten button now does. A refused press says why ("Armed is off: nothing
+  was sent.", "B/E: no open position ...").
+- **The focus comes back** after a pick in an order bar select (account, Qty, bracket preset) or the t / pt toggle,
+  and Enter in a bracket box commits it and leaves the box, so a hotkey works at once.
+- **Refused as keys**, with the reason shown and nothing saved: what the browser or Windows keeps for itself (Ctrl+W,
+  Ctrl+T, Ctrl+N, Ctrl+Shift+T, Ctrl+Tab, Ctrl+R, F5, Ctrl+L, Ctrl+P, Ctrl+S, Ctrl+F, Ctrl+H, Ctrl+J, Ctrl+D, Ctrl+Q,
+  Ctrl+Shift+N, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+Delete, F1, F3, F6, F7, F11, F12, Alt+F4, Alt+Tab, Alt+Left,
+  Alt+Right, Alt+Home, Alt+D, Alt+E, Alt+F, Escape, Tab, any Windows key combo; also Ctrl+Shift+W, Ctrl+Shift+R,
+  Ctrl+Shift+Q, Ctrl+F4, Ctrl+0 to Ctrl+9 and F10), the chart's own keys with any modifiers (A, + and =, -, End, the
+  arrows, Delete, Backspace; / without Ctrl or Alt), a modifier alone, keys that are not a letter, digit, F-key, numpad
+  or punctuation key (Space, Enter, Page Up and the like), and a combo another action has.
+- **Never by accident**: no hotkey fires while the focus is in a box, a select or an editable element, while a menu
+  or Settings is open, or on a held key's repeats; one that fires calls preventDefault so the browser does not act on
+  it too. A mounted read-only chart has no Settings and ignores the keys entirely. The handler is one function
+  (`hotkeyHandler`) so a page with several charts can give it to its execution chart.
+
 ## 1.10.0 (2026-10-01): order bar essentials
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling. Nothing

@@ -88,7 +88,11 @@ try {
   check(await page.getAttribute('#armBtn', 'aria-checked') === 'false', 'Armed off after load');
   check(/Trading through ChartBridge/.test(await page.textContent('#statusRo')), 'footer says trading');
 
-  // Armed off: buttons, Shift+click and flatten send nothing
+  // Armed off: Buy, Sell and Shift+click send nothing; Flatten works while disarmed (Anthony 2026-10-01: never blocked)
+  const types0 = (await control(PORT, 'received')).types;
+  await page.click('#sellMkt');
+  check((await status(page)).text === 'Armed is off: nothing was sent. Turn Armed on to trade.', 'disarmed Sell: nothing sent');
+  await page.waitForTimeout(450);
   await page.click('#buyMkt');
   let st = await status(page);
   check(/Armed is off: nothing was sent/.test(st.text) && /warn/.test(st.cls), 'disarmed click message: ' + st.text);
@@ -100,6 +104,12 @@ try {
   await page.click('#flattenBtn');
   await page.waitForTimeout(400);
   check((await state()).orders.length === 0 && !Object.values((await state()).positions).some(p => p.qty), 'nothing traded while disarmed');
+  {
+    const t1 = (await control(PORT, 'received')).types, n = k => (t1[k] || 0) - (types0[k] || 0);
+    const st1 = await status(page);
+    check(n('order') === 0 && n('change') === 0 && n('flatten') === 1 && st1.text === 'Flatten sent for Sim101 MNQ: cancel its orders, close the position at market.',
+      'disarmed: no order sent, Flatten sent (it works while disarmed): ' + JSON.stringify({ order: n('order'), flatten: n('flatten'), note: st1.text }));
+  }
   await shot(page, 'orders-1440-disarmed.png');
 
   // arm, bracket 40 / 80 ticks, buy 2 at market

@@ -282,6 +282,26 @@
 .chart-live .acct-note.batch-note.away { color: var(--warn); }   /* its account or instrument is not the one shown */
 .chart-live select:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 
+/* Settings (1.11.0): the trading hotkeys, one row per action: its name, the box that takes the keys, Clear, a note */
+.chart-live .set-wrap { position: relative; display: inline-block; flex: none; }
+.chart-live .set-btn { display: inline-flex; align-items: center; gap: 8px; }
+.chart-live .set-btn[aria-expanded="true"] { background: var(--s3); border-color: var(--accent-border); }
+.chart-live .set-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: 400px; max-width: calc(100vw - 32px); box-sizing: border-box; background: var(--panel, #0B1016); border: 1px solid var(--line-strong); border-radius: 12px; padding: 8px; display: flex; flex-direction: column; gap: 4px; box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
+.chart-live .set-panel.set-left { right: auto; left: 0; }
+.chart-live .set-panel[hidden] { display: none; }
+.chart-live .hk-list { display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+.chart-live .hk-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto; align-items: center; gap: 2px 8px; min-height: 34px; }
+.chart-live .hk-name { font-size: 13px; color: var(--text); }
+.chart-live .hk-in { box-sizing: border-box; width: 100%; min-height: 30px; padding: 4px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line-strong); color: var(--head); font: 600 12px var(--mono); cursor: pointer; caret-color: transparent; }
+.chart-live .hk-in::placeholder { color: var(--text3); font-weight: 500; }
+.chart-live .hk-in:focus { border-color: var(--accent-text); }
+.chart-live .hk-clear { min-height: 30px; padding: 4px 8px; }
+.chart-live .hk-note { grid-column: 1 / -1; font-size: 11px; color: var(--text2); }
+.chart-live .hk-note:empty { display: none; }
+.chart-live .hk-note.warn { color: var(--warn); }
+.chart-live .hk-note.error { color: var(--loss); }
+.chart-live .hk-foot { margin: 6px 8px 4px; font-size: 11px; line-height: 1.45; color: var(--text2); }
+
 @media (max-width: 720px) {
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
   .chart-live .obtn { padding: 4px 10px; }
