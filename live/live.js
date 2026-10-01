@@ -866,6 +866,8 @@ const pageWsUrl = () => {
  *   toolbar        false: the chart's toolbar is not shown; the host shows its own header with the chart's Indicators
  *                  button (the returned `indicators` element) and calls setView, chart.setTool, chart.reset.
  *   onColors       called after the Colors panel or an indicator gear changed a color (the host refreshes its other charts).
+ *   compact        true: for a small panel. The legend is at most 2 lines (no source line, no LIVE pill, no bar time; the
+ *                  prices by importance) and the status line shows only while it carries a note (no delays, fps, ticks).
  * The returned object then also has setView(view), view(), refreshSettings() (Glide and Range style read again from
  * storage), refreshColors() (the colors read again from storage), `indicators` and `colors` (the Indicators and Colors
  * elements, for a host to place).
@@ -881,6 +883,7 @@ function start(container, opt, PAGE) {
   if (!PAGE && !opt.wsUrl && !FEED) throw new Error('ChartLive.mount needs options.wsUrl');
   const VIEW = !PAGE && opt.view && typeof opt.view === 'object' ? opt.view : null;           // the host keeps root, tf and range
   const SLIM = !PAGE && opt.toolbar === false;                                               // the host shows its own header
+  const COMPACT = !PAGE && opt.compact === true;                                             // a small panel: 2-line legend, notes only
   const onView = typeof opt.onView === 'function' ? opt.onView : null;
   const onColors = typeof opt.onColors === 'function' ? opt.onColors : null;
   const TRADING = PAGE;                          // trading only on ChartBridge's own page, never through mount()
@@ -893,7 +896,7 @@ function start(container, opt, PAGE) {
 
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
-  rootEl.className = 'chart-live' + (SLIM ? ' slim' : '');
+  rootEl.className = 'chart-live' + (SLIM ? ' slim' : '') + (COMPACT ? ' compact' : '');
   rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN });
   container.appendChild(rootEl);
   const els = {};
@@ -2575,7 +2578,14 @@ function start(container, opt, PAGE) {
     pill.textContent = text; pill.className = 'pill' + (cls ? ' ' + cls : '');
     if (onStatus) { try { onStatus({ state: map[state] ? state : 'connecting', paneId: PANE, root: D.root || S.root, attempt: wsTries }); } catch (e) { setTimeout(() => { throw e; }); } }
   }
-  function setStatus(text, level) { clearTimeout(flashTimer); const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); }
+  function setStatus(text, level) { clearTimeout(flashTimer); const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); syncNote(); }
+  /* compact (a host's small panel): the status line shows only while it carries a note (live.css .has-note) */
+  let noteOn = false;
+  function syncNote() {
+    if (!COMPACT) return;
+    const on = !!$('statusMsg').textContent || ['ibNote', 'vpNote', 'rangeNote'].some(k => !$(k).hidden && !!$(k).textContent);
+    if (on !== noteOn) { noteOn = on; rootEl.classList.toggle('has-note', on); }
+  }
   /* Error-level status from ChartBridge (for example a bracket leg rejected: the position may have no stop) stays
      on screen until dismissed. The newest three are kept. */
   const alerts = [];
@@ -3510,7 +3520,7 @@ function start(container, opt, PAGE) {
     // or a holiday it keeps the last session until the next session's first trade, and RTH never moves on the clock
     // (1.6.1, the engine's keep)
     if (D.vp && D.vp.advance(etNow())) vpLegend();
-    vpNote(); vpLegend(); rangeNote();
+    vpNote(); vpLegend(); rangeNote(); syncNote();
   }, 500);
 
   if (document.fonts && document.fonts.load) {

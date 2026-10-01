@@ -108,7 +108,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
    one line (what does not fit is cut, the chart keeps its height) */
 .ws-body > .chart-live { flex: 1 1 auto; min-height: 0; padding: 6px 8px 4px; gap: 4px; }
 .ws-panel .chart-live .stage { min-height: 48px; }
-.ws-body > .chart-live > .status { display: none; }   /* one status line for the window, in the top bar */
+/* delays and fps are in the top bar; a chart's own notes show under it (ChartLive.mount compact: true, live.css) */
 
 /* ---------------- the order ticket's place (the ticket comes in E2b) */
 .tk-hold { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px; text-align: center; color: var(--ws-muted); line-height: 1.4; }

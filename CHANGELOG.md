@@ -19,7 +19,11 @@ Page only; no version bump (the release is cut after E2b). Nothing in ChartBridg
   Initial balance, VP Volume profile, CD Cumulative delta, FL Fills; one click shows or hides, as the toolbar's chips);
   those that do not fit go behind a "+N" chip that opens a small list. The header never wraps or scrolls. The charts' own
   toolbars and status lines are not shown: one status line for the window sits in the top bar (the worst feed and local
-  delay over the instruments, each one's in its tooltip, and the frame rate).
+  delay over the instruments, each one's in its tooltip, and the frame rate). A chart's own notes (loading, the Range
+  bars start, the IB and profile notes, ChartBridge's messages; warnings in their colour) show in one faint line at the
+  bottom of that chart, only while there is one. The panel legends are at most 2 lines: no source and version line, no
+  LIVE pill (the top bar has it), no bar time; the close and change first (`compact: true`). The single chart page
+  keeps its full legend and status line.
 - **Settings holds everything general**: Glide and Range style (every chart, and the single chart page), the trading
   hotkeys (the 1.11.0 Settings; they act here once the order ticket comes), the large-print floors, Change PIN, the
   layout reset. **Colors** sit in the top bar and color every chart at once.
@@ -31,7 +35,7 @@ Page only; no version bump (the release is cut after E2b). Nothing in ChartBridg
   come with ChartBridge 0.3.7), NQ 5 min and ES 1 min (cols 8 to 10), the order ticket's place (cols 11 to 12, rows 1
   to 2: "Order ticket: next build") and Time and Sales (rows 3 to 6). No execution chart (Anthony's redesign: the order
   ticket replaces it in E2b).
-- `ChartLive.mount` options for a host (live/EMBED.md): `feed`, `view`, `onView`, `toolbar: false`, `onColors`, and
+- `ChartLive.mount` options for a host (live/EMBED.md): `feed`, `view`, `onView`, `toolbar: false`, `compact`, `onColors`, and
   `setView`, `refreshSettings`, `refreshColors`, `stats`, `indicators`, `chips`, `colors` on the returned object. Without them a mounted
   chart and the single chart page behave exactly as before.
 - The updater writes the workspace's script after `live.js` and the pages last (`index.html` very last).

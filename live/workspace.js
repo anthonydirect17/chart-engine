@@ -438,7 +438,7 @@ function mountChart(v) {
   v.nameEl = v.head.querySelector('.ws-name'); v.tfEl = v.head.querySelector('.ws-tf'); v.viewBtn = v.head.querySelector('.ws-view');
   headChart(v);
   const pane = window.ChartLive.mount(v.body, {
-    feed: hub, paneId: p.id, storagePrefix: PREFIX, toolbar: false,
+    feed: hub, paneId: p.id, storagePrefix: PREFIX, toolbar: false, compact: true,
     view: { root: p.root, tf: p.tf, range: p.tf === 'range' ? p.range : undefined },
     onView: nv => viewChanged(v, nv),
     onColors: () => { for (const o of chartViews()) if (o !== v) o.pane.refreshColors(); },

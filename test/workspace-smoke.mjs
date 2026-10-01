@@ -259,6 +259,10 @@ try {
     glide: document.querySelector('#glideSeg [aria-pressed="true"]').dataset.v, mode: document.getElementById('rangeMode').value, toolbar: getComputedStyle(document.querySelector('header.bar')).display }));
   check(!sv.grid && sv.toolbar !== 'none', '/single.html is the single chart page with its toolbar');
   check(sv.sym === 'NQ' && sv.tf === 'm5', 'it opens on its own instrument and bars (' + sv.sym + ' ' + sv.tf + ')');
+  const sl = await sp.evaluate(() => { const vis = id => { const e = document.getElementById(id); return !!e && getComputedStyle(e).display !== 'none' && e.offsetHeight > 0; };
+    return { src: vis('lgSrc') && /ChartBridge .*chart \d/.test(document.getElementById('lgSrc').textContent), pill: vis('connPill'), time: vis('lgTime'), grid: getComputedStyle(document.getElementById('legend')).display,
+      status: vis('dFeed') && vis('fps') && getComputedStyle(document.querySelector('footer.status')).display !== 'none' }; });
+  check(sl.src && sl.pill && sl.time && sl.grid === 'grid' && sl.status, 'the single chart page keeps its full legend (source line, LIVE, bar time) and its status line');
   check(sv.glide === 'fast' && sv.mode === 'traded', 'with the Glide and Range style set in the workspace');
   // and back: Glide set on the single chart page reaches the workspace's charts
   await sp.click('#glideSeg [data-v="off"]');
@@ -456,6 +460,27 @@ try {
   const lst = await page.evaluate(id => { const l = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`); const r = l.getBoundingClientRect(); return { open: !l.hidden, n: l.querySelectorAll('.ind-chip').length, inside: r.right <= innerWidth && r.bottom <= innerHeight }; }, nq3.id);
   check(lst.open && lst.n === ch.listed && lst.inside, '"' + ch.more + '" opens a small list of them');
   await shot(page, 'workspace-1366x768-chips.png');
+  const esP = s.panels.find(p => p.type === 'chart' && p.root === 'ES');
+  const lg = await page.evaluate(id => {
+    const el = document.querySelector(`.ws-panel[data-id="${id}"] .legend`), r = el.getBoundingClientRect();
+    const hidden = sel => { const e = el.querySelector(sel); return !e || getComputedStyle(e).display === 'none'; };
+    const inside = sel => { const e = el.querySelector(sel); const q = e.getBoundingClientRect(); return q.height > 0 && q.bottom <= r.bottom + 0.5; };
+    const tops = new Set([...el.querySelectorAll('.lg1 > *, .lg2 > *, .lg3 > *')].filter(e => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().top < r.bottom - 1).map(e => Math.round(e.getBoundingClientRect().top)));
+    return { src: hidden('[id$="lgSrc"]'), pill: hidden('[id$="connPill"]'), h: r.height, rows: tops.size, close: inside('.lg2 > :nth-child(5)') && inside('[id$="lgChg"]') && inside('[id$="lgName"]'), text: el.innerText.replace(/\s+/g, ' ').slice(0, 80) };
+  }, esP.id);
+  check(lg.src && lg.pill, 'the panel legend has no source and version line and no LIVE pill (the top bar says LIVE · ChartBridge)');
+  check(lg.rows <= 2 && lg.h <= 40 && lg.close, 'ES 1 min at 1366x768: the legend fits in 2 lines (' + lg.rows + ' rows, ' + Math.round(lg.h) + ' px: ' + lg.text + ')');
+  await control('status?level=warn&text=' + encodeURIComponent('Test note for the chart'));
+  await page.waitForTimeout(400);
+  const nt = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`), st = c.querySelector(':scope > .status'), m = st.querySelector('.msg'), r = st.getBoundingClientRect(), b = c.getBoundingClientRect();
+    return { on: c.classList.contains('has-note'), shown: getComputedStyle(st).display !== 'none', text: m.textContent, color: getComputedStyle(m).color, bottom: b.bottom - r.bottom < 8, h: r.height, others: [...st.children].filter(x => getComputedStyle(x).display !== 'none').length }; }, esP.id);
+  check(nt.on && nt.shown && nt.text === 'Test note for the chart' && nt.bottom && nt.h <= 18 && nt.others === 1, 'a note shows in one faint line at the bottom of the chart (' + Math.round(nt.h) + ' px), nothing else on it');
+  check(nt.color === 'rgb(224, 180, 90)', 'a warning keeps its colour (' + nt.color + ')');
+  await shot(page, 'workspace-1366x768-note.png');
+  await control('status?level=info&text=');
+  await page.waitForTimeout(400);
+  const nc = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`); return { on: c.classList.contains('has-note'), shown: getComputedStyle(c.querySelector(':scope > .status')).display !== 'none' }; }, esP.id);
+  check(!nc.on && !nc.shown, 'and clears: no line and no space when there is no note');
   const first = await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip`).dataset.id, nq3.id);
   await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-list .ind-chip[data-id="${first}"]`);
   check(await page.evaluate(([id, f]) => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip[data-id="${f}"]`); return !!c && c.getAttribute('aria-pressed') === 'false'; }, [nq3.id, first]), 'a chip in the list works like the others, and the list stays open');
