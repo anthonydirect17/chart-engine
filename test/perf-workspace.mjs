@@ -3,7 +3,7 @@
 // Not part of `npm test`: it takes about 2 minutes per page.
 //
 //   node test/perf-workspace.mjs [--mode=both|workspace|single] [--secs=120] [--warm=10] [--live-rate=300]
-//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape]
+//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape] [--ticket]
 //
 // --live-rate is trades a second per instrument while a page is subscribed to it (with the fake's bursts of 3 times
 // that for 1.5 s in every 10 s), so the workspace's MNQ, NQ and ES each trade at that rate. The single page shows the
@@ -25,6 +25,9 @@ import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, d) => { const a = process.argv.slice(2).find(x => x === '--' + name || x.startsWith('--' + name + '=')); return a === undefined ? d : a.includes('=') ? a.slice(a.indexOf('=') + 1) : true; };
 const VARIANT = arg('variant', 'default');
+/* --ticket (1.12.0): trading on; the workspace's ticket held and Armed, MNQ long with its stop and target working, so
+   the order display path (every MNQ chart's lines, the Armed border, the ticket's P&L) runs under the load */
+const TICKET = !!arg('ticket', false);
 const MODE = arg('mode', 'both'), SECS = +arg('secs', 120), WARM = +arg('warm', 10), LIVE_RATE = +arg('live-rate', 300), TICK_RATE = +arg('tick-rate', 15), PORT = +arg('port', 8834);
 
 const init = `(() => {
@@ -63,7 +66,8 @@ const q = (arr, p) => { if (!arr.length) return 0; const s = arr.slice().sort((a
 const r2 = v => Math.round(v * 100) / 100, r3 = v => Math.round(v * 1000) / 1000;
 
 async function run(mode) {
-  const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--test-pin=' + TEST_PIN]
+    .concat(TICKET ? ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9'] : []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
   const browser = await chromium.launch(Object.assign({ args: ['--enable-precise-memory-info', '--js-flags=--expose-gc'] }, process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));
   try {
@@ -95,6 +99,17 @@ async function run(mode) {
     if (mode === 'single') await page.waitForFunction(() => { const e = document.getElementById('connPill'); return e && e.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
     else await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 120000, polling: 200 });
     const loadMs = Date.now() - t0;
+    let ticket = null;
+    if (TICKET && mode === 'workspace') {
+      await page.waitForFunction(() => window.workspace.ticket().held && window.workspace.ticket().enabled && !!document.querySelector('[data-tk-id="buyMkt"]'), null, { timeout: 30000 });
+      for (const [k, v] of [['bStop', '40'], ['bTarget', '80']]) { await page.fill(`[data-tk-id="${k}"]`, v); await page.press(`[data-tk-id="${k}"]`, 'Tab'); }
+      await page.click('[data-tk-id="armBtn"]');
+      await page.click('[data-tk-id="buyMkt"]');
+      await page.waitForFunction(() => /^LONG 1/.test(document.querySelector('[data-tk-id="oPos"]').textContent), null, { timeout: 15000 });
+      await page.waitForTimeout(1000);
+      ticket = await page.evaluate(() => ({ armed: window.workspace.ticket().armed, pos: document.querySelector('[data-tk-id="oPos"]').textContent,
+        border: document.querySelectorAll('.ws-body > .chart-live.is-armed').length, lines: window.workspace.panels().filter(p => p.type === 'chart' && p.root === 'MNQ').map(p => window.workspace.chart(p.id).getOrders().length) }));
+    }
     await page.waitForTimeout(WARM * 1000);
     const heapStart = await page.evaluate(() => performance.memory.usedJSHeapSize);
     const cdp = await ctx.newCDPSession(page);
@@ -121,7 +136,7 @@ async function run(mode) {
       tapeFrameP50: P.tape.length ? r3(q(P.tape, 0.5)) : null, tapeFrameP95: P.tape.length ? r3(q(P.tape, 0.95)) : null, tapeFrames: P.tape.length, tapeRows: P.tapeRows, tapeKept: P.tapeKept,
       mainThreadBusyPct: r2(busyPct), scriptPct: r2(scriptPct), layoutStylePct: r2(layoutPct), longTasks: P.long.length, longTaskMax: r2(Math.max(0, ...P.long)),
       heapStartMB: r2(heapStart / 1048576), heapEndMB: r2(P.heapEnd / 1048576), heapAfterGcMB: r2(heapGc / 1048576),
-      crossOriginIsolated: P.iso, webSockets: P.sockets, webSocketsMade: P.socketsMade, feed: P.feed, errors,
+      ticket, crossOriginIsolated: P.iso, webSockets: P.sockets, webSocketsMade: P.socketsMade, feed: P.feed, errors,
     };
   } finally { await browser.close(); bridge.kill(); }
 }
