@@ -1,10 +1,14 @@
 # Changelog
 
-## ChartBridge 0.3.7 (order side) (draft, not released; version not bumped)
+## ChartBridge 0.3.7 (2026-10-01): planned stop and target prices, settlement, 4h, 1D and 1W bars, the weekly profile
 
-ChartBridge (nt8/) order paths only, Anthony's rulings of 2026-10-01; the page is unchanged (chart 1.11.0 works against
-it as it is; the page side comes later). The data side of 0.3.7 is a separate section. **Needs a recompile** (while
-flat, or with no resting entry that matters: an entry placed by 0.3.6 keeps its tick bracket, see below).
+ChartBridge (nt8/) only; the page and the engine are unchanged (chart 1.11.0 works against it as it is: it ignores the
+new keys and messages; the page side of `plan`, settlement, the higher timeframes and the weekly profile comes later).
+**Needs a recompile:** while flat and with no resting orders, run `update-pc.ps1 -InstallChartBridge` (README: Keep this
+PC up to date) or `nt8\install.ps1`, then compile in NinjaTrader (F5). An entry placed by 0.3.6 and still resting at the
+recompile keeps its tick bracket (below).
+
+### Order side (Anthony's rulings of 2026-10-01)
 - **No 200-tick limits.** A limit or stop price may be any distance from the last price, and bracket ticks any whole
   number of 0 or more. Every other gate stays (tick grid, last price under 300 seconds old, stops and limits on the
   right side of the market, the cap, the rate, strict messages, accounts, the token). Optional limits in `config.txt`:
@@ -46,6 +50,46 @@ flat, or with no resting entry that matters: an entry placed by 0.3.6 keeps its 
   speak the new keys (`--max-ticks-away`, `--max-bracket-ticks`), `test/fake-bridge.test.js`, the source guards in
   `test/nt8-source.test.js`. `test/orders-smoke.mjs` starts the fake bridge with `--max-ticks-away=200` for its
   refusal check.
+
+### Data side
+- **Prior settlement.** The settlement of the session before the current one (sessions 18:00 to 17:00 ET), from
+  NinjaTrader's own settlement for each served contract (`MarketData.Settlement` at subscription, and every Settlement
+  update). Each value is dated with the session it settles from NinjaTrader's stamp; one stamped inside a later session is
+  not used (null, never a guess). Today's settlement, in after the close, becomes the prior at 18:00 (over a weekend,
+  Friday's from Sunday 18:00; across a CME holiday, the last session's). In `hello` per instrument (`settlement`,
+  `settlementDate`), and `{"type":"settlement","root","p","date"}` to every page when the prior changes. The last two dated
+  values per root are kept in `settlements.txt` with their contract (a line for another contract, as after a roll, is
+  ignored), read and written off NinjaTrader's thread, so a restart in the evening still knows the prior. `/diag` `settlements`.
+- **4h, 1D and 1W bars on request.** `{"type":"htf","root","tf","id"}` (strict). NinjaTrader's own 240-minute, day and week
+  bars, 300 by count, through the gate last (only with no chart loading, no window or backfill out or queued, no minute
+  chart's last trades out); not answered in 15 s (Anthony), it is given up with the reason, frees the gate, and is asked
+  again no sooner than 60 s later. A page waits on a request once, answers are formatted once and outside the locks the
+  live trades take, and `htfBar` goes only to pages that have the bars. Kept per root and timeframe: a second
+  page or a reload is served from memory; asked again on a later trading day or after a feed drop. The forming bar follows
+  the live trades ChartBridge already has (no request per trade); a page that asked gets `htfBar` at most once a second
+  while it changes. Bars are start-stamped (4h from the 18:00 ET open; 1D on the trading day; 1W on its Monday).
+- **Weekly volume profile on request.** `{"type":"weekProfile","root","id"}` (strict): the last 5 finished sessions' volume
+  at price from the session tables, never a NinjaTrader request. Each finished table is now also kept as
+  `profile-<ROOT>-<date>.txt` (14 days) so a restart still has the week; a session with no table is listed as missing, a
+  table that is not whole says so. One answer per page at a time, cached per root while the tables are the same.
+- **The old by-date tick load is removed** (replaced by the served window in 0.3.5): its request, the Bid and Ask history
+  (`quoteHours`), the quote wait and their `/diag` fields (`sides.lastLoad`, `quotesOutstanding`, `seams.tickToAheadMin`,
+  `tickRetriedEndingNow`), and the backfill's side join that only it used (`ClassifyBackfill`, `QuoteSeries`,
+  `ContinueTickRule`, `BackfillSides`). A `quoteHours` line in `config.txt` is now noted once and does nothing. Live
+  trades keep their sides as before.
+- **Review follow-ups.** The gate's stop edges (lf7 N1 to N3): a request dropped at a stop answers its waiting pages and a
+  start clears what it left, a timeout after the stop never marks the gate stuck again, and a stop is checked right before
+  a taken request is sent (a request that still slips out in the last instructions has its answer dropped uncopied). `MarketClosedNow` knows the CME holidays by the page's own rules
+  (lf7 N4: no session on New Year's Day, Good Friday and Christmas; the 13:00 halt on other NYSE holidays and 13:15 on
+  early closes). Daily bars (bars1): a queued message older than 40 days is dropped, a session The Desk refused is not
+  asked again after a restart either (`refused_bars.txt`, N1), and the queue files are read on the bars thread, not
+  NinjaTrader's (N7). The updater (`update-pc.ps1 -InstallChartBridge`, N2) takes out an add-on file the previous install
+  had and the new commit no longer lists (a revert of daily bars, say), inside the same all-or-nothing copy, and records
+  each install's file list.
+- Unchanged from the reviews, still open: bars1 N3 (`contract.<ROOT>` applies to every catch-up session), N4 (two README
+  wording points), N5 (Stop can block up to 500 ms in the worst case), N6 (a minute chart's last trades can go beside a bars
+  request); lf7 N4's other points (the "failed once" text after an unstuck, `feedDown` set by any connection, tails not
+  gated: Anthony's call).
 
 ## 1.11.0 (2026-10-01): trading hotkeys
 

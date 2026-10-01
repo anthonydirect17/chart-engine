@@ -96,6 +96,12 @@
 // (sm 2); every trade before them gets a tick-rule side (sm 3), as when NinjaTrader is asked for no historical quotes
 // there. 0 is 0.3.4.1's default (no measured side in the backfill); without the flag, every backfill trade is measured
 // like 0.3.4's (its quote history covered the whole window).
+// --data-037 (ChartBridge 0.3.7, data side, see nt8/PROTOCOL.md): hello lists a sample prior settlement and its date per instrument
+//   (made-up sample data, as everything here) and the features "settlement", "htf", "weekProfile"; the page's strict
+//   "htf" request is answered with 4h, 1D or 1W bars made from the sample minutes and kept live by the fake trades
+//   ("htfBar" at most once a second), and "weekProfile" with the last 5 sessions' volume at price of the sample minutes
+//   (one listed "missing", as a session ChartBridge has no table for). With --test-controls, POST
+//   /test/settlement?root=MNQ&p=21456.25&date=2026-09-28 sends a "settlement" message to every page (p=null: none known).
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -117,6 +123,7 @@ const flagValue = name => { const a = flag(name); return a && a.includes('=') ? 
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
 const PIN_OFF = !!flag('pin-off');
 const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
+const DATA_037 = !!flag('data-037');
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
@@ -389,9 +396,94 @@ function onMessage(c, text) {
   received.types[type] = (received.types[type] || 0) + 1;
   if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
   if (m.type === 'subscribe') subscribe(c, m);
+  else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7
 }
+/* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
+const settlement = {}, settlementDate = {};       // the prior session's settlement and its trading date (sample: its last close)
+for (const r of Object.keys(INSTR)) {
+  const b = data[r], day = CE.util.tradeDay(b[b.length - 1].t, 64800), prior = b.filter(x => CE.util.tradeDay(x.t, 64800) < day);
+  settlement[r] = prior.length ? prior[prior.length - 1].c : null;
+  settlementDate[r] = new Date((prior.length ? CE.util.tradeDay(prior[prior.length - 1].t, 64800) : day - 1) * 86400000).toISOString().slice(0, 10);
+}
+const HTF_FRAMES = ['4h', '1D', '1W'];
+function htfStart(tf, t) {                       // as ChartBridge.HtfStart: 4h from the 18:00 ET open, 1D the trading day, 1W its Monday
+  const day = Math.floor((t + 21600) / 86400);
+  if (tf === '4h') { const open = day * 86400 - 21600; return open + Math.floor((t - open) / 14400) * 14400; }
+  if (tf === '1D') return day * 86400;
+  const dow = ((day + 4) % 7 + 7) % 7;
+  return (day - (dow + 6) % 7) * 86400;
+}
+const htfSeries = {};                             // 'MNQ 4h' -> bars [[t,o,h,l,c,v]], made once, kept live by trade()
+function htfBars(r, tf) {
+  const key = r + ' ' + tf;
+  if (htfSeries[key]) return htfSeries[key];
+  const out = [];
+  for (const b of data[r]) {
+    const t = htfStart(tf, b.t), x = out[out.length - 1];
+    if (x && x[0] === t) { x[2] = Math.max(x[2], b.h); x[3] = Math.min(x[3], b.l); x[4] = b.c; x[5] += b.v; }
+    else out.push([t, b.o, b.h, b.l, b.c, b.v]);
+  }
+  return (htfSeries[key] = out.slice(-300));
+}
+function htfTrade(r, t, p, v) {
+  for (const tf of HTF_FRAMES) {
+    const s = htfSeries[r + ' ' + tf]; if (!s) continue;
+    const st = htfStart(tf, t), x = s[s.length - 1];
+    if (x && st < x[0]) continue;
+    if (x && st === x[0]) { x[2] = Math.max(x[2], p); x[3] = Math.min(x[3], p); x[4] = p; x[5] += v; }
+    else s.push([st, p, p, p, p, v]);
+    s.version = (s.version || 0) + 1;
+  }
+}
+// strict, as ChartBridge: only the listed keys, strings or (id) a whole number of up to 15 digits, no escapes
+function strict(text, m, keys, need) {
+  if (/\\/.test(text) || !m || typeof m !== 'object' || Array.isArray(m)) return 'not a plain JSON object';
+  for (const k of Object.keys(m)) if (!keys.includes(k)) return 'unknown key ' + k;
+  for (const k of need) if (m[k] === undefined) return 'missing ' + k;
+  for (const k of Object.keys(m)) if (k !== 'id' && typeof m[k] !== 'string') return k + ' must be a string';
+  if (m.id !== undefined && !(Number.isInteger(m.id) && m.id >= 0 && String(m.id).length <= 15 && /"id"\s*:\s*(0|[1-9]\d*)\s*[,}]/.test(text))) return 'id must be a whole number';
+  return null;
+}
+function onDataRequest(c, m, text) {
+  const why = m.type === 'htf' ? strict(text, m, ['type', 'root', 'tf', 'id'], ['root', 'tf']) || (HTF_FRAMES.includes(m.tf) ? null : 'tf must be 4h, 1D or 1W')
+    : strict(text, m, ['type', 'root', 'id'], ['root']);
+  if (why) return send(c, { type: 'status', level: 'warn', text: 'ChartBridge refused a ' + m.type + ' message: ' + why });
+  const id = m.id === undefined ? null : m.id;
+  if (!INSTR[m.root]) {
+    if (m.type === 'htf') return send(c, { type: 'htf', root: m.root, tf: m.tf, id, name: null, bars: [], error: 'ChartBridge does not serve ' + m.root });
+    return send(c, { type: 'weekProfile', root: m.root, id, tick: null, sessions: [], rows: [], error: 'ChartBridge does not serve ' + m.root });
+  }
+  if (m.type === 'htf') {
+    const bars = htfBars(m.root, m.tf);
+    c.htf = c.htf || new Map();
+    if (c.htf.size < 12 || c.htf.has(m.root + ' ' + m.tf)) c.htf.set(m.root + ' ' + m.tf, { version: bars.version || 0, lastT: bars.length ? bars[bars.length - 1][0] : -Infinity });
+    return send(c, { type: 'htf', root: m.root, tf: m.tf, id, name: INSTR[m.root].name, bars, error: null });
+  }
+  // weekProfile: the last 5 finished sample sessions, each bar's volume at its close (sample data, not a real profile)
+  const tick = INSTR[m.root].tick, byDay = new Map();
+  for (const b of data[m.root]) { const d = CE.util.tradeDay(b.t, 64800); if (!byDay.has(d)) byDay.set(d, new Map()); const rows = byDay.get(d), k = Math.round(b.c / tick); rows.set(k, (rows.get(k) || 0) + b.v); }
+  const today = CE.util.tradeDay(etNow(), 64800), days = [...byDay.keys()].filter(d => d < today).sort((a, b) => a - b).slice(-5);
+  const all = new Map(), sessions = days.map((d, i) => {
+    const date = new Date(d * 86400000).toISOString().slice(0, 10);
+    if (i === 1) return { date, missing: 'no table: ChartBridge was not running for this session, or its file is gone' };
+    const rows = [...byDay.get(d)].sort((a, b) => a[0] - b[0]);
+    for (const [k, v] of rows) all.set(k, (all.get(k) || 0) + v);
+    return { date, from: d * 86400 - 21600, whole: true, coveredFrom: d * 86400 - 21600, drop: null, rows };
+  });
+  send(c, { type: 'weekProfile', root: m.root, id, tick, sessions, rows: [...all].sort((a, b) => a[0] - b[0]), error: null });
+}
+if (DATA_037) setInterval(() => {                 // htfBar: at most once a second while a watched forming bar changes
+  for (const c of clients) if (c.htf) for (const [key, w] of c.htf) {
+    const s = htfSeries[key]; if (!s || !s.length || (s.version || 0) === w.version) continue;
+    const lastT = s[s.length - 1][0], from = Math.min(w.lastT, lastT);
+    w.version = s.version || 0; w.lastT = lastT;
+    const [root, tf] = key.split(' ');
+    send(c, { type: 'htfBar', root, tf, bars: s.filter(x => x[0] >= from) });
+  }
+}, 1000);
+
 const tickCache = new Map();             // --tick-rate: millions of ticks, made once per root and hours
 function subscribe(c, m) {
   const r = INSTR[m.root] ? m.root : 'MNQ';
@@ -470,6 +562,7 @@ function trade(r, p) {
     k.push(msg.t, p, msg.v, s, sm);
   }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
+  if (DATA_037) htfTrade(r, msg.t, p, msg.v);   // the forming 4h, 1D and 1W bars follow the trades
   desk.tick(r, p);                        // the matching engine sees every trade
 }
 if (!LIVE_RATE) setInterval(() => {
@@ -532,6 +625,10 @@ const server = http.createServer((req, res) => {
         positions: Object.fromEntries(desk.positions) }));
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
+    else if (p === '/test/settlement' && DATA_037) {
+      settlement[r] = q.get('p') === 'null' ? null : +q.get('p'); if (q.get('date')) settlementDate[r] = q.get('date');
+      for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
+    }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
@@ -588,6 +685,10 @@ server.on('upgrade', (req, sock) => {
   const hello = { type: 'hello', version: flagValue('version') || (V1 ? 'fake-0.2.1' : SIDES ? 'fake-0.3.4' : 'fake-0.3.3'), now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
+  if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
+    for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
+    hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
+  }
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
