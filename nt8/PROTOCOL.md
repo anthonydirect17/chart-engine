@@ -558,8 +558,12 @@ its state is back ("queued", or for a retry "failed once (...), asked again in 6
 claimed its request at the time limit has 30 s more to finish its copy; past that it counts as unanswered (one Output line)
 until the copy ends. Minute charts load as usual.
 Orders and Flatten are never affected. `/diag` `gate.stuck` names the request, `stuckSinceUtcMs` says since when, and a
-waiting backfill's `state` starts "waiting:". Stopping ChartBridge (a compile, or closing NinjaTrader) clears the stuck
-request, ends the gate's worker (waited for at most 5 s) and cancels any backfill retry still to come.
+waiting backfill's `state` starts "waiting:". Only the request that made the gate stuck frees it. Stopping ChartBridge (a
+compile, or closing NinjaTrader) clears the stuck request and marks the gate stopped until the next start: no tick request
+goes to NinjaTrader after it (nothing is queued, no worker starts, no minute chart's last trades, no second ask), an answer
+that comes later is dropped uncopied, and any backfill retry still to come is cancelled with its timer. The gate's worker
+has its own thread; Stop waits for it at most 250 ms, and a worker still inside a NinjaTrader call then ends when that call
+returns, sending nothing more (one Output line says so).
 
 **The served window.** Every subscribe with `tickHours` above 0 (a Range or seconds chart, with or without `liveFirst`: a 1.6.x
 page or The Desk's relay gets it too; 0.3.5 never runs 0.3.4's by-date tick load) gets the last `rangeHours` of trades

@@ -560,8 +560,19 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   // review 5 N2: the wait for an answer that claimed it at the limit is bounded; past it the gate shows it stuck
   assert.match(bodyOf(code, 'private static void GateLoop('), /else if \(!answered && !done\.Wait\(AnswerCopyMs, stop\)\)/);
   // review 5 N6: Stop() ends the gate's worker (joined, bounded) and cancels the backfill retries' timers
-  assert.match(bodyOf(code, 'public static void Stop('), /StopGate\(\);/);
-  assert.match(bodyOf(code, 'public static void StopGate('), /stop\.Cancel\(\);[\s\S]*worker\.Wait\(5000\)/);
+  // review 6 S2: Stop() waits only 250 ms for the worker on NinjaTrader's thread; the harness waits 5 s
+  assert.match(bodyOf(code, 'public static void Stop('), /StopGate\(250\);/);
+  assert.match(code, /public static void StopGate\(int joinMs = 5000\)/);
+  assert.match(bodyOf(code, 'public static void StopGate('), /gateStopped = true;[\s\S]*stop\.Cancel\(\);[\s\S]*worker\.Wait\(joinMs\)/);
+  // review 6 S1: after a stop nothing is queued, no worker starts, no tail goes, and a late answer is dropped uncopied
+  assert.match(bodyOf(code, 'private static void GateEnqueue('), /if \(gateStopped\) return;/);
+  assert.match(bodyOf(code, 'private static void GateKick('), /if \(gateStopped \|\| gateRunning/);
+  assert.match(bodyOf(code, 'private static bool BeginTail('), /if \(gateStopped \|\| gateStuck != null/);
+  assert.match(bodyOf(code, 'public static bool Start('), /StartGate\(\);/);
+  assert.equal((code.match(/if \(j\.Stop\.IsCancellationRequested\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} return; \}/g) || []).length, 2);
+  // review 6 N1: only the request that made the gate stuck frees it; N2: the worker has its own thread
+  assert.match(bodyOf(code, 'private static void GateUnstuck('), /if \(gateStuckJob != j\) backfills = null;/);
+  assert.match(bodyOf(code, 'private static void GateKick('), /TaskCreationOptions\.LongRunning/);
   assert.match(code, /Task\.Delay\(BackfillRetryMs, ask\.Stop\)/);
   assert.match(bodyOf(code, 'private static void GateLoop('), /j\.Stop = stop;/);
   assert.doesNotMatch(bodyOf(code, 'private static void GateLoop('), /Thread\.Sleep/);
@@ -569,8 +580,8 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   // review 5 S1: a queued retry waits too, and gets its state back
   assert.match(bodyOf(code, 'private static void BackfillWaits('), /book\.BackfillState\.StartsWith\("failed once", StringComparison\.Ordinal\)/);
   assert.match(bodyOf(code, 'private static void BackfillWaits('), /book\.BackfillState = book\.BackfillWaitWas \?\? "queued";/);
-  assert.match(askw, /if \(!Claim\(j\)\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} if \(LateAnswer\(j\)\) GateUnstuck\("window " \+ book\.Root\); return; \}/);
-  assert.match(bodyOf(code, 'private static void RunBackfill('), /if \(!Claim\(j\)\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} if \(LateAnswer\(j\)\) GateUnstuck\(/);
+  assert.match(askw, /if \(!Claim\(j\)\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} if \(LateAnswer\(j\)\) GateUnstuck\(j, "window " \+ book\.Root\); return; \}/);
+  assert.match(bodyOf(code, 'private static void RunBackfill('), /if \(!Claim\(j\)\) \{ try \{ req\.Dispose\(\); \} catch \(Exception\) \{ \} if \(LateAnswer\(j\)\) GateUnstuck\(j, /);
   // review 5 (found in its race2 probe): a late answer during the marking never frees the gate before it is marked stuck
   assert.match(code, /private static bool LateAnswer\(GateJob j\) \{ return Interlocked\.CompareExchange\(ref j\.State, 4, 2\) != 2; \}/);
   assert.match(bodyOf(code, 'private static void GateLoop('), /GateTimedOut\(j\);\s*if \(Interlocked\.CompareExchange\(ref j\.State, 3, 2\) != 2\) GateUnstuck\(/);

@@ -399,8 +399,8 @@ public static class WindowHarness
         if (!hadNq) named["NQ"] = NqInst;
         if (!hadEs) named["ES"] = EsInst;
         // Every stand-in page's SendLoop holds a pool thread while it waits on its queue, and the reconnect storm opens 10 at
-        // once: with Mono's slow thread injection the gate's worker could start seconds late (the storm case failed 2 runs in
-        // 11, and on cb6f127 too under load). Enough threads up front, as on a PC with a few pages; set back after.
+        // once: with Mono's slow thread injection a load's continuations could run seconds late and the storm case failed
+        // (2 runs in 11; 1 in 4 still with the gate's worker on its own thread). Enough threads up front; set back after.
         int minWorkers, minIo; ThreadPool.GetMinThreads(out minWorkers, out minIo);
         ThreadPool.SetMinThreads(Math.Max(minWorkers, 64), minIo);
         try
@@ -417,6 +417,10 @@ public static class WindowHarness
             CopyNeverEnds();
             AnsweredWhileMarking();
             StopEndsGate();
+            StopRound2();
+            StopLoad();
+            StopLate();
+            StopShortWait();
             BackfillOrderAndRound2();
             ClosedMarketDrop();
             Windows();
@@ -1011,6 +1015,155 @@ public static class WindowHarness
         finally
         {
             ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillRetryMs = retryWas; ChartBridgeServer.BackfillTimeoutMs = toWas;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 6 S1 ("stopround2"): a window out at the stop is answered after it with a full, short answer, so a second ask
+    // would be due. Nothing goes to NinjaTrader after the stop, and the answer is dropped, not copied.
+    static void StopRound2()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> tape = Walk(t0, 100, 181, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        ChartBridgeServer.WindowFirstGuess = 1000;
+        List<string> sa = new List<string>();
+        ChartBridgeClient a = NewClient(991, sa);
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, tape, 0, 50);
+            SubOn(a, "MNQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest w = null;
+            if (!WaitFor(() => (w = Find(m0, IsWin)) != null)) { Check(false, "review 6 S1: no window went out"); return; }
+            DropClient(a);                                                        // as Stop() closes its pages
+            ChartBridgeServer.StopGate();
+            int made = MadeCount();
+            List<Trade> full = Walk(simNow.AddMinutes(-1), (int)w.BarsBack, 182, 5);
+            w.Answer(Answer(full, 0, full.Count), ErrorCode.NoError);              // full and short: a second ask would be due
+            Thread.Sleep(800);
+            RootBook book = ChartBridgeServer.BookOf("MNQ", inst);
+            double cb; lock (book.Sync) cb = book.WindowCallbackMs;
+            Check(MadeCount() == made && cb < 0 && Gate().Contains("\"now\":null"),
+                "review 6 S1: a window answered after the stop asks nothing more of NinjaTrader (" + (MadeCount() - made) + " requests after) and is not copied");
+        }
+        finally
+        {
+            DropClient(a);
+            ChartBridgeServer.WindowFirstGuess = 200000;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 6 S1 ("stopload"): a Range load in flight at the stop (its minute history not answered yet; its page closed, as
+    // Stop() does). The minute answer comes after the stop: no window goes to NinjaTrader.
+    static void StopLoad()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> tape = Walk(t0, 100, 183, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        List<string> sa = new List<string>();
+        ChartBridgeClient a = NewClient(992, sa);
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, tape, 0, 50);
+            SubOn(a, "MNQ", "1", 2);
+            DropClient(a);
+            ChartBridgeServer.StopGate();
+            int made = MadeCount();
+            AnswerMinutes(m0);
+            Thread.Sleep(800);
+            Check(MadeCount() == made && Gate().Contains("\"now\":null") && Gate().Contains("\"windowsQueued\":0"),
+                "review 6 S1: a load whose minute history is answered after the stop sends no window (" + (MadeCount() - made) + " requests after)");
+        }
+        finally
+        {
+            DropClient(a);
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 6 N1 ("stoplate"): a request stuck before a stop, then a start in the same process and a new stuck request; the
+    // old request's late answer must not free the new stuck gate.
+    static void StopLate()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> tape = Walk(t0, 100, 184, 100), nq = Walk(t0, 20, 185, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        int wtoWas = ChartBridgeServer.WindowTimeoutMs;
+        ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 1000;
+        List<string> sa = new List<string>(), sb = new List<string>();
+        ChartBridgeClient a = NewClient(993, sa), b = null;
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, tape, 0, 50);
+            SubOn(a, "MNQ", "1", 2); AnswerMinutes(m0);
+            BarsRequest w = null;
+            if (!WaitFor(() => (w = Find(m0, IsWin)) != null) || !WaitFor(() => Gate().Contains("\"stuck\":\"window MNQ\""), 3000)) { Check(false, "review 6 N1: MNQ did not get stuck"); return; }
+            DropClient(a);
+            ChartBridgeServer.StopGate();
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));   // a start in the same process
+            LiveOn(NqInst, nq, 0, 20);
+            b = NewClient(994, sb);
+            int m1 = MadeCount();
+            SubOn(b, "NQ", "1", 2); AnswerMinutes(m1);
+            BarsRequest wn = null;
+            bool nqStuck = WaitFor(() => (wn = Find(m1, IsWin)) != null) && WaitFor(() => Gate().Contains("\"stuck\":\"window NQ\""), 3000);
+            w.Answer(Answer(tape, 0, 50), ErrorCode.NoError);                     // the old run's request answers late
+            Thread.Sleep(300);
+            bool still = Gate().Contains("\"stuck\":\"window NQ\"");
+            if (wn != null) wn.Answer(Answer(nq, 0, 20), ErrorCode.NoError);       // the new run's own answer frees it
+            Check(nqStuck && still && WaitFor(() => Gate().Contains("\"stuck\":null"), 3000),
+                "review 6 N1: an answer from before a stop does not free a newer stuck gate; only that request's own answer does");
+        }
+        finally
+        {
+            DropClient(a); if (b != null) DropClient(b);
+            ChartBridgeServer.WindowTimeoutMs = wtoWas; ChartBridgeServer.WindowFirstGuess = 200000;
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // Review 6 S2 ("stopinrequest"): Stop() runs on NinjaTrader's thread, so it waits only 250 ms for the worker, even when the
+    // worker is inside a NinjaTrader call (here Request() takes 1.5 s). The worker then ends on its own and sends nothing more.
+    static void StopShortWait()
+    {
+        DateTime t0 = SimBase.AddMinutes(-10);
+        List<Trade> tape = Walk(t0, 100, 186, 100);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        List<string> sa = new List<string>();
+        ChartBridgeClient a = NewClient(995, sa);
+        System.Threading.ManualResetEventSlim inRequest = new System.Threading.ManualResetEventSlim(false);
+        try
+        {
+            int m0 = MadeCount();
+            LiveOn(inst, tape, 0, 50);
+            BarsRequest.AutoAnswer = r => { if (IsWin(r)) { inRequest.Set(); Thread.Sleep(1500); } return false; };
+            SubOn(a, "MNQ", "1", 2);
+            new Thread(() => AnswerMinutes(m0)).Start();
+            if (!inRequest.Wait(5000)) { Check(false, "review 6 S2: no window went out"); return; }
+            System.Threading.Tasks.Task worker = (System.Threading.Tasks.Task)typeof(ChartBridgeServer).GetField("gateTask", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
+            DropClient(a);
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            ChartBridgeServer.StopGate(250);
+            long ms = sw.ElapsedMilliseconds;
+            int made = MadeCount();
+            bool ended = worker != null && worker.Wait(5000);
+            Thread.Sleep(300);
+            bool logged; lock (NinjaTrader.Code.Output.Lines) logged = NinjaTrader.Code.Output.Lines.Any(l => l.Contains("did not end within 250 ms of the stop"));
+            Check(ms < 700 && ended && logged && MadeCount() == made,
+                "review 6 S2: Stop waits " + ms + " ms (250 ms) for a worker inside a 1.5 s NinjaTrader call, says so once, and the worker then ends and sends nothing");
+        }
+        finally
+        {
+            BarsRequest.AutoAnswer = null;
+            DropClient(a);
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
         }
     }
