@@ -7,7 +7,9 @@ talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on 
 ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
 Since 0.3.4 every trade, live and in the backfill, carries its side (buy or sell) and how it was found; see
 "Trade side" below.
-Since 0.3.7 (data side) ChartBridge also sends NinjaTrader's prior settlement, NinjaTrader's own 4h, 1D and 1W bars on
+Since 0.3.7 a limit or stop entry's stop and target are planned PRICES (new `plan` message, `planned` on its `order`
+messages, no 200-tick limits unless `config.txt` sets them); see "Planned stop and target on a resting entry (0.3.7)"
+below. Since 0.3.7 ChartBridge also sends NinjaTrader's prior settlement, NinjaTrader's own 4h, 1D and 1W bars on
 request, and the last 5 sessions' volume at price on request; see "Settlement, higher-timeframe bars and the weekly
 profile (0.3.7)" below. A page that does not know these messages ignores them (the live page's message switch has no
 default case, so an unknown type does nothing).
@@ -678,7 +680,11 @@ serve is answered with an `error` and no bars.
   still knows the prior (and, before 18:00, the day before's). A line for another contract than the one served now (the
   contract before a roll) is ignored, so a restart on the roll day never gives the old contract's settlement as the new
   one's prior; the prior is then null until NinjaTrader gives the new contract's own value. Pages are told in order, one
-  check at a time.
+  check at a time. A page always ends with the right value: right after its `hello`, any root whose prior changed while
+  the hello was being built (the file read just after a start, or a new value) gets a `settlement` message to that page,
+  after the hello. Lines for roots not configured now are kept in the file. If the file cannot be read at the start, it
+  is not rewritten from memory that run (said in the Output window); the priors from it are not known until a
+  settlement comes in.
 - **Live check:** whether Tradovate's feed gives a Settlement value, and the time NinjaTrader stamps on it (the snapshot
   at subscription especially), is to be seen on the trading PC: the Output lines and `/diag` `settlements.last`.
 
@@ -691,10 +697,11 @@ serve is answered with an `error` and no bars.
   queued, no minute chart's last trades are out and no page is loading (as the daily bars, which go after it). So it never
   starts beside a chart load; a chart load that comes while it is out waits behind it (one small request). A request
   NinjaTrader does not answer in 15 s (`HtfTimeoutMs`, Anthony 2026-10-01) is given up and **frees the gate** (as the daily
-  bars: the chart never waits); its pages get the plain reason ("NinjaTrader did not answer within 15 s"), its late answer is
-  dropped uncopied, and that root and timeframe is asked again no sooner than 60 s later. A request still queued after 120 s
-  (the chart's requests kept going first) is taken back ("not asked: the chart's own requests kept NinjaTrader busy for 120
-  s; ask again"). While the gate is stuck on an unanswered window or backfill, a
+  bars: the chart never waits); its pages get the plain reason and when it can be asked again ("NinjaTrader did not answer
+  within 15 s; it can be asked again in 60 s (from 2026-10-01 10:15:02.123 ET)"), its late answer is dropped uncopied, and
+  that root and timeframe is asked again no sooner than 60 s later. A request still queued after 120 s (the chart's requests
+  kept going first) is taken back ("not asked: the chart's own requests kept NinjaTrader busy for 120 s; it can be asked
+  again in 60 s (from ...)"). While the gate is stuck on an unanswered window or backfill, a
   request is answered at once with the reason. After a failure the same root and timeframe is not asked again for 60 s.
 - **The answer:** `{"type":"htf","root","tf","id","name","bars":[[t,o,h,l,c,v],...],"error":null}`, oldest first, the last
   bar forming, prices and volume as NinjaTrader has them. `t` is the bar's start in bar-time seconds (New York wall clock),
@@ -725,8 +732,9 @@ serve is answered with an `error` and no bars.
   by the CME rules above, whose 17:00 ET close has passed; the session running now is the page's own `profile`). Each finished
   table is kept in memory and written to `profile-<ROOT>-<yyyy-MM-dd>.txt` (its trading day) in ChartBridge's folder, kept 14
   days, so a restart still has the earlier sessions; the file also records a feed drop. Files are read and the answer made
-  off NinjaTrader's thread. One answer per page is in progress at a time: requests meanwhile fold into one more answer (the
-  latest `id`). The answer is kept per root while the same tables answer it, so a repeat copies nothing; finished tables
+  off NinjaTrader's thread. One answer per page is in progress at a time: requests meanwhile are folded per root (each root
+  asked meanwhile is answered once more, with its latest `id`, in the order the roots were first asked; at most 16 roots
+  wait), so a request for another root is never lost. The answer is kept per root while the same tables answer it, so a repeat copies nothing; finished tables
   never change and are read with no lock (only a just-finished current table is copied under the book's lock).
 - **The answer:** `{"type":"weekProfile","root","id","tick","sessions":[...],"rows":[[priceTicks,v],...],"error":null}`.
   `sessions`, oldest first, each `{date, from, whole, coveredFrom, drop, rows}` (as in `profile`: `from` the 18:00 start,
@@ -849,7 +857,7 @@ sends each session's 1-minute bars to The Desk (`nt8/ChartBridgeBars.cs`).
   or posted to The Desk: the worker leaves any wait at once, a post in flight is aborted (the message stays
   queued), an answer that comes later is not copied or queued. `Stop()` runs on NinjaTrader's thread, so it waits
   250 ms for the worker at most, as for the gate's worker.
-- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.6","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
+- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.7","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
   "tick":0.25,"session":"2026-09-30","tf":"1m","stamp":"open","bars":[[t,o,h,l,c,v],...],"complete":true}`,
   one per contract per session. Market data and the PC name only.
 - **Queue:** each message is written to `pending_bars.jsonl` (next to `pending_fills.jsonl`, replaced
@@ -1012,7 +1020,8 @@ sees them; a market entry keeps ticks from its fill.
   remove the stop first"); with `maxBracketTicks` set, so is a move that takes it further than that from them.
 - **Changing the plan** (`plan`, below) before the fill: add, move or remove the stop and the target, checked as
   at placement against the entry's current price, and also against the price a `change` has sent that NinjaTrader
-  has not confirmed yet (both must pass; a move NinjaTrader refuses is forgotten). Adding a stop or target to an entry that had none is a new
+  has not confirmed yet (both must pass; the sent price is forgotten once NinjaTrader confirms it, on any change error
+  or refusal, when the entry is done, and on any update outside a pending change that still shows another price). Adding a stop or target to an entry that had none is a new
   bracket: refused on an order that would reduce the position, as at placement. After the entry has filled in
   part, a `plan` applies to the fill increments still to come only (those ChartBridge has not yet placed legs
   for); legs already working are not touched (move them with `change` on the leg, as B/E does). If contracts
@@ -1040,9 +1049,13 @@ sees them; a market entry keeps ticks from its fill.
   a pool thread, started before ChartBridge watches the accounts; written after a placement and after a `plan`
   on the page's connection thread, outside every lock; and a line is removed (on a pool thread) once its entry
   is done and every fill has legs. NinjaTrader's thread only reads memory. Until the file has been read (the
-  first moments after a start), a resting entry's bracket is not recovered: a fill's legs wait (the 2 second
-  check places them, at the saved prices, once it has been read), and `plan` and `change` on such an entry are
-  refused ("ChartBridge is still reading planned_brackets.txt"); nothing is guessed. A `plan` whose save fails
+  first moments after a start), a resting entry's bracket is not recovered: a fill's legs wait, and are placed
+  at the saved prices the moment the file has been read (the full increment, as its order event would have; the
+  legs check trims legs beyond the position); if it is still not read about 3 s after the 2 second check first sees
+  such a fill, every signed-in page gets a `status` `error` naming the entry with NO LEGS. `plan` and `change` on such
+  an entry are refused meanwhile ("ChartBridge is still reading planned_brackets.txt"); nothing is guessed. A `plan`
+  on an entry placed since the start, sent before the read, applies; its write waits for the read (no false "could
+  not be saved"). A `plan` whose save fails
   still applies (the fills use what Anthony set) and raises a `status` `error` that the prices may not survive a
   recompile. Lines older than 7 days are dropped when the file is read (entries are Day orders).
 - **Missing record.** If a recovered limit or stop entry still working (or with fills that have no legs) has no
@@ -1066,7 +1079,7 @@ Examples: `{"type":"order","cid":"c7","account":"Sim101","root":"MNQ","side":"bu
 
 **Optional distance limits** (`config.txt`; absent means no limit; a value that is not a whole number of 1 or
 more is ignored, so there is no limit, with a line in the Output window and a `status` `warn` to every signed-in
-page at config load and to each page as it signs in, Anthony 2026-10-01; for the page build: show it): `maxTicksAway = 400` (a limit or stop price, placed or moved,
+page at config load and to each page as it signs in successfully (never to one whose sign-in failed), Anthony 2026-10-01; for the page build: show it): `maxTicksAway = 400` (a limit or stop price, placed or moved,
 at most 400 ticks from the last price) and `maxBracketTicks = 300` (bracket ticks at most 300; a planned stop
 or target at most 300 ticks from its entry's price). When set, the `trading` message names them
 (`"maxTicksAway": 400`, `"maxBracketTicks": 300`).

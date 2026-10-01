@@ -294,6 +294,52 @@ public static class DataHarness
             Check(fri.EndsWith(SetOf("MNQ", "null", "2026-04-01")) && sunH.EndsWith(SetOf("MNQ", "20000", "2026-04-02")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "20000", "2026-04-02")),
                 "settlement, Good Friday: on the holiday the prior is Wednesday's (none known: null); from Sunday 18:00 and on Monday, Thursday's (" + fri + " | " + sunH + ")");
             Check(Of(a, "tick").Count == 0, "settlement: no tick or trade comes of it");
+
+            // 0.3.7 release nits: a date-only stamp before its day's settlement time says so (not "inside a later session")
+            simNow = Et(2026, 9, 29, 11, 0, 0);
+            SettleEvent(mnq, 21490, new DateTime(2026, 9, 29), false);
+            Thread.Sleep(200);
+            Check(Logged("MNQ settlement 21490 (NinjaTrader's, update) is dated 2026-09-29, and that day's settlement is not due before 16:00 ET, so it is not used yet")
+                  || Logged("is dated 2026-09-29, and that day's settlement is not due before 16:00 ET, so it is not used yet"), "settlement: a date-only stamp before its settlement time is said as such");
+            // the page ends with the right value: after hello, a root whose prior is not what hello said gets "settlement"
+            ResetSettlements(true);
+            simNow = Et(2026, 10, 6, 11, 0, 0);
+            List<string> hc = new List<string>();
+            ChartBridgeClient ph = Page(5103, hc);
+            try
+            {
+                Dictionary<string, string> seen = new Dictionary<string, string>();
+                string hello = (string)Priv("HelloJsonFor", seen);   // built while nothing was known (as before settlements.txt is read)
+                SettleEvent(mnq, 21600, Et(2026, 10, 5, 16, 15, 0), false);   // then the value comes (the read, or an update)
+                Thread.Sleep(200);
+                hc.Clear();
+                Priv("SettlementAfterHello", ph, seen);
+                Check(hello.Contains(SetOf("MNQ", "null", "2026-10-05")) && Of(hc, "settlement").Count == 1 && Of(hc, "settlement")[0] == Msg("MNQ", "21600", "2026-10-05"),
+                      "settlement: after a hello that said null, the page gets the value as it is now (and nothing for roots that did not change): " + string.Join(" ", hc));
+            }
+            finally { Drop(ph); }
+            // settlements.txt: lines for roots not configured now are kept; a file that cannot be read is not rewritten
+            ResetSettlements(true);
+            File.WriteAllLines(SettleFile(), new[] { "ZZQ 2026-10-01 100.5 ZZQ 12-26", "MNQ 2026-10-05 21600 MNQ 12-26" });
+            Priv("LoadSettlements");
+            string[] kept = new string[0];
+            WaitFor(() => { try { kept = File.ReadAllLines(SettleFile()); } catch (IOException) { } return kept.Contains("ZZQ 2026-10-01 100.5 ZZQ 12-26"); });
+            Check(kept.Contains("ZZQ 2026-10-01 100.5 ZZQ 12-26") && kept.Contains("MNQ 2026-10-05 21600 MNQ 12-26"), "settlements.txt: a line for a root not configured now is kept when the file is written: " + string.Join(" | ", kept));
+            ResetSettlements(true);
+            File.WriteAllLines(SettleFile(), new[] { "MNQ 2026-10-05 21600 MNQ 12-26" });
+            FileStream held = new FileStream(SettleFile(), FileMode.Open, FileAccess.ReadWrite, FileShare.None);   // reading it fails (held open, not shared)
+            try
+            {
+                Priv("LoadSettlements");
+                SettleEvent(mnq, 21700, Et(2026, 10, 6, 16, 15, 0), false);
+                Thread.Sleep(200);
+                Priv("SaveSettlements");
+                bool failed = (bool)Field("settleReadFailed");
+                held.Dispose(); held = null;
+                Check(failed && Logged("it is not rewritten this run") && File.ReadAllLines(SettleFile()).SequenceEqual(new[] { "MNQ 2026-10-05 21600 MNQ 12-26" }),
+                      "settlements.txt that cannot be read is not rewritten from memory: " + string.Join(" | ", File.ReadAllLines(SettleFile())));
+            }
+            finally { if (held != null) held.Dispose(); SetField("settleReadFailed", false); System.Collections.IList o = (System.Collections.IList)Field("SettleOtherRoots"); lock ((System.Collections.IDictionary)Field("Settlements")) o.Clear(); }
         }
         finally { Drop(pa); Drop(pb); ResetSettlements(true); }
     }
@@ -472,7 +518,7 @@ public static class DataHarness
             BarsRequest hw = null;
             Check(WaitFor(() => (hw = Made(m6).FirstOrDefault(IsHtf)) != null) && hw.BarsPeriod.BarsPeriodType == BarsPeriodType.Week && hw.BarsPeriod.Value == 1, "htf: 1W asks for Week 1 bars");
             if (hw != null) hw.Answer(new Bars(), ErrorCode.NoError);
-            Check(WaitFor(() => Of(la, "htf").Any(x => x.Contains("\"tf\":\"1W\""))) && Of(la, "htf").First(x => x.Contains("\"tf\":\"1W\"")).Contains("\"bars\":[],\"error\":\"NinjaTrader has no 1W bars for MNQ 12-26\""),
+            Check(WaitFor(() => Of(la, "htf").Any(x => x.Contains("\"tf\":\"1W\""))) && Of(la, "htf").First(x => x.Contains("\"tf\":\"1W\"")).Contains("\"bars\":[],\"error\":\"NinjaTrader has no 1W bars for MNQ 12-26; it can be asked again in 60 s (from "),
                 "htf: an empty answer says so (no bars made up)");
         }
         finally { Drop(a); Drop(b); Drop(load); ChartBridgeServer.WindowFirstGuess = fgWas; ChartBridgeServer.ResetBooks(DateTime.MinValue); }
@@ -496,7 +542,7 @@ public static class DataHarness
             Msg(a, "{\"type\":\"htf\",\"root\":\"NQ\",\"tf\":\"1D\",\"id\":1}");
             BarsRequest h = null;
             Check(WaitFor(() => (h = Made(m0).FirstOrDefault(IsHtf)) != null), "htf timeout: the request goes out");
-            Check(WaitFor(() => Of(la, "htf").Count == 1, 4000) && Of(la, "htf")[0].Contains("\"bars\":[],\"error\":\"NinjaTrader did not answer within 1 s\""), "htf timeout: the page is answered with the reason");
+            Check(WaitFor(() => Of(la, "htf").Count == 1, 4000) && Of(la, "htf")[0].Contains("\"bars\":[],\"error\":\"NinjaTrader did not answer within 1 s; it can be asked again in 60 s (from 2026-09-29 "), "htf timeout: the page is answered with the reason and when it can be asked again: " + string.Join(" ", Of(la, "htf")));
             Check(WaitFor(() => Gate().Contains("\"now\":null")) && Gate().Contains("\"stuck\":null"), "htf timeout: the gate is free, not stuck (the chart never waits): " + Gate());
             load = Page(5302, ll);
             int m1 = MadeCount();
@@ -581,7 +627,12 @@ public static class DataHarness
             string body0 = w.Substring(w.IndexOf(",\"tick\""));
             Check(wl.Count >= 2 && wl.Count <= 201 && wl.Last().Contains("\"id\":1199,") && wl.Skip(1).All(x => x.Substring(x.IndexOf(",\"tick\"")) == body0),
                 "week (review B2 S2): 200 requests from one page, one answer in progress at a time: " + (wl.Count - 1) + " answers (the rest folded in), the last with the latest id, all the cached text");
-            int weekCount = wl.Count;
+            // 0.3.7 release: folded per root, so a request for another root while one is answered is never lost
+            for (int r = 0; r < 20; r++) { Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\",\"id\":" + (2000 + r) + "}"); if (r == 3) Msg(a, "{\"type\":\"weekProfile\",\"root\":\"NQ\",\"id\":3000}"); }
+            Check(WaitFor(() => Of(la, "weekProfile").Any(x => x.Contains("\"root\":\"NQ\",\"id\":3000,")) && Of(la, "weekProfile").Any(x => x.Contains("\"id\":2019,"))),
+                  "week: a request for NQ among MNQ requests while one is answered is answered too (folded per root), and MNQ's latest id");
+            Thread.Sleep(100);
+            int weekCount = Of(la, "weekProfile").Count;
             Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\",\"days\":7}");
             Msg(a, "{\"type\":\"weekProfile\",\"root\":\"MNQ\",\"id\":1.5}");
             Thread.Sleep(100);

@@ -51,6 +51,14 @@ recompile keeps its tick bracket (below).
   `test/nt8-source.test.js`. `test/orders-smoke.mjs` starts the fake bridge with `--max-ticks-away=200` for its
   refusal check.
 
+- **Release fixes (re-review).** A fill on a resting entry that came before `planned_brackets.txt` was read gets its
+  legs the moment the file has been read, and if the file is still not read about 3 s after the 2 second check first
+  sees such a fill, the pages get an alarm naming the entry with no legs. The price a move sent is forgotten on any
+  change error or refusal and on any update outside a pending change. A `plan` sent before the file is read is not
+  called "could not be saved": the write waits for the read. The `maxTicksAway`/`maxBracketTicks` warning goes only
+  to a page that signed in. A fill on a planned entry while the file is being read: legs for the full increment (as
+  its order event), the legs check trims any beyond the position.
+
 ### Data side
 - **Prior settlement.** The settlement of the session before the current one (sessions 18:00 to 17:00 ET), from
   NinjaTrader's own settlement for each served contract (`MarketData.Settlement` at subscription, and every Settlement
@@ -86,6 +94,13 @@ recompile keeps its tick bracket (below).
   NinjaTrader's (N7). The updater (`update-pc.ps1 -InstallChartBridge`, N2) takes out an add-on file the previous install
   had and the new commit no longer lists (a revert of daily bars, say), inside the same all-or-nothing copy, and records
   each install's file list.
+- **Release fixes (data review nits).** weekProfile requests that come while one is answered are folded per root (a
+  request for another root is never lost; the latest id of each). A page ends with the right prior settlement: after
+  its `hello`, a root whose prior changed while the hello was built (settlements.txt read just after a start, or a new
+  value) gets `settlement` to that page. `settlements.txt` that cannot be read is not rewritten from memory that run,
+  and lines for roots not configured now are kept. A failed higher-timeframe request says when it can be asked again
+  ("it can be asked again in 60 s (from ... ET)"), and a date-only settlement stamp seen before that day's settlement
+  time says so, not "inside a later session".
 - Unchanged from the reviews, still open: bars1 N3 (`contract.<ROOT>` applies to every catch-up session), N4 (two README
   wording points), N5 (Stop can block up to 500 ms in the worst case), N6 (a minute chart's last trades can go beside a bars
   request); lf7 N4's other points (the "failed once" text after an unstuck, `feedDown` set by any connection, tails not

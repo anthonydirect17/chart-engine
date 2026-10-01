@@ -266,8 +266,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
             lock (ConnectedSince) ConnectedSince.Clear();
-            lock (PlanMemLock) { Plans.Clear(); plansLoaded = false; planGeneration++; }
-            lock (Sync) SentPrice.Clear();
+            lock (PlanMemLock) { Plans.Clear(); plansLoaded = false; writeWaiting = false; planGeneration++; }
+            lock (Sync) { SentPrice.Clear(); PlanDeferred.Clear(); PlanWaitSince.Clear(); }
         }
 
         // ---------------------------------------------------------- strict message reading (gate 8)
@@ -384,7 +384,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             client.Trader = reason == null;
             client.Send(TradingJson(client.Trader, reason));
             List<string> warnings;
-            lock (ConfigWarnings) warnings = ConfigWarnings.ToList();
+            lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
             if (client.Trader) { client.Send(OrdersJson()); foreach (string p in PositionJsons()) client.Send(p); }
         }
@@ -757,6 +757,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         // already working for earlier fill increments are not touched: they move with change, as B/E does.
         private static readonly object PlanLock = new object();   // a plan change and an entry move are checked one at a time
         private static readonly Dictionary<Order, double> SentPrice = new Dictionary<Order, double>();   // entry -> price a change sent, until confirmed (Sync)
+        // S1: resting entries whose bracket waits for planned_brackets.txt to be read (Sync), and since when the scan has
+        // seen one with fills and no legs (an alarm after PlanReadAlarmMs).
+        private static readonly HashSet<Order> PlanDeferred = new HashSet<Order>();
+        private static readonly Dictionary<Order, double> PlanWaitSince = new Dictionary<Order, double>();
+        public const double PlanReadAlarmMs = 3000;
 
         private static string PlanOrder(string top, string id)
         {
@@ -959,7 +964,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (SentPrice.TryGetValue(o, out sent))
                 {
                     double px = o.OrderType == OrderType.Limit ? o.LimitPrice : o.StopPrice;
-                    if (IsDone(o.OrderState) || Math.Abs(px - sent) < 1e-9 || e.Error == ErrorCode.UnableToChangeOrder) SentPrice.Remove(o);   // confirmed, refused, or done
+                    // Forgotten once NinjaTrader has answered: confirmed, any error or refusal, done, or an update outside a
+                    // pending change that still shows another price (the move did not happen).
+                    bool pending = o.OrderState == OrderState.ChangePending || o.OrderState == OrderState.ChangeSubmitted;
+                    if (IsDone(o.OrderState) || Math.Abs(px - sent) < 1e-9 || e.Error != ErrorCode.NoError || o.OrderState == OrderState.Rejected || !pending) SentPrice.Remove(o);
                 }
             }
             string root = ChartBridgeServer.RootFor(o.Instrument);
@@ -1116,7 +1124,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<Pair> pairs;
                 bool lost = false, deferred;
                 Bracket rec = Recover(entry, out pairs, out deferred);
-                if (deferred) { ChartBridgeServer.Log("entry " + (entry.Name ?? "") + ": waiting for planned_brackets.txt to be read before its bracket is recovered"); return; }   // the 2 s scan tries again
+                if (deferred)
+                {
+                    bool first;
+                    lock (Sync) first = PlanDeferred.Add(entry);   // placed as soon as the file has been read (LoadPlans)
+                    if (first) ChartBridgeServer.Log("entry " + (entry.Name ?? "") + ": waiting for planned_brackets.txt to be read before its bracket is recovered");
+                    return;
+                }
                 lock (Sync)
                 {
                     if (!BracketOfEntry.TryGetValue(entry, out br))
@@ -1502,6 +1516,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                     bool skip;
                     lock (Sync) skip = Settled.Contains(o);
                     if (skip) continue;
+                    if (!PlansLoaded() && PlanNameRx.IsMatch(o.Name ?? ""))
+                    {
+                        // S1: planned_brackets.txt not read yet: its legs wait (never guessed); loud once it has lasted PlanReadAlarmMs.
+                        bool known, alarm = false;
+                        lock (Sync)
+                        {
+                            known = BracketOfEntry.ContainsKey(o);
+                            if (!known)
+                            {
+                                PlanDeferred.Add(o);
+                                double since;
+                                if (!PlanWaitSince.TryGetValue(o, out since)) PlanWaitSince[o] = now;
+                                else if (since >= 0 && now - since >= PlanReadAlarmMs) { alarm = true; PlanWaitSince[o] = -1; }   // -1: said once
+                            }
+                        }
+                        if (alarm)
+                            Alarm(Where(a, o.Instrument) + ": entry " + o.Name + " has " + o.Filled + " filled contract(s) and NO LEGS yet: planned_brackets.txt has not been read since ChartBridge started; check the stop in NinjaTrader now");
+                        if (!known) continue;
+                    }
                     try
                     {
                         KeepBracket(o, true, now);
@@ -1789,7 +1822,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object PlanMemLock = new object();    // Plans and plansLoaded; never held during file I/O
         private static readonly object PlanFileLock = new object();   // one writer at a time; each writes the latest records
         private static readonly Dictionary<string, PlanRecord> Plans = new Dictionary<string, PlanRecord>();
-        private static bool plansLoaded;
+        private static bool plansLoaded, writeWaiting;   // writeWaiting: a write asked for before the file was read; done right after the read
         private static int planGeneration;   // a load from before a Clear() never lands in the next run
         public const double PlanKeepMs = 7 * 24 * 3600 * 1000.0;
         private static readonly Regex PlanLineRx = new Regex("^([0-9a-f]{8}) ([0-9]{1,9}(?:\\.[0-9]{1,8})?) ([0-9]{1,9}(?:\\.[0-9]{1,8})?) ([0-9]{1,15})$");
@@ -1834,7 +1867,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (PlanMemLock)
             {
                 if (gen != planGeneration || plansLoaded) return;
-                extra = Plans.Keys.Any(k => !read.ContainsKey(k));   // an entry placed while the file was being read
+                extra = writeWaiting || Plans.Keys.Any(k => !read.ContainsKey(k));   // a write asked for, or an entry placed, while the file was being read
+                writeWaiting = false;
                 foreach (KeyValuePair<string, PlanRecord> kv in read) if (!Plans.ContainsKey(kv.Key)) Plans[kv.Key] = kv.Value;   // a record set meanwhile wins
                 plansLoaded = true;
             }
@@ -1842,7 +1876,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (old > 0 || extra)
             {
                 string err = WritePlans();   // drop the old lines, add the new ones
-                if (err != null) ChartBridgeServer.Log("could not update planned_brackets.txt (" + err + ")");
+                if (err != null) Alarm("could not update planned_brackets.txt (" + err + "); planned prices set since the start may not survive a recompile or restart");
+            }
+            // S1: fills that waited for the read (seen by an order event or by the 2 s scan) get their legs now, as their
+            // order events would have placed them: the full increment (the legs check trims legs beyond the position).
+            List<Order> waited;
+            lock (Sync) { waited = PlanDeferred.ToList(); PlanDeferred.Clear(); PlanWaitSince.Clear(); }
+            foreach (Order o in waited)
+            {
+                try { KeepBracket(o); }
+                catch (Exception ex) { Alarm(Where(o.Account, o.Instrument) + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
             }
         }
 
@@ -1854,7 +1897,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<string> lines;
                 lock (PlanMemLock)
                 {
-                    if (!plansLoaded) return "planned_brackets.txt has not been read yet (it is written once it has)";   // never overwrite the file before it has been read
+                    if (!plansLoaded) { writeWaiting = true; return null; }   // never overwrite the file before it has been read: queued, written right after the read
                     lines = Plans.Select(kv => kv.Key + " " + PriceText(kv.Value.Stop) + " " + PriceText(kv.Value.Target) + " " +
                                                ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture)).ToList();
                 }

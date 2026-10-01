@@ -123,7 +123,7 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(legs, /bool byFill = hasStop && br\.Priced && !br\.ValueEstimated && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
   const keep = fnBody('KeepBracket');
   assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
-  assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)[^\n]*return; \}[^\n]*\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
+  assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)\s*\{[^}]*PlanDeferred\.Add\(entry\)[^}]*return;\s*\}\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
   // from an order event the legs are placed in full, never sized from a position read at fill time;
   // only the scan path (a gap that lasted SettleMs) reads the settled position
   assert.match(keep, /if \(fromScan\) \{ KeepBracketFromScan\(entry, br, now\); return; \}/);
@@ -354,8 +354,9 @@ test('PIN: checked before the stream (before the WebSocket upgrade) and before /
   const route = handle.indexOf('if (path.StartsWith("/pin/")) { ChartBridgePin.Serve(ctx, path); return; }');
   assert.ok(route > addr && route < handle.indexOf('ServeFile(ctx, path)'), '/pin/ routed after the address check');
   // hello, execs and every stream message are only sent from RunClient, which runs only after the upgrade
-  assert.equal((code.match(/client\.Send\(HelloJson\(\)\)/g) || []).length, 1);
-  assert.ok(bodyOf(code, 'private static async Task RunClient(').includes('client.Send(HelloJson());'));
+  assert.equal((code.match(/client\.Send\(HelloJsonFor\(seen\)\)/g) || []).length, 1);
+  assert.ok(bodyOf(code, 'private static async Task RunClient(').includes('client.Send(HelloJsonFor(seen));'));
+  assert.ok(bodyOf(code, 'private static async Task RunClient(').includes('SettlementAfterHello(client, seen);'));   // 0.3.7: hello ends right
   // only the own page needs it; the comparison matches the WebSocket origin rule (trimmed, lower-cased)
   assert.match(bodyOf(pcode, 'public static bool IsOwnOrigin(string origin)'), /return origin != null && origin\.Trim\(\)\.ToLowerInvariant\(\) == ChartBridgeAccess\.OwnOrigin;/);
   assert.match(bodyOf(pcode, 'public static bool WsUnlocked(string origin, string unlock)'), /if \(!IsOwnOrigin\(origin\)\) return true;\s*return TokenValid\(unlock\);/);
@@ -550,7 +551,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.3\.[5-9]";/);
-  assert.match(bodyOf(code, 'private static string HelloJson('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\"\]/);   // 0.3.7 adds three
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\"\]/);   // 0.3.7 adds three
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));

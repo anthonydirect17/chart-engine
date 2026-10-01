@@ -1356,8 +1356,79 @@ public static class OrdersHarness
         sent.Clear();
         Msg("auth", "{\"type\":\"auth\",\"token\":\"" + ChartBridgeOrders.SessionJson().Split('"')[3] + "\"}");
         Check(sent.Count >= 2 && sent[0].Contains("\"type\":\"trading\"") && sent[1].Contains("\"level\":\"warn\"") && sent[1].Contains("NO maxBracketTicks limit"), "and a page signing in gets the warning too");
+        // N4: a page whose sign-in fails is not sent the warning
+        sent.Clear();
+        Msg("auth", "{\"type\":\"auth\",\"token\":\"wrong\"}");
+        Check(sent.Any(m => m.Contains("token does not match")) && !sent.Any(m => m.Contains("NO maxBracketTicks limit")), "N4 a page whose sign-in fails gets no config warning");
+        Msg("auth", "{\"type\":\"auth\",\"token\":\"" + ChartBridgeOrders.SessionJson().Split('"')[3] + "\"}");
         ChartBridgeOrders.ResetConfig();
         ChartBridgeOrders.ReadConfig("trading", "true");
+        Review2Checks();
+    }
+
+    // ------------------------------------------------------------ 0.3.7 release: the re-review's S1, N2, N3
+    static void Review2Checks()
+    {
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimKx1, SimKx2, SimKx3, SimKx4");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+
+        // S1a: a fill that waited for planned_brackets.txt gets its legs as soon as the file has been read, with no scan
+        Account k1 = NewAccount("SimKx1");
+        Msg("order", Ord("SimKx1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order f1 = Newest(k1);
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);   // started again; the file not read yet
+        Fill(k1, f1, 1, 24990);
+        Check(k1.Calls.Count == 1, "S1 a fill before the file is read: no legs guessed");
+        ChartBridgeOrders.LoadPlansNow();
+        Check(k1.Calls.Count == 3 && k1.Calls[1].EndsWith("S24980 oco:cb-" + Tag(f1) + "-1") && k1.Calls[2].EndsWith("L25010 S0 oco:cb-" + Tag(f1) + "-1"),
+              "S1 the moment the file has been read, the waiting fill gets its legs (no scan needed): " + string.Join(" | ", k1.Calls));
+        // S1b: never read: a page alarm about 3 s after the scan first sees the waiting fill, once
+        Account k2 = NewAccount("SimKx2");
+        Msg("order", Ord("SimKx2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order f2 = Newest(k2);
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Fill(k2, f2, 1, 24990);
+        SetPos(k2, mnq, 1);
+        sent.Clear();
+        double ts = 23000000;
+        ChartBridgeOrders.CheckLegs(ts); ChartBridgeOrders.CheckLegs(ts + 2000);
+        Check(!Alarmed("NO LEGS yet"), "S1 within 3 s of the scan first seeing it: no alarm yet");
+        ChartBridgeOrders.CheckLegs(ts + 4000); ChartBridgeOrders.CheckLegs(ts + 6000);
+        Check(sent.Count(m => m.Contains("\"level\":\"error\"") && m.Contains("entry " + f2.Name + " has 1 filled contract(s) and NO LEGS yet: planned_brackets.txt has not been read")) == 1,
+              "S1 not read 3 s on: one page alarm naming the entry with no legs");
+        ChartBridgeOrders.LoadPlansNow();
+        Check(k2.Calls.Count == 2 && k2.Calls[1].EndsWith("S24980 oco:"), "S1 and once read, the legs go at once: " + string.Join(" | ", k2.Calls));
+
+        // N2: the remembered sent price is forgotten on any change error, and on an update that shows the move did not happen
+        Account k3 = NewAccount("SimKx3");
+        Msg("order", Ord("SimKx3", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order f3 = Newest(k3);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(f3) + "\",\"price\":24985}");
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24987.5"));
+        Check(Rejected("being moved to 24985"), "N2 a move pending: checked against both prices");
+        ChartBridgeOrders.OnOrderUpdate(k3, new OrderEventArgs { Order = f3, Error = ErrorCode.OrderRejected });
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24987.5"));
+        Check(LastOrderMsg(f3).Contains("\"stop\":24987.5"), "N2 a change refused with another error (OrderRejected): the sent price is forgotten: " + LastSent());
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(f3) + "\",\"price\":24989}");
+        f3.OrderState = OrderState.ChangePending; Update(k3, f3);
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24989.5"));
+        Check(Rejected("being moved to 24989"), "N2 an update while the change is pending keeps the sent price: " + LastSent());
+        f3.OrderState = OrderState.Working; Update(k3, f3);   // NinjaTrader answered: still at 24990, the move did not happen
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24989.5"));
+        Check(LastOrderMsg(f3).Contains("\"stop\":24989.5"), "N2 an update outside a pending change at the old price: the sent price is forgotten: " + LastSent());
+
+        // N3: a plan on an entry placed before the file is read: no false "could not be saved"; written right after the read
+        Account k4 = NewAccount("SimKx4");
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Ord("SimKx4", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order f4 = Newest(k4);
+        sent.Clear();
+        Msg("plan", PlanMsg(IdOf(f4), "\"stopPrice\":24975"));
+        Check(LastOrderMsg(f4).Contains("\"stop\":24975") && !Alarmed("could not be saved") && !PlanFileText().Contains(Tag(f4)),
+              "N3 a plan before the file is read: applied, no false save alarm, the write waits for the read");
+        ChartBridgeOrders.LoadPlansNow();
+        Check(PlanFileText().Contains(Tag(f4) + " 24975 0 "), "N3 written right after the read: " + PlanFileText());
     }
 
     // ------------------------------------------------------------ who may connect (ChartBridge.cs, ChartBridgeAccess)

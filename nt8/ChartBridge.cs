@@ -1,4 +1,4 @@
-// ChartBridge 0.3.6 for NinjaTrader 8
+// ChartBridge 0.3.7 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
@@ -1348,7 +1348,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
         public volatile bool WantsProfile;      // 0.3.5: the page's subscribe asked for "profile" messages (set under the Pending lock)
         public readonly Dictionary<string, ChartBridgeServer.HtfWatch> Htf = new Dictionary<string, ChartBridgeServer.HtfWatch>();   // 0.3.7: higher-timeframe series this page asked for (lock it)
-        public bool WeekBusy, WeekAgain; public string WeekAgainRoot, WeekAgainId;   // 0.3.7: one weekProfile answer in progress per page (under the Htf lock)
+        public bool WeekBusy;   // 0.3.7: one weekProfile answer in progress per page (under the Htf lock)
+        public readonly List<string[]> WeekQueue = new List<string[]>();   // requests meanwhile, folded per root: {root, latest id}, in order (Htf lock)
         // Two lanes (0.3.4). The order lane (OrderLane: hello, trading, orders, order, position, reject, exec, execs, status,
         // pong) is a FIFO checked before every message, so these go out at the next message boundary, ahead of any market
         // data queued before them; the data lane (history, ticks, ready, tick, and anything else) is the FIFO outbox. Order
@@ -1766,7 +1767,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.6";
+        public const string Version = "0.3.7";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2040,7 +2041,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             client.Origin = origin;
             Clients[id] = client;
             Task sending = Task.Run(() => client.SendLoop());   // SendLoop blocks on its queue; never run it inline (0.1.0 deadlock)
-            client.Send(HelloJson());
+            Dictionary<string, string> seen = new Dictionary<string, string>();
+            client.Send(HelloJsonFor(seen));
+            SettlementAfterHello(client, seen);   // 0.3.7: hello ends up right even if settlements.txt was read (or a value came) while it was built
             client.Send(ExecsJson());
             byte[] buf = new byte[16384];
             try
@@ -2166,7 +2169,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             return inst.MasterInstrument.Name;
         }
 
-        private static string HelloJson()
+        private static string HelloJson() { return HelloJsonFor(null); }
+        // seen: each root's settlement fields as hello gave them (for SettlementAfterHello).
+        private static string HelloJsonFor(Dictionary<string, string> seen)
         {
             StringBuilder b = new StringBuilder();
             b.Append("{\"type\":\"hello\",\"version\":").Append(CbJson.Str(Version));
@@ -2180,7 +2185,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"name\":").Append(CbJson.Str(kv.Value.FullName))
                  .Append(",\"tick\":").Append(CbJson.Num(kv.Value.MasterInstrument.TickSize))
                  .Append(",\"pointValue\":").Append(CbJson.Num(kv.Value.MasterInstrument.PointValue))
-                 .Append(SettlementHelloFields(kv.Key)).Append('}');   // 0.3.7: the prior settlement (null when none) and the day it settles
+                 .Append(SettlementHelloFields(kv.Key, seen)).Append('}');   // 0.3.7: the prior settlement (null when none) and the day it settles
             }
             b.Append("],\"accounts\":[");
             first = true;
@@ -3602,6 +3607,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, SettleRoot> Settlements = new Dictionary<string, SettleRoot>();
         private static readonly object SettleFileLock = new object(), SettleTickLock = new object();
         private static volatile bool settleLoaded = true;   // false from Start until settlements.txt is read (nothing is written before)
+        private static volatile bool settleReadFailed;      // the file could not be read: never rewritten from memory this run (it may hold what memory lacks)
+        private static readonly List<string> SettleOtherRoots = new List<string>();   // lines for roots not configured now, written back as they were (Settlements lock)
         private static int settleSaveQueued;
         public const int SettlementsKept = 2;
         private static string SettlementFile { get { return Path.Combine(ChartBridgeConfig.Folder, "settlements.txt"); } }
@@ -3632,6 +3639,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return et < ChartBridgeCme.NextSessionOpen(d) ? d : (DateTime?)null;
             }
             return null;
+        }
+        // Why a settlement stamp gives no day (the Output window line).
+        private static string UndatedWhy(DateTime ntTime)
+        {
+            if (ntTime.TimeOfDay == TimeSpan.Zero)
+            {
+                DateTime d0 = ntTime.Date;
+                if (!ChartBridgeCme.SessionDay(d0)) return "is dated " + Day(d0) + ", a day with no Globex session, so it is not used";
+                return "is dated " + Day(d0) + ", and that day's settlement is not due before " + d0.Add(ChartBridgeCme.EarliestSettlement(d0)).ToString("HH:mm", CultureInfo.InvariantCulture) +
+                       " ET, so it is not used yet (a date-only stamp counts once that time has passed)";
+            }
+            return "is stamped " + EtText(ntTime) + " ET, inside a later session: which session it settles is not known, so it is not used";
         }
         // The prior settlement for the session running at NinjaTrader time now: its day, and the value (NaN when none).
         private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p)
@@ -3674,7 +3693,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 SaveSettlementsSoon();
                 Log(root + " settlement " + CbJson.Num(price) + " for the session of " + Day(day.Value) + " (NinjaTrader's, " + from + ", stamped " + EtText(ntTime) + " ET)");
             }
-            if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") is stamped " + EtText(ntTime) + " ET, inside a later session: which session it settles is not known, so it is not used");
+            if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + UndatedWhy(ntTime));
             SettlementTick();
         }
         // Pages get the prior when it changes: a new value for its day, or the next session's start (every second, HtfPushMs).
@@ -3702,11 +3721,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
         // hello's fields for one instrument: the prior settlement for the session running now, and its day.
-        private static string SettlementHelloFields(string root)
+        private static string SettlementHelloFields(string root, Dictionary<string, string> seen)
         {
             DateTime day; double p;
             PriorSettlement(root, NowNt(), out day, out p);
-            return ",\"settlement\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"settlementDate\":" + CbJson.Str(Day(day));
+            string f = ",\"settlement\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"settlementDate\":" + CbJson.Str(Day(day));
+            if (seen != null) seen[root] = f;
+            return f;
+        }
+        // A page registered before its hello went out can miss a "settlement" sent to every page in between (settlements.txt read
+        // just after a start, or a new value), or get it ahead of a hello built a moment earlier. So, after hello: for any root
+        // whose prior is now not what hello said, this page gets "settlement" with the value as it is now (after hello, so the
+        // page ends with the right value; a later change reaches it like every page).
+        private static void SettlementAfterHello(ChartBridgeClient client, Dictionary<string, string> seen)
+        {
+            try
+            {
+                DateTime now = NowNt();
+                foreach (KeyValuePair<string, string> kv in seen)
+                {
+                    DateTime day; double p;
+                    PriorSettlement(kv.Key, now, out day, out p);
+                    string f = ",\"settlement\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"settlementDate\":" + CbJson.Str(Day(day));
+                    if (f != kv.Value)
+                        client.Send("{\"type\":\"settlement\",\"root\":" + CbJson.Str(kv.Key) + ",\"p\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"date\":" + CbJson.Str(Day(day)) + "}");
+                }
+            }
+            catch (Exception ex) { Log("settlement after hello: " + ex.Message); }
         }
         // settlements.txt: "ROOT yyyy-MM-dd price CONTRACT" (the contract last, it has a space), the last SettlementsKept days
         // per root, replaced through a temp file. Written off NinjaTrader's thread, one writer at a time, each from the state
@@ -3718,9 +3759,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         private static void SaveSettlements()
         {
+            if (settleReadFailed) return;   // reading failed at start: the file is left as it is (said once in the Output window then)
             lock (SettleFileLock)
             {
                 List<string> lines = new List<string>();
+                lock (Settlements) lines.AddRange(SettleOtherRoots);   // roots not configured now: kept, not dropped
                 lock (Settlements)
                     foreach (KeyValuePair<string, SettleRoot> kv in Settlements.OrderBy(x => x.Key, StringComparer.Ordinal))
                         if (kv.Value.Contract != null)
@@ -3740,14 +3783,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // At Start, off NinjaTrader's thread (N3): the values kept before, for the contracts served now only (a line for another
         // contract, the one before a roll, is ignored: S1). Then the pages get the prior if it changed, and the file is written
         // once with whatever came in meanwhile.
-        private static void LoadSettlementsSoon() { settleLoaded = false; Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleLoaded = true; } }); }
+        private static void LoadSettlementsSoon() { settleLoaded = false; settleReadFailed = false; lock (Settlements) SettleOtherRoots.Clear(); Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleReadFailed = true; settleLoaded = true; } }); }
         private static void LoadSettlements()
         {
             string[] lines = new string[0];
             lock (SettleFileLock)
             {
                 try { if (File.Exists(SettlementFile)) lines = File.ReadAllLines(SettlementFile); }
-                catch (Exception ex) { Log("settlements.txt not read: " + ex.Message); }
+                catch (Exception ex) { settleReadFailed = true; Log("settlements.txt not read: " + ex.Message + "; it is not rewritten this run (the priors from it are not known until a settlement comes in)"); }
             }
             int ignored = 0;
             lock (Settlements)
@@ -3758,6 +3801,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (f.Length != 4 || !DateTime.TryParseExact(f[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d)
                         || !double.TryParse(f[2], NumberStyles.Float, CultureInfo.InvariantCulture, out p) || !(p > 0)) { ignored++; continue; }
                     Instrument inst = InstrumentFor(f[0]);
+                    if (inst == null && !Settlements.ContainsKey(f[0])) { SettleOtherRoots.Add(line.Trim()); continue; }   // a root not configured now: kept for when it is again
                     if (inst == null || inst.FullName != f[3]) { ignored++; continue; }   // not the contract served now
                     SettleRoot s;
                     if (!Settlements.TryGetValue(f[0], out s)) { s = new SettleRoot(); Settlements[f[0]] = s; }
@@ -4074,6 +4118,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A request that failed: its pages get the bars ChartBridge already has (kept live), or none and the reason.
         private static void HtfFailed(HtfSeries s, string why)
         {
+            // A failure blocks a new request for HtfRetryMs (review: say when it can be asked again, not just "ask again").
+            why += "; it can be asked again in " + (HtfRetryMs / 1000) + " s (from " + EtText(NowNt()) + " ET)";
             List<KeyValuePair<ChartBridgeClient, string>> waiters;
             HtfSnap snap = null;
             lock (HtfLock)
@@ -4135,7 +4181,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<GateJob> old = new List<GateJob>();
             double now = ChartBridgeTime.NowUtcMs();
             lock (GateLock) { old = GateHtfJobs.Where(x => now - x.QueuedMs > HtfQueueMs).ToList(); foreach (GateJob x in old) GateHtfJobs.Remove(x); }
-            foreach (GateJob x in old) { try { if (x.OnExpire != null) x.OnExpire("not asked: the chart's own requests kept NinjaTrader busy for " + (HtfQueueMs / 1000) + " s; ask again"); } catch (Exception) { } }
+            foreach (GateJob x in old) { try { if (x.OnExpire != null) x.OnExpire("not asked: the chart's own requests kept NinjaTrader busy for " + (HtfQueueMs / 1000) + " s"); } catch (Exception) { } }
         }
         private static string HtfDiagJson()
         {
@@ -4181,10 +4227,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (root == null || (d.ContainsKey("id") && id == null)) { RefuseRequest(client, "weekProfile", "root must be a string, id a whole number"); return; }
             Instrument inst = InstrumentFor(root);
             if (inst == null) { client.Send("{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(root) + ",\"id\":" + (id ?? "null") + ",\"tick\":null,\"sessions\":[],\"rows\":[],\"error\":" + CbJson.Str("ChartBridge does not serve " + root) + "}"); return; }
-            // review B2 S2: one answer in progress per page; requests meanwhile are folded into one more answer (the latest id)
+            // review B2 S2: one answer in progress per page; requests meanwhile are folded per root (the latest id of each root is
+            // answered once, in the order the roots were first asked), so a request for another root is never lost
             lock (client.Htf)
             {
-                if (client.WeekBusy) { client.WeekAgain = true; client.WeekAgainRoot = root; client.WeekAgainId = id; return; }
+                if (client.WeekBusy)
+                {
+                    string[] had = client.WeekQueue.FirstOrDefault(q => q[0] == root);
+                    if (had != null) had[1] = id; else if (client.WeekQueue.Count < 16) client.WeekQueue.Add(new[] { root, id });
+                    return;
+                }
                 client.WeekBusy = true;
             }
             Task.Run(() =>
@@ -4201,8 +4253,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     catch (Exception ex) { Log("weekly profile error: " + ex.Message); client.Send("{\"type\":\"weekProfile\",\"root\":" + CbJson.Str(r) + ",\"id\":" + (i ?? "null") + ",\"tick\":null,\"sessions\":[],\"rows\":[],\"error\":" + CbJson.Str(ex.Message) + "}"); }
                     lock (client.Htf)
                     {
-                        if (!client.WeekAgain) { client.WeekBusy = false; return; }
-                        client.WeekAgain = false; r = client.WeekAgainRoot; i = client.WeekAgainId;
+                        if (client.WeekQueue.Count == 0) { client.WeekBusy = false; return; }
+                        r = client.WeekQueue[0][0]; i = client.WeekQueue[0][1];
+                        client.WeekQueue.RemoveAt(0);
                     }
                 }
             });
