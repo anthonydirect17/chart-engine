@@ -43,6 +43,7 @@ public static class SeamHarness
         Pure();
         Load();
         WindowHarness.Run(Check);   // 0.3.5: the session tables and the trade text (check/WindowHarness.cs)
+        BarsHarness.Run(Check);     // 0.3.6: the daily 1-minute bars to The Desk, through the gate (check/BarsHarness.cs)
     }
 
     // ------------------------------------------------------------ the pure functions

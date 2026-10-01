@@ -683,7 +683,7 @@ Test 'Get-AddOnHashes: a file another program holds reads as unreadable, never a
 
 Test '-InstallChartBridge: an add-on file held past the retry puts back every file already replaced; AddOns exactly as before (the reviewer''s p5_addons)' {
   $script:FakeDiag = '0.4.0'
-  [void](Commit 'ChartBridge 0.4.1 (all three files change)' { Set-CbVersion '0.4.1'; foreach ($n in @('ChartBridgeOrders.cs', 'ChartBridgePin.cs')) { $f = Get-LocalPath $src "nt8/$n"; Put $f ((Get-Text $f) + "`n// 0.4.1`n") } })
+  [void](Commit 'ChartBridge 0.4.1 (three of the four add-on files change)' { Set-CbVersion '0.4.1'; foreach ($n in @('ChartBridgeOrders.cs', 'ChartBridgePin.cs')) { $f = Get-LocalPath $src "nt8/$n"; Put $f ((Get-Text $f) + "`n// 0.4.1`n") } })
   [void](Run-Update)
   Assert ((Read-JsonFile (Join-Path $script:P.Staged 'stage.json'))['chartBridgeVersion'] -eq '0.4.1') 'staged 0.4.1'
   $before = Get-AddOnsPrint
@@ -697,7 +697,7 @@ Test '-InstallChartBridge: an add-on file held past the retry puts back every fi
   $said = Get-Said
   Assert-Code $code 1 'STOP'
   Assert ($said -match 'STOP: ChartBridge 0\.4\.1 was not copied and nothing changed in AddOns' -and $said -match 'NinjaScript Editor holds it' -and $said -match 'Close the NinjaScript Editor') "says nothing changed, and why: $said"
-  Assert ((Get-Text $script:P.Log) -match 'the add-on copy failed after 1 of 3 files .*putting back: ChartBridge\.cs') 'ChartBridge.cs had been replaced (the reviewer''s mix), and was put back'
+  Assert ((Get-Text $script:P.Log) -match 'the add-on copy failed after 1 of 4 files .*putting back: ChartBridge\.cs') 'ChartBridge.cs had been replaced (the reviewer''s mix), and was put back'
   Assert ((Get-AddOnsPrint) -eq $before) "AddOns exactly as before (every file's hash): $(Get-AddOnMarks)"
   Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns | Where-Object { $_.Name -like '*.upd-*' }).Count -eq 0) 'no temporary file left in AddOns'
   $s = Read-State

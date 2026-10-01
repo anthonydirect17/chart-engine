@@ -1,5 +1,47 @@
 # Changelog
 
+## ChartBridge 0.3.6 (2026-10-01): daily 1-minute bars to The Desk
+
+ChartBridge (nt8/) only, on top of 0.3.5: the page, the engine and the chart version (1.8.0) are unchanged. Ships with
+0.3.5 as one install. **Needs a recompile:** while flat, run `update-pc.ps1 -InstallChartBridge` (README: Keep this PC
+up to date) or `nt8\install.ps1`; both copy the new `ChartBridgeBars.cs` too (it is listed in `nt8/install-files.json`;
+`install.ps1` itself is unchanged), then compile in NinjaTrader (F5). **Off** until `bars = on` is in `config.txt`.
+- **What it sends** (contract v1, approved by Anthony 2026-09-30): after each session closes (17:00 New York time, plus
+  5 minutes), if NinjaTrader's price feed is connected, every finished 1-minute bar of that session (18:00 the day before
+  to 17:00; the Sunday evening counts as Monday) for NQ, MNQ, ES and MES, from NinjaTrader's own data, to The Desk's
+  `POST /api/bars`. One message per contract per session: the front month the chart uses (or `contract.<ROOT>`), plus
+  any other contract of that root with fills that session. Each bar is `[t, o, h, l, c, v]`, `t` its open in UTC
+  milliseconds (NinjaTrader stamps a bar at its close; ChartBridge takes a minute off), sorted, one per minute,
+  `complete: true`. Only market data and the PC name (`pc`, default the Windows computer name) leave the PC.
+- **Catch-up:** at the start (2 minutes in, and only once the gate below is idle) any of the last 5 sessions The Desk
+  has not taken yet is sent, so the first run also delivers the day before. Weekends and the template's full holidays
+  are skipped. A session NinjaTrader has no bars for (or that fails) is asked 3 times, 15 minutes apart, then not
+  until the next start: nothing is looped on.
+- **Never beside the chart's data work:** each bars request goes to NinjaTrader through 0.3.5's gate, last of all. It
+  is queued only when the gate is idle (not stopped or stuck, no Range window or session backfill out or queued, no
+  backfill still to come or due again, no minute chart's last trades out, no page loading), so nothing piles up there;
+  otherwise it waits and `/diag` says what for. A window or backfill asked while a bars request is out waits behind it,
+  as behind any request (one contract's minutes, about a second). A bars request NinjaTrader does not answer in 60 s
+  frees the gate (Anthony: the chart never waits on bars), unlike a window or a backfill, which keep 0.3.5's stuck
+  rule; a window may then go while NinjaTrader still works on it (accepted), and its late answer is not used. In
+  regular trading hours (09:30 to 16:15 ET) it asks for nothing, except the catch-up after a start. Nothing on the order
+  lane; the order files are byte for byte those of main.
+- **Stop** (F5, closing NinjaTrader): nothing more is asked of NinjaTrader or posted to The Desk. The worker leaves any
+  wait at once, a post in flight is aborted (the message stays queued), an answer that comes later is not copied, and
+  Stop waits 250 ms for the worker, as the gate's Stop does.
+- **Like fills:** messages wait in `pending_bars.jsonl` until The Desk takes them (10 s per request, retried every 10 s);
+  ones The Desk calls malformed (400, 422) are set aside in `rejected_bars.jsonl`; `sent_bars.txt` records what was
+  taken. The Desk stores by (contract, minute), so a resend is harmless.
+- **`/diag`:** a `bars` section (`enabled`, `state`, `waitingForGate`, `lastSent` per contract, `waiting`, `setAside`,
+  `gaveUp`, `lastRequest`, `lastError`), and the gate shows `barsQueued`.
+- **Settings:** `bars = on`, `barsRoots = NQ, MNQ, ES, MES`, `pc = HOME`.
+- **Checks:** `nt8/check/BarsHarness.cs` runs inside `npm run check:orders` (Mono, 112 checks): the session rules, then
+  the failure scenarios through the real gate with a stand-in Desk (S1 off by default, S2 one session including both
+  daylight saving changes and a Sunday open, S3 The Desk unreachable, S4 catch-up, S5 never beside a window or backfill
+  and a stuck gate, S6 a stop during a request and during a post, S7 contracts per root, S8 `/diag`, RTH). A real
+  post to The Desk (its `POST /api/bars` from a local run) stored the rows, refused bad input with a 400 and refused
+  the tunnel's headers with a 403. `test/nt8-bars.test.js` guards the source in CI.
+
 ## 1.8.0 and ChartBridge 0.3.5 (2026-09-30): a light Range chart, an exact volume profile
 
 Page, bar builder, fake bridge and ChartBridge; the engine only changes its version. **Needs a recompile:** run

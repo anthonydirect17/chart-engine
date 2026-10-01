@@ -85,10 +85,13 @@ namespace NinjaTrader.Cbi
     public class Connection
     {
         public ConnectionStatus Status { get; set; }
+        public ConnectionStatus PriceStatus { get; set; }                       // the price feed (connection_class.htm)
+        public static readonly List<Connection> Connections = new List<Connection>();
         public static event EventHandler<ConnectionStatusEventArgs> ConnectionStatusUpdate;
         public static void FireStatus(Connection c, ConnectionStatus previous) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status, PreviousStatus = previous }); }
         public static void FirePrice(Connection c, ConnectionStatus previous, ConnectionStatus now) { if (ConnectionStatusUpdate != null) ConnectionStatusUpdate(c, new ConnectionStatusEventArgs { Connection = c, Status = c.Status, PreviousStatus = c.Status, PriceStatus = now, PreviousPriceStatus = previous }); }
     }
+    public enum MergePolicy { DoNotMerge, MergeBackAdjusted, MergeNonBackAdjusted, UseGlobalSettings, UseDefault }   // barsrequest_mergepolicy.htm
     public enum OrderAction { Buy, BuyToCover, Sell, SellShort }
     public enum OrderType { Limit, Market, MIT, StopMarket, StopLimit }
     public enum OrderEntry { Automated, Manual }
@@ -160,7 +163,11 @@ namespace NinjaTrader.Data
 {
     public enum MarketDataType { Ask, Bid, Last, DailyHigh, DailyLow, DailyVolume, LastClose, Opening, OpenInterest, Settlement, Unknown }
     public enum BarsPeriodType { Tick, Volume, Range, Second, Minute, Day, Week, Month, Year }
-    public class TradingHours { }
+    public class TradingHours
+    {
+        public string Name { get; set; }
+        public readonly Dictionary<DateTime, string> Holidays = new Dictionary<DateTime, string>();   // full holidays by date (holidays.htm)
+    }
     public class BarsPeriod { public BarsPeriodType BarsPeriodType { get; set; } public int Value { get; set; } private MarketDataType mdt = MarketDataType.Last; public MarketDataType MarketDataType { get { return mdt; } set { mdt = value; } } }   // Last unless set, as NinjaTrader
     // Holds rows the harness puts in (a real Bars is filled by NinjaTrader).
     public class Bars
@@ -197,6 +204,8 @@ namespace NinjaTrader.Data
         public BarsRequest(NinjaTrader.Cbi.Instrument i, int barsBack) { Instrument = i; BarsBack = barsBack; lock (Made) Made.Add(this); }
         public BarsPeriod BarsPeriod { get; set; }
         public TradingHours TradingHours { get; set; }
+        private NinjaTrader.Cbi.MergePolicy mergePolicy = NinjaTrader.Cbi.MergePolicy.UseGlobalSettings;   // NinjaTrader's setting unless set
+        public NinjaTrader.Cbi.MergePolicy MergePolicy { get { return mergePolicy; } set { mergePolicy = value; } }
         public Bars Bars { get; set; }
         public void Request(Action<BarsRequest, NinjaTrader.Cbi.ErrorCode, string> callback) { Callback = callback; Func<BarsRequest, bool> auto = AutoAnswer; if (auto != null) auto(this); }
         public void Answer(Bars bars, NinjaTrader.Cbi.ErrorCode code) { Answered = true; Bars = bars; Callback(this, code, code == NinjaTrader.Cbi.ErrorCode.NoError ? "" : "stub error"); }

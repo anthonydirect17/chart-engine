@@ -531,8 +531,8 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 
 // ---- 0.3.5: the served window and the session's volume at price (behaviour: nt8/check/WindowHarness.cs under Mono)
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
-  assert.match(src, /^\/\/ ChartBridge 0\.3\.5 for NinjaTrader 8/);
-  assert.match(code, /public const string Version = "0\.3\.5";/);
+  assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
+  assert.match(code, /public const string Version = "0\.3\.[5-9]";/);
   assert.match(bodyOf(code, 'private static string HelloJson('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\"\]/);
   // S6: every tick chart (liveFirst or not) gets the served window; the by-date tick load only under the harness switch
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0 && !ByDateTickLoads,/);
@@ -590,7 +590,8 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   // one tick request to NinjaTrader at a time: windows first, a backfill only with nothing else out (no minute tail either)
   const next = bodyOf(code, 'private static GateJob GateNext(');
   assert.match(next, /if \(gateStuck != null\) return null;/);
-  assert.match(next, /if \(GateBackfills\.Count == 0 \|\| tailsOut > 0\) return null;/);
+  // 0.3.6: with no backfill queued, a daily bars request goes last (no minute tail out, no page loading); else as 0.3.5
+  assert.match(next, /if \(GateBackfills\.Count == 0\)\s*\{[\s\S]*?if \(GateBarJobs\.Count == 0 \|\| tailsOut > 0\) return null;\s*if \(PageLoading\(\)\) \{ wait = true; return null; \}[\s\S]*?\}\s*if \(tailsOut > 0\) return null;/);
   assert.match(bodyOf(code, 'private static void RequestTicks('), /if \(!BeginTail\(\)\)/);
   // on NinjaTrader's callback thread only the copy (timed); the rest on a worker
   for (const f of ['private static void AskWindow(', 'private static void RunBackfill(']) {
