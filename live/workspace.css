@@ -31,6 +31,9 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-conn.bad { color: var(--ws-sell); }
 .ws-clock { font: 600 13px var(--ws-mono); font-variant-numeric: tabular-nums; }
 .ws-et { color: var(--ws-muted); font-weight: 400; }
+.ws-stat { display: inline-flex; gap: 6px; font: 500 11px var(--ws-mono); color: var(--ws-muted); font-variant-numeric: tabular-nums; flex: none; }
+.ws-stat b { color: var(--ws-text2); font-weight: 500; }
+.ws-sep { color: var(--ws-line2); }
 .ws-note { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ws-note.warn { color: var(--ws-warn); }
 .ws-fill { flex: 1 1 auto; min-width: 0; }
@@ -70,9 +73,19 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 
 /* the slim chart header: instrument and bars (a button), the chart's Indicators, the small menu */
 .ws-lv.chart-live { display: contents; }
-.ws-view { display: inline-flex; align-items: center; gap: 8px; min-width: 0; height: 22px; padding: 0 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--ws-text); font: inherit; cursor: pointer; }
+.ws-view { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 8px; min-width: 0; height: 22px; padding: 0 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--ws-text); font: inherit; cursor: pointer; }
 .ws-view:hover, .ws-view[aria-expanded="true"] { background: var(--ws-field); border-color: var(--ws-line2); }
-.ws-view .ws-name { color: var(--ws-text); }
+.ws-view .ws-name { color: var(--ws-text); min-width: 0; }
+.ws-view .ws-tf, .ws-view .ws-caret { flex: none; }
+/* the chart's pinned indicators as 2-letter chips (live.js renders them; those that do not fit go behind "+N") */
+.ws-head .ind-chips { flex: 1 1 0; min-width: 0; min-height: 0; gap: 4px; overflow: hidden; }
+.ws-head .ind-chip { height: 22px; padding: 0 6px; gap: 5px; border-radius: 5px; font-size: 10px; letter-spacing: .04em; }
+.ws-head .ind-chip .sw { width: 8px; }
+.ws-head .ind-chip-more { border-style: solid; color: var(--ws-text2); }
+.ws-head .ind-chip-more .sw { display: none; }
+.ws-head .ind-chip-list { position: fixed; z-index: 60; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 6px; background: var(--ws-pop); border: 1px solid var(--ws-tint-line); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
+.ws-head .ind-chip-list .ind-chip { justify-content: flex-start; }
+.ws-head .ind-chip-list .ind-chip::after { content: attr(aria-label); font-family: var(--ws-sans); font-weight: 500; letter-spacing: 0; color: var(--ws-text2); margin-left: 4px; }
 .ws-caret { width: 5px; height: 5px; flex: none; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
 .ws-head .ind { flex: none; }
 .ws-head .ind-btn { min-height: 22px; height: 22px; padding: 0 8px; border-radius: 5px; gap: 6px; font-size: 12px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
@@ -81,7 +94,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-more { font-size: 15px; line-height: 1; padding: 1px 6px 3px; }
 /* narrow panels (a 1366 px screen): the header keeps the instrument, bars and buttons on one line. The classes come
    from workspace.js (a ResizeObserver): container queries made every chart frame slower (perf:workspace). */
-.ws-view, .ws-x, .ws-ic, .ws-head .ws-sel { flex: none; }
+.ws-x, .ws-ic, .ws-head .ws-sel, .ws-head .ind { flex: none; }
 .ws-panel.narrow .ws-grip { display: none; }
 .ws-panel.narrow .ws-head { padding-left: 8px; gap: 6px; }
 .ws-panel.narrower .ws-head .ind-btn { font-size: 0; gap: 4px; }
@@ -95,7 +108,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
    one line (what does not fit is cut, the chart keeps its height) */
 .ws-body > .chart-live { flex: 1 1 auto; min-height: 0; padding: 6px 8px 4px; gap: 4px; }
 .ws-panel .chart-live .stage { min-height: 48px; }
-.ws-body > .chart-live > .status { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; min-width: 0; }
+.ws-body > .chart-live > .status { display: none; }   /* one status line for the window, in the top bar */
 
 /* ---------------- the order ticket's place (the ticket comes in E2b) */
 .tk-hold { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px; text-align: center; color: var(--ws-muted); line-height: 1.4; }

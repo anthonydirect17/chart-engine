@@ -341,6 +341,34 @@ function note(text, warn) {
   if (text) noteTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
 
+/* One status line for the window (the charts' own are not shown here): the worst feed and local delay over the
+   instruments (each one's in the tooltip) and the charts' frame rate, every second. */
+function fmtDelay(v) { return v === null || v === undefined ? '-' : (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms' + (v < 0 ? ' (PC clock behind)' : ''); }
+function syncStats() {
+  const per = new Map();
+  let fps = 0, busy = false;
+  for (const v of chartViews()) {
+    const s = v.pane.stats();
+    if (s.chart && !s.chart.idle) { busy = true; fps = Math.max(fps, s.chart.fps || 0); }
+    if (!s.root) continue;
+    const r = per.get(s.root) || { feed: null, local: null };
+    if (s.feed !== null && (r.feed === null || s.feed > r.feed)) r.feed = s.feed;
+    if (s.local !== null && (r.local === null || s.local > r.local)) r.local = s.local;
+    per.set(s.root, r);
+  }
+  let feed = null, local = null, worst = '';
+  for (const [root, r] of per) {
+    if (r.feed !== null && (feed === null || r.feed > feed)) { feed = r.feed; worst = root; }
+    if (r.local !== null && (local === null || r.local > local)) local = r.local;
+  }
+  $('wsFeed').textContent = fmtDelay(feed) + (feed !== null && per.size > 1 ? ' ' + worst : '');
+  $('wsLocal').textContent = fmtDelay(local);
+  $('wsFps').textContent = !chartViews().length ? '-' : busy ? Math.round(fps) + ' fps' : 'idle';
+  $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown:\n' +
+    ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
+}
+setInterval(syncStats, 1000);
+
 /* ---------------- saving */
 function save() { W.saveLayout(store, layout, { panels }); }
 
@@ -372,7 +400,7 @@ function addView(p) {
   let mid = '';
   if (p.type === 'chart') {
     mid = '<button type="button" class="ws-view" data-act="view" aria-haspopup="dialog" aria-expanded="false"><span class="ws-name"></span><span class="ws-tf"></span><span class="ws-caret" aria-hidden="true"></span></button>' +
-      '<span class="chart-live ws-lv ws-ind"></span><span class="ws-fill"></span>' +
+      '<span class="chart-live ws-lv ws-ind"></span>' +
       '<button type="button" class="ws-ic ws-more" data-act="more" aria-haspopup="menu" aria-expanded="false" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>';
   } else if (p.type === 'tape') {
     mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
@@ -420,11 +448,11 @@ function mountChart(v) {
     },
   });
   v.pane = pane;
-  v.head.querySelector('.ws-ind').appendChild(pane.indicators);   // the chart's own Indicators button and menu
+  v.head.querySelector('.ws-ind').append(pane.indicators, pane.chips);   // the chart's own Indicators button and menu, its chips
   const indBtn = pane.indicators.querySelector('.ind-btn');
   const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
   if (mo) mo.observe(indBtn, { attributes: true, attributeFilter: ['aria-expanded'] });
-  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); if (pane.indicators) pane.indicators.remove(); };
+  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.chips.remove(); };
 }
 function viewChanged(v, nv) {
   const p = v.panel;

@@ -138,6 +138,18 @@ try {
   }));
   check(hd.every(x => x.grip && x.view && x.ind && x.more && x.x), 'every chart header: handle, instrument and bars, Indicators, the small menu, the x');
   check(hd.every(x => x.bar === 'none' && x.h === 28), 'the chart\'s own toolbar is not shown; the header is 28 px');
+  const chips = await page.evaluate(id => [...document.querySelectorAll(`.ws-panel[data-id="${id}"] .ws-head .ind-chip[data-id]`)].map(c => c.textContent), main.id);
+  check(chips.join(' ') === 'VO VW LV IB FL', 'the main chart\'s pinned indicators as 2-letter chips in its header (' + chips.join(' ') + ')');
+  const vw = `.ws-panel[data-id="${main.id}"] .ws-head .ind-chip[data-id="vwap"]`;
+  await page.click(vw);
+  const vwSaved = await page.evaluate(id => { const v = JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')[id]; return v ? v.ind.vwap.shown : 'none: ' + Object.keys(JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')).join(','); }, main.id);
+  check(await page.getAttribute(vw, 'aria-pressed') === 'false' && vwSaved === false, 'a chip click hides that indicator, as the toolbar\'s chips do (' + vwSaved + ')');
+  await page.click(vw);
+  check(await page.getAttribute(vw, 'aria-pressed') === 'true', 'and shows it again');
+  const one = await page.evaluate(() => ({ footers: [...document.querySelectorAll('.ws-body > .chart-live > .status')].map(f => getComputedStyle(f).display), feed: document.getElementById('wsFeed').textContent,
+    local: document.getElementById('wsLocal').textContent, fps: document.getElementById('wsFps').textContent, tip: document.getElementById('wsStat').title }));
+  check(one.footers.length === 4 && one.footers.every(d => d === 'none'), 'no status line under the charts');
+  check(/ms( [A-Z]+)?$/.test(one.feed) && /ms$/.test(one.local) && /^(\d+ fps|idle)$/.test(one.fps) && /MNQ: feed/.test(one.tip) && /ES: feed/.test(one.tip), 'one status line in the top bar: feed ' + one.feed + ', local ' + one.local + ', ' + one.fps);
   const ib = `.ws-panel[data-id="${nq.id}"] .ws-head .ind-btn`;
   await page.click(ib);
   const im = await page.evaluate(id => { const p = document.querySelector(`.ws-panel[data-id="${id}"] .ind-panel`); const r = p.getBoundingClientRect(); return { open: !p.hidden, w: r.width, right: r.right, vw: innerWidth }; }, nq.id);
@@ -418,8 +430,8 @@ try {
     await page.waitForTimeout(800);
     const fitOk = await page.evaluate(() => { const g = document.getElementById('wsGrid').getBoundingClientRect(); return [...document.querySelectorAll('.ws-panel')].every(p => { const r = p.getBoundingClientRect(); return r.left >= g.left - 1 && r.top >= g.top - 1 && r.right <= g.right + 1 && r.bottom <= g.bottom + 1 && r.width > 50 && r.height > 50; }) && document.documentElement.scrollWidth <= innerWidth; });
     check(fitOk, w + 'x' + h + ': every panel inside the window, by cells');
-    const heads = await page.evaluate(() => [...document.querySelectorAll('.ws-head')].every(h => h.offsetHeight === 28 && h.scrollHeight <= 28));
-    check(heads, w + 'x' + h + ': every header one 28 px line');
+    const heads = await page.evaluate(() => [...document.querySelectorAll('.ws-head')].every(h => h.offsetHeight === 28 && h.scrollHeight <= 28 && h.scrollWidth <= h.clientWidth + 1));
+    check(heads, w + 'x' + h + ': every header one 28 px line, nothing past its edge (a 2 x 1 chart too)');
   }
   // the default layout itself at 2560 and 1366, for Anthony to look at
   await page.setViewportSize({ width: 2560, height: 1440 });
@@ -428,6 +440,27 @@ try {
   await shot(page, 'workspace-2560x1440.png');
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.waitForTimeout(1500);
+  console.log('chips on a narrow chart (1366x768, the default layout)');
+  s = await state();
+  const nq3 = s.panels.find(p => p.type === 'chart' && p.root === 'NQ');
+  await page.click(`.ws-panel[data-id="${nq3.id}"] .ws-head .ind-btn`);
+  for (const q of ['vwap', 'levels', 'ib', 'fills', 'volume bars']) { await page.fill(`.ws-panel[data-id="${nq3.id}"] .ind-panel input[data-f="q"]`, q); await page.keyboard.press('Enter'); }
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  const ch = await page.evaluate(id => { const h = document.querySelector(`.ws-panel[data-id="${id}"] .ws-head`), more = h.querySelector('.ind-chip-more');
+    return { shown: [...h.querySelectorAll('.ind-chips > .ind-chip[data-id]')].map(c => c.textContent), more: more && !more.hidden ? more.textContent : '', listed: h.querySelectorAll('.ind-chip-list .ind-chip').length,
+      fits: h.scrollWidth <= h.clientWidth + 1 && h.offsetHeight === 28, all: [...document.querySelectorAll('.ws-head')].every(x => x.scrollWidth <= x.clientWidth + 1 && x.offsetHeight === 28) }; }, nq3.id);
+  check(ch.more === '+' + ch.listed && ch.listed > 0 && ch.shown.length + ch.listed === 5, 'the chips that do not fit go behind "' + ch.more + '" (' + ch.shown.join(' ') + ' shown)');
+  check(ch.fits && ch.all, 'the header does not wrap or scroll, and no header does');
+  await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-more`);
+  const lst = await page.evaluate(id => { const l = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`); const r = l.getBoundingClientRect(); return { open: !l.hidden, n: l.querySelectorAll('.ind-chip').length, inside: r.right <= innerWidth && r.bottom <= innerHeight }; }, nq3.id);
+  check(lst.open && lst.n === ch.listed && lst.inside, '"' + ch.more + '" opens a small list of them');
+  await shot(page, 'workspace-1366x768-chips.png');
+  const first = await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip`).dataset.id, nq3.id);
+  await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-list .ind-chip[data-id="${first}"]`);
+  check(await page.evaluate(([id, f]) => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip[data-id="${f}"]`); return !!c && c.getAttribute('aria-pressed') === 'false'; }, [nq3.id, first]), 'a chip in the list works like the others, and the list stays open');
+  await page.keyboard.press('Escape');
+  check(await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`).hidden, nq3.id), 'Esc closes the list');
   await shot(page, 'workspace-1366x768.png');
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.waitForTimeout(1500);

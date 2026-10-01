@@ -62,24 +62,25 @@ const RANGE_MIN = 1, RANGE_MAX = 400;
  * gear shows (only what the chart really does; the account whose fills are marked is the one account picker's).
  */
 const INDICATORS = [
-  { id: 'volume', name: 'Volume bars', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
+  { id: 'volume', name: 'Volume bars', code: 'VO', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
     opt: 'Bottom 16% of the plot, in the candle colors' },
-  { id: 'vwap', name: 'VWAP', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
+  { id: 'vwap', name: 'VWAP', code: 'VW', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
     opt: 'Session VWAP from 18:00 ET' },
-  { id: 'levels', name: 'Levels', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
+  { id: 'levels', name: 'Levels', code: 'LV', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
     alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val value area',
     opt: 'Prior day high, low, close and value area; overnight high and low' },
-  { id: 'ib', name: 'Initial balance', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
+  { id: 'ib', name: 'Initial balance', code: 'IB', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
     opt: '1 hour, locks 10:30 ET' },
-  { id: 'vp', name: 'Volume profile', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
+  { id: 'vp', name: 'Volume profile', code: 'VP', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
     alias: 'vp volume profile poc vah val value area',
     opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
-  { id: 'delta', name: 'Cumulative delta', short: 'DELTA', letter: 'D', cat: 'volume', sw: 'var(--delta-sw)',
+  { id: 'delta', name: 'Cumulative delta', code: 'CD', short: 'DELTA', letter: 'D', cat: 'volume', sw: 'var(--delta-sw)',
     alias: 'delta cd cvd cumulative order flow',
     opt: 'Market buys minus market sells from 18:00 ET, in a pane below the chart; each trade\'s side comes from ChartBridge 0.3.4. Drag the line above the pane (or focus it and use the arrow keys) to resize it.' },
-  { id: 'fills', name: 'Fills', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
+  { id: 'fills', name: 'Fills', code: 'FL', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
 ];
+/* code: the 2-letter chip in a host's slim header (the workspace, E2a; Anthony approved VO VW LV IB VP CD FL). */
 /* Listed in the menu, tagged "coming" and not selectable until they exist (none since the volume profile, 1.6.0, and
    the cumulative delta, 1.7.0). */
 const COMING = [];
@@ -2654,6 +2655,8 @@ function start(container, opt, PAGE) {
     st.setProperty('--delta-sw', T.upText);                       // the delta pane's swatch: the bull candle color, readable here
     deltaLegendKey = '';
     legendKey = '';
+    // a host's slim header holds the Indicators menu and the chips outside this element: their swatches follow too
+    if (SLIM) for (const el of [$('indWrap'), $('indChips')]) for (const k of ['--vwap-sw', '--up-text', '--down-text', '--ib-sw', '--vp-sw', '--delta-sw', '--vp-poc']) el.style.setProperty(k, st.getPropertyValue(k));
   }
 
   /*
@@ -3027,14 +3030,45 @@ function start(container, opt, PAGE) {
     strip.innerHTML = pinned.map(d => {
       const shown = IS.ind[d.id].shown;
       return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
-        `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span></button>`;
-    }).join('');
+        `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span>` +
+        (SLIM ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
+    }).join('') + (SLIM ? '<button type="button" class="ind-chip ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>' : '');
     fitChips();
+  }
+  /* In a host's slim header (toolbar: false) the strip has the room the header leaves: 2-letter chips, and those that do
+     not fit go behind a "+N" chip that opens a small list of them (the same chips). The header never wraps or scrolls. */
+  let chipListOpen = false;
+  function fitSlimChips() {
+    const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
+    if (!more || !list) return;
+    for (const c of [...list.children]) strip.insertBefore(c, more);
+    more.hidden = true;
+    const over = () => strip.scrollWidth > strip.clientWidth + 1;
+    if (over()) {
+      more.hidden = false;
+      const shown = [...strip.querySelectorAll(':scope > .ind-chip[data-id]')];
+      let n = 0;
+      do { const c = shown.pop(); if (!c) break; list.insertBefore(c, list.firstChild); n++; more.textContent = '+' + n; } while (over());
+      more.setAttribute('aria-label', n + ' more pinned ' + (n === 1 ? 'indicator' : 'indicators'));
+      more.title = [...list.children].map(c => c.getAttribute('aria-label')).join(', ');
+    }
+    showChipList(chipListOpen && !more.hidden);
+  }
+  function showChipList(v) {
+    const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
+    if (!more || !list) return;
+    chipListOpen = v;
+    list.hidden = !v; more.setAttribute('aria-expanded', String(v));
+    if (!v) return;
+    const r = more.getBoundingClientRect();                 // fixed: the header strip clips its overflow
+    list.style.top = Math.round(r.bottom + 4) + 'px';
+    list.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - list.offsetWidth - 8, r.left))) + 'px';
   }
   /* The strip never wraps and never moves the toolbar (review N4): it always keeps room for a full strip of one-letter
      chips (6), so pinning or unpinning cannot change the toolbar's lines, and chips show their names only when that
      fits without adding a toolbar line; otherwise each is one letter. */
   function fitChips() {
+    if (SLIM) { fitSlimChips(); return; }
     const strip = $('indChips'), bar = strip.closest('.bar');
     const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
     strip.style.setProperty('--chip-room', room + 'px');
@@ -3141,11 +3175,16 @@ function start(container, opt, PAGE) {
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
+      if (SLIM && e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
       const b = e.target.closest('button[data-id]'); if (!b) return;
       const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
       changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
     });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
+    if (SLIM) {
+      listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
+      listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
+    }
     wrap.addEventListener('keydown', e => {
       if (panel.hidden) return;
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
@@ -3182,6 +3221,7 @@ function start(container, opt, PAGE) {
       const ro = new ResizeObserver(() => { fitChips(); if (!panel.hidden) place(); });
       ro.observe(rootEl);
       ro.observe(rootEl.querySelector('.bar'));                  // the toolbar's own width (a host resizing the pane)
+      if (SLIM) ro.observe($('indChips'));                       // in the host's header: the room the header leaves it
       cleanups.push(() => ro.disconnect());
     }
   }
@@ -3541,7 +3581,9 @@ function start(container, opt, PAGE) {
   colorsLive = true;
   return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}),
     setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors,
-    indicators: $('indWrap'), colors: themePanel.element };
+    indicators: $('indWrap'), chips: $('indChips'), colors: themePanel.element,
+    /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
+    stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), chart: chart.stats() }) };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX };

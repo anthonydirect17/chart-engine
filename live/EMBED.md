@@ -101,13 +101,15 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `feed` | none | A `ChartFeed` hub (`live/feed.js`, `ChartFeed.create({ wsUrl })`): the chart takes its data from the hub's one connection per instrument instead of opening its own WebSocket, so several charts (and tapes) of one instrument share one connection and one subscribe. `wsUrl` is then not needed. Added for the workspace (E2a). |
 | `view` | none | `{ root, tf, range }`: the chart's own instrument, bars (`s15` to `h1`, `range`) and range size in ticks. The chart starts on them and never saves them under the prefix; the host keeps them (`onView`). Without it the chart reads and saves them under the prefix as before. |
 | `onView` | none | Called with `{ root, tf, range }` whenever the chart's instrument, bars or range size change (from its toolbar or `setView`). |
-| `toolbar` | `true` | `false`: the chart's toolbar is not shown. The host shows its own header with the chart's Indicators button (the returned `indicators` element, moved into an element with the class `chart-live` so `live.css` styles it) and calls `setView`, `chart.setTool`, `chart.clearDrawings`, `chart.reset`. |
+| `toolbar` | `true` | `false`: the chart's toolbar is not shown. The host shows its own header with the chart's Indicators button and its pinned chips (the returned `indicators` and `chips` elements, moved into an element with the class `chart-live` so `live.css` styles them; the chips are then 2-letter, and those that do not fit the room left go behind a "+N" chip with a small list) and calls `setView`, `chart.setTool`, `chart.clearDrawings`, `chart.reset`. |
 | `onColors` | none | Called after this chart's Colors panel or an indicator gear changed a color, so a host can call `refreshColors()` on its other charts. |
 
 With these options the returned object also has `setView({ root, tf, range })` (any of the three), `view()`,
 `refreshSettings()` (Glide and Range style read again from storage, for a host whose Settings change them),
-`refreshColors()` (the chart and indicator colors read again from storage), and the elements `indicators` (the
-Indicators button and its menu) and `colors` (the Colors button and panel) for a host to place. None of it changes a
+`refreshColors()` (the chart and indicator colors read again from storage), `stats()` (`{ root, feed, local, chart }`:
+the median feed and local delays in ms and the engine's frame stats, for a host's own status line), and the elements
+`indicators` (the Indicators button and its menu), `chips` (the pinned chips) and `colors` (the Colors button and
+panel) for a host to place. None of it changes a
 chart mounted without them.
 
 Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
