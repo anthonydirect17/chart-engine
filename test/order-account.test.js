@@ -67,8 +67,10 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.match(CORE.slice(CORE.indexOf('function cancelAll('), CORE.indexOf('function cancelPump(')), /^\s+if \(!ready\(\)\) return;/m);
   // Flatten (the button and the Close hotkey, 1.11.0) and Flatten all: ready() first; Flatten all names TR.account then
   assert.match(CORE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.flattenHere\(\)\)\);/);
-  assert.match(CORE, /function flattenHere\(other\) \{\n\s+if \(!ready\(false\)\) return;/);
-  assert.match(CORE, /function flattenAll\(\) \{\n\s+if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
+  // 1.13.0 (the F2 review): an open NO STOP question is closed first (dropNoStop sends nothing), then ready() as before
+  assert.match(CORE, /function flattenHere\(other\) \{\n\s+(dropNoStop\(\);\n\s+)?if \(!ready\(false\)\) return;/);
+  assert.match(CORE, /function flattenAll\(\) \{\n\s+(dropNoStop\(\);\n\s+)?if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
+  assert.match(CORE, /const dropNoStop = \(\) => \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \};/, 'dropNoStop only closes the question');
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
   assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
   assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
@@ -77,7 +79,7 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.match(CORE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('buy', 'market', null\)\)\);/);
   assert.match(CORE, /\$\('sellMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('sell', 'market', null\)\)\);/);
   assert.match(CORE, /\$\('beBtn'\)\.addEventListener\('click', pointerOnly\(core\.breakEven\)\);/);
-  assert.match(PAGE, /chart\.on\('orderMove', e => \(OT\.planIdOf\(e\.id\) \? T\.planMove\(e\.id, e\.price\) : T\.moveOrder\(e\.id, e\.price\)\)\);/);
+  assert.match(PAGE, /chart\.on\('orderMove', e => \(OT\.planIdOf\(e\.id\) \? T\.planMove\(e\.id, e\.price, e\.from\) : T\.moveOrder\(e\.id, e\.price\)\)\);/);
   assert.match(PAGE, /chart\.on\('orderCancel', e => \(OT\.planIdOf\(e\.id\) \? T\.planRemove\(e\.id\) : T\.cancelOrder\(e\.id\)\)\);/);
   // 1.13.0: a planned line's drag, x and "+SL" / "+TP" go through ready() too (the gates of a leg's drag)
   assert.match(CORE, /function planTarget\(entryId\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return null; \}\n\s+if \(notShown\(entryId\)\) return null;/);
