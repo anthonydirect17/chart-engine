@@ -222,9 +222,14 @@ namespace NinjaTrader.Data
         public double Ask { get; set; }
         public bool IsReset { get; set; }
     }
+    // NinjaTrader's MarketData also holds a snapshot of each type (marketdata.htm: Ask, Bid, DailyHigh, DailyLow, DailyVolume,
+    // Last, LastClose, Opening, OpenInterest, Settlement, each a MarketDataEventArgs; null here unless the harness sets one).
     public class MarketData
     {
-        public MarketData(NinjaTrader.Cbi.Instrument i) { }
+        public static Func<NinjaTrader.Cbi.Instrument, MarketDataEventArgs> SettlementFor;   // the harness: the snapshot a new subscription finds
+        public MarketData(NinjaTrader.Cbi.Instrument i) { Func<NinjaTrader.Cbi.Instrument, MarketDataEventArgs> f = SettlementFor; Settlement = f != null ? f(i) : null; }
         public event EventHandler<MarketDataEventArgs> Update;
+        public MarketDataEventArgs Settlement { get; set; }
+        public MarketDataEventArgs LastClose { get; set; }
     }
 }

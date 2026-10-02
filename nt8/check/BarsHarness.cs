@@ -95,6 +95,8 @@ public static class BarsHarness
             S1OffByDefault(dir);
             S2OneSession(dir);
             S3DeskUnreachable(dir);
+            N1QueueAgeAndRefusals(dir);   // 0.3.7: review bars1 N1
+            N7ReadOffNtThread(dir);       // 0.3.7: review bars1 N7
             S4CatchUpAtStart(dir);
             S5NeverBesideTheChart(dir);
             S6StopDuringRequest(dir);
@@ -400,7 +402,7 @@ public static class BarsHarness
         ChartBridgeBars.ReadConfig("pc", "HOME");
         ChartBridgeBars.CatchUpSessions = 5; ChartBridgeBars.RequestTimeoutMs = 60000; ChartBridgeBars.QueueWaitMs = 60000; ChartBridgeBars.MaxTries = 3;
         ChartBridgeBars.TickMs = 10000; ChartBridgeBars.SettleMs = 120000; ChartBridgeBars.PlanEveryMs = 60000;
-        foreach (string f in new[] { "pending_bars.jsonl", "sent_bars.txt", "rejected_bars.jsonl", "config.txt" }) File.Delete(Path.Combine(dir, "ChartBridge", f));
+        foreach (string f in new[] { "pending_bars.jsonl", "sent_bars.txt", "rejected_bars.jsonl", "refused_bars.txt", "config.txt" }) File.Delete(Path.Combine(dir, "ChartBridge", f));
         ChartBridgeBarsQueue.Load();
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
         ChartBridgeBars.Lookup = name => Inst(name);
@@ -422,7 +424,7 @@ public static class BarsHarness
     static void S1OffByDefault(string dir)
     {
         Desk desk = Fresh(dir, null, Utc(2026, 9, 30, 21, 6));
-        List<string> originsWas = ChartBridgeConfig.AllowOrigins; int quoteWas = ChartBridgeConfig.QuoteHours;
+        List<string> originsWas = ChartBridgeConfig.AllowOrigins;
         try
         {
             // config.txt with other settings and no bars line, as on every PC today
@@ -446,7 +448,7 @@ public static class BarsHarness
         {
             File.Delete(Path.Combine(dir, "ChartBridge", "config.txt"));
             ChartBridgeConfig.Load();
-            ChartBridgeConfig.AllowOrigins = originsWas; ChartBridgeConfig.QuoteHours = quoteWas;
+            ChartBridgeConfig.AllowOrigins = originsWas;
             ChartBridgeConfig.DeskUrl = desk.Url;
             desk.Stop();
         }
@@ -503,7 +505,7 @@ public static class BarsHarness
                   "S2 OneSession: the request: MNQ 12-26, 1 minute, Last, DoNotMerge, the instrument's trading hours, from the day before the open to now (NinjaTrader's time): " + (r == null ? "none" : r.From + " to " + r.To));
             string b = d2.All().FirstOrDefault() ?? "";
             Check(b.StartsWith("{\"v\":1,\"source\":\"chartbridge\",\"bridge\":\"" + ChartBridgeServer.Version + "\",\"pc\":\"HOME\",\"contract\":\"MNQ 12-26\",\"root\":\"MNQ\",\"tick\":0.25,\"session\":\"2026-09-30\",\"tf\":\"1m\",\"stamp\":\"open\",\"bars\":[[") &&
-                  ChartBridgeServer.Version == "0.3.6", "S2 OneSession: contract v1 fields, bridge 0.3.6, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
+                  ChartBridgeServer.Version == "0.3.7", "S2 OneSession: contract v1 fields, bridge 0.3.7, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
             Check(Ts(b).Count > 0 && Ts(b)[0] == Ms(Utc(2026, 9, 29, 22, 0)) && b.Contains("[" + Ms(Utc(2026, 9, 29, 22, 0)) + ",25000,25001,24999.5,25000.25,10]"),
                 "S2 OneSession: the first bar is the 18:00 ET minute (NinjaTrader's 18:01 close stamp less 60 s), prices and volume exact");
         }
@@ -567,6 +569,55 @@ public static class BarsHarness
             Check(back.All().Count(x => x == good) == 1, "S3 DeskUnreachable: a message queued twice is posted once");
         }
         finally { ChartBridgeBars.Stop(); if (back != null) back.Stop(); }
+    }
+
+    // ------------------------------------------------------------ 0.3.7 (review bars1 N1): the queue's age limit, refusals remembered
+    static void N1QueueAgeAndRefusals(string dir)
+    {
+        Desk desk = Fresh(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 6)));
+        try
+        {
+            List<DeskBar> one = new List<DeskBar> { new DeskBar { T = Ms(Utc(2026, 9, 29, 13, 30)), O = 1, H = 2, L = 0.5, C = 1.5, V = 3 } };
+            string old = ChartBridgeBars.MessageJson("MNQ 09-26", "MNQ", 0.25, D(2026, 8, 10), one), recent = ChartBridgeBars.MessageJson("MNQ 12-26", "MNQ", 0.25, D(2026, 9, 29), one);
+            File.WriteAllLines(Path.Combine(dir, "ChartBridge", "pending_bars.jsonl"), new[] { old, recent });
+            ChartBridgeBarsQueue.Load();
+            Check(ChartBridgeBarsQueue.Waiting() == 1 && !ChartBridgeBarsQueue.IsWaiting("2026-08-10 MNQ 09-26") && Lines(dir, "pending_bars.jsonl").Length == 1 && Logged("dropped 1 message(s) older than 40 days from pending_bars.jsonl"),
+                "N1: a message older than " + ChartBridgeBarsQueue.KeepSentDays + " days is dropped from pending_bars.jsonl at the start (it never waits longer than the record is kept)");
+            // The Desk refuses 09-29 (422): set aside, and remembered across a restart, so the catch-up does not ask for it again
+            desk.Status = body => body.Contains("\"session\":\"2026-09-29\"") ? 422 : 200;
+            ChartBridgeBarsQueue.Flush();
+            Check(ChartBridgeBarsQueue.IsRefused("2026-09-29 MNQ 12-26") && Lines(dir, "refused_bars.txt").Contains("2026-09-29 MNQ 12-26") && Lines(dir, "rejected_bars.jsonl").Length == 1,
+                "N1: a refusal is set aside and noted in refused_bars.txt");
+            // a restart: what the worker remembers this run (GaveUp) is gone, the files are read again
+            ChartBridgeBars.ResetConfig(); ChartBridgeBars.Start();   // bars off: resets the run's memory, starts nothing
+            ChartBridgeBars.ReadConfig("bars", "on"); ChartBridgeBars.ReadConfig("barsRoots", "MNQ"); ChartBridgeBars.ReadConfig("pc", "HOME");
+            ChartBridgeBarsQueue.Load();
+            ChartBridgeBars.CatchUpSessions = 2;
+            int m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            List<string> asked = BarsMade(m0).Select(r => SessionOf(r).ToString("MM-dd")).ToList();
+            Check(asked.Count == 1 && asked[0] == "09-30" && Lines(dir, "rejected_bars.jsonl").Length == 1,
+                "N1: after a restart the refused session is not asked again (rejected_bars.jsonl does not grow); only 09-30 is (" + string.Join(",", asked) + ")");
+        }
+        finally { desk.Stop(); foreach (string f in new[] { "refused_bars.txt" }) File.Delete(Path.Combine(dir, "ChartBridge", f)); }
+    }
+
+    // ------------------------------------------------------------ 0.3.7 (review bars1 N7): the files are read off NinjaTrader's thread
+    static void N7ReadOffNtThread(string dir)
+    {
+        Desk desk = Fresh(dir, "MNQ", EtToUtc(W(2026, 9, 30, 17, 6)));
+        int caller = Thread.CurrentThread.ManagedThreadId, logThread = -1;
+        try
+        {
+            List<DeskBar> one = new List<DeskBar> { new DeskBar { T = Ms(Utc(2026, 9, 29, 13, 30)), O = 1, H = 2, L = 0.5, C = 1.5, V = 3 } };
+            File.WriteAllLines(Path.Combine(dir, "ChartBridge", "pending_bars.jsonl"), new[] { ChartBridgeBars.MessageJson("MNQ 12-26", "MNQ", 0.25, D(2026, 9, 29), one) });
+            ChartBridgeBars.TickMs = 600000; ChartBridgeBars.SettleMs = 600000;   // the worker only starts
+            NinjaTrader.Code.Output.OnLine = line => { if (line.Contains("daily 1-minute bars go to The Desk")) logThread = Thread.CurrentThread.ManagedThreadId; };
+            ChartBridgeBars.Start();   // as NinjaTrader's thread calls it
+            Check(WaitFor(() => logThread != -1) && logThread != caller && BarsThread() != null && logThread == BarsThread().ManagedThreadId && ChartBridgeBarsQueue.Waiting() == 1,
+                "N7: Start() reads pending_bars.jsonl, sent_bars.txt and refused_bars.txt on the bars thread, not the caller's (NinjaTrader's) thread");
+        }
+        finally { NinjaTrader.Code.Output.OnLine = null; ChartBridgeBars.Stop(); desk.Stop(); }
     }
 
     // ------------------------------------------------------------ S4: catch-up at start
@@ -666,8 +717,7 @@ public static class BarsHarness
         DateTime t0 = NtOf(W(2026, 9, 29, 11, 0));
         ChartBridgeServer.ClockForHarness = () => simNow;
         int wtoWas = ChartBridgeServer.WindowTimeoutMs, bfStartWas = ChartBridgeServer.BackfillStartMs, bfGapWas = ChartBridgeServer.BackfillGapMs;
-        bool bfOnWas = ChartBridgeServer.BackfillOn, byDateWas = ChartBridgeServer.ByDateTickLoads;
-        ChartBridgeServer.ByDateTickLoads = false;   // 0.3.5's served window (SeamHarness turns 0.3.4's by-date load on for its own cases)
+        bool bfOnWas = ChartBridgeServer.BackfillOn;
         ChartBridgeClient a = null, b = null;
         Desk desk = Fresh(dir, "MNQ", EtToUtc(W(2026, 9, 29, 11, 0)));
         try
@@ -744,6 +794,7 @@ public static class BarsHarness
             if (bf2 != null) bf2.Answer(TicksOf(tape, 0, 160), ErrorCode.NoError);
             WaitFor(() => ((string)Priv("BooksJson")).Contains("\"state\":\"done\""), 3000);
             ChartBridgeBars.PlanOnce(null);
+            WaitFor(() => BarsMade(m0).Count == 1 && ChartBridgeBarsQueue.IsDone("2026-09-28 MNQ 12-26"), 3000);   // the bars thread sends it (a timing flake in the reviews)
             Check(bf2 != null && BarsMade(m0).Count == 1 && ChartBridgeBarsQueue.IsDone("2026-09-28 MNQ 12-26"), "S5 NeverBesideTheChart: once the backfill is done, the bars go");
             ChartBridgeServer.BackfillOn = bfOnWas; ChartBridgeServer.BackfillRetryMs = 60000;
 
@@ -813,7 +864,7 @@ public static class BarsHarness
             desk.Stop();
             BarsRequest.AutoAnswer = AnswerLikeNt;
             ChartBridgeServer.WindowTimeoutMs = wtoWas; ChartBridgeServer.BackfillStartMs = bfStartWas; ChartBridgeServer.BackfillGapMs = bfGapWas; ChartBridgeServer.BackfillOn = bfOnWas;
-            ChartBridgeServer.BackfillRetryMs = 60000; ChartBridgeServer.WindowFirstGuess = 200000; ChartBridgeServer.ByDateTickLoads = byDateWas;
+            ChartBridgeServer.BackfillRetryMs = 60000; ChartBridgeServer.WindowFirstGuess = 200000;
             ChartBridgeServer.StopGate();
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
             ChartBridgeServer.ClockForHarness = null;
