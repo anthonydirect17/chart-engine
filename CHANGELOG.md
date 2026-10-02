@@ -122,6 +122,8 @@ from using 1.12.0 live on HOME:
   `.btn`, since Reset view moved into the menu), `smoke:delta` (Home and End on the pane's divider: the ratio within
   0.001 of the limit, as the pane's whole pixels give it at the taller chart). `smoke:orders`: the drag probe above.
   `smoke:hotkeys` unchanged (Settings and the small menu stay on screen when the window is resized while open).
+- `test/trade-sides.test.js` (ChartBridge 0.3.8's): the hub now keeps a trade's `q` (it said chart 1.12.0 read none);
+  the chart, the bar builder and the order code still read no `q`.
 
 ## 1.13.0 (2026-10-02): planned stop and target lines, NO STOP, Armed in deep red
 
@@ -216,12 +218,14 @@ nor `test/fake-orders.mjs` or `test/fake-bridge.mjs`. The engine gets planned li
   new protection line ("NO STOP on 1" in the loss red); `smoke:plan` no longer expects a key to do nothing while the
   question is open.
 
-## Unreleased (G1c, 2026-10-02): chart signals: absorption bars, divergence arrows, large-order bubbles
+## 1.12.1 (2026-10-02): Signals: absorption bars, divergence arrows, large-order bubbles
 
-Page only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); no version bump (the coordinator folds it
-into a release), no ChartBridge change, no new page file. Anthony's two NinjaScript indicators ported from the files he
-sent (`FROM_WORK_2026-10-01_LargeAbsorber.cs`, class AbsorptionTradeCombo, and `FROM_WORK_2026-10-01_DeltaD.cs`, class
-DeltaDivergenceSignal v1.0), with his rulings of 2026-10-01. Every signal counts from the page's opening only, from the
+Page and engine only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); works with ChartBridge 0.3.2 and
+newer, no recompile (the signals need the trade sides of 0.3.4 and newer), no new page file. Run `nt8\install.ps1` again
+after pulling (the PC updater installs it by itself; the open pages say "Update ready: reload when flat").
+Anthony's two NinjaScript indicators ported from the files he sent (`FROM_WORK_2026-10-01_LargeAbsorber.cs`, class
+AbsorptionTradeCombo, and `FROM_WORK_2026-10-01_DeltaD.cs`, class DeltaDivergenceSignal v1.0), with his rulings of
+2026-10-01. Every signal counts from the page's opening only, from the
 trades ChartBridge sides (an unknown side is left out). The motion, the live tick path, the bar builder, the candle and
 volume drawing order and the order code are unchanged; a trade costs O(1) more and a bar close one short step.
 
@@ -229,7 +233,9 @@ volume drawing order and the order code are unchanged; a trade costs O(1) more a
   spike and a rejection close on one bar, the large trade's side matching. Painted at the close only, the whole candle in
   a toned cyan (bullish) or warm yellow (bearish) with a crisp 1 px outline in a brighter shade; an outline only while the
   bar forms with the three holding (it goes when they stop; NinjaTrader paints mid-bar and never un-paints). No line, no
-  label. LookbackPeriod 20, VolumeMultiplier 1.8, RejectionZone 0.35 and AggregationWindowMs 500 per instrument and
+  label. **A deliberate difference from Anthony's NinjaTrader script** (his ruling 2026-10-02): a large print on a bar's
+  first tick counts for that bar. In the script OnBarUpdate resets the bar's tracking on its first tick, which can drop a
+  large print that came on that very tick; here the bar's tracking is reset first and then the print is taken. LookbackPeriod 20, VolumeMultiplier 1.8, RejectionZone 0.35 and AggregationWindowMs 500 per instrument and
   chart type, in its gear (`live-signals-v1`); TickTolerance 0 as the file. The large trade's floor is the large-print
   floor.
 - **Divergence arrows** in the delta pane only (its gear: Show divergences, off by default, per pane; SwingLookback 5,
@@ -251,6 +257,82 @@ volume drawing order and the order code are unchanged; a trade costs O(1) more a
 - Tests: `test/signals.test.js` (the rules on hand-built bars and trades); `npm run smoke:signals` replays a scripted tape
   (`test/signals-scene.mjs`, the fake bridge's `--scene=signals`, sample data) on MNQ Range 40 in regular hours on the
   single chart page and in the workspace, with pixel checks of the toned colors and screenshots.
+- A rebuild (another bar type or size, a setting changed, a reconnect) replays the page's own live trades in slices; on
+  range bars each trade goes to the bar it made by its order in the store (as the delta pane, `RangeReplay`), so the
+  rebuilt chart paints exactly the bars live trading painted. The chart's frame allocates nothing for the signals.
+- `live/COMPAT.json`: page 1.12.1, minChartBridge 0.3.2 (unchanged).
+
+## ChartBridge 0.3.8 (2026-10-02): stop and target in ticks from the fill (the ATM rule), Time and Sales category
+
+ChartBridge (nt8/) and the PC updater only; the page and the engine are unchanged (chart 1.12.0 works against it as it
+is: it already sends `bracket` in ticks and ignores the new keys). **Needs a recompile:** while flat and with no resting
+orders if you can, run `update-pc.ps1 -InstallChartBridge` (README: Keep this PC up to date) or `nt8\install.ps1`, then
+compile in NinjaTrader (F5). Entries still resting at the recompile are handled as below.
+
+### The rule change (Anthony): a resting entry's stop and target are ticks from the fill again
+- **0.3.7's planned PRICES are gone.** A limit or stop entry's stop and target are distances in ticks from its
+  ACTUAL fill, like a NinjaTrader ATM: every fill increment gets its legs at the fill price plus or minus those ticks
+  (better fill, better legs; slippage moves them with it). They travel with the entry when it is dragged, and moving
+  the entry onto or past where its stop or target would be is never refused. Market entries are unchanged.
+- **The market exit** at a fill now happens only when a trade in the last 2 seconds went through the stop level
+  (a fresh trade, never an estimate); otherwise the stop goes in as usual.
+- **Protocol** (`nt8/PROTOCOL.md`, "Planned stop and target on a resting entry (0.3.8)"): `order` keeps `bracket` in
+  ticks; `stopPrice` and `targetPrice` are no longer accepted, and the price checks went with them. `plan` is
+  `{type, cid?, id, stopTicks?, targetTicks?}`: a whole number of 1 or more sets a distance, `null` removes it, a key
+  left out is unchanged, at least one is needed; strict, rate-limited, the same gates as `change` (and
+  `maxBracketTicks` when set). A bracket on a reducing order is still refused. `order` messages for a working resting
+  entry carry `"planned": {"stopTicks", "targetTicks"}` (null for none).
+- **Kept from 0.3.7, now in ticks:** the plan-versus-fill race check under the fill path's lock; the ticks in the
+  order name (`CB#1a2b3c4d atm s8 t16`) and `planned_brackets.txt` (`<tag> ticks <stop> <target> <saved>`); file I/O
+  off NinjaTrader's thread and outside every lock; fills found by the 2 second check left to that path; recovery that
+  never guesses (a missing record uses the name's ticks, with an alarm). The remembered sent price of a move (0.3.7,
+  P9) is removed: plans no longer depend on the entry's price.
+- **No legs from an estimated price (review P3, P13).** After a recompile, an increment that follows contracts handled
+  with no legs is priced from NinjaTrader's executions of the entry; when they cannot give the price, no legs are
+  placed and an error alarm says NO STOP and to set it in NinjaTrader (0.3.7 placed legs from an estimate, and could
+  put a stop above the market and exit at market by mistake).
+- **Entries placed before 0.3.8 and still resting:** a 0.3.6 entry (`s8 t16`, already ticks) is recovered as it is,
+  and `plan` now accepts it. A 0.3.7 entry (`plan s<price> t<price>`) is converted once, at recovery, to the ticks it
+  shows now from the entry's current price (a price on the wrong side is no stop or no target), written to the file,
+  with a `status` `warn` to the pages naming them; when its stop was on the wrong side, an error alarm that it has NO
+  STOP, at the conversion and again at its fill (review P10).
+- **The empty `planned_brackets.txt` seen on HOME.** In 0.3.7 a failed write (an antivirus such as Norton holding the
+  file just written) was only logged, so an earlier empty write could stay as the file, and a failed read at start
+  was followed by rewrites from memory that dropped the lines not read. Now: writes are tried again a few times,
+  raise an alarm when they still fail and are retried every 2 seconds until they succeed ("saved again"); a read is
+  tried again for a few seconds and, if it still fails, the file is never rewritten that run (with an alarm); and
+  every 2 seconds each working resting entry with a bracket is checked to have its line.
+
+### Settlement dating (Anthony)
+- A value stamped from a session's close (17:00 ET) until the next session's settlement time is that session's. The
+  snapshot NinjaTrader gives at a first start in the evening (HOME, 20:43 ET on 2026-10-01) is now that day's
+  settlement; a morning start dates it the day before, a weekend one Friday.
+- A value equal to the stored value of the day before is never used, whatever its stamp (NinjaTrader can still hold
+  the day before's value; a blank is safer than a wrong change). With nothing stored for the day before, a value
+  stamped from the close on is the day's, and one stamped between 16:00 and the 17:00 close waits. Settlement updates
+  are handled one at a time in arrival order (one task each could take them out of order).
+
+### Time and Sales category (`q`)
+- Every live `tick` carries `q`: 2 above the ask, 1 at the ask, 0 between, -1 at the bid, -2 below the bid, from the
+  same quote the side tagger uses (no request added, no string made per trade); no field when unknown. A served-window
+  trade ChartBridge saw live with a quote is `[t, p, v, null, null, q]`; trades from NinjaTrader's answer, tables and
+  files stay `[t, p, v]` (unknown, never guessed). Chart 1.12.0 ignores both. `/diag` counts trades by category.
+
+### PC updater (`nt8/update-pc.ps1`)
+- The delete of `staged.tmp\files.zip` is tried again for about 5 seconds (Norton held it: "Access to the path is
+  denied").
+- A fetch that fails because the network is not up yet (the run at sign-in) is tried again every 10 seconds for up
+  to 2 minutes; then the run ends quietly (`offline`, logged as INFO, not a STOP) and the next run tries again.
+  Other fetch failures stop as before. A command refused meanwhile (`-InstallChartBridge`, say) says the other run is
+  waiting for the network and to try again in about 2 minutes. The scheduled task runs the pinned copy: this applies
+  after `update-pc.ps1 register` or `-InstallChartBridge`.
+
+### Checks
+- `npm run check:orders`: OrdersHarness (the 0.3.8 ATM checks and the planned_brackets.txt faults), DataHarness
+  (settlement dating: evening, morning, Saturday and Sunday first starts), SidesHarness (`q`, and a flood probe:
+  OnMarketData cost unchanged within noise). `test/pc-updater.tests.ps1` (the fetch wait, the held zip),
+  `test/trade-sides.test.js` (1.12.0 ignores `q`), the fakes (`test/fake-orders.mjs`, `test/fake-bridge.mjs`
+  with `--no-q`) and the source guards.
 
 ## 1.12.0 (2026-10-01): the workspace and its order ticket
 

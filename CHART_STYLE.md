@@ -8,13 +8,15 @@ fantastic chart. Thats what I want to actually trade on."
   values from `src/chart-engine.js`, do not re-derive them.
 - **Engine:** the Custom Canvas 2D engine (decided 2026-09-29). Not Lightweight Charts.
 - **Sits under** Anthony's `HOUSE_STYLE.md`. The design is Anthony's; do not "improve" it.
-- **Engine version:** 1.9.0 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
+- **Engine version:** 1.12.1 (1.5.3 added the 1-hour Initial Balance lines and the Background choice; on the
   default ground every color below is unchanged. 1.6.0 is the live page's Indicators menu "E2" and chip strip; the
   chart itself draws exactly as in 1.5.3. 1.7.0 adds the cumulative delta pane below the chart; with it off the chart
   draws exactly as in 1.6.0. 1.9.0 adds color presets and indicator colors in the gears; with the default colors the
-  chart draws exactly as in 1.7.0). Page and engine 1.14.0 (the display round, Anthony's list of 2026-10-01): the live
-  pages draw no grid lines by default, keep 80 px of room right of the last bar at any zoom, keep every order on the
-  price scale and no longer size it by the VWAP; everything else draws as in 1.13.0.
+  chart draws exactly as in 1.7.0. 1.12.1 adds the chart signals and their tokens `--sig-bull`, `--sig-bull-line`,
+  `--sig-bear`, `--sig-bear-line`; with them off the chart draws exactly as in 1.12.0). Page and engine 1.14.0 (the
+  display round, Anthony's list of 2026-10-01): the live pages draw no grid lines by default, keep 80 px of room right of
+  the last bar at any zoom, keep every order on the price scale and no longer size it by the VWAP; everything else draws
+  as in 1.13.0.
 
 ## Colors
 

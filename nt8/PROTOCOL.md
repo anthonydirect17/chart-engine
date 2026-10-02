@@ -198,10 +198,10 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 |---|---|---|
 | `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
-| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places), `done` (bool) | after `history`, the current session's trades, chunked |
+| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
 | `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
-| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side) | every trade, live |
+| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
@@ -389,6 +389,36 @@ more distinct later stamps, delivered before that trade, push out the quote from
 quote (the tick rule, or side 0), and `quoteAfterTrade` counts it. The tick rule uses the previous live trade of that
 instrument. Quotes are followed from the moment ChartBridge starts, so the first trades after a start can go by the
 tick rule. The held trades of a load are tagged when they arrive, like any live trade.
+
+## Time and Sales category (0.3.8)
+
+Each trade can carry where it printed against the prevailing quote, as NinjaTrader's Time and Sales colours it:
+
+| `q` | the trade printed |
+|---|---|
+| `2` | above the ask |
+| `1` | at the ask |
+| `0` | between the bid and the ask |
+| `-1` | at the bid |
+| `-2` | below the bid |
+| absent or `null` | unknown: no usable quote |
+
+It is read from the very quote the side uses (Trade side, `sm` 2): the last bid and ask stamped strictly before the
+trade on NinjaTrader's times, both above zero, bid below ask (a locked or crossed quote is not used), no update for
+over 60 seconds is stale, and none after a reset. Prices are compared on the same 0.000001 grid. `q` and `s` are
+separate: a trade between the quote is `q` 0 with its side from the tick rule (`sm` 3). No NinjaTrader request is
+added for it: the live Bid and Ask updates ChartBridge already follows are the only source.
+
+**Live.** A `tick` ends `..., "s": 1, "sm": 2, "q": 1}`; with no usable quote there is no `q` field at all.
+
+**History.** A trade in a `ticks` list is `[t, p, v]` when its category is unknown and `[t, p, v, null, null, q]`
+when it is known. Only trades ChartBridge saw live, with a usable quote, and keeps in the served window (see Served
+window and session table) have it: the trades of NinjaTrader's own tick answer, the session table and the files have
+no stored quote, so they stay `[t, p, v]`, unknown, never guessed. The side places stay `null` as in 0.3.7, so a page
+that reads `s` and `sm` from places 4 and 5 sees no side, exactly as for `[t, p, v]`.
+
+**Older pages** ignore it: chart 1.12.0 reads places 1 to 5 of a trade (`null` there is "no side") and only the
+fields it knows of a `tick`. `/diag` counts the live trades by category (`sides.<root>.live.q`).
 
 **Resets and bad prices.** NinjaTrader's help describes `IsReset` as "a UI reset is needed after a manual disconnect",
 meant for its market data columns. A market data event with `IsReset` is never a trade here, whatever its type and
@@ -663,11 +693,23 @@ serve is answered with an `error` and no bars.
   takes every Settlement event after that. Only a price above 0 counts; a reset event is never one; `LastClose` (the prior
   session's close) is never used.
 - **Each value is dated** with the trading date it settles, from NinjaTrader's time on it: a date-only stamp (00:00) is that
-  date, once that date's settlement time (below) has passed (before it, the day has not settled: not used); otherwise the latest session day whose settlement could be out by then (16:00 ET, or 12:00 ET on an NYSE holiday or
-  early close, when CME halts early), as long as the next session has not opened (its 18:00 ET open; a weekend or a CME
-  holiday in between counts as before it). A value stamped inside a later session (a snapshot stamped when it was read,
-  say) could settle any earlier day: it is not used (one Output line says so; `/diag` shows it with `day` null), and with no
-  other dated value the prior is null rather than a wrong one.
+  date, once that date's settlement time (below) has passed (before it, the day has not settled: not used). A timed stamp
+  (0.3.8, Anthony's ruling) belongs to the session whose settlement time it comes after: stamped after a session day's
+  settlement time (16:00 ET, or 12:00 ET on an NYSE holiday or early close, when CME halts early) and before the next
+  session day's settlement time, it is that day's. So 16:15 Monday, 20:43 Monday evening and 10:00 Tuesday are all Monday's;
+  a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session) is Thursday's. This dates the
+  snapshot NinjaTrader gives at subscription, which carries the time it was read (HOME, 2026-10-01: a first start at
+  20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). **Equal to the day before's** (Anthony
+  and the coordinator, 0.3.8): NinjaTrader can still hold the day before's value after the settlement time, so a value
+  equal to the stored value of the day before is never used, whatever its stamp (two equal settlements in a row are
+  rare, and a blank is safer than a wrong change); one Output line says why, and ChartBridge waits for a value that
+  differs. A value that differs is used at once, from the settlement time on. With no value stored for the day before:
+  stamped from the session's close (17:00 ET; 13:00 or 13:15 on a holiday or early close) it is the day's (HOME's
+  first evening); stamped between the settlement time and the close it waits. A value that came before
+  `settlements.txt` was read, with nothing stored to compare yet, is held and judged once it is read. Settlement
+  updates are handled one at a time, in the order NinjaTrader sent them. A day with no Globex session, or a value
+  that cannot be placed, is not used (one Output line says so; `/diag` shows it with `day` null), and with no other dated
+  value the prior is null rather than a wrong one.
 - **Today's settlement after the afternoon close** (in from about 16:15 ET) is kept and shown in `/diag`, but the prior
   stays the day before's until the next session starts at 18:00 ET; then today's becomes the prior and every page gets a
   `settlement` message. ChartBridge checks every second, so the roll reaches pages within a second of 18:00.
@@ -859,7 +901,7 @@ sends each session's 1-minute bars to The Desk (`nt8/ChartBridgeBars.cs`).
   or posted to The Desk: the worker leaves any wait at once, a post in flight is aborted (the message stays
   queued), an answer that comes later is not copied or queued. `Stop()` runs on NinjaTrader's thread, so it waits
   250 ms for the worker at most, as for the gate's worker.
-- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.7","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
+- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.8","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
   "tick":0.25,"session":"2026-09-30","tf":"1m","stamp":"open","bars":[[t,o,h,l,c,v],...],"complete":true}`,
   one per contract per session. Market data and the PC name only.
 - **Queue:** each message is written to `pending_bars.jsonl` (next to `pending_fills.jsonl`, replaced
@@ -1015,9 +1057,12 @@ A market entry is unchanged: ticks from its fill.
 - **At the fill.** Every fill increment's legs go at that increment's fill price minus the stop ticks and plus the
   target ticks (a sell the other way), with the planned ticks as they are when the fill is handled. On a gap or
   slippage the legs are from the actual fill, so the stop is always on the right side of it; the market exit is
-  only for a trade from the last 2 seconds at or through the stop level (see Brackets). After a recompile an
-  increment's fill price can be an estimate (contracts handled with no legs before it have no name to read their
-  prices from); the legs are then placed from it with a `status` `warn` saying so.
+  only for a trade from the last 2 seconds at or through the stop level (see Brackets). After a recompile, contracts
+  handled with no legs before it (no name records their price) make the next increment's price unknown from the
+  names: it is read from NinjaTrader's executions of the entry (`Account.Executions`, the ones whose `Order` is the
+  entry or that carry its `OrderId`). When they cannot give it, NO legs are placed from an estimate: a `status`
+  `error` says "NO STOP: N contract(s) ... filled while ChartBridge was restarting ...; set the stop in NinjaTrader",
+  and the missing-stop alarm watches the position. The stop-already-traded check only ever runs on a real price.
 - **Changing the plan** (`plan`, below) before or between fills: set, change or remove the stop or target distance.
   A distance is a whole number of 1 or more (at most `maxBracketTicks` when `config.txt` sets it); `null` removes it.
   Adding a stop or target to an entry that had none is a new bracket: refused on an order that would reduce the
@@ -1067,7 +1112,9 @@ A market entry is unchanged: ticks from its fill.
   (`plan s<price> t<price>`, its planned prices from its 0.3.7 line in `planned_brackets.txt`, else from its name) is
   converted once, at recovery, to the distances it shows now: stop and target ticks from the entry's current price
   (rounded to the tick; a price on the wrong side of the entry, or none, is no stop or no target). The converted
-  ticks are written as its line, and the pages get a `status` `warn` naming them. From then on it is an ATM entry.
+  ticks are written as its line, and the pages get a `status` `warn` naming them; when its planned stop was on the
+  wrong side (the entry was moved past it), a `status` `error` saying it has NO STOP, and the same error again when
+  it fills, until a `plan` gives it a stop. From then on it is an ATM entry.
   0.3.7 price lines for entries ChartBridge has not seen yet are kept in the file until their entry is converted or
   they are 7 days old.
 

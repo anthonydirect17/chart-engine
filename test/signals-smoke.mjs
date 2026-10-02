@@ -209,7 +209,10 @@ try {
   check(await page.getAttribute('[data-f="sig:abs:VolumeMultiplier"]', 'aria-invalid') === 'true', '11 is outside the file\'s range (1 to 10): marked, not saved');
   await page.fill('[data-f="sig:abs:VolumeMultiplier"]', '1.8');
   await sleep(400);
-  check(await page.evaluate(() => window.liveChart.getSignals().absorption.painted.length) === st.painted.length, 'back to 1.8: the same bars painted again from the replay');
+  await page.waitForFunction(() => !window.liveChart.getSignals().absorption || window.liveChart.getSignals().absorption.s.VolumeMultiplier === 1.8, null, { timeout: 5000 }).catch(() => {});
+  await sleep(600);
+  const again = await page.evaluate(() => window.liveChart.getSignals().absorption.painted.map(p => p.t + '|' + p.dir).join(','));
+  check(again === st.painted.map(p => p.t + '|' + p.dir).join(','), 'back to 1.8: the replay (range bars by the store\'s order) paints exactly the bars live trading painted: ' + again);
   await page.keyboard.press('Escape');
   await page.mouse.dblclick(cb.x + 300, cb.y + 200);      // reset the view
   await sleep(900);

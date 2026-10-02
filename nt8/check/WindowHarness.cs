@@ -308,7 +308,7 @@ public static class WindowHarness
         while (i < json.Length && json[i] == '[')
         {
             int j = json.IndexOf(']', i);
-            o.Add(json.Substring(i + 1, j - i - 1).Split(',').Select(x => double.Parse(x, CultureInfo.InvariantCulture)).ToArray());
+            o.Add(json.Substring(i + 1, j - i - 1).Split(',').Select(x => x == "null" ? double.NaN : double.Parse(x, CultureInfo.InvariantCulture)).ToArray());   // 0.3.8: [t, p, v, null, null, q]
             i = j + 1; if (i < json.Length && json[i] == ',') i++;
         }
         return o;

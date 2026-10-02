@@ -528,7 +528,7 @@ function create(env) {
   /* every other window drops its question too (the workspace passes it on): r, or every instrument for null */
   const flattened = r => { if (typeof env.flattened === 'function') env.flattened(r); };
   function flattenHere(other) {
-    dropNoStop(); flattened(other || root());
+    try { dropNoStop(); flattened(other || root()); } catch (e) { /* never in the way of the flatten */ }
     if (!ready(false)) return;
     const R = other || root();
     if (!sameAction(other ? 'flatten|' + other : 'flatten', now())) return;
@@ -545,7 +545,7 @@ function create(env) {
    */
   let faRun = null;                                                // { account, queue: [root], sent: [root] }
   function flattenAll() {
-    dropNoStop(); flattened(null);
+    try { dropNoStop(); flattened(null); } catch (e) { /* never in the way of the flatten */ }
     if (!ready(false)) return;
     const account = TR.account;
     if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
