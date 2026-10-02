@@ -27,6 +27,7 @@
     "smoke:hotkeys": "node test/hotkeys-smoke.mjs",
     "smoke:workspace": "node test/workspace-smoke.mjs",
     "smoke:plan": "node test/plan-smoke.mjs",
+    "smoke:nostop": "node test/nostop-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",

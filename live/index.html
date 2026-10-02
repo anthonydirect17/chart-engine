@@ -40,6 +40,8 @@
      sent: they stay until dismissed -->
 <div class="ws-alerts" id="wsAlerts">
   <div class="ws-alert" id="wsAlert" role="alert" hidden><b>ChartBridge</b><span id="wsAlertText"></span><button type="button" class="ws-btn" id="wsAlertClose">Dismiss</button></div>
+  <!-- NO STOP (1.13.0; F2 review: in the page's flow, never modal, so Close and Flatten all work while it is open) -->
+  <div class="ws-alert nostop-ask" id="wsNoStop" role="alertdialog" aria-modal="false" aria-labelledby="wsNoStopTitle" aria-describedby="wsNoStopText" hidden><b id="wsNoStopTitle">No stop: send anyway?</b><span id="wsNoStopText"></span><button type="button" class="ws-btn" id="wsNoStopCancel">Cancel</button><button type="button" class="ws-btn nostop-send" id="wsNoStopSend">Send</button></div>
   <div class="ws-alert warn" id="wsUnsent" role="alert" hidden><b>Not sent</b><span id="wsUnsentText"></span><button type="button" class="ws-btn" id="wsUnsentClose">Dismiss</button></div>
 </div>
 

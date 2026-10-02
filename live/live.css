@@ -9,7 +9,7 @@
   --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
   --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
   --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
-  --crimson: #9F1239; --crimson-word: #E0445E;
+  --crimson: #9F1239; --crimson-word: #E0445E; --armed-ring: #7B5CFF;
   --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
   --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8; --delta-sw: #4B9CD3;
   /* The chart's ground and the legend on it follow the Colors panel's Background (1.5.3; set from the engine's
@@ -250,7 +250,8 @@
 .chart-live .oinfo .long, .chart-live .oinfo .profit { color: var(--profit); }
 .chart-live .oinfo .short, .chart-live .oinfo .loss { color: var(--loss); }
 .chart-live .olegs { color: var(--text3); font: 500 11px var(--sans); font-variant-numeric: tabular-nums; }
-.chart-live .olegs.uncovered, .chart-live .olegs.over { color: var(--warn); }   /* a gap ("NO STOP on 1") or more than the position (1.13.0) */
+.chart-live .olegs.uncovered { color: var(--loss); }   /* a gap ("NO STOP on 1"): the loss red of the NO STOP tag (F2 review) */
+.chart-live .olegs.over { color: var(--warn); }        /* more than the position (1.13.0) */
 /* The position (1.13.0, Anthony: a calm block in the house style): a small side tag, the average price, the P&L the most
    prominent value; labels in the sans face, numbers tabular */
 .chart-live .oinfo.pz { display: inline-flex; align-items: baseline; gap: 8px; font: 500 12px var(--mono); color: var(--text2); white-space: nowrap; }
@@ -282,15 +283,16 @@
 @media (prefers-reduced-motion: reduce) { .chart-live .acct-sel.acct-flash { animation: none; } }
 .chart-live .obar.armed { border-color: var(--crimson-word); background: color-mix(in srgb, var(--crimson) 14%, var(--s2)); box-shadow: 0 0 0 1px var(--crimson-word) inset; }
 .chart-live .armed-note { font: 600 11px var(--cond); letter-spacing: .1em; text-transform: uppercase; color: var(--warn); }
-.chart-live.is-armed .stage { border-color: var(--crimson-word); box-shadow: 0 0 0 1px var(--crimson-word); }
+/* the chart while Armed (F2 review, Anthony): purple with the soft static glow, as the workspace's charts (its accent
+   #7B5CFF); only the order bar is deep red */
+.chart-live.is-armed .stage { border-color: var(--armed-ring); box-shadow: 0 0 0 1px var(--armed-ring), 0 0 8px 1px color-mix(in srgb, var(--armed-ring) 45%, transparent); }
 .chart-live .pill.armed { color: #FFE4EA; background: var(--crimson); border-color: var(--crimson-word); }
 /* NO STOP (1.13.0, Anthony): the stop box is 0; and the one question before the first order with no stop */
 .chart-live .nostop { display: inline-flex; align-items: center; font: 700 10px var(--cond); letter-spacing: .1em; color: var(--loss); border: 1px solid var(--loss); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
-.chart-live .nostop-ask { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); }
-.chart-live .nostop-card { display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 32px)); box-sizing: border-box; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--loss); background: var(--panel, #0B1016); color: var(--text); box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
-.chart-live .nostop-card b { color: var(--loss); font-size: 14px; }
-.chart-live .nostop-card span { line-height: 1.45; }
-.chart-live .nostop-btns { display: flex; justify-content: flex-end; gap: 8px; }
+/* the NO STOP question (F2 review): a strip in the page's flow under the order bar, like the ChartBridge alert, never a
+   modal overlay; it covers nothing, so the order bar and the hotkeys stay usable */
+.chart-live .nostop-ask[hidden] { display: none; }
+.chart-live .nostop-btns { display: flex; justify-content: flex-end; gap: 8px; flex: none; }
 .chart-live .nostop-send { color: var(--loss); border-color: var(--loss); font-weight: 600; }
 .chart-live .alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--loss); border-radius: 12px; background: rgba(255, 122, 122, 0.12); color: var(--head); font-weight: 500; }
 .chart-live .alert-title { font: 700 11px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--loss); }

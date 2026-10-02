@@ -41,7 +41,12 @@ async function until(fn, what, ms) {
 const spies = () => {
   window.__sent = []; window.__notes = [];
   const send = WebSocket.prototype.send;
-  WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (['order', 'change', 'cancel', 'flatten', 'plan'].includes(m.type)) window.__sent.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
+  window.__held = []; window.__holdChanges = false;       // F2 review: a change held back, so a moved entry waits for its answer
+  WebSocket.prototype.send = function (d) {
+    try { const m = JSON.parse(d); if (['order', 'change', 'cancel', 'flatten', 'plan'].includes(m.type)) window.__sent.push(m); if (m.type === 'change' && window.__holdChanges) { window.__held.push([this, d]); return; } } catch (e) { /* not JSON */ }
+    return send.call(this, d);
+  };
+  window.__release = () => { window.__holdChanges = false; for (const [s, d] of window.__held.splice(0)) send.call(s, d); };
   const iv = setInterval(() => { const el = document.getElementById('statusMsg') || document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__notes.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
 };
 /* an older ChartBridge: its order messages have no `planned` */
@@ -90,11 +95,12 @@ try {
   const red = await page.evaluate(() => { const a = getComputedStyle(document.getElementById('armBtn')), b = getComputedStyle(document.getElementById('obar')), p = getComputedStyle(document.getElementById('armPill'));
     return { arm: a.backgroundColor, armText: a.color, bar: b.borderTopColor, pill: p.backgroundColor }; });
   check(red.arm === 'rgb(159, 18, 57)' && red.armText === 'rgb(255, 228, 234)' && red.bar === 'rgb(224, 68, 94)' && red.pill === 'rgb(159, 18, 57)', 'Armed in deep red: the switch, the bar outline and the ARMED badge (' + JSON.stringify(red) + ')');
+  const stage = await page.evaluate(() => { const c = getComputedStyle(document.querySelector('.chart-live .stage')); return { border: c.borderTopColor, glow: /8px/.test(c.boxShadow) }; });
+  check(stage.border === 'rgb(123, 92, 255)' && stage.glow, 'the chart outline while Armed: purple with the glow, as the workspace (' + JSON.stringify(stage) + ')');
   await clear(page); await wait(450);
   await page.click('#buyMkt'); await wait(200);
   check(await asked() && /No stop: send anyway\?/.test(await page.textContent('#noStopAsk')) && !(await sent(page)).length, 'the first order with no stop asks "No stop: send anyway?" in the page, nothing sent yet');
   check(await page.evaluate(() => document.activeElement === document.getElementById('noStopCancel')), 'Cancel has the focus (Enter does not send by accident)');
-  await page.keyboard.press('Alt+C');                                              // a key while the question is open: nothing
   await page.click('#noStopCancel'); await wait(200);
   check(!(await asked()) && !(await sent(page)).length, 'Cancel: nothing sent');
   await wait(450); await page.click('#buyMkt'); await wait(200);
@@ -151,6 +157,23 @@ try {
   await until(async () => (await sent(page, ['plan'])).length === 1, 'a plan for the stop');
   check(JSON.stringify(strip(await sent(page, ['plan']))) === JSON.stringify([{ type: 'plan', id, stopTicks: 16 }]), 'the planned stop dragged to 16 ticks: plan stopTicks 16');
   await until(async () => (await state()).orders.find(o => o.id === id).planned.stopTicks === 16, 'ChartBridge keeps 16');
+  // F2 review: a planned line dragged while the entry's move still waits for its answer sends the distance the chart
+  // showed, from the moved entry (L - 6), not from the price ChartBridge last confirmed (L - 7)
+  await clear(page); await wait(450);
+  await page.evaluate(() => { window.__holdChanges = true; });
+  h = await hOf(id);
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + h.box.y + h.box.h / 2); await page.mouse.down();
+  await page.mouse.move(box.x + h.box.x + h.box.w / 2, box.y + await yAt(L - 6), { steps: 6 }); await page.mouse.up(); await wait(300);
+  const pend = await lines();
+  check(pend.find(o => o.id === id + ':sl') && Math.abs((await hOf(id + ':sl')).box.y + (await hOf(id + ':sl')).box.h / 2 - await yAt(L - 6 - 4)) < 4, 'the entry moved and waiting for its answer: its planned stop drawn 16 ticks under the moved entry');
+  await wait(450);
+  await dragLine(id + ':sl', L - 6 - 5);                                           // 20 ticks under the moved entry (16 under the old)
+  await until(async () => (await sent(page, ['plan'])).length === 1, 'a plan while the entry move waits');
+  check(JSON.stringify(strip(await sent(page, ['plan']))) === JSON.stringify([{ type: 'plan', id, stopTicks: 20 }]), 'dragged while the entry move waits: plan stopTicks 20, the distance the chart showed (' + JSON.stringify(strip(await sent(page, ['plan']))) + ')');
+  await page.evaluate(() => window.__release());
+  await until(async () => { const o = (await state()).orders.find(x => x.id === id); return o.price === L - 6 && o.planned.stopTicks === 20; }, 'the entry at L - 6 with its stop 20 ticks under');
+  ls = await until(async () => { const l = await lines(); return l.find(o => o.id === id + ':sl' && o.price === L - 6 - 5) ? l : null; }, 'the planned stop where it was dropped');
+  check(!!ls, 'after the answer the planned stop is where Anthony dropped it (L - 11)');
   await clear(page); await wait(450);
   await dragLine(id + ':sl', L - 7 + 2);                                           // across the entry
   check(!(await sent(page, ['plan'])).length && (await notes(page)).some(t => /a stop goes on the loss side of the entry/.test(t)), 'the stop dragged across the entry: refused on the page, nothing sent');
@@ -247,20 +270,20 @@ try {
   await B.bringToFront(); await B.evaluate(() => { localStorage.setItem('live-hotkeys-v1', JSON.stringify({ buy: 'Alt+B', sell: '', be: '', close: 'Alt+C', flattenAll: '' })); window.dispatchEvent(new StorageEvent('storage', { key: 'live-hotkeys-v1' })); });
   await B.evaluate(() => document.activeElement && document.activeElement.blur());
   await B.keyboard.press('Alt+B'); await wait(300);
-  const bAsk = await B.evaluate(() => { const d = document.getElementById('wsDialog'); return d.open ? d.textContent : ''; });
-  const aAsk = await A.evaluate(() => document.getElementById('wsDialog').open);
+  const bAsk = await B.evaluate(() => { const d = document.getElementById('wsNoStop'); return d.hidden ? '' : d.textContent; });
+  const aAsk = await A.evaluate(() => !document.getElementById('wsNoStop').hidden);
   check(/No stop: send anyway\?/.test(bAsk) && !aAsk && !(await sent(A)).length, 'B\'s Buy key with the ticket\'s stop 0: B asks (the window clicked), A does not, nothing sent yet');
-  await B.click('#wsDialog [data-act="cancel"]'); await wait(300);
+  await B.click('#wsNoStopCancel'); await wait(300);
   check(!(await sent(A)).length, 'Cancel in B: nothing sent');
   await B.keyboard.press('Alt+C'); await wait(300);
-  check((await sent(B, ['flatten'])).length === 1 && !(await B.evaluate(() => document.getElementById('wsDialog').open)), 'Close from B: never asked, sent');
+  check((await sent(B, ['flatten'])).length === 1 && await B.evaluate(() => document.getElementById('wsNoStop').hidden), 'Close from B: never asked, sent');
   await wait(450); await B.keyboard.press('Alt+B'); await wait(300);
-  await B.click('#wsDialog [type="submit"]');
+  await B.click('#wsNoStopSend');
   await until(async () => (await sent(A, ['order'])).length === 1, 'B\'s Buy sent from A after Send');
   await until(async () => (await A.evaluate(() => window.workspace.ticket().holder === null && true)) !== undefined, 'x');
   await A.bringToFront(); await wait(450);
   await A.click(tk('buyMkt')); await wait(300);
-  check(!(await A.evaluate(() => document.getElementById('wsDialog').open)) && (await sent(A, ['order'])).length === 2, 'after Send in B, A does not ask again either (one question per ticket load)');
+  check(await A.evaluate(() => document.getElementById('wsNoStop').hidden) && (await sent(A, ['order'])).length === 2, 'after Send in B, A does not ask again either (one question per ticket load)');
   await A.click(tk('flattenBtn'));
   await until(async () => { const s = await state(); return !s.orders.length && !Object.values(s.positions).some(p => p.qty); }, 'flat (workspace)');
   // a resting limit from A's chart with a bracket: planned lines on both windows' MNQ charts; B's drag goes through A

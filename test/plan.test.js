@@ -148,3 +148,45 @@ test('NO STOP (Anthony): the first order with no stop after a load asks; Send se
   assert.equal(asks.length, 1, 'a stop in the box: no question');
   assert.deepEqual(sent.slice(-2), ['order', 'order+b']);
 });
+
+/* ---------------- the F2 review */
+test('planDrag from the entry price the chart drew (a move of the entry waits for its answer): the distance shown', () => {
+  const b = entry();                                   // ChartBridge last confirmed 25000
+  assert.deepEqual(OT.planDrag(b, 'stop', 24996, 0.25), { ticks: 16 }, 'no `from`: from the confirmed price');
+  assert.deepEqual(OT.planDrag(b, 'stop', 24996, 0.25, 25001), { ticks: 20 }, 'from the moved entry the chart shows');
+  assert.match(OT.planDrag(b, 'stop', 25000.5, 0.25, 25000.25).error, /loss side/, 'across the moved entry: refused');
+  assert.deepEqual(OT.planDrag(b, 'target', 25010, 0.25, 25001.1), { ticks: 36 }, '`from` snapped to the grid');
+  assert.deepEqual(OT.planDrag(b, 'stop', 24996, 0.25, NaN), { ticks: 16 }, 'a bad `from`: the confirmed price');
+  const r = rig();
+  r.core.setArmed(true);
+  r.core.planMove('o5:sl', 24996, 25001);
+  assert.deepEqual(r.strip(), [{ type: 'plan', id: 'o5', stopTicks: 20 }]);
+});
+
+test('opensPosition: flat, adding, or a reversal opens a position; a reduce or a close does not', () => {
+  assert.equal(OT.opensPosition('buy', 0, 1), true);
+  assert.equal(OT.opensPosition('buy', 2, 1), true, 'adding');
+  assert.equal(OT.opensPosition('sell', 1, 1), false, 'closing');
+  assert.equal(OT.opensPosition('sell', 3, 2), false, 'reducing');
+  assert.equal(OT.opensPosition('sell', 1, 3), true, 'long 1, sell 3: opens short 2');
+  assert.equal(OT.opensPosition('buy', -2, 5), true, 'short 2, buy 5: opens long 3');
+  assert.equal(OT.bracketAllowed('sell', 1), false, 'the bracket rule is unchanged: a reversal takes no bracket');
+});
+
+test('NO STOP: a reversal is asked as an entry and goes with no bracket; Close and Flatten all close an open question', () => {
+  const store = new Map(), sent = [], asks = []; let clock = 1000, qty = 3, drops = 0;
+  const prefs = LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) });
+  const core = TC.create({ LP, prefs, fetch: () => new Promise(() => {}), send: m => sent.push(m), open: () => true, sock: () => 1, root: () => 'MNQ', lastPrice: () => 100,
+    qty: () => qty, pickerAccount: () => core.TR.account, wantedAccount: () => 'Sim101', tick: () => 0.25, served: () => true, fmt: p => String(p), flash: () => {},
+    later: () => 0, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {}, batch: () => {}, unsent: () => {}, destroyed: () => false, now: () => (clock += 500),
+    confirmNoStop: (root, go) => { asks.push(go); return true; }, dropNoStop: () => { drops++; } });
+  core.hello({ version: '0.3.8' });
+  core.applyTrading({ enabled: true, accounts: ['Sim101'], maxQty: { MNQ: 5 } }); core.setArmed(true);
+  core.message({ type: 'position', account: 'Sim101', root: 'MNQ', qty: 1, avgPrice: 100 });
+  core.sendOrder('sell', 'market', null);
+  assert.equal(asks.length, 1, 'long 1, sell 3: asked');
+  asks[0]();
+  assert.equal(sent.length, 1); assert.equal(sent[0].qty, 3); assert.equal(sent[0].bracket, undefined, 'the reversal goes with no bracket (1.12.0 rule)');
+  core.flattenHere(); core.flattenAll();
+  assert.equal(drops, 2, 'Close and Flatten all each close an open question first');
+});

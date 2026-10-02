@@ -402,7 +402,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 
 - **Armed** switch. Off after every page load, and it turns itself off when the account or instrument
   changes, the connection drops or ChartBridge turns trading off. While it is on, the switch is deep red and the bar
-  and the chart are outlined in it (1.13.0, Anthony; amber before), the legend shows ARMED with the account and the tab title starts with ARMED and names the
+  is outlined in it, and the chart has a purple outline with a soft glow as in the workspace (1.13.0, Anthony; amber
+  before), the legend shows ARMED with the account and the tab title starts with ARMED and names the
   instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
   is off** (except Flatten, which works with Armed off, 1.11.0), and nothing asks for confirmation while it is on:
   one click sends the order. The one exception (1.13.0, Anthony): the first order with no stop after each page load
@@ -433,10 +434,12 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   fill and travel with it (ChartBridge 0.3.8, see below).
 - **NO STOP** (1.13.0, Anthony): while the stop box is 0 a red NO STOP tag shows beside the bracket boxes. The first
   order with no stop after each page load (Buy MKT, Sell MKT, their hotkeys, a Shift+click or Ctrl+click on the chart)
-  asks "No stop: send anyway?" in the page, with **Send** and **Cancel** (Cancel has the focus, so Enter does not send).
-  Cancel sends nothing; Send sends it, and nothing asks again until the page is loaded again. An order that reduces
-  the position never asks (it takes no bracket), nor do Close, Flatten, Flatten all, B/E or a cancel. In the
-  workspace the question shows in the window you clicked or pressed the key in.
+  asks "No stop: send anyway?" in a strip under the order bar, with **Send** and **Cancel** (Cancel has the focus, so
+  Enter does not send; Escape is Cancel). Cancel sends nothing; Send sends it, and nothing asks again until the page is
+  loaded again. An order that reduces the position never asks, nor do Close, Flatten, Flatten all, B/E or a cancel; a
+  reversal (Sell 3 while long 1) asks, since it opens a position (and, as before, goes with no bracket). The question
+  never blocks anything: Flatten, Close and Flatten all work while it is open and close it, its order not sent. In the
+  workspace the question shows under the top bar of the window you clicked or pressed the key in.
 - **B/E** (1.10.0, next to Flatten, needs Armed): moves the stop of the open position to break-even, the average
   price rounded a tick toward safety (long up, short down). On only with a position on this account and instrument
   and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past
@@ -576,7 +579,7 @@ Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { po
 `on('orderMove', { id, price })` · `on('orderCancel', { id })` · `on('orderPlace', { price })`. The chart only
 asks; the page decides what to send. Order lines are display only until `setOrderEditing(true)`. 1.13.0: an item
 with `plan: { parent, offset, role }` is a planned line drawn `offset` ticks from its parent order (following it while
-the parent is dragged), and `adds: ['stop', 'target']` on an order draws "+SL" / "+TP" cells that fire
+the parent is dragged; its `orderMove` also has `from`, the parent price it was drawn from), and `adds: ['stop', 'target']` on an order draws "+SL" / "+TP" cells that fire
 `on('orderPlanAdd', { id, which })`.
 
 `on('legend')` fires with `{ bar, prev, index, forming, hovering }` whenever the bar under the

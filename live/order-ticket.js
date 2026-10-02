@@ -92,11 +92,14 @@ function plannedLines(o, tick) {
 /**
  * A planned line dragged to `price` (1.13.0): the new distance from the entry's price in whole ticks (at least 1), or
  * the reason it is refused (a stop at or past the entry on the profit side, a target at or past it on the loss side).
+ * `from`: the entry price the chart drew the line from (the F2 review): while a move of the entry waits for its answer
+ * the chart draws the line from the moved price, so the distance sent is the one Anthony saw. Without it, o.price.
  */
-function planDrag(o, which, price, tick) {
+function planDrag(o, which, price, tick, from) {
   if (!o || !(tick > 0) || !isFinite(price) || typeof o.price !== 'number') return { error: 'Not sent: that entry is no longer working.' };
   const dir = o.side === 'sell' ? -1 : 1;
-  const d = Math.round((price - o.price) / tick) * dir;      // ticks toward profit (+) or loss (-) for this entry
+  const base = typeof from === 'number' && isFinite(from) && from > 0 ? Math.round(from / tick) * tick : o.price;
+  const d = Math.round((price - base) / tick) * dir;         // ticks toward profit (+) or loss (-) for this entry
   if (which === 'stop') return d <= -1 ? { ticks: -d } : { error: 'Not sent: a stop goes on the loss side of the entry (' + (dir > 0 ? 'below' : 'above') + ' it). Drag it back past the entry.' };
   return d >= 1 ? { ticks: d } : { error: 'Not sent: a target goes on the profit side of the entry (' + (dir > 0 ? 'above' : 'below') + ' it). Drag it back past the entry.' };
 }
@@ -174,6 +177,15 @@ function orderEvent(o, prev, fmt) {
 
 /** A bracket goes only on an order that opens or adds: never on one against the current position. */
 function bracketAllowed(side, positionQty) { return !positionQty || (positionQty > 0) === (side === 'buy'); }
+/**
+ * Whether an order opens a position (F2 review, for the NO STOP question): flat, adding, or a reversal (a sell of 3
+ * while long 1 opens short 2). A reversal still takes no bracket (bracketAllowed, the 1.12.0 rule), so its opening part
+ * has no stop whatever the bracket says.
+ */
+function opensPosition(side, positionQty, qty) {
+  if (bracketAllowed(side, positionQty)) return true;
+  return (+qty || 0) > Math.abs(+positionQty || 0);
+}
 
 /**
  * How far the working orders protect an open position: a multi-lot entry that fills in pieces gets one stop and
@@ -472,5 +484,5 @@ function hotkeyAction(keys, combo) {
 }
 
 return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
-  MAX_BRACKET_TICKS, NO_CAP, versionOf, versionAtLeast, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
+  MAX_BRACKET_TICKS, NO_CAP, versionOf, versionAtLeast, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

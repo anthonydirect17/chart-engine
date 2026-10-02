@@ -42,7 +42,7 @@ async function until(fn, what, ms) {
   }
 }
 /* 1.13.0: the first order with no stop after each load asks "No stop: send anyway?" (Anthony); this smoke answers Send
-   (test/nostop-smoke.mjs checks the question itself) */
+   (test/plan-smoke.mjs and test/nostop-smoke.mjs check the question itself) */
 const answerNoStop = () => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); };
 async function open(browser, port, width, height) {
   const page = await browser.newPage({ viewport: { width, height: height || 860 }, deviceScaleFactor: 2 });
@@ -284,7 +284,7 @@ try {
   const cls = await page.getAttribute('#oLegs', 'class') || '';
   check(cls.includes('uncovered'), 'stops short: the uncovered class, got "' + cls + '"');
   const col = await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color);
-  check(col === 'rgb(224, 180, 90)', 'stops short: the warning color (1.13.0, Anthony: a gap is in the warning color), got ' + col);
+  check(col === 'rgb(255, 122, 122)', 'stops short: the loss red of the NO STOP tag (F2 review), got ' + col);
   await shot(page, 'orders-1440-legs-short.png');
   await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
   await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');

@@ -2013,7 +2013,13 @@ function create(container, options) {
       const d = od, p = local(e); od = null;
       const inPlot = p.x >= 0 && p.x < plotW && p.y >= 0 && p.y < plotH;
       const shown = d.price >= Math.min(V.lo, V.hi) && d.price <= Math.max(V.lo, V.hi);
-      if (!cancelled && inPlot && shown && d.moved && d.price !== d.price0 && orderEditing) { pendingMoves.set(d.id, d.price); emit('orderMove', { id: d.id, price: d.price }); }
+      if (!cancelled && inPlot && shown && d.moved && d.price !== d.price0 && orderEditing) {
+        // a planned line also says the entry price it was drawn from (a moved entry may still wait for its answer)
+        const ord = orders.find(x => x.id === d.id), par = ord && ord.plan ? orders.find(x => x.id === ord.plan.parent) : null;
+        const ev = { id: d.id, price: d.price };
+        if (par) ev.from = orderPrice(par);
+        pendingMoves.set(d.id, d.price); emit('orderMove', ev);
+      }
       setCursor(zoneOf(p), p); dirty = true; return;
     }
     if (dd) {
@@ -2261,7 +2267,7 @@ function create(container, options) {
      * 1.13.0: `plan: { parent, offset, role, ticks }` marks a planned stop or target of a resting entry (`parent` its id,
      * `offset` signed ticks from the entry's price, `role` 'stop' or 'target'): drawn fainter and finely dashed, labelled
      * "SL plan -12t" / "TP plan +24t", it follows the entry while that is dragged and is dragged and closed like an
-     * order (orderMove, orderCancel with its own id). `adds: ['stop', 'target']` on an entry draws "+SL" / "+TP" cells on
+     * order (orderMove with its own id and `from`, the entry price it was drawn from; orderCancel). `adds: ['stop', 'target']` on an entry draws "+SL" / "+TP" cells on
      * its label while editing; a click on one emits orderPlanAdd { id, which }.
      */
     setOrders(list) {

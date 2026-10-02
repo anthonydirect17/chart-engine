@@ -127,6 +127,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-alert b { color: var(--ws-sell); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; font-size: 11px; }
 .ws-alert span { flex: 1 1 auto; white-space: pre-line; }
 .ws-alert.warn { border-color: var(--ws-warn); background: var(--ws-warn-ground); }
+.ws-alert .nostop-send { color: var(--ws-sell); border-color: var(--ws-sell); font-weight: 600; }   /* the NO STOP question's Send (Cancel has the focus) */
 .ws-alert.warn b { color: var(--ws-warn); }
 
 /* ---------------- the order ticket (1.12.0): the order bar's controls (live.css) in a column; Armed in the Armed color.

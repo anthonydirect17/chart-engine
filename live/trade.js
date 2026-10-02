@@ -36,6 +36,8 @@
  *   confirmNoStop(root, go)  1.13.0: the first order with no stop after a page load asks "No stop: send anyway?" in the
  *                        page; the host shows its dialog and calls go() on Send (then false: nothing is asked again
  *                        this page load). Returns false when it cannot ask here (a click forwarded from another window).
+ *                        The question must not be modal: Close and Flatten all work while it is open.
+ *   dropNoStop()         F2 review: close an open NO STOP question, its order not sent (Close and Flatten all call it)
  *   destroyed()          the host went away
  *   prefs, LP            LivePrefs (the saved bracket, qty and presets) and its module
  *   pin, fetch, framed, framedReason, now
@@ -210,7 +212,8 @@ function create(env) {
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
     const b = OT.cleanBracket(brackets[R], cap()), pos = TR.positions.get(TR.account + '|' + R);
     const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
-    if (!reduces && !(b.stop > 0) && !noStopOk && typeof env.confirmNoStop === 'function') {
+    // a reversal (sell 3 while long 1) opens a position too: asked as an entry (F2 review); it still takes no bracket
+    if (OT.opensPosition(side, pos && pos.qty, qty) && !(b.stop > 0) && !noStopOk && typeof env.confirmNoStop === 'function') {
       const go = again || (() => sendOrder(side, kind, price));
       if (env.confirmNoStop(R, () => { noStopOk = true; go(); }) === false) flash('No stop on ' + R + ': nothing was sent. Set a stop, or send it from the order ticket\'s window to be asked.', 'warn');
       return;
@@ -506,7 +509,11 @@ function create(env) {
   /* The Flatten button, and the Close hotkey (1.11.0): this account and instrument. Works while disarmed (Anthony
      2026-10-01: Flatten is never blocked); every other check of ready() stays. `other`: a Close for another instrument
      than the one shown (the ticket's "Also open" line). */
+  /* An open NO STOP question never holds up Close or Flatten all (F2 review): they act at once and the question goes,
+     its order not sent. */
+  const dropNoStop = () => { if (typeof env.dropNoStop === 'function') env.dropNoStop(); };
   function flattenHere(other) {
+    dropNoStop();
     if (!ready(false)) return;
     const R = other || root();
     if (!sameAction(other ? 'flatten|' + other : 'flatten', now())) return;
@@ -523,6 +530,7 @@ function create(env) {
    */
   let faRun = null;                                                // { account, queue: [root], sent: [root] }
   function flattenAll() {
+    dropNoStop();
     if (!ready(false)) return;
     const account = TR.account;
     if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
@@ -600,10 +608,12 @@ function create(env) {
     send({ type: 'plan', cid: newCid(), id: o.id, [whichKey(which)]: ticks });
     flash(said, '');
   }
-  function planMove(planId, price) {
+  /* `from`: the entry price the chart drew the line from (a move of the entry may still wait for its answer), so the
+     distance sent is the one the chart showed (F2 review) */
+  function planMove(planId, price, from) {
     const p = OT.planIdOf(planId); if (!p) return;
     const o = planTarget(p.entry); if (!o) return;
-    const r = OT.planDrag(o, p.which, price, tickOf(o.root));
+    const r = OT.planDrag(o, p.which, price, tickOf(o.root), from);
     if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
     if (r.ticks > cap()) { env.changed(); flash('Not sent: ' + r.ticks + ' ticks is more than ChartBridge takes (' + cap() + ').', 'warn'); return; }
     sendPlan(o, p.which, r.ticks, 'Planned ' + whichName(p.which) + ' of order ' + o.id + ': ' + r.ticks + ' ticks from the fill.');

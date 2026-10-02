@@ -29,7 +29,7 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Trade exit, live dot | `#F2F6FA` |
 | Working orders (1.3.0) | `#3DDC97` buy, `#FF7A7A` sell (house trade-side colors) |
 | Position line and tag | `#F2F6FA`; open P&L text `#3DDC97` profit, `#FF7A7A` loss |
-| Armed (live page and ticket) | 1.13.0: the house crimson `#9F1239` switch and ARMED pill with the logo's light ink `#FFE4EA` (6.7:1), the outline in the crimson word color `#E0445E` (4.5:1 on the bar); amber `#E0B45A` before |
+| Armed (live page and ticket) | 1.13.0: the house crimson `#9F1239` switch and ARMED pill with the logo's light ink `#FFE4EA` (6.7:1), the order bar or ticket outline in the crimson word color `#E0445E` (4.5:1 on the bar); the chart's outline the workspace accent `#7B5CFF` with a soft glow on both pages; amber `#E0B45A` before |
 | Chart ground | `#080B10` |
 | Regular-hours ground (bars under 1 hour) | `#0B1016` |
 | Grid hairlines | `rgba(42,54,69,0.30)` |
@@ -372,8 +372,13 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Chart panels**: the slim 28 px header, the compact chart. A chart live for orders (the ticket's instrument while
   Armed) has a purple outline on its stage, the workspace accent `#7B5CFF` (Anthony), with a soft static glow (a
   1 px ring and an 8 px shadow at 45%); no new color, no animation. 1.13.0: the Armed switch and the ticket's outline
-  are deep red (the house crimson, Anthony); the chart borders stay purple with the glow. The single chart page's
-  stage outline is the crimson word color while Armed.
+  are deep red (the house crimson, Anthony); the chart borders stay purple with the glow, and the single chart page's
+  chart takes the same purple glow (`--armed-ring`), only its order bar deep red.
+- **The NO STOP question (1.13.0)** is a strip in the page's flow, never a modal overlay: under the order bar on the
+  single chart page (the ChartBridge alert's shape, the loss red border and title), under the top bar in the workspace
+  (the `.ws-alert` shape). Cancel then Send, Send in the loss red; Cancel has the focus. It covers nothing, so the
+  order bar, the ticket and the top bar stay usable while it is open. The protection line's gap ("NO STOP on 1") is
+  the loss red of the NO STOP tag.
 - **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
   instrument and account; Armed (the crimson switch, the ticket outlined in `--crimson-word` while Armed, 1.13.0); Qty with "max N" and the
   bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Close and Cancel all, a

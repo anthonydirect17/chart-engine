@@ -718,9 +718,9 @@ function markup(p, o) {
     </span>
     <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" id="${p}oCancel" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
   </section></div>
-  <div class="nostop-ask" id="${p}noStopAsk" role="alertdialog" aria-modal="true" aria-labelledby="${p}noStopTitle" aria-describedby="${p}noStopText" hidden>
-    <div class="nostop-card"><b id="${p}noStopTitle">No stop: send anyway?</b><span id="${p}noStopText"></span>
-      <span class="nostop-btns"><button type="button" class="btn" id="${p}noStopCancel">Cancel</button><button type="button" class="btn nostop-send" id="${p}noStopSend">Send</button></span></div>
+  <div class="alert nostop-ask" id="${p}noStopAsk" role="alertdialog" aria-modal="false" aria-labelledby="${p}noStopTitle" aria-describedby="${p}noStopText" hidden>
+    <span class="alert-title" id="${p}noStopTitle">No stop: send anyway?</span><span class="alert-text" id="${p}noStopText"></span>
+    <span class="nostop-btns"><button type="button" class="btn" id="${p}noStopCancel">Cancel</button><button type="button" class="btn nostop-send" id="${p}noStopSend">Send</button></span>
   </div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
@@ -1974,6 +1974,7 @@ function start(container, opt, PAGE) {
     syncAccounts: () => syncAccounts(), batch: () => { if (BAR) BAR.renderBatch(); }, unsent: () => { if (BAR) BAR.renderUnsent(); },
     positionChanged: () => applyMarkers(),
     confirmNoStop: (root, go) => askNoStop(root, go),
+    dropNoStop: () => { if (noStopGo || !$('noStopAsk').hidden) closeNoStop(false); },
   });
   const TR = T ? T.TR : { v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false, armed: false, account: '', orders: new Map(), positions: new Map() };
   /* A host's chart (ChartLive.mount's `trade`, the workspace): the host says what to show (its order account's working
@@ -2070,7 +2071,9 @@ function start(container, opt, PAGE) {
   }
 
   /* NO STOP (1.13.0, Anthony): the first order with no stop after the page loads asks here, in the page; Send sends it
-     (and no later one asks), Cancel or Escape sends nothing. */
+     (and no later one asks), Cancel or Escape sends nothing. A strip under the order bar, never modal (F2 review): the
+     Flatten button, Close and Flatten all work while it is open and close it (dropNoStop), its order not sent. Cancel
+     has the focus, so Enter never sends an order with no stop. */
   let noStopGo = null;
   function askNoStop(root, go) {
     noStopGo = go;
@@ -2892,7 +2895,7 @@ function start(container, opt, PAGE) {
     listen(window, 'storage', e => { if (e.key === PREFIX + HKKEY) { readHotkeys(); renderHotkeys(); } });
     listen(document, 'keydown', hotkeyHandler({
       keys: () => HK, root: rootEl,
-      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin') || !$('noStopAsk').hidden,
+      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
       actions: { buy: () => T.sendOrder('buy', 'market', null), sell: () => T.sendOrder('sell', 'market', null), be: T.breakEven, close: () => T.flattenHere(), flattenAll: T.flattenAll },
       ignored: () => flash(HOTKEY_IN_BOX, 'warn'),
     }));
@@ -2908,7 +2911,7 @@ function start(container, opt, PAGE) {
     setupSellClicks(price => T.sendOrder('sell', OT.placeKind('sell', price, lastPrice()), price));
     /* a planned stop or target line (ids "o5:sl", "o5:tp", 0.3.8): its drag sets the distance, its x removes it, "+SL" /
        "+TP" on the entry adds it */
-    chart.on('orderMove', e => (OT.planIdOf(e.id) ? T.planMove(e.id, e.price) : T.moveOrder(e.id, e.price)));
+    chart.on('orderMove', e => (OT.planIdOf(e.id) ? T.planMove(e.id, e.price, e.from) : T.moveOrder(e.id, e.price)));
     chart.on('orderCancel', e => (OT.planIdOf(e.id) ? T.planRemove(e.id) : T.cancelOrder(e.id)));
     chart.on('orderPlanAdd', e => T.planAdd(e.id, e.which));
   } else if (HOST) {
@@ -2922,7 +2925,7 @@ function start(container, opt, PAGE) {
       if (armedHere()) call(HOST.place, ['buy', e.price, D.root, kindAt('buy', e.price)]);
     });
     setupSellClicks(price => call(HOST.place, ['sell', price, D.root, kindAt('sell', price)]));
-    chart.on('orderMove', e => { if (armedHere()) call(HOST.move, [e.id, e.price, D.root]); else renderHost(); });
+    chart.on('orderMove', e => { if (armedHere()) call(HOST.move, [e.id, e.price, D.root, e.from]); else renderHost(); });
     chart.on('orderCancel', e => { if (armedHere()) call(HOST.cancel, [e.id, D.root]); });
     chart.on('orderPlanAdd', e => { if (armedHere() && typeof HOST.planAdd === 'function') call(HOST.planAdd, [e.id, e.which, D.root]); });
   }

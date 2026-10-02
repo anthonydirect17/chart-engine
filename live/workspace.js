@@ -472,10 +472,11 @@ const core = TC.create({
      asked there before it came (its noStopOk), so here it is only refused */
   confirmNoStop: (root, go) => {
     if (forwarding) return false;
-    confirmBox('No stop: send anyway? The ' + root + ' order has no stop (the bracket stop is 0). Later orders with no stop go without asking until this window is loaded again.', 'Send', go,
+    askNoStop('The ' + root + ' order has no stop (the bracket stop is 0). Later orders with no stop go without asking until this window is loaded again.', go,
       () => tnote('Not sent: no stop. Set the bracket stop, or send again and choose Send.', 'warn'));
     return true;
   },
+  dropNoStop: () => dropNoStop(),
 });
 let forwarding = false;                               // acting on another window's forward (it asked its own questions)
 
@@ -573,9 +574,10 @@ function forward(action) {
   const hd = holder(), side = action.kind === 'place' ? action.side : action.kind === 'buy' || action.kind === 'sell' ? action.kind : '';
   if (side && hd && hd.stop === 0 && !hd.noStopOk && !action.noStopOk) {
     const pos = core.TR.positions.get((hd.account || '') + '|' + (hd.root || ''));
-    if (OT.bracketAllowed(side, pos && pos.qty)) {
-      confirmBox('No stop: send anyway? The ' + hd.root + ' order has no stop (the order ticket\'s bracket stop is 0). Later orders with no stop go without asking.', 'Send',
-        () => forward(Object.assign({}, action, { noStopOk: true })), () => { note('Not sent: no stop.', true); renderCharts(); });
+    if (OT.opensPosition(side, pos && pos.qty, hd.qty)) {
+      // the answer goes with the instrument it was asked about: the ticket's window refuses it for another (F2 review)
+      askNoStop('The ' + hd.root + ' order has no stop (the order ticket\'s bracket stop is 0). Later orders with no stop go without asking.',
+        () => forward(Object.assign({}, action, { noStopOk: true, root: hd.root })), () => { note('Not sent: no stop.', true); renderCharts(); });
       return;
     }
   }
@@ -592,11 +594,13 @@ function actHere(a) {
   const was = capture; capture = notes;
   try {
     const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
-    if (a.noStopOk === true) core.allowNoStop();          // asked in the window it came from, and Anthony said Send
-    if (a.root && a.root !== R && (a.kind === 'place' || a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd')) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
+    const otherRoot = !!a.root && a.root !== R && ['place', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
+    // asked in the window it came from, and Anthony said Send: only for the instrument he was asked about (F2 review)
+    if (a.noStopOk === true && !otherRoot) core.allowNoStop();
+    if (otherRoot) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
-    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price); else core.moveOrder(a.id, +a.price); }
+    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
     else if (a.kind === 'cancel' && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
     else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which);
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
@@ -608,7 +612,7 @@ function actHere(a) {
 }
 const tradeHost = {
   place: (side, price, root, kind) => chartAction({ kind: 'place', side, price, root, orderKind: kind }),
-  move: (id, price, root) => chartAction({ kind: 'move', id, price, root }),
+  move: (id, price, root, from) => chartAction({ kind: 'move', id, price, root, from }),
   cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
   planAdd: (id, which, root) => chartAction({ kind: 'planAdd', id, which, root }),
 };
@@ -836,7 +840,8 @@ setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
 const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
-const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else forward({ kind }); };
+/* a Buy or Sell key forwarded names the instrument this window knows the ticket is on (F2 review) */
+const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   keys: () => HK, root: document.body, busy,
   actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
@@ -1366,6 +1371,27 @@ function askName(title, value, done) {
   });
   const i = $('wsName'); i.focus(); i.select();
 }
+/* The NO STOP question (1.13.0; F2 review): a strip under the top bar in the page's flow, never modal, so the ticket's
+   Close, the top bar's Flatten all and the hotkeys work while it is open (they close it: dropNoStop, its order not
+   sent). Cancel has the focus, so Enter never sends an order with no stop; Escape is Cancel. One question at a time:
+   a newer one replaces it (the older order is not sent). */
+let noStopQ = null;
+function askNoStop(text, onSend, onCancel) {
+  noStopQ = { onSend, onCancel };
+  $('wsNoStopText').textContent = text;
+  $('wsNoStop').hidden = false;
+  $('wsNoStopCancel').focus();
+}
+function closeNoStopQ(how) {
+  const q = noStopQ; noStopQ = null;
+  if (document.activeElement && $('wsNoStop').contains(document.activeElement)) document.activeElement.blur();
+  $('wsNoStop').hidden = true;
+  if (q && how === 'send') q.onSend(); else if (q && how === 'cancel' && q.onCancel) q.onCancel();
+}
+function dropNoStop() { if (noStopQ || !$('wsNoStop').hidden) closeNoStopQ('drop'); }
+$('wsNoStopSend').addEventListener('click', () => closeNoStopQ('send'));
+$('wsNoStopCancel').addEventListener('click', () => closeNoStopQ('cancel'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('wsNoStop').hidden) { e.preventDefault(); closeNoStopQ('cancel'); } });
 function confirmBox(text, label, done, cancel) {
   const d = $('wsDialog');
   d.innerHTML = `<form class="ws-dlg" method="dialog"><p>${esc(text)}</p><div class="ws-dlg-btns"><button type="button" class="ws-btn" data-act="cancel">Cancel</button>` +

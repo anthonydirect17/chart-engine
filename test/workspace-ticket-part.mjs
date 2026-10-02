@@ -37,8 +37,8 @@ export async function run({ browser, check, fail, shot, root, port }) {
       Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
       window.WebSocket = Spy;
       // 1.13.0: the first order with no stop after a load asks "No stop: send anyway?" (Anthony); answered Send here
-      // (test/plan-smoke.mjs checks the question itself)
-      setInterval(() => { const d = document.getElementById('wsDialog'); if (d && d.open && /No stop/.test(d.textContent)) { const b = d.querySelector('[type="submit"]'); if (b) b.click(); } }, 30);
+      // (test/plan-smoke.mjs and test/nostop-smoke.mjs check the question itself)
+      setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30);
       // every note the top bar shows (a later one can replace it before a check reads it)
       window.__notes = [];
       const iv = setInterval(() => { const el = document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__notes.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
