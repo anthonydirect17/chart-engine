@@ -44,6 +44,8 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Value area high/low | `#E0B45A` |
 | Initial Balance high (1.5.3) | `#F7C6EC` bright orchid (Anthony: the high brighter than the low; 1.59:1 from the low) |
 | Initial Balance low (1.5.3) | `#E58BD2` orchid, the base (the one level hue nothing else on the chart uses) |
+| Signals, bullish (G1c) | `--sig-bull` `#38DCE8` a softer cyan; outline `--sig-bull-line` `#9CF1F7` (Anthony's NinjaTrader cyan, toned) |
+| Signals, bearish (G1c) | `--sig-bear` `#F3D84A` a warm yellow; outline `--sig-bear-line` `#FFEC8F` (his NinjaTrader yellow, toned) |
 
 Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the Chart lab v0 look),
 House green / red (`#3DDC97` / `#FF7A7A`). Text drawn in a candle color is lightened until it reads
@@ -235,6 +237,42 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   below), "Bar delta +123" in bar mode, "Delta since 18:37:16.6 +1,234" for a later start ("Delta since 18:37:16.6, missed 32 s +1,234" after a gap), and "· 37 unknown" (the unknown
   side volume of the session, dim) when there is any. On by default on the main pane, without a chip (pin it from the
   menu for one); its own Indicators entry "Cumulative delta" (chip DELTA, letter D) in the Volume group.
+- **Chart signals (G1c; Anthony's rulings 2026-10-01).** Three, from the trades ChartBridge sides (an unknown side is
+  left out), counted from the page's opening only (Anthony uses them strictly live), each in its gear and saved like the
+  other indicator settings. Colors: Anthony's NinjaTrader cyan and yellow toned to the house palette (not `#00FFFF` and
+  `#FFFF00`): `--sig-bull` `#38DCE8` and `--sig-bear` `#F3D84A`, each with a slightly brighter outline shade
+  (`--sig-bull-line` `#9CF1F7`, `--sig-bear-line` `#FFEC8F`). The cyan is 11.8:1 on the ground and clearly apart from the
+  Carolina bull candle (1.8:1 lighter and greener, an RGB distance of 70); the yellow is lemon beside the value-area gold. Set in the
+  Absorption bars gear (an indicator preset keeps them; a preset saved before G1c takes the defaults). On another ground
+  they move as candle bodies (2.5:1) and the outlines as lines (3:1), keeping their hue (Light: bodies `#2AA5AE` and `#AA9734`,
+  outlines `#5E9194` and `#998E56`).
+  - **Absorption bars** (Anthony's AbsorptionTradeCombo, Signals group, no chip and never counted toward the strip): a
+    large trade (a single print, or same side prints at one price within the aggregation window added up, from the
+    large-print floor), a volume spike (the bar's volume at least the multiplier times the average of the lookback bars
+    before it) and a rejection close (close ratio in the top or bottom rejection zone) on one bar, the large trade's side
+    matching (the latest large print in the bar gives the side). Painted at the close only: the whole candle in the signal
+    color with a crisp 1 device pixel inner outline around the body in its brighter shade. While a bar forms with the three
+    holding, a 1 px outline in the outline shade one pixel clear of its body; it goes when they stop holding, and the bar
+    is painted at its close only if they hold then (Anthony; NinjaTrader paints mid-bar and never un-paints). No line, no
+    label. Settings per instrument and chart type (Range 40, 1 minute, ...; the file's defaults for each: LookbackPeriod 20,
+    VolumeMultiplier 1.8, RejectionZone 0.35, AggregationWindowMs 500), inside the file's ranges.
+  - **Large-order bubbles** (Volume group, chip BB / B): same side prints within 100 ms of the first added up, from the
+    floor, a circle centred on the trade price (volume weighted, on the tick) and its bar. The area grows with the square
+    root of the size, so the radius with its fourth root: 6 px at the floor, 12 px at 16 times it, 24 px at most (256
+    times); zoomed in past the default 7 px spacing every radius grows with the square root of the spacing, at most 1.6
+    times. Filled in the side's candle color as it reads on the ground (`upText` buys, `downText` sells) at 32%, a crisp
+    1.25 px ring in the same color at 92% with a 1 px hairline of the ground just outside it, so it stays clear on a candle
+    of its own color. Drawn over the candles but see-through (a range bar's body spans nearly the whole bar, so behind it a
+    bubble would be hidden), the larger first. From four times the floor the size beside it in 10 px mono, as the fill
+    quantities. Floors RTH (09:30 to 16:15 ET) / overnight: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, the same
+    numbers as the workspace's Time and Sales (one key, `live-tape-floors-v1`), editable in the gear and in the
+    workspace's Settings; Auto (per instrument) uses the session's top 1% of group sizes once 200 groups have traded.
+  - **Divergence arrows** (Anthony's DeltaDivergenceSignal v1.0, the delta pane's gear: Show divergences, off by
+    default, with SwingLookback 5, MinBarsBetweenSwings 3, MinDivergencePct 0.10): in the delta pane only, on the pane's
+    own cumulative delta, at bar close. An 11 by 11 px arrow 4 px below a bullish swing's delta candle and above a bearish
+    one: solid in the signal color once the swing is confirmed; hollow (a 1.25 px outline in the outline shade on the
+    ground) from the close of the bar that beats the previous swing with the delta not following, gone if a later bar
+    takes its high (low) first.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session.
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
@@ -315,7 +353,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     Session or RTH, and the Cumulative delta's Show, Cumulative or Bar delta, in the toolbar's segmented style at 11 px), and an x that takes it off the chart. Pins only on
     these rows; group rows have the + and the gear.
   - The groups, folded, one open at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars, Volume
-    profile, Cumulative delta), Trades (Fills); a dashed + adds one. Then "Coming: time and sales".
+    profile, Cumulative delta, Large-order bubbles), Trades (Fills), Signals (Absorption bars, G1c); a dashed + adds one.
+    Then "Coming: time and sales".
   - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything). Fills are included.
   - **The live trade always stays** (Anthony): hiding Fills (switch, chip or Hide all) hides past fills and trade
     marks, never the open trade: its entry fills stay marked, and the position line and label, working orders and

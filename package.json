@@ -26,6 +26,7 @@
     "smoke:presets": "node test/presets-smoke.mjs",
     "smoke:hotkeys": "node test/hotkeys-smoke.mjs",
     "smoke:workspace": "node test/workspace-smoke.mjs",
+    "smoke:signals": "node test/signals-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",

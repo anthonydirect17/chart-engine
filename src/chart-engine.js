@@ -1318,15 +1318,20 @@ function create(container, options) {
   /* The first item of a list sorted by t whose t is at or after t0. */
   const firstAt = (list, t0) => { let lo = 0, hi = list.length; while (lo < hi) { const m = (lo + hi) >> 1; if (list[m].t < t0) lo = m + 1; else hi = m; } return lo; };
   /*
-   * Large-order bubbles: a circle at the trade's price on its bar, its area growing with the square root of the size
-   * (Anthony), so the radius with its fourth root: BUBBLE_R0 at the floor, BUBBLE_RMAX at most (about 260 times the
-   * floor). Filled in the side's candle color as it reads on this ground (bull for buys, bear for sells) at BUBBLE_FILL,
-   * with a crisp ring in the same color at BUBBLE_RING; behind the candles, so the candle it sits on always shows in
-   * full, the larger ones first so a smaller one on top of a larger one still shows. Sizes beside the circle (as the
-   * fill quantities) from BUBBLE_LABEL_R up.
+   * Large-order bubbles: a circle centred on the trade's price and its bar, its area growing with the square root of the
+   * size (Anthony), so the radius with the size's fourth root: BUBBLE_R0 at the floor (a 12 px circle, wider than a
+   * candle body at the default 7 px spacing, so even the smallest reads at a glance), twice that at 16 times the floor,
+   * BUBBLE_RMAX at most (256 times the floor; no print covers a screen of candles). Filled in the side's candle color as
+   * it reads on this ground (bull for buys, bear for sells) at BUBBLE_FILL, with a crisp ring in the same color at
+   * BUBBLE_RING. Drawn over the candles but see-through, so the candle it sits on always shows (a range bar's body spans
+   * nearly the whole bar, so a bubble behind it would be hidden); the larger ones first, so a smaller one on a larger one
+   * shows. The size beside the circle in 10 px mono (as the fill quantities) from four times the floor up. Zoomed in past
+   * the default spacing, every radius grows with the square root of the spacing, at most BUBBLE_ZOOM times, so a bubble
+   * keeps its weight against wider candles.
    */
-  const BUBBLE_R0 = 5, BUBBLE_RMAX = 20, BUBBLE_FILL = 0.3, BUBBLE_RING = 0.9, BUBBLE_LABEL_R = 8.5;
-  const bubbleR = b => clamp(BUBBLE_R0 * Math.pow(Math.max(1, b.v / (b.f > 0 ? b.f : 1)), 0.25), BUBBLE_R0, BUBBLE_RMAX);
+  const BUBBLE_R0 = 6, BUBBLE_RMAX = 24, BUBBLE_FILL = 0.32, BUBBLE_RING = 0.92, BUBBLE_ZOOM = 1.6;
+  const bubbleZoom = () => clamp(Math.sqrt(V.spacing / o.barSpacing), 1, BUBBLE_ZOOM);
+  const bubbleR = b => clamp(BUBBLE_R0 * Math.pow(Math.max(1, b.v / (b.f > 0 ? b.f : 1)), 0.25), BUBBLE_R0, BUBBLE_RMAX) * bubbleZoom();
   let bubbleShown = [];                 // the bubbles of this frame, for their labels after the candles
   function drawBubbles(from, to) {
     bubbleShown = [];
@@ -1340,11 +1345,15 @@ function create(container, options) {
     }
     if (!bubbleShown.length) return;
     bubbleShown.sort((a, b) => b.r - a.r);
-    const lw = Math.max(1, Math.round(dpr * 1.25)) / dpr;
+    // the ring 1.25 px (whole device pixels), with a hairline of the ground just outside it, so a bubble stays crisp on
+    // a candle of its own color as on the bare ground
+    const lw = Math.max(1, Math.round(dpr * 1.25)) / dpr, edge = rgba(T.bg, 0.75);
     for (const s of bubbleShown) {
       const col = s.b.side > 0 ? T.upText : T.downText;
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
       ctx.fillStyle = rgba(col, BUBBLE_FILL); ctx.fill();
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r + 0.5 / dpr, 0, Math.PI * 2);
+      ctx.strokeStyle = edge; ctx.lineWidth = 1 / dpr; ctx.stroke();
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r - lw / 2, 0, Math.PI * 2);
       ctx.strokeStyle = rgba(col, BUBBLE_RING); ctx.lineWidth = lw; ctx.stroke();
     }
@@ -1354,7 +1363,7 @@ function create(container, options) {
     ctx.font = '500 10px ' + T.fontMono; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round'; ctx.setLineDash([]);
     for (const s of bubbleShown) {
-      if (s.r < BUBBLE_LABEL_R) continue;
+      if (s.b.v < 4 * s.b.f) continue;                    // from four times the floor (a radius of 8.5 px or more)
       const col = s.b.side > 0 ? T.upText : T.downText, text = fmtPrice(Math.round(s.b.v), 0), x = s.x + s.r + 3;
       ctx.strokeStyle = rgba(T.bg, 0.85); ctx.lineWidth = 3; ctx.strokeText(text, x, s.y);
       ctx.fillStyle = col; ctx.fillText(text, x, s.y);
@@ -1400,7 +1409,7 @@ function create(container, options) {
    * bar's delta candle for a bullish divergence and above it for a bearish one, at the swing bar; solid once confirmed,
    * hollow (an outline on the ground) while it waits for its confirmation.
    */
-  const ARROW_W = 9, ARROW_HEAD = 5, ARROW_STEM = 4, ARROW_GAP = 4;
+  const ARROW_W = 11, ARROW_HEAD = 6, ARROW_STEM = 5, ARROW_GAP = 4;
   function drawArrows(from, to, top, bottom, yD) {
     const Dv = signals && o.layers.divergence ? signals.divergence : null;
     if (!Dv || !Dv.arrows.length || !delta || to < from) return;
@@ -1663,9 +1672,6 @@ function create(container, options) {
       ctx.stroke(); ctx.globalAlpha = 1;
     }
 
-    // large-order bubbles (G1c): behind the candles, so the candle they sit on always shows
-    drawBubbles(from, to);
-
     // candles
     if (n >= 0) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1683,6 +1689,7 @@ function create(container, options) {
       drawAbsorption(from, to, bodyW, wickW);                       // absorption bars (G1c): painted over their candles
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+    drawBubbles(from, to);                                          // large-order bubbles (G1c): see-through, over the candles
     drawBubbleLabels();
 
     // trades
@@ -2388,6 +2395,8 @@ function create(container, options) {
     orderHandles() { return orderHits.map(h => JSON.parse(JSON.stringify(h))); },
     /** Price to y and back, in CSS px from the top of the chart (as last drawn). */
     priceToY(price) { return yOf(price); },
+    /** The x of bar i's centre, CSS px from the left of the chart (as last drawn; G1c, for tests and hosts). */
+    barToX(i) { return xOf(i); },
     yToPrice(y) { return priceAt(y); },
     goLive() { V.kin = null; V.follow = true; dirty = true; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
