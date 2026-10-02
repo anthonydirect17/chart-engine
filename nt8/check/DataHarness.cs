@@ -173,6 +173,7 @@ public static class DataHarness
     static void SettleEvent(Instrument i, double p, DateTime stamp, bool reset)
     {
         Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = i, MarketDataType = MarketDataType.Settlement, Price = p, Volume = 0, Time = stamp, IsReset = reset });
+        WaitFor(() => ChartBridgeServer.SettlementsIdle);   // 0.3.8: updates are handled on one queue, in order
     }
     static string Hello() { return (string)Priv("HelloJson"); }
     static string HelloOf(string root) { string h = Hello(); int i = h.IndexOf("{\"root\":\"" + root + "\""); return i < 0 ? "" : h.Substring(i, h.IndexOf('}', i) - i + 1); }
@@ -183,11 +184,18 @@ public static class DataHarness
     {
         // which session a value settles, from NinjaTrader's time on it; and which session's settlement is the prior now
         Func<DateTime, string> SD = nt => { DateTime? d = ChartBridgeServer.SettlementDay(nt, Et(2026, 10, 5, 11, 0, 0)); return d.HasValue ? d.Value.ToString("yyyy-MM-dd") : "null"; };
-        Check(SD(Et(2026, 9, 28, 16, 15, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 17, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 10, 0, 0)) == "null" && SD(Et(2026, 9, 28, 18, 30, 0)) == "null"
-              && SD(Et(2026, 9, 28, 15, 0, 0)) == "null",
-            "settlement day: stamped 16:15 or 17:59 ET is that day's; stamped inside a later session (10:00 the next day, 18:30) or before 16:00 is not known (null)");
-        Check(SD(Et(2026, 10, 3, 10, 0, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 17, 59, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 18, 30, 0)) == "null",
-            "settlement day: over a weekend (Saturday, Sunday 17:59) it is Friday's; after Sunday's 18:00 open it is not known");
+        Check(SD(Et(2026, 9, 28, 16, 15, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 17, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 10, 0, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 18, 30, 0)) == "2026-09-28"
+              && SD(Et(2026, 9, 29, 15, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 16, 0, 0)) == "2026-09-29" && SD(Et(2026, 9, 28, 15, 0, 0)) == "2026-09-25",
+            "settlement day (0.3.8, Anthony): stamped after a session's settlement time (16:00 ET) and before the next one's is that session's: 16:15, 17:59, 18:30 and 10:00 the next day are Monday's; from Tuesday 16:00 Tuesday's; Monday 15:00 is Friday's");
+        Check(SD(Et(2026, 10, 3, 10, 0, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 17, 59, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 18, 30, 0)) == "2026-10-02" && SD(Et(2026, 10, 5, 15, 0, 0)) == "2026-10-02",
+            "settlement day (0.3.8): over a weekend (Saturday, Sunday 17:59 and 18:30, Monday 15:00) it is Friday's");
+        Func<DateTime, string> PV = nt => { bool pv; DateTime? d = ChartBridgeServer.SettlementDay(nt, Et(2026, 12, 1, 11, 0, 0), out pv); return (d.HasValue ? d.Value.ToString("yyyy-MM-dd") : "null") + (pv ? " provisional" : ""); };
+        Check(PV(Et(2026, 9, 29, 16, 5, 0)) == "2026-09-29 provisional" && PV(Et(2026, 9, 29, 16, 59, 59)) == "2026-09-29 provisional" && PV(Et(2026, 9, 29, 17, 0, 0)) == "2026-09-29"
+              && PV(Et(2026, 9, 29, 20, 43, 0)) == "2026-09-29" && PV(Et(2026, 9, 30, 10, 0, 0)) == "2026-09-29" && PV(Et(2026, 10, 3, 12, 0, 0)) == "2026-10-02"
+              && PV(Et(2026, 11, 27, 12, 30, 0)) == "2026-11-27 provisional" && PV(Et(2026, 11, 27, 13, 15, 0)) == "2026-11-27" && PV(new DateTime(2026, 9, 29)) == "2026-09-29",
+            "settlement day (0.3.8 buffer, Anthony): 16:00 to 17:00 ET is provisional (used only when it differs from the day before's); from the 17:00 close it is the day's; an early close (11-27, 12:00 to 13:15) the same; a date-only stamp is never provisional");
+        Check(ChartBridgeServer.SettlementDay(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0)).HasValue && ChartBridgeServer.SettlementDay(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0)).Value == new DateTime(2026, 10, 1),
+            "settlement day (0.3.8, HOME 2026-10-01): stamped 20:43 ET that evening is 10-01's");
         Check(SD(Et(2026, 4, 3, 12, 0, 0)) == "2026-04-02" && SD(Et(2026, 1, 19, 13, 30, 0)) == "2026-01-19" && SD(new DateTime(2026, 9, 28)) == "2026-09-28" && SD(new DateTime(2026, 10, 3)) == "null",
             "settlement day: Good Friday 2026 (no session) is Thursday's; MLK Day's halt settles at noon; a date-only stamp is its date (a Saturday is none)");
         DateTime? early = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 10, 0, 0)), late = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 16, 30, 0));
@@ -201,31 +209,43 @@ public static class DataHarness
         Check(PR(2026, 4, 3, 12, 0) == "2026-04-01" && PR(2026, 4, 5, 18, 0) == "2026-04-02" && PR(2026, 4, 6, 11, 0) == "2026-04-02",
             "prior: Good Friday 2026 (no session): Thursday's settlement is the prior from Sunday 18:00 through Monday");
 
+        // a first start at different times (each resets the books and settlements.txt)
+        StartChecks();
         // through the server: the snapshot at subscription, a value stamped inside a later session
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
         ResetSettlements(true);
         simNow = Et(2026, 9, 29, 11, 0, 0);
-        MarketData.SettlementFor = i => i == mnq ? new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = 21456.25, Time = Et(2026, 9, 28, 16, 15, 0) }
-            : i == nq ? new MarketDataEventArgs { Instrument = nq, MarketDataType = MarketDataType.Settlement, Price = 25010, Time = Et(2026, 9, 29, 10, 59, 0) } : null;
+        MarketData.SettlementFor = i => i == mnq ? new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = 21456.25, Time = Et(2026, 9, 28, 17, 15, 0) }
+            : i == nq ? new MarketDataEventArgs { Instrument = nq, MarketDataType = MarketDataType.Settlement, Price = 25010, Time = new DateTime(2026, 9, 26) } : null;
         List<MarketData> feeds = (List<MarketData>)Field("Feeds");
         int feedsBefore = feeds.Count;
         try { Priv("SubscribeMarketData"); }
         finally { MarketData.SettlementFor = null; feeds.RemoveRange(feedsBefore, feeds.Count - feedsBefore); }
         Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21456.25", "2026-09-28")) && HelloOf("NQ").EndsWith(SetOf("NQ", "null", "2026-09-28")) && HelloOf("ES").EndsWith(SetOf("ES", "null", "2026-09-28")),
-            "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is stamped inside Tuesday's session (no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
+            "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is dated a Saturday (no session: no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
         Check(Hello().Contains("\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\"]"), "hello: features list settlement, htf and weekProfile");
-        Check(Logged("NQ settlement 25010 (NinjaTrader's, snapshot) is stamped 2026-09-29 10:59:00.000 ET, inside a later session"), "settlement: the undated one is said in the Output window");
+        Check(Logged("NQ settlement 25010 (NinjaTrader's, snapshot) is dated 2026-09-26, a day with no Globex session"), "settlement: the undated one is said in the Output window");
         List<string> a = new List<string>(), b = new List<string>();
         ChartBridgeClient pa = Page(5101, a), pb = Page(5102, b);
         try
         {
-            // 16:15 to 18:00: today's settlement arrives; yesterday's stays the prior
+            // 0.3.8 buffer (Anthony): 16:00 to 17:00 ET, NinjaTrader can still hold the day before's value. At 16:05 Monday's
+            // value again is not Tuesday's: not used, said once; a value that differs is the new one: used.
+            simNow = Et(2026, 9, 29, 16, 5, 30);
+            SettleEvent(mnq, 21456.25, Et(2026, 9, 29, 16, 5, 0), false);
+            Thread.Sleep(100);
+            string dg0 = (string)Priv("DiagJson");
+            Check(!dg0.Contains("\"2026-09-29\":") && dg0.Contains("\"day\":null") && Logged("MNQ settlement 21456.25 (NinjaTrader's, update) is stamped 2026-09-29 16:05:00.000 ET (the 2026-09-29 session's), and equals 2026-09-28's settlement, so it may still be the day before's: not used"),
+                "settlement, 16:05 with the old value (0.3.8 buffer): Monday's value stamped 16:05 Tuesday is not Tuesday's settlement; the Output window says why");
+            // 16:05 to 18:00: today's settlement arrives (it differs); yesterday's stays the prior
+            SettleEvent(mnq, 21470.5, Et(2026, 9, 29, 16, 5, 10), false);
             simNow = Et(2026, 9, 29, 16, 20, 0);
-            SettleEvent(mnq, 21470.5, Et(2026, 9, 29, 16, 15, 0), false);
             Thread.Sleep(200);
+            Check(((string)Priv("DiagJson")).Contains("\"2026-09-29\":21470.5") && Logged("MNQ settlement 21470.5 for the session of 2026-09-29 (NinjaTrader's, update, stamped 2026-09-29 16:05:10.000 ET)"),
+                "settlement, 16:05 with a new value (0.3.8 buffer): it differs from Monday's, so it is Tuesday's settlement");
             simNow = Et(2026, 9, 29, 17, 59, 50); Priv("SettlementTick");
             Check(Of(a, "settlement").Count == 0 && HelloOf("MNQ").EndsWith(SetOf("MNQ", "21456.25", "2026-09-28")),
-                "settlement, 16:15 to 18:00: Tuesday's settlement (in at 16:15) is kept, but Monday's is still the prior; nothing sent");
+                "settlement, 16:05 to 18:00: Tuesday's settlement (in at 16:05) is kept, but Monday's is still the prior; nothing sent");
             Check(((string)Priv("DiagJson")).Contains("\"MNQ\":{\"prior\":{\"date\":\"2026-09-28\",\"p\":21456.25},\"byDate\":{\"2026-09-28\":21456.25,\"2026-09-29\":21470.5}"), "settlement: /diag shows the prior and every dated value");
             // the 18:00 roll
             simNow = Et(2026, 9, 29, 18, 0, 5); Priv("SettlementTick");
@@ -242,7 +262,7 @@ public static class DataHarness
             Check(Of(a, "settlement").Count == 3 && HelloOf("MNQ").EndsWith(SetOf("MNQ", "21470.5", "2026-09-29")), "settlement: a 0, a reset and a LastClose change nothing");
 
             // a weekend: Friday's settlement is the prior from Sunday 18:00 to Monday 17:00
-            simNow = Et(2026, 10, 1, 16, 20, 0); SettleEvent(mnq, 21480, Et(2026, 10, 1, 16, 15, 0), false);
+            simNow = Et(2026, 10, 1, 17, 10, 0); SettleEvent(mnq, 21480, Et(2026, 10, 1, 17, 5, 0), false);   // after the close (Wednesday's is not known)
             simNow = Et(2026, 10, 2, 16, 20, 0); SettleEvent(mnq, 21500, Et(2026, 10, 2, 16, 15, 0), false);
             Thread.Sleep(200);
             simNow = Et(2026, 10, 3, 12, 0, 0); Priv("SettlementTick");
@@ -253,6 +273,12 @@ public static class DataHarness
             Check(sat.EndsWith(SetOf("MNQ", "21480", "2026-10-01")) && sun.EndsWith(SetOf("MNQ", "21500", "2026-10-02")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "21500", "2026-10-02"))
                   && Of(a, "settlement").Contains(Msg("MNQ", "21500", "2026-10-02")),
                 "settlement, weekend: Saturday still Thursday's; from Sunday 18:00 to Monday 17:00 Friday's (" + sat + " | " + sun + ")");
+            // 0.3.8 (coordinator): a value equal to the stored day before's is never used, whatever its stamp: Friday's 21500
+            // again, stamped Monday 17:30 or Tuesday 09:00 (both after Monday's close), is not Monday's
+            SettleEvent(mnq, 21500, Et(2026, 10, 5, 17, 30, 0), false);
+            SettleEvent(mnq, 21500, Et(2026, 10, 6, 9, 0, 0), false);
+            Check(!((string)Priv("DiagJson")).Contains("\"2026-10-05\":") && Logged("MNQ settlement 21500 (NinjaTrader's, update) is stamped 2026-10-05 17:30:00.000 ET (the 2026-10-05 session's), and equals 2026-10-02's settlement"),
+                  "settlement, equal to the stored day before (0.3.8): not used after the close either (17:30, and 09:00 the next morning)");
             string[] file = new string[0];
             WaitFor(() => { try { file = File.Exists(SettleFile()) ? File.ReadAllLines(SettleFile()) : new string[0]; } catch (IOException) { } return file.Length == 2 && file[1].StartsWith("MNQ 2026-10-02"); });
             Check(file.Length == 2 && file[0] == "MNQ 2026-10-01 21480 MNQ 12-26" && file[1] == "MNQ 2026-10-02 21500 MNQ 12-26", "settlement: settlements.txt keeps the last two dated values per root, each with its contract (written off NinjaTrader's thread): " + string.Join(" | ", file));
@@ -276,7 +302,7 @@ public static class DataHarness
                 Check(HelloOf("MNQ").Contains("\"name\":\"MNQ 03-27\"") && HelloOf("MNQ").EndsWith(SetOf("MNQ", "null", "2026-12-09")) && HelloOf("NQ").EndsWith(SetOf("NQ", "25000", "2026-12-09")),
                     "settlement, restart on the roll day (review B2 S1): MNQ 12-26's values in settlements.txt are not MNQ 03-27's prior (null); NQ, still 12-26, keeps its own; an old line without its contract is ignored: " + HelloOf("MNQ"));
                 Check(Logged("settlements.txt: 3 line(s) not for a contract served now (or unreadable) ignored"), "settlement: the ignored lines are said in the Output window");
-                SettleEvent(mar, 21250.75, Et(2026, 12, 9, 16, 15, 0), false);
+                SettleEvent(mar, 21250.75, Et(2026, 12, 9, 17, 5, 0), false);
                 Thread.Sleep(200);
                 Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21250.75", "2026-12-09")), "settlement: the new contract's own value for the day before is its prior");
             }
@@ -284,7 +310,7 @@ public static class DataHarness
 
             // a holiday: Good Friday 2026 has no session; Thursday's settlement is the prior from Sunday 18:00
             ResetSettlements(true);
-            simNow = Et(2026, 4, 2, 16, 20, 0); SettleEvent(mnq, 20000, Et(2026, 4, 2, 16, 15, 0), false);
+            simNow = Et(2026, 4, 2, 17, 10, 0); SettleEvent(mnq, 20000, Et(2026, 4, 2, 17, 5, 0), false);
             Thread.Sleep(200);
             simNow = Et(2026, 4, 3, 12, 0, 0);
             string fri = HelloOf("MNQ");
@@ -310,7 +336,7 @@ public static class DataHarness
             {
                 Dictionary<string, string> seen = new Dictionary<string, string>();
                 string hello = (string)Priv("HelloJsonFor", seen);   // built while nothing was known (as before settlements.txt is read)
-                SettleEvent(mnq, 21600, Et(2026, 10, 5, 16, 15, 0), false);   // then the value comes (the read, or an update)
+                SettleEvent(mnq, 21600, Et(2026, 10, 5, 17, 5, 0), false);   // then the value comes (the read, or an update)
                 Thread.Sleep(200);
                 hc.Clear();
                 Priv("SettlementAfterHello", ph, seen);
@@ -318,6 +344,36 @@ public static class DataHarness
                       "settlement: after a hello that said null, the page gets the value as it is now (and nothing for roots that did not change): " + string.Join(" ", hc));
             }
             finally { Drop(ph); }
+            // 0.3.8 buffer: 16:05 with no day before's value known: not used (nothing to compare); but a value that came
+            // before settlements.txt was read is judged once it is read, against the day before's value from the file
+            ResetSettlements(true);
+            simNow = Et(2026, 10, 6, 16, 6, 0);
+            SettleEvent(mnq, 21650, Et(2026, 10, 6, 16, 5, 0), false);
+            Thread.Sleep(100);
+            Check(!((string)Priv("DiagJson")).Contains("\"2026-10-06\":") && Logged("with no settlement for 2026-10-05 known to compare it with: not used"),
+                  "settlement, 16:05 with no day before's value known (0.3.8 buffer): not used, and said");
+            ResetSettlements(true);
+            File.WriteAllLines(SettleFile(), new[] { "MNQ 2026-10-05 21600 MNQ 12-26" });
+            SetField("settleLoaded", false);
+            SettleEvent(mnq, 21650, Et(2026, 10, 6, 16, 5, 0), false);   // the snapshot at a 16:06 start, before the file is read
+            bool before = ((string)Priv("DiagJson")).Contains("\"2026-10-06\":");
+            Priv("LoadSettlements");
+            Thread.Sleep(100);
+            Check(!before && ((string)Priv("DiagJson")).Contains("\"2026-10-06\":21650") && (bool)Field("settleLoaded"),
+                  "settlement, 16:05 before settlements.txt is read (a start at 16:06): held, then judged against the file's 2026-10-05 value (it differs: used)");
+            // 0.3.8: updates are handled one at a time in the order they came (one task each took them out of order: the
+            // weekend case flaked). 300 updates for one day, sent as fast as they come: the last one sent is the one kept.
+            ResetSettlements(true);
+            simNow = Et(2026, 10, 7, 19, 0, 0);
+            for (int k = 0; k < 300; k++)
+                Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = 30000 + k * 0.25, Volume = 0, Time = Et(2026, 10, 7, 17, 5, 0).AddMilliseconds(k) });
+            WaitFor(() => ChartBridgeServer.SettlementsIdle);
+            // their saves (off the thread, one at a time) finish before the file cases below rewrite settlements.txt
+            WaitFor(() => { try { return (int)Field("settleSaveQueued") == 0 && File.Exists(SettleFile()) && File.ReadAllText(SettleFile()).Contains("30074.75"); } catch (IOException) { return false; } });
+            Thread.Sleep(300);
+            string dq = (string)Priv("DiagJson");
+            Check(dq.Contains("\"2026-10-07\":30074.75") && dq.Contains("\"p\":30074.75,\"ntTime\":\"2026-10-07 17:05:00.299\""),
+                  "settlement updates one at a time, in order (0.3.8): of 300 sent as fast as they come, the last one is kept");
             // settlements.txt: lines for roots not configured now are kept; a file that cannot be read is not rewritten
             ResetSettlements(true);
             File.WriteAllLines(SettleFile(), new[] { "ZZQ 2026-10-01 100.5 ZZQ 12-26", "MNQ 2026-10-05 21600 MNQ 12-26" });
@@ -331,7 +387,7 @@ public static class DataHarness
             try
             {
                 Priv("LoadSettlements");
-                SettleEvent(mnq, 21700, Et(2026, 10, 6, 16, 15, 0), false);
+                SettleEvent(mnq, 21700, Et(2026, 10, 6, 17, 5, 0), false);
                 Thread.Sleep(200);
                 Priv("SaveSettlements");
                 bool failed = (bool)Field("settleReadFailed");
@@ -345,6 +401,39 @@ public static class DataHarness
     }
 
     // ------------------------------------------------------------ higher-timeframe bars: the pure rules
+    // 0.3.8 (Anthony, 2026-10-01): a first start in the evening, in the morning and on a weekend, with NinjaTrader's settlement
+    // snapshot stamped when it was read (as on HOME: 10-01's came stamped 20:43 ET): it is used as the prior.
+    static void StartWith(DateTime nowEt, DateTime stampEt, double p)
+    {
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        ResetSettlements(true);
+        simNow = nowEt;
+        MarketData.SettlementFor = i => i == mnq ? new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = p, Time = stampEt } : null;
+        List<MarketData> feeds = (List<MarketData>)Field("Feeds");
+        int before = feeds.Count;
+        try { Priv("SubscribeMarketData"); }
+        finally { MarketData.SettlementFor = null; feeds.RemoveRange(before, feeds.Count - before); }
+        Thread.Sleep(100);
+    }
+    static void StartChecks()
+    {
+        try
+        {
+            StartWith(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0), 30760.5);
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "30760.5", "2026-10-01")), "settlement, a first start in the evening (HOME 10-01): the snapshot stamped 20:43 ET is 10-01's, the prior of the session running: " + HelloOf("MNQ"));
+            StartWith(Et(2026, 10, 2, 9, 30, 0), Et(2026, 10, 2, 9, 30, 0), 30760.5);
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "30760.5", "2026-10-01")), "settlement, a first start in the morning: the snapshot stamped 09:30 ET is the day before's, the prior: " + HelloOf("MNQ"));
+            StartWith(Et(2026, 10, 3, 12, 0, 0), Et(2026, 10, 3, 12, 0, 0), 30800);
+            string sat = HelloOf("MNQ");
+            simNow = Et(2026, 10, 4, 19, 0, 0);
+            Check(sat.EndsWith(SetOf("MNQ", "null", "2026-10-01")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "30800", "2026-10-02")),
+                  "settlement, a first start on a Saturday: the snapshot is Friday's; Saturday's prior is still Thursday's (none known: null), and from Sunday 18:00 Friday's: " + sat + " | " + HelloOf("MNQ"));
+            StartWith(Et(2026, 10, 4, 19, 30, 0), Et(2026, 10, 4, 19, 30, 0), 30800);
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "30800", "2026-10-02")), "settlement, a first start on Sunday evening: the snapshot stamped 19:30 is Friday's, the prior: " + HelloOf("MNQ"));
+        }
+        finally { ResetSettlements(true); }
+    }
+
     static void HtfPure()
     {
         Func<string, double, string> S = (tf, et) => new DateTime(1970, 1, 1).AddSeconds(ChartBridgeServer.HtfStart(tf, et)).ToString("yyyy-MM-dd HH:mm");

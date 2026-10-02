@@ -2,7 +2,7 @@
 // The fake bridge (test/fake-bridge.mjs) runs this, the tests check it, and the C# side should match it.
 // Everything here is simulated: prices are sample data, not market data, and nothing reaches a broker.
 //
-// Reading order: the safety gates (checkAction, check_order, checkPrice, planProblem, check_plan), then the matching
+// Reading order: the safety gates (checkAction, check_order, checkPrice, check_plan), then the matching
 // engine (tick, fill), then brackets (bracketsAfterFill, legFilled, flatLegs).
 
 // ChartBridge 0.3.7 (Anthony, 2026-10-01): no distance limits unless config.txt sets them (config.maxTicksAway: a limit
@@ -21,14 +21,13 @@ export const TOUCH_FILL = 1;
 const WORKING = new Set(['working', 'partFilled']);
 const isWorking = o => WORKING.has(o.state);
 const isLeg = o => o.role === 'stop' || o.role === 'target';
-const isPrice = v => typeof v === 'number' && isFinite(v);
 
 // Gate 8, as ChartBridge 0.3 checks it: only the protocol's keys (a misspelt "bracket" is refused, never
 // ignored), and a bracket must be an object with exactly stop and target.
 export const KEYS = {
-  order: ['type', 'cid', 'account', 'root', 'side', 'kind', 'qty', 'price', 'bracket', 'stopPrice', 'targetPrice'],
+  order: ['type', 'cid', 'account', 'root', 'side', 'kind', 'qty', 'price', 'bracket'],
   change: ['type', 'cid', 'id', 'price'],
-  plan: ['type', 'cid', 'id', 'stopPrice', 'targetPrice'],   // 0.3.7: a resting entry's planned stop and target
+  plan: ['type', 'cid', 'id', 'stopTicks', 'targetTicks'],   // 0.3.8: a resting entry's planned stop and target distances
   cancel: ['type', 'cid', 'id'],
   flatten: ['type', 'cid', 'account', 'root'],
 };
@@ -113,7 +112,7 @@ export class OrderDesk {
     for (const [k, p] of this.positions) if (p.qty && this.accounts.includes(k.split('|')[0])) { const [account, root] = k.split('|'); this.send(conn, { type: 'position', account, root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null }); }
   }
 
-  /* ---------------- page to server: order, change, plan (0.3.7), cancel, flatten */
+  /* ---------------- page to server: order, change, plan (0.3.8), cancel, flatten */
   handle(conn, m) {
     const ref = {};
     if (typeof m.cid === 'string') ref.cid = m.cid;
@@ -176,41 +175,10 @@ export class OrderDesk {
         if (maxB > 0 && v > maxB) return 'Bracket ' + k + ' must be from 0 to ' + maxB + ' ticks (maxBracketTicks in config.txt).';
       }
     }
-    const hasSp = m.stopPrice !== undefined, hasTp = m.targetPrice !== undefined;
-    if (hasSp || hasTp) {
-      if (m.kind === 'market') return 'A market entry\'s stop and target are ticks from the fill: use bracket, not stopPrice or targetPrice.';
-      if (m.bracket !== undefined) return 'Use bracket (ticks) or stopPrice and targetPrice (prices), not both.';
-      if (hasSp && !(isPrice(m.stopPrice) && m.stopPrice > 0)) return 'stopPrice must be a plain price above 0 (leave it out for no stop).';
-      if (hasTp && !(isPrice(m.targetPrice) && m.targetPrice > 0)) return 'targetPrice must be a plain price above 0 (leave it out for no target).';
-    }
-    const plan = this.planOf(m);
-    if (m.kind !== 'market') { const p = this.planProblem(m.root, m.side, m.price, plan.stop, plan.target); if (p) return p; }
     const b = m.bracket || {};
-    const wants = b.stop > 0 || b.target > 0 || plan.stop > 0 || plan.target > 0;
+    const wants = b.stop > 0 || b.target > 0;
     const pos = this.pos(m.account, m.root).qty;
     if (wants && pos !== 0 && (pos > 0) !== (m.side === 'buy')) return 'A bracket can only go on an order that opens or adds to a position.';
-    return null;
-  }
-  /** 0.3.7: a limit or stop entry's planned stop and target prices (0 = none): given as prices, or bracket ticks from its price. */
-  planOf(m) {
-    if (m.kind === 'market') return { stop: 0, target: 0 };
-    if (m.stopPrice !== undefined || m.targetPrice !== undefined) return { stop: m.stopPrice || 0, target: m.targetPrice || 0 };
-    const b = m.bracket || {}, tick = this.instruments[m.root].tick, dir = m.side === 'buy' ? 1 : -1;
-    const at = signedTicks => { const p = +(m.price + dir * signedTicks * tick).toFixed(10); return p > 0 ? p : -1; };   // -1: at or below zero, refused
-    return { stop: b.stop > 0 ? at(-b.stop) : 0, target: b.target > 0 ? at(b.target) : 0 };
-  }
-  /** 0.3.7: planned prices against the entry's price: on the grid, the stop on the losing side, the target on the winning side. */
-  planProblem(root, side, entry, stop, target) {
-    const tick = this.instruments[root].tick, buy = side === 'buy', maxB = this.config.maxBracketTicks;
-    for (const [k, v] of [['stop', stop], ['target', target]]) {
-      if (v === 0) continue;
-      if (!(v > 0)) return 'The bracket would put the ' + k + ' at or below zero from the entry price ' + fmt(entry) + '.';
-      if (!onTickGrid(v, tick)) return 'The ' + k + ' price ' + fmt(v) + ' is not on the ' + root + ' tick grid (' + tick + ').';
-      const losing = k === 'stop';
-      if (losing ? (buy ? !(v < entry) : !(v > entry)) : (buy ? !(v > entry) : !(v < entry)))
-        return 'A ' + side + ' entry\'s ' + k + ' must be ' + ((losing === buy) ? 'below' : 'above') + ' its price ' + fmt(entry) + '.';
-      if (maxB > 0 && Math.round(Math.abs(v - entry) / tick) > maxB) return 'The ' + k + ' is more than ' + maxB + ' ticks from the entry price (maxBracketTicks in config.txt).';
-    }
     return null;
   }
   check_change(m) {
@@ -218,37 +186,34 @@ export class OrderDesk {
     if (!o || !isWorking(o) || !this.accounts.includes(o.account)) return 'No working order ' + m.id + '.';
     if (o.kind === 'market') return 'A market order has no price to move.';
     if (o.kind !== 'limit' && o.kind !== 'stop') return 'Only limit and stop market orders can be moved (this one is ' + o.kind + ').';
-    const p = this.checkPrice(o.root, o.side, o.kind, m.price); if (p) return p;
-    if (o.planned) {                     // 0.3.7: the planned prices stay; a move to or past them is refused
-      const buy = o.side === 'buy', sp = o.planned.stop || 0, tp = o.planned.target || 0;
-      if (sp > 0 && (buy ? m.price <= sp : m.price >= sp)) return 'The entry cannot move to or past its own planned stop ' + fmt(sp) + '; move or remove the stop first.';
-      if (tp > 0 && (buy ? m.price >= tp : m.price <= tp)) return 'The entry cannot move to or past its own planned target ' + fmt(tp) + '; move or remove the target first.';
-      return this.planProblem(o.root, o.side, m.price, sp, tp);
-    }
-    return null;
+    return this.checkPrice(o.root, o.side, o.kind, m.price);   // 0.3.8: the planned distances travel with the entry, never a reason to refuse
   }
-  /** 0.3.7: set (a price), keep (absent) or remove (null) a resting entry's planned stop and target. */
+  /** 0.3.8 (Anthony's ATM rule): set (a whole number of ticks, 1 or more), keep (absent) or remove (null) a resting entry's
+   *  planned stop and target distances, for the fill increments still to come. */
   check_plan(m) {
     const o = this.orders.get(m.id);
     if (!o || !isWorking(o) || !this.accounts.includes(o.account)) return 'No working order ' + m.id + '.';
     if (o.role !== 'entry') return 'Only a ChartBridge entry has a planned stop and target; a working leg moves with change.';
     if (!o.planned) return 'Only a resting limit or stop entry has a planned stop and target.';
-    if (m.stopPrice === undefined && m.targetPrice === undefined) return 'plan needs stopPrice or targetPrice (a price to set or move it, null to remove it).';
-    for (const k of ['stopPrice', 'targetPrice'])
-      if (m[k] !== undefined && m[k] !== null && !(isPrice(m[k]) && m[k] > 0)) return k + ' must be a plain price above 0, or null to remove it.';
-    const next = this.nextPlan(o, m);
-    const p = this.planProblem(o.root, o.side, o.price, next.stop, next.target); if (p) return p;
-    const was = o.planned, pos = this.pos(o.account, o.root).qty;
-    if (!was.stop && !was.target && (next.stop || next.target) && pos !== 0 && (pos > 0) !== (o.side === 'buy')) return 'A bracket can only go on an order that opens or adds to a position.';
+    if (m.stopTicks === undefined && m.targetTicks === undefined) return 'plan needs stopTicks or targetTicks (a whole number of ticks to set it, null to remove it).';
+    const maxB = this.config.maxBracketTicks;
+    for (const k of ['stopTicks', 'targetTicks']) {
+      const v = m[k];
+      if (v === undefined || v === null) continue;
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) return k + ' must be a whole number of 1 or more, or null to remove it.';
+      if (maxB > 0 && v > maxB) return k + ' must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
+    }
+    const next = this.nextPlan(o, m), was = o.planned, pos = this.pos(o.account, o.root).qty;
+    if (!was.stopTicks && !was.targetTicks && (next.stopTicks || next.targetTicks) && pos !== 0 && (pos > 0) !== (o.side === 'buy')) return 'A bracket can only go on an order that opens or adds to a position.';
     return null;
   }
   nextPlan(o, m) {
     const pick = (v, had) => v === undefined ? had || 0 : v === null ? 0 : v;
-    return { stop: pick(m.stopPrice, o.planned.stop), target: pick(m.targetPrice, o.planned.target) };
+    return { stopTicks: pick(m.stopTicks, o.planned.stopTicks), targetTicks: pick(m.targetTicks, o.planned.targetTicks) };
   }
   do_plan(m) {
     const o = this.orders.get(m.id), next = this.nextPlan(o, m);
-    o.planned = { stop: next.stop || null, target: next.target || null };   // for the fill increments still to come
+    o.planned = { stopTicks: next.stopTicks || null, targetTicks: next.targetTicks || null };   // for the fill increments still to come
     this.emitOrder(o);
   }
   check_cancel(m) {
@@ -282,7 +247,7 @@ export class OrderDesk {
       price: m.kind === 'market' ? null : m.price, role: 'entry' });
     const b = m.bracket;
     if (m.kind === 'market') o.bracket = b && (b.stop > 0 || b.target > 0) ? { stop: b.stop, target: b.target } : null;   // ticks from the fill
-    else { const pl = this.planOf(m); o.planned = { stop: pl.stop || null, target: pl.target || null }; }                  // 0.3.7: prices
+    else o.planned = { stopTicks: b && b.stop > 0 ? b.stop : null, targetTicks: b && b.target > 0 ? b.target : null };      // 0.3.8: ticks from the fill, changeable by plan
     this.emitOrder(o);
     this.matchOne(o, this.last[o.root], true);
   }
@@ -325,7 +290,7 @@ export class OrderDesk {
     Object.assign(m, { account: o.account, root: o.root, name: o.name, side: o.side, kind: o.kind,
       qty: o.qty, filled: o.filled, price: o.price, avgFill: o.avgFill, state: o.state, role: o.role, oco: o.oco });
     if (o.text) m.text = o.text;
-    if (o.planned) m.planned = { stop: o.planned.stop, target: o.planned.target };   // 0.3.7: a resting entry's planned prices
+    if (o.planned && isWorking(o)) m.planned = { stopTicks: o.planned.stopTicks, targetTicks: o.planned.targetTicks };   // 0.3.8: a working resting entry's planned distances
     return m;
   }
   broadcast(msg) { for (const c of this.conns()) if (c.authed) this.send(c, msg); }
@@ -386,27 +351,24 @@ export class OrderDesk {
   broadcastAll(msg) { for (const c of this.conns()) this.send(c, msg); }   // exec goes to every page (the fills layer)
 
   /* ---------------- brackets: each entry fill gets its own OCO pair (stop and target) for that quantity */
-  /** A market entry's legs go around this fill's price; a resting entry's (0.3.7) at its planned prices, at any fill
-   *  price. Several pairs can exist for one entry. Legs are GTC in ChartBridge. */
+  /** Every entry's legs go around this fill's actual price (0.3.8, the ATM rule): a market entry's bracket ticks, a resting
+   *  entry's planned ticks as they are now. Several pairs can exist for one entry. Legs are GTC in ChartBridge. */
   bracketsAfterFill(entry, qty, price) {
     const tick = this.instruments[entry.root].tick, dir = entry.side === 'buy' ? 1 : -1, exit = entry.side === 'buy' ? 'sell' : 'buy';
     const pl = entry.planned, b = entry.bracket;
-    const stopPx = pl ? pl.stop || 0 : b.stop > 0 ? price - dir * b.stop * tick : 0;
-    const targetPx = pl ? pl.target || 0 : b.target > 0 ? price + dir * b.target * tick : 0;
+    const st = pl ? pl.stopTicks || 0 : b.stop || 0, tt = pl ? pl.targetTicks || 0 : b.target || 0;
+    const stopPx = st > 0 ? +(price - dir * st * tick).toFixed(10) : 0, targetPx = tt > 0 ? +(price + dir * tt * tick).toFixed(10) : 0;
     const where = entry.root + ' ' + entry.account;
     if (entry.afterFlatten) this.broadcast({ type: 'status', level: 'error', text: where + ': an entry filled AFTER Flatten (' + qty + ' contract(s)); a position may be open. It gets its stop and target now; check NinjaTrader' });
     if (!stopPx && !targetPx) return;
     const both = stopPx > 0 && targetPx > 0, oco = both ? 'OCO-' + entry.id + '-' + (++this.ocoSeq) : null;
     const last = this.last[entry.root];
-    const byTick = stopPx > 0 && (dir > 0 ? stopPx >= last : stopPx <= last), byFill = stopPx > 0 && !!pl && (dir > 0 ? stopPx >= price : stopPx <= price);
-    if (byTick || byFill) {   // the stop level has already traded (a trade, or the fill itself): exit now, as the stop would have
+    if (stopPx > 0 && (dir > 0 ? stopPx >= last : stopPx <= last)) {   // the stop level has already traded: exit now, as the stop would have
       const x = this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'market', qty, price: null, role: 'other', parent: entry.id });
-      this.broadcast({ type: 'status', level: 'error', text: where + ': price had already passed the stop level ' + fmt(stopPx) + (byTick ? ' (last ' + fmt(last) + ')' : ' (filled at ' + fmt(price) + ')') + '; exited ' + qty + ' at market' });
+      this.broadcast({ type: 'status', level: 'error', text: where + ': price had already passed the stop level ' + fmt(stopPx) + ' (last ' + fmt(last) + '); exited ' + qty + ' at market' });
       this.emitOrder(x); this.matchOne(x, last, true);
       return;
     }
-    if (pl && targetPx > 0 && (dir > 0 ? targetPx <= Math.max(last, price) : targetPx >= Math.min(last, price)))
-      this.broadcast({ type: 'status', level: 'warn', text: where + ': price had already reached the planned target ' + fmt(targetPx) + ' (filled at ' + fmt(price) + '); the target goes in as a limit that fills at once at the target or better' });
     const made = [];
     if (stopPx > 0) made.push(this.newOrder({ cid: null, account: entry.account, root: entry.root, side: exit, kind: 'stop', qty,
       price: stopPx, role: 'stop', oco, parent: entry.id }));

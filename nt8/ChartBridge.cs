@@ -1,4 +1,4 @@
-// ChartBridge 0.3.7 for NinjaTrader 8
+// ChartBridge 0.3.8 for NinjaTrader 8
 // Streams live market data and your fills from NinjaTrader to the chart-engine live page.
 // Serves the page at http://localhost:8765/ and a WebSocket at ws://localhost:8765/ws (this PC only:
 // every request must come from a loopback address, and a browser WebSocket from an allowed origin).
@@ -474,6 +474,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // session running at New York time et (the last one begun; in a break, a weekend or a holiday, the one before it), and
         // the session day before a given one.
         public static TimeSpan EarliestSettlement(DateTime d) { return NyseHolidays(d.Year).Contains(d.Date) || NyseEarlyCloses(d.Year).Contains(d.Date) ? TimeSpan.FromHours(12) : TimeSpan.FromHours(16); }
+        // 0.3.8: the session's close, New York time of day: 17:00, or the halt on an NYSE holiday (13:00) or early close (13:15).
+        public static TimeSpan SessionClose(DateTime d) { return NyseHolidays(d.Year).Contains(d.Date) ? TimeSpan.FromHours(13) : NyseEarlyCloses(d.Year).Contains(d.Date) ? new TimeSpan(13, 15, 0) : TimeSpan.FromHours(17); }
         public static DateTime NextSessionOpen(DateTime d) { DateTime n = d.Date.AddDays(1); for (int i = 0; i < 30 && !SessionDay(n); i++) n = n.AddDays(1); return n.AddHours(-6); }
         public static DateTime CurrentSession(DateTime et) { DateTime d = TradingDay(et); for (int i = 0; i < 30 && !SessionDay(d); i++) d = d.AddDays(-1); return d; }
         public static DateTime PreviousSession(DateTime d) { DateTime p = d.Date.AddDays(-1); for (int i = 0; i < 30 && !SessionDay(p); i++) p = p.AddDays(-1); return p; }
@@ -579,6 +581,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public DateTime[] Time;
         public double[] Open, High, Low, Close;
         public long[] Volume;
+        public byte[] QCode;   // 0.3.8: served-window trades only: each one's Time and Sales category (0 unknown); null: none known
 
         public static RawBars Copy(Bars bars, bool closeOnly)
         {
@@ -607,6 +610,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             r.Time = new DateTime[n]; Array.Copy(Time, i0, r.Time, 0, n);
             r.Close = new double[n]; Array.Copy(Close, i0, r.Close, 0, n);
             r.Volume = new long[n]; Array.Copy(Volume, i0, r.Volume, 0, n);
+            if (QCode != null) { r.QCode = new byte[n]; Array.Copy(QCode, i0, r.QCode, 0, n); }
             if (Open != null)
             {
                 r.Open = new double[n]; Array.Copy(Open, i0, r.Open, 0, n);
@@ -627,6 +631,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public long Volume;
         public string Json;     // the "tick" message as it goes to the page
         public int Side, Method;   // 0.3.4: its side and method as tagged live (in Json too); not part of the seam's match
+        public byte QCode;         // 0.3.8: its Time and Sales category (ChartBridgeSides.QCode: 0 unknown, the default)
     }
 
     // What one subscribe's seam did, for /diag.
@@ -861,6 +866,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return s;
         }
 
+        // 0.3.8, Time and Sales: where a trade printed against the prevailing quote, as NinjaTrader's Time and Sales colours
+        // it: 2 above the ask, 1 at the ask, 0 between, -1 at the bid, -2 below the bid; NoQ (sent as nothing) without a
+        // usable quote (QuoteUsable: both sides above zero, bid below ask). The quote is the one the side was classified by.
+        public const int NoQ = int.MinValue;
+        public static int Category(double price, double bid, double ask)
+        {
+            if (!QuoteUsable(bid, ask)) return NoQ;
+            long p = PriceKey(price), b = PriceKey(bid), a = PriceKey(ask);
+            return p > a ? 2 : p == a ? 1 : p < b ? -2 : p == b ? -1 : 0;
+        }
+        // Kept in a byte where trades are stored (SeamTick, TradeLog): 0 unknown (the default), else q + 3 (1 to 5).
+        public static byte QCode(int q) { return q == NoQ || q < -2 || q > 2 ? (byte)0 : (byte)(q + 3); }
+        public static int QOf(byte code) { return code >= 1 && code <= 5 ? code - 3 : NoQ; }
+        // The live tick's field, made once: no string is made per trade for it (unknown: no field).
+        private static readonly string[] QFields = { ",\"q\":-2", ",\"q\":-1", ",\"q\":0", ",\"q\":1", ",\"q\":2" };
+        public static string QJson(int q) { return q >= -2 && q <= 2 ? QFields[q + 2] : ""; }
     }
 
     // The trading session (0.3.4, Anthony's ruling 2026-09-30): CME equity index futures reopen at 18:00 New York time
@@ -911,28 +932,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly List<long[]> times = new List<long[]>();
         private readonly List<double[]> prices = new List<double[]>();
         private readonly List<long[]> vols = new List<long[]>();
+        private readonly List<byte[]> cats = new List<byte[]>();   // 0.3.8: each trade's Time and Sales category (QCode; 0 unknown)
         public int Count;
         public int Served;                   // loads that got their window from here (for /diag)
 
-        public void Add(DateTime t, double price, long volume)
+        // A trade from NinjaTrader's tick answer has no quote stored with it: its category is unknown (0), never guessed.
+        public void Add(DateTime t, double price, long volume) { Add(t, price, volume, 0); }
+        public void Add(DateTime t, double price, long volume, byte qCode)
         {
-            if ((Count & Mask) == 0) { times.Add(new long[Size]); prices.Add(new double[Size]); vols.Add(new long[Size]); }
+            if ((Count & Mask) == 0) { times.Add(new long[Size]); prices.Add(new double[Size]); vols.Add(new long[Size]); cats.Add(new byte[Size]); }
             int b = Count >> Shift, i = Count & Mask;
-            times[b][i] = t.Ticks; prices[b][i] = price; vols[b][i] = volume;
+            times[b][i] = t.Ticks; prices[b][i] = price; vols[b][i] = volume; cats[b][i] = qCode;
             Count++;
         }
         public DateTime First { get { return Count > 0 ? new DateTime(times[0][0]) : DateTime.MinValue; } }
 
         // What is logged so far, fixed: the blocks are only ever appended to, so this copies block references, not trades
         // (the lock is held for microseconds); ToBars then copies the trades with no lock held.
-        public View Snapshot() { return new View { T = times.ToArray(), P = prices.ToArray(), V = vols.ToArray(), Count = Count }; }
+        public View Snapshot() { return new View { T = times.ToArray(), P = prices.ToArray(), V = vols.ToArray(), Q = cats.ToArray(), Count = Count }; }
         public class View
         {
-            public long[][] T; public double[][] P; public long[][] V; public int Count;
+            public long[][] T; public double[][] P; public long[][] V; public byte[][] Q; public int Count;
             public RawBars ToBars()
             {
-                RawBars r = new RawBars { Count = Count, Time = new DateTime[Count], Close = new double[Count], Volume = new long[Count] };
-                for (int i = 0; i < Count; i++) { int b = i >> Shift, k = i & Mask; r.Time[i] = new DateTime(T[b][k]); r.Close[i] = P[b][k]; r.Volume[i] = V[b][k]; }
+                RawBars r = new RawBars { Count = Count, Time = new DateTime[Count], Close = new double[Count], Volume = new long[Count], QCode = new byte[Count] };
+                for (int i = 0; i < Count; i++) { int b = i >> Shift, k = i & Mask; r.Time[i] = new DateTime(T[b][k]); r.Close[i] = P[b][k]; r.Volume[i] = V[b][k]; r.QCode[i] = Q[b][k]; }
                 return r;
             }
         }
@@ -1031,11 +1055,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // data starts (a weekend, the 17:00 break), which would open a finished session.
         public void OnTrade(DateTime t, double price, long volume, double et, DateTime listeningSinceUtc, DateTime feedUpSinceUtc, double nowMs, DateTime nowNt, bool backfill)
         {
+            OnTrade(t, price, volume, et, listeningSinceUtc, feedUpSinceUtc, nowMs, nowNt, backfill, 0);
+        }
+        // qCode (0.3.8): the trade's Time and Sales category as tagged live (ChartBridgeSides.QCode), kept in the served window.
+        public void OnTrade(DateTime t, double price, long volume, double et, DateTime listeningSinceUtc, DateTime feedUpSinceUtc, double nowMs, DateTime nowNt, bool backfill, byte qCode)
+        {
             if (Table == null || t >= Table.End || t < Table.Start)
             {
                 DateTime s, e;
                 SessionClock.Bounds(t, out s, out e);
-                if (Table != null && s < Table.Start) { LateTrades++; if (Cache != null) Cache.Add(t, price, volume); AddLive(t, price, volume); return; }
+                if (Table != null && s < Table.Start) { LateTrades++; if (Cache != null) Cache.Add(t, price, volume, qCode); AddLive(t, price, volume, qCode); return; }
                 if (nowNt != DateTime.MinValue && Math.Abs((nowNt - t).TotalSeconds) > StaleTradeSec) { StaleTrades++; return; }
                 if (Table != null) { Last = Table; LastChanged = true; KeepPast(Table); }
                 DateTime sUtc = ChartBridgeTime.ToUtc(s);
@@ -1060,16 +1089,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (BackfillLive.Count < LiveCap) BackfillLive.Add(new SeamTick { Time = t, Price = price, Volume = volume });
                 else { BackfillLive = null; BackfillState = "abandoned: over " + LiveCap + " live trades while it waited"; }   // S1: bounded
             }
-            if (Cache != null) Cache.Add(t, price, volume);
-            AddLive(t, price, volume);
+            if (Cache != null) Cache.Add(t, price, volume, qCode);
+            AddLive(t, price, volume, qCode);
             if (rateStartMs < 0) rateStartMs = nowMs;
             if (nowMs - rateStartMs >= 15 * 60000) { rateLast = rateCur; rateCur = 0; rateStartMs = nowMs; }
             rateCur++;
         }
-        private void AddLive(DateTime t, double price, long volume)
+        private void AddLive(DateTime t, double price, long volume, byte qCode)
         {
             if (WindowLive == null) return;
-            if (WindowLive.Count < LiveCap) WindowLive.Add(new SeamTick { Time = t, Price = price, Volume = volume });
+            if (WindowLive.Count < LiveCap) WindowLive.Add(new SeamTick { Time = t, Price = price, Volume = volume, QCode = qCode });
             else { WindowLive = null; CapGen = WindowGen; }   // abandoned: the loads waiting are answered (no trades) off the lock
         }
         public bool InTable(DateTime t) { return Table != null && t >= Table.Start && t < Table.End; }
@@ -1276,6 +1305,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private readonly SessionClock session = new SessionClock();
         private readonly long[] counts = new long[4];
         private long bidUpdates, askUpdates, eventSame, eventDiffers, eventNone, tieChanged, quoteAfterTrade, staleQuotes, resets;
+        private readonly long[] catCounts = new long[5];   // 0.3.8: trades by Time and Sales category, -2 to 2
+        private long catNone;
 
         public void NoteQuote(bool isBid, double price, DateTime time)
         {
@@ -1295,6 +1326,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // eventBid, eventAsk: the Last update's own Bid and Ask (MarketDataEventArgs), only compared, for /diag.
         public int Tag(double price, DateTime time, double eventBid, double eventAsk, out int method)
         {
+            int cat;
+            return Tag(price, time, eventBid, eventAsk, out method, out cat);
+        }
+
+        // cat (0.3.8, the wire's q): the trade's Time and Sales category (ChartBridgeSides.Category) against the same quote
+        // the side used; ChartBridgeSides.NoQ without one.
+        public int Tag(double price, DateTime time, double eventBid, double eventAsk, out int method, out int cat)
+        {
             lock (sync)
             {
                 if (session.NewSession(time)) { hasLast = false; lastSide = 0; }   // 18:00 ET: the tick rule starts over
@@ -1306,6 +1345,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (bids.AsOf(time, false, out x, out tx) && asks.AsOf(time, false, out y, out ty)) staleQuotes++;
                 }
                 int s = ChartBridgeSides.Classify(price, q ? b : double.NaN, q ? a : double.NaN, hasLast, lastPrice, lastSide, out method);
+                cat = q ? ChartBridgeSides.Category(price, b, a) : ChartBridgeSides.NoQ;
+                if (cat == ChartBridgeSides.NoQ) catNone++; else catCounts[cat + 2]++;
                 bool q2 = Quote(time, true, out b2, out a2);
                 int m2;
                 if (ChartBridgeSides.Classify(price, q2 ? b2 : double.NaN, q2 ? a2 : double.NaN, hasLast, lastPrice, lastSide, out m2) != s) tieChanged++;
@@ -1329,7 +1370,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ",\"liveTieChanged\":" + tieChanged + ",\"quoteAfterTrade\":" + quoteAfterTrade + ",\"staleQuotes\":" + staleQuotes +
                     ",\"bid\":" + CbJson.Num(bids.Latest) + ",\"ask\":" + CbJson.Num(asks.Latest) +
                     ",\"bidUpdates\":" + bidUpdates + ",\"askUpdates\":" + askUpdates + ",\"quoteResets\":" + resets +
-                    ",\"eventQuoteSame\":" + eventSame + ",\"eventQuoteDiffers\":" + eventDiffers + ",\"eventQuoteNone\":" + eventNone + "}";
+                    ",\"eventQuoteSame\":" + eventSame + ",\"eventQuoteDiffers\":" + eventDiffers + ",\"eventQuoteNone\":" + eventNone +
+                    ",\"q\":{\"aboveAsk\":" + catCounts[4] + ",\"atAsk\":" + catCounts[3] + ",\"between\":" + catCounts[2] + ",\"atBid\":" + catCounts[1] + ",\"belowBid\":" + catCounts[0] + ",\"unknown\":" + catNone + "}}";
             }
         }
     }
@@ -1767,7 +1809,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.3.7";
+        public const string Version = "0.3.8";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2259,9 +2301,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (type == MarketDataType.Settlement)
             {
-                // 0.3.7: NinjaTrader's settlement for the contract (a reset is never one: handled above). Rare: off this thread.
-                string sr = RootOf(e.Instrument), sc = e.Instrument != null ? e.Instrument.FullName : null; double sp = e.Price; DateTime stime = e.Time;
-                Task.Run(() => NoteSettlement(sr, sc, sp, stime, "update"));
+                // 0.3.7: NinjaTrader's settlement for the contract (a reset is never one: handled above). Rare: off this thread,
+                // one at a time in the order they came (0.3.8: one queue; a task each could take them out of order).
+                QueueSettlement(RootOf(e.Instrument), e.Instrument != null ? e.Instrument.FullName : null, e.Price, e.Time);
                 return;
             }
             if (type != MarketDataType.Last) return;
@@ -2272,15 +2314,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 DateTime utc = ChartBridgeTime.ToUtc(e.Time);
                 string root = RootOf(e.Instrument);
                 ChartBridgeOrders.NoteLast(root, e.Price);
-                int method;
-                int side = SideTagger(root).Tag(e.Price, e.Time, e.Bid, e.Ask, out method);
+                int method, cat;
+                int side = SideTagger(root).Tag(e.Price, e.Time, e.Bid, e.Ask, out method, out cat);
                 double t = ChartBridgeTime.EtSeconds(utc);
                 string json = "{\"type\":\"tick\",\"root\":" + CbJson.Str(root) +
                     ",\"t\":" + CbJson.Num3(t) +
                     ",\"u\":" + CbJson.Num3(ChartBridgeTime.UtcMs(utc)) +
                     ",\"rx\":" + CbJson.Num3(rx) +
                     ",\"p\":" + CbJson.Num(e.Price) + ",\"v\":" + e.Volume.ToString(CultureInfo.InvariantCulture) +
-                    ",\"s\":" + side.ToString(CultureInfo.InvariantCulture) + ",\"sm\":" + method.ToString(CultureInfo.InvariantCulture) + "}";   // 0.3.4: side and method
+                    ",\"s\":" + side.ToString(CultureInfo.InvariantCulture) + ",\"sm\":" + method.ToString(CultureInfo.InvariantCulture) + ChartBridgeSides.QJson(cat) + "}";   // 0.3.4: side and method; 0.3.8: q
                 // 0.3.5: the instrument's table and served window take the trade, and the pages get it, under the book's lock: a
                 // snapshot taken under it (a load's window and profile) is exact against what the pages get after it.
                 if (Volatile.Read(ref feedDown) != 0 || Interlocked.Read(ref firstTradeUtcTicks) == 0) FeedUp();   // a trade: the feed is up
@@ -2291,7 +2333,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     DateTime nowNt = book.InTable(e.Time) ? DateTime.MinValue : NowNt();   // the clock only when a session may open
                     book.OnTrade(e.Time, e.Price, e.Volume, t, new DateTime(Interlocked.Read(ref listeningSinceUtcTicks), DateTimeKind.Utc),
-                        new DateTime(Interlocked.Read(ref feedUpSinceUtcTicks), DateTimeKind.Utc), rx, nowNt, profileRoot);
+                        new DateTime(Interlocked.Read(ref feedUpSinceUtcTicks), DateTimeKind.Utc), rx, nowNt, profileRoot, ChartBridgeSides.QCode(cat));
                     wantBackfill = book.BackfillState == "wanted";
                     if (wantBackfill) book.BackfillState = "queued";
                     lastChanged = book.LastChanged;
@@ -2303,7 +2345,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         else lock (c.Pending)
                         {
                             if (c.Ready) c.Send(json);
-                            else c.Pending.Add(new SeamTick { Time = e.Time, Price = e.Price, Volume = e.Volume, Json = json, Side = side, Method = method });   // NinjaTrader's time, as the backfill's
+                            else c.Pending.Add(new SeamTick { Time = e.Time, Price = e.Price, Volume = e.Volume, Json = json, Side = side, Method = method, QCode = ChartBridgeSides.QCode(cat) });   // NinjaTrader's time, as the backfill's
                         }
                     }
                 }
@@ -2567,6 +2609,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // One trade as the page reads it: [t, p, v] (the served window carries no side; 0.3.7 removed the by-date load's sided
         // backfill). The same text as 0.3.4 wrote for t, p, v, with no string made per number (0.3.5; the harness compares them).
+        // 0.3.8: a trade ChartBridge saw live with a usable quote is [t, p, v, null, null, q] (q its Time and Sales category;
+        // the side places stay null as in 0.3.7, so a page reading s and sm sees none); one with no stored quote stays [t, p, v].
         public static void AppendTrade(StringBuilder b, RawBars bars, int i, ChartBridgeTime.EtCache et)
         {
             b.Append('[');
@@ -2575,6 +2619,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             CbJson.AppendNum(b, bars.Close[i]);
             b.Append(',');
             CbJson.AppendLong(b, bars.Volume[i]);
+            int q = bars.QCode != null ? ChartBridgeSides.QOf(bars.QCode[i]) : ChartBridgeSides.NoQ;
+            if (q != ChartBridgeSides.NoQ) { b.Append(",null,null,"); CbJson.AppendLong(b, q); }
             b.Append(']');
         }
 
@@ -2762,7 +2808,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else
                     {
                         SeamResult r = ChartBridgeSeam.Dedupe(raw.Time, raw.Close, raw.Volume, raw.Count, book.WindowLive, held);
-                        foreach (SeamTick h in r.Release) cache.Add(h.Time, h.Price, h.Volume);   // the live trades not in the answer
+                        foreach (SeamTick h in r.Release) cache.Add(h.Time, h.Price, h.Volume, h.QCode);   // the live trades not in the answer, with their q
                         book.Cache = cache; book.WindowAsking = false; book.WindowLive = null; book.WindowFailedMs = -1;
                         waiters = new List<object>(book.WindowWaiters); book.WindowWaiters.Clear();
                     }
@@ -3607,6 +3653,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, SettleRoot> Settlements = new Dictionary<string, SettleRoot>();
         private static readonly object SettleFileLock = new object(), SettleTickLock = new object();
         private static volatile bool settleLoaded = true;   // false from Start until settlements.txt is read (nothing is written before)
+        // 0.3.8: values stamped 16:00 to 17:00 ET that came before settlements.txt was read, with no day before's value to
+        // compare yet: judged again once it is read ({root, contract, price, ntTime, from}; Settlements lock).
+        private static readonly List<object[]> SettlePending = new List<object[]>();
         private static volatile bool settleReadFailed;      // the file could not be read: never rewritten from memory this run (it may hold what memory lacks)
         private static readonly List<string> SettleOtherRoots = new List<string>();   // lines for roots not configured now, written back as they were (Settlements lock)
         private static int settleSaveQueued;
@@ -3616,14 +3665,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Day(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
 
         // The trading day a settlement stamped at NinjaTrader time ntTime belongs to, or null when the time cannot say. A
-        // date-only stamp (00:00) is that date. Otherwise: the latest day with a Globex session whose settlement could be out
-        // by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early), and only while the next session
-        // has not opened yet (its 18:00 ET open; a weekend or a CME holiday in between counts as before it). A value stamped
-        // inside a later session (a snapshot stamped when it was read, say) could be any earlier day's: null, not used.
-        public static DateTime? SettlementDay(DateTime ntTime) { return SettlementDay(ntTime, NowNt()); }
+        // date-only stamp (00:00) is that date. Otherwise (0.3.8, Anthony): the latest day with a Globex session
+        // whose settlement could be out by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early),
+        // as long as the next session's settlement time has not come yet: NinjaTrader keeps the last settlement and stamps
+        // it when it is read, so on HOME 10-01's settlement came stamped 20:43 ET that evening (inside the next session),
+        // and it is 10-01's. A value stamped after the next session's settlement time could be either day's: null, not used.
+        // 0.3.8 buffer (Anthony): between the settlement time and the session's close (16:00 to 17:00 ET) NinjaTrader can
+        // still hold the day before's value, so such a stamp is provisional: NoteSettlement uses it only when it differs from
+        // the day before's stored value. From the close (17:00 ET) on it is the day's.
+        public static DateTime? SettlementDay(DateTime ntTime) { bool prov; return SettlementDay(ntTime, NowNt(), out prov); }
+        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt) { bool prov; return SettlementDay(ntTime, nowNt, out prov); }
         // nowNt: a date-only stamp for a day counts only once that day's settlement time has passed (review B2 N1).
-        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt)
+        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt, out bool provisional)
         {
+            provisional = false;
             if (ntTime.TimeOfDay == TimeSpan.Zero)
             {
                 DateTime d0 = ntTime.Date;
@@ -3636,7 +3691,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             for (DateTime d = et.Date; d > et.Date.AddDays(-14); d = d.AddDays(-1))
             {
                 if (!ChartBridgeCme.SessionDay(d) || d.Add(ChartBridgeCme.EarliestSettlement(d)) > et) continue;
-                return et < ChartBridgeCme.NextSessionOpen(d) ? d : (DateTime?)null;
+                for (DateTime n = d.AddDays(1); n < d.AddDays(15); n = n.AddDays(1))
+                    if (ChartBridgeCme.SessionDay(n))
+                    {
+                        if (et >= n.Add(ChartBridgeCme.EarliestSettlement(n))) return null;
+                        provisional = et < d.Add(ChartBridgeCme.SessionClose(d));
+                        return d;
+                    }
+                return null;
             }
             return null;
         }
@@ -3650,7 +3712,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return "is dated " + Day(d0) + ", and that day's settlement is not due before " + d0.Add(ChartBridgeCme.EarliestSettlement(d0)).ToString("HH:mm", CultureInfo.InvariantCulture) +
                        " ET, so it is not used yet (a date-only stamp counts once that time has passed)";
             }
-            return "is stamped " + EtText(ntTime) + " ET, inside a later session: which session it settles is not known, so it is not used";
+            return "is stamped " + EtText(ntTime) + " ET, after the next session's settlement time (or before any): which session it settles is not known, so it is not used";
         }
         // The prior settlement for the session running at NinjaTrader time now: its day, and the value (NaN when none).
         private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p)
@@ -3663,19 +3725,70 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         public static void NoteSettlement(string root, double price, DateTime ntTime, string from) { NoteSettlement(root, null, price, ntTime, from); }
+
+        // 0.3.8: Settlement updates from OnMarketData, handled one at a time in arrival order on a pool thread.
+        private static readonly ConcurrentQueue<object[]> SettleQueue = new ConcurrentQueue<object[]>();
+        private static int settleDraining;
+        private static void QueueSettlement(string root, string contract, double price, DateTime ntTime)
+        {
+            SettleQueue.Enqueue(new object[] { root, contract, price, ntTime });
+            if (Interlocked.CompareExchange(ref settleDraining, 1, 0) == 0) Task.Run(() => DrainSettlements());
+        }
+        private static void DrainSettlements()
+        {
+            for (;;)
+            {
+                object[] x;
+                while (SettleQueue.TryDequeue(out x))
+                {
+                    try { NoteSettlement((string)x[0], (string)x[1], (double)x[2], (DateTime)x[3], "update"); }
+                    catch (Exception ex) { Log("settlement error: " + ex.Message); }
+                }
+                Interlocked.Exchange(ref settleDraining, 0);
+                if (SettleQueue.IsEmpty || Interlocked.CompareExchange(ref settleDraining, 1, 0) != 0) return;   // more came: go on (unless another drain took them)
+            }
+        }
+        // The harness: true once every queued update has been handled.
+        public static bool SettlementsIdle { get { return SettleQueue.IsEmpty && Volatile.Read(ref settleDraining) == 0; } }
         // contract: the instrument the value came with (null: the contract served for root now).
         public static void NoteSettlement(string root, string contract, double price, DateTime ntTime, string from)
         {
             if (root == null || double.IsNaN(price) || double.IsInfinity(price) || !(price > 0)) return;
             if (contract == null) { Instrument inst = InstrumentFor(root); contract = inst != null ? inst.FullName : null; }
-            DateTime? day = SettlementDay(ntTime);
+            bool provisional;
+            DateTime? day = SettlementDay(ntTime, NowNt(), out provisional);
             bool stored = false, undated = false;
+            string waitWhy = null;
             lock (Settlements)
             {
                 SettleRoot s;
                 if (!Settlements.TryGetValue(root, out s)) { s = new SettleRoot(); Settlements[root] = s; }
                 if (s.Contract != contract) { s.Contract = contract; s.ByDate.Clear(); }   // another contract (a roll): its own values only
                 bool again = SameP(s.RawP, price) && s.RawNt == ntTime;
+                if (day.HasValue)
+                {
+                    // 0.3.8 (Anthony and the coordinator): a value equal to the day before's stored one is never used, whatever its
+                    // stamp (NinjaTrader can still hold the day before's value; two equal settlements in a row are rare, and a
+                    // blank is safer than a wrong change). With none stored: from the close on it is the day's (HOME's first
+                    // evening); before the close (16:00 to 17:00) it waits. A value that came before settlements.txt was read,
+                    // with nothing stored yet to compare, is held and judged once it is read.
+                    DateTime before = ChartBridgeCme.PreviousSession(day.Value);
+                    double old;
+                    bool known = s.ByDate.TryGetValue(before, out old);
+                    if (!known && !settleLoaded)
+                    {
+                        SettlePending.Add(new object[] { root, contract, price, ntTime, from });   // judged once settlements.txt is read
+                        return;
+                    }
+                    if (known ? SameP(old, price) : provisional)
+                    {
+                        if (!again) waitWhy = "is stamped " + EtText(ntTime) + " ET (the " + Day(day.Value) + " session's), and " +
+                            (known ? "equals " + Day(before) + "'s settlement, so it may still be the day before's: not used; waiting for a value that differs"
+                                   : "came before that session's close at " + day.Value.Add(ChartBridgeCme.SessionClose(day.Value)).ToString("HH:mm", CultureInfo.InvariantCulture) +
+                                     " ET with no settlement for " + Day(before) + " known to compare it with: not used; waiting for a value that differs, or one stamped after the close");
+                        day = null;
+                    }
+                }
                 s.RawP = price; s.RawNt = ntTime; s.RawFrom = from; s.RawDay = day; s.RawAtUtcMs = ChartBridgeTime.NowUtcMs();
                 if (day.HasValue)
                 {
@@ -3693,7 +3806,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 SaveSettlementsSoon();
                 Log(root + " settlement " + CbJson.Num(price) + " for the session of " + Day(day.Value) + " (NinjaTrader's, " + from + ", stamped " + EtText(ntTime) + " ET)");
             }
-            if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + UndatedWhy(ntTime));
+            if (waitWhy != null) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + waitWhy);
+            else if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + UndatedWhy(ntTime));
             SettlementTick();
         }
         // Pages get the prior when it changes: a new value for its day, or the next session's start (every second, HtfPushMs).
@@ -3783,7 +3897,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // At Start, off NinjaTrader's thread (N3): the values kept before, for the contracts served now only (a line for another
         // contract, the one before a roll, is ignored: S1). Then the pages get the prior if it changed, and the file is written
         // once with whatever came in meanwhile.
-        private static void LoadSettlementsSoon() { settleLoaded = false; settleReadFailed = false; lock (Settlements) SettleOtherRoots.Clear(); Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleReadFailed = true; settleLoaded = true; } }); }
+        private static void LoadSettlementsSoon() { settleLoaded = false; settleReadFailed = false; lock (Settlements) { SettleOtherRoots.Clear(); SettlePending.Clear(); } Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleReadFailed = true; SettleLoadDone(); } }); }
+        // settlements.txt is read (or failed): from now on values are judged at once; the ones held meanwhile are judged now.
+        private static void SettleLoadDone()
+        {
+            List<object[]> held;
+            lock (Settlements) { settleLoaded = true; held = new List<object[]>(SettlePending); SettlePending.Clear(); }
+            foreach (object[] h in held) NoteSettlement((string)h[0], (string)h[1], (double)h[2], (DateTime)h[3], (string)h[4]);
+        }
         private static void LoadSettlements()
         {
             string[] lines = new string[0];
@@ -3809,7 +3930,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (!s.ByDate.ContainsKey(d)) s.ByDate[d] = p;
                 }
             if (ignored > 0) Log("settlements.txt: " + ignored + " line(s) not for a contract served now (or unreadable) ignored");
-            settleLoaded = true;
+            SettleLoadDone();
             SaveSettlements();
             SettlementTick();
         }

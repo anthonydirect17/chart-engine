@@ -140,7 +140,7 @@ test('fake bridge: backfill trades are [t, p, v, s, sm] and live ticks carry s a
   const { ticks, live } = await load([]);
   assert.ok(ticks.length > 100);
   for (const x of ticks) {
-    assert.equal(x.length, 5);
+    assert.ok(x.length === 5 || x.length === 6, 'and since 0.3.8 q in a 6th place when known');
     assert.ok([-1, 0, 1].includes(x[3]) && [0, 2, 3].includes(x[4]), JSON.stringify(x));
     assert.ok((x[3] === 0) === (x[4] === 0), 'side 0 only with method 0: ' + JSON.stringify(x));
   }
@@ -154,4 +154,68 @@ test('fake bridge --no-sides: the 0.3.3 format ([t, p, v], no s or sm)', async (
   const { ticks, live } = await load(['--no-sides']);
   assert.ok(ticks.length > 100 && ticks.every(x => x.length === 3));
   assert.ok(live.every(m => !('s' in m) && !('sm' in m)));
+});
+
+/* ---------------- 0.3.8: the Time and Sales category q (nt8/PROTOCOL.md "Time and Sales category") */
+const Q = NEW.map((x, i) => x[4] === 2 ? (Math.abs(x[1] - OLD[i - 1][1]) >= 0.5 ? 2 : 1) * Math.sign(x[1] - OLD[i - 1][1]) : x[4] === 3 ? 0 : null);
+
+test('q: chart 1.12.0 ignores a 6th element: [t, p, v, s, sm, q] and [t, p, v, null, null, q] store exactly as before', () => {
+  const five = new BB.TickStore(), six = new BB.TickStore(), three = new BB.TickStore(), nulls = new BB.TickStore();
+  five.pushAll(NEW); six.pushAll(NEW.map((x, i) => Q[i] === null ? x : x.concat([Q[i]])));
+  three.pushAll(OLD); nulls.pushAll(OLD.map((x, i) => Q[i] === null ? x : x.concat([null, null, Q[i]])));
+  assert.ok(Q.some(q => q === 2) && Q.some(q => q === -2) && Q[0] === null);
+  for (let i = 0; i < NEW.length; i++) {
+    assert.deepEqual([six.at(i), six.side(i), six.method(i)], [five.at(i), five.side(i), five.method(i)]);
+    assert.deepEqual([nulls.at(i), nulls.side(i), nulls.method(i)], [three.at(i), three.side(i), three.method(i)], 'null side places are no side, as [t, p, v]');
+  }
+  for (const opts of [{ mode: 'time', seconds: 60 }, { mode: 'range', rangeMode: 'traded', rangeTicks: 8, tick: 0.25 }]) {
+    const a = new BB.BarBuilder(opts), b = new BB.BarBuilder(opts);
+    three.feed(a, 0); nulls.feed(b, 0);
+    assert.deepEqual(bars(b), bars(a), JSON.stringify(opts));
+  }
+});
+
+test('q: chart 1.12.0 reads no q: its hub keeps places 1 to 5 of a trade and live fields by name', async () => {
+  const F = require('../live/feed.js');
+  class WS {
+    constructor() { this.sent = []; this.readyState = 0; WS.all.push(this); }
+    send(d) { this.sent.push(JSON.parse(d)); } close() { this.readyState = 3; }
+    open() { this.readyState = 1; if (this.onopen) this.onopen({}); }
+    msg(m) { if (this.onmessage) this.onmessage({ data: JSON.stringify(m) }); }
+  }
+  WS.all = [];
+  const h = F.create({ wsUrl: () => 'ws://x/ws', WebSocket: WS });
+  const got = [];
+  const panelOf = (sub) => { const s = h.open('MNQ'); s.onmessage = ev => { got.push([sub, ev.message]); if (ev.message.type === 'hello') s.send(JSON.stringify({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 2, liveFirst: true, sub })); }; };
+  panelOf(1);
+  await new Promise(r => setTimeout(r, 5));
+  const ws = WS.all[0]; ws.open();
+  ws.msg({ type: 'hello', version: '0.3.8', instruments: [{ root: 'MNQ', tick: 0.25 }], accounts: ['Sim101'], features: ['liveFirst', 'profile'] });
+  await new Promise(r => setTimeout(r, 5));
+  const sub = ws.sent[0].sub;
+  ws.msg({ type: 'history', root: 'MNQ', sub, bars: [], done: true });
+  ws.msg({ type: 'ticks', root: 'MNQ', sub, ticks: [[61, 1.25, 1], [62, 1.5, 2, null, null, 2], [63, 1.25, 1, -1, 2, -1]], done: true });
+  ws.msg({ type: 'ready', root: 'MNQ', sub });
+  ws.msg({ type: 'tick', root: 'MNQ', t: 64, p: 1.5, v: 1, s: 1, sm: 2, q: 1 });
+  panelOf(2);                                                   // a panel that joins later gets the load made again
+  await new Promise(r => setTimeout(r, 30));
+  const late = got.filter(([p]) => p === 2).map(([, m]) => m);
+  const ticks = late.find(m => m.type === 'ticks'), tick = late.find(m => m.type === 'tick');
+  assert.deepEqual(ticks.ticks, [[61, 1.25, 1], [62, 1.5, 2], [63, 1.25, 1, -1, 2]], 'the 6th element is not kept (nor misread as a side)');
+  assert.ok(tick && !('q' in tick) && tick.s === 1, 'a replayed tick carries the fields 1.12.0 knows');
+  const src = ['live.js', 'feed.js', 'bar-builder.js', 'workspace.js', 'trade.js'].map(f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8')).join('\n');
+  assert.ok(!/\bx\[5\]|\bm\.q\b|\bmsg\.q\b/.test(src), 'no page file reads a trade\'s 6th place or a tick\'s q');
+});
+
+test('fake bridge: live ticks carry q (or none when unknown) and backfill trades a 6th place when known; --no-q sends none', async () => {
+  const { ticks, live } = await load([]);
+  const six = ticks.filter(x => x.length === 6);
+  assert.ok(six.length > 50 && six.every(x => [-2, -1, 0, 1, 2].includes(x[5])), 'some backfill trades have their q');
+  assert.ok(ticks.every(x => x.length === 5 || x.length === 6));
+  assert.ok(six.every(x => (x[4] === 3) === (x[5] === 0)), 'between the quote only by the tick rule (the fake\'s rule)');
+  assert.ok(live.length && live.every(m => !('q' in m) || [-2, -1, 0, 1, 2].includes(m.q)), JSON.stringify(live.slice(0, 3)));
+  const s = new BB.TickStore(); s.pushAll(ticks);
+  assert.deepEqual(s.at(5), ticks[5].slice(0, 3));
+  const old = await load(['--no-q']);
+  assert.ok(old.ticks.every(x => x.length === 5) && old.live.every(m => !('q' in m) && 's' in m));
 });

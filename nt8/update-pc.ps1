@@ -14,7 +14,9 @@
     check                 dry run: fetches main and says what `update` would do; changes nothing
     update                the automatic path (the scheduled task runs this): installs the newest commit on main
                           whose CI is green on ubuntu-latest and windows-latest, only when its page works with the
-                          ChartBridge compiled on this PC; stages a new ChartBridge but never installs it
+                          ChartBridge compiled on this PC; stages a new ChartBridge but never installs it. A network
+                          that is not up yet (the run at sign-in) is waited for up to 2 minutes, then the run ends
+                          quietly (offline) until the next one
     -InstallChartBridge   run by Anthony while flat: copies the staged add-on files (and the matching page), then
                           Anthony presses F5 in the NinjaScript Editor while flat
     rollback              puts the previous page files back (and skips that commit until a newer one is on main)
@@ -71,6 +73,14 @@ $script:LogKeep = 3
 $script:AddOnWriteAllowed = $false             # only Invoke-InstallChartBridge sets it, after Anthony confirms
 $script:UpdaterStopped = $false                # the pinned copy failed its own check (Test-PinnedSelf)
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
+# 0.3.8: the run at sign-in can come before the network is up ("Failed to connect to github.com port 443"): `update`
+# tries the fetch again for up to FetchWaitSec, then gives up quietly (outcome offline) until the next run.
+$script:FetchWaitSec = 120
+$script:FetchRetrySec = 10
+# 0.3.8: an antivirus (Norton on HOME) can hold the freshly extracted staged.tmp\files.zip for a moment ("Access to the
+# path is denied"): its delete is tried DeleteTries times, DeleteRetryMs apart (about 5 seconds in all).
+$script:DeleteTries = 10
+$script:DeleteRetryMs = 500
 # A page target: plain names joined by /, no .., no drive, no trailing dot or space (Windows trims those)
 $script:TargetPattern = '^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*(/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)*$'
 
@@ -92,6 +102,7 @@ function Initialize-Paths([string]$Repo, [string]$NtFolder) {
     Log = (Join-Path $dir 'update.log'); Lock = (Join-Path $dir 'updater.lock'); Paused = (Join-Path $dir 'paused')
     Staged = (Join-Path $dir 'staged'); Previous = (Join-Path $dir 'previous'); PrevAddOns = (Join-Path $dir 'previous-addons')
     Journal = (Join-Path $dir 'swap.json'); Bin = (Join-Path $dir 'bin'); PrevNext = (Join-Path $dir 'previous-next')
+    NetWait = (Join-Path $dir 'network-wait')
   }
 }
 
@@ -189,6 +200,22 @@ function Write-JsonAtomic([string]$Path, $Value) {
 
 function Remove-Dir([string]$Path) {
   if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
+}
+
+# Waits, one place (the tests make it instant and count it).
+function Wait-Ms([int]$Ms) { Start-Sleep -Milliseconds $Ms }
+function Remove-FileOnce([string]$Path) { Remove-Item -LiteralPath $Path -Force }
+
+# Deletes a file another program may hold for a moment (an antivirus scanning a file just written): tried again for
+# about five seconds before the error is passed on.
+function Remove-FileRetry([string]$Path) {
+  for ($try = 1; ; $try++) {
+    try { if (Test-Path -LiteralPath $Path) { Remove-FileOnce $Path }; return }
+    catch {
+      if ($try -ge $script:DeleteTries) { throw "could not delete $Path after $try tries over about $([int]($script:DeleteTries * $script:DeleteRetryMs / 1000)) s (another program, an antivirus perhaps, holds it): $($_.Exception.Message)" }
+      Wait-Ms $script:DeleteRetryMs
+    }
+  }
 }
 
 function ConvertTo-VersionOrNull([string]$Text) {
@@ -575,7 +602,7 @@ function Invoke-Stage($Info) {
   $src = Join-Path $tmp 'src'
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $src)
-  Remove-Item -Force $zip
+  Remove-FileRetry $zip
   $targets = @()
   foreach ($w in $www) {
     $from = Get-LocalPath $src ([string](Get-Field $w 'from'))
@@ -970,6 +997,48 @@ function Get-CloneNote {
 
 function New-Result { return @{ outcome = ''; reason = ''; target = $null; ci = $null; stage = $null; compiled = $null; recovered = $null } }
 
+# A git error that says the network is not there (yet), as opposed to a refusal or a broken clone.
+function Test-NetworkDown([string]$Err) {
+  return [bool]($Err -match "(?i)could not resolve host|failed to connect to|couldn't connect to server|connection timed out|timed out after|network is unreachable|no route to host|temporary failure in name resolution|no such host is known|connection (?:refused|reset)|recv failure")
+}
+
+# git fetch of main. With -Wait (the `update` run), a network that is not up yet is waited for: tried again every
+# FetchRetrySec for up to FetchWaitSec. Returns the last git result with waitedSec and offline (still no network).
+function Invoke-Fetch([switch]$Wait) {
+  $start = Get-NowMs
+  for ($try = 1; ; $try++) {
+    $f = Invoke-Git @('fetch', '--quiet', $script:Remote, $script:Branch) 180
+    $waited = [int](((Get-NowMs) - $start) / 1000)
+    $down = ($f.code -ne 0) -and (Test-NetworkDown ([string]$f.err))
+    # at most FetchWaitSec of waits (by count, and by the clock for fetches that themselves take long)
+    if ($f.code -eq 0 -or -not $down -or -not $Wait -or $try * $script:FetchRetrySec -gt $script:FetchWaitSec -or $waited + $script:FetchRetrySec -gt $script:FetchWaitSec) {
+      $f.waitedSec = $waited; $f.offline = $down; $f.tries = $try
+      return $f
+    }
+    if ($try -eq 1) {
+      Write-Host "the network is not up yet ($(Get-LastLine $f.err)); trying the fetch again for up to $($script:FetchWaitSec) s"
+      # a note for a run refused by the lock meanwhile (Get-BusyText): this run is only waiting for the network
+      try { [IO.File]::WriteAllText($script:P.NetWait, [string](Get-NowMs), $script:Utf8) } catch { }
+    }
+    try { Wait-Ms ($script:FetchRetrySec * 1000) } catch { Clear-NetWait; throw }
+  }
+}
+function Clear-NetWait { try { if (Test-Path -LiteralPath $script:P.NetWait) { Remove-Item -LiteralPath $script:P.NetWait -Force } } catch { } }
+
+# What a run refused by the lock says: another run works, or (0.3.8) another run is waiting for the network.
+function Get-BusyText {
+  try {
+    if (Test-Path -LiteralPath $script:P.NetWait) {
+      $since = [long]([IO.File]::ReadAllText($script:P.NetWait).Trim())
+      $age = ((Get-NowMs) - $since) / 1000
+      if ($age -ge 0 -and $age -lt ($script:FetchWaitSec + 240)) {
+        return "another update-pc.ps1 run is waiting for the network (the run at sign-in, up to $($script:FetchWaitSec) s; waiting $([int]$age) s so far); try again in about 2 minutes"
+      }
+    }
+  } catch { }
+  return 'another update-pc.ps1 run is working; try again in a minute'
+}
+
 function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
   $r = New-Result
   $pre = Test-Preflight
@@ -984,7 +1053,12 @@ function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
     $r.outcome = 'paused'; $r.reason = "paused by hand ($($script:P.Paused)); run update-pc.ps1 resume to turn updates back on"; return $r
   }
   $r.compiled = Get-CompiledChartBridge $State
-  $f = Invoke-Git @('fetch', '--quiet', $script:Remote, $script:Branch) 180
+  try { $f = Invoke-Fetch -Wait:(-not $DryRun -and -not $StageOnly) } finally { if (-not $DryRun -and -not $StageOnly) { Clear-NetWait } }
+  if ($f.code -ne 0 -and $f.offline) {
+    # 0.3.8: quietly (not a stop): nothing was changed, and the next run (sign-in or the daily one) tries again
+    $r.outcome = 'offline'; $r.reason = "the network was not up: git fetch could not reach $($script:Remote) ($($f.tries) tries over $($f.waitedSec) s; $(Get-LastLine $f.err)); nothing changed, the next run tries again"
+    return $r
+  }
   if ($f.code -ne 0) { $r.outcome = 'fetch_failed'; $r.reason = "git fetch failed: $(Get-LastLine $f.err)"; return $r }
   $t = Invoke-Git @('rev-parse', "refs/remotes/$($script:Remote)/$($script:Branch)") 30
   if ($t.code -ne 0) { $r.outcome = 'fetch_failed'; $r.reason = "no $($script:Remote)/$($script:Branch)"; return $r }
@@ -1087,7 +1161,7 @@ function Invoke-Update([switch]$DryRun) {
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }      # before anything is written (no NinjaTrader folder: nothing)
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
     if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger) }
@@ -1196,7 +1270,7 @@ function Invoke-Rollback {
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
     try { [void](Resume-Swap $state) } catch { return (Write-Verdict $false $_.Exception.Message) }
@@ -1388,7 +1462,7 @@ function Invoke-InstallChartBridge {
   $pre = Test-Preflight -NoWwwOk
   if ($pre) { return (Write-Verdict $false $pre) }
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     if (-not (Test-Path $script:P.Www)) { New-Item -ItemType Directory -Force -Path $script:P.Www | Out-Null }   # a PC without the page yet
     $state = Read-State
@@ -1503,7 +1577,7 @@ function Invoke-Repair {
   $pre = Test-Preflight -NoWwwOk
   if ($pre) { return (Write-Verdict $false $pre) }
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     if (-not (Test-Path $script:P.Www)) { New-Item -ItemType Directory -Force -Path $script:P.Www | Out-Null }
     $state = Read-State
@@ -1764,7 +1838,7 @@ function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
 # register's first half (any system): pick a checked copy, pin it, remember the daily time. Returns the pinned path.
 function Invoke-PinForTask([string]$At) {
   $lock = Enter-Lock
-  if (-not $lock) { throw 'another update-pc.ps1 run is working; try again in a minute' }
+  if (-not $lock) { throw (Get-BusyText) }
   try {
     $state = Read-State
     $src = Get-PinSource $state
