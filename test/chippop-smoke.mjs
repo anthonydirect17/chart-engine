@@ -34,6 +34,32 @@ async function startBridge() {
     '--version=0.3.8', '--data-037', '--live-rate=40', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => bridge.stdout.once('data', r));
 }
+/* every message the page sends, and every status line it shows (as smoke:hotkeys); Close on Alt+C, Flatten all on Shift+F9 */
+const spies = () => {
+  window.__sent = []; window.__statusSeen = [];
+  const iv = setInterval(() => { const el = document.getElementById('statusMsg') || document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__statusSeen.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (d) { try { window.__sent.push(JSON.parse(d)); } catch (e) { /* not JSON */ } return send.call(this, d); };
+  try { localStorage.setItem('live-hotkeys-v1', JSON.stringify({ buy: '', sell: '', be: '', close: 'Alt+C', flattenAll: 'Shift+F9' })); } catch (e) { /* none */ }
+};
+/* each selector's centre reaches its own element (nothing covers it), and the Close and Flatten all keys act */
+async function reachAndKeys(page, sels, what) {
+  const r = await page.evaluate(sels => sels.map(sel => { const el = document.querySelector(sel); if (!el || !el.getClientRects().length) return sel + ': missing';
+    const b = el.getBoundingClientRect(), hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+    return hit && (hit === el || el.contains(hit)) ? '' : sel + ': covered by ' + (hit ? hit.className || hit.tagName : 'nothing'); }).filter(Boolean), sels);
+  check(r.length === 0, what + ': every order button reachable (' + sels.length + ')' + (r.length ? ': ' + r.join('; ') : ''));
+  await page.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
+  // the orders go out on the pace (1.1 s apart): wait for them rather than a fixed time
+  const waitFor = async fn => { for (let k = 0; k < 40; k++) { if (await page.evaluate(fn)) return true; await new Promise(r => setTimeout(r, 100)); } return false; };
+  await new Promise(r => setTimeout(r, 450));                 // past the order bar's 0.4 s repeat guard
+  await page.keyboard.press('Alt+KeyC');
+  const fl = await waitFor(() => window.__sent.some(m => m.type === 'flatten'));
+  await page.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
+  await page.keyboard.press('Shift+F9');
+  const fa = await waitFor(() => window.__sent.some(m => m.type === 'flatten') || window.__statusSeen.some(t => /Flatten all/.test(t)) || /Flatten all: /.test(document.body.innerText));
+  const why = fl && fa ? '' : ' (close ' + fl + ', flatten all ' + fa + ': ' + JSON.stringify(await page.evaluate(() => window.__statusSeen.slice(-3))) + ')';
+  check(fl && fa, what + ': the Close key sent a flatten and the Flatten all key acted, with it open' + why);
+}
 async function openPage(ctx, url) {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
@@ -60,6 +86,7 @@ try {
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
     const ctx = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
+    await ctx.addInitScript(spies);
 
     /* ================================================================ /single.html */
     console.log(`/single.html ${w}x${h}`);
@@ -73,11 +100,27 @@ try {
     for (const id of ['delta', 'vp', 'bubbles']) { const b = await sp.$(`#indBody [data-act="pin"][data-id="${id}"]`); if (b && (await b.getAttribute('aria-pressed')) === 'false') await b.click(); }
     await sp.keyboard.press('Escape'); await sp.waitForTimeout(300);
     await sp.click('#chart'); await sp.waitForTimeout(200);
+    // review D2: every chip's popover clear of the order bar; Close and Flatten all work while it is open
+    const ORDER = ['#flattenBtn', '#beBtn', '#cancelAllBtn', '#buyMkt', '#sellMkt', '#armBtn'];
+    for (const id of await sp.evaluate(() => [...document.querySelectorAll('#indChips > .ind-chip[data-id]')].map(c => c.dataset.id))) {
+      await sp.click(`#indChips > .ind-chip[data-id="${id}"]`); await sp.waitForTimeout(150);
+      const ps = await popState(sp, 'body');
+      check(ps.open && ps.inside && !ps.scrolls, `${id} popover open, whole on screen`);
+      await reachAndKeys(sp, ORDER, `/single.html ${w}: the ${id} popover`);
+      if (w === 1920 && id === 'levels') await shot(sp, 'chippop-single-levels-1920.png');
+      await sp.keyboard.press('Escape'); await sp.waitForTimeout(100);
+    }
+    // from one of its boxes (a hex box has the focus): Ctrl or Alt combos still act
+    await sp.click('#indChips .ind-chip[data-id="vwap"]'); await sp.focus('body .chip-pop input[data-hk="vwap"]');
+    await reachAndKeys(sp, ORDER, `/single.html ${w}: a box in the VWAP popover has the focus`);
+    await sp.keyboard.press('Escape'); await sp.waitForTimeout(100);
+    if (await sp.evaluate(() => !document.querySelector('body .chip-pop').hidden)) await sp.keyboard.press('Escape');
     // open: the VWAP chip shows VWAP's settings, dropped from the chip; the chart is unchanged
     await sp.click('#indChips .ind-chip[data-id="vwap"]'); await sp.waitForTimeout(200);
     let s = await popState(sp, 'body');
     check(s.open && s.id === 'vwap' && s.on && /VWAP/.test(s.text) && (await sp.evaluate(() => window.liveChart.getLayers().vwap)) === true, 'a chip click opens its settings, the indicator still shown: "' + s.text + '"');
-    check(s.chip && Math.abs(s.y - (s.chip.b + 6)) <= 1 && s.inside && !s.scrolls, 'dropped from the chip, whole on screen, no scrolling: ' + JSON.stringify({ x: Math.round(s.x), y: Math.round(s.y), w: Math.round(s.w), h: Math.round(s.h) }));
+    const obB = await sp.evaluate(() => document.getElementById('obar').getBoundingClientRect().bottom);
+    check(s.chip && s.y >= obB + 5 && s.inside && !s.scrolls, 'dropped under the chip, below the order bar, whole on screen, no scrolling: ' + JSON.stringify({ x: Math.round(s.x), y: Math.round(s.y), w: Math.round(s.w), h: Math.round(s.h) }));
     check(await sp.isVisible('body .chip-pop [data-f="opt:vwap:session:rth"]') && (await sp.$$('body .chip-pop input[data-ck="vwap"]')).length === 1, 'the gear\'s own content: Hours and the line color');
     if (w === 1366) await shot(sp, 'chippop-single-vwap-1366.png');
     // edit: RTH only, applied and saved for this chart
@@ -148,9 +191,15 @@ try {
     check(await wp.textContent('#wsKeys') === 'KEYS ON', 'KEYS ON before');
     await wp.click(`${WS} .ind-chip[data-id="levels"]`); await wp.waitForTimeout(200);
     s = await popState(wp, WS);
-    check(s.open && s.id === 'levels' && s.inside && !s.scrolls && s.chip && Math.abs(s.y - (s.chip.b + 6)) <= 1, 'a panel chip opens its settings under it, whole on screen: ' + JSON.stringify({ x: Math.round(s.x), y: Math.round(s.y), h: Math.round(s.h) }));
+    check(s.open && s.id === 'levels' && s.inside && !s.scrolls && s.chip && s.y >= s.chip.b + 5, 'a panel chip opens its settings under it, whole on screen: ' + JSON.stringify({ x: Math.round(s.x), y: Math.round(s.y), h: Math.round(s.h) }));
     check(await wp.textContent('#wsKeys') === 'KEYS OFF', 'KEYS OFF while it is open');
     if (w === 1366) await shot(wp, 'chippop-ws-levels-1366.png');
+    const TICKET = await wp.evaluate(() => ['#wsFlat'].concat([...document.querySelectorAll('.ws-panel[data-type="ticket"] button')].filter(b => b.getClientRects().length && b.offsetParent).map((b, i) => { b.dataset.reach = 'r' + i; return `[data-reach="r${i}"]`; })));
+    for (const id of await wp.evaluate(sc => [...document.querySelectorAll(sc + ' .ind-chips > .ind-chip[data-id]')].map(c => c.dataset.id), WS)) {
+      if (id !== 'levels') { await wp.keyboard.press('Escape'); await wp.click(`${WS} .ind-chip[data-id="${id}"]`); await wp.waitForTimeout(150); }
+      await reachAndKeys(wp, TICKET, `workspace ${w}: the ${id} popover`);
+    }
+    await wp.keyboard.press('Escape'); await wp.click(`${WS} .ind-chip[data-id="levels"]`); await wp.waitForTimeout(150);
     await wp.click(`${WS} .chip-pop [data-f="tog:levels:pdh"]`);
     check((await wp.evaluate(id => JSON.parse(localStorage.getItem('live-indicator-options-v1'))[id].levels.pdh, main)) === 'off', 'an edit in a panel: PDH off, saved for that panel');
     await wp.click(`${WS} .chip-pop [data-f="tog:levels:pdh"]`);

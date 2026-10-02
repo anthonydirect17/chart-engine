@@ -876,14 +876,19 @@ function hotkeyHandler(o) {
     const id = OT.hotkeyAction(o.keys(), OT.hotkeyCombo(e));
     if (!id || typeof o.actions[id] !== 'function') return;
     const a = document.activeElement;
-    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) {
+    /* Close and Flatten all always work while a menu or popover is open (review D2), even from one of its boxes when the
+       combo types nothing there (Ctrl or Alt, or an F-key); never while the PIN pad asks */
+    const urgent = (id === 'close' || id === 'flattenAll') && !document.querySelector('.cb-pin');
+    const inBox = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+    const popBox = inBox && urgent && (e.ctrlKey || e.altKey || /^F([1-9]|1[0-9]|2[0-4])$/.test(e.key)) && !!a.closest('.ind-panel, .chip-pop, .ce-theme-panel, .set-panel, .more-menu, .ind-chip-list');
+    if (inBox && !popBox) {
       // Close and Flatten all say why nothing happened (1.12.0, the 1.11.0 review); the box keeps the key
-      if ((id === 'close' || id === 'flattenAll') && !e.repeat && typeof o.ignored === 'function' && o.root.contains(a) && !o.busy()) o.ignored(id);
+      if (urgent && !e.repeat && typeof o.ignored === 'function' && o.root.contains(a)) o.ignored(id);
       return;
     }
     const onBody = !a || a === document.body || a === document.documentElement;
     if (!onBody && !o.root.contains(a)) return;
-    if (o.busy() || OT.isChartKey(e)) return;
+    if ((!urgent && o.busy()) || OT.isChartKey(e)) return;
     e.preventDefault();
     if (e.repeat) return;
     o.actions[id]();
@@ -3270,10 +3275,19 @@ function start(container, opt, PAGE) {
   function placePop() {
     const a = chipOf(popId); if (!a) return;
     const r = a.getBoundingClientRect(), w = chipPop.offsetWidth, h = chipPop.offsetHeight, W = window.innerWidth, H = window.innerHeight;
-    let top = r.bottom + 6, left = r.left;
-    if (top + h > H - 8) top = r.top - 6 - h >= 8 ? r.top - 6 - h : Math.max(8, H - 8 - h);   // flipped up near the bottom
-    if (left + w > W - 8) left = r.right - w >= 8 ? r.right - w : Math.max(8, W - 8 - w);       // flipped left near the right
-    chipPop.style.top = Math.round(top) + 'px'; chipPop.style.left = Math.round(left) + 'px';
+    /* clear of the order bar and the order ticket (review D2): on the page below the order bar, as the Indicators menu;
+       in the workspace never over the ticket's panel, so Flatten, Close, Cancel all and the ticket's buttons stay reachable */
+    const ob = !SLIM && $('obar') && !$('obar').hidden ? $('obar').getBoundingClientRect() : null;
+    const avoid = [...document.querySelectorAll('.ws-panel[data-type="ticket"]')].map(e => e.getBoundingClientRect());
+    if (ob) avoid.push(ob);
+    const base = ob ? Math.max(r.bottom, ob.bottom) : r.bottom;
+    const fits = (x, y) => x >= 8 && y >= 8 && x + w <= W - 8 && y + h <= H - 8 && !avoid.some(q => x < q.right && x + w > q.left && y < q.bottom && y + h > q.top);
+    const xs = [r.left, r.right - w].concat(avoid.map(q => q.left - 8 - w), avoid.map(q => q.right + 8));
+    const ys = [base + 6, r.top - 6 - h].concat(avoid.map(q => q.bottom + 6));
+    let at = null;
+    for (const y of ys) { for (const x of xs) if (fits(x, y)) { at = [x, y]; break; } if (at) break; }
+    if (!at) at = [Math.max(8, Math.min(r.left, W - 8 - w)), Math.max(8, Math.min(base + 6, H - 8 - h))];   // whole on screen at least
+    chipPop.style.top = Math.round(at[1]) + 'px'; chipPop.style.left = Math.round(at[0]) + 'px';
   }
   function renderPop() {
     const st = popId && IS.ind[popId];
