@@ -374,7 +374,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   list of them), a **⋯** `.btn` opening a small menu (Trend line, Price line,
   Clear drawings, Reset view; 500 13px, the accent tint on hover and while a tool is on), Colors, Settings. Settings
   gain a "CHART" section above the hotkeys: Glide, Range style, Grid lines (Off / On), Room right (None, 40, 80, 160 px), ATR period (a 64 px number box, 2 to 100, 14 by default; review D2),
-  each a 32 px row of its name (13px) and the toolbar's control, and ATR period (a 64 px number box, 2 to 100, review D2);
+  each a 32 px row of its name (13px) and the toolbar's control;
   then Change PIN and the versions (400 11px mono, the
   quiet grey). A host's chart with its own toolbar keeps the 1.13.0 toolbar.
 - Drag to pan and throw. Wheel or pinch zooms at the pointer; a sideways trackpad swipe pans.
