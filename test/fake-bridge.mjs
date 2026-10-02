@@ -61,11 +61,19 @@
 //                                   live trade from 17:00 to 18:00 ET, or from Friday 17:00 to Sunday 18:00 (sample data
 //                                   shifted to now otherwise trades through 18:00)
 //   --no-sides                      behave like ChartBridge 0.3.3 for trade sides: ticks as [t,p,v] and live ticks without
-//                                   s and sm (to check the page against an older add-on)
+//                                   s and sm (to check the page against an older add-on); no q either
+//   --no-q                          behave like ChartBridge 0.3.7 for the Time and Sales category: no q anywhere
 // Trade sides (ChartBridge 0.3.4, nt8/PROTOCOL.md "Trade side"): every backfill trade is [t, p, v, s, sm] and every live
 // tick carries s (1 buy, -1 sell, 0 unknown) and sm (0 none, 1 aggressor flag, 2 bid/ask, 3 tick rule). The fake has no
 // quotes: a trade that moved the price counts as at the quote (sm 2: up a buy, down a sell), an unchanged one keeps the
 // previous side by the tick rule (sm 3), the first is unknown (0, 0). Sample data, not a real classification.
+// Time and Sales category (ChartBridge 0.3.8, nt8/PROTOCOL.md "Time and Sales category"): a live tick carries q (2 above
+// the ask, 1 at it, 0 between, -1 at the bid, -2 below it; no field when unknown) and a backfill trade with one is
+// [t, p, v, s, sm, q] (a full load keeps the fake's 0.3.4 sides in places 4 and 5); the served window (--live-first) is
+// [t, p, v] for its history (NinjaTrader's answer has no quote) and [t, p, v, null, null, q] for the trades the fake made
+// live, as ChartBridge 0.3.8 sends it. The fake has no quotes either: a move of one tick is at the quote (1 or -1), of
+// two or more through it (2 or -2), an unchanged price between (0); the first trade, and backfill trades before
+// --quote-hours, unknown. Sample data.
 // Served window and session table (ChartBridge 0.3.5, nt8/PROTOCOL.md "Served window" and "Session table"), sample data,
 // never market data:
 //   --live-first                    hello lists "liveFirst" and "profile". The data is one tape per instrument: the tick
@@ -102,6 +110,11 @@
 //   ("htfBar" at most once a second), and "weekProfile" with the last 5 sessions' volume at price of the sample minutes
 //   (one listed "missing", as a session ChartBridge has no table for). With --test-controls, POST
 //   /test/settlement?root=MNQ&p=21456.25&date=2026-09-28 sends a "settlement" message to every page (p=null: none known).
+// --scene=signals (chart signals, G1c): once a page is live on MNQ, MNQ's random walk stops and a scripted tape replays
+//   instead (test/signals-scene.mjs: sample trades with sides that read like a real stretch of regular hours, with a few
+//   large prints), --scene-warp=36 times faster than the clock (each trade stamped on the scene's own clock from the
+//   moment it started, so bars and times read as a real market's), after --scene-delay=1500 ms. With --test-controls,
+//   GET /test/scene says how far it got ({ started, sent, total, done }). Sample data, never market data.
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -111,6 +124,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { OrderDesk } from './fake-orders.mjs';
 import { PinLock, HEADER as PIN_HEADER } from './fake-pin.mjs';
+import { signalScene } from './signals-scene.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
@@ -121,6 +135,7 @@ const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
+const SCENE = flagValue('scene'), SCENE_WARP = +flagValue('scene-warp') || 36, SCENE_DELAY = flagValue('scene-delay') === '' ? 1500 : +flagValue('scene-delay');
 const PIN_OFF = !!flag('pin-off');
 const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
 const DATA_037 = !!flag('data-037');
@@ -128,6 +143,7 @@ const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES =
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const SIDES = !flag('no-sides') && !V1;           // ChartBridge 0.2 (--v1) had no sides either
+const TAPE_Q = SIDES && !flag('no-q');             // 0.3.8: the Time and Sales category (see the header)
 const LIVE_FIRST = !!flag('live-first') && !V1, CALENDAR = !!flag('calendar');
 let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
 const RANGE_HOURS = +flagValue('range-hours') || 2, WINDOW_MS = flagValue('window-ms') === '' ? 300 : +flagValue('window-ms');
@@ -140,6 +156,11 @@ function sideOf(p, prev, prevSide) {
   if (p > prev + 1e-9) return [1, 2];
   if (p < prev - 1e-9) return [-1, 2];
   return prevSide ? [prevSide, 3] : [0, 0];
+}
+/* The Time and Sales category of a trade from the previous price and its side's method (see the header), or null. */
+function qOf(p, prev, sm) {
+  if (sm === 2) { const d = p - prev; return Math.abs(d) >= 0.5 - 1e-9 ? Math.sign(d) * 2 : Math.sign(d); }
+  return sm === 3 ? 0 : null;
 }
 // 0.3.7: a limit that is not a whole number of 1 or more is no limit, and the pages are warned (Anthony, 2026-10-01).
 const limitWarnings = [];
@@ -239,6 +260,8 @@ function ticksFrom(bars, hours) {
         const prev = out.length ? out[out.length - 1] : undefined, sd = sideOf(p, prev && prev[1], prev && prev[3]);
         if (sd[1] === 2 && row[0] < quoteFrom) sd[1] = 3;          // before the quote window: the same side, by the tick rule
         row.push(...sd);
+        const q = TAPE_Q && row[0] >= quoteFrom ? qOf(p, prev && prev[1], sd[1]) : null;
+        if (q !== null) row.push(q);                                // 0.3.8: the 6th place, only when known
       }
       out.push(row);
     });
@@ -277,13 +300,19 @@ class Tape {
   _grow(cap) {
     const old = this.n ? this : null;
     this.cap = cap;
-    const t = new Float64Array(cap), p = new Float64Array(cap), v = new Float64Array(cap), s = new Int8Array(cap), m = new Int8Array(cap);
-    if (old) { t.set(this.t.subarray(0, this.n)); p.set(this.p.subarray(0, this.n)); v.set(this.v.subarray(0, this.n)); s.set(this.s.subarray(0, this.n)); m.set(this.m.subarray(0, this.n)); }
-    this.t = t; this.p = p; this.v = v; this.s = s; this.m = m;
+    const t = new Float64Array(cap), p = new Float64Array(cap), v = new Float64Array(cap), s = new Int8Array(cap), m = new Int8Array(cap), q = new Int8Array(cap);
+    if (old) { t.set(this.t.subarray(0, this.n)); p.set(this.p.subarray(0, this.n)); v.set(this.v.subarray(0, this.n)); s.set(this.s.subarray(0, this.n)); m.set(this.m.subarray(0, this.n)); q.set(this.q.subarray(0, this.n)); }
+    this.t = t; this.p = p; this.v = v; this.s = s; this.m = m; this.q = q;
   }
-  push(t, p, v, s, sm) { if (this.n === this.cap) this._grow(this.cap * 2); const i = this.n++; this.t[i] = t; this.p[i] = p; this.v[i] = v; this.s[i] = s; this.m[i] = sm; }
-  row(i) { return SIDES ? [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i]] : [this.t[i], this.p[i], this.v[i]]; }
-  rows(a, b, plain) { const out = new Array(Math.max(0, b - a)); for (let i = a; i < b; i++) out[i - a] = plain ? [this.t[i], this.p[i], this.v[i]] : this.row(i); return out; }
+  /* q: the Time and Sales category, null when unknown (kept as -128) */
+  push(t, p, v, s, sm, q) { if (this.n === this.cap) this._grow(this.cap * 2); const i = this.n++; this.t[i] = t; this.p[i] = p; this.v[i] = v; this.s[i] = s; this.m[i] = sm; this.q[i] = q === null || q === undefined ? -128 : q; }
+  row(i) {
+    if (!SIDES) return [this.t[i], this.p[i], this.v[i]];
+    return TAPE_Q && this.q[i] !== -128 ? [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i], this.q[i]] : [this.t[i], this.p[i], this.v[i], this.s[i], this.m[i]];
+  }
+  /* plain: the served window as ChartBridge 0.3.7 sends it, [t, p, v]; 0.3.8: [t, p, v, null, null, q] for a trade with a known q */
+  plainRow(i) { return TAPE_Q && this.q[i] !== -128 ? [this.t[i], this.p[i], this.v[i], null, null, this.q[i]] : [this.t[i], this.p[i], this.v[i]]; }
+  rows(a, b, plain) { const out = new Array(Math.max(0, b - a)); for (let i = a; i < b; i++) out[i - a] = plain ? this.plainRow(i) : this.row(i); return out; }
   /* the first trade at or after time t */
   at(t) { let lo = 0, hi = this.n; while (lo < hi) { const m = (lo + hi) >> 1; if (this.t[m] < t) lo = m + 1; else hi = m; } return lo; }
 }
@@ -294,7 +323,7 @@ if (LIVE_FIRST) for (const r of Object.keys(INSTR)) {
   for (const x of hist) {
     if (x[0] > now) break;                          // the tape ends now; live trades carry on from here
     const [sd, sm] = sideOf(x[1], prevP, prevS);
-    k.push(x[0], x[1], x[2], sd, sm); prevP = x[1]; prevS = sd;
+    k.push(x[0], x[1], x[2], sd, sm, null); prevP = x[1]; prevS = sd;   // NinjaTrader's tick answer: no stored quote, q unknown
   }
   tapes[r] = k;
 }
@@ -507,6 +536,7 @@ function subscribe(c, m) {
     }
     send(c, { type: 'ready', root: r });
     c.ready = true;
+    sceneReady(r);
   };
   if (LOAD_DELAY_MS) setTimeout(finish, LOAD_DELAY_MS); else finish();   // --load-delay-ms: NinjaTrader's tick request taking that long
 }
@@ -530,7 +560,7 @@ function subscribeTape(c, m, r) {
     const end = k.n;
     if (from !== null) sendTicks(from, end);
     if (c.profile) send(c, tag(profileMsg(r, end)));
-    send(c, tag({ type: 'ready', root: r })); c.ready = true;
+    send(c, tag({ type: 'ready', root: r })); c.ready = true; sceneReady(r);
   };
   if (!(hours > 0)) { finish(null); return; }       // a minute chart: no trades
   if (!liveFirstOn && m.liveFirst !== true) { finish(k.at(etNow() - hours * 3600)); return; }   // an old bridge: the full load
@@ -551,23 +581,49 @@ if (LIVE_FIRST) for (const r of Object.keys(INSTR)) { const k = tapes[r]; if (k.
 function trade(r, p) {
   if (CME_HOURS && cmeClosed(etNow())) return;          // nothing trades while CME is closed
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
+  const q = TAPE_Q && last[r] !== undefined ? qOf(p, last[r], sm) : null;   // 0.3.8
   last[r] = p; lastSide[r] = s;
   const now = Date.now();
   // u: the data's UTC time, on the exchange clock, 20 to 50 ms before ChartBridge's PC receives it (rx, on its clock)
   const msg = { type: 'tick', root: r, t: +(etNow() + TICK_SHIFT).toFixed(3), u: now + CLOCK_OFFSET * 1000 - 20 - Math.random() * 30, rx: now + PC_CLOCK_OFFSET * 1000, p, v: 1 + Math.floor(Math.random() * 5) };
   if (SIDES) { msg.s = s; msg.sm = sm; }
+  if (q !== null) msg.q = q;                          // 0.3.8: no field when unknown
   if (LIVE_FIRST) {                                   // on the tape: never older than its last trade
     const k = tapes[r];
     if (k.n && msg.t < k.t[k.n - 1]) msg.t = k.t[k.n - 1];
-    k.push(msg.t, p, msg.v, s, sm);
+    k.push(msg.t, p, msg.v, s, sm, q);
   }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   if (DATA_037) htfTrade(r, msg.t, p, msg.v);   // the forming 4h, 1D and 1W bars follow the trades
   desk.tick(r, p);                        // the matching engine sees every trade
 }
+/* --scene=signals: the scripted MNQ tape (see the header), replayed once from the first page that is live on MNQ. */
+const scene = { started: false, sent: 0, total: 0, done: false, t0: 0 };
+function sceneReady(r) {
+  if (SCENE !== 'signals' || r !== 'MNQ' || scene.started) return;
+  scene.started = true; held.MNQ = true;                 // the random walk stops; only the scene trades MNQ from here
+  setTimeout(() => {
+    const t0 = +(etNow() + 0.2).toFixed(3), list = signalScene({ t0, p0: last.MNQ, tick: INSTR.MNQ.tick }), wall0 = Date.now();
+    scene.total = list.length; scene.t0 = t0;
+    const timer = setInterval(() => {
+      const upTo = t0 + (Date.now() - wall0) / 1000 * SCENE_WARP;
+      while (scene.sent < list.length && list[scene.sent][0] <= upTo) { const [t, p, v, sd] = list[scene.sent++]; sceneTrade('MNQ', t, p, v, sd); }
+      if (scene.sent >= list.length) { scene.done = true; clearInterval(timer); }
+    }, 10);
+  }, SCENE_DELAY);
+}
+function sceneTrade(r, t, p, v, sd) {
+  last[r] = p; lastSide[r] = sd;
+  const now = Date.now();
+  const msg = { type: 'tick', root: r, t, u: now + CLOCK_OFFSET * 1000 - 25, rx: now + PC_CLOCK_OFFSET * 1000, p, v };
+  if (SIDES) { msg.s = sd; msg.sm = 2; }
+  if (LIVE_FIRST) { const k = tapes[r]; if (k.n && msg.t < k.t[k.n - 1]) msg.t = k.t[k.n - 1]; k.push(msg.t, p, v, sd, 2); }
+  for (const c of clients) if (c.ready && c.root === r) send(c, msg);
+  desk.tick(r, p);
+}
 if (!LIVE_RATE) setInterval(() => {
   if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
-  for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
+  for (const r of Object.keys(INSTR)) if (!(scene.started && r === 'MNQ')) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 else {
   // --live-rate: a busy market. Every 10 ms a Poisson number of trades; mostly 0 or 1 tick apart, and a fast jump of
@@ -579,7 +635,7 @@ else {
   setInterval(() => {
     const burst = ((Date.now() - t0) % 10000) < 1500 ? 3 : 1;
     for (const r of Object.keys(INSTR)) {
-      if (held[r] || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
+      if (held[r] || (scene.started && r === 'MNQ') || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
       const n = poisson(LIVE_RATE * burst / 100);
       for (let k = 0; k < n; k++) {
         const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
@@ -637,10 +693,12 @@ const server = http.createServer((req, res) => {
       for (const x of Object.values(books)) if (x.window && !x.gapAsked) { x.window = null; x.gapAsked = true; }   // asked again once (ChartBridge: at most once in 10 minutes)
       for (const c of clients) if (c.ready && c.profile && tapes[c.root]) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
     }
+    else if (p === '/test/scene') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(scene)); }
     else if (p === '/test/tape') {
       const k = tapes[r], from = k ? k.at(+q.get('from') || 0) : 0;
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(k ? { n: k.n - from, t: Array.from(k.t.subarray(from, k.n)), p: Array.from(k.p.subarray(from, k.n)), v: Array.from(k.v.subarray(from, k.n)), s: Array.from(k.s.subarray(from, k.n)), m: Array.from(k.m.subarray(from, k.n)) } : null));
+      return res.end(JSON.stringify(k ? { n: k.n - from, t: Array.from(k.t.subarray(from, k.n)), p: Array.from(k.p.subarray(from, k.n)), v: Array.from(k.v.subarray(from, k.n)), s: Array.from(k.s.subarray(from, k.n)), m: Array.from(k.m.subarray(from, k.n)),
+        q: Array.from(k.q.subarray(from, k.n), x => x === -128 ? null : x) } : null));
     }
     else if (p === '/test/books') {
       res.writeHead(200, { 'Content-Type': 'application/json' });

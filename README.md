@@ -43,7 +43,12 @@ On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volu
 **Initial balance** (today's 1-hour IB, 1.5.3), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
 buys minus market sells below the chart, counted from when the page opens or the trades' sides were measured, and from
 0 again at 18:00 ET; the sides from ChartBridge 0.3.4) per chart pane, with a search box ("/" opens it), a Recent line, Hide
-all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). Hiding
+all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). **Chart
+signals** (1.12.1, Anthony's NinjaScript indicators, counted from the page's opening from the trades' sides): **Absorption
+bars** (Signals group, no chip; a large trade, a volume spike and a rejection close on one bar paint it cyan or yellow at
+the close, an outline while it forms; settings per instrument and bar type in its gear), **Large-order bubbles** (Volume
+group; same side prints within 100 ms from the large-print floor, the workspace's Time and Sales floors) and the delta
+pane's **divergence arrows** (its gear, Show divergences). Hiding
 Fills never hides the open trade (its entry fills, the position line, working orders, stop and target lines). One
 **Account** picker, the order bar's (or, with no order bar, a compact one in the toolbar), chooses the account for
 orders and whose fills are marked. **Range** bars are
@@ -92,7 +97,7 @@ line; recompile or restart NinjaTrader after a change):
 | `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
-| `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (a market entry's ticks; a resting entry's planned stop or target from its price). None: no limit. Same rule for a mistyped value. |
+| `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
 | `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
@@ -504,12 +509,15 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
    trade is more than 300 seconds old. ChartBridge 0.3.7 has no distance limit unless `config.txt` sets
    `maxTicksAway` (before 0.3.7: within 200 ticks of the last price).
 
-**Planned stop and target on a resting entry (ChartBridge 0.3.8, Anthony 2026-10-01).** Like a NinjaTrader ATM, a
-limit or stop entry's stop and target are distances in ticks from its actual fill, and they travel with the entry when
-it is moved (moving it is never refused for its bracket). Each fill's legs go at that fill's price minus the stop and
-plus the target ticks. The page draws them as planned lines and changes them with a `plan` message (chart 1.13.0,
-above). The distances survive a recompile or restart (the entry's order name and `planned_brackets.txt` in
-ChartBridge's folder; `nt8/PROTOCOL.md`).
+**Stop and target on a resting entry (ChartBridge 0.3.8, Anthony's ATM rule; replaces 0.3.7's planned prices).** A
+limit or stop entry's stop and target are distances in ticks from its ACTUAL fill: every fill of it gets its legs at
+the fill price plus or minus those ticks, so they travel with the entry when it is dragged, and moving the entry onto
+or past where its stop or target would be is never refused. A market entry works the same way, as before. A fill
+exits at market (with an alarm) only when a trade in the last 2 seconds went through the stop level. The ticks survive
+a recompile or restart (the entry's order name, `CB#tag atm s8 t16`, and `planned_brackets.txt` in ChartBridge's
+folder). A `plan` message adds, changes or removes them before the fill, in ticks (`stopTicks`, `targetTicks`); the
+page sends it from chart 1.13.0 (the planned lines, above; `nt8/PROTOCOL.md`). An entry still resting from 0.3.7 is converted once to ticks
+from its current price, with a warning to the page.
 6. Only the instruments ChartBridge serves.
 7. At most 10 order actions per second per page (a `plan` counts as one, 1.13.0).
 
@@ -569,6 +577,11 @@ trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET se
 (`setLayers({ vp: true })`, off by default) as bars from the right edge of the plot behind the candles; the chart
 redraws on its own when the profile changes.
 
+Chart signals (1.12.1): `new ChartEngine.Absorption({ settings, floorAt, tick })`, `new ChartEngine.LargePrints({ floorAt,
+auto, tick })` and `new ChartEngine.DeltaDivergence({ settings })`, fed by the page (`add(...)`, `update(bars, valueAt)`);
+`setSignals({ absorption, bubbles, divergence, version })` hands them to the chart, drawn while the `absorption`,
+`bubbles` and `divergence` layers are on; the chart redraws when `version` changes.
+
 Cumulative delta (1.7.0): `new ChartEngine.CumulativeDelta({ sessionStart, seconds, coveredFrom })` counts trades
 (`add(t, v, side, barT, method)`, side 1 buy, -1 sell, 0 or none unknown) into one candle per price bar of the
 running buys minus sells, from 0 at each 18:00 ET session, from `coveredFrom` on (the start of the page's
@@ -602,7 +615,9 @@ formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `build
 
 ## Colors
 
-Defaults: bull `#4B9CD3` (Carolina blue), bear `#6D28D9` (deep purple), VWAP `#B69CFF`.
+Defaults: bull `#4B9CD3` (Carolina blue), bear `#6D28D9` (deep purple), VWAP `#B69CFF`; the chart signals (1.12.1) a toned
+cyan `#38DCE8` and warm yellow `#F3D84A`, with outlines `#9CF1F7` and `#FFEC8F` (theme keys `sigBull`, `sigBullLine`,
+`sigBear`, `sigBearLine`; CHART_STYLE `--sig-bull`, `--sig-bull-line`, `--sig-bear`, `--sig-bear-line`).
 `mountThemePanel(chart, host)` adds a **Colors** button with presets and pickers; choices are saved in
 that browser. Its options (1.9.0): `vwap: false` leaves the VWAP picker out (the live page sets the VWAP in its gear),
 `note` replaces the line at its foot, and the returned `slot` is an empty element above Reset for a page's own rows

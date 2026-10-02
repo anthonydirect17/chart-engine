@@ -120,7 +120,10 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(legs, /"CB#" \+ br\.Tag \+ " stop" \+ mark/);
   assert.match(legs, /"CB#" \+ br\.Tag \+ " target" \+ mark/);
   assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/);   // a stop through the market becomes a market exit
-  assert.match(legs, /bool byFill = hasStop && br\.Priced && !br\.ValueEstimated && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
+  // 0.3.8 (the ATM rule): legs are ticks from the actual fill; the market exit only on a recent trade through the stop
+  assert.match(legs, /sp = Round\(br\.EntryIsBuy \? incPrice - br\.StopTicks \* tick : incPrice \+ br\.StopTicks \* tick, tick\);/);
+  assert.match(legs, /if \(fresh && \(br\.EntryIsBuy \? sp >= last : sp <= last\)\)/);
+  assert.ok(!/bool byFill|StopPx|Priced/.test(ocode), 'no price-anchored planned bracket left (0.3.7)');
   const keep = fnBody('KeepBracket');
   assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
   assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)\s*\{\s*bool first;\s*lock \(Sync\) \{ first = !PlanDeferred\.ContainsKey\(entry\); if \(first\) PlanDeferred\[entry\] = true; \}[^\n]*\s*if \(first\)[^\n]*\s*return;\s*\}\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
@@ -155,9 +158,9 @@ test('bracket upkeep runs even with trading off; pages hear only about tradable 
 });
 
 test('strict messages: known keys only, bracket must be an object', () => {
-  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket", "stopPrice", "targetPrice" \} \}/);
+  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" \} \}/);
   assert.match(ocode, /\{ "change", new\[\] \{ "type", "cid", "id", "price" \} \}/);
-  assert.match(ocode, /\{ "plan", new\[\] \{ "type", "cid", "id", "stopPrice", "targetPrice" \} \}/);   // 0.3.7
+  assert.match(ocode, /\{ "plan", new\[\] \{ "type", "cid", "id", "stopTicks", "targetTicks" \} \}/);   // 0.3.8: ticks
   assert.match(ocode, /\{ "cancel", new\[\] \{ "type", "cid", "id" \} \}/);
   assert.match(ocode, /\{ "flatten", new\[\] \{ "type", "cid", "account", "root" \} \}/);
   assert.match(ocode, /BracketKeys = \{ "stop", "target" \}/);
@@ -200,21 +203,20 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.match(fnBody('PendingOrders'), /MayFill\(o\.OrderState\)/);
   assert.match(fnBody('PendingOrders'), /foreach \(Order o in Ours\)/);
   assert.match(fnBody('PlaceOrderLocked'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);
-  assert.match(fnBody('PlaceOrderLocked'), /bool wantsLegs = stopTicks > 0 \|\| targetTicks > 0 \|\| stopPx > 0 \|\| targetPx > 0;/);
+  assert.match(fnBody('PlaceOrderLocked'), /bool wantsLegs = stopTicks > 0 \|\| targetTicks > 0;/);
   assert.match(fnBody('PlaceOrderLocked'), /if \(wantsLegs && reduces\) return/);
-  // 0.3.7: a planned stop or target is checked against the entry's price at placement, on a plan change and on an entry move
-  assert.match(fnBody('PlaceOrderLocked'), /PlanProblem\(tick, isBuy, price, stopPx, targetPx\)/);
-  assert.match(fnBody('PlanOrder'), /PlanProblem\(tick, buy, entryPx, newSp, newTp\)/);
-  assert.match(fnBody('ChangeOrder'), /cannot move to or past its own planned stop/);
+  // 0.3.8: a move is never refused for its bracket (the ticks travel with the entry); a plan is ticks, 1 or more, or null
+  assert.ok(!/planned stop|PlanLock|BracketFor/.test(fnBody('ChangeOrder')), 'ChangeOrder never looks at the planned bracket');
+  assert.match(fnBody('TicksOf'), /if \(Int\(top, key, out v\) != 1 \|\| v < 1\) return -1;/);
   for (const f of ['ChangeOrder', 'PlanOrder']) {
     assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
   // a plan change that cannot be saved changes nothing
   // a plan is set in memory with the check that no fill waits, under Sync; the file is written afterwards, outside the locks
-  assert.match(fnBody('PlanOrder'), /lock \(Sync\)\s*\{\s*waiting = o\.Filled - br\.Covered;\s*if \(waiting <= 0\) \{ br\.StopPx = newSp; br\.TargetPx = newTp;/);
+  assert.match(fnBody('PlanOrder'), /lock \(Sync\)\s*\{\s*waiting = o\.Filled - br\.Covered;\s*if \(waiting <= 0\) \{ br\.StopTicks = newSt; br\.TargetTicks = newTt;/);
   const plan = fnBody('PlanOrder');
-  assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.lastIndexOf('SetPlan(br.Tag, newSp, newTp);') && plan.lastIndexOf('SetPlan(') > 0, 'the file is written after the plan is set');
+  assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.lastIndexOf('SetPlan(br.Tag, newSt, newTt);') && plan.lastIndexOf('SetPlan(') > 0, 'the file is written after the plan is set');
   assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.indexOf('lock (PlanLock)') && /\}\s*ChartBridgeServer\.Log\("planned bracket set/.test(plan), 'and after PlanLock is released');
   assert.match(fnBody('ChangeOrder'), /OrderType\.StopLimit\) return/);
   assert.match(fnBody('PlaceOrderLocked'), /PriceProblem\(root, tick, kind, isBuy, price\)/);
@@ -478,7 +480,7 @@ test('ChartBridgePin.cs is C# 5 too', () => {
 // ---- 0.3.3: the seam between the backfill and the live trades (behaviour: nt8/check/SeamHarness.cs under Mono)
 test('0.3.3: held live trades are matched against the backfill on NinjaTrader times before ready', () => {
   // held with NinjaTrader's time for the trade, the backfill's basis (never the PC clock)
-  assert.match(bodyOf(code, 'private static void OnMarketData('), /c\.Pending\.Add\(new SeamTick \{ Time = e\.Time, Price = e\.Price, Volume = e\.Volume, Json = json, Side = side, Method = method \}\)/);
+  assert.match(bodyOf(code, 'private static void OnMarketData('), /c\.Pending\.Add\(new SeamTick \{ Time = e\.Time, Price = e\.Price, Volume = e\.Volume, Json = json, Side = side, Method = method, QCode = ChartBridgeSides\.QCode\(cat\) \}\)/);   // 0.3.8: and its q
   // 0.3.7: the by-date tick request (0.3.3 to 0.3.4.1) is gone; tick charts get the served window (0.3.5)
   assert.ok(!/RequestTickHistory|ByDateTickLoads/.test(code), 'the by-date tick load is removed');
   // ready and the held trades under the Pending lock, only for the page's latest subscribe, only those Dedupe releases
@@ -515,11 +517,11 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(quote, /NoteQuote\(type == MarketDataType\.Bid, e\.Price, e\.Time\);[\s\S]*if \(type != MarketDataType\.Last\) return;/);
   assert.ok(!/Send\(|Pending/.test(quote), 'a quote update sends or holds nothing');
   // the live tick keeps 0.3.3's fields in order and adds s and sm at the end
-  assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ "\}"/);
+  assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ ChartBridgeSides\.QJson\(cat\) \+ "\}"/);   // 0.3.8: then q, when known
   // backfill trades: t, p, v first, then s and sm
   // (0.3.5: written by AppendTrade with no string per number; WindowHarness.cs checks the text is 0.3.4's)
   assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et\);/);
-  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed)
+  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*int q = bars\.QCode != null \? ChartBridgeSides\.QOf\(bars\.QCode\[i\]\) : ChartBridgeSides\.NoQ;\s*if \(q != ChartBridgeSides\.NoQ\) \{ b\.Append\(",null,null,"\); CbJson\.AppendLong\(b, q\); \}\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed); 0.3.8: [t, p, v, null, null, q] when q is known
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
   assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
@@ -681,7 +683,7 @@ test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a qu
 test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only through the gate, the weekly profile never asks', () => {
   const note = bodyOf(code, 'public static void NoteSettlement(string root, string contract,');
   assert.match(note, /!\(price > 0\)\) return;/, 'only a real price');
-  assert.match(note, /DateTime\? day = SettlementDay\(ntTime\);/, 'every value dated from NinjaTrader\'s time on it');
+  assert.match(note, /DateTime\? day = SettlementDay\(ntTime, NowNt\(\), out provisional\);/, 'every value dated from NinjaTrader\'s time on it (0.3.8: and whether it is in the 16:00 to 17:00 buffer)');
   assert.match(bodyOf(code, 'private static void PriorSettlement('), /ChartBridgeCme\.PreviousSession\(ChartBridgeCme\.CurrentSession\(/);
   assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlementsSoon\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);   // read off NinjaTrader's thread
   // review B2: answers built outside HtfLock, one waiter per page, the 15 s limit
@@ -707,4 +709,26 @@ test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only throug
   const proto = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'PROTOCOL.md'), 'utf8');
   for (const t of ['settlement', 'htf', 'htfBar', 'weekProfile']) assert.match(proto, new RegExp('\\| `' + t + '` \\|'), t + ' in PROTOCOL.md');
   assert.ok(!/[\u2013\u2014]/.test(proto), 'no em or en dashes in PROTOCOL.md');
+});
+
+test('0.3.8 q: the Time and Sales category comes from the side tagger\'s quote, with no request and no string made per trade', () => {
+  const tag = code.slice(code.indexOf('out int method, out int cat)'), code.indexOf('public string DiagJson()', code.indexOf('out int method, out int cat)')));
+  assert.match(tag, /int s = ChartBridgeSides\.Classify\(price, q \? b : double\.NaN, q \? a : double\.NaN[^\n]*\n\s*cat = q \? ChartBridgeSides\.Category\(price, b, a\) : ChartBridgeSides\.NoQ;/,
+    'q is read from the very quote the side was classified by (b, a), unknown without one');
+  assert.match(code, /\+ ChartBridgeSides\.QJson\(cat\) \+ "\}";/, 'the live tick ends with the q field from QJson');
+  assert.match(code, /private static readonly string\[\] QFields = /, 'the five q fields are made once');
+  assert.ok(!/cat\.ToString\(|QJson\([^)]*\)\.ToString|"\\"q\\":" \+/.test(code), 'no q string made per trade');
+  assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode\)/, 'the held live trades keep their q in the served window');
+  assert.match(code, /for \(int i = start; i < raw\.Count; i\+\+\) cache\.Add\(raw\.Time\[i\], raw\.Close\[i\], raw\.Volume\[i\]\);/, 'NinjaTrader\'s answer has no stored quote: unknown');
+});
+
+test('0.3.8 review: never legs from an estimated fill price; settlement updates on one queue', () => {
+  assert.ok(!/can only estimate/.test(ocode), 'the estimate warning (legs placed from an estimate) is gone');
+  const keep = ocode.slice(ocode.indexOf('private static void KeepBracket(Order entry, bool fromScan, double now)'), ocode.indexOf('private static bool NoPlan('));
+  assert.ok(keep.indexOf('if (unknown) { PriceUnknownAlarm(br, inc, where); return; }') > 0 && keep.indexOf('if (unknown) { PriceUnknownAlarm(br, inc, where); return; }') < keep.indexOf('PlaceLegs('),
+    'an unknown increment price returns before PlaceLegs (no legs, an error alarm)');
+  assert.match(ocode, /if \(qty > 0 && unknown\) \{ PriceUnknownAlarm\(br, qty, where\); return; \}/, 'the scan path too');
+  assert.match(ocode, /object\.ReferenceEquals\(x\.Order, entry\) \|\| \(!string\.IsNullOrEmpty\(id\) && x\.OrderId == id\)/, 'the price comes from the entry\'s own executions');
+  assert.ok(!/Task\.Run\(\(\) => NoteSettlement/.test(code), 'no task per settlement update');
+  assert.match(code, /QueueSettlement\(RootOf\(e\.Instrument\)/, 'updates go to the one queue');
 });
