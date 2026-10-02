@@ -222,3 +222,20 @@ test('NO STOP (the F2 re-review): an answer is for the instrument, account and A
   asks[3]();
   assert.deepEqual(sent.map(m => m.type + ' ' + m.root), ['order MNQ'], 'as asked: it goes');
 });
+
+test('Flatten and Flatten all still go out when closing the NO STOP question throws', () => {
+  const store = new Map(), sent = []; let clock = 1000, boom = false;
+  const prefs = LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) });
+  const core = TC.create({ LP, prefs, fetch: () => new Promise(() => {}), send: m => sent.push(m), open: () => true, sock: () => 1, root: () => 'MNQ', lastPrice: () => 100,
+    qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => 'Sim101', tick: () => 0.25, served: () => true, fmt: p => String(p), flash: () => {},
+    later: () => 0, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {}, batch: () => {}, unsent: () => {}, destroyed: () => false, now: () => (clock += 500),
+    dropNoStop: () => { if (boom) throw new Error('boom'); }, flattened: () => { if (boom) throw new Error('boom'); } });
+  core.hello({ version: '0.3.8' });
+  core.applyTrading({ enabled: true, accounts: ['Sim101'], maxQty: { MNQ: 5 } });
+  core.message({ type: 'position', account: 'Sim101', root: 'MNQ', qty: 1, avgPrice: 100 });
+  boom = true;
+  core.flattenHere();
+  assert.equal(sent.filter(m => m.type === 'flatten' && m.root === 'MNQ').length, 1, 'Close went out, disarmed, despite the throw');
+  core.flattenAll();
+  assert.equal(sent.filter(m => m.type === 'flatten' && m.root === 'MNQ').length, 2, 'Flatten all went out despite the throw');
+});
