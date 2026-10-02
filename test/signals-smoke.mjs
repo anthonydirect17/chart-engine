@@ -73,11 +73,12 @@ const watchArrows = page => page.evaluate(() => {
   P._step = function (...a) { const r = step.apply(this, a); for (const x of this.arrows) { const k = x.t + '|' + x.dir; (seen[k] = seen[k] || {})[x.solid ? 'solid' : 'hollow'] = true; } return r; };
 });
 /* Wait for the scene; `onHollow` once a hollow arrow shows. */
-async function playScene(p, page, getSig, onHollow) {
+async function playScene(p, page, getSig, onHollow, onForming) {
   for (let i = 0; i < 300; i++) {
     const st = await scene(p);
     const arrows = await page.evaluate(getSig);
     if (onHollow && (arrows || []).some(a => !a.solid)) { await onHollow(arrows.find(a => !a.solid)); onHollow = null; }
+    if (onForming && await page.evaluate(() => { const c = window.liveChart, a = c && c.getSignals().absorption; return !!a && a.forming(c.bars()) !== 0; })) { await onForming(); onForming = null; }
     if (st.done && i > 2) break;
     await sleep(400);
   }
@@ -125,6 +126,7 @@ try {
   await shot(page, 'signals-single-menu-done-1920.png');
 
   console.log('the scripted tape plays (sample data)');
+  let formingSeen = 0;
   const sigArrows = () => { const d = window.liveChart.getSignals().divergence; return d ? d.arrows.map(a => ({ t: a.t, dir: a.dir, solid: a.solid })) : []; };
   await watchArrows(page);
   const seen = await playScene(P1, page, sigArrows, async a => {
@@ -132,7 +134,13 @@ try {
     const g = await page.evaluate(t => { const c = window.liveChart, i = c.bars().findIndex(b => b.t === t), r = document.getElementById('chart').getBoundingClientRect(), dp = c.deltaPane();
       return { x: r.x + c.barToX(i), y: r.y + dp.top, h: dp.height }; }, a.t);
     await shot(page, 'signals-crop-hollow-arrow.png', { x: Math.max(0, g.x - 300), y: g.y - 4, width: 420, height: g.h + 8 });
+  }, async () => {                                          // the outline of a forming bar, when the polling catches one
+    const g = await page.evaluate(() => { const c = window.liveChart, b = c.bars(), i = b.length - 1, r = document.getElementById('chart').getBoundingClientRect();
+      return { x: r.x + c.barToX(i), y: r.y + c.priceToY(b[i].c), f: c.getSignals().absorption.forming(b) }; });
+    formingSeen = g.f;
+    await shot(page, 'signals-crop-forming.png', { x: Math.max(0, g.x - 260), y: Math.max(0, g.y - 160), width: 320, height: 320 });
   });
+  console.log('  note ' + (formingSeen ? 'a forming bar\'s outline was caught (' + (formingSeen > 0 ? 'cyan' : 'yellow') + ')' : 'no forming outline caught by the polling (the unit tests cover it)'));
   const st = await page.evaluate(() => { const c = window.liveChart, s = c.getSignals(), b = c.bars();
     return { painted: s.absorption.painted.map(p => ({ t: p.t, dir: p.dir, i: b.findIndex(x => x.t === p.t) })), bubbles: s.bubbles.list.map(x => ({ t: x.t, p: x.p, v: x.v, f: x.f, side: x.side })),
       arrows: s.divergence.arrows.map(a => ({ t: a.t, dir: a.dir, solid: a.solid, i: b.findIndex(x => x.t === a.t) })), n: b.length, T: c.colors() }; });

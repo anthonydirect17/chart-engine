@@ -1811,8 +1811,9 @@ function start(container, opt, PAGE) {
       return j >= 0 && U.tradeDay(cb[j].t, SESSION) === U.tradeDay(t, SESSION) ? cb[j].c : null;
     });
   }
-  /* Everything again (a new load of the instrument, a rebuild of the bars, a setting changed). */
-  function sigRebuild() { sigReplay({ abs: true, bub: true }); sigDivergence(true); }
+  /* On new bars (a load, another bar type or size): the absorption bars again; the bubbles only after a new load (they
+     are kept by time, whatever the bars); the divergence from the bars. */
+  function sigRebuild() { sigReplay({ abs: true, bub: !SIG.bubbles }); sigDivergence(true); }
   /* One live trade, after the chart and the delta core took it (onTick). */
   function sigTrade(t, p, v, s, barT) {
     const job = SIG.job;
