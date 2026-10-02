@@ -68,6 +68,7 @@ namespace NinjaTrader.Cbi
         public DateTime Time { get; set; }
         public string ExecutionId { get; set; }
         public string OrderId { get; set; }
+        public Order Order { get; set; }   // NinjaTrader's Execution.Order: the order that filled
     }
     // NinjaTrader's ExecutionEventArgs has NO Instrument property (confirmed by the NT8 compiler, 2026-09-29).
     public class ExecutionEventArgs : EventArgs
@@ -110,6 +111,7 @@ namespace NinjaTrader.Cbi
         public double LimitPrice { get; set; }
         public double StopPrice { get; set; }
         public double AverageFillPrice { get; set; }
+        public string OrderId { get; set; }
         public string Oco { get; set; }
         public string Name { get; set; }
         public double LimitPriceChanged { get; set; }

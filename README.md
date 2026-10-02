@@ -92,7 +92,7 @@ line; recompile or restart NinjaTrader after a change):
 | `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
-| `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (a market entry's ticks; a resting entry's planned stop or target from its price). None: no limit. Same rule for a mistyped value. |
+| `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
 | `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
@@ -428,8 +428,8 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   name, default like "12/24t"; up to 12) and **Delete** for the saved preset picked. A **t / pt** toggle shows and
   types the values in ticks or points (points round to the nearest tick); they are kept in ticks. The boxes still
   take at most 200 ticks (the page's own limit; ChartBridge 0.3.7 has none unless `config.txt` sets `maxBracketTicks`).
-  With ChartBridge 0.3.7 a limit or stop entry's bracket becomes PRICES when it is placed (from the entry's price):
-  its legs go there at whatever price it fills, and moving the entry leaves them where they are (see below).
+  With ChartBridge 0.3.8 a limit or stop entry's bracket stays in TICKS from each actual fill and travels with the
+  entry when it is moved, like a NinjaTrader ATM (see below; 0.3.7's planned prices are gone).
 - **B/E** (1.10.0, next to Flatten, needs Armed): moves the stop of the open position to break-even, the average
   price rounded a tick toward safety (long up, short down). On only with a position on this account and instrument
   and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past
@@ -485,13 +485,15 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
    trade is more than 300 seconds old. ChartBridge 0.3.7 has no distance limit unless `config.txt` sets
    `maxTicksAway` (before 0.3.7: within 200 ticks of the last price).
 
-**Planned stop and target on a resting entry (ChartBridge 0.3.7, Anthony 2026-10-01).** A limit or stop entry's stop
-and target are prices: every fill of it gets its legs at those prices, whatever the fill price (better on a gap, worse
-on slippage); a fill at or through the planned stop exits at market with an alarm, and a target already passed fills
-at once as a limit. Moving the entry leaves the planned prices where they are; a move to or past them is refused. A
-market entry keeps its stop and target in ticks from the fill. The planned prices survive a recompile or restart
-(the entry's order name and `planned_brackets.txt` in ChartBridge's folder). ChartBridge 0.3.7 also takes a `plan`
-message to add, move or remove them before the fill; the page that sends it is a later build (`nt8/PROTOCOL.md`).
+**Stop and target on a resting entry (ChartBridge 0.3.8, Anthony's ATM rule; replaces 0.3.7's planned prices).** A
+limit or stop entry's stop and target are distances in ticks from its ACTUAL fill: every fill of it gets its legs at
+the fill price plus or minus those ticks, so they travel with the entry when it is dragged, and moving the entry onto
+or past where its stop or target would be is never refused. A market entry works the same way, as before. A fill
+exits at market (with an alarm) only when a trade in the last 2 seconds went through the stop level. The ticks survive
+a recompile or restart (the entry's order name, `CB#tag atm s8 t16`, and `planned_brackets.txt` in ChartBridge's
+folder). A `plan` message adds, changes or removes them before the fill, in ticks (`stopTicks`, `targetTicks`); the
+page that sends it is a later build (`nt8/PROTOCOL.md`). An entry still resting from 0.3.7 is converted once to ticks
+from its current price, with a warning to the page.
 6. Only the instruments ChartBridge serves.
 7. At most 10 order actions per second per page.
 
