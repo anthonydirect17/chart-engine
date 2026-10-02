@@ -441,8 +441,9 @@ test('debounce waits for quiet, flush runs a waiting call now', async () => {
 // nt8/install.ps1 and the updater (nt8/update-pc.ps1) copy what nt8/install-files.json lists
 const installed = () => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).www.map(f => f.from);
 
-test('every script the live page loads is copied by nt8/install.ps1', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8');
+for (const page of ['single.html', 'index.html']) {
+test('every script the live page loads is copied by nt8/install.ps1: ' + page, () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'live', page), 'utf8');
   const srcs = [...html.matchAll(/<script src="([^"]+)"/g)].map(m => m[1]);
   assert.ok(srcs.length >= 4);
   for (const src of srcs) {
@@ -451,12 +452,13 @@ test('every script the live page loads is copied by nt8/install.ps1', () => {
   }
 });
 
-test('every local stylesheet the live page loads is copied by nt8/install.ps1', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8');
+test('every local stylesheet the live page loads is copied by nt8/install.ps1: ' + page, () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'live', page), 'utf8');
   const hrefs = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map(m => m[1]).filter(h => !/^https?:/.test(h));
   assert.ok(hrefs.includes('live.css'));
   for (const href of hrefs) assert.ok(installed().includes('live/' + href), href + ' is not in nt8/install-files.json');
 });
+}
 
 /* A chart tab as the page holds it: choices read once at load, then changed one at a time. Before 1.4.1 the page
    wrote the whole bracket (setBracket); the fallback below does exactly that, so this test shows the old failure when

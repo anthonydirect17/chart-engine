@@ -32,6 +32,7 @@ import { TEST_PIN, unlockIfAsked } from './smoke-pin.mjs';
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, d) => { const a = process.argv.slice(2).find(x => x === '--' + name || x.startsWith('--' + name + '=')); return a === undefined ? d : a.includes('=') ? a.slice(a.indexOf('=') + 1) : true; };
+// the single chart page: live/single.html since the workspace became live/index.html (E2a), live/index.html before
 const VIEW = arg('view', 'range'), SECS = +arg('secs', 30), ROOT = path.resolve(arg('root', here)), LABEL = arg('label', path.basename(ROOT));
 const PORT = +arg('port', 8830), TICK_RATE = +arg('tick-rate', 15), LIVE_RATE = +arg('live-rate', 100), RANGE = +arg('range', 40);
 const ET = arg('et', '');                  // a time of day in New York (HH:MM) for the page and the bridge clocks
@@ -48,6 +49,7 @@ const VP = arg('vp', false);               // true, or 'rth'
 const LIVE_FIRST = !!arg('live-first', false);
 const DELTA_OFF = arg('delta', '1') === '0';
 
+const SINGLE = fs.existsSync(path.join(ROOT, 'live', 'single.html')) ? 'single.html' : '';
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
   '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--clock-offset=' + OFFSET, '--test-pin=' + TEST_PIN].concat(EMBED ? ['--tickets'] : []).concat(LIVE_FIRST ? ['--live-first'] : []).concat(fs.existsSync(path.join(ROOT, 'live', 'pin.js')) ? [] : ['--pin-off']), { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
@@ -102,7 +104,7 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.addInitScript(init);
   // cross-origin isolated, so performance.now() has 5 microsecond resolution instead of 100
-  await ctx.route(/\/live\/(index\.html)?$|\/test\/embed-host\.html$/, async r => {
+  await ctx.route(/\/live\/(index\.html|single\.html)?$|\/test\/embed-host\.html$/, async r => {
     const resp = await r.fetch();
     await r.fulfill({ response: resp, headers: Object.assign({}, resp.headers(), { 'cross-origin-opener-policy': 'same-origin', 'cross-origin-embedder-policy': 'require-corp' }) });
   });
@@ -115,7 +117,7 @@ try {
     if (EMBED) {
       await page.goto(`http://localhost:${PORT}/test/embed-host.html`);
       await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: () => url + '?ticket=' + Math.random().toString(36).slice(2), storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
-    } else { await page.goto(`http://localhost:${PORT}/live/`); await unlockIfAsked(page, TEST_PIN, 120000); }
+    } else { await page.goto(`http://localhost:${PORT}/live/${SINGLE}`); await unlockIfAsked(page, TEST_PIN, 120000); }
     await page.waitForFunction(() => { const el = document.querySelector('[id$="connPill"]'); return el && el.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
     return { page, loadMs: Date.now() - t0 };
   };

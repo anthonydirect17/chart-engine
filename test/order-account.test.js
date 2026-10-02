@@ -40,46 +40,64 @@ test('orderAccount: the result is always one of the allowed accounts, or none', 
   }
 });
 
-test('live.js: every order path sends for TR.account, and only after ready() checked the account shown', () => {
+/* 1.12.0: the order logic moved unchanged from live.js into live/trade.js (TradeCore), which the single chart page's
+   order bar and the workspace's ticket share; the checks below read it there, and its wiring in live.js. */
+const CORE = fs.readFileSync(path.join(__dirname, '..', 'live', 'trade.js'), 'utf8').replace(/\r\n/g, '\n');
+const WS = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').replace(/\r\n/g, '\n');
+const TC = require('../live/trade.js');
+
+test('trade.js: every order path sends for TR.account, and only after ready() checked the account shown', () => {
   // the messages that act on an account: the order and Flatten carry TR.account; cancel and change carry an id
-  const sends = PAGE.match(/send\(\{ type: '(order|flatten|cancel|change)'[^\n]*/g) || [];
+  const sends = CORE.match(/send\(\{ type: '(order|flatten|cancel|change)'[^\n]*/g) || [];
   assert.ok(sends.length >= 4, 'found the order sends');
-  assert.match(PAGE, /const msg = \{ type: 'order', cid: newCid\(\), account: TR\.account,/);
-  // Flatten: the click sends for the account and instrument shown (sendFlatten); its one resend after a rate refusal
-  // only while those are still shown (review 3 S4)
-  assert.match(PAGE, /sendFlatten\(TR\.account, D\.root\);/);
-  assert.match(PAGE, /send\(\{ type: 'flatten', account, root \}\);/);
-  assert.match(PAGE, /if \(ws && ws\.readyState === 1 && TR\.enabled && TR\.account === f\.account && D\.root === f\.root\) \{\n\s+sendFlatten\(f\.account, f\.root, true\);/);
+  assert.match(CORE, /const msg = \{ type: 'order', cid: newCid\(\), account: TR\.account,/);
+  // Flatten: the click sends for the account and instrument shown (sendFlatten); a resend after a rate refusal only
+  // while those are still shown (review 3 S4), Flatten all's while the account is still a trade account (1.12.0)
+  assert.match(CORE, /sendFlatten\(TR\.account, R, false, other \? 'all' : 'here'\);/);
+  assert.match(CORE, /send\(\{ type: 'flatten', account, root: R \}\);/);
+  assert.match(CORE, /const ok = on && \(f\.kind === 'here' \? TR\.account === f\.account && root\(\) === f\.root : TR\.accounts\.includes\(f\.account\)\);\n\s+if \(ok\) \{ sendFlatten\(f\.account, f\.root, true, f\.kind\);/);
   // ready(): the picker must show TR.account, else nothing is sent
-  const ready = PAGE.slice(PAGE.indexOf('function ready('), PAGE.indexOf('function sendOrder('));
-  assert.match(ready, /if \(\$\('oAcct'\)\.value !== TR\.account\) \{ syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);
+  const ready = CORE.slice(CORE.indexOf('function ready('), CORE.indexOf('function sendOrder('));
+  assert.match(ready, /if \(env\.pickerAccount\(\) !== TR\.account\) \{ env\.syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);
+  assert.match(PAGE, /pickerAccount: \(\) => \$\('oAcct'\)\.value,/, 'the page\'s picker');
+  assert.match(WS, /pickerAccount: \(\) => \(holds\(\) && TK\.el \? tk\('oAcct'\)\.value : ticketAccount\(\)\),/, 'the ticket\'s picker');
   // every path goes through ready(): sendOrder (Buy, Sell, click-trade, Shift+click), cancelAll, Flatten, move, cancel
-  assert.match(PAGE.slice(PAGE.indexOf('function sendOrder('), PAGE.indexOf('function workingHere(')), /^\s+if \(!ready\(\)\) return;/m);
-  assert.match(PAGE.slice(PAGE.indexOf('function cancelAll('), PAGE.indexOf('function setArmed(')), /^\s+if \(!ready\(\)\) return;/m);
+  assert.match(CORE.slice(CORE.indexOf('function sendOrder('), CORE.indexOf('function placeAt(')), /^\s+if \(!ready\(\)\) return;/m);
+  assert.match(CORE.slice(CORE.indexOf('function breakEven('), CORE.indexOf('function bePump(')), /^\s+if \(!ready\(\)\) return;/m);
+  assert.match(CORE.slice(CORE.indexOf('function cancelAll('), CORE.indexOf('function cancelPump(')), /^\s+if \(!ready\(\)\) return;/m);
   // Flatten (the button and the Close hotkey, 1.11.0) and Flatten all: ready() first; Flatten all names TR.account then
-  assert.match(PAGE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(flattenHere\)\);/);
-  assert.match(PAGE, /function flattenHere\(\) \{\n\s+if \(!ready\(false\)\) return;/);
-  assert.match(PAGE, /function flattenAll\(\) \{\n\s+if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
+  assert.match(CORE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.flattenHere\(\)\)\);/);
+  assert.match(CORE, /function flattenHere\(other\) \{\n\s+if \(!ready\(false\)\) return;/);
+  assert.match(CORE, /function flattenAll\(\) \{\n\s+if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
-  assert.deepEqual((PAGE.match(/ready\(false\)/g) || []).length, 2);
-  assert.match(PAGE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
-  // the hotkeys call the buttons' own functions (1.11.0): no second order path
-  assert.match(PAGE, /actions: \{ buy: \(\) => sendOrder\('buy', 'market', null\), sell: \(\) => sendOrder\('sell', 'market', null\), be: breakEven, close: flattenHere, flattenAll \},/);
-  assert.match(PAGE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => sendOrder\('buy', 'market', null\)\)\);/);
-  assert.match(PAGE, /\$\('sellMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => sendOrder\('sell', 'market', null\)\)\);/);
-  assert.match(PAGE, /\$\('beBtn'\)\.addEventListener\('click', pointerOnly\(breakEven\)\);/);
-  assert.match(PAGE, /chart\.on\('orderMove', e => \{\n\s+if \(!ready\(\)\) \{ renderTrading\(\); return; \}\n\s+if \(notShown\(e\.id\)\) return;/);
-  assert.match(PAGE, /chart\.on\('orderCancel', e => \{\n\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(e\.id\)\) return;/);
-  assert.match(PAGE, /const notShown = id => \{ const o = TR\.orders\.get\(id\); if \(o && o\.account === TR\.account\) return false;/);
+  assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
+  assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
+  // the hotkeys and the buttons call the core's own functions: no second order path, on either page
+  assert.match(PAGE, /actions: \{ buy: \(\) => T\.sendOrder\('buy', 'market', null\), sell: \(\) => T\.sendOrder\('sell', 'market', null\), be: T\.breakEven, close: \(\) => T\.flattenHere\(\), flattenAll: T\.flattenAll \},/);
+  assert.match(CORE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('buy', 'market', null\)\)\);/);
+  assert.match(CORE, /\$\('sellMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('sell', 'market', null\)\)\);/);
+  assert.match(CORE, /\$\('beBtn'\)\.addEventListener\('click', pointerOnly\(core\.breakEven\)\);/);
+  assert.match(PAGE, /chart\.on\('orderMove', e => T\.moveOrder\(e\.id, e\.price\)\);/);
+  assert.match(PAGE, /chart\.on\('orderCancel', e => T\.cancelOrder\(e\.id\)\);/);
+  assert.match(CORE, /function moveOrder\(id, price\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return; \}\n\s+if \(notShown\(id\)\) return;/);
+  assert.match(CORE, /function cancelOrder\(id\) \{\n\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(id\)\) return;/);
+  assert.match(CORE, /const notShown = id => \{ const o = TR\.orders\.get\(id\); if \(o && o\.account === TR\.account\) return false;/);
+  // the workspace sends only through the same core: its ticket's buttons (TradeCore.wire), chart clicks, keys, forwards
+  assert.match(WS, /const core = TC\.create\(\{/);
+  assert.match(WS, /TK\.bar = TC\.wire\(id => map\[id\] \|\| null, core, \{/);
+  assert.doesNotMatch(WS, /tws\.send\(JSON\.stringify\(\{ type: '(order|flatten|cancel|change)'/, 'no order message built outside the core');
+  assert.equal((WS.match(/tws\.send\(/g) || []).length, 1, 'the order connection is written only by the core\'s send');
 });
 
-test('live.js: TR.account is set only from orderAccount, the picker, or cleared; Armed is never read from storage', () => {
-  const sets = PAGE.match(/TR\.account = [^;]*;/g);
-  assert.deepEqual(sets, ["TR.account = TR.enabled ? pick.account : '';", "TR.account = '';", 'TR.account = e.target.value;']);
-  assert.match(PAGE, /const pick = LP\.orderAccount\(TR\.accounts, TR\.enabled \? viewAccount : ''\);/);
-  assert.doesNotMatch(PAGE, /TR\.armed = (?!v;)/, 'TR.armed is set only in setArmed');
-  assert.doesNotMatch(PAGE, /store\.(get|set)\('[^']*arm/i, 'nothing about Armed in storage');
-  assert.match(PAGE, /if \(cameOn \|\| !TR\.enabled \|\| TR\.account !== was\) setArmed\(false\);/);
+test('trade.js: TR.account is set only from orderAccount, the picker, or cleared; Armed is never read from storage', () => {
+  const sets = CORE.match(/TR\.account = [^;]*;/g);
+  assert.deepEqual(sets, ["TR.account = TR.enabled ? pick.account : '';", "TR.account = '';", 'TR.account = a;']);
+  assert.match(CORE, /const pick = LP\.orderAccount\(TR\.accounts, TR\.enabled \? env\.wantedAccount\(\) : ''\);/);
+  assert.match(PAGE, /wantedAccount: \(\) => viewAccount,/);
+  assert.match(CORE, /function pickAccount\(a\) \{\n\s+TR\.account = a;\n\s+if \(TR\.armed\) \{ setArmed\(false\); flash\('Armed turned off: the account changed\.', 'warn'\); \}/);
+  assert.doesNotMatch(PAGE + CORE + WS, /TR\.armed = (?!v;)/, 'TR.armed is set only in setArmed');
+  assert.doesNotMatch(PAGE + WS, /store\.(get|set|getItem|setItem)\('[^']*arm/i, 'nothing about Armed in storage');
+  assert.match(CORE, /if \(cameOn \|\| !TR\.enabled \|\| TR\.account !== was\) setArmed\(false\);/);
   // the trading page never follows another tab's pick (each tab keeps its own account while open)
   assert.match(PAGE, /function followAccount\(v\) \{\n\s+if \(TRADING \|\| /);
   // the 1.5 fills choice is never an order account
@@ -90,26 +108,33 @@ test('live.js: TR.account is set only from orderAccount, the picker, or cleared;
   assert.equal((PAGE.match(/saveTabAccount\(/g) || []).length, 2, 'called on the two kinds of pick, never on a fallback');
 });
 
-/* Cancel all's batch (review 2 S1, S2, N1), run on its own: live.js's code from CANCEL_CHUNK to setArmed, with the page
-   around it stubbed (the socket, the timers, the elements). The page itself is driven in test/orders-smoke.mjs. */
+/* Cancel all's batch (review 2 S1, S2, N1), run on its own: TradeCore with the page around it stubbed (the socket, the
+   timers, the elements). The page itself is driven in test/orders-smoke.mjs. */
 function cancelHarness(n, opts = {}) {
   const OT = require('../live/order-ticket.js');
-  const src = PAGE.slice(PAGE.indexOf('  const CANCEL_CHUNK'), PAGE.indexOf('  function setArmed('));
-  const TR = { enabled: true, armed: true, account: 'EVAL-1', accounts: ['Sim101', 'EVAL-1'], orders: new Map(), positions: new Map() };
+  const store = new Map();
+  const prefs = LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) });
+  const D = { root: 'MNQ' }, ws = { readyState: 1 }, sent = [], at = [], flashes = [], timers = [], els = {}, clock = { t: 1000 };
+  const $ = id => els[id] || (els[id] = { textContent: '', title: '', hidden: true, cls: new Set() });
+  let core = null;
+  core = TC.create({
+    LP, prefs, fetch: () => new Promise(() => {}), send: m => { sent.push(m.id); at.push(clock.t); }, open: () => ws.readyState === 1, sock: () => ws,
+    root: () => D.root, lastPrice: () => 100, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => '', tick: () => 0.25, served: () => true, fmt: p => String(p),
+    flash: (t, l) => flashes.push([t, l]), later: (fn, ms) => timers.push({ fn, ms }), changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
+    batch: () => { const b = core.batchLine(D.root); $('oCancel').textContent = b.text; if (b.away) $('oCancel').cls.add('away'); else $('oCancel').cls.delete('away'); },
+    unsent: () => { const u = core.unsentNote(); $('unsentBar').hidden = !u.show; $('unsentText').textContent = u.text; },
+    destroyed: () => false, now: () => clock.t,
+  });
+  const TR = Object.assign(core.TR, { v2: true, enabled: true, armed: true, account: 'EVAL-1', accounts: ['Sim101', 'EVAL-1'] });
   for (let i = 1; i <= n; i++) TR.orders.set('A' + i, { id: 'A' + i, account: 'EVAL-1', root: 'MNQ', side: 'buy', kind: 'limit', state: 'working', qty: 1, price: 100 - i, oco: null });
   for (const o of opts.others || []) TR.orders.set(o.id, o);
-  const D = { root: 'MNQ' }, ws = { readyState: 1 }, sent = [], at = [], flashes = [], timers = [], els = {}, clock = { t: 1000 };
-  const $ = id => els[id] || (els[id] = { textContent: '', title: '', hidden: true, cls: new Set(), classList: { toggle(c, on) { if (on) this.o.cls.add(c); else this.o.cls.delete(c); } } });
-  const mk = $; for (const id of ['oCancel', 'unsentBar', 'unsentText']) mk(id).classList.o = mk(id);
-  let counted = null;                                                    // live.js's send counts every order action (actionSent)
-  const api = new Function('TR', 'D', 'OT', 'ws', 'send', 'later', 'flash', 'ready', '$', 'performance',
-    src + '\n  return { cancelAll, batchStop, unsentCheck, actionSent, sendFlatten, onRefused, inCancelAll, get batch() { return batch; }, unsent };')(
-    TR, D, OT, ws, m => { if (ws.readyState === 1) { sent.push(m.id); at.push(clock.t); counted(); } }, (fn, ms) => timers.push({ fn, ms }), (t, l) => flashes.push([t, l]),
-    () => TR.armed && TR.enabled && ws.readyState === 1, $, { now: () => clock.t });
-  counted = api.actionSent;
+  const t = core._t;
+  const api = { cancelAll: core.cancelAll, inCancelAll: core.inCancelAll, batchStop: t.batchStop, unsentCheck: t.unsentCheck, actionSent: t.actionSent,
+    sendFlatten: t.sendFlatten, onRefused: t.onRefused, get batch() { return t.batch; } };
   // the next timer: the clock moves to it (a whole 1.1 s after the first of the last 8 sends)
   const tick = () => { const t = timers.shift(); if (t) { clock.t += t.ms; t.fn(); } return !!t; };
   const wait = ms => { clock.t += ms; };
+  void OT;
   return { TR, D, ws, sent, at, flashes, timers, els, api, tick, wait, clock };
 }
 
@@ -132,11 +157,11 @@ test('Cancel all: the rest go out by id whatever Armed, the account shown or the
   assert.equal(h.api.batch, null);
   assert.equal(h.timers.length, 0);
   assert.ok(inWindow(h.at), 'never over 6 in 1.1 s');
-  // nothing in live.js locks the picker or Armed any more
-  assert.doesNotMatch(PAGE, /TR\.cancelling|cancelSeq/);
-  assert.match(PAGE, /sel\.disabled = !TR\.accounts\.length;/);
-  assert.match(PAGE, /if \(el !== \$\('oAcct'\)\) el\.disabled = !on;/);
-  assert.match(PAGE, /const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;/);
+  // nothing locks the picker or Armed any more
+  assert.doesNotMatch(PAGE + CORE, /TR\.cancelling|cancelSeq/);
+  assert.match(CORE, /sel\.disabled = !TR\.accounts\.length;/);
+  assert.match(CORE, /if \(el !== \$\('oAcct'\) && !el\.hasAttribute\('data-keep'\)\) el\.disabled = !on;/);
+  assert.match(CORE, /const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;/);
 });
 
 test('Cancel all: the newest click goes first, so the account shown never waits behind an earlier batch (review 3 S1)', () => {
@@ -209,7 +234,7 @@ test('a drag on an order in a Cancel all under way sends no change: Cancel all w
   while (h.tick());
   h.wait(5100);
   assert.equal(h.api.inCancelAll('A9'), false, 'a while after its cancel went out');
-  assert.match(PAGE, /if \(notShown\(e\.id\)\) return;\n(\s+\/\*[^]*?\*\/\n)?\s+if \(inCancelAll\(e\.id\)\) \{ renderTrading\(\); flash\('Not moved: order ' \+ e\.id \+ ' is in the Cancel all under way, which cancels it\.', 'warn'\); return; \}\n\s+send\(\{ type: 'change'/);
+  assert.match(CORE, /if \(notShown\(id\)\) return;\n(\s+\/\*[^]*?\*\/\n)?\s+if \(inCancelAll\(id\)\) \{ env\.changed\(\); flash\('Not moved: order ' \+ id \+ ' is in the Cancel all under way, which cancels it\.', 'warn'\); return; \}\n\s+send\(\{ type: 'change'/);
 });
 
 test('Cancel all: the orders just sent count toward the pace, so ChartBridge never sees more than 10 a second', () => {
@@ -219,7 +244,7 @@ test('Cancel all: the orders just sent count toward the pace, so ChartBridge nev
   assert.equal(h.sent.length, 2, 'at most 6 actions in 1.1 s');
   while (h.tick());
   assert.equal(h.sent.length, 10);
-  assert.match(PAGE, /if \(ws && ws\.readyState === 1\) \{ ws\.send\(JSON\.stringify\(obj\)\); if \(ORDER_ACTIONS\.includes\(obj\.type\)\) actionSent\(\); \}/);
+  assert.match(CORE, /function send\(obj\) \{\n\s+if \(!open\(\)\) return;\n\s+env\.send\(obj\);\n\s+if \(ORDER_ACTIONS\.includes\(obj\.type\)\) actionSent\(\);/);
 });
 
 test('Flatten: takes its orders off a batch (no "No working order" after it), and is sent again once after a rate refusal (review 2 S2, review 3 S4)', () => {
@@ -230,7 +255,7 @@ test('Flatten: takes its orders off a batch (no "No working order" after it), an
   while (h.tick());
   assert.equal(h.sent.length, 6 + 1, 'the first 6 and the Flatten, nothing after it');
   assert.equal(h.api.batch, null);
-  assert.match(PAGE, /send\(\{ type: 'cancel', id: e\.id \}\);\n\s+batchStop\(x => x\.id === e\.id\);/);
+  assert.match(CORE, /send\(\{ type: 'cancel', id \}\);\n\s+batchStop\(x => x\.id === id\);/);
   // refused for the rate: sent once more 1.1 s later, while EVAL-1 MNQ is still shown
   const g = cancelHarness(0);
   g.api.sendFlatten('EVAL-1', 'MNQ');
@@ -280,10 +305,11 @@ test('Cancel all: a drop mid-batch leaves a note that names the account, the ins
   g.TR.orders.clear(); g.api.unsentCheck();
   assert.match(g.els.unsentText.textContent, /^6 cancels on EVAL-1 MNQ were not sent: the account is no longer a trade account in ChartBridge\./);
   // the wiring: a drop, trading off and the account list, a refusal, and Dismiss
-  assert.match(PAGE, /batchStop\(\(\) => true, 'the connection to ChartBridge dropped'\);   \/\/ before the orders are cleared/);
-  assert.match(PAGE, /if \(!TR\.enabled\) batchStop\(\(\) => true, 'trading went off \(' \+ TR\.reason\.replace\(\/\\\.\$\/, ''\) \+ '\)'\);/);
-  assert.match(PAGE, /case 'reject': if \(!onRefused\(m\)\) flash\('Refused by ChartBridge: ' \+ m\.reason, 'error'\);/);
-  assert.match(PAGE, /\$\('unsentClose'\)\.addEventListener\('click', \(\) => \{ unsent\.clear\(\); flattenMiss = ''; renderUnsent\(\); \}\);/);
+  assert.match(CORE, /batchStop\(\(\) => true, 'the connection to ChartBridge dropped'\);   \/\/ before the orders are cleared/);
+  assert.match(CORE, /if \(!TR\.enabled\) batchStop\(\(\) => true, 'trading went off \(' \+ TR\.reason\.replace\(\/\\\.\$\/, ''\) \+ '\)'\);/);
+  assert.match(CORE, /case 'reject': if \(!onRefused\(m\)\) flash\('Refused by ChartBridge: ' \+ m\.reason, 'error'\);/);
+  assert.match(CORE, /\$\('unsentClose'\)\.addEventListener\('click', \(\) => core\.dismissUnsent\(\)\);/);
+  assert.match(CORE, /function dismissUnsent\(\) \{ unsent\.clear\(\); flattenMiss = ''; env\.unsent\(\); \}/);
 });
 
 test('order-ticket.js is unchanged by 1.6.1 (defaultAccount stays for anything else that uses it)', () => {

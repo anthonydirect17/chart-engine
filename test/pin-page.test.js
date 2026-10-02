@@ -40,15 +40,20 @@ test('pin.js asks for the PIN again only when ChartBridge says the unlock is gon
 test('live.js: only the standalone page uses the PIN; ChartLive.mount never does', () => {
   assert.match(live, /const PIN = PAGE \? window\.ChartBridgePin \|\| null : null;/);
   assert.match(live, /const WS_URL = opt\.wsUrl \|\| \(PIN \? \(\) => PIN\.wsUrl\(pageWsUrl\(\)\) : pageWsUrl\(\)\);/);
-  assert.match(live, /fetch\('\/session', \{ cache: 'no-store', headers: PIN \? PIN\.headers\(\) : \{\} \}\)/);
+  // 1.12.0: the sign-in is TradeCore's (live/trade.js), created only on the page (TRADING), with the page's PIN
+  assert.match(read('live/trade.js'), /env\.fetch\('\/session', \{ cache: 'no-store', headers: PIN \? PIN\.headers\(\) : \{\} \}\)/);
+  assert.match(live, /const T = !TRADING \? null : TC\.create\(\{\n\s+LP, prefs, pin: PIN,/);
   assert.match(live, /function mount\(container, options\) \{ return start\(container, options \|\| \{\}, false\); \}/);
-  assert.match(live, /if \(window\.ChartBridgePin\) window\.ChartBridgePin\.gate\(\)\.then\(\(\) => start\(document\.body, \{\}, true\)\);/, 'the page starts only after the unlock');
+  assert.match(live, /if \(window\.ChartBridgePin\) window\.ChartBridgePin\.gate\(\)\.then\(boot\); else boot\(\);/, 'the page starts only after the unlock');
+  assert.match(live, /const boot = \(\) => \{ if \(!window\.TradeCore\) \{[^\n]*return; \} start\(document\.body, \{\}, true\); \};/, 'and with its order logic (trade.js, fetched when an older single.html did not load it)');
   assert.equal((live.match(/ChartBridgePin/g) || []).length, 3, 'ChartBridgePin used only in the page boot and the PAGE line');
   // the host page and EMBED.md never load pin.js
   assert.ok(!/pin\.js/.test(read('test/embed-host.html')));
   const vendor = read('live/EMBED.md').split('## Mount')[0];
   assert.ok(!/pin\.js|pin\.css/.test(vendor), 'EMBED.md: pin.js and pin.css are not files to vendor');
-  // the standalone page loads pin.js before live.js
-  const html = read('live/index.html');
-  assert.ok(html.indexOf('src="pin.js"') > 0 && html.indexOf('src="pin.js"') < html.indexOf('src="live.js"'));
+  // the single chart page and the workspace load pin.js before live.js
+  for (const f of ['live/single.html', 'live/index.html']) {
+    const html = read(f);
+    assert.ok(html.indexOf('src="pin.js"') > 0 && html.indexOf('src="pin.js"') < html.indexOf('src="live.js"'), f);
+  }
 });

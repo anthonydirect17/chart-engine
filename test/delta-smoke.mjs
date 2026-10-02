@@ -200,7 +200,7 @@ try {
   const off = offsetTo(13, 0, 0, weekday);
   const br = await startBridge(off);
   const ctx = await context(off, 'range');
-  const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+  const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
   await p.waitForTimeout(800);
   let s = await state(p), px = await pixels(p);
   check(await p.textContent('#lgTf') === 'Range 40t' && /fake-0\.3\.4/.test(await p.textContent('#lgSrc')), 'NQ Range 40 on a fake ChartBridge 0.3.4 (sample data): ' + await p.textContent('#lgSrc'));
@@ -345,7 +345,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b3 = await startBridge(o, ['--no-sides']);
     const c3 = await context(o, 'range');
-    const q = await openPage(c3, `http://localhost:${b3.port}/live/`);
+    const q = await openPage(c3, `http://localhost:${b3.port}/live/single.html`);
     const st = await state(q), pxl = await pixels(q);
     check(/fake-0\.3\.3/.test(await q.textContent('#lgSrc')) && st.layer && st.pane.on, 'ChartBridge 0.3.3: the pane is there (the layout as with sides)');
     check(st.delta === null && pxl.pane.up + pxl.pane.down === 0 && pxl.plot.up + pxl.plot.down > 1000, 'and draws nothing: no delta, no candle pixels in it: ' + JSON.stringify(pxl));
@@ -363,7 +363,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b4 = await startBridge(o, ['--tick-hours-max=2']);
     const c4 = await context(o, 's15');
-    const q = await openPage(c4, `http://localhost:${b4.port}/live/`);
+    const q = await openPage(c4, `http://localhost:${b4.port}/live/single.html`);
     const st = await state(q), ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
     check(!!ses && ses.partial && ses.from > ses.start + 3600 && ses.firstOpen === 0, '15s with 2 hours of ticks: the session counts from ' + (ses && U.fmtExact(ses.from)) + ', flagged as partial');
     check(st.pane.title.endsWith(' since ' + U.fmtExact(ses.from) + ' ET') && st.legend.startsWith('Delta since ' + U.fmtExact(ses.from)), 'said in the pane ("' + st.pane.title + '") and the legend ("' + st.legend + '")');
@@ -378,7 +378,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b5 = await startBridge(o);
     const c5 = await context(o, 'm1');
-    const q = await openPage(c5, `http://localhost:${b5.port}/live/`);
+    const q = await openPage(c5, `http://localhost:${b5.port}/live/single.html`);
     const st = await state(q), asked = await q.evaluate(() => window.__asked);
     check(JSON.stringify(asked) === '[0]' && st.delta && st.delta.sessions.every(x => x.partial) && / since 13:0\d ET \(page opened\)$|starts with the next full bar$/.test(st.pane.title),
       '1m first load at 13:00: asks no ticks (' + asked + ', as before 1.7.0), the delta from the page\'s opening: "' + st.pane.title + '"');
@@ -433,7 +433,7 @@ try {
       const o = offsetTo(2, 5, 0, tueToFri);                       // 02:05 ET: Range asks 11 hours, a cap of 8 starts at 18:05
       const bc = await startBridge(o, bridgeFlags);
       const cc = await context(o, 'range', '', opts);
-      const q = await openPage(cc, `http://localhost:${bc.port}/live/`);
+      const q = await openPage(cc, `http://localhost:${bc.port}/live/single.html`);
       const st = await state(q), ses = st.delta && st.delta.sessions[st.delta.sessions.length - 1];
       const r = await q.evaluate(() => ({ first: window.__trades.length ? window.__trades[0][0] : null, asked: window.__asked }));
       const late = r.first - (ses ? ses.start : 0);                 // 8 hours before the request: 18:05, give or take the page's load time
@@ -459,7 +459,7 @@ try {
     const o = offsetTo(17, 59, 20, monToThu);
     const b8 = await startBridge(o);
     const c8 = await context(o, 'm1', '', { cmeBreak: true });      // no tick backfill (minute view), nothing trades 17:00 to 18:00
-    const q = await openPage(c8, `http://localhost:${b8.port}/live/`);
+    const q = await openPage(c8, `http://localhost:${b8.port}/live/single.html`);
     const endAt = Date.now() + 50000;
     let st = await state(q);
     while (Date.now() < endAt) {
@@ -494,7 +494,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b = await startBridge(o, ['--quote-hours=' + qh]);
     const c = await context(o, 's15');
-    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
     let r = await newest(q);
     const endAt = Date.now() + 40000;
     while (Date.now() < endAt && !(r.ses && r.ses.n > 5)) { await q.waitForTimeout(1000); r = await newest(q); }
@@ -516,7 +516,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b = await startBridge(o);
     const c = await context(o, 'm1', `if (!localStorage.getItem('live-indicators-v2')) localStorage.setItem('live-indicators-v2', JSON.stringify({ main: { ind: { delta: { on: false, shown: true, pin: false } } } }));`);
-    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
     const before = await q.evaluate(() => ({ asked: window.__asked.slice(), delta: !!window.liveChart.getDelta(), layer: window.liveChart.getLayers().delta }));
     check(JSON.stringify(before.asked) === '[0]' && !before.delta && !before.layer, '1m with the delta pane off: asks no ticks (' + before.asked + '), no delta');
     await q.evaluate(() => {
@@ -536,7 +536,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b = await startBridge(o);
     const c = await context(o, 'h1');
-    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
     await q.waitForTimeout(3000);
     const r = await newest(q);
     check(!!r.ses && r.ses.partial && r.ses.n > 5 && r.ses.firstOpen === 0 && r.ses.buy === r.got.b && r.ses.sell === r.got.s && r.ses.n === r.got.n && r.ses.from - r.ses.start > 19 * 3600 - 1,
@@ -549,7 +549,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b = await startBridge(o, ['--quote-hours=0']);
     const c = await context(o, 'm5');
-    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
     await q.waitForTimeout(3000);
     // the count as drawn, and every live trade received from its start (the recorder here is never reset)
     const kept = () => q.evaluate(() => new Promise(res => requestAnimationFrame(() => {
@@ -580,7 +580,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b = await startBridge(o, ['--quote-hours=1']);
     const c = await context(o, 's15');
-    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
     await q.click('#tfSeg >> text="1m"'); await live(q);
     const seen = () => q.evaluate(() => new Promise(res => requestAnimationFrame(() => { const x = window.liveChart.getDelta().sessions.at(-1); res({ title: window.liveChart.deltaPane().title, from: x.from, n: x.trades, buy: x.buy, sell: x.sell }); })));
     const before = await seen();
@@ -598,7 +598,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b = await startBridge(o, ['--quote-hours=0', '--load-delay-ms=3000']);
     const c = await context(o, 'm5');
-    const q = await openPage(c, `http://localhost:${b.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
     await q.waitForTimeout(2000);
     const t0 = await q.evaluate(() => window.liveChart.deltaPane().title);
     check(/ \(page opened\)$/.test(t0), '5m before the reload: nothing missed, "' + t0 + '"');
@@ -614,7 +614,7 @@ try {
     const o = offsetTo(13, 0, 0, weekday);
     const b1 = await startBridge(o, ['--quote-hours=0']);
     const c = await context(o, 'm5');
-    const q = await openPage(c, `http://localhost:${b1.port}/live/`);
+    const q = await openPage(c, `http://localhost:${b1.port}/live/single.html`);
     await q.waitForTimeout(3000);
     const before = await q.evaluate(() => { const x = window.liveChart.getDelta().sessions.at(-1); return { title: window.liveChart.deltaPane().title, from: x.from, n: x.trades }; });
     const downAt = Date.now();
@@ -642,7 +642,7 @@ try {
       const o = offsetTo(17, 59, 52, weekdayEve);
       const b = await startBridge(o + 10, ['--cme-hours', '--pc-clock-offset=' + o]);
       const c = await context(o, 'm1', '', { cmeBreak: true });
-      const q = await openPage(c, `http://localhost:${b.port}/live/`);
+      const q = await openPage(c, `http://localhost:${b.port}/live/single.html`);
       const liveAt = U.zoneSeconds((await q.evaluate(() => window.__readyAt)));
       const s18 = Math.ceil(liveAt / 86400) * 86400 - 6 * 3600;
       if (!(liveAt >= s18 - 10 && liveAt + 5 <= s18)) { console.log('  info C: live at ' + U.fmtExact(liveAt) + ' by the PC clock, outside 17:59:50 to 17:59:55; again'); await c.close(); b.kill(); continue; }
@@ -666,7 +666,7 @@ try {
     const o = offsetTo(17, 59, 35, monToThu);
     const b7 = await startBridge(o);
     const c7 = await context(o, 's15');
-    const q = await openPage(c7, `http://localhost:${b7.port}/live/`);
+    const q = await openPage(c7, `http://localhost:${b7.port}/live/single.html`);
     const before = await state(q);
     const endAt = Date.now() + 45000;
     let after = before;

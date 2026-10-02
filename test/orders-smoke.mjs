@@ -46,7 +46,7 @@ async function open(browser, port, width, height) {
   page.on('pageerror', e => fail(width + 'px pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await page.goto(`http://localhost:${port}/live/`);
+  await page.goto(`http://localhost:${port}/live/single.html`);
   await unlockIfAsked(page);                                   // ChartBridge 0.3.2: the page's PIN (made-up test PIN)
   await page.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(600);
@@ -561,7 +561,7 @@ try {
       const pg = await ctx.newPage();
       pg.on('pageerror', e => fail('1.6.1 pageerror: ' + e.message));
       pg.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('1.6.1 console: ' + m.text()); });
-      await pg.goto(`http://localhost:${P5}/live/`);
+      await pg.goto(`http://localhost:${P5}/live/single.html`);
       await unlockIfAsked(pg);
       await tradingOn(pg);
       return pg;
@@ -1021,13 +1021,13 @@ try {
   /* ---------------- clickjacking: ChartBridge refuses frames; the page also refuses to trade inside one */
   const host = await browser.newPage({ viewport: { width: 1300, height: 900 } });
   await host.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await host.setContent(`<iframe id="f" src="http://localhost:${PORT}/live/" style="width:1260px;height:860px;border:0"></iframe>`);
+  await host.setContent(`<iframe id="f" src="http://localhost:${PORT}/live/single.html" style="width:1260px;height:860px;border:0"></iframe>`);
   await host.waitForTimeout(2500);
   const blocked = host.frames().find(f => f !== host.mainFrame());
   check(!blocked || !(await blocked.evaluate(() => !!document.getElementById('connPill')).catch(() => false)), 'ChartBridge page loaded inside a frame');
   await startBridge(PORT + 3, ['--trading', '--trade-accounts=Sim101', '--allow-frames', '--test-pin=' + TEST_PIN]);
-  await host.setContent(`<iframe id="f" src="http://localhost:${PORT + 3}/live/" style="width:1260px;height:860px;border:0"></iframe>`);
-  const pinFrame = await until(async () => host.frames().find(x => x !== host.mainFrame() && /\/live\/$/.test(x.url())), 'framed page', 15000);
+  await host.setContent(`<iframe id="f" src="http://localhost:${PORT + 3}/live/single.html" style="width:1260px;height:860px;border:0"></iframe>`);
+  const pinFrame = await until(async () => host.frames().find(x => x !== host.mainFrame() && /\/live\/single\.html$/.test(x.url())), 'framed page', 15000);
   if (pinFrame) await unlockIfAsked(pinFrame).catch(e => fail('framed page PIN: ' + e.message));
   const fr = await until(async () => { const f = host.frames().find(x => x !== host.mainFrame()); return f && await f.evaluate(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE').catch(() => false) ? f : null; }, 'framed page loads with --allow-frames', 15000);
   if (fr) {
@@ -1054,7 +1054,7 @@ try {
     const cn = await browser.newPage({ viewport: { width: 1680, height: 860 } });
     await cn.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     await cn.addInitScript(() => { window.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} }; });   // never connects
-    await cn.goto(`http://localhost:${PORT + 4}/live/`);
+    await cn.goto(`http://localhost:${PORT + 4}/live/single.html`);
     await unlockIfAsked(cn);
     await cn.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'CONNECTING', null, { timeout: 15000 });
     await cn.waitForTimeout(300);

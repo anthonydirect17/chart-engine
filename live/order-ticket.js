@@ -312,7 +312,8 @@ function parseHotkey(s) {
   return m ? { ctrl: !!m[1], alt: !!m[2], shift: !!m[3], meta: !!m[4], key: m[5] } : null;
 }
 /* Kept by the browser or Windows (Anthony's list, and a few more of the same kind: Ctrl+Shift+W, Ctrl+Shift+R,
-   Ctrl+Shift+Q, Ctrl+F4, Ctrl+0 to Ctrl+9 and F10). Exact combos; the F-keys below go with any modifiers. */
+   Ctrl+Shift+Q, Ctrl+F4, Ctrl+0 to Ctrl+9 and F10; 1.12.0: Ctrl+Shift+C, Ctrl+O, Ctrl+U, Ctrl+G, Ctrl+K, Ctrl+E,
+   Ctrl+Shift+B, Ctrl+Shift+O, Alt+Shift+I and F4). Exact combos; the F-keys below go with any modifiers. */
 const RESERVED = {
   'Ctrl+W': 'closes the tab', 'Ctrl+Shift+W': 'closes the window', 'Ctrl+T': 'opens a tab', 'Ctrl+N': 'opens a window',
   'Ctrl+Shift+T': 'opens the last closed tab', 'Ctrl+R': 'reloads the page', 'Ctrl+Shift+R': 'reloads the page',
@@ -323,9 +324,13 @@ const RESERVED = {
   'Alt+E': 'opens the browser menu', 'Alt+F': 'opens the browser menu', 'Ctrl+0': 'resets the page zoom',
   'Ctrl+Tab': 'switches browser tabs', 'Ctrl+Shift+Tab': 'switches browser tabs', 'Ctrl+Shift+Delete': 'clears browsing data',
   'Alt+Tab': 'switches windows in Windows', 'Alt+ArrowLeft': 'goes back', 'Alt+ArrowRight': 'goes forward', 'Alt+Home': 'opens the home page',
+  // 1.12.0 (the 1.11.0 review): more the browser keeps
+  'Ctrl+Shift+C': 'opens the developer tools', 'Ctrl+O': 'opens a file', 'Ctrl+U': 'shows the page source', 'Ctrl+G': 'finds the next match',
+  'Ctrl+K': 'searches from the address bar', 'Ctrl+E': 'searches from the address bar', 'Ctrl+Shift+B': 'shows or hides the bookmarks bar',
+  'Ctrl+Shift+O': 'opens the bookmarks', 'Alt+Shift+I': 'opens the feedback form',
 };
 for (let n = 1; n <= 9; n++) RESERVED['Ctrl+' + n] = 'switches browser tabs';
-const RESERVED_F = { F1: 'opens help', F3: 'finds on the page', F5: 'reloads the page', F6: 'goes to the address bar', F7: 'turns on caret browsing', F10: 'opens the browser menu', F11: 'goes full screen', F12: 'opens the developer tools' };
+const RESERVED_F = { F1: 'opens help', F3: 'finds on the page', F4: 'opens the address bar list', F5: 'reloads the page', F6: 'goes to the address bar', F7: 'turns on caret browsing', F10: 'opens the browser menu', F11: 'goes full screen', F12: 'opens the developer tools' };
 /* The chart's own keys, as the engine and the page read them: with any modifiers unless noted. */
 const CHART_KEYS = { A: 'A fits the price axis', '=': '+ and = zoom in', 'Num+': '+ zooms in', '-': '- zooms out', 'Num-': '- zooms out' };
 const OTHER_KEYS = {

@@ -57,7 +57,7 @@ async function startBridge(offset) {
 
 const offset = offsetTo(11, 15);
 const br = await startBridge(offset);
-const URL = `http://localhost:${br.port}/live/`;
+const URL = `http://localhost:${br.port}/live/single.html`;
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
 await ctx.addInitScript(`(() => { const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000}; })();`);

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Live Chart</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="pin.css">
+<style>
+/* Live trading chart fed by ChartBridge (NinjaTrader 8). One screen: toolbar, chart, status line.
+   live.css styles the chart (everything inside .chart-live); the page itself only fills the window.
+   Dark only on purpose: Anthony's house style. */
+:root { color-scheme: dark; }
+html, body { height: 100%; margin: 0; }
+body { background: #080B10; }
+</style>
+</head>
+<body>
+<!-- The page is the same chart a host page mounts with ChartLive.mount (live/EMBED.md); live.js builds it here. -->
+<script src="../src/chart-engine.js"></script>
+<script src="bar-builder.js"></script>
+<script src="order-ticket.js"></script>
+<!-- the order bar's order logic, the one order path shared with the order ticket (1.12.0) -->
+<script src="trade.js"></script>
+<!-- ChartBridge's PIN (0.3.2): only this page loads it; a mounted chart never asks for the PIN. -->
+<script src="pin.js"></script>
+<script src="live.js" data-mount="page"></script>
+<!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
+<script src="update-notice.js"></script>
+</body>
+</html>

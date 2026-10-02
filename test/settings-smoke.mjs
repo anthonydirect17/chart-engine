@@ -20,7 +20,7 @@ await new Promise(r => bridge.stdout.once('data', r));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 // ChartBridge 0.3.2: after a load or reload the page asks for its PIN (made-up test PIN) before the chart starts
 const live = async p => { await unlockIfAsked(p); await p.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 }); };
-const URL = `http://localhost:${PORT}/live/`;
+const URL = `http://localhost:${PORT}/live/single.html`;
 
 async function newPage(ctx) {
   const p = await ctx.newPage();

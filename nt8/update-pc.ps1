@@ -690,13 +690,15 @@ function Repair-Folders {
 }
 
 # The order files are written in: what others load first (the engine, then the libraries and styles), live.js after
-# them, index.html last. A page loaded in the middle then gets old files with new dependencies, never the reverse.
+# them, then what loads live.js (the workspace's script), the pages, and index.html last. A page loaded in the middle
+# then gets old files with new dependencies, never the reverse.
 function Get-PageOrder([string[]]$Files) {
   $rank = {
     param($f)
     if ($f -eq 'index.html') { return 9 }
+    if ($f -like '*.html') { return 8 }
     if ($f -eq 'live.js') { return 6 }
-    if ($f -eq 'update-notice.js') { return 7 }
+    if ($f -eq 'update-notice.js' -or $f -eq 'workspace.js') { return 7 }
     if ($f -like 'src/*') { return 0 }
     if ($f -like '*.js') { return 1 }
     if ($f -like '*.css') { return 2 }

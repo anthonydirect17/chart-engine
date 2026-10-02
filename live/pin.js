@@ -1,6 +1,7 @@
 /*
  * ChartBridgePin: the 4-digit PIN on ChartBridge's own page (ChartBridge 0.3.2; nt8/PROTOCOL.md, "PIN").
- * Only the standalone page loads this file (live/index.html); ChartLive.mount never uses it, so a host page such as
+ * Only ChartBridge's own pages load this file (live/single.html, and the workspace, live/index.html, which unlocks the
+ * same way); ChartLive.mount never uses it, so a host page such as
  * The Desk never sees the pad and never needs ChartBridge's PIN.
  *
  *   ChartBridgePin.gate()        -> promise, resolved once the page is unlocked (or ChartBridge has no PIN: 0.3.1

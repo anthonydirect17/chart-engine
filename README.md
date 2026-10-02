@@ -28,6 +28,14 @@ With ChartBridge 0.2 or older it is always read only, exactly as before.
 3. Open `http://localhost:8765/` in Chrome or Edge. The first time on each PC it asks Anthony to **set a
    4-digit PIN** (see [The PIN on ChartBridge's page](#the-pin-on-chartbridges-page)).
 
+`http://localhost:8765/` is the **workspace** (1.12.0): panels on a 12 x 6 grid, one browser window per screen, each
+window with its own layout (`?layout=Main`, `?layout=Second`). Charts with slim headers (instrument and bars, the
+Indicators menu, drawing tools), Time and Sales, and the **order ticket** (see [The workspace's order
+ticket](#the-workspaces-order-ticket)). Each instrument's trades come in once per window, whatever the number of panels
+showing it. Colors sit in the top bar, everything general (Glide, Range style, hotkeys, large prints, the PIN) in
+Settings, and both are shared with the single chart page. The top bar also has **Flatten all** and **KEYS ON / OFF**.
+The **single chart page** with its order bar and hotkeys is `http://localhost:8765/single.html`.
+
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
@@ -187,7 +195,8 @@ live trades), and answers
 session is said). Old pages ignore all of it. Details: "Settlement, higher-timeframe bars and the weekly profile" in
 `nt8/PROTOCOL.md`.
 
-Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/`
+Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/` (the
+workspace; the single chart page is `http://localhost:8765/live/single.html`)
 (`npm run bridge -- --trading --trade-accounts=Sim101,DEMO-EVAL --max-qty=MNQ:5` to try order entry on
 simulated fills; the flags are listed at the top of `test/fake-bridge.mjs`). The fake has the same PIN; it
 asks for one to be set unless started with `--test-pin=<made-up PIN>`, and `--pin-file=<path>` keeps it
@@ -344,6 +353,30 @@ closed and nothing recorded yet); the page needs a newer ChartBridge; paused; or
 
 With NinjaTrader closed, the ChartBridge version counted is the newest one `/diag` showed (or the one
 `-InstallChartBridge` copied, once seen), and never above the version in `bin\Custom\AddOns\ChartBridge.cs`.
+
+## The workspace's order ticket
+
+The workspace trades through its **order ticket** (1.12.0, Anthony 2026-10-01), a panel of its own: instrument,
+account, Armed, Qty, the bracket presets with the stop and target, Buy MKT, Sell MKT, B/E, **Close** (cancel this
+instrument's orders and close its position at market; the single chart page calls it Flatten), Cancel all, and the
+position, P&L, stop and target cover and last fill of its instrument. It calls the very same functions as the single
+chart page's order bar (`live/trade.js`), so everything below about the order bar holds for it too.
+
+- **Every chart on the ticket's instrument takes orders while it is Armed**, in every window: Shift + left click buys,
+  Shift + right click and Ctrl + left click sell, drag a working order or a bracket leg to move it, its x cancels it.
+  Those charts have a purple border with a soft glow. Charts on other instruments only show their orders, position and fills.
+- **Switching the ticket's instrument** turns Armed off; anything still open on the old one shows as "Also open: MNQ
+  +2" with its own Close.
+- **One ticket for all windows** of the browser on this PC. The first window to open takes it by itself (Armed off);
+  a reload takes it back. Add it in another window and it asks "Move the ticket here?"; after a move Armed is off.
+  When the ticket's window closes, no other window takes it until you add it there ("Use the ticket here"). Only the ticket's window sends orders: a click, drag, Buy, Sell or B/E
+  key in another window is passed to it; if it does not answer within 300 ms nothing is sent and a note says so.
+- **Close, Flatten all and the top bar's Flatten all** go from the window you use, Armed or not, on the ticket's
+  account (with no ticket anywhere: the last ticket's instrument, on the last account picked on this PC; KEYS's
+  tooltip says which). Flatten all flattens every instrument with a position or a working order on it.
+- **KEYS ON** in the top bar means a hotkey pressed now works in this window; KEYS OFF means the window does not have
+  the focus, or a box, menu or dialog has it.
+- Chrome or Edge (they keep the one ticket with the Web Locks API).
 
 ## Trading from the chart
 

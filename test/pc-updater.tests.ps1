@@ -938,6 +938,10 @@ Test 'the write order: the engine first, the libraries and styles, live.js, inde
   $o = Get-PageOrder @('index.html', 'live.js', 'live.css', 'bar-builder.js', 'src/chart-engine.js', 'update-notice.js', 'pin.css', 'order-ticket.js', 'pin.js')
   Assert ($o[0] -eq 'src/chart-engine.js' -and $o[$o.Count - 1] -eq 'index.html') ($o -join ',')
   Assert ([array]::IndexOf($o, 'live.js') -gt [array]::IndexOf($o, 'bar-builder.js') -and [array]::IndexOf($o, 'live.js') -gt [array]::IndexOf($o, 'live.css')) ($o -join ',')
+  # the workspace (index.html since E2a): its script after live.js, the single chart page next to last
+  $w = Get-PageOrder @('index.html', 'single.html', 'workspace.js', 'feed.js', 'live.js', 'workspace.css', 'src/chart-engine.js')
+  Assert ($w[$w.Count - 1] -eq 'index.html' -and $w[$w.Count - 2] -eq 'single.html') ($w -join ',')
+  Assert ([array]::IndexOf($w, 'workspace.js') -gt [array]::IndexOf($w, 'live.js') -and [array]::IndexOf($w, 'feed.js') -lt [array]::IndexOf($w, 'live.js')) ($w -join ',')
 }
 
 # ---------------------------------------------------------------------------------------------- the rest

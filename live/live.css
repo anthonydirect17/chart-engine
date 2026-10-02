@@ -316,3 +316,30 @@
   .chart-live .seg button { padding: 4px 7px; }
   .chart-live .ce-live { right: 86px !important; bottom: 34px !important; }
 }
+/* A compact chart (ChartLive.mount compact: true, the workspace's panels). The legend: at most 2 lines, no source line,
+   no LIVE pill (the host shows the connection), no bar time; the prices by importance (the close and the change first),
+   whole items only, so a narrow panel shows fewer of them rather than more lines. The status line: only while it carries
+   a note (loading, the range, IB and profile notes, warnings in their colour), one faint line under the chart. */
+.chart-live.compact .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 1px 8px; padding: 4px 8px 0; max-height: 35px; overflow: hidden; font: 400 11px/17px var(--mono); font-variant-numeric: tabular-nums; color: var(--lg-dim); }
+.chart-live.compact .legend :is(.lg1, .lg2, .lg3) { display: contents; font: inherit; }
+.chart-live.compact .legend * { line-height: 17px; }
+.chart-live.compact .legend .lg1 b { font: 600 11px/17px var(--sans); order: 1; }
+.chart-live.compact .legend .tfbadge { order: 2; }
+.chart-live.compact .legend .lg2 > :nth-child(5) { order: 3; }
+.chart-live.compact .legend [id$="lgChg"] { order: 4; }
+.chart-live.compact .legend [id$="lgVwWrap"] { order: 5; }
+.chart-live.compact .legend [id$="lgDelta"] { order: 6; }
+.chart-live.compact .legend .lg2 > :nth-child(2) { order: 7; }
+.chart-live.compact .legend .lg2 > :nth-child(3) { order: 8; }
+.chart-live.compact .legend .lg2 > :nth-child(4) { order: 9; }
+.chart-live.compact .legend .lg2 > :nth-child(7) { order: 10; }
+.chart-live.compact .legend [id$="lgFill"] { order: 11; }
+.chart-live.compact .legend [id$="lgVp"] { order: 12; }
+.chart-live.compact .legend :is([id$="lgSrc"], [id$="connPill"], [id$="lgTime"]) { display: none; }
+.chart-live.compact > .status { display: none; }
+.chart-live.compact.has-note > .status { display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; min-width: 0; font: 400 11px var(--sans); color: var(--text3); }
+.chart-live.compact > .status > :not(.msg):not(.ibnote) { display: none; }
+.chart-live.compact > .status > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chart-live.compact > .status > .msg:empty { display: none; }
+/* A chart whose host shows its own header (ChartLive.mount toolbar: false, the workspace): no toolbar of its own. */
+.chart-live.slim > header.bar { display: none !important; }

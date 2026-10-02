@@ -102,7 +102,7 @@ try {
     const off = offsetTo(10, 0, weekday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     const ib = await ibOf(p);
     check(ib.length === 2 && ib[0].name === 'IBH' && ib[1].name === 'IBL' && ib.every(l => l.dash === CE.IB_FORMING_DASH.join('/')) && ib[0].price >= ib[1].price,
       '10:00 ET: IBH and IBL forming, long dashes: ' + JSON.stringify(ib));
@@ -150,7 +150,7 @@ try {
     const off = offsetTo(11, 15, weekday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     const ib = await ibOf(p);
     check(ib.length === 2 && ib[0].name === 'IBH' && ib[1].name === 'IBL' && ib.every(l => l.dash === ''), '11:15 ET: IBH and IBL locked, solid: ' + JSON.stringify(ib.map(l => [l.name, l.price, l.dash])));
     await p.screenshot({ path: path.join(SHOTS, 'ib-locked-1115.png') });
@@ -163,7 +163,7 @@ try {
     const off = offsetTo(9, 0, weekday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     check((await ibOf(p)).length === 0 && await p.isHidden('#ibNote'), '9:00 ET: no IB yet, no note');
     await ctx.close(); br.kill();
   }
@@ -171,7 +171,7 @@ try {
     const off = offsetTo(11, 0, saturday);
     const br = await startBridge(off);
     const ctx = await context(off);
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     check((await ibOf(p)).length === 0 && await p.isHidden('#ibNote'), 'Saturday 11:00 ET: no IB, no note');
     await ctx.close(); br.kill();
   }
@@ -181,7 +181,7 @@ try {
     if (off !== null) {
       const br = await startBridge(off);
       const ctx = await context(off);
-      const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+      const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
       check((await ibOf(p)).length === 0 && /holiday/.test(await p.textContent('#ibNote')), 'NYSE holiday 11:00 ET: no IB, a quiet note: ' + await p.textContent('#ibNote'));
       await ctx.close(); br.kill();
     }
@@ -190,7 +190,7 @@ try {
     const off = offsetTo(11, 0, weekday);
     const br = await startBridge(off);
     const ctx = await context(off, { dropHistoryBefore: todayAt(off, 9, 45) });
-    const p = await openPage(ctx, `http://localhost:${br.port}/live/`);
+    const p = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
     const note = await p.textContent('#ibNote');
     check((await ibOf(p)).length === 0 && /^Initial balance not shown: the history does not reach back before 9:30/.test(note) && await p.isVisible('#ibNote'), 'history from 9:45: no IB, and the status line says why: ' + note);
     await p.screenshot({ path: path.join(SHOTS, 'ib-uncovered.png') });
@@ -202,8 +202,8 @@ try {
     const off = offsetTo(11, 15, weekday);
     const br = await startBridge(off, ['--trading', '--trade-accounts=Sim101']);   // trading on: the order bar and Armed
     const ctx = await context(off);
-    const a = await openPage(ctx, `http://localhost:${br.port}/live/`);
-    const b = await openPage(ctx, `http://localhost:${br.port}/live/`);      // a second tab, open before A changes anything
+    const a = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);
+    const b = await openPage(ctx, `http://localhost:${br.port}/live/single.html`);      // a second tab, open before A changes anything
     await a.bringToFront();
     /* the ground drawn in the plot's top-left corner (device pixels), and the stage and legend backgrounds */
     const look = p => p.evaluate(() => {

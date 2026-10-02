@@ -1,6 +1,7 @@
 # Embedding the live chart (ChartLive.mount)
 
-The live chart page (`live/index.html`, served by ChartBridge at `http://localhost:8765/`) and a host page such
+The single chart page (`live/single.html`, served by ChartBridge at `http://localhost:8765/single.html`), the
+workspace (`live/index.html`, ChartBridge's main page at `http://localhost:8765/`, a host of its own) and a host page such
 as The Desk run the same code. The standalone page boots itself; a host page calls `ChartLive.mount`. Every
 change to the standalone chart therefore shows up in the host as soon as the host vendors the new files.
 
@@ -14,16 +15,17 @@ Copy these five files from one chart-engine commit (all from the same version), 
 | 2 | `src/chart-engine.js` | `<script>` or `<script defer>` | `window.ChartEngine` |
 | 3 | `live/bar-builder.js` | `<script>` or `<script defer>` | `window.BarBuilder` |
 | 4 | `live/order-ticket.js` | `<script>` or `<script defer>` | `window.OrderTicket` (needed even read only: `live.js` reads it at load) |
+| (4b) | `live/trade.js` | `<script>` before `live.js` | `window.TradeCore`, the order logic (1.12.0): only for a page that trades (the single chart page and the workspace load it); a read-only host does not need it |
 | 5 | `live/live.js` | `<script>` or `<script defer>`, **without** `data-mount` | `window.LivePrefs`, `window.ChartLive` |
 
 No bundler, no build step. Scripts 2 to 5 must run in this order (plain `defer` scripts keep document order),
 and `ChartLive.mount` must run after script 5, for example from the host's own deferred or module script.
-Leave out `data-mount="page"`: that attribute is how `live/index.html` boots the standalone page into `body`.
+Leave out `data-mount="page"`: that attribute is how `live/single.html` boots the standalone page into `body`.
 
 Record the chart-engine commit and version (`ChartEngine.VERSION`) in the host's `VENDORED.txt`.
 
 Optional: the IBM Plex fonts the chart uses (IBM Plex Sans, Sans Condensed and Mono, from Google Fonts in
-`live/index.html`). Without them the chart falls back to system fonts.
+`live/single.html`). Without them the chart falls back to system fonts.
 
 If the host sets a Content Security Policy: `connect-src` must allow the WebSocket URLs it passes (for
 example `ws://localhost:8765` and its own relay), and `style-src` must allow inline styles (the engine adds one
@@ -97,6 +99,22 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
 | `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors, ind), rename(group, id, name), remove(group, id), shared }` (`ind`: a chart preset's linked indicator preset id), each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
+| `feed` | none | A `ChartFeed` hub (`live/feed.js`, `ChartFeed.create({ wsUrl })`): the chart takes its data from the hub's one connection per instrument instead of opening its own WebSocket, so several charts (and tapes) of one instrument share one connection and one subscribe. `wsUrl` is then not needed. Added for the workspace (E2a). |
+| `view` | none | `{ root, tf, range }`: the chart's own instrument, bars (`s15` to `h1`, `range`) and range size in ticks. The chart starts on them and never saves them under the prefix; the host keeps them (`onView`). Without it the chart reads and saves them under the prefix as before. |
+| `onView` | none | Called with `{ root, tf, range }` whenever the chart's instrument, bars or range size change (from its toolbar or `setView`). |
+| `toolbar` | `true` | `false`: the chart's toolbar is not shown. The host shows its own header with the chart's Indicators button and its pinned chips (the returned `indicators` and `chips` elements, moved into an element with the class `chart-live` so `live.css` styles them; the chips are then 2-letter, and those that do not fit the room left go behind a "+N" chip with a small list) and calls `setView`, `chart.setTool`, `chart.clearDrawings`, `chart.reset`. |
+| `compact` | `false` | `true`: for a small panel. The legend is at most 2 lines (no source and version line, no LIVE pill, no bar time; the close and change first, then VWAP, delta, O H L, volume, the last fill) and the status line shows only while it carries a note (loading, the range, IB and profile notes, warnings), with no delays or fps. |
+| `onColors` | none | Called after this chart's Colors panel or an indicator gear changed a color, so a host can call `refreshColors()` on its other charts. |
+| `trade` | none | 1.12.0, the workspace: `{ place(side, price, root, kind), move(id, price, root), cancel(id, root) }` (`kind`: the limit or stop this chart's own price gives, null with no price yet). The chart shows what `setTrade({ root, live, account, orders, position, pointValue, qty })` gives it (only while `root` is its instrument: the working orders and position lines, the account's fills, and while `live` the Armed outline and order editing) and hands Shift + left click (buy), Shift + right click and Ctrl + left click (sell), a drag and an x to the host, which checks and sends them. `setTrade(null)` clears. The browser's menu is off on such a chart. |
+
+With these options the returned object also has `setView({ root, tf, range })` (any of the three), `view()`,
+`refreshSettings()` (Glide and Range style read again from storage, for a host whose Settings change them),
+`refreshColors()` (the chart and indicator colors read again from storage), `stats()` (`{ root, feed, local, chart }`:
+the median feed and local delays in ms and the engine's frame stats, for a host's own status line), and the elements
+`indicators` (the Indicators button and its menu), `chips` (the pinned chips) and `colors` (the Colors button and
+panel) for a host to place, and `setTrade` (with `trade`). None of it changes a
+chart mounted without them. `ChartLive.hotkeyHandler(o)` is the trading hotkeys' one keydown handler (1.11.0), which
+the workspace uses for its window.
 
 Reconnecting works as on the standalone page: after a drop it tries again after 0.5 s, then 1 s, 1.5 s and so
 on up to every 5 s. Before the first connection the chart shows "Waiting for ChartBridge"; after a drop it shows
@@ -153,13 +171,18 @@ session counted from later than 18:00 with the start ("since 18:05 ET"). A relay
 ## Read-only guarantee
 
 A chart made with `ChartLive.mount` is always read only: there is no option to turn trading on (a `trading`
-option is ignored). Only the standalone page, booted by `live/index.html` with `data-mount="page"`, can trade.
+option is ignored). Only the standalone page, booted by `live/single.html` with `data-mount="page"`, trades itself.
+The workspace (1.12.0) trades through its own order connection and TradeCore (`live/trade.js`), never through a chart:
+its charts are mounted with `trade` (below), which only hands the host the clicks; every point here still holds for
+the chart itself.
 
 - The chart never requests `GET /session` and never sends `auth`.
 - Only `subscribe` and `ping` messages ever leave it: `send` drops every other type, whatever calls it.
   Messages about trading from ChartBridge (`trading`, `orders`, `order`, `position`, `reject`) are ignored.
 - There is no order bar, no Armed switch and no ARMED pill in the page at all, no Shift+click order preview or
-  placing, and no draggable order lines (order editing is never turned on in the chart).
+  placing, and no draggable order lines (order editing is never turned on in the chart). With `trade` (the workspace)
+  order editing is on only while the host's `setTrade` says the chart is live, and a click, drag or x calls the host's
+  `place`, `move` or `cancel`; the chart sends nothing for them.
 - On top of that, ChartBridge itself refuses orders from any page but its own (the WebSocket Origin must be
   `http://localhost:<port>`, and trading needs the session token only that page can read).
 
