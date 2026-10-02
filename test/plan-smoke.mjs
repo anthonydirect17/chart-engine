@@ -195,7 +195,28 @@ try {
   await oldp.close();
   await page.click('#flattenBtn');
   await until(async () => !(await state()).orders.length, 'flat');
+  check(await page.evaluate(() => document.getElementById('bStop').max) === '100000', 'ChartBridge 0.3.8 with no maxBracketTicks: no 200-tick cap on the bracket fields');
   await page.close();
+
+  // a mistyped limit in config.txt: the warning stays on the page until dismissed; an older ChartBridge keeps the 200 cap
+  for (const [port, flags, what] of [[PORT + 1, ['--version=0.3.8', '--max-ticks-away=abc', '--max-bracket-ticks=1.5'], 'warn'], [PORT + 2, ['--version=0.3.6'], 'cap']]) {
+    await startBridge(port, ['--trading', '--trade-accounts=Sim101', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags));
+    const p = await ctx.newPage();
+    p.on('pageerror', e => fail('pageerror: ' + e.message));
+    await p.goto(`http://localhost:${port}/live/single.html`);
+    await unlockIfAsked(p);
+    await p.waitForFunction(() => document.getElementById('connPill').textContent === 'LIVE' && !document.getElementById('buyMkt').disabled, null, { timeout: 30000 });
+    if (what === 'warn') {
+      await until(() => p.isVisible('#alertBar'), 'the config warning shown');
+      const a = await p.evaluate(() => ({ text: document.getElementById('alertText').textContent, warn: document.getElementById('alertBar').classList.contains('warn') }));
+      check(a.warn && /maxTicksAway = abc/.test(a.text) && /maxBracketTicks = 1\.5/.test(a.text), 'a mistyped maxTicksAway / maxBracketTicks: ChartBridge\'s warning stays on the page (' + JSON.stringify(a.text) + ')');
+      await wait(7000);
+      check(await p.isVisible('#alertBar'), 'the warning is still there after 7 s');
+    } else {
+      check(await p.evaluate(() => document.getElementById('bStop').max) === '200', 'ChartBridge 0.3.6: the bracket fields keep the 200-tick cap');
+    }
+    await p.close();
+  }
 
   /* ================================================================ the workspace: two windows */
   console.log('the workspace');

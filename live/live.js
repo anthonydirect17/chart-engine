@@ -1937,7 +1937,9 @@ function start(container, opt, PAGE) {
       case 'tick': onTick(m); break;
       case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
       case 'exec': addFill(m); applyMarkers(); break;
-      case 'status': if (m.level === 'error') alertLoud(m.text); else setStatus(m.text, m.level); break;
+      /* 1.13.0: a warning (for example a mistyped maxTicksAway in config.txt, which means NO limit) stays on screen
+         until dismissed, as in the workspace; other notes go to the status line */
+      case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text && !COMPACT) alertLoud(m.text, true); else setStatus(m.text, m.level); break;
     }
     if (T) T.message(m);                               // trading, orders, order, position, reject (live/trade.js)
   }
@@ -2160,11 +2162,14 @@ function start(container, opt, PAGE) {
   /* Error-level status from ChartBridge (for example a bracket leg rejected: the position may have no stop) stays
      on screen until dismissed. The newest three are kept. */
   const alerts = [];
-  function alertLoud(text) {
+  let alertErr = false;
+  function alertLoud(text, warn) {
     alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
+    if (!warn) alertErr = true;
     $('alertText').textContent = alerts.join('\n'); $('alertBar').hidden = false;
+    $('alertBar').classList.toggle('warn', !alertErr);                // red once an error is in it
   }
-  $('alertClose').addEventListener('click', () => { alerts.length = 0; $('alertBar').hidden = true; });
+  $('alertClose').addEventListener('click', () => { alerts.length = 0; alertErr = false; $('alertBar').hidden = true; });
   /* Order messages show for a while, then clear (errors stay longer). */
   let flashTimer = 0;
   function flash(text, level) { setStatus(text, level); const t = text; flashTimer = setTimeout(() => { if ($('statusMsg').textContent === t) setStatus('', ''); }, level === 'error' ? 12000 : 6000); }

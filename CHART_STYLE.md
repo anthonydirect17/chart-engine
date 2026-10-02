@@ -29,7 +29,7 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Trade exit, live dot | `#F2F6FA` |
 | Working orders (1.3.0) | `#3DDC97` buy, `#FF7A7A` sell (house trade-side colors) |
 | Position line and tag | `#F2F6FA`; open P&L text `#3DDC97` profit, `#FF7A7A` loss |
-| Armed (live page only) | `#E0B45A` amber outline on the order bar and chart, ARMED pill |
+| Armed (live page and ticket) | 1.13.0: the house crimson `#9F1239` switch and ARMED pill with the logo's light ink `#FFE4EA` (6.7:1), the outline in the crimson word color `#E0445E` (4.5:1 on the bar); amber `#E0B45A` before |
 | Chart ground | `#080B10` |
 | Regular-hours ground (bars under 1 hour) | `#0B1016` |
 | Grid hairlines | `rgba(42,54,69,0.30)` |
@@ -94,7 +94,8 @@ frame) from the engine's helpers (`buildTheme`, `readableOn`, `legible`):
   On any other ground it takes the chrome's colors: its ground is the chrome's, the bar the raised surface, Buy and
   Sell keep an 8% tint (16% on hover) of the house `#3DDC97` and `#FF7A7A`, their text the same hue moved until it
   reads 4.5:1 on the hover tint over the bar and over the Armed bar, Armed the amber `--warn` with ground-colored text
-  (4.5:1). Before 1.9.0 the bar never changed with the ground (review 2, B1); Anthony asked for it to follow. Only
+  (4.5:1). 1.13.0: Armed is the house crimson instead (below); its outline is `--crimson-word`, which `chromeColors`
+  moves to 4.5:1 on every ground as before. Before 1.9.0 the bar never changed with the ground (review 2, B1); Anthony asked for it to follow. Only
   colors change: every control, its place and what it does stay as they were.
 - **Dimmed controls (1.9.0, review R2):** Buy, Sell, Flatten and Cancel all fade to 0.45 while disarmed, and every
   control to 0.4 while trading is off, on the house bar. On any other ground `chromeColors` raises those opacities
@@ -248,6 +249,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   stops), plus a close x while order editing is on. Labels that would overlap step left. The price-axis tag
   is filled in the side color for limits and outlined (dashed) for stops, and stacks with the level tags.
   An order moved and waiting for its answer draws at 55%. Labels draw above the last price line and live dot.
+- **Planned stop and target (1.13.0, ChartBridge 0.3.8):** a resting entry's planned legs draw as its legs would (the
+  leg's side color), but clearly planned: the line finely dashed 2/4 at 70% (40% while a move waits for its answer),
+  the label "SL plan -12t" / "TP plan +24t" (ticks from the fill, from the line's live distance while dragged) with a
+  dashed border, the price tag outlined. They hang off the entry: while the entry is dragged they move with it. While
+  order editing is on, an entry missing one shows "+SL" / "+TP" cells in its label, before the x, in the label's type.
 - **Position (1.3.0):** a 1.5 px `#F2F6FA` line at 60% at the average price, a label "LONG 2  +3.50 pt
   +$14.00" (side word in the side color, P&L in the result color; points per contract, dollars for the
   position) and an outlined tag on the price axis.
@@ -365,9 +371,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   not sent (warn amber), each with Dismiss.
 - **Chart panels**: the slim 28 px header, the compact chart. A chart live for orders (the ticket's instrument while
   Armed) has a purple outline on its stage, the workspace accent `#7B5CFF` (Anthony), with a soft static glow (a
-  1 px ring and an 8 px shadow at 45%); no new color, no animation. The single chart page keeps its amber Armed.
+  1 px ring and an 8 px shadow at 45%); no new color, no animation. 1.13.0: the Armed switch and the ticket's outline
+  are deep red (the house crimson, Anthony); the chart borders stay purple with the glow. The single chart page's
+  stage outline is the crimson word color while Armed.
 - **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
-  instrument and account; Armed (the amber switch, the bar outlined in amber while Armed); Qty with "max N" and the
+  instrument and account; Armed (the crimson switch, the ticket outlined in `--crimson-word` while Armed, 1.13.0); Qty with "max N" and the
   bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Close and Cancel all, a
   third each; then the position and P&L, the stop and target cover, the last fill (buy green, sell red), "Also open"
   lines in warn amber each with its Close, the account note, the Cancel all line and the notes line (11 px; warn and
