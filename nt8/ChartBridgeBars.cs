@@ -336,7 +336,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!Enabled) return;
                 try
                 {
-                    ChartBridgeBarsQueue.Load();
+                    // bars N7 (0.3.7): pending_bars.jsonl, sent_bars.txt and refused_bars.txt are read on the bars thread
+                    // (Run), not here: Start runs on NinjaTrader's thread.
                     ManualResetEvent stop = new ManualResetEvent(false);
                     stopEvent = stop;
                     int gen = ++generation;
@@ -346,8 +347,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     t.Name = "ChartBridge bars";
                     worker = t;
                     t.Start();
-                    ChartBridgeServer.Log("daily 1-minute bars go to The Desk after each close (bars = on): " + string.Join(", ", Roots) +
-                        "; " + ChartBridgeBarsQueue.Waiting() + " message(s) waiting in pending_bars.jsonl");
                 }
                 catch (Exception ex) { Note("daily bars could not start: " + ex.Message); }
             }
@@ -382,6 +381,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Func<bool> stopping = () => Stopping(gen, stop);
             System.Diagnostics.Stopwatch since = System.Diagnostics.Stopwatch.StartNew();
+            if (stopping()) return;
+            try
+            {
+                ChartBridgeBarsQueue.Load();   // bars N7: off NinjaTrader's thread
+                ChartBridgeServer.Log("daily 1-minute bars go to The Desk after each close (bars = on): " + string.Join(", ", Roots) +
+                    "; " + ChartBridgeBarsQueue.Waiting() + " message(s) waiting in pending_bars.jsonl");
+            }
+            catch (Exception ex) { Note("daily bars could not read their files: " + ex.Message); }
             long lastPlan = long.MinValue / 2;
             state = "starting: the charts load first";
             while (!stop.WaitOne(TickMs))
@@ -416,7 +423,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (BarsJob j in Wanted(sessions, Roots, FillJobs(sessions)))
             {
                 if (stopping()) return;
-                if (ChartBridgeBarsQueue.IsDone(j.Key) || ChartBridgeBarsQueue.IsWaiting(j.Key)) continue;
+                if (ChartBridgeBarsQueue.IsDone(j.Key) || ChartBridgeBarsQueue.IsWaiting(j.Key) || ChartBridgeBarsQueue.IsRefused(j.Key)) continue;   // bars N1: a refusal is remembered across restarts
                 DateTime notBefore;
                 lock (RetryAt)
                 {
@@ -554,6 +561,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly List<string> Pending = new List<string>();
         private static readonly List<string> PendingKeys = new List<string>();   // same order as Pending
         private static readonly HashSet<string> Sent = new HashSet<string>();
+        private static readonly HashSet<string> Refused = new HashSet<string>();   // bars N1 (0.3.7): sessions The Desk refused, kept KeepSentDays
         private static readonly Regex SessionRx = new Regex("\"session\":\"(\\d{4}-\\d{2}-\\d{2})\"");
         private static readonly Regex ContractRx = new Regex("\"contract\":\"([^\"\\\\]*)\"");
         private static readonly Regex DetailRx = new Regex("\"detail\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
@@ -567,6 +575,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string File_ { get { return Path.Combine(ChartBridgeConfig.Folder, "pending_bars.jsonl"); } }
         private static string SetAsideFile { get { return Path.Combine(ChartBridgeConfig.Folder, "rejected_bars.jsonl"); } }
         private static string SentFile { get { return Path.Combine(ChartBridgeConfig.Folder, "sent_bars.txt"); } }
+        private static string RefusedFile { get { return Path.Combine(ChartBridgeConfig.Folder, "refused_bars.txt"); } }
 
         // "yyyy-MM-dd contract" of a whole message line, or null for a line cut short by a crash mid-write.
         public static string KeyOfLine(string line)
@@ -581,10 +590,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Sync)
             {
-                Pending.Clear(); PendingKeys.Clear(); Sent.Clear();
+                Pending.Clear(); PendingKeys.Clear(); Sent.Clear(); Refused.Clear();
                 sendError = ""; lastFailed = false;
                 Interlocked.Exchange(ref setAside, 0);   // /diag: set aside since this start
-                int bad = 0;
+                int bad = 0, old = 0;
+                DateTime cutoff = ChartBridgeBars.UtcNow().Date.AddDays(-KeepSentDays);
                 try
                 {
                     Directory.CreateDirectory(ChartBridgeConfig.Folder);
@@ -595,12 +605,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                             if (line.Length == 0) continue;
                             string key = KeyOfLine(line);
                             if (key == null) { bad++; continue; }
+                            if (Older(key, cutoff)) { old++; continue; }   // bars N1: never waits longer than the record is kept
                             if (PendingKeys.Contains(key)) continue;
                             Pending.Add(line); PendingKeys.Add(key);
                         }
                 }
                 catch (Exception ex) { ChartBridgeServer.Log("could not read pending bars: " + ex.Message); }
                 if (bad > 0) ChartBridgeServer.Log("skipped " + bad + " unreadable line(s) in pending_bars.jsonl");
+                if (old > 0) { ChartBridgeServer.Log("dropped " + old + " message(s) older than " + KeepSentDays + " days from pending_bars.jsonl"); SavePending(); }
+                try
+                {
+                    if (File.Exists(RefusedFile))
+                        foreach (string raw in File.ReadAllLines(RefusedFile)) { string k = raw.Trim(); if (k.Length > 11 && !Older(k, cutoff)) Refused.Add(k); }
+                }
+                catch (Exception ex) { ChartBridgeServer.Log("could not read refused_bars.txt: " + ex.Message); }
                 try
                 {
                     if (File.Exists(SentFile))
@@ -623,18 +641,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { Replace(File_, Pending); } catch (Exception ex) { ChartBridgeServer.Log("could not save pending bars: " + ex.Message); }
         }
 
+        // A key ("yyyy-MM-dd contract") whose session is before cutoff; an unreadable date is not old.
+        private static bool Older(string key, DateTime cutoff)
+        {
+            DateTime d;
+            return key.Length >= 10 && DateTime.TryParseExact(key.Substring(0, 10), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d) && d < cutoff;
+        }
+
         // Sessions older than KeepSentDays are dropped from the record: the catch-up never looks that far back.
-        private static void SaveSent()
+        private static void SaveSent() { SaveRecord(Sent, SentFile, "sent_bars.txt"); }
+        private static void SaveRefused() { SaveRecord(Refused, RefusedFile, "refused_bars.txt"); }
+        private static void SaveRecord(HashSet<string> set, string file, string name)
         {
             DateTime cutoff = ChartBridgeBars.UtcNow().Date.AddDays(-KeepSentDays);
-            List<string> keep = Sent.Where(k =>
-            {
-                DateTime d;
-                return !DateTime.TryParseExact(k.Substring(0, 10), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d) || d >= cutoff;
-            }).OrderBy(k => k, StringComparer.Ordinal).ToList();
-            Sent.Clear();
-            foreach (string k in keep) Sent.Add(k);
-            try { Replace(SentFile, keep); } catch (Exception ex) { ChartBridgeServer.Log("could not save sent_bars.txt: " + ex.Message); }
+            List<string> keep = set.Where(k => !Older(k, cutoff)).OrderBy(k => k, StringComparer.Ordinal).ToList();
+            set.Clear();
+            foreach (string k in keep) set.Add(k);
+            try { Replace(file, keep); } catch (Exception ex) { ChartBridgeServer.Log("could not save " + name + ": " + ex.Message); }
         }
 
         public static void Queue(string key, string json)
@@ -649,6 +672,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static bool IsWaiting(string key) { lock (Sync) return PendingKeys.Contains(key); }
         public static bool IsDone(string key) { lock (Sync) return Sent.Contains(key); }
+        public static bool IsRefused(string key) { lock (Sync) return Refused.Contains(key); }
         public static int Waiting() { lock (Sync) return Pending.Count; }
         public static long SetAsideCount() { return Interlocked.Read(ref setAside); }
         public static string SendError() { return sendError ?? ""; }
@@ -677,6 +701,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (i >= 0) { Pending.RemoveAt(i); PendingKeys.RemoveAt(i); }
                 SavePending();
                 if (sent) { Sent.Add(key); SaveSent(); }
+                else { Refused.Add(key); SaveRefused(); }   // bars N1: set aside, and not asked for again after a restart either
             }
         }
 
@@ -764,7 +789,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Done(key, line, false);
                     Interlocked.Increment(ref setAside);
                     ChartBridgeBars.SkipThisRun(key);
-                    ChartBridgeServer.Log("The Desk refused the bars for " + key + " (" + code + (why.Length > 0 ? ": " + Clean(why) : "") + "); set aside in rejected_bars.jsonl");
+                    ChartBridgeServer.Log("The Desk refused the bars for " + key + " (" + code + (why.Length > 0 ? ": " + Clean(why) : "") + "); set aside in rejected_bars.jsonl, not asked for again (refused_bars.txt)");
                     return true;
                 }
                 if (Volatile.Read(ref stopGen) != gen) return false;   // aborted by a stop: still queued, nothing to report

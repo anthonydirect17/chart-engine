@@ -59,7 +59,8 @@ const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePa
 try {
   /* ---------------- trading on: Sim101 and DEMO-EVAL, MNQ cap 5 */
   const PORT = BASE;
-  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--test-controls', '--test-pin=' + TEST_PIN]);
+  // --max-ticks-away=200: ChartBridge 0.3.7 has no distance limit unless config.txt sets one; the refusal check below uses it
+  await startBridge(PORT, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--max-ticks-away=200', '--test-controls', '--test-pin=' + TEST_PIN]);
   const page = await open(browser, PORT, 1440);
   const L = Math.round((await control(PORT, 'hold', { root: 'MNQ' })).last);    // hold the sample walk at a round price
   await control(PORT, 'price', { root: 'MNQ', p: L });
@@ -289,7 +290,7 @@ try {
   await control(PORT, 'price', { root: 'MNQ', p: L });
 
   // rejects: qty over the cap (stopped in the page: a qty remembered over a lower cap stays picked and is refused), and a
-  // ChartBridge refusal (more than 200 ticks away)
+  // ChartBridge refusal (more than 200 ticks away, maxTicksAway = 200)
   await page.evaluate(() => { const q = document.getElementById('oQty'); q.value = '9'; q.dispatchEvent(new Event('change')); });
   await page.click('#buyMkt');
   st = await status(page);

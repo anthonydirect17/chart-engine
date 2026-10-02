@@ -1252,12 +1252,36 @@ function Test-SameHashes($A, $B) {
 #   @{ ok = $true; backup }                                   all files replaced
 #   @{ ok = $false; backup; error; mixed = @() }              nothing changed (AddOns checked against its hashes)
 #   @{ ok = $false; backup; error; mixed = @(names); ... }    the restore failed too: AddOns holds a mix
+# ChartBridge 0.3.7 (review bars1 N2): the add-on files the previous install had that the staged commit no longer lists
+# (a revert of a release that added a file, say ChartBridgeBars.cs). Left in AddOns, NinjaTrader would compile an older
+# ChartBridge.cs beside a file that needs a newer one, and no ChartBridge would load. The previous list is the one this
+# updater recorded with the install (chartBridge.installed.files); an install recorded before 0.3.7 has none, so it is
+# read from that install's commit (its install-files.json). Only ChartBridge*.cs files that are in AddOns now count.
+function Get-RetiredAddOns($State, [string[]]$Names) {
+  $inst = Get-Field $State['chartBridge'] 'installed'
+  $prev = @(Get-Field $inst 'files' @())
+  if ($prev.Count -eq 0) {
+    $c = [string](Get-Field $inst 'commit' '')
+    if ($c -match '^[0-9a-f]{7,40}$') {
+      $m = Invoke-Git @('show', "${c}:$($script:ManifestPath)") 60
+      if ($m.code -eq 0) {
+        try { $prev = @(@(Get-Field (ConvertFrom-JsonText $m.out) 'addons' @()) | ForEach-Object { Split-Path -Leaf ([string]$_) }) } catch { $prev = @() }
+      } else { Write-Log "-InstallChartBridge: the installed commit $(Get-Short $c) cannot be read, so files it had that this one drops are not known (none are taken out)" 'WARN' }
+    }
+  }
+  return @($prev | Where-Object { ([string]$_) -match '^ChartBridge[A-Za-z0-9_]*\.cs$' -and $Names -notcontains $_ -and (Test-Path -LiteralPath (Join-Path $script:P.AddOns $_)) } | Select-Object -Unique)
+}
+
 function Install-AddOnFiles($Stage, $State) {
   if (-not $script:AddOnWriteAllowed) { throw 'refused: add-on (.cs) files are only copied by update-pc.ps1 -InstallChartBridge, after Anthony confirms he is flat' }
   if (-not (Test-Path $script:P.AddOns)) { New-Item -ItemType Directory -Force -Path $script:P.AddOns | Out-Null }
   $names = @(Get-Field $Stage 'addonFiles' @())
-  $before = Get-AddOnHashes $names
-  foreach ($n in $names) { if ($before[$n] -eq 'unreadable') { throw "$n in AddOns cannot be read (another program holds it): nothing was copied, try again" } }
+  # files the previous install had and this commit drops: backed up and taken out inside the same all-or-nothing copy
+  # (put back with the others when it fails), so AddOns is always one whole set (review bars1 N2)
+  $retired = @(Get-RetiredAddOns $State $names)
+  $all = @($names) + @($retired)
+  $before = Get-AddOnHashes $all
+  foreach ($n in $all) { if ($before[$n] -eq 'unreadable') { throw "$n in AddOns cannot be read (another program holds it): nothing was copied, try again" } }
   $keep = [string](Get-Field (Get-Field $State['chartBridge'] 'mixed') 'backup' '')
   $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff'))
   for ($i = 2; Test-Path -LiteralPath $backup; $i++) { $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff') + "-$i") }
@@ -1265,13 +1289,14 @@ function Install-AddOnFiles($Stage, $State) {
   $sums = Get-Field $Stage 'sha256' @{}
   $after = @{}
   foreach ($n in $names) { $after[$n] = [string](Get-Field $sums "addons/$n" '') }
+  foreach ($n in $retired) { $after[$n] = 'missing' }
   try {
     New-Item -ItemType Directory -Force -Path $backup | Out-Null
-    foreach ($n in $names) {
+    foreach ($n in $all) {
       $cur = Join-Path $script:P.AddOns $n
       if (Test-Path -LiteralPath $cur) { Copy-Item -LiteralPath $cur -Destination (Join-Path $backup $n) -Force }
     }
-    foreach ($n in $names) {
+    foreach ($n in $all) {
       if ($before[$n] -ne 'missing' -and (Get-FileSha256 (Join-Path $backup $n)) -ne $before[$n]) { throw "the backup of $n does not match the file in AddOns" }
     }
     # the last three backups, and always the one a recorded mix points to
@@ -1282,17 +1307,23 @@ function Install-AddOnFiles($Stage, $State) {
     }
     # recorded before the first replace: a run cut off in the middle (a power loss) is found by the next run, which
     # compares AddOns with the set before and the set after (Update-MixedAddOns)
-    $State['chartBridge']['copying'] = @{ at = (Get-NowMs); version = [string](Get-Field $Stage 'chartBridgeVersion'); commit = (Get-Field $Stage 'commit'); files = $names; before = $before; after = $after; backup = $backup }
+    $State['chartBridge']['copying'] = @{ at = (Get-NowMs); version = [string](Get-Field $Stage 'chartBridgeVersion'); commit = (Get-Field $Stage 'commit'); files = $all; addonFiles = $names; before = $before; after = $after; backup = $backup }
     Save-State $State
+    foreach ($n in $retired) {
+      Remove-Item -LiteralPath (Join-Path $script:P.AddOns $n) -Force   # its copy is in the backup
+      [void]$replaced.Add($n)
+      Write-Log "-InstallChartBridge: $n is not in ChartBridge $(Get-Field $Stage 'chartBridgeVersion')'s file list: taken out of AddOns (kept in $backup)"
+      Invoke-CrashPoint "addon:$($replaced.Count)"
+    }
     foreach ($n in $names) {
       Move-FileAtomic (Join-Path $script:P.AddOns "$n.upd-tmp") (Join-Path $script:P.AddOns $n)
       [void]$replaced.Add($n)
       Invoke-CrashPoint "addon:$($replaced.Count)"
     }
-    return @{ ok = $true; backup = $backup; after = $after }
+    return @{ ok = $true; backup = $backup; after = $after; files = $all; retired = $retired }
   } catch {
     $err = $_.Exception.Message
-    Write-Log "-InstallChartBridge: the add-on copy failed after $($replaced.Count) of $($names.Count) files ($err); putting back: $(@($replaced) -join ', ')" 'ERROR'
+    Write-Log "-InstallChartBridge: the add-on copy failed after $($replaced.Count) of $($all.Count) files ($err); putting back: $(@($replaced) -join ', ')" 'ERROR'
     $notBack = @()
     foreach ($n in @($replaced)) {
       $dest = Join-Path $script:P.AddOns $n
@@ -1304,7 +1335,7 @@ function Install-AddOnFiles($Stage, $State) {
         }
       } catch { $notBack += $n; Write-Log "-InstallChartBridge: $n could not be put back ($($_.Exception.Message))" 'ERROR' }
     }
-    foreach ($n in $names) {
+    foreach ($n in $all) {
       foreach ($x in @("$n.upd-tmp", "$n.upd-restore")) {
         $f = Join-Path $script:P.AddOns $x
         try { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } } catch { }
@@ -1312,10 +1343,10 @@ function Install-AddOnFiles($Stage, $State) {
     }
     # AddOns is called unchanged only when every file has its hash from before
     $now = $null
-    try { $now = Get-AddOnHashes $names } catch { }
+    try { $now = Get-AddOnHashes $all } catch { }
     $mixed = @()
-    foreach ($n in $names) { if ($null -eq $now -or [string]$now[$n] -ne [string]$before[$n]) { $mixed += $n } }
-    return @{ ok = $false; backup = $backup; error = $err; mixed = $mixed; before = $before; after = $after; notBack = $notBack }
+    foreach ($n in $all) { if ($null -eq $now -or [string]$now[$n] -ne [string]$before[$n]) { $mixed += $n } }
+    return @{ ok = $false; backup = $backup; error = $err; mixed = $mixed; before = $before; after = $after; notBack = $notBack; files = $all }
   }
 }
 
@@ -1333,7 +1364,7 @@ function Update-MixedAddOns($State) {
       $State['chartBridge']['mixed'] = $cp
       Write-Log "STOP: $($script:MixedStop). An -InstallChartBridge of ChartBridge $(Get-Field $cp 'version') was cut off half way: $($changed -join ', ') changed. The files as they were: $(Get-Field $cp 'backup')" 'ERROR'
     } elseif ($changed.Count -and (Test-SameHashes $now (Get-Field $cp 'after'))) {
-      $State['chartBridge']['installed'] = @{ version = (Get-Field $cp 'version'); commit = (Get-Field $cp 'commit'); at = (Get-NowMs); confirmed = $false }
+      $State['chartBridge']['installed'] = @{ version = (Get-Field $cp 'version'); commit = (Get-Field $cp 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $cp 'addonFiles' (Get-Field $cp 'files' @())) }
       Write-Log "an -InstallChartBridge of ChartBridge $(Get-Field $cp 'version') was cut off after its last replace: all files are in; press F5 when flat" 'WARN'
     }
   }
@@ -1346,7 +1377,7 @@ function Update-MixedAddOns($State) {
     Write-Log 'the ChartBridge files in AddOns are whole again (all as before -InstallChartBridge)'
   } elseif (Test-SameHashes $now (Get-Field $mx 'after')) {
     $State['chartBridge'].Remove('mixed')
-    $State['chartBridge']['installed'] = @{ version = (Get-Field $mx 'version'); commit = (Get-Field $mx 'commit'); at = (Get-NowMs); confirmed = $false }
+    $State['chartBridge']['installed'] = @{ version = (Get-Field $mx 'version'); commit = (Get-Field $mx 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $mx 'addonFiles' (Get-Field $mx 'files' @())) }
     Write-Log "the ChartBridge files in AddOns are whole again (all of ChartBridge $(Get-Field $mx 'version'))"
   }
 }
@@ -1389,7 +1420,7 @@ function Invoke-InstallChartBridge {
     $backup = $copy.backup
     if (Get-Field $state['chartBridge'] 'mixed') { $state['chartBridge'].Remove('mixed'); Write-Log 'the ChartBridge files in AddOns are one whole set again' }
     # recorded at once: whatever happens next, the notice, status and the F5 bookkeeping know the files were replaced
-    $state['chartBridge']['installed'] = @{ version = $sv; commit = (Get-Field $stage 'commit'); at = (Get-NowMs); confirmed = $false }
+    $state['chartBridge']['installed'] = @{ version = $sv; commit = (Get-Field $stage 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $stage 'addonFiles' @()) }   # 0.3.7: the list, so a later install knows what it drops
     $state['chartBridge']['toastedFor'] = $sv
     Save-State $state
     Write-Log "ChartBridge $sv copied into $($script:P.AddOns) from $(Get-Short (Get-Field $stage 'commit')) by hand (-InstallChartBridge); the files it replaced are in $backup"
@@ -1451,7 +1482,7 @@ function Complete-AddOnFailure($State, $Stage, $Copy, $Pass, $Compiled) {
   $after = $Copy.after
   $before = $Copy.before; $backup = $Copy.backup
   if ($old) { $before = Get-Field $old 'before'; $backup = [string](Get-Field $old 'backup') }   # the set before the first failed copy
-  $State['chartBridge']['mixed'] = @{ at = (Get-NowMs); version = $sv; commit = (Get-Field $Stage 'commit'); files = @(Get-Field $Stage 'addonFiles' @()); before = $before; after = $after; backup = $backup; changed = @($Copy.mixed); error = $Copy.error }
+  $State['chartBridge']['mixed'] = @{ at = (Get-NowMs); version = $sv; commit = (Get-Field $Stage 'commit'); files = @($(if ($Copy.files) { $Copy.files } else { Get-Field $Stage 'addonFiles' @() })); addonFiles = @(Get-Field $Stage 'addonFiles' @()); before = $before; after = $after; backup = $backup; changed = @($Copy.mixed); error = $Copy.error }
   $r2.outcome = 'chartbridge_mixed'
   $r2.reason = "$($script:MixedStop). The copy of ChartBridge $sv failed ($($Copy.error)) and the old files could not all be put back: $(@($Copy.mixed) -join ', ') differ from before. The files as they were before are in $backup"
   Write-Log "STOP: $($r2.reason)" 'ERROR'

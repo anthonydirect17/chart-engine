@@ -769,6 +769,41 @@ Test 'a cut after the last replace: the next run counts the copy (all files are 
   $script:FakeDiag = '0.4.2'
   [void](Run-Update)
 }
+Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily bars) takes it out of AddOns with the copy; a failed copy puts it back (review bars1 N2)' {
+  [void](Commit 'a revert: ChartBridgeBars.cs leaves the list (ChartBridge 0.4.3)' {
+    Set-CbVersion '0.4.3'
+    Remove-Item -LiteralPath (Get-LocalPath $src 'nt8/ChartBridgeBars.cs') -Force
+    $mf = Get-LocalPath $src 'nt8/install-files.json'
+    Put $mf ((Get-Text $mf) -replace ',\s*"nt8/ChartBridgeBars\.cs"', '')
+  })
+  [void](Run-Update)
+  $stage = Read-JsonFile (Join-Path $script:P.Staged 'stage.json')
+  Assert ($stage['chartBridgeVersion'] -eq '0.4.3' -and @($stage['addonFiles']).Count -eq 3 -and @($stage['addonFiles']) -notcontains 'ChartBridgeBars.cs') "staged 0.4.3 without ChartBridgeBars.cs: $(@($stage['addonFiles']) -join ', ')"
+  Assert (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs')) 'the 0.4.2 install left ChartBridgeBars.cs in AddOns'
+  # the probe: the copy fails on its third file; the file taken out and the one replaced are both put back
+  $before = Get-AddOnsPrint
+  $script:HoldAddOn = 'ChartBridgeOrders.cs'; $script:Yes = $true
+  try { $code = Invoke-InstallChartBridge } finally { $script:HoldAddOn = ''; $script:Yes = $false }
+  Assert-Code $code 1 'STOP (nothing changed)'
+  $log = Get-Text $script:P.Log
+  Assert ($log -match 'ChartBridgeBars\.cs is not in ChartBridge 0\.4\.3''s file list: taken out of AddOns' -and $log -match 'the add-on copy failed after 2 of 4 files .*putting back: ChartBridgeBars\.cs, ChartBridge\.cs') 'taken out first, then put back with ChartBridge.cs'
+  Assert ((Get-AddOnsPrint) -eq $before) 'AddOns exactly as before, ChartBridgeBars.cs included'
+  Assert (-not (Read-State)['chartBridge'].Contains('mixed')) 'no mix'
+  # an install recorded before 0.3.7 has no file list: the list is read from that install's commit
+  $s = Read-State; $s['chartBridge']['installed'].Remove('files'); Save-State $s
+  $script:Yes = $true
+  try { $code = Invoke-InstallChartBridge } finally { $script:Yes = $false }
+  Assert-Code $code 0 'OK'
+  Assert (-not (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs'))) 'ChartBridgeBars.cs is gone from AddOns: NinjaTrader compiles one whole 0.4.3'
+  foreach ($n in $script:AddOnNames) { Assert (Get-TextSame (Join-Path $script:P.AddOns $n) (Get-LocalPath $src "nt8/$n")) "$n is the commit's" }
+  Assert ((Get-Text (Join-Path $script:P.AddOns 'SomethingElse.cs')) -match 'another add-on') 'other add-ons untouched'
+  $kept = @(Get-ChildItem -Recurse -LiteralPath $script:P.PrevAddOns -Filter 'ChartBridgeBars.cs')
+  Assert ($kept.Count -ge 1) 'its copy is kept in the backup'
+  $inst = (Read-State)['chartBridge']['installed']
+  Assert ($inst['version'] -eq '0.4.3' -and (@($inst['files']) -join ',') -eq 'ChartBridge.cs,ChartBridgeOrders.cs,ChartBridgePin.cs') "the install records its file list: $(@($inst['files']) -join ',')"
+  $script:FakeDiag = '0.4.3'
+  [void](Run-Update)
+}
 Test 'status keeps what /diag said (a page waiting for F5 then follows on the next run)' {
   $s = Read-State; $s['chartBridge']['diagVersion'] = '0.3.3'; Save-State $s
   $script:FakeDiag = '0.4.0'

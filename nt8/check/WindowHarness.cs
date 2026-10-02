@@ -217,10 +217,10 @@ public static class WindowHarness
     // ------------------------------------------------------------ the faster trade text is the same text
     // Every trade 0.3.5 formats (the backfill and the older history) must read exactly as 0.3.4 wrote it: the same time to
     // the millisecond across daylight saving changes in NinjaTrader's zone and New York's, the same price and volume text.
-    static string Old(DateTime nt, double p, long v, int s, int m)
+    static string Old(DateTime nt, double p, long v)
     {
         double t = ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(nt));
-        return "[" + CbJson.Num3(t) + "," + CbJson.Num(p) + "," + v.ToString(CultureInfo.InvariantCulture) + "," + s.ToString(CultureInfo.InvariantCulture) + "," + m.ToString(CultureInfo.InvariantCulture) + "]";
+        return "[" + CbJson.Num3(t) + "," + CbJson.Num(p) + "," + v.ToString(CultureInfo.InvariantCulture) + "]";
     }
     static void Format()
     {
@@ -238,7 +238,6 @@ public static class WindowHarness
                 {
                     int n = 6000;
                     RawBars bars = new RawBars { Count = n, Time = new DateTime[n], Close = new double[n], Volume = new long[n] };
-                    BackfillSides sd = new BackfillSides { Side = new sbyte[n], Method = new byte[n], Trades = n };
                     long tick = day.AddDays(-1).Ticks;
                     for (int i = 0; i < n; i++)
                     {
@@ -248,14 +247,14 @@ public static class WindowHarness
                         int k = rnd.Next(0, 6);
                         bars.Close[i] = k == 0 ? 20000 + rnd.Next(0, 4000) * 0.25 : k == 1 ? rnd.Next(1, 100000) * 0.01 : k == 2 ? rnd.NextDouble() * 50000 : k == 3 ? -rnd.Next(1, 800) * 0.25 : k == 4 ? rnd.Next(1, 9) * 0.0001 : 1e10 + rnd.Next(0, 100);
                         bars.Volume[i] = rnd.Next(0, 3) == 0 ? rnd.Next(1, 10) : (long)rnd.Next(0, int.MaxValue) * 1000;
-                        sd.Side[i] = (sbyte)rnd.Next(-1, 2); sd.Method[i] = (byte)rnd.Next(0, 4);
+                        rnd.Next(-1, 2); rnd.Next(0, 4);   // (the sides 0.3.4 to 0.3.6 drew here, kept so the random sequence is the same)
                     }
                     ChartBridgeTime.EtCache et = new ChartBridgeTime.EtCache();
                     for (int i = 0; i < n; i++)
                     {
                         System.Text.StringBuilder b = new System.Text.StringBuilder();
-                        ChartBridgeServer.AppendTrade(b, bars, sd, i, et);
-                        string o = Old(bars.Time[i], bars.Close[i], bars.Volume[i], sd.Side[i], sd.Method[i]);
+                        ChartBridgeServer.AppendTrade(b, bars, i, et);
+                        string o = Old(bars.Time[i], bars.Close[i], bars.Volume[i]);
                         compared++;
                         if (b.ToString() != o) { differ++; if (first == null) first = (z ?? "local") + " " + bars.Time[i].ToString("o") + ": " + b + " against " + o; }
                     }
@@ -267,19 +266,18 @@ public static class WindowHarness
         // And what it saves: a 100,000-trade chunk both ways.
         int m2 = 100000;
         RawBars rb = new RawBars { Count = m2, Time = new DateTime[m2], Close = new double[m2], Volume = new long[m2] };
-        BackfillSides rs = new BackfillSides { Side = new sbyte[m2], Method = new byte[m2], Trades = m2 };
-        for (int i = 0; i < m2; i++) { rb.Time[i] = DateTime.Now.AddHours(-3).AddTicks(i * 311117L); rb.Close[i] = 20000 + (i % 41) * 0.25; rb.Volume[i] = 1 + i % 5; rs.Side[i] = (sbyte)(i % 3 - 1); rs.Method[i] = 2; }
+        for (int i = 0; i < m2; i++) { rb.Time[i] = DateTime.Now.AddHours(-3).AddTicks(i * 311117L); rb.Close[i] = 20000 + (i % 41) * 0.25; rb.Volume[i] = 1 + i % 5; }
         double oldUs = 1e9, newUs = 1e9;
         for (int rep = 0; rep < 3; rep++)
         {
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             System.Text.StringBuilder a = new System.Text.StringBuilder();
-            for (int i = 0; i < m2; i++) a.Append(Old(rb.Time[i], rb.Close[i], rb.Volume[i], rs.Side[i], rs.Method[i]));
+            for (int i = 0; i < m2; i++) a.Append(Old(rb.Time[i], rb.Close[i], rb.Volume[i]));
             oldUs = Math.Min(oldUs, sw.Elapsed.TotalMilliseconds * 1000 / m2);
             sw = System.Diagnostics.Stopwatch.StartNew();
             System.Text.StringBuilder c = new System.Text.StringBuilder();
             ChartBridgeTime.EtCache et = new ChartBridgeTime.EtCache();
-            for (int i = 0; i < m2; i++) ChartBridgeServer.AppendTrade(c, rb, rs, i, et);
+            for (int i = 0; i < m2; i++) ChartBridgeServer.AppendTrade(c, rb, i, et);
             newUs = Math.Min(newUs, sw.Elapsed.TotalMilliseconds * 1000 / m2);
         }
         Console.WriteLine("     (a trade's text: " + oldUs.ToString("0.00", CultureInfo.InvariantCulture) + " us as 0.3.4 wrote it, " + newUs.ToString("0.00", CultureInfo.InvariantCulture) + " us now, Mono on the build box)");
@@ -391,7 +389,6 @@ public static class WindowHarness
         Func<BarsRequest, bool> was = BarsRequest.AutoAnswer;
         BarsRequest.AutoAnswer = null;
         int gapWas = ChartBridgeServer.BackfillGapMs, startWas = ChartBridgeServer.BackfillStartMs, retryWas = ChartBridgeServer.BackfillRetryMs, toWas = ChartBridgeServer.BackfillTimeoutMs, wretryWas = ChartBridgeServer.WindowRetryMs, wtoWas = ChartBridgeServer.WindowTimeoutMs;
-        ChartBridgeServer.ByDateTickLoads = false;
         ChartBridgeServer.ClockForHarness = () => simNow;
         Priv("WatchFeed");
         Dictionary<string, Instrument> named = (Dictionary<string, Instrument>)typeof(ChartBridgeServer).GetField("Instruments", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
@@ -431,7 +428,7 @@ public static class WindowHarness
         {
             ChartBridgeServer.BackfillOn = false; ChartBridgeServer.BackfillGapMs = gapWas; ChartBridgeServer.BackfillStartMs = startWas; ChartBridgeServer.BackfillRetryMs = retryWas;
             ChartBridgeServer.BackfillTimeoutMs = toWas; ChartBridgeServer.WindowRetryMs = wretryWas; ChartBridgeServer.WindowTimeoutMs = wtoWas;
-            ChartBridgeServer.ClockForHarness = null; ChartBridgeServer.ByDateTickLoads = true;
+            ChartBridgeServer.ClockForHarness = null;
             Priv("UnwatchFeed");
             if (!hadNq) named.Remove("NQ");
             if (!hadEs) named.Remove("ES");

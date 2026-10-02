@@ -69,6 +69,11 @@ public static class OrdersHarness
 
     public static int Main()
     {
+        // 0.3.7: ChartBridge's folder (planned_brackets.txt) in a fresh directory, never a shared /tmp/nt8 from an earlier run
+        string home = Path.Combine(Path.GetTempPath(), "cb-orders-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(home, "ChartBridge"));
+        NinjaTrader.Core.Globals.UserDataDir = home;
+        ChartBridgeOrders.LoadPlansNow();   // what StartPlans does at start, here on this thread
         mnq = new Instrument { FullName = "MNQ 12-26", MasterInstrument = new MasterInstrument { Name = "MNQ", TickSize = 0.25, PointValue = 2 } };
         es = new Instrument { FullName = "ES 12-26", MasterInstrument = new MasterInstrument { Name = "ES", TickSize = 0.25, PointValue = 50 } };
         FieldInfo f = typeof(ChartBridgeServer).GetField("Instruments", BindingFlags.NonPublic | BindingFlags.Static);
@@ -156,13 +161,15 @@ public static class OrdersHarness
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":[1]"));
         Check(Rejected("nested object or list"), "list value: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":-1,\"target\":8}"));
-        Check(Rejected("from 0 to 200"), "negative bracket ticks: refused");
+        Check(Rejected("0 or more"), "negative bracket ticks: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8}"));
         Check(Rejected("needs both stop and target"), "bracket missing its target: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":4"));
         Check(Rejected("over the MNQ cap of 3"), "one order over the cap: refused");
+        ChartBridgeOrders.ReadConfig("maxBracketTicks", "200");   // 0.3.7: only with the config limit set
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":201,\"target\":8}"));
-        Check(Rejected("from 0 to 200"), "bracket over 200 ticks: refused");
+        Check(Rejected("from 0 to 200 (maxBracketTicks in config.txt)"), "bracket over maxBracketTicks = 200: refused");
+        ChartBridgeOrders.MaxBracketTicks = 0;
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":\"8\",\"target\":16}"));
         Check(Rejected("needs both stop and target"), "bracket ticks as a string: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8.5,\"target\":16}"));
@@ -178,8 +185,10 @@ public static class OrdersHarness
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999.1"));
         Check(Rejected("tick grid"), "price off the tick grid: refused");
+        ChartBridgeOrders.ReadConfig("maxTicksAway", "200");   // 0.3.7: only with the config limit set
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24949.75"));
-        Check(Rejected("more than 200 ticks"), "limit 201 ticks away: refused");
+        Check(Rejected("more than 200 ticks") && Rejected("maxTicksAway in config.txt"), "limit 201 ticks away with maxTicksAway = 200: refused");
+        ChartBridgeOrders.MaxTicksAway = 0;
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":2.4999e4"));
         Check(Rejected("plain price"), "price with an exponent: refused");
         Msg("order", Order("Sim101", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1"));
@@ -270,7 +279,7 @@ public static class OrdersHarness
         // ------------------------------------------------------------ brackets: one OCO pair per fill increment
         sent.Clear();
         Msg("order", "{\"type\":\"order\",\"cid\":\"c13\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":16}}");
-        Check(sim.Calls.Count == 1 && Regex.IsMatch(sim.Calls[0], "^submit CB#[0-9a-f]{8} s8 t16 Buy Limit 3 L24990 S0 oco:$"), "allowed limit sent, bracket written in its name: " + (sim.Calls.Count > 0 ? sim.Calls[0] : "none"));
+        Check(sim.Calls.Count == 1 && Regex.IsMatch(sim.Calls[0], "^submit CB#[0-9a-f]{8} plan s24988 t24994 Buy Limit 3 L24990 S0 oco:$"), "allowed limit sent, bracket ticks turned into planned prices from the limit price, in its name: " + (sim.Calls.Count > 0 ? sim.Calls[0] : "none"));
         Order entry = sim.Orders[0];
         string tag = Tag(entry);
         Fill(sim, entry, 2, 24990);
@@ -280,8 +289,8 @@ public static class OrdersHarness
         Check(sent.Any(m => m.Contains("\"type\":\"order\"") && m.Contains("\"cid\":\"c13\"") && m.Contains("\"state\":\"partFilled\"") && m.Contains("\"role\":\"entry\"")), "order update sent to the page with cid, role and state");
         Fill(sim, entry, 3, (24990 * 2 + 24991) / 3.0);
         legs = After(sim, 3);
-        Check(legs.Count == 2 && legs[0] == "submit CB#" + tag + " stop f3 q1 p24991 Sell StopMarket 1 L0 S24989 oco:cb-" + tag + "-3" && legs[1] == "submit CB#" + tag + " target f3 q1 p24991 Sell Limit 1 L24995 S0 oco:cb-" + tag + "-3",
-              "next fill of 1 at 24991: its own pair, priced from that fill: " + string.Join(" | ", legs));
+        Check(legs.Count == 2 && legs[0] == "submit CB#" + tag + " stop f3 q1 p24991 Sell StopMarket 1 L0 S24988 oco:cb-" + tag + "-3" && legs[1] == "submit CB#" + tag + " target f3 q1 p24991 Sell Limit 1 L24994 S0 oco:cb-" + tag + "-3",
+              "next fill of 1 at 24991 (0.3.7): its own pair, at the planned prices, not ticks from that fill: " + string.Join(" | ", legs));
         Check(!sim.Calls.Any(x => x.StartsWith("change")), "earlier legs are not resized (no change calls)");
         Update(sim, entry);
         Check(sim.Calls.Count == 5, "a repeated update places nothing more");
@@ -406,7 +415,7 @@ public static class OrdersHarness
         Order rTarget = Manual(r, mnq, OrderAction.Sell, OrderType.Limit, 2, 24994, 0, "cb-0badcafe-2", "CB#0badcafe target f2 q2 p24990");
         rTarget.Filled = 1; rTarget.OrderState = OrderState.PartFilled;
         SetPos(r, mnq, 2);
-        ChartBridgeOrders.Clear();
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.LoadPlansNow();
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         double trc = 4000000;
         // the scan notes the gap; it acts once the gap has lasted 4 seconds
@@ -838,6 +847,8 @@ public static class OrdersHarness
         ChartBridgeOrders.OnPositionUpdate(sim, new PositionEventArgs { Position = new Position { Instrument = es }, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 1 });
         Check(sent.Count == 1, "position on a contract ChartBridge does not serve is not sent");
 
+        PlannedChecks();   // 0.3.7: planned prices on resting entries, no distance limits unless config.txt sets them
+
         // ------------------------------------------------------------ turning trading off stops every order action
         ChartBridgeOrders.ResetConfig();
         int n = sim.Calls.Count;
@@ -853,6 +864,618 @@ public static class OrdersHarness
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
     }
+    // ------------------------------------------------------------ 0.3.7: planned prices on resting entries (Anthony's rulings, 2026-10-01)
+    static Order Newest(Account a) { return a.Orders[a.Orders.Count - 1]; }
+    static string Ord(string account, string rest) { return Order(account, rest); }
+    static string PlanMsg(string id, string rest) { return "{\"type\":\"plan\",\"cid\":\"p\",\"id\":\"" + id + "\"" + (rest.Length > 0 ? "," + rest : "") + "}"; }
+    static string LastOrderMsg(Order o) { string id = IdOf(o); for (int i = sent.Count - 1; i >= 0; i--) if (sent[i].Contains("\"type\":\"order\"") && sent[i].Contains("\"id\":\"" + id + "\"")) return sent[i]; return ""; }
+    static string PlanFilePath() { return Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "planned_brackets.txt"); }
+    static string PlanFileText() { try { return File.ReadAllText(PlanFilePath()); } catch (Exception) { return ""; } }
+    static bool Alarmed(string contains) { return sent.Any(m => m.Contains("\"level\":\"error\"") && m.Contains(contains)); }
+    static void Recompile() { ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000); ChartBridgeOrders.LoadPlansNow(); }
+
+    static void PlannedChecks()
+    {
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimN1, SimN2, SimN3, SimN4, SimN5, SimN6, SimN7, SimN8, SimN9, SimNA, SimNB, SimNC, SimND, SimNE");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+
+        // ---- ruling 1: no 200-tick limits; optional limits in config.txt
+        Account n1 = NewAccount("SimN1");
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24750,\"bracket\":{\"stop\":500,\"target\":500}"));
+        Check(n1.Calls.Count == 1 && Regex.IsMatch(n1.Calls[0], "^submit CB#[0-9a-f]{8} plan s24625 t24875 Buy Limit 1 L24750 S0 oco:$"),
+              "no config limit: a limit 1000 ticks from the last price with a 500-tick bracket is accepted (planned 24625 / 24875): " + (n1.Calls.Count > 0 ? n1.Calls[0] : LastSent()));
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":500,\"target\":1000}"));
+        Order m500 = Newest(n1);
+        Check(n1.Calls.Count == 2 && Regex.IsMatch(m500.Name, "^CB#[0-9a-f]{8} s500 t1000$"), "no config limit: a market entry with a 500 / 1000 tick bracket is accepted: " + m500.Name);
+        Fill(n1, m500, 1, 25000);
+        Check(n1.Calls.Count == 4 && n1.Calls[2].EndsWith("Sell StopMarket 1 L0 S24875 oco:cb-" + Tag(m500) + "-1") && n1.Calls[3].EndsWith("Sell Limit 1 L25250 S0 oco:cb-" + Tag(m500) + "-1"),
+              "market entry: legs 500 and 1000 ticks from the fill: " + string.Join(" | ", After(n1, 2)));
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":100001,\"target\":8}"));
+        Check(Rejected("at or below zero") && n1.Calls.Count == 4, "a market bracket that would put the stop below zero is refused");
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":99996,\"target\":8}"));
+        Check(Rejected("at or below zero") && n1.Calls.Count == 4, "a limit bracket that would put the stop at or below zero is refused (never read as no stop)");
+        ChartBridgeOrders.ReadConfig("maxTicksAway", "400");
+        ChartBridgeOrders.ReadConfig("maxBracketTicks", "300");
+        Check(ChartBridgeOrders.TradingJson(true, null).Contains("\"maxTicksAway\":400,\"maxBracketTicks\":300}"), "the trading message names the config limits when set: " + ChartBridgeOrders.TradingJson(true, null));
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24750,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Check(Rejected("more than 400 ticks from the last price 25000 (maxTicksAway in config.txt)") && n1.Calls.Count == 4, "maxTicksAway = 400: the 1000-tick limit is refused");
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24900,\"bracket\":{\"stop\":500,\"target\":8}"));
+        Check(Rejected("from 0 to 300 (maxBracketTicks in config.txt)") && n1.Calls.Count == 4, "maxBracketTicks = 300: a 500-tick bracket is refused");
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24900,\"stopPrice\":24800,\"targetPrice\":24910"));
+        Check(Rejected("the stop is more than 300 ticks from the entry price 24900") && n1.Calls.Count == 4, "maxBracketTicks = 300: a planned stop 400 ticks from the entry is refused");
+        Msg("order", Ord("SimN1", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":301,\"target\":8}"));
+        Check(Rejected("from 0 to 300") && n1.Calls.Count == 4, "maxBracketTicks = 300: a market bracket of 301 ticks is refused");
+        lock (NinjaTrader.Code.Output.Lines) NinjaTrader.Code.Output.Lines.Clear();
+        ChartBridgeOrders.ReadConfig("maxTicksAway", "4OO");
+        bool said; lock (NinjaTrader.Code.Output.Lines) said = NinjaTrader.Code.Output.Lines.Any(x => x.Contains("maxTicksAway = 4OO is not a whole number") && x.Contains("NO maxTicksAway limit"));
+        Check(ChartBridgeOrders.MaxTicksAway == 0 && said, "a maxTicksAway that is not a whole number is ignored, said in the Output window");
+        ChartBridgeOrders.ResetConfig();
+        Check(ChartBridgeOrders.MaxTicksAway == 0 && ChartBridgeOrders.MaxBracketTicks == 0, "config reset: no limits (absent means none)");
+        ChartBridgeOrders.ReadConfig("trading", "true");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimN1, SimN2, SimN3, SimN4, SimN5, SimN6, SimN7, SimN8, SimN9, SimNA, SimNB, SimNC, SimND, SimNE");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+
+        // a 4-digit tick bracket in an old-style name (a market entry, or a resting one placed before 0.3.7) after a recompile
+        Account n2 = NewAccount("SimN2");
+        Order oldE = Manual(n2, mnq, OrderAction.Buy, OrderType.Limit, 2, 24990, 0, "", "CB#0ddba110 s1200 t2400");
+        oldE.Filled = 1; oldE.AverageFillPrice = 24990; oldE.OrderState = OrderState.PartFilled;
+        Manual(n2, mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24690, "cb-0ddba110-1", "CB#0ddba110 stop f1 q1 p24990");
+        Manual(n2, mnq, OrderAction.Sell, OrderType.Limit, 1, 25590, 0, "cb-0ddba110-1", "CB#0ddba110 target f1 q1 p24990");
+        Recompile();
+        oldE.Filled = 2; oldE.AverageFillPrice = (24990 + 24980) / 2.0; oldE.OrderState = OrderState.Filled;
+        Update(n2, oldE);
+        Check(n2.Calls.Count == 2 && n2.Calls[0] == "submit CB#0ddba110 stop f2 q1 p24980 Sell StopMarket 1 L0 S24680 oco:cb-0ddba110-2" && n2.Calls[1] == "submit CB#0ddba110 target f2 q1 p24980 Sell Limit 1 L25580 S0 oco:cb-0ddba110-2",
+              "after a recompile, an old-style name with a 4-digit bracket (s1200 t2400) recovers: the next fill gets its pair 1200 / 2400 ticks from its own price: " + string.Join(" | ", n2.Calls));
+
+        // ---- ruling 2: a resting entry's legs go at its planned prices, at any fill price
+        Account n3 = NewAccount("SimN3");
+        sent.Clear();
+        Msg("order", Ord("SimN3", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e3 = Newest(n3);
+        string t3 = Tag(e3);
+        Check(n3.Calls.Count == 1 && e3.Name == "CB#" + t3 + " plan s24980 t25010", "prices at placement: the planned stop and target are in the entry's name: " + e3.Name);
+        Check(PlanFileText().Contains(t3 + " 24980 25010 "), "and in planned_brackets.txt: " + PlanFileText());
+        Update(n3, e3);
+        Check(LastOrderMsg(e3).Contains("\"role\":\"entry\"") && LastOrderMsg(e3).Contains(",\"planned\":{\"stop\":24980,\"target\":25010}"), "the order event tells the page the planned prices: " + LastOrderMsg(e3));
+        Fill(n3, e3, 1, 24990);
+        Check(After(n3, 1).SequenceEqual(new[] { "submit CB#" + t3 + " stop f1 q1 p24990 Sell StopMarket 1 L0 S24980 oco:cb-" + t3 + "-1", "submit CB#" + t3 + " target f1 q1 p24990 Sell Limit 1 L25010 S0 oco:cb-" + t3 + "-1" }),
+              "filled exactly at the limit: legs at the planned prices: " + string.Join(" | ", After(n3, 1)));
+        Fill(n3, e3, 2, (24990 + 24985) / 2.0);
+        Check(After(n3, 3).SequenceEqual(new[] { "submit CB#" + t3 + " stop f2 q1 p24985 Sell StopMarket 1 L0 S24980 oco:cb-" + t3 + "-2", "submit CB#" + t3 + " target f2 q1 p24985 Sell Limit 1 L25010 S0 oco:cb-" + t3 + "-2" }),
+              "filled better (a gap to 24985): legs at the planned prices, not 5 ticks lower: " + string.Join(" | ", After(n3, 3)));
+        Fill(n3, e3, 3, (24990 + 24985 + 24988) / 3.0);
+        Check(After(n3, 5).SequenceEqual(new[] { "submit CB#" + t3 + " stop f3 q1 p24988 Sell StopMarket 1 L0 S24980 oco:cb-" + t3 + "-3", "submit CB#" + t3 + " target f3 q1 p24988 Sell Limit 1 L25010 S0 oco:cb-" + t3 + "-3" }),
+              "a third part at another price: its own pair, at the planned prices: " + string.Join(" | ", After(n3, 5)));
+        bool gone = WaitFor(() => !PlanFileText().Contains(t3), 5000);
+        Check(gone, "the entry done and covered: its line leaves planned_brackets.txt");
+        // the stop already traded at the fill (a gap through it): the market exit, with its alarm
+        Account n4 = NewAccount("SimN4");
+        Msg("order", Ord("SimN4", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e4 = Newest(n4);
+        sent.Clear();
+        Fill(n4, e4, 1, 24978);
+        Check(n4.Calls.Count == 2 && n4.Calls[1] == "submit CB#" + Tag(e4) + " exit f1 q1 p24978 Sell Market 1 L0 S0 oco:", "a gap fill through the planned stop: a market exit, no stop through the market: " + n4.Calls.Last());
+        Check(Alarmed("price had already passed the stop level 24980 (filled at 24978); exited 1 at market"), "and the alarm says so");
+        // a stop-market entry with slippage: legs at the planned prices
+        Account n5 = NewAccount("SimN5");
+        Msg("order", Ord("SimN5", "\"side\":\"buy\",\"kind\":\"stop\",\"qty\":1,\"price\":25010,\"stopPrice\":24995,\"targetPrice\":25030"));
+        Order e5 = Newest(n5);
+        Check(n5.Calls.Count == 1 && n5.Calls[0].EndsWith(" plan s24995 t25030 Buy StopMarket 1 L0 S25010 oco:"), "a buy stop entry with planned prices: " + n5.Calls[0]);
+        Fill(n5, e5, 1, 25013);
+        Check(After(n5, 1).SequenceEqual(new[] { "submit CB#" + Tag(e5) + " stop f1 q1 p25013 Sell StopMarket 1 L0 S24995 oco:cb-" + Tag(e5) + "-1", "submit CB#" + Tag(e5) + " target f1 q1 p25013 Sell Limit 1 L25030 S0 oco:cb-" + Tag(e5) + "-1" }),
+              "stop entry filled 3 ticks worse (slippage): legs at the planned prices: " + string.Join(" | ", After(n5, 1)));
+        // the target already through at the fill: the target goes in as a limit through the market (fills at once), with a warning
+        Msg("order", Ord("SimN5", "\"side\":\"buy\",\"kind\":\"stop\",\"qty\":1,\"price\":25010,\"stopPrice\":24995,\"targetPrice\":25015"));
+        Order e5b = Newest(n5);
+        int n5c = n5.Calls.Count;
+        sent.Clear();
+        Fill(n5, e5b, 1, 25016);
+        Check(After(n5, n5c).Count == 2 && After(n5, n5c)[1].EndsWith("Sell Limit 1 L25015 S0 oco:cb-" + Tag(e5b) + "-1") && After(n5, n5c)[0].EndsWith("S24995 oco:cb-" + Tag(e5b) + "-1"),
+              "target already passed at the fill: the OCO pair is placed, the target a limit through the market: " + string.Join(" | ", After(n5, n5c)));
+        Check(sent.Any(m => m.Contains("\"level\":\"warn\"") && m.Contains("already reached the planned target 25015 (filled at 25016)")), "and a warning says so");
+
+        // ---- old page messages (bracket in ticks): market from the fill, limit and stop from the entry's own price
+        Account n6 = NewAccount("SimN6");
+        Msg("order", Ord("SimN6", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e6m = Newest(n6);
+        Fill(n6, e6m, 1, 25001);
+        Check(Regex.IsMatch(e6m.Name, "^CB#[0-9a-f]{8} s8 t16$") && After(n6, 1).Count == 2 && After(n6, 1)[0].EndsWith("Buy StopMarket 1 L0 S25003 oco:cb-" + Tag(e6m) + "-1") && After(n6, 1)[1].EndsWith("Buy Limit 1 L24997 S0 oco:cb-" + Tag(e6m) + "-1"),
+              "old page, market sell with 8 / 16 ticks: legs from the fill 25001 (25003 / 24997): " + string.Join(" | ", After(n6, 1)));
+        Msg("order", Ord("SimN6", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25010,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e6l = Newest(n6);
+        int n6c = n6.Calls.Count;
+        Fill(n6, e6l, 1, 25012);   // filled better on a gap up
+        Check(e6l.Name == "CB#" + Tag(e6l) + " plan s25012 t25006", "old page, sell limit 25010 with 8 / 16 ticks: planned 25012 / 25006 from its price (" + e6l.Name + ")");
+        Check(After(n6, n6c).Count == 1 && After(n6, n6c)[0] == "submit CB#" + Tag(e6l) + " exit f1 q1 p25012 Buy Market 1 L0 S0 oco:",
+              "and a fill at 25012 is at its planned stop: the market exit path: " + string.Join(" | ", After(n6, n6c)));
+        Msg("order", Ord("SimN6", "\"side\":\"sell\",\"kind\":\"stop\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e6s = Newest(n6);
+        n6c = n6.Calls.Count;
+        ChartBridgeOrders.NoteLast("MNQ", 24988);   // the sell stop triggered on the way down
+        Fill(n6, e6s, 1, 24988);   // slippage
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Check(e6s.Name == "CB#" + Tag(e6s) + " plan s24992 t24986" && After(n6, n6c).SequenceEqual(new[] { "submit CB#" + Tag(e6s) + " stop f1 q1 p24988 Buy StopMarket 1 L0 S24992 oco:cb-" + Tag(e6s) + "-1", "submit CB#" + Tag(e6s) + " target f1 q1 p24988 Buy Limit 1 L24986 S0 oco:cb-" + Tag(e6s) + "-1" }),
+              "old page, sell stop 24990 with 8 / 16 ticks, filled at 24988: legs at 24992 / 24986 (from its price, not the fill): " + string.Join(" | ", After(n6, n6c)));
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990"));
+        Order e6n = Newest(n6);
+        Update(n6, e6n);
+        Check(e6n.Name == "CB#" + Tag(e6n) + " plan s0 t0" && LastOrderMsg(e6n).Contains(",\"planned\":{\"stop\":null,\"target\":null}"), "a limit with no bracket: planned null / null on the page: " + LastOrderMsg(e6n));
+        Check(!LastOrderMsg(e6m).Contains("planned"), "a market entry's order event has no planned key");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"stopPrice\":24980"));
+        Check(Rejected("ticks from the fill: use bracket"), "a market entry with stopPrice: refused");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Check(Rejected("not both"), "bracket and stopPrice together: refused");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24995"));
+        Check(Rejected("a buy entry's stop must be below its price 24990"), "placement: a planned stop on the wrong side: refused");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"targetPrice\":24990"));
+        Check(Rejected("a buy entry's target must be above its price 24990"), "placement: a planned target at the entry price: refused");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980.1"));
+        Check(Rejected("not on the 0.25 tick grid"), "placement: a planned stop off the tick grid: refused");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":\"24980\""));
+        Check(Rejected("stopPrice must be a plain price"), "placement: stopPrice as a string: refused");
+        Msg("order", Ord("SimN6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":null"));
+        Check(Rejected("stopPrice must be a plain price"), "placement: stopPrice null: refused (leave it out for none)");
+
+        // ---- ruling 3: moving a resting entry keeps its planned prices; to or past them is refused
+        Account n7 = NewAccount("SimN7");
+        Msg("order", Ord("SimN7", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25010,\"stopPrice\":25020,\"targetPrice\":25005"));
+        Order e7s = Newest(n7);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e7s) + "\",\"price\":25005}");
+        Check(Rejected("cannot move to or past its own planned target 25005") && n7.Calls.Count == 1, "a sell entry moved onto its own planned target: refused");
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e7s) + "\",\"price\":25025}");
+        Check(Rejected("cannot move to or past its own planned stop 25020") && n7.Calls.Count == 1, "a sell entry moved past its own planned stop: refused");
+        Msg("cancel", "{\"type\":\"cancel\",\"id\":\"" + IdOf(e7s) + "\"}");
+        e7s.OrderState = OrderState.Cancelled; Update(n7, e7s);
+        n7.Calls.Clear();
+        Msg("order", Ord("SimN7", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e7 = Newest(n7);
+        string id7 = IdOf(e7);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + id7 + "\",\"price\":24985}");
+        Check(n7.Calls.Last() == "change " + e7.Name + " L24985 S0 Q0", "the entry moves to 24985: " + n7.Calls.Last());
+        e7.LimitPrice = 24985;
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + id7 + "\",\"price\":24980}");
+        Check(Rejected("cannot move to or past its own planned stop 24980") && n7.Calls.Count == 2, "a move onto its own planned stop: refused");
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + id7 + "\",\"price\":24970}");
+        Check(Rejected("cannot move to or past its own planned stop 24980") && n7.Calls.Count == 2, "a move past its own planned stop: refused");
+        Fill(n7, e7, 1, 24985);
+        Check(After(n7, 2).Count == 2 && After(n7, 2)[0].EndsWith("S24980 oco:cb-" + Tag(e7) + "-1") && After(n7, 2)[1].EndsWith("L25010 S0 oco:cb-" + Tag(e7) + "-1"),
+              "after the move, the fill's legs are at the planned prices (unchanged by the move): " + string.Join(" | ", After(n7, 2)));
+
+        // ---- ruling 4: add, move and remove the planned stop and target before the fill
+        Account n8 = NewAccount("SimN8");
+        Msg("order", Ord("SimN8", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":3,\"price\":25010"));
+        Order e8 = Newest(n8);
+        string id8 = IdOf(e8), t8 = Tag(e8);
+        sent.Clear();
+        Msg("plan", PlanMsg(id8, "\"targetPrice\":25000"));
+        Check(LastOrderMsg(e8).Contains(",\"planned\":{\"stop\":null,\"target\":25000}") && PlanFileText().Contains(t8 + " 0 25000 "), "add a target to a limit placed without one: " + LastOrderMsg(e8));
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25020"));
+        Check(LastOrderMsg(e8).Contains(",\"planned\":{\"stop\":25020,\"target\":25000}") && PlanFileText().Contains(t8 + " 25020 25000 "), "add a stop (the target is kept): " + LastOrderMsg(e8));
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25005"));
+        Check(Rejected("a sell entry's stop must be above its price 25010") && LastOrderMsg(e8).Contains("\"stop\":25020"), "a planned stop on the wrong side: refused, nothing changed");
+        Msg("plan", PlanMsg(id8, "\"targetPrice\":25012"));
+        Check(Rejected("a sell entry's target must be below its price 25010"), "a planned target on the wrong side: refused");
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25020.1"));
+        Check(Rejected("not on the 0.25 tick grid"), "a planned stop off the tick grid: refused");
+        Msg("plan", PlanMsg(id8, ""));
+        Check(Rejected("plan needs stopPrice or targetPrice"), "a plan with neither key: refused");
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25025,\"qty\":2"));
+        Check(Rejected("unknown key \\\"qty\\\" in plan"), "a plan with an unknown key: refused");
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":\"25025\""));
+        Check(Rejected("stopPrice must be a plain price above 0, or null"), "a plan price as a string: refused");
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":0"));
+        Check(Rejected("stopPrice must be a plain price above 0, or null"), "a plan price of 0: refused (null removes)");
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25025,\"stopPrice\":25030"));
+        Check(Rejected("key twice"), "a plan key twice: refused");
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25025"));
+        Check(LastOrderMsg(e8).Contains("\"planned\":{\"stop\":25025,\"target\":25000}"), "move the planned stop (a drag): " + LastOrderMsg(e8));
+        sent.Clear();
+        ChartBridgeOrders.PlanWriteFault = () => "disk full";
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25030"));
+        ChartBridgeOrders.PlanWriteFault = null;
+        Check(!sent.Any(m => m.Contains("\"type\":\"reject\"")) && LastOrderMsg(e8).Contains("\"planned\":{\"stop\":25030,\"target\":25000}") && PlanFileText().Contains(t8 + " 25025 25000 ")
+              && Alarmed("are set (stop 25030 / target 25000) but could not be saved (disk full); after a recompile or restart it would use the prices it was placed with"),
+              "a plan change that cannot be saved still applies (the fill uses it), with an alarm that it may not survive a recompile: " + string.Join(" | ", sent));
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25025"));
+        Check(PlanFileText().Contains(t8 + " 25025 25000 ") && LastOrderMsg(e8).Contains("\"stop\":25025"), "set again: saved");
+        Check(n8.Calls.Count == 1, "plan changes send nothing to NinjaTrader");
+        // part filled: the change applies to the fill increments still to come; legs already working are not touched
+        Fill(n8, e8, 1, 25010);
+        Check(After(n8, 1).Count == 2 && After(n8, 1)[0].EndsWith("Buy StopMarket 1 L0 S25025 oco:cb-" + t8 + "-1") && After(n8, 1)[1].EndsWith("Buy Limit 1 L25000 S0 oco:cb-" + t8 + "-1"),
+              "first part: legs at the planned prices: " + string.Join(" | ", After(n8, 1)));
+        Msg("plan", PlanMsg(id8, "\"targetPrice\":null"));
+        Check(LastOrderMsg(e8).Contains("\"planned\":{\"stop\":25025,\"target\":null}") && n8.Calls.Count == 3, "remove the target while part filled: planned target null, the working pair untouched");
+        Fill(n8, e8, 2, 25010);
+        Check(After(n8, 3).Count == 1 && After(n8, 3)[0] == "submit CB#" + t8 + " stop f2 q1 p25010 Buy StopMarket 1 L0 S25025 oco:", "second part: a stop only (no OCO), at the planned stop: " + string.Join(" | ", After(n8, 3)));
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25030,\"targetPrice\":24990"));
+        Fill(n8, e8, 3, 25010);
+        Check(After(n8, 4).Count == 2 && After(n8, 4)[0].EndsWith("S25030 oco:cb-" + t8 + "-3") && After(n8, 4)[1].EndsWith("L24990 S0 oco:cb-" + t8 + "-3") && !n8.Calls.Any(x => x.StartsWith("change") || x.StartsWith("cancel")),
+              "third part: the new prices; earlier legs never changed or cancelled: " + string.Join(" | ", After(n8, 4)));
+        Msg("plan", PlanMsg(id8, "\"stopPrice\":25040"));
+        Check(Rejected("no working order") || Rejected("no longer working"), "plan on a filled entry: refused");
+        // remove the stop, then the fill gets a lone target
+        Msg("order", Ord("SimN8", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25010,\"stopPrice\":25020,\"targetPrice\":25000"));
+        Order e8b = Newest(n8);
+        int n8c = n8.Calls.Count;
+        Msg("plan", PlanMsg(IdOf(e8b), "\"stopPrice\":null"));
+        Fill(n8, e8b, 1, 25010);
+        Check(After(n8, n8c).Count == 1 && After(n8, n8c)[0] == "submit CB#" + Tag(e8b) + " target f1 q1 p25010 Buy Limit 1 L25000 S0 oco:", "stop removed before the fill: a lone target: " + string.Join(" | ", After(n8, n8c)));
+        // what a plan may not touch
+        string legId = IdOf(n8.Orders[1]);
+        Msg("plan", PlanMsg(legId, "\"stopPrice\":25040"));
+        Check(Rejected("only a ChartBridge entry"), "plan on a bracket leg: refused (legs move with change)");
+        Order oldRest = Manual(n8, mnq, OrderAction.Sell, OrderType.Limit, 1, 25010, 0, "", "CB#0ddba111 s8 t16");
+        Update(n8, oldRest);
+        Msg("plan", PlanMsg(IdOf(oldRest), "\"stopPrice\":25020"));
+        Check(Rejected("placed before ChartBridge 0.3.7"), "plan on an entry placed before 0.3.7 (ticks): refused");
+        Msg("order", Ord("SimN7", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Newest(n7).OrderType == OrderType.Market, "a market entry placed: " + LastSent());
+        Msg("plan", PlanMsg(IdOf(Newest(n7)), "\"stopPrice\":24980"));
+        Check(Rejected("only a resting limit or stop entry"), "plan on a market entry: refused: " + LastSent());
+        // adding a bracket to an entry that would reduce the position: refused, as at placement
+        Account n9 = NewAccount("SimN9");
+        SetPos(n9, mnq, 2);
+        Msg("order", Ord("SimN9", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":1,\"price\":25010"));
+        Msg("plan", PlanMsg(IdOf(Newest(n9)), "\"stopPrice\":25020"));
+        Check(Rejected("opens or adds"), "adding a stop to an entry that reduces the position: refused");
+        // gates: account and trading
+        ChartBridgeOrders.ReadConfig("trading", "false");
+        Msg("plan", PlanMsg(IdOf(Newest(n9)), "\"stopPrice\":25020"));
+        Check(Rejected("trading is off"), "plan with trading off: refused");
+        ChartBridgeOrders.ReadConfig("trading", "true");
+
+        // ---- persistence: a recompile or restart while resting, after an edit
+        Account na = NewAccount("SimNA");
+        Msg("order", Ord("SimNA", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order ea = Newest(na);
+        string ta = Tag(ea);
+        Msg("plan", PlanMsg(IdOf(ea), "\"stopPrice\":24970,\"targetPrice\":25020"));
+        Recompile();
+        ChartBridgeOrders.Resume();   // ChartBridge starts again: planned_brackets.txt is read
+        sent.Clear();
+        Msg("auth", "{\"type\":\"auth\",\"token\":\"" + ChartBridgeOrders.SessionJson().Split('"')[3] + "\"}");
+        string snap = sent.FirstOrDefault(m => m.Contains("\"type\":\"orders\"")) ?? "";
+        Check(snap.Contains("\"planned\":{\"stop\":24970,\"target\":25020}"), "after a restart the orders snapshot has the edited planned prices: " + snap);
+        Fill(na, ea, 1, 24990);
+        Check(After(na, 1).Count == 2 && After(na, 1)[0] == "submit CB#" + ta + " stop f1 q1 p24990 Sell StopMarket 1 L0 S24970 oco:cb-" + ta + "-1" && After(na, 1)[1].EndsWith("L25020 S0 oco:cb-" + ta + "-1"),
+              "after a restart while resting, the fill gets legs at the edited prices (from planned_brackets.txt): " + string.Join(" | ", After(na, 1)));
+        Check(!Alarmed("could not be read"), "no alarm when the record is there");
+        Recompile();   // and again while part filled
+        Fill(na, ea, 2, (24990 + 24988) / 2.0);
+        Check(After(na, 3).Count == 2 && After(na, 3)[0] == "submit CB#" + ta + " stop f2 q1 p24988 Sell StopMarket 1 L0 S24970 oco:cb-" + ta + "-2",
+              "a recompile while part filled: the next part still gets the edited prices, once: " + string.Join(" | ", After(na, 3)));
+        // missing record: the prices the entry was placed with (its name), never a guess, and an alarm
+        Account nb = NewAccount("SimNB");
+        Msg("order", Ord("SimNB", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order eb = Newest(nb);
+        Msg("plan", PlanMsg(IdOf(eb), "\"stopPrice\":24975"));
+        Check(WaitFor(() => !PlanFileText().Contains(ta), 5000), "the restarted entry, done and covered, leaves planned_brackets.txt");
+        File.Delete(PlanFilePath());   // the record is lost (stopped, file gone), then ChartBridge starts again
+        Recompile();
+        sent.Clear();
+        Update(nb, eb);   // the next order event while it rests
+        Check(Alarmed("planned stop and target of entry CB#" + Tag(eb) + " could not be read") && Alarmed("it will use the prices it was placed with, stop 24980 / target 25010"),
+              "missing record while resting: an alarm, naming the prices it will use: " + string.Join(" | ", sent.Where(m => m.Contains("could not be read"))));
+        Check(LastOrderMsg(eb).Contains("\"planned\":{\"stop\":24980,\"target\":25010}"), "and the page is shown the prices that will be used");
+        sent.Clear();
+        Fill(nb, eb, 1, 24990);
+        Check(After(nb, 1).Count == 2 && After(nb, 1)[0].EndsWith("S24980 oco:cb-" + Tag(eb) + "-1") && Alarmed("its legs go at the prices it was placed with"),
+              "missing record at the fill: legs at the placement prices from the name, and the alarm again: " + string.Join(" | ", After(nb, 1)));
+        Account nc = NewAccount("SimNC");
+        Order ec = Manual(nc, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#0ddba112 plan s0 t25010");
+        ec.Filled = 1; ec.AverageFillPrice = 24990; ec.OrderState = OrderState.Filled;   // filled while ChartBridge was stopped, record lost
+        SetPos(nc, mnq, 1);
+        sent.Clear();
+        double tn = 11000000;
+        ChartBridgeOrders.CheckLegs(tn); ChartBridgeOrders.CheckLegs(tn + 4500);
+        Check(nc.Calls.Count == 1 && nc.Calls[0] == "submit CB#0ddba112 target f1 q1 p24990 Sell Limit 1 L25010 S0 oco:" && Alarmed("There is NO planned stop"),
+              "a fill found by the scan with no record and no stop in the name: the target only, and the alarm says there is NO stop: " + string.Join(" | ", nc.Calls));
+        // a plan changed after a restart is saved again and used
+        Account nd = NewAccount("SimND");
+        Msg("order", Ord("SimND", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order ed = Newest(nd);
+        WaitFor(() => !PlanFileText().Contains(Tag(eb)), 5000);
+        File.Delete(PlanFilePath());   // the record is lost (stopped, file gone), then ChartBridge starts again
+        Recompile();
+        Update(nd, ed);
+        Msg("plan", PlanMsg(IdOf(ed), "\"stopPrice\":24985"));
+        sent.Clear();
+        Fill(nd, ed, 1, 24990);
+        Check(After(nd, 1).Count == 1 && After(nd, 1)[0].EndsWith("S24985 oco:") && !Alarmed("could not be read"), "a plan set again after a lost record is saved and used, with no second alarm: " + string.Join(" | ", After(nd, 1)));
+        // an entry cancelled while resting: its line is removed
+        Account ne = NewAccount("SimNE");
+        Msg("order", Ord("SimNE", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order ee = Newest(ne);
+        Check(PlanFileText().Contains(Tag(ee)), "a new entry's line is in planned_brackets.txt");
+        ee.OrderState = OrderState.Cancelled; Update(ne, ee);
+        Check(WaitFor(() => !PlanFileText().Contains(Tag(ee)), 5000), "cancelled: its line leaves planned_brackets.txt");
+
+        ReviewChecks();
+    }
+
+    // ------------------------------------------------------------ 0.3.7 fix round: the independent review's probes (P1, P1b, P2, P3) and more
+    static void ReviewChecks()
+    {
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimZq1, SimZq2, SimZq3, SimZq4, SimZq5, SimZq6, SimZq7, SimZq8, SimZq9");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+
+        // P1: a plan adding a stop and target to an entry with no plan, while its full fill lands during the save: the
+        // plan is in force before the save, so the fill gets the new legs
+        Account p1 = NewAccount("SimZq1");
+        Msg("order", Ord("SimZq1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990"));
+        Order e1 = Newest(p1);
+        Update(p1, e1);
+        sent.Clear();
+        ChartBridgeOrders.PlanWriteFault = () => { ChartBridgeOrders.PlanWriteFault = null; Fill(p1, e1, 1, 24990); return null; };
+        Msg("plan", PlanMsg(IdOf(e1), "\"stopPrice\":24980,\"targetPrice\":25010"));
+        ChartBridgeOrders.PlanWriteFault = null;
+        Check(After(p1, 1).Count == 2 && After(p1, 1)[0].EndsWith("S24980 oco:cb-" + Tag(e1) + "-1") && After(p1, 1)[1].EndsWith("L25010 S0 oco:cb-" + Tag(e1) + "-1") && !sent.Any(m => m.Contains("\"type\":\"reject\"")),
+              "P1 a fill landing while a plan is being saved gets the new plan's legs (the plan is in force before the save): " + string.Join(" | ", p1.Calls));
+        // P1, the other order: NinjaTrader has the fill but its event is not handled yet: the plan is refused, saying so, and NO STOP is alarmed
+        Msg("order", Ord("SimZq1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990"));
+        Order e1b = Newest(p1);
+        Update(p1, e1b);
+        e1b.Filled = 1; e1b.AverageFillPrice = 24990; e1b.OrderState = OrderState.Filled;   // filled; the event is on its way
+        e1b.OrderState = OrderState.PartFilled;   // (still working as far as the plan gate can tell)
+        sent.Clear();
+        int c1 = p1.Calls.Count;
+        Msg("plan", PlanMsg(IdOf(e1b), "\"stopPrice\":24980"));
+        Check(Rejected("1 contract(s) filled before this plan arrived; they get the planned nothing (no stop, no target); nothing changed") && Alarmed("filled before the plan arrived and get NO STOP"),
+              "P1 a plan racing a fill NinjaTrader has reported but ChartBridge has not handled: refused with how many contracts, and the NO STOP alarm: " + LastSent());
+        e1b.OrderState = OrderState.Filled; Update(p1, e1b);
+        Check(p1.Calls.Count == c1 && !LastOrderMsg(e1b).Contains("\"stop\":24980"), "and the fill gets what was planned before (nothing), never the refused plan");
+
+        // P1b: an existing plan, part fill waiting: refused; the waiting contract gets the OLD prices
+        Account p2 = NewAccount("SimZq2");
+        Msg("order", Ord("SimZq2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e2 = Newest(p2);
+        Update(p2, e2);
+        e2.Filled = 1; e2.AverageFillPrice = 24990; e2.OrderState = OrderState.PartFilled;   // event not handled yet
+        sent.Clear();
+        Msg("plan", PlanMsg(IdOf(e2), "\"stopPrice\":24975"));
+        Check(Rejected("1 contract(s) filled before this plan arrived; they get the planned stop 24980 / target 25010 as it was") && !Alarmed("NO STOP"),
+              "P1b a part fill waiting: the plan is refused, naming the prices that contract gets: " + LastSent());
+        Update(p2, e2);
+        Check(After(p2, 1).Count == 2 && After(p2, 1)[0].EndsWith("S24980 oco:cb-" + Tag(e2) + "-1"), "P1b the waiting contract gets the old stop 24980: " + string.Join(" | ", After(p2, 1)));
+        Msg("plan", PlanMsg(IdOf(e2), "\"stopPrice\":24975"));
+        Fill(p2, e2, 2, 24990);
+        Check(After(p2, 3).Count == 2 && After(p2, 3)[0].EndsWith("S24975 oco:cb-" + Tag(e2) + "-2"), "P1b sent again: the contract still to fill gets 24975: " + string.Join(" | ", After(p2, 3)));
+        // a plan adding a stop after a contract filled with none: accepted for what is still to fill, with an alarm for the naked contract
+        Msg("order", Ord("SimZq2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990"));
+        Order e2b = Newest(p2);
+        Fill(p2, e2b, 1, 24990);
+        sent.Clear();
+        Msg("plan", PlanMsg(IdOf(e2b), "\"stopPrice\":24980"));
+        Check(!sent.Any(m => m.Contains("\"type\":\"reject\"")) && Alarmed("1 contract(s) of entry CB#" + Tag(e2b) + " already filled with NO STOP"),
+              "a stop planned after a contract filled with none: applied to the rest, and an alarm for the contract with no stop");
+
+        // P2: a move still in flight: a plan must pass against both the confirmed and the sent price
+        Account p3 = NewAccount("SimZq3");
+        Msg("order", Ord("SimZq3", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e3 = Newest(p3);
+        Update(p3, e3);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e3) + "\",\"price\":24985}");
+        Msg("plan", PlanMsg(IdOf(e3), "\"stopPrice\":24987.5"));
+        Check(Rejected("a buy entry's stop must be below its price 24985") && Rejected("(the entry is being moved to 24985)"),
+              "P2 a planned stop between the old price and a move NinjaTrader has not confirmed: refused: " + LastSent());
+        Msg("plan", PlanMsg(IdOf(e3), "\"targetPrice\":24987.5"));
+        Check(Rejected("a buy entry's target must be above its price 24990"), "P2 and a target between them, against the confirmed price: refused");
+        e3.LimitPrice = 24985; Update(p3, e3);   // NinjaTrader confirms the move
+        Msg("plan", PlanMsg(IdOf(e3), "\"stopPrice\":24982"));
+        Check(LastOrderMsg(e3).Contains("\"planned\":{\"stop\":24982,\"target\":25010}"), "P2 once the move is confirmed, a stop below the new price is accepted");
+        int c3 = p3.Calls.Count;
+        Fill(p3, e3, 1, 24985);
+        Check(After(p3, c3).Count == 2 && After(p3, c3)[0].EndsWith("S24982 oco:cb-" + Tag(e3) + "-1"), "P2 and the fill gets legs, no market exit: " + string.Join(" | ", After(p3, c3)));
+        // a move NinjaTrader refuses: the sent price is forgotten
+        Msg("order", Ord("SimZq3", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order e3b = Newest(p3);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e3b) + "\",\"price\":24983}");
+        ChartBridgeOrders.OnOrderUpdate(p3, new OrderEventArgs { Order = e3b, Error = ErrorCode.UnableToChangeOrder });
+        Msg("plan", PlanMsg(IdOf(e3b), "\"stopPrice\":24985"));
+        Check(LastOrderMsg(e3b).Contains("\"stop\":24985"), "a move NinjaTrader refused no longer limits the plan: " + LastSent());
+
+        // P3: after a recompile the increment's price is an estimate (a contract handled with no legs before it): no false market exit
+        Account p4 = NewAccount("SimZq4");
+        Msg("order", Ord("SimZq4", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990"));
+        Order e4 = Newest(p4);
+        Update(p4, e4);
+        Fill(p4, e4, 1, 24970);   // no plan yet: no legs
+        Msg("plan", PlanMsg(IdOf(e4), "\"stopPrice\":24980,\"targetPrice\":25010"));
+        Fill(p4, e4, 2, (24970 + 24990) / 2.0);
+        Recompile();
+        int c4 = p4.Calls.Count;
+        sent.Clear();
+        Fill(p4, e4, 3, (24970 + 24990 + 24985) / 3.0);   // the third contract fills at 24985, above the stop 24980
+        Check(After(p4, c4).Count == 2 && !After(p4, c4).Any(x => x.Contains(" exit ")) && After(p4, c4)[0].Contains(" S24980 "),
+              "P3 a fill above the planned stop after a recompile never sends a market exit (the estimated price is no proof): " + string.Join(" | ", After(p4, c4)));
+        // and a real trade through the stop still exits
+        Account p5 = NewAccount("SimZq5");
+        Msg("order", Ord("SimZq5", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990"));
+        Order e5 = Newest(p5);
+        Update(p5, e5);
+        Fill(p5, e5, 1, 24970);
+        Msg("plan", PlanMsg(IdOf(e5), "\"stopPrice\":24980,\"targetPrice\":25010"));
+        Fill(p5, e5, 2, (24970 + 24990) / 2.0);
+        Recompile();
+        ChartBridgeOrders.NoteLast("MNQ", 24979);
+        int c5 = p5.Calls.Count;
+        Fill(p5, e5, 3, (24970 + 24990 + 24985) / 3.0);
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Check(After(p5, c5).Count == 1 && After(p5, c5)[0].Contains(" exit "), "P3 after a recompile, a trade from the last 2 s through the stop still takes the market exit: " + string.Join(" | ", After(p5, c5)));
+
+        // P4 (kept, documented): after a recompile, contracts handled with no legs after the last named pair are not known, so the
+        // next fill gets legs for them too (more protection; the legs check trims legs beyond the position)
+        Account p6 = NewAccount("SimZq6");
+        Msg("order", Ord("SimZq6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990"));
+        Order e6 = Newest(p6);
+        Update(p6, e6);
+        Fill(p6, e6, 1, 24990);
+        Msg("plan", PlanMsg(IdOf(e6), "\"stopPrice\":24980"));
+        Recompile();
+        int c6 = p6.Calls.Count;
+        Fill(p6, e6, 2, 24990);
+        Check(After(p6, c6).Count == 1 && After(p6, c6)[0].Contains(" stop f2 q2 "), "P4 after a recompile the next fill gets legs for both contracts (documented): " + string.Join(" | ", After(p6, c6)));
+
+        // planned_brackets.txt read at start: an order event before it has been read waits; the scan places the legs once it is read
+        Account p7 = NewAccount("SimZq7");
+        Msg("order", Ord("SimZq7", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order e7 = Newest(p7);
+        Msg("plan", PlanMsg(IdOf(e7), "\"stopPrice\":24975"));
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);   // started again; the file not read yet
+        Msg("plan", PlanMsg(IdOf(e7), "\"stopPrice\":24970"));
+        Check(Rejected("still reading planned_brackets.txt"), "a plan before the file is read: refused");
+        Fill(p7, e7, 1, 24990);
+        Check(p7.Calls.Count == 1, "a fill before the file is read: no legs guessed, they wait");
+        SetPos(p7, mnq, 1);
+        ChartBridgeOrders.LoadPlansNow();
+        double tq = 12000000;
+        ChartBridgeOrders.CheckLegs(tq); ChartBridgeOrders.CheckLegs(tq + 4500);
+        Check(p7.Calls.Count == 2 && p7.Calls[1].EndsWith("S24975 oco:"), "once the file is read, the scan places the legs at the saved prices: " + string.Join(" | ", p7.Calls));
+
+        // a bracket object on plan, change or cancel is refused; on flatten it is still ignored (Flatten is never refused for it)
+        Account p8 = NewAccount("SimZq8");
+        Msg("order", Ord("SimZq8", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order e8 = Newest(p8);
+        Msg("plan", "{\"type\":\"plan\",\"id\":\"" + IdOf(e8) + "\",\"stopPrice\":24970,\"bracket\":{\"stop\":8,\"target\":8}}");
+        Check(Rejected("unknown key \\\"bracket\\\" in plan"), "plan with a bracket object: refused: " + LastSent());
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e8) + "\",\"price\":24985,\"bracket\":{\"stop\":8,\"target\":8}}");
+        Check(Rejected("unknown key \\\"bracket\\\" in change") && p8.Calls.Count == 1, "change with a bracket object: refused");
+        Msg("cancel", "{\"type\":\"cancel\",\"id\":\"" + IdOf(e8) + "\",\"bracket\":{\"stop\":8,\"target\":8}}");
+        Check(Rejected("unknown key \\\"bracket\\\" in cancel") && p8.Calls.Count == 1, "cancel with a bracket object: refused");
+        sent.Clear();
+        Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SimZq8\",\"root\":\"MNQ\",\"bracket\":{\"stop\":8,\"target\":8}}");
+        Check(p8.Calls.Last() == "flatten MNQ 12-26" && !sent.Any(m => m.Contains("\"type\":\"reject\"")), "flatten with a bracket object: still sent (never refused for it)");
+
+        // Q2: a mistyped limit means no limit, and the pages are told (at config load and when a page signs in)
+        sent.Clear();
+        ChartBridgeOrders.ReadConfig("maxBracketTicks", "3oo");
+        Check(ChartBridgeOrders.MaxBracketTicks == 0 && sent.Any(m => m.Contains("\"level\":\"warn\"") && m.Contains("maxBracketTicks = 3oo is not a whole number of 1 or more; it is ignored, so there is NO maxBracketTicks limit")),
+              "a mistyped maxBracketTicks: no limit, and a warn to the signed-in pages");
+        sent.Clear();
+        Msg("auth", "{\"type\":\"auth\",\"token\":\"" + ChartBridgeOrders.SessionJson().Split('"')[3] + "\"}");
+        Check(sent.Count >= 2 && sent[0].Contains("\"type\":\"trading\"") && sent[1].Contains("\"level\":\"warn\"") && sent[1].Contains("NO maxBracketTicks limit"), "and a page signing in gets the warning too");
+        // N4: a page whose sign-in fails is not sent the warning
+        sent.Clear();
+        Msg("auth", "{\"type\":\"auth\",\"token\":\"wrong\"}");
+        Check(sent.Any(m => m.Contains("token does not match")) && !sent.Any(m => m.Contains("NO maxBracketTicks limit")), "N4 a page whose sign-in fails gets no config warning");
+        Msg("auth", "{\"type\":\"auth\",\"token\":\"" + ChartBridgeOrders.SessionJson().Split('"')[3] + "\"}");
+        ChartBridgeOrders.ResetConfig();
+        ChartBridgeOrders.ReadConfig("trading", "true");
+        Review2Checks();
+    }
+
+    // ------------------------------------------------------------ 0.3.7 release: the re-review's S1, N2, N3
+    static void Review2Checks()
+    {
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimKx1, SimKx2, SimKx3, SimKx4");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+
+        // S1a: a fill that waited for planned_brackets.txt gets its legs as soon as the file has been read, with no scan
+        Account k1 = NewAccount("SimKx1");
+        Msg("order", Ord("SimKx1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order f1 = Newest(k1);
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);   // started again; the file not read yet
+        Fill(k1, f1, 1, 24990);
+        Check(k1.Calls.Count == 1, "S1 a fill before the file is read: no legs guessed");
+        ChartBridgeOrders.LoadPlansNow();
+        Check(k1.Calls.Count == 3 && k1.Calls[1].EndsWith("S24980 oco:cb-" + Tag(f1) + "-1") && k1.Calls[2].EndsWith("L25010 S0 oco:cb-" + Tag(f1) + "-1"),
+              "S1 the moment the file has been read, the waiting fill gets its legs (no scan needed): " + string.Join(" | ", k1.Calls));
+        // S1b: never read: a page alarm about 3 s after the scan first sees the waiting fill, once
+        Account k2 = NewAccount("SimKx2");
+        Msg("order", Ord("SimKx2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order f2 = Newest(k2);
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Fill(k2, f2, 1, 24990);
+        SetPos(k2, mnq, 1);
+        sent.Clear();
+        double ts = 23000000;
+        ChartBridgeOrders.CheckLegs(ts); ChartBridgeOrders.CheckLegs(ts + 2000);
+        Check(!Alarmed("NO LEGS yet"), "S1 within 3 s of the scan first seeing it: no alarm yet");
+        ChartBridgeOrders.CheckLegs(ts + 4000); ChartBridgeOrders.CheckLegs(ts + 6000);
+        Check(sent.Count(m => m.Contains("\"level\":\"error\"") && m.Contains("entry " + f2.Name + " has 1 filled contract(s) and NO LEGS yet: planned_brackets.txt has not been read")) == 1,
+              "S1 not read 3 s on: one page alarm naming the entry with no legs");
+        ChartBridgeOrders.LoadPlansNow();
+        Check(k2.Calls.Count == 2 && k2.Calls[1].EndsWith("S24980 oco:"), "S1 and once read, the legs go at once: " + string.Join(" | ", k2.Calls));
+
+        // N2: the remembered sent price is forgotten on any change error, and on an update that shows the move did not happen
+        Account k3 = NewAccount("SimKx3");
+        Msg("order", Ord("SimKx3", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order f3 = Newest(k3);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(f3) + "\",\"price\":24985}");
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24987.5"));
+        Check(Rejected("being moved to 24985"), "N2 a move pending: checked against both prices");
+        ChartBridgeOrders.OnOrderUpdate(k3, new OrderEventArgs { Order = f3, Error = ErrorCode.OrderRejected });
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24987.5"));
+        Check(LastOrderMsg(f3).Contains("\"stop\":24987.5"), "N2 a change refused with another error (OrderRejected): the sent price is forgotten: " + LastSent());
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(f3) + "\",\"price\":24989}");
+        f3.OrderState = OrderState.ChangePending; Update(k3, f3);
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24989.5"));
+        Check(Rejected("being moved to 24989"), "N2 an update while the change is pending keeps the sent price: " + LastSent());
+        f3.OrderState = OrderState.Working; Update(k3, f3);   // NinjaTrader answered: still at 24990, the move did not happen
+        Msg("plan", PlanMsg(IdOf(f3), "\"stopPrice\":24989.5"));
+        Check(LastOrderMsg(f3).Contains("\"stop\":24989.5"), "N2 an update outside a pending change at the old price: the sent price is forgotten: " + LastSent());
+
+        // N3: a plan on an entry placed before the file is read: no false "could not be saved"; written right after the read
+        Account k4 = NewAccount("SimKx4");
+        ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Ord("SimKx4", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"stopPrice\":24980"));
+        Order f4 = Newest(k4);
+        sent.Clear();
+        Msg("plan", PlanMsg(IdOf(f4), "\"stopPrice\":24975"));
+        Check(LastOrderMsg(f4).Contains("\"stop\":24975") && !Alarmed("could not be saved") && !PlanFileText().Contains(Tag(f4)),
+              "N3 a plan before the file is read: applied, no false save alarm, the write waits for the read");
+        ChartBridgeOrders.LoadPlansNow();
+        Check(PlanFileText().Contains(Tag(f4) + " 24975 0 "), "N3 written right after the read: " + PlanFileText());
+        Review3Checks();
+    }
+
+    // ------------------------------------------------------------ 0.3.7 final review: P8 and P9
+    static void Review3Checks()
+    {
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimRw1, SimRw2, SimRw3, SimRw4, SimRw5");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+        // P8: an entry that filled while ChartBridge was stopped, found by the start scan: legs only for what the listed
+        // position holds, whether the scan or the file read comes first
+        string[] tags = { "0ddba301", "0ddba302", "0ddba303", "0ddba304" };
+        for (int k = 0; k < 4; k++)
+        {
+            bool scanFirst = k < 2, flat = k % 2 == 0;
+            Account a = NewAccount("SimRw" + (k + 1));
+            Order e = Manual(a, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#" + tags[k] + " plan s24980 t25010");
+            e.Filled = 1; e.AverageFillPrice = 24990; e.OrderState = OrderState.Filled;   // filled while ChartBridge was stopped
+            SetPos(a, mnq, flat ? 0 : 1);                                                  // flat: closed by hand since
+            File.AppendAllText(PlanFilePath(), tags[k] + " 24980 25010 " + (long)ChartBridgeTime.NowUtcMs() + "\n");
+            ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);         // ChartBridge starts; the file not read yet
+            double t = 41000000 + k * 100000;
+            if (scanFirst) { ChartBridgeOrders.CheckLegs(t); ChartBridgeOrders.LoadPlansNow(); }
+            else { ChartBridgeOrders.LoadPlansNow(); ChartBridgeOrders.CheckLegs(t); }
+            bool none = !a.Calls.Any(x => x.StartsWith("submit"));
+            ChartBridgeOrders.CheckLegs(t + 2000); ChartBridgeOrders.CheckLegs(t + 6500); ChartBridgeOrders.CheckLegs(t + 9000);
+            string what = "P8 " + (scanFirst ? "start scan before the read" : "read before the start scan") + ", position " + (flat ? "flat" : "long 1");
+            if (flat) Check(none && !a.Calls.Any(x => x.StartsWith("submit")), what + ": no legs on a flat account: " + string.Join(" | ", a.Calls));
+            else Check(none && a.Calls.Count == 2 && a.Calls[0].EndsWith("S24980 oco:cb-" + tags[k] + "-1") && a.Calls[1].EndsWith("L25010 S0 oco:cb-" + tags[k] + "-1"),
+                       what + ": legs for the contract the position holds, at the saved prices, by the scan: " + string.Join(" | ", a.Calls));
+        }
+
+        // P9: an update still on its way when the change went out (not in a pending state) does not drop the sent price
+        Account p9 = NewAccount("SimRw5");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Ord("SimRw5", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e9 = Newest(p9);
+        Update(p9, e9);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e9) + "\",\"price\":24985}");
+        Update(p9, e9);   // a Working update from before the change, still at 24990
+        Msg("plan", PlanMsg(IdOf(e9), "\"stopPrice\":24987.5"));
+        Check(Rejected("being moved to 24985"), "P9 an older update outside a pending state keeps the sent price (both prices still checked): " + LastSent());
+        e9.OrderState = OrderState.ChangePending; Update(p9, e9);
+        e9.OrderState = OrderState.Working; e9.LimitPrice = 24985; Update(p9, e9);   // confirmed
+        Msg("plan", PlanMsg(IdOf(e9), "\"stopPrice\":24982.5"));
+        Check(LastOrderMsg(e9).Contains("\"stop\":24982.5"), "P9 and once NinjaTrader confirms, only the new price counts");
+    }
+
     // ------------------------------------------------------------ who may connect (ChartBridge.cs, ChartBridgeAccess)
     // Example addresses only: a LAN-style address from the documentation range, a Tailscale-style 100.x address.
     static bool Loop(string ip) { return ChartBridgeAccess.IsLoopback(new IPEndPoint(IPAddress.Parse(ip), 50000)); }

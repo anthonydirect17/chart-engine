@@ -81,7 +81,7 @@ line; recompile or restart NinjaTrader after a change):
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
 | `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |
 | `profileRoots` | `MNQ, NQ, ES, MES` | 0.3.5: when ChartBridge starts after 18:00 ET, the instruments whose session so far is loaded once, one at a time in this order, for an exact volume profile. Others count from the live trades ("since HH:MM ET"). |
-| `quoteHours` | `0` | ChartBridge 0.3.4.1: hours of historical Bid and Ask a tick chart asks NinjaTrader for, to side its backfill trades: `0` (none; they go by the tick rule, live trades keep their side from the live quote), `1` or `2`. Anything else is `0`. See the changelog. |
+| `quoteHours` | none | No longer used (ChartBridge 0.3.7 removed the by-date tick load it served; since 0.3.5 every Range and seconds chart gets the served window). The line is noted once in the Output window and does nothing; it can go. |
 | `accounts` | every account except Backtest and Playback | Allow-list of accounts to watch, e.g. `Sim101, EVAL*` (`*` matches a prefix). |
 | `postFills` | `false` | `true` also sends every fill to The Desk (see `nt8/PROTOCOL.md`). |
 | `deskUrl` | `http://localhost:8800` | Where The Desk runs. |
@@ -91,6 +91,8 @@ line; recompile or restart NinjaTrader after a change):
 | `trading` | `false` | `true` turns on order entry from the chart (see below). |
 | `tradeAccounts` | none | Accounts the chart may trade, e.g. `Sim101, <eval name>`. Exact names, no wildcard; Backtest and Playback never. |
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). |
+| `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
+| `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (a market entry's ticks; a resting entry's planned stop or target from its price). None: no limit. Same rule for a mistyped value. |
 | `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
@@ -173,10 +175,25 @@ The Desk tags each trade with the levels around it, and for that it needs the da
   logged and tried again 15 minutes later, 3 times at most, then not until the next start.
 - **Like fills:** each message waits in `pending_bars.jsonl` (next to `pending_fills.jsonl`) until The
   Desk takes it (`POST /api/bars` at `deskUrl`, retried every 10 seconds), so a restart or The Desk being
-  closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl`. Sessions
-  The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
+  closed loses nothing. A message The Desk calls malformed is set aside in `rejected_bars.jsonl` and, since 0.3.7,
+  listed in `refused_bars.txt`, so it is not asked for again after a restart either; a waiting message more than
+  40 days old is dropped. Sessions The Desk took are listed in `sent_bars.txt`. `/diag` shows a `bars` section: on or off, the last session
   sent per contract, how many wait, what it waits for at the gate, and the last problem. Details: "Daily bars to The Desk" in
   `nt8/PROTOCOL.md`.
+
+### Settlement, 4h, 1D and 1W bars, and the weekly profile (ChartBridge 0.3.7, data side)
+
+For the page's day % change, its 4h, 1D and 1W charts and the weekly profile, ChartBridge sends the prior session's
+settlement from NinjaTrader with the date it settles (in `hello` and when it changes, including the 18:00 roll; null when
+it has no reliably dated value; kept in `settlements.txt` with its contract across restarts, so a restart on a roll day
+never takes the old contract's value), answers a page's `htf` request with
+NinjaTrader's own 240-minute, day or week bars (asked once per instrument and timeframe through the gate, last, never
+beside a chart load; a request NinjaTrader does not answer in 15 s is given up with the reason and asked again no sooner
+than 60 s later, so the chart never waits on it; kept in memory for other pages and reloads; the forming bar follows the
+live trades), and answers
+`weekProfile` with the last 5 sessions' volume at price from its session tables (never a NinjaTrader request; a missing
+session is said). Old pages ignore all of it. Details: "Settlement, higher-timeframe bars and the weekly profile" in
+`nt8/PROTOCOL.md`.
 
 Without NinjaTrader, `npm run bridge` starts a fake bridge with sample data at `http://localhost:8765/live/` (the
 workspace; the single chart page is `http://localhost:8765/live/single.html`)
@@ -409,8 +426,10 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   the boxes: **Custom**, **1:1**, **1:1.5**, **1:2** (the target is the stop times the ratio, rounded, and follows the
   stop while the ratio is picked; typing the target makes it Custom), your saved presets, **Save current...** (a
   name, default like "12/24t"; up to 12) and **Delete** for the saved preset picked. A **t / pt** toggle shows and
-  types the values in ticks or points (points round to the nearest tick); they are kept in ticks. Still at most 200
-  ticks (ChartBridge 0.3.6).
+  types the values in ticks or points (points round to the nearest tick); they are kept in ticks. The boxes still
+  take at most 200 ticks (the page's own limit; ChartBridge 0.3.7 has none unless `config.txt` sets `maxBracketTicks`).
+  With ChartBridge 0.3.7 a limit or stop entry's bracket becomes PRICES when it is placed (from the entry's price):
+  its legs go there at whatever price it fills, and moving the entry leaves them where they are (see below).
 - **B/E** (1.10.0, next to Flatten, needs Armed): moves the stop of the open position to break-even, the average
   price rounded a tick toward safety (long up, short down). On only with a position on this account and instrument
   and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past
@@ -462,8 +481,17 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
    sign in with the token from `GET /session` (a new one each start; 0.3.2: only for a page unlocked with
    the PIN). The page may not sit in another
    page's frame; it also refuses to arm or trade inside one.
-5. Limit and stop prices on the tick grid, within 200 ticks of the last price, stops on the right side of
-   the market, and refused when the last trade is more than 300 seconds old.
+5. Limit and stop prices on the tick grid, stops on the right side of the market, and refused when the last
+   trade is more than 300 seconds old. ChartBridge 0.3.7 has no distance limit unless `config.txt` sets
+   `maxTicksAway` (before 0.3.7: within 200 ticks of the last price).
+
+**Planned stop and target on a resting entry (ChartBridge 0.3.7, Anthony 2026-10-01).** A limit or stop entry's stop
+and target are prices: every fill of it gets its legs at those prices, whatever the fill price (better on a gap, worse
+on slippage); a fill at or through the planned stop exits at market with an alarm, and a target already passed fills
+at once as a limit. Moving the entry leaves the planned prices where they are; a move to or past them is refused. A
+market entry keeps its stop and target in ticks from the fill. The planned prices survive a recompile or restart
+(the entry's order name and `planned_brackets.txt` in ChartBridge's folder). ChartBridge 0.3.7 also takes a `plan`
+message to add, move or remove them before the fill; the page that sends it is a later build (`nt8/PROTOCOL.md`).
 6. Only the instruments ChartBridge serves.
 7. At most 10 order actions per second per page.
 
@@ -587,7 +615,7 @@ npm run smoke:live-first # the served window and the session table: exact range 
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
-npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window and the daily bars under Mono
+npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window, the daily bars and the 0.3.7 data side under Mono
 ```
 
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in
