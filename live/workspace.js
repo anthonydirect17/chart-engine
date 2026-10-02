@@ -1511,13 +1511,20 @@ function placeNoStop() {
   const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(), c = $('wsConn').getBoundingClientRect();
   $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px');
   $('wsNoStop').style.setProperty('--ns-left', Math.max(8, Math.round(c.right - top.left + 12)) + 'px');
+  /* one line, never cut (review D2): the whole text when it fits, else a shorter one, then the shorter title too; the
+     whole text stays in the tooltip, Cancel and Send always in view */
+  const full = $('wsNoStop').dataset.text || '', t = $('wsNoStopText'), b = $('wsNoStopTitle');
+  const m = /^The (\S+) order has no stop/.exec(full);
+  const first = full.split('. ')[0].replace(/\.?$/, '.');
+  const tries = [[full, 'No stop: send anyway?'], [first, 'No stop: send anyway?'], [m ? m[0] + '.' : first, 'No stop: send anyway?'], [m ? m[1] + ': no stop.' : 'No stop.', 'No stop: send anyway?'], [m ? m[1] + ': no stop.' : '', 'No stop: send?'], ['', 'No stop: send?']];
+  for (const [txt, ttl] of tries) { t.textContent = txt; t.hidden = !txt; b.textContent = ttl; if (t.scrollWidth <= t.clientWidth + 1 && b.scrollWidth <= b.clientWidth + 1 && $('wsNoStop').scrollWidth <= $('wsNoStop').clientWidth + 1) break; }
 }
 window.addEventListener('resize', () => { if (noStopQ) placeNoStop(); });
 function askNoStop(text, onSend, onCancel, bound) {
   noStopQ = Object.assign({ onSend, onCancel }, bound || {});
-  $('wsNoStopText').textContent = text; $('wsNoStop').title = 'No stop: send anyway? ' + text;
-  placeNoStop();
+  $('wsNoStopText').textContent = text; $('wsNoStop').dataset.text = text; $('wsNoStop').title = 'No stop: send anyway? ' + text;
   $('wsNoStop').hidden = false;
+  placeNoStop();
   $('wsNoStopCancel').focus();
 }
 /* A Close or Flatten (r) or Flatten all (null) in any window: every window drops its question for it, and the ticket's

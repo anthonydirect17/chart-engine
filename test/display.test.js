@@ -428,3 +428,28 @@ test('chips: up to ten, the eleventh refused; the header text toggle saved per c
   assert.equal(p.setLegendShown('', false), false, 'a pane id is needed');
   assert.equal(p.setLegendShown('__proto__', false), false);
 });
+
+test('RTH VWAP kept up to date bar by bar equals the whole computation, and starts over on other bars (review D2)', () => {
+  const bars = [];
+  let S = null, p = 100;
+  const t0 = etT(2026, 9, 28, 9, 0);
+  for (let i = 0; i < 1500; i++) {                       // two days of minutes, some trades changing the forming bar
+    const t = t0 + i * 60;
+    p += ((i * 7919) % 11 - 5) * 0.25;
+    bars.push({ t, o: p, h: p + 1, l: p - 1, c: p, v: 1 + (i % 9) });
+    for (let k = 0; k < 2; k++) {                          // the forming bar changes, then is read again
+      const b = bars[bars.length - 1]; b.c += 0.25; b.h = Math.max(b.h, b.c); b.v += 1;
+      S = U.rthVwapUpdate(S, bars, { sessionStart: 18 * 3600 });
+      if (i % 97 === 0 || i === 1499) {
+        const whole = U.rthVwap(bars, { sessionStart: 18 * 3600 });
+        assert.deepEqual([S.t.length, S.vw.length], [whole.t.length, whole.vw.length], 'at bar ' + i);
+        for (let j = 0; j < whole.t.length; j++) { assert.equal(S.t[j], whole.t[j]); assert.ok(Math.abs(S.vw[j] - whole.vw[j]) < 1e-9, 'bar ' + i + ' point ' + j); }
+      }
+    }
+  }
+  // other bars (a reload, another view): started over, not mixed in
+  const other = bars.slice(500).map(b => Object.assign({}, b, { t: b.t + 7 }));
+  const S2 = U.rthVwapUpdate(S, other, { sessionStart: 18 * 3600 }), w2 = U.rthVwap(other, { sessionStart: 18 * 3600 });
+  assert.deepEqual(S2.t, w2.t);
+  assert.ok(S2.vw.every((v, j) => Math.abs(v - w2.vw[j]) < 1e-9));
+});

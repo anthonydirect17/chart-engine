@@ -55,6 +55,7 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Time and Sales, between (1.14.0) | `--tape-mid` `#9AA8B8`, the quiet grey (7.9:1) |
 | Time and Sales, at the bid (1.14.0) | `--tape-bid` `#FF5C7A`, the tape's sell red (6.5:1) |
 | Time and Sales, below the bid (1.14.0) | `--tape-below` `#FFA3B4`, the brighter red (10.2:1) |
+| Time and Sales, a big trade's lift (1.14.0) | `--tape-big-lift` `#FFFFFF`: a big trade's price and size are its color mixed 30% toward it |
 
 Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the Chart lab v0 look),
 House green / red (`#3DDC97` / `#FF7A7A`). Text drawn in a candle color is lightened until it reads
@@ -224,10 +225,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Volume profile (1.6.0; Anthony's ruling 2026-09-29):** the session's traded volume per price,
   1-tick rows, as horizontal bars from the right edge of the plot, in front of the grid and behind the volume bars,
   levels, VWAP and candles. The largest row (the POC) is 25% of the plot width (`VP_WIDTH`), the rest in proportion.
-  Opaque fills (brighter in 1.14.0, Anthony; each editable in the profile's gear, `--vp-row`, `--vp-value`): rows
-  outside the value area `#1E2733`, the 70% value area a step stronger `#2F3B4F`, the POC row in
+  Opaque fills (each editable in the profile's gear since 1.14.0, `--vp-row`, `--vp-value`): rows
+  outside the value area `#19212C` (brighter in 1.14.0), the 70% value area a step stronger `#212C3B` (capped at 1.13.0's,
+  Anthony: a bear candle over it keeps 1.99:1), the POC row in
   the value-level gold `#E0B45A`. On another ground the two row colors are mixed from the ground toward the ink
-  (10% and 20%) and the POC moves until it reads at 3:1 on the value-area rows. Each row is its price span tall
+  (7.5% and 14%) and the POC moves until it reads at 3:1 on the value-area rows. Each row is its price span tall
   (price minus half a tick to plus half a tick) in whole device pixels, with a 1 px gap once rows are 4 px or taller;
   rows thinner than a pixel share it, the bar as long as the largest of them and the POC winning, so it always
   shows; the POC bar is at least 2 CSS px tall, centred on its row. Off by default on every pane; the Indicators menu adds it (Volume group), and its gear panel holds a Session (from 18:00 ET) or RTH (9:30:00 up to 16:00:00 ET, 13:00 on NYSE early-close days, none on
@@ -235,8 +237,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Anthony's rulings 2026-09-30): the full session over weekends and NYSE holidays (on weekday evenings it moves at
   18:00 as before), RTH also through the weekday night until the next 9:30; for the ticks the page has (no more
   tick history is loaded for it); the IB keeps its own rule. Candles over the rows
-  read lower than on the bare ground (default since 1.14.0: bear 1.59:1 over the value area, 2.12:1 over the other
-  rows; were 1.99 and 2.42); their floor there is open for Anthony.
+  read lower than on the bare ground (default: bear 1.99:1 over the value area, 2.28:1 over the other
+  rows since 1.14.0, 2.42 before); their floor there is open for Anthony.
   - **Developing POC, VAH and VAL (1.14.0):** toggles dPOC, dVAH, dVAL in the profile's gear, on by default. Solid
     lines across the plot at 85% (the prior day's levels are dashed): the POC 1.5 px in `vpPocText`, the value area's
     edges 1 px in the secondary text color, each named at the profile's left edge (600 10px Condensed, right aligned,

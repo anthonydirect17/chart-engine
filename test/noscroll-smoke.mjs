@@ -133,6 +133,8 @@ try {
       await expectFits(page, '#wsNoStop', 'the NO STOP question');
       const u = await page.evaluate(uncovered, ['#wsNoStop', ['#wsConn', '#wsKeys', '#wsFlat', '#wsNoStopCancel', '#wsNoStopSend', '.tk [data-tk-id="flattenBtn"]', '.tk [data-tk-id="armBtn"]']]);
       check(Object.values(u).every(v => v === true), 'the NO STOP question covers none of: the connection status, KEYS, Flatten all, Cancel, Send, the ticket\'s Close and Armed ' + JSON.stringify(u));
+      const cut = await page.evaluate(() => ['wsNoStopTitle', 'wsNoStopText'].map(id => document.getElementById(id)).filter(e => !e.hidden && e.scrollWidth > e.clientWidth + 1).map(e => e.id + ': ' + e.textContent));
+      check(cut.length === 0, `the NO STOP question's text on one line, not cut (review D2): "${await page.textContent('#wsNoStop')}"` + (cut.length ? ' cut: ' + cut.join('; ') : ''));
       await page.screenshot({ path: path.join(out, `noscroll-ws-nostop-${w}.png`) });
       await page.click('#wsNoStopCancel');
       await page.click('.tk [data-tk-id="armBtn"]');

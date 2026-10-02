@@ -257,7 +257,8 @@ test('theme: on the default ground the profile colors are the chosen ones; on ev
    (2.5:1, FLOOR.candle) is against the bare ground, and buildTheme keeps it there; over the profile's rows the ratios
    are lower, and what floor they should keep is Anthony's call. The bounds below are the current code's measured
    minimums over these grounds and presets (a guard against a change making it worse unnoticed), not a floor.
-   1.14.0 made the rows brighter at Anthony's request, which lowered these by design. */
+   1.14.0 made the rows outside the value area brighter (Anthony) and kept the value area at 1.13.0's, so a bear candle
+   over it keeps 1.99:1 on the default ground (Anthony's answer, review D2). */
 test('theme: candle and VWAP contrast over the profile rows, measured on every preset and odd ground', t => {
   const grounds = CE.BACKGROUNDS.map(b => b.bg).concat(['#FFFFFF', '#777777', '#B0102A', '#123456', '#E8E0C8']);
   const rows = [], min = {};
@@ -277,14 +278,14 @@ test('theme: candle and VWAP contrast over the profile rows, measured on every p
   for (const line of rows) t.diagnostic(line);
   t.diagnostic('minimums: ' + Object.entries(min).map(([k, m]) => k + ' ' + m.v.toFixed(2) + ' (' + m.at + ')').join(', '));
   // the current code's measured minimums (not a floor; see above)
-  assert.ok(min.upVA.v >= 1.6 && min.downVA.v >= 1.42, 'candles over the value-area rows: ' + min.upVA.v.toFixed(2) + ' / ' + min.downVA.v.toFixed(2));
-  assert.ok(min.upRow.v >= 2.02 && min.downRow.v >= 1.97, 'candles over the other rows: ' + min.upRow.v.toFixed(2) + ' / ' + min.downRow.v.toFixed(2));
-  assert.ok(min.vwapVA.v >= 1.96, 'VWAP over the value-area rows: ' + min.vwapVA.v.toFixed(2));
+  assert.ok(min.upVA.v >= 1.85 && min.downVA.v >= 1.75, 'candles over the value-area rows: ' + min.upVA.v.toFixed(2) + ' / ' + min.downVA.v.toFixed(2));
+  assert.ok(min.upRow.v >= 2.14 && min.downRow.v >= 2.14, 'candles over the other rows: ' + min.upRow.v.toFixed(2) + ' / ' + min.downRow.v.toFixed(2));
+  assert.ok(min.vwapVA.v >= 2.25, 'VWAP over the value-area rows: ' + min.vwapVA.v.toFixed(2));
   // the default ground and palette, as the CHANGELOG states them
   const D = U.buildTheme();
-  assert.equal(U.contrast(D.down, D.vpValue).toFixed(2), '1.59', 'default: bear over the value area');
-  assert.equal(U.contrast(D.up, D.vpValue).toFixed(2), '3.76', 'default: bull over the value area');
-  assert.equal(U.contrast(D.down, D.vpRow).toFixed(2), '2.12', 'default: bear over the other rows');
+  assert.equal(U.contrast(D.down, D.vpValue).toFixed(2), '1.99', 'default: bear over the value area, as 1.13.0');
+  assert.equal(U.contrast(D.up, D.vpValue).toFixed(2), '4.70', 'default: bull over the value area');
+  assert.equal(U.contrast(D.down, D.vpRow).toFixed(2), '2.28', 'default: bear over the other rows');
 });
 
 /* ---- the chart on a stand-in canvas */

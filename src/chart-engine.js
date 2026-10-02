@@ -272,7 +272,7 @@ const DEFAULT_THEME = {
   drawing: '#D8CCFF',                    // trend lines and horizontal lines
   // volume profile (1.6.0): rows a tint of the ground, value area a step stronger, POC in the value-level gold;
   // 1.14.0 (Anthony: too dark on the dark ground) brighter: rows 1.31:1 on the ground, value area 1.74:1 (were 1.15, 1.40)
-  vpRow: '#1E2733', vpValue: '#2F3B4F', vpPoc: '#E0B45A',
+  vpRow: '#19212C', vpValue: '#212C3B', vpPoc: '#E0B45A',
   // chart signals (G1c, Anthony: his NinjaTrader cyan and yellow toned to the house palette, not pure #00FFFF and
   // #FFFF00): a softer cyan and a warm yellow for the absorption bars' bodies and the divergence arrows, each with a
   // slightly brighter shade for the 1 px outline (CHART_STYLE --sig-bull, --sig-bull-line, --sig-bear, --sig-bear-line)
@@ -309,7 +309,7 @@ const NEUTRAL_MIX = [
   ['rth', 0.025, 0], ['grid', 0.06, FLOOR.grid], ['axisLine', 0.09, 0], ['divider', 0.2, FLOOR.divider],
   ['cross', 0.4, FLOOR.cross], ['axisText', 0.57, FLOOR.text], ['axisTextStrong', 0.95, FLOOR.strong],
   ['tagFill', 0.07, 0], ['tagBorder', 0.2, FLOOR.divider], ['exit', 1, FLOOR.text], ['live', 1, FLOOR.text],
-  ['vpRow', 0.1, 0], ['vpValue', 0.2, 0],
+  ['vpRow', 0.075, 0], ['vpValue', 0.14, 0],
 ];
 
 /**
@@ -924,6 +924,33 @@ function rthVwap(bars, opts) {
     t.push(b.t + o.barSeconds); vw.push(vol > 0 ? pv / vol : b.c);
   }
   return { t, vw, from: o.from, to: o.to, sessionStart: o.sessionStart };
+}
+/** rthVwap() kept up to date as bars come (review D2: not every bar again each second): `series` from an earlier call
+    (or null) and the same bars array grown or its last bar changed. The closed bars are added once; only the last bar
+    (the forming one) is worked out again. Starts over when the bars are not the ones it saw (a reload, another view).
+    Returns the series, the same as rthVwap(bars, opts) would. */
+function rthVwapUpdate(series, bars, opts) {
+  const o = Object.assign({ from: 34200, to: 57600, barSeconds: 60, sessionStart: 18 * 3600 }, opts || {});
+  bars = bars || [];
+  let S = series;
+  const same = S && S.from === o.from && S.to === o.to && S.sessionStart === o.sessionStart && S.done <= bars.length &&
+    (S.done === 0 || (bars[S.done - 1] && bars[S.done - 1].t === S.lastT));
+  if (!same) S = { t: [], vw: [], from: o.from, to: o.to, sessionStart: o.sessionStart, done: 0, lastT: null, day: null, pv: 0, vol: 0, tail: false };
+  if (S.tail) { S.t.pop(); S.vw.pop(); S.tail = false; }
+  const add = (b, keep) => {
+    const sec = tod(b.t);
+    if (sec < o.from || sec >= o.to) return;
+    const d = tradeDay(b.t, o.sessionStart);
+    let pv = S.pv, vol = S.vol;
+    if (d !== S.day) { pv = 0; vol = 0; }
+    const v = b.v || 0; pv += (b.h + b.l + b.c) / 3 * v; vol += v;
+    S.t.push(b.t + o.barSeconds); S.vw.push(vol > 0 ? pv / vol : b.c);
+    if (keep) { S.day = d; S.pv = pv; S.vol = vol; } else S.tail = true;
+  };
+  for (; S.done < bars.length - 1; S.done++) add(bars[S.done], true);      // the closed bars, once
+  S.lastT = S.done > 0 ? bars[S.done - 1].t : null;
+  if (bars.length) add(bars[bars.length - 1], false);                     // the last bar, again each time
+  return S;
 }
 /** The anchored VWAP of rthVwap() at `time` (a bar's end): the value of the last bar ending at or before it in the same
     window of the same day, or null outside the window or before its first bar. */
@@ -3608,7 +3635,7 @@ return {
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
-    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, vwapAt, PD_POC_DASH,
+    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,
   // chart signals (G1c)

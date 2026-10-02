@@ -145,9 +145,10 @@ from using 1.12.0 live on HOME:
 ### Batch 2 (Anthony, 2026-10-02)
 - **A. Volume profile colors**: rows, value area rows and POC each a picker and hex box in the profile's gear (indicator
   colors `vpRow`, `vpValue`, `vpPoc`; an indicator preset saved before takes the defaults for the new two). Brighter
-  defaults: rows `#1E2733`, value area `#2F3B4F` (were `#141C26` and `#212C3B`), POC gold unchanged; on other grounds the
-  rows are 10% and the value area 20% toward the text color (were 7% and 14%). Measured: bear candles over the value area 1.59:1
-  on the default ground (was 1.99), bull 3.76:1 (was 4.70); the candle floor against the bare ground is unchanged.
+  rows outside the value area by default: `#19212C` (was `#141C26`), 7.5% toward the text color on other grounds (was
+  7%). The value area is capped at 1.13.0's `#212C3B` (14%), so a bear candle over it keeps 1.99:1 on the default ground
+  (Anthony's answer to the review); POC gold unchanged; he can still raise them in the gear. Measured on the default
+  ground: bear 1.99:1 over the value area, 2.28:1 over the other rows; bull 4.70:1.
 - **B. Levels**: the Initial Balance is part of Levels (its own indicator and IB chip retired; search "ib" finds Levels).
   Every line its own toggle in the Levels gear: PDH, PDL, Prior close, ONH, ONL, PD VAH, PD VAL, PD POC, IBH, IBL. The
   prior day's value area is named **PD VAH** / **PD VAL**, and its point of control **PD POC** is drawn (the value-area

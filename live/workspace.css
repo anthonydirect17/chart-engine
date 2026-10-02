@@ -16,6 +16,7 @@
   --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #FFC266; --ws-warn-ground: #2A2110; --ws-warn-text: #FFE2B0;
   /* Time and Sales categories (1.14.0, CHART_STYLE): above the ask and below the bid the brighter pair; set by the tape's gear */
   --tape-above: #9CF5CB; --tape-ask: #3DDC97; --tape-mid: #9AA8B8; --tape-bid: #FF5C7A; --tape-below: #FFA3B4;
+  --tape-big-lift: #FFFFFF;   /* what a big trade's color is mixed toward (30%) */
   --ws-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --ws-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
@@ -235,7 +236,7 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .tp-row .tp-p, .tp-row .tp-v { color: var(--tp-c, var(--ws-text)); }
 /* a big trade (the large-print floor, the bubbles' own): bold, its color brighter on a tint of it, a bar at the left edge */
 .tp-row.big { background: color-mix(in srgb, var(--tp-c, var(--ws-accent)) 24%, var(--ws-panel)); box-shadow: inset 3px 0 0 var(--tp-c, var(--ws-accent)); font-weight: 700; }
-.tp-row.big .tp-p, .tp-row.big .tp-v { color: color-mix(in srgb, var(--tp-c, var(--ws-text)) 70%, #FFFFFF); }
+.tp-row.big .tp-p, .tp-row.big .tp-v { color: color-mix(in srgb, var(--tp-c, var(--ws-text)) 70%, var(--tape-big-lift)); }
 .tp-row.big .tp-t { color: var(--ws-text2); }
 /* the tape's gear: the category colors */
 .tc-list { display: grid; gap: 4px; }

@@ -2653,7 +2653,7 @@ function start(container, opt, PAGE) {
   }
   function vwapApply() {
     if (S.options.vwap.session === 'rth' && D.m1 && D.m1.bars.length) {
-      vwapSeries = U.rthVwap(D.m1.bars, { sessionStart: SESSION }); vwapVer++;
+      vwapSeries = U.rthVwapUpdate(vwapSeries, D.m1.bars, { sessionStart: SESSION }); vwapVer++;   // the closed bars once, the forming bar again (review D2)
       chart.setVwapSource((t, i) => { const bs = chart.bars(); return bs[i] ? U.vwapAt(vwapSeries, barEnd(bs[i], i)) : null; });
     } else { vwapSeries = null; chart.setVwapSource(null); }
   }
