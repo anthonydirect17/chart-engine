@@ -37,7 +37,9 @@
  *                        page; the host shows its dialog and calls go() on Send (then false: nothing is asked again
  *                        this page load). Returns false when it cannot ask here (a click forwarded from another window).
  *                        The question must not be modal: Close and Flatten all work while it is open.
- *   dropNoStop()         F2 review: close an open NO STOP question, its order not sent (Close and Flatten all call it)
+ *   dropNoStop()         F2 review: close an open NO STOP question, its order not sent (Close, Flatten all and Armed
+ *                        going off call it; the answer is also bound to the instrument, account and Armed it was asked in)
+ *   flattened(root)      a Close or Flatten (root) or Flatten all (null) was pressed here, for other windows (optional)
  *   destroyed()          the host went away
  *   prefs, LP            LivePrefs (the saved bracket, qty and presets) and its module
  *   pin, fetch, framed, framedReason, now
@@ -203,6 +205,8 @@ function create(env) {
      B/E and cancels never ask. `again` sends it once Anthony says Send. */
   let noStopOk = false;
   function allowNoStop() { noStopOk = true; }
+  function dropNoStop() { if (typeof env.dropNoStop === 'function') env.dropNoStop(); }
+  let armGen = 0;                                          // counts Armed going off: an answer is for one arming only
   function sendOrder(side, kind, price, again) {
     if (!ready()) return;
     const R = root();
@@ -215,7 +219,17 @@ function create(env) {
     // a reversal (sell 3 while long 1) opens a position too: asked as an entry (F2 review); it still takes no bracket
     if (OT.opensPosition(side, pos && pos.qty, qty) && !(b.stop > 0) && !noStopOk && typeof env.confirmNoStop === 'function') {
       const go = again || (() => sendOrder(side, kind, price));
-      if (env.confirmNoStop(R, () => { noStopOk = true; go(); }) === false) flash('No stop on ' + R + ': nothing was sent. Set a stop, or send it from the order ticket\'s window to be asked.', 'warn');
+      /* the answer is for this instrument and account while Armed (the F2 re-review): a Send after the instrument or the
+         account changed, or after Armed went off (even if armed again), sends nothing */
+      const asked = { root: R, account: TR.account, gen: armGen };
+      const send = () => {
+        if (!TR.armed || armGen !== asked.gen || root() !== asked.root || TR.account !== asked.account) {
+          flash('Not sent: that question was for ' + asked.root + ' on ' + asked.account + (TR.armed && armGen === asked.gen ? ', and the order bar is on ' + root() + ' on ' + TR.account + ' now.' : ' while Armed; Armed went off since.'), 'warn');
+          return;
+        }
+        noStopOk = true; go();
+      };
+      if (env.confirmNoStop(R, send) === false) flash('No stop on ' + R + ': nothing was sent. Set a stop, or send it from the order ticket\'s window to be asked.', 'warn');
       return;
     }
     if (!sameAction.call(null, [side, kind, price, qty].join('|'), now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
@@ -511,9 +525,10 @@ function create(env) {
      than the one shown (the ticket's "Also open" line). */
   /* An open NO STOP question never holds up Close or Flatten all (F2 review): they act at once and the question goes,
      its order not sent. */
-  const dropNoStop = () => { if (typeof env.dropNoStop === 'function') env.dropNoStop(); };
+  /* every other window drops its question too (the workspace passes it on): r, or every instrument for null */
+  const flattened = r => { if (typeof env.flattened === 'function') env.flattened(r); };
   function flattenHere(other) {
-    dropNoStop();
+    dropNoStop(); flattened(other || root());
     if (!ready(false)) return;
     const R = other || root();
     if (!sameAction(other ? 'flatten|' + other : 'flatten', now())) return;
@@ -530,7 +545,7 @@ function create(env) {
    */
   let faRun = null;                                                // { account, queue: [root], sent: [root] }
   function flattenAll() {
-    dropNoStop();
+    dropNoStop(); flattened(null);
     if (!ready(false)) return;
     const account = TR.account;
     if (faRun) { flash('Flatten all under way on ' + faRun.account + ': ' + faRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
@@ -645,6 +660,7 @@ function create(env) {
   function setArmed(on) {
     const v = !!on && TR.enabled && !(on && env.armBlocked && env.armBlocked());
     TR.armed = v;
+    if (!v) { armGen++; dropNoStop(); }                    // Armed off: an open NO STOP question goes (F2 re-review)
     env.armed(v);
     env.changed();
   }

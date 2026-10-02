@@ -718,10 +718,6 @@ function markup(p, o) {
     </span>
     <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" id="${p}oCancel" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
   </section></div>
-  <div class="alert nostop-ask" id="${p}noStopAsk" role="alertdialog" aria-modal="false" aria-labelledby="${p}noStopTitle" aria-describedby="${p}noStopText" hidden>
-    <span class="alert-title" id="${p}noStopTitle">No stop: send anyway?</span><span class="alert-text" id="${p}noStopText"></span>
-    <span class="nostop-btns"><button type="button" class="btn" id="${p}noStopCancel">Cancel</button><button type="button" class="btn nostop-send" id="${p}noStopSend">Send</button></span>
-  </div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
   /* Settings (1.11.0): the trading hotkeys. Only on the trading page; a mounted chart has none. */
@@ -822,7 +818,11 @@ ${obar}
     <button type="button" class="btn" id="${p}unsentClose">Dismiss</button>
   </div>` : ''}
 
-  <main class="stage">
+  <main class="stage">${o.trading ? `
+  <div class="alert nostop-ask" id="${p}noStopAsk" role="alertdialog" aria-modal="false" aria-labelledby="${p}noStopTitle" aria-describedby="${p}noStopText" hidden>
+    <span class="alert-title" id="${p}noStopTitle">No stop: send anyway?</span><span class="alert-text" id="${p}noStopText"></span>
+    <span class="nostop-btns"><button type="button" class="btn" id="${p}noStopCancel">Cancel</button><button type="button" class="btn nostop-send" id="${p}noStopSend">Send</button></span>
+  </div>` : ''}
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
@@ -2071,7 +2071,8 @@ function start(container, opt, PAGE) {
   }
 
   /* NO STOP (1.13.0, Anthony): the first order with no stop after the page loads asks here, in the page; Send sends it
-     (and no later one asks), Cancel or Escape sends nothing. A strip under the order bar, never modal (F2 review): the
+     (and no later one asks), Cancel or Escape sends nothing. A strip over the top of the chart (it takes no room, so
+     the chart never resizes; F2 re-review), never modal (F2 review): the
      Flatten button, Close and Flatten all work while it is open and close it (dropNoStop), its order not sent. Cancel
      has the focus, so Enter never sends an order with no stop. */
   let noStopGo = null;

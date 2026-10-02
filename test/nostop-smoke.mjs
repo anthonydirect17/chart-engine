@@ -2,22 +2,28 @@
 // probe-nostop-flatten.mjs and probe-nostop-ws.mjs), against the fake bridge (ChartBridge 0.3.8's protocol, sample
 // data; nothing reaches a broker):
 //   - /single.html: with the question open, the Close key, the Flatten all key and a click on Flatten each send at once
-//     and close the question (its order not sent); the question is in the page's flow and covers nothing; Cancel has
-//     the focus, so Enter sends nothing; a reversal (Sell 3 while long 1) is asked, a reducing Sell is not;
+//     and close the question (its order not sent); the question floats over the chart, covers no control and the
+//     chart does not resize; Cancel has the focus, so Enter sends nothing; a reversal (Sell 3 while long 1) is asked,
+//     a reducing Sell is not; Armed off, or another instrument and Armed again, drops it and nothing is sent;
 //   - the workspace (two windows): the same for the ticket's Close, the top bar's Flatten all and the keys, in the
-//     ticket's window and in a window that forwards; Cancel has the focus there too; a Buy confirmed in the other window
-//     carries its instrument and the ticket's window refuses it once the ticket is on another one.
+//     ticket's window and in a window that forwards; Cancel has the focus there too; the question sits over the top
+//     bar, so the grid never resizes and the ticket never scrolls (1366x768, 1920x1080, 2560x1440); Armed off, the
+//     ticket on another instrument, or a Close in the other window drops it; an answer that reaches the ticket's
+//     window after a Close of its instrument (the drop arriving late) is refused (the F2 re-review).
 //   npm run smoke:nostop        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser; NOSTOP_PART=single or
 //                               workspace runs one part)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import fs from 'node:fs';
 import { TEST_PIN, unlockIfAsked, enterPin } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.NOSTOP_SMOKE_PORT || 8881);
 const PART = process.env.NOSTOP_PART || '';
+const out = path.join(root, 'test', 'out');
+fs.mkdirSync(out, { recursive: true });
 const errors = [];
 let checks = 0;
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
@@ -37,6 +43,12 @@ const spies = keys => {
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (['order', 'change', 'cancel', 'flatten', 'plan'].includes(m.type)) window.__sent.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
   try { localStorage.setItem('live-hotkeys-v1', JSON.stringify(keys)); } catch (e) { /* blocked */ }
+  // window.__deafFlat: this window misses the other windows' "a Close or Flatten went out" (a late broadcast)
+  const BC = window.BroadcastChannel;
+  if (typeof BC === 'function') window.BroadcastChannel = class extends BC {
+    set onmessage(f) { super.onmessage = this.name === 'chartbridge-noflat-v1' && f ? (e => { if (!window.__deafFlat) f(e); }) : f; }
+    get onmessage() { return super.onmessage; }
+  };
   const iv = setInterval(() => { const el = document.getElementById('statusMsg') || document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__notes.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
 };
 const sent = (p, types) => p.evaluate(t => window.__sent.filter(m => !t || t.includes(m.type)).map(m => { const c = Object.assign({}, m); delete c.cid; return c; }), types || null);
@@ -71,11 +83,17 @@ try {
   await openSingle();
   const asked = () => page.evaluate(() => !document.getElementById('noStopAsk').hidden);
   await page.click('#armBtn'); await wait(450);
+  const chartSize = () => page.evaluate(() => { const c = document.querySelector('#chart canvas').getBoundingClientRect(), st = document.querySelector('.stage').getBoundingClientRect(); return [Math.round(c.width), Math.round(c.height), Math.round(st.top), Math.round(st.height)]; });
+  const sizeBefore = await chartSize();
   await page.click('#buyMkt'); await wait(250);
   check(await asked() && !(await sent(page)).length, 'Buy MKT with stop 0: the question, nothing sent');
   check(await page.evaluate(() => document.activeElement === document.getElementById('noStopCancel')), 'Cancel has the focus');
   const flow = await page.evaluate(() => getComputedStyle(document.getElementById('noStopAsk')).position);
-  check(flow === 'static' && await uncovered(page, '#flattenBtn') && await uncovered(page, '#armBtn') && await uncovered(page, '#buyMkt'), 'the question is in the page\'s flow (' + flow + '): the order bar is not covered');
+  const sizeNow = await chartSize();
+  check(flow === 'absolute' && await uncovered(page, '#flattenBtn') && await uncovered(page, '#armBtn') && await uncovered(page, '#buyMkt') && await uncovered(page, '#noStopCancel') && await uncovered(page, '#noStopSend'),
+    'the question floats over the chart (' + flow + '): the order bar, Cancel and Send are not covered');
+  await page.screenshot({ path: path.join(out, 'nostop-single-1600x900.png') });
+  check(JSON.stringify(sizeNow) === JSON.stringify(sizeBefore), 'the chart does not resize when the question shows (' + JSON.stringify(sizeBefore) + ' / ' + JSON.stringify(sizeNow) + ')');
   await page.keyboard.press('Enter'); await wait(300);
   check(!(await asked()) && !(await sent(page)).length, 'Enter on the question: Cancel, nothing sent');
 
@@ -92,6 +110,20 @@ try {
   await flattenWhileAsked('the Flatten all key', () => page.keyboard.press('Shift+F9'));
   await flattenWhileAsked('a click on Flatten', () => page.click('#flattenBtn'));
   await until(async () => !(await state()).orders.length, 'no working order left');
+
+  // Armed off drops the question; another instrument and Armed again: still gone, nothing sent (F2 re-review)
+  await clear(page); await wait(450);
+  await page.click('#buyMkt'); await wait(250);
+  await page.click('#armBtn'); await wait(250);
+  check(!(await asked()) && !(await sent(page)).length, 'Armed off drops the question, nothing sent');
+  await page.click('#armBtn'); await wait(450);
+  await page.click('#buyMkt'); await wait(250);
+  const wasOpen = await asked();
+  await page.click('#symSeg button[data-v="NQ"]'); await wait(800);
+  await page.click('#armBtn'); await wait(450);
+  check(wasOpen && !(await asked()) && !(await sent(page)).length, 'asked on MNQ, then NQ and Armed again: the question is gone, nothing sent');
+  await page.click('#symSeg button[data-v="MNQ"]'); await wait(800);
+  await page.click('#armBtn'); await wait(450);
 
   // Escape is Cancel; Send sends it
   await clear(page); await wait(450);
@@ -138,11 +170,29 @@ try {
   await A.bringToFront();
   await A.fill(tk('bStop'), '0'); await A.press(tk('bStop'), 'Tab'); await blur(A);
   await A.click(tk('armBtn')); await wait(450);
+  // no scrolling, ever: the grid does not move and the ticket does not scroll when the question shows; Close, Flatten
+  // all, KEYS, Cancel and Send all in view and not covered, at each screen size
+  const layoutOf = () => A.evaluate(() => { const t = document.querySelector('.ws-panel[data-type="ticket"] .chart-live.tk'), g = document.getElementById('wsGrid').getBoundingClientRect();
+    return { grid: [Math.round(g.top), Math.round(g.height)], sh: t.scrollHeight, ch: t.clientHeight, sw: t.scrollWidth, cw: t.clientWidth }; });
+  for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
+    await A.setViewportSize({ width: w, height: h }); await wait(900);
+    const before = await layoutOf();
+    await clear(A); await wait(450);
+    await A.click(tk('buyMkt')); await wait(300);
+    const open = await layoutOf();
+    if (w === 1366) await A.screenshot({ path: path.join(out, 'nostop-workspace-1366x768.png') });
+    const seen = [];
+    for (const sel of ['#wsFlat', '#wsKeys', tk('flattenBtn'), '#wsNoStopCancel', '#wsNoStopSend']) if (!(await uncovered(A, sel))) seen.push(sel);
+    check(await wsAsked(A) && JSON.stringify(open.grid) === JSON.stringify(before.grid) && open.sh <= open.ch + 1 && open.sw <= open.cw + 1 && !seen.length,
+      w + 'x' + h + ': the question shows, the grid stays put, the ticket does not scroll, nothing covered (' + JSON.stringify({ before, open, covered: seen }) + ')');
+    await A.click('#wsNoStopCancel'); await wait(200);
+  }
+  await A.setViewportSize({ width: 1600, height: 900 }); await wait(900);
   await A.click(tk('buyMkt')); await wait(250);
   check(await wsAsked(A) && !(await sent(A)).length, 'the ticket\'s Buy MKT with stop 0: the question in A, nothing sent');
   check(await A.evaluate(() => document.activeElement === document.getElementById('wsNoStopCancel')), 'Cancel has the focus');
   const pos = await A.evaluate(() => getComputedStyle(document.getElementById('wsNoStop')).position);
-  check(pos === 'static' && await uncovered(A, '#wsFlat') && await uncovered(A, tk('flattenBtn')), 'the question is under the top bar in the page\'s flow (' + pos + '): the top bar and the ticket\'s Close are not covered');
+  check(pos === 'absolute', 'the question sits over the top bar (' + pos + ')');
   await A.keyboard.press('Enter'); await wait(300);
   check(!(await wsAsked(A)) && !(await sent(A)).length, 'Enter on the question: Cancel, nothing sent');
 
@@ -170,19 +220,48 @@ try {
   await wsFlattenWhileAsked(B, 'B, question open, the top bar\'s Flatten all', async () => { await blur(B); await B.keyboard.press('Alt+B'); }, () => B.click('#wsFlat'));
   await until(async () => !(await state()).orders.length, 'no working order left (workspace)');
 
-  // a Buy confirmed in B goes with its instrument: the ticket moved on to NQ meanwhile, so A refuses it
+  // Armed off in the ticket's window drops its own question and B's (F2 re-review)
+  await clear(A); await clear(B); await A.bringToFront(); await wait(450);
+  await A.click(tk('buyMkt')); await wait(250);
+  await B.bringToFront(); await blur(B); await B.keyboard.press('Alt+B'); await wait(400);
+  const both = (await wsAsked(A)) && (await wsAsked(B));
+  await A.bringToFront(); await A.click(tk('armBtn')); await wait(500);
+  check(both && !(await wsAsked(A)) && !(await wsAsked(B)) && !(await sent(A)).length, 'Armed off in A: A\'s question and B\'s both go, nothing sent');
+  await A.click(tk('armBtn')); await wait(400);
+
+  // B asked about MNQ, then the ticket moves on to NQ: B's question goes, nothing sent
   await clear(A); await clear(B); await wait(450);
-  await blur(B); await B.keyboard.press('Alt+B'); await wait(300);
-  check(await wsAsked(B), 'B asked about the MNQ Buy');
+  await B.bringToFront(); await blur(B); await B.keyboard.press('Alt+B'); await wait(300);
+  const bOpen = await wsAsked(B);
   await A.selectOption(tk('root'), 'NQ'); await wait(600);
-  await A.fill(tk('bStop'), '0'); await A.press(tk('bStop'), 'Tab'); await blur(A);
   await A.click(tk('armBtn')); await wait(400);
   await B.waitForFunction(() => window.workspace.ticket().holder && window.workspace.ticket().holder.root === 'NQ', null, { timeout: 5000 });
-  await B.click('#wsNoStopSend'); await wait(800);
+  await wait(300);
+  check(bOpen && !(await wsAsked(B)) && !(await sent(A)).length, 'B asked about MNQ, the ticket moved to NQ: B\'s question is gone, nothing sent');
+  await A.selectOption(tk('root'), 'MNQ'); await wait(600);
+  await A.fill(tk('bStop'), '0'); await A.press(tk('bStop'), 'Tab'); await blur(A);
+  await A.click(tk('armBtn')); await wait(400);
+  await B.waitForFunction(() => { const h = window.workspace.ticket().holder; return h && h.root === 'MNQ' && h.armed; }, null, { timeout: 5000 });
+
+  // a Close in A drops B's question; and when B misses that (a late broadcast), A refuses B's answer
+  await clear(A); await clear(B); await wait(450);
+  await B.bringToFront(); await blur(B); await B.keyboard.press('Alt+B'); await wait(300);
+  const bAsk2 = await wsAsked(B);
+  await A.bringToFront(); await blur(A); await A.keyboard.press('Alt+C'); await wait(500);
+  check(bAsk2 && (await sent(A, ['flatten'])).length === 1 && !(await wsAsked(B)), 'a Close in A: sent at once, and B\'s question goes');
+  await B.evaluate(() => { window.__deafFlat = true; });
+  await clear(A); await clear(B); await wait(450);
+  await B.bringToFront(); await blur(B); await B.keyboard.press('Alt+B'); await wait(300);
+  const bAsk3 = await wsAsked(B);
+  await A.bringToFront(); await blur(A); await A.keyboard.press('Alt+C'); await wait(500);
+  const stillB = await wsAsked(B);
+  await B.bringToFront(); await B.click('#wsNoStopSend'); await wait(800);
   const bn = await notes(B);
-  check(!(await sent(A, ['order'])).length && bn.some(t => /order ticket is on NQ now, not MNQ/.test(t)), 'Send in B after the ticket moved to NQ: A refuses the MNQ Buy, nothing sent (' + JSON.stringify(bn.slice(-2)) + ')');
-  await A.click(tk('buyMkt')); await wait(300);
-  check(await wsAsked(A), 'and A was not told "Send" by it: its own NQ order with no stop is still asked');
+  check(bAsk3 && stillB && !(await sent(A, ['order'])).length && bn.some(t => /went out after that order was asked about/.test(t)),
+    'B missed the Close (late): its Send reaches A, which refuses it, nothing sent (' + JSON.stringify(bn.slice(-1)) + ')');
+  await B.evaluate(() => { window.__deafFlat = false; });
+  await A.bringToFront(); await A.click(tk('buyMkt')); await wait(300);
+  check(await wsAsked(A), 'and A was not told "Send" by it: its own order with no stop is still asked');
   await A.click('#wsNoStopCancel');
   }
   await ctx.close();

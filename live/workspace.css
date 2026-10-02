@@ -128,6 +128,10 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-alert span { flex: 1 1 auto; white-space: pre-line; }
 .ws-alert.warn { border-color: var(--ws-warn); background: var(--ws-warn-ground); }
 .ws-alert .nostop-send { color: var(--ws-sell); border-color: var(--ws-sell); font-weight: 600; }   /* the NO STOP question's Send (Cancel has the focus) */
+.ws-top > .ws-ns { position: absolute; z-index: 2; top: 4px; bottom: 4px; left: 8px; right: var(--ns-right, 50%); margin: 0; padding: 0 6px 0 10px; gap: 8px; min-width: 0; box-sizing: border-box; }
+.ws-top > .ws-ns[hidden] { display: none; }
+.ws-top > .ws-ns > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the whole text in its tooltip */
+.ws-top > .ws-ns .ws-btn { flex: none; }
 .ws-alert.warn b { color: var(--ws-warn); }
 
 /* ---------------- the order ticket (1.12.0): the order bar's controls (live.css) in a column; Armed in the Armed color.
