@@ -102,6 +102,7 @@ function Initialize-Paths([string]$Repo, [string]$NtFolder) {
     Log = (Join-Path $dir 'update.log'); Lock = (Join-Path $dir 'updater.lock'); Paused = (Join-Path $dir 'paused')
     Staged = (Join-Path $dir 'staged'); Previous = (Join-Path $dir 'previous'); PrevAddOns = (Join-Path $dir 'previous-addons')
     Journal = (Join-Path $dir 'swap.json'); Bin = (Join-Path $dir 'bin'); PrevNext = (Join-Path $dir 'previous-next')
+    NetWait = (Join-Path $dir 'network-wait')
   }
 }
 
@@ -1014,9 +1015,28 @@ function Invoke-Fetch([switch]$Wait) {
       $f.waitedSec = $waited; $f.offline = $down; $f.tries = $try
       return $f
     }
-    if ($try -eq 1) { Write-Host "the network is not up yet ($(Get-LastLine $f.err)); trying the fetch again for up to $($script:FetchWaitSec) s" }
-    Wait-Ms ($script:FetchRetrySec * 1000)
+    if ($try -eq 1) {
+      Write-Host "the network is not up yet ($(Get-LastLine $f.err)); trying the fetch again for up to $($script:FetchWaitSec) s"
+      # a note for a run refused by the lock meanwhile (Get-BusyText): this run is only waiting for the network
+      try { [IO.File]::WriteAllText($script:P.NetWait, [string](Get-NowMs), $script:Utf8) } catch { }
+    }
+    try { Wait-Ms ($script:FetchRetrySec * 1000) } catch { Clear-NetWait; throw }
   }
+}
+function Clear-NetWait { try { if (Test-Path -LiteralPath $script:P.NetWait) { Remove-Item -LiteralPath $script:P.NetWait -Force } } catch { } }
+
+# What a run refused by the lock says: another run works, or (0.3.8) another run is waiting for the network.
+function Get-BusyText {
+  try {
+    if (Test-Path -LiteralPath $script:P.NetWait) {
+      $since = [long]([IO.File]::ReadAllText($script:P.NetWait).Trim())
+      $age = ((Get-NowMs) - $since) / 1000
+      if ($age -ge 0 -and $age -lt ($script:FetchWaitSec + 240)) {
+        return "another update-pc.ps1 run is waiting for the network (the run at sign-in, up to $($script:FetchWaitSec) s; waiting $([int]$age) s so far); try again in about 2 minutes"
+      }
+    }
+  } catch { }
+  return 'another update-pc.ps1 run is working; try again in a minute'
 }
 
 function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
@@ -1033,7 +1053,7 @@ function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
     $r.outcome = 'paused'; $r.reason = "paused by hand ($($script:P.Paused)); run update-pc.ps1 resume to turn updates back on"; return $r
   }
   $r.compiled = Get-CompiledChartBridge $State
-  $f = Invoke-Fetch -Wait:(-not $DryRun -and -not $StageOnly)
+  try { $f = Invoke-Fetch -Wait:(-not $DryRun -and -not $StageOnly) } finally { if (-not $DryRun -and -not $StageOnly) { Clear-NetWait } }
   if ($f.code -ne 0 -and $f.offline) {
     # 0.3.8: quietly (not a stop): nothing was changed, and the next run (sign-in or the daily one) tries again
     $r.outcome = 'offline'; $r.reason = "the network was not up: git fetch could not reach $($script:Remote) ($($f.tries) tries over $($f.waitedSec) s; $(Get-LastLine $f.err)); nothing changed, the next run tries again"
@@ -1141,7 +1161,7 @@ function Invoke-Update([switch]$DryRun) {
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }      # before anything is written (no NinjaTrader folder: nothing)
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
     if (-not $DryRun) { Save-TriggerCheck $state (Sync-DailyTrigger) }
@@ -1250,7 +1270,7 @@ function Invoke-Rollback {
   $pre = Test-Preflight
   if ($pre) { return (Write-Verdict $false $pre) }
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     $state = Read-State
     try { [void](Resume-Swap $state) } catch { return (Write-Verdict $false $_.Exception.Message) }
@@ -1442,7 +1462,7 @@ function Invoke-InstallChartBridge {
   $pre = Test-Preflight -NoWwwOk
   if ($pre) { return (Write-Verdict $false $pre) }
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     if (-not (Test-Path $script:P.Www)) { New-Item -ItemType Directory -Force -Path $script:P.Www | Out-Null }   # a PC without the page yet
     $state = Read-State
@@ -1557,7 +1577,7 @@ function Invoke-Repair {
   $pre = Test-Preflight -NoWwwOk
   if ($pre) { return (Write-Verdict $false $pre) }
   $lock = Enter-Lock
-  if (-not $lock) { return (Write-Verdict $false 'another update-pc.ps1 run is working; try again in a minute') }
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
   try {
     if (-not (Test-Path $script:P.Www)) { New-Item -ItemType Directory -Force -Path $script:P.Www | Out-Null }
     $state = Read-State
@@ -1818,7 +1838,7 @@ function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
 # register's first half (any system): pick a checked copy, pin it, remember the daily time. Returns the pinned path.
 function Invoke-PinForTask([string]$At) {
   $lock = Enter-Lock
-  if (-not $lock) { throw 'another update-pc.ps1 run is working; try again in a minute' }
+  if (-not $lock) { throw (Get-BusyText) }
   try {
     $state = Read-State
     $src = Get-PinSource $state

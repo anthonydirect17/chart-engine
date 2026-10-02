@@ -2301,9 +2301,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (type == MarketDataType.Settlement)
             {
-                // 0.3.7: NinjaTrader's settlement for the contract (a reset is never one: handled above). Rare: off this thread.
-                string sr = RootOf(e.Instrument), sc = e.Instrument != null ? e.Instrument.FullName : null; double sp = e.Price; DateTime stime = e.Time;
-                Task.Run(() => NoteSettlement(sr, sc, sp, stime, "update"));
+                // 0.3.7: NinjaTrader's settlement for the contract (a reset is never one: handled above). Rare: off this thread,
+                // one at a time in the order they came (0.3.8: one queue; a task each could take them out of order).
+                QueueSettlement(RootOf(e.Instrument), e.Instrument != null ? e.Instrument.FullName : null, e.Price, e.Time);
                 return;
             }
             if (type != MarketDataType.Last) return;
@@ -3725,6 +3725,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         public static void NoteSettlement(string root, double price, DateTime ntTime, string from) { NoteSettlement(root, null, price, ntTime, from); }
+
+        // 0.3.8: Settlement updates from OnMarketData, handled one at a time in arrival order on a pool thread.
+        private static readonly ConcurrentQueue<object[]> SettleQueue = new ConcurrentQueue<object[]>();
+        private static int settleDraining;
+        private static void QueueSettlement(string root, string contract, double price, DateTime ntTime)
+        {
+            SettleQueue.Enqueue(new object[] { root, contract, price, ntTime });
+            if (Interlocked.CompareExchange(ref settleDraining, 1, 0) == 0) Task.Run(() => DrainSettlements());
+        }
+        private static void DrainSettlements()
+        {
+            for (;;)
+            {
+                object[] x;
+                while (SettleQueue.TryDequeue(out x))
+                {
+                    try { NoteSettlement((string)x[0], (string)x[1], (double)x[2], (DateTime)x[3], "update"); }
+                    catch (Exception ex) { Log("settlement error: " + ex.Message); }
+                }
+                Interlocked.Exchange(ref settleDraining, 0);
+                if (SettleQueue.IsEmpty || Interlocked.CompareExchange(ref settleDraining, 1, 0) != 0) return;   // more came: go on (unless another drain took them)
+            }
+        }
+        // The harness: true once every queued update has been handled.
+        public static bool SettlementsIdle { get { return SettleQueue.IsEmpty && Volatile.Read(ref settleDraining) == 0; } }
         // contract: the instrument the value came with (null: the contract served for root now).
         public static void NoteSettlement(string root, string contract, double price, DateTime ntTime, string from)
         {
@@ -3740,9 +3765,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!Settlements.TryGetValue(root, out s)) { s = new SettleRoot(); Settlements[root] = s; }
                 if (s.Contract != contract) { s.Contract = contract; s.ByDate.Clear(); }   // another contract (a roll): its own values only
                 bool again = SameP(s.RawP, price) && s.RawNt == ntTime;
-                if (day.HasValue && provisional)
+                if (day.HasValue)
                 {
-                    // 16:00 to 17:00 ET: only a value that differs from the day before's stored one is the new settlement
+                    // 0.3.8 (Anthony and the coordinator): a value equal to the day before's stored one is never used, whatever its
+                    // stamp (NinjaTrader can still hold the day before's value; two equal settlements in a row are rare, and a
+                    // blank is safer than a wrong change). With none stored: from the close on it is the day's (HOME's first
+                    // evening); before the close (16:00 to 17:00) it waits. A value that came before settlements.txt was read,
+                    // with nothing stored yet to compare, is held and judged once it is read.
                     DateTime before = ChartBridgeCme.PreviousSession(day.Value);
                     double old;
                     bool known = s.ByDate.TryGetValue(before, out old);
@@ -3751,12 +3780,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                         SettlePending.Add(new object[] { root, contract, price, ntTime, from });   // judged once settlements.txt is read
                         return;
                     }
-                    if (!known || SameP(old, price))
+                    if (known ? SameP(old, price) : provisional)
                     {
-                        if (!again) waitWhy = "is stamped " + EtText(ntTime) + " ET, before the " + Day(day.Value) + " session's close at " +
-                            day.Value.Add(ChartBridgeCme.SessionClose(day.Value)).ToString("HH:mm", CultureInfo.InvariantCulture) + " ET, and " +
-                            (known ? "equals " + Day(before) + "'s settlement" : "no settlement for " + Day(before) + " is known to compare it with") +
-                            ", so it may still be the day before's: not used; waiting for a value that differs, or one stamped after the close";
+                        if (!again) waitWhy = "is stamped " + EtText(ntTime) + " ET (the " + Day(day.Value) + " session's), and " +
+                            (known ? "equals " + Day(before) + "'s settlement, so it may still be the day before's: not used; waiting for a value that differs"
+                                   : "came before that session's close at " + day.Value.Add(ChartBridgeCme.SessionClose(day.Value)).ToString("HH:mm", CultureInfo.InvariantCulture) +
+                                     " ET with no settlement for " + Day(before) + " known to compare it with: not used; waiting for a value that differs, or one stamped after the close");
                         day = null;
                     }
                 }

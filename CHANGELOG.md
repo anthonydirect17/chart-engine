@@ -23,13 +23,17 @@ compile in NinjaTrader (F5). Entries still resting at the recompile are handled 
 - **Kept from 0.3.7, now in ticks:** the plan-versus-fill race check under the fill path's lock; the ticks in the
   order name (`CB#1a2b3c4d atm s8 t16`) and `planned_brackets.txt` (`<tag> ticks <stop> <target> <saved>`); file I/O
   off NinjaTrader's thread and outside every lock; fills found by the 2 second check left to that path; recovery that
-  never guesses (a missing record uses the name's ticks, with an alarm); the warning when legs were placed from an
-  estimated fill price. The remembered sent price of a move (0.3.7, P9) is removed: plans no longer depend on the
-  entry's price.
+  never guesses (a missing record uses the name's ticks, with an alarm). The remembered sent price of a move (0.3.7,
+  P9) is removed: plans no longer depend on the entry's price.
+- **No legs from an estimated price (review P3, P13).** After a recompile, an increment that follows contracts handled
+  with no legs is priced from NinjaTrader's executions of the entry; when they cannot give the price, no legs are
+  placed and an error alarm says NO STOP and to set it in NinjaTrader (0.3.7 placed legs from an estimate, and could
+  put a stop above the market and exit at market by mistake).
 - **Entries placed before 0.3.8 and still resting:** a 0.3.6 entry (`s8 t16`, already ticks) is recovered as it is,
   and `plan` now accepts it. A 0.3.7 entry (`plan s<price> t<price>`) is converted once, at recovery, to the ticks it
   shows now from the entry's current price (a price on the wrong side is no stop or no target), written to the file,
-  with a `status` `warn` to the pages naming them.
+  with a `status` `warn` to the pages naming them; when its stop was on the wrong side, an error alarm that it has NO
+  STOP, at the conversion and again at its fill (review P10).
 - **The empty `planned_brackets.txt` seen on HOME.** In 0.3.7 a failed write (an antivirus such as Norton holding the
   file just written) was only logged, so an earlier empty write could stay as the file, and a failed read at start
   was followed by rewrites from memory that dropped the lines not read. Now: writes are tried again a few times,
@@ -41,9 +45,10 @@ compile in NinjaTrader (F5). Entries still resting at the recompile are handled 
 - A value stamped from a session's close (17:00 ET) until the next session's settlement time is that session's. The
   snapshot NinjaTrader gives at a first start in the evening (HOME, 20:43 ET on 2026-10-01) is now that day's
   settlement; a morning start dates it the day before, a weekend one Friday.
-- Between the settlement time and the close (16:00 to 17:00 ET) NinjaTrader can still hold the day before's value: a
-  value stamped then is used only when it differs from the day before's stored value, otherwise ChartBridge waits
-  (with no stored value to compare, it waits too).
+- A value equal to the stored value of the day before is never used, whatever its stamp (NinjaTrader can still hold
+  the day before's value; a blank is safer than a wrong change). With nothing stored for the day before, a value
+  stamped from the close on is the day's, and one stamped between 16:00 and the 17:00 close waits. Settlement updates
+  are handled one at a time in arrival order (one task each could take them out of order).
 
 ### Time and Sales category (`q`)
 - Every live `tick` carries `q`: 2 above the ask, 1 at the ask, 0 between, -1 at the bid, -2 below the bid, from the
@@ -56,8 +61,9 @@ compile in NinjaTrader (F5). Entries still resting at the recompile are handled 
   denied").
 - A fetch that fails because the network is not up yet (the run at sign-in) is tried again every 10 seconds for up
   to 2 minutes; then the run ends quietly (`offline`, logged as INFO, not a STOP) and the next run tries again.
-  Other fetch failures stop as before. The scheduled task runs the pinned copy: this applies after `update-pc.ps1
-  register` or `-InstallChartBridge`.
+  Other fetch failures stop as before. A command refused meanwhile (`-InstallChartBridge`, say) says the other run is
+  waiting for the network and to try again in about 2 minutes. The scheduled task runs the pinned copy: this applies
+  after `update-pc.ps1 register` or `-InstallChartBridge`.
 
 ### Checks
 - `npm run check:orders`: OrdersHarness (the 0.3.8 ATM checks and the planned_brackets.txt faults), DataHarness

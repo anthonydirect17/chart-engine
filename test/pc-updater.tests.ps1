@@ -989,6 +989,20 @@ Test 'no network for about 2 minutes: given up quietly (offline, INFO, OK), noth
     Assert ($script:Toasts.Count -eq 0 -or $script:Toasts[-1] -notmatch 'network') 'no toast'
   } finally { Reset-FlakyFetch }
 }
+Test '-InstallChartBridge during the network wait is refused saying so (retry in about 2 minutes); the note goes with the wait' {
+  Use-FlakyFetch
+  $script:DuringWait = $null
+  ${function:script:Wait-Ms} = { param([int]$Ms) [void]$script:Waits.Add($Ms); if ($null -eq $script:DuringWait) { $script:Yes = $true; try { $script:DuringWait = Invoke-InstallChartBridge; $script:DuringText = Get-Said } finally { $script:Yes = $false } } }
+  try {
+    $script:NetDown = 2; $script:FetchErr = $script:NoNet
+    [void](Get-Said)
+    Assert-Code (Invoke-Update) 0 'the update itself carries on'
+    Assert-Code $script:DuringWait 1 'the install is refused (the lock is held)'
+    Assert ($script:DuringText -match 'STOP: another update-pc.ps1 run is waiting for the network' -and $script:DuringText -match 'try again in about 2 minutes') $script:DuringText
+    Assert (-not (Test-Path $script:P.NetWait)) 'the note is gone after the wait'
+    Assert ((Get-BusyText) -match 'is working; try again in a minute') 'without the note: the usual text'
+  } finally { Reset-FlakyFetch; $script:DuringWait = $null }
+}
 Test 'a fetch refused for another reason is not waited for (fetch_failed, a STOP); check never waits' {
   Use-FlakyFetch
   try {

@@ -223,7 +223,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool Resting;                    // a limit or stop entry: its ticks can be changed (plan), and are kept in planned_brackets.txt
             public bool PlanLost;                   // recovered without its planned_brackets.txt record: the name's ticks, with an alarm
             public string Converted;                // 0.3.7 planned prices turned into ticks at recovery: what to tell the page
-            public bool ValueEstimated;             // recovered: CoveredValue partly estimated, so an increment's fill price is an estimate
+            public bool ValueEstimated;             // recovered: CoveredValue partly unknown (contracts handled with no legs before a
+                                                    // recompile); the next increment's price comes from NinjaTrader's executions, never an estimate
+            public bool ConvertedNoStop;            // a 0.3.7 entry whose planned stop was on the wrong side of its price at conversion: NO STOP
             public int CoveredNoStop;               // contracts handled this session without a stop (no planned stop): for the plan alarm
             public int Covered;               // entry contracts already handled (legs, exit, or closed an opposite position)
             public double CoveredValue;       // sum of fill price times contracts for Covered
@@ -757,7 +759,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Sync)
                 {
                     waiting = o.Filled - br.Covered;
-                    if (waiting <= 0) { br.StopTicks = newSt; br.TargetTicks = newTt; br.PlanLost = false; }
+                    if (waiting <= 0) { br.StopTicks = newSt; br.TargetTicks = newTt; br.PlanLost = false; if (newSt > 0) br.ConvertedNoStop = false; }
                     noStop = br.CoveredNoStop;
                 }
                 if (waiting > 0)
@@ -1011,9 +1013,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     br.StopTicks = sp > 0 ? Math.Max(0, (int)Math.Round((br.EntryIsBuy ? px - sp : sp - px) / tick)) : 0;
                     br.TargetTicks = tp > 0 ? Math.Max(0, (int)Math.Round((br.EntryIsBuy ? tp - px : px - tp) / tick)) : 0;
                     ConvertLegacy(br.Tag, br.StopTicks, br.TargetTicks);
+                    br.ConvertedNoStop = sp > 0 && br.StopTicks == 0;   // its stop was at or past the entry's price (the entry was moved): none now
                     br.Converted = "entry CB#" + br.Tag + " was placed by ChartBridge 0.3.7 with planned prices (stop " + PriceText(sp) + " / target " + PriceText(tp) +
                                    (fromFile ? "" : ", from its order name") + "); from now on its stop and target are " + TicksText(br.StopTicks) + " / " + TicksText(br.TargetTicks) +
-                                   " ticks from its fill (the ATM rule), the distances they are from its price " + CbJson.Num(px) + " now; check them on the chart";
+                                   " ticks from its fill (the ATM rule), the distances they are from its price " + CbJson.Num(px) + " now; " +
+                                   (br.ConvertedNoStop ? "its planned stop " + PriceText(sp) + " is not " + (br.EntryIsBuy ? "below" : "above") + " that price, so it has NO STOP: set one (plan, or in NinjaTrader) before it fills"
+                                                       : "check them on the chart");
                 }
             }
             List<Order> orders;
@@ -1038,7 +1043,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             // An increment that closed an opposite position got no legs, so Covered is the highest fill mark
             // seen; the value of the contracts in between is taken at the entry's average price.
             int named = byFill.Values.Sum(x => x.Qty);
-            if (br.Covered > named) { br.CoveredValue += (br.Covered - named) * entry.AverageFillPrice; br.ValueEstimated = true; }
+            if (br.Covered > named)
+            {
+                // 0.3.8 review (P3, P13): the contracts in between are valued from NinjaTrader's executions of the entry; when
+                // those cannot account for them, the value is marked unknown and the next increment's price is read from the
+                // executions then, or it gets no legs (never legs from an estimate).
+                double real = FillValue(FillsOf(entry), 0, br.Covered);
+                if (!double.IsNaN(real)) br.CoveredValue = real;
+                else { br.CoveredValue += (br.Covered - named) * entry.AverageFillPrice; br.ValueEstimated = true; }
+            }
             foreach (Pair p in byFill.Values)
                 if ((p.Stop != null && !IsDone(p.Stop.OrderState)) || (p.Target != null && !IsDone(p.Target.OrderState))) pairs.Add(p);
             // A missing record matters only while the planned ticks may still be used: the entry still works, or it
@@ -1095,8 +1108,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (br.Resting && NoPlan(br)) { CoverWithoutLegs(entry, br); return; }
             if (fromScan) { KeepBracketFromScan(entry, br, now); return; }
+            bool est;
+            lock (Sync) est = br.ValueEstimated;
+            List<double[]> fills = est ? FillsOf(entry) : null;   // read before Sync (the account's own lock)
             int inc, filled;
             double incPrice;
+            bool unknown = false, fromExec = false;
             lock (Sync)
             {
                 filled = entry.Filled;
@@ -1105,13 +1122,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                 inc = filled - br.Covered;
                 double value = entry.AverageFillPrice * filled;
                 incPrice = (value - br.CoveredValue) / inc;
+                if (br.ValueEstimated)
+                {
+                    double real = RealIncPrice(fills, entry, br.Covered, filled);
+                    if (double.IsNaN(real)) unknown = true; else { incPrice = real; fromExec = true; }
+                    br.ValueEstimated = false;   // from here on CoveredValue is the average fill times the filled count: exact
+                }
                 br.Covered = filled;
                 br.CoveredValue = value;
+                if (unknown) { br.CoveredNoStop += inc; Manage(br.Account, br.Instrument); }   // watched by the missing-stop alarm
             }
             string where = Where(br.Account, br.Instrument);
             if (br.AfterFlatten)
                 Alarm(where + ": an entry filled AFTER Flatten (" + inc + " contract(s)); a position may be open. It gets its stop and target now; check NinjaTrader");
             if (br.PlanLost) PlanLostAlarm(br, true);
+            if (unknown) { PriceUnknownAlarm(br, inc, where); return; }
+            if (br.ConvertedNoStop) ConvertedNoStopAlarm(br, inc);
+            if (fromExec) ChartBridgeServer.Log("entry CB#" + br.Tag + ": the fill price of " + inc + " contract(s) after a recompile read from NinjaTrader's executions: " + CbJson.Num(incPrice));
             PlaceLegs(br, filled, inc, incPrice, where);
         }
 
@@ -1130,9 +1157,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 inc = filled - br.Covered;
                 br.Covered = filled;
                 br.CoveredValue = entry.AverageFillPrice * filled;
+                br.ValueEstimated = false;   // exact from here (the average fill times the filled count)
                 br.CoveredNoStop += inc;
             }
             string where = Where(br.Account, br.Instrument);
+            if (br.ConvertedNoStop) ConvertedNoStopAlarm(br, inc);
             if (br.AfterFlatten)
                 Alarm(where + ": an entry filled AFTER Flatten (" + inc + " contract(s)); a position may be open, and the entry had no planned stop or target; check NinjaTrader");
             ChartBridgeServer.Log("entry " + (entry.Name ?? "") + " filled " + inc + " contract(s) with no planned stop or target: no legs, on " + where);
@@ -1155,7 +1184,69 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void Announce(Bracket br)
         {
             if (br.PlanLost) PlanLostAlarm(br, false);
-            if (br.Converted != null) Warn(Where(br.Account, br.Instrument) + ": " + br.Converted);
+            if (br.Converted != null)
+            {
+                if (br.ConvertedNoStop) Alarm(Where(br.Account, br.Instrument) + ": " + br.Converted);   // 0.3.8 review (P10): NO STOP is an error
+                else Warn(Where(br.Account, br.Instrument) + ": " + br.Converted);
+            }
+        }
+
+        // 0.3.8 review (P10): a converted 0.3.7 entry that lost its stop fills: said again, as an error.
+        private static void ConvertedNoStopAlarm(Bracket br, int qty)
+        {
+            Alarm(Where(br.Account, br.Instrument) + ": entry CB#" + br.Tag + " (placed by ChartBridge 0.3.7) filled " + qty + " contract(s) with NO STOP: its planned stop was on the wrong side of the entry when it was converted; set the stop in NinjaTrader now");
+        }
+
+        // 0.3.8 review (P3, P13): an entry's fills from NinjaTrader's executions on its account, oldest first ({quantity, price}
+        // each): the executions whose Order is the entry, or that carry its OrderId. Reads the account's list under its own
+        // lock; call without Sync. Null when the list cannot be read.
+        private static List<double[]> FillsOf(Order entry)
+        {
+            if (entry == null || entry.Account == null) return null;
+            List<Execution> list;
+            try { lock (entry.Account.Executions) list = entry.Account.Executions.ToList(); }
+            catch (Exception) { return null; }
+            string id = entry.OrderId;
+            List<KeyValuePair<int, Execution>> mine = new List<KeyValuePair<int, Execution>>();
+            for (int i = 0; i < list.Count; i++)
+            {
+                Execution x = list[i];
+                if (x != null && (object.ReferenceEquals(x.Order, entry) || (!string.IsNullOrEmpty(id) && x.OrderId == id))) mine.Add(new KeyValuePair<int, Execution>(i, x));
+            }
+            return mine.OrderBy(p => p.Value.Time).ThenBy(p => p.Key).Select(p => new double[] { p.Value.Quantity, p.Value.Price }).ToList();
+        }
+
+        // The value (price times contracts, summed) of the entry's filled contracts from+1 to `to`, from FillsOf; NaN when the
+        // executions do not account for them all.
+        private static double FillValue(List<double[]> fills, int from, int to)
+        {
+            if (fills == null || to <= from) return fills == null ? double.NaN : 0;
+            double v = 0;
+            int at = 0;
+            foreach (double[] f in fills)
+            {
+                int q = (int)f[0];
+                if (q <= 0 || !(f[1] > 0)) continue;
+                int a = Math.Max(at, from), b = Math.Min(at + q, to);
+                if (b > a) v += (b - a) * f[1];
+                at += q;
+            }
+            return at >= to ? v : double.NaN;
+        }
+
+        // The real price of contracts before+1..filled when CoveredValue is not known (ValueEstimated): from the executions of
+        // those contracts, or the average fill less the executions of the ones before; NaN when neither can be read.
+        private static double RealIncPrice(List<double[]> fills, Order entry, int before, int filled)
+        {
+            double v = FillValue(fills, before, filled);
+            if (double.IsNaN(v)) { double b = FillValue(fills, 0, before); if (!double.IsNaN(b)) v = entry.AverageFillPrice * filled - b; }
+            return double.IsNaN(v) ? double.NaN : v / (filled - before);
+        }
+
+        private static void PriceUnknownAlarm(Bracket br, int qty, string where)
+        {
+            Alarm(where + ": NO STOP: " + qty + " contract(s) of entry CB#" + br.Tag + " filled while ChartBridge was restarting (or just after), and their fill price cannot be read " +
+                  "from NinjaTrader's executions, so no stop or target was placed for them (never from an estimate); set the stop in NinjaTrader");
         }
 
         // The bracket of a ChartBridge entry, recovered from the names (and planned_brackets.txt) after a recompile
@@ -1215,20 +1306,30 @@ namespace NinjaTrader.NinjaScript.AddOns
             int inc = filled - before, qty = Math.Min(inc, Math.Max(0, along - covered));
             int advance = steady ? inc : qty;
             if (advance == 0) return;   // not steady and nothing to place yet: look again later
+            bool est;
+            lock (Sync) est = br.ValueEstimated;
+            List<double[]> fills = est ? FillsOf(entry) : null;
             double incPrice;
+            bool unknown = false;
             lock (Sync)
             {
                 if (br.Covered != before || entry.Filled != filled) return;   // an order event got there first
                 incPrice = (entry.AverageFillPrice * filled - br.CoveredValue) / inc;
+                double real = double.NaN;
+                if (br.ValueEstimated) { real = RealIncPrice(fills, entry, before, filled); unknown = double.IsNaN(real); }
                 br.Covered = before + advance;
-                br.CoveredValue += advance * incPrice;
-                if (br.Covered >= filled) GapSince.Remove(entry);
+                br.CoveredValue += advance * (unknown ? incPrice : br.ValueEstimated ? real : incPrice);
+                if (!unknown && br.ValueEstimated) incPrice = real;
+                if (br.Covered >= filled) { GapSince.Remove(entry); br.CoveredValue = entry.AverageFillPrice * filled; br.ValueEstimated = false; }
+                if (unknown && qty > 0) { br.CoveredNoStop += qty; Manage(br.Account, br.Instrument); }
             }
             string where = Where(br.Account, br.Instrument);
             Warn(where + ": found " + inc + " filled contract(s) no order update reported (ChartBridge was reloading?); " +
                  (qty > 0 ? "placing legs for " + qty : "no legs needed") + " (position " + (along * (br.EntryIsBuy ? 1 : -1)) + ", covered by legs " + covered +
                  (steady ? "" : "; connection not steady yet, the rest is checked again") + ")");
             if (qty > 0 && br.PlanLost) PlanLostAlarm(br, true);
+            if (qty > 0 && unknown) { PriceUnknownAlarm(br, qty, where); return; }
+            if (qty > 0 && br.ConvertedNoStop) ConvertedNoStopAlarm(br, qty);
             if (qty > 0) PlaceLegs(br, before + qty, qty, incPrice, where);
         }
 
@@ -1287,11 +1388,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Alarm(where + ": price had already passed the stop level " + CbJson.Num(sp) + " (last " + CbJson.Num(last) + "); exited " + qty + " at market");
                 return;
             }
-            // After a recompile an increment's fill price can be an estimate (contracts handled without legs before it have
-            // no name to read their prices from): the legs go from it, and the page is told to check them.
-            if (br.ValueEstimated)
-                Warn(where + ": entry CB#" + br.Tag + " filled " + qty + " contract(s) after a recompile, at a price ChartBridge can only estimate (" + CbJson.Num(Round(incPrice, tick)) +
-                     "); its legs go " + TicksText(br.StopTicks) + " / " + TicksText(br.TargetTicks) + " ticks from that; check them against the fill in NinjaTrader");
             string oco = hasStop && hasTarget ? "cb-" + br.Tag + "-" + filled.ToString(CultureInfo.InvariantCulture) : "";
             Pair pair = new Pair { Bracket = br, Qty = qty };
             if (hasStop)

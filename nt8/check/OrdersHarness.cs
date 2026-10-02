@@ -29,6 +29,12 @@ public static class OrdersHarness
     static string Order(string account, string rest) { return "{\"type\":\"order\",\"cid\":\"x\",\"account\":\"" + account + "\",\"root\":\"MNQ\"," + rest + "}"; }
     static void Update(Account a, Order o) { ChartBridgeOrders.OnOrderUpdate(a, new OrderEventArgs { Order = o }); }
     static void Fill(Account a, Order o, int filled, double avg) { o.Filled = filled; o.AverageFillPrice = avg; o.OrderState = filled >= o.Quantity ? OrderState.Filled : OrderState.PartFilled; Update(a, o); }
+    // A fill with NinjaTrader's execution for it listed on the account (exec false: none listed, as before 0.3.8's review).
+    static void FillX(Account a, Order o, int filled, double avg, double price, bool exec)
+    {
+        if (exec) lock (a.Executions) a.Executions.Add(new Execution { Order = o, Instrument = o.Instrument, Quantity = filled - o.Filled, Price = price, Time = DateTime.Now, ExecutionId = "x" + Guid.NewGuid().ToString("N") });
+        Fill(a, o, filled, avg);
+    }
     static string IdOf(Order o) { return (string)typeof(ChartBridgeOrders).GetMethod("IdFor", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { o }); }
     static string Tag(Order entry) { return Regex.Match(entry.Name, "^CB#([0-9a-f]{8}) ").Groups[1].Value; }
     static List<string> After(Account a, int n) { return a.Calls.Skip(n).ToList(); }
@@ -1109,12 +1115,27 @@ public static class OrdersHarness
         Check(WaitFor(() => PlanFileText().Contains("0ddba371 ticks 60 120 ") && !PlanFileText().Contains("0ddba371 24975"), 5000), "the converted ticks replace its 0.3.7 line: " + PlanFileText());
         Fill(nc, e37, 1, 24992);
         Check(After(nc, 0).Any(x => x.EndsWith("S24977 oco:cb-0ddba371-1")) && After(nc, 0).Any(x => x.EndsWith("L25022 S0 oco:cb-0ddba371-1")), "the converted entry fills: legs 60 / 120 ticks from the fill: " + string.Join(" | ", nc.Calls));
- WaitFor(() => !PlanFileText().Contains("0ddba371"), 3000);   // the filled entry's line is gone (its write is on a pool thread)
+        WaitFor(() => !PlanFileText().Contains("0ddba371"), 3000);   // the filled entry's line is gone (its write is on a pool thread)
         File.AppendAllText(PlanFilePath(), "0ddba373 25000 0 " + (long)ChartBridgeTime.NowUtcMs() + "\n");   // a 0.3.7 line for an entry not seen yet
         Recompile();
         string kept = PlanFileText();
         Msg("order", Ord("SimNC", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24980"));
         Check(WaitFor(() => PlanFileText().Contains("0ddba373 25000 0 "), 3000), "a 0.3.7 line for an entry not recovered yet is kept when the file is written: " + PlanFileText());
+
+        // 0.3.8 review P10: a 0.3.7 entry moved in NinjaTrader below its planned stop (buy limit 24975, stop 24980) converts with
+        // NO STOP: an ERROR alarm at the conversion naming NO STOP, and again at its fill (before: a warn, then a target only)
+        Account nd = NewAccount("SimND");
+        Order e10 = Manual(nd, mnq, OrderAction.Buy, OrderType.Limit, 1, 24975, 0, "", "CB#0ddba401 plan s24980 t25010");
+        Recompile();
+        sent.Clear();
+        Update(nd, e10);
+        Check(Alarmed("SimND: entry CB#0ddba401 was placed by ChartBridge 0.3.7") && Alarmed("its planned stop 24980 is not below that price, so it has NO STOP"),
+              "P10 a converted 0.3.7 entry whose stop is on the wrong side: an error alarm naming NO STOP at the conversion: " + string.Join(" | ", sent.Where(m => m.Contains("0ddba401")).Select(m => m.Length > 300 ? m.Substring(0, 300) : m)));
+        sent.Clear();
+        Fill(nd, e10, 1, 24975);
+        Check(Alarmed("SimND: entry CB#0ddba401 (placed by ChartBridge 0.3.7) filled 1 contract(s) with NO STOP") && nd.Calls.Count == 1 && nd.Calls[0].Contains(" target f1 q1 "),
+              "P10 and again at its fill, as an error (the target goes in): " + string.Join(" | ", nd.Calls));
+        Done(nd);
 
         ReviewChecks();
     }
@@ -1122,7 +1143,7 @@ public static class OrdersHarness
     // ------------------------------------------------------------ the 0.3.7 reviews, for 0.3.8's ticks (P1 race, the file read, P8, ...)
     static void ReviewChecks()
     {
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimZq1, SimZq2, SimZq4, SimZq5, SimZq6, SimZq7, SimZq8, SimKx1, SimKx2, SimKx4, SimRw1, SimRw2, SimRw3, SimRw4, SimW1, SimW2");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimZq1, SimZq2, SimZq4, SimZq5, SimZq6, SimZq7, SimZq8, SimKx1, SimKx2, SimKx4, SimRw1, SimRw2, SimRw3, SimRw4, SimW1, SimW2, SimZr0n, SimZr0x, SimZr1n, SimZr1x, SimZr2x");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
         ChartBridgeOrders.NoteLast("MNQ", 25000);
 
@@ -1171,33 +1192,76 @@ public static class OrdersHarness
         Msg("plan", PlanMsg(IdOf(e2b), "\"stopTicks\":8"));
         Check(!sent.Any(m => m.Contains("\"type\":\"reject\"")) && Alarmed("1 contract(s) of entry CB#" + Tag(e2b) + " already filled with NO STOP"), "a stop planned after a contract filled with none: applied to the rest, and an alarm for the contract with no stop");
 
-        // P3 (ValueEstimated): after a recompile an increment's fill price can be an estimate: legs from it, with a warning
-        Account p4 = NewAccount("SimZq4");
-        Msg("order", Ord("SimZq4", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990"));
-        Order e4 = Newest(p4);
-        Update(p4, e4);
-        Fill(p4, e4, 1, 24970);   // no plan yet: no legs
-        Msg("plan", PlanMsg(IdOf(e4), "\"stopTicks\":40,\"targetTicks\":80"));
-        Fill(p4, e4, 2, (24970 + 24990) / 2.0);
-        Recompile();
-        int c4 = p4.Calls.Count;
-        sent.Clear();
-        Fill(p4, e4, 3, (24970 + 24990 + 24985) / 3.0);
-        Check(After(p4, c4).Count == 2 && !After(p4, c4).Any(x => x.Contains(" exit ")) && sent.Any(m => m.Contains("\"level\":\"warn\"") && m.Contains("at a price ChartBridge can only estimate")),
-              "P3 after a recompile the next fill's price is an estimate: legs from it, no market exit, and a warning to check them: " + string.Join(" | ", After(p4, c4)));
+        // 0.3.8 review P3 and P13: after a recompile, an increment after contracts handled with no legs (no name records their
+        // price) gets its price from NinjaTrader's executions of the entry; when they cannot give it, NO legs from an estimate
+        // and an error alarm. Before the fix the estimate put a stop at 24991.25 above a 24985 market (a wrong market EXIT).
+        double[][] seq = { new double[] { 24970, 24990, 24985 }, new double[] { 24990, 24970, 24985 } };
+        for (int k = 0; k < 2; k++)
+        {
+            foreach (bool withExec in new[] { false, true })
+            {
+                Account pa = NewAccount("SimZr" + k + (withExec ? "x" : "n"));
+                Msg("order", Ord(pa.Name, "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990"));
+                Order pe = Newest(pa);
+                Update(pa, pe);
+                FillX(pa, pe, 1, seq[k][0], seq[k][0], withExec);   // no plan yet: no legs
+                Msg("plan", PlanMsg(IdOf(pe), "\"stopTicks\":8,\"targetTicks\":16"));
+                FillX(pa, pe, 2, (seq[k][0] + seq[k][1]) / 2.0, seq[k][1], withExec);
+                Recompile();
+                ChartBridgeOrders.NoteLast("MNQ", seq[k][2]);
+                int pc = pa.Calls.Count;
+                sent.Clear();
+                FillX(pa, pe, 3, (seq[k][0] + seq[k][1] + seq[k][2]) / 3.0, seq[k][2], withExec);
+                ChartBridgeOrders.NoteLast("MNQ", 25000);
+                List<string> got = After(pa, pc);
+                string label = "P" + (k == 0 ? "3" : "13") + " fills " + seq[k][0] + ", " + seq[k][1] + ", " + seq[k][2] + " then a recompile";
+                if (withExec)
+                    Check(got.Count == 2 && got[0].Contains(" stop f3 q1 p24985 ") && got[0].EndsWith("S24983 oco:cb-" + Tag(pe) + "-3") && got[1].Contains("L24989 S0") && !got.Any(x => x.Contains(" exit ")),
+                          label + ", NinjaTrader's executions listed: the legs go 8 / 16 ticks from the real fill 24985 (stop 24983, target 24989), no market exit: " + string.Join(" | ", got));
+                else
+                    Check(got.Count == 0 && Alarmed("NO STOP: 1 contract(s) of entry CB#" + Tag(pe) + " filled while ChartBridge was restarting") && Alarmed("set the stop in NinjaTrader"),
+                          label + ", no executions to read the price from: NO legs from an estimate (no exit, no stop above the market, no target below it), and an error alarm: " + string.Join(" | ", got));
+                if (!withExec && k == 1)
+                {
+                    // the missing-stop alarm path still watches it: the position is 3, the stops cover 1
+                    SetPos(pa, mnq, 3);
+                    sent.Clear();
+                    double tq = 71000000;
+                    for (int t = 0; t <= 40000; t += 2000) ChartBridgeOrders.CheckLegs(tq + t);   // steady again 30 s after the recompile, then the alarm
+                    Check(Alarmed("the position is 3 but ChartBridge's working stops cover 1 contract(s)"), "P13: and the missing-stop alarm says the position is not covered");
+                    SetPos(pa, mnq, 0);
+                }
+                Done(pa);
+            }
+        }
+        // the market exit still works from a REAL price: executions listed, a trade from the last 2 s through the stop
         Account p5 = NewAccount("SimZq5");
         Msg("order", Ord("SimZq5", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":3,\"price\":24990"));
         Order e5 = Newest(p5);
         Update(p5, e5);
-        Fill(p5, e5, 1, 24970);
+        FillX(p5, e5, 1, 24970, 24970, true);
         Msg("plan", PlanMsg(IdOf(e5), "\"stopTicks\":40,\"targetTicks\":80"));
-        Fill(p5, e5, 2, (24970 + 24990) / 2.0);
+        FillX(p5, e5, 2, (24970 + 24990) / 2.0, 24990, true);
         Recompile();
         ChartBridgeOrders.NoteLast("MNQ", 24900);
         int c5 = p5.Calls.Count;
-        Fill(p5, e5, 3, (24970 + 24990 + 24985) / 3.0);
+        FillX(p5, e5, 3, (24970 + 24990 + 24985) / 3.0, 24985, true);
         ChartBridgeOrders.NoteLast("MNQ", 25000);
-        Check(After(p5, c5).Count == 1 && After(p5, c5)[0].Contains(" exit "), "P3 a trade from the last 2 s through the stop still takes the market exit: " + string.Join(" | ", After(p5, c5)));
+        Check(After(p5, c5).Count == 1 && After(p5, c5)[0].Contains(" exit f3 q1 p24985 "), "P3: from the real fill price (24985, executions), a trade from the last 2 s through its stop 24975 still takes the market exit: " + string.Join(" | ", After(p5, c5)));
+        // a sell, executions listed at the recompile: the value is exact at recovery already (no estimate kept)
+        Account pq7 = NewAccount("SimZr2x");
+        Msg("order", Ord("SimZr2x", "\"side\":\"sell\",\"kind\":\"limit\",\"qty\":3,\"price\":25010"));
+        Order eq7 = Newest(pq7);
+        Update(pq7, eq7);
+        FillX(pq7, eq7, 1, 25012, 25012, true);   // no plan yet: no legs
+        Msg("plan", PlanMsg(IdOf(eq7), "\"stopTicks\":8,\"targetTicks\":16"));
+        FillX(pq7, eq7, 2, (25012 + 25010) / 2.0, 25010, true);
+        Recompile();
+        int cq7 = pq7.Calls.Count;
+        FillX(pq7, eq7, 3, (25012 + 25010 + 25011) / 3.0, 25011, true);
+        Check(After(pq7, cq7).Count == 2 && After(pq7, cq7)[0].Contains(" stop f3 q1 p25011 ") && After(pq7, cq7)[0].EndsWith("S25013 oco:cb-" + Tag(eq7) + "-3") && After(pq7, cq7)[1].Contains("L25007 S0"),
+              "a sell: the contract after the recompile gets its legs from its own fill 25011 (stop 25013, target 25007): " + string.Join(" | ", After(pq7, cq7)));
+        Done(pq7);
         // P4 (kept, documented): after a recompile, contracts handled with no legs after the last named pair get legs at the next fill
         Account p6 = NewAccount("SimZq6");
         Msg("order", Ord("SimZq6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990"));

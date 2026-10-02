@@ -173,6 +173,7 @@ public static class DataHarness
     static void SettleEvent(Instrument i, double p, DateTime stamp, bool reset)
     {
         Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = i, MarketDataType = MarketDataType.Settlement, Price = p, Volume = 0, Time = stamp, IsReset = reset });
+        WaitFor(() => ChartBridgeServer.SettlementsIdle);   // 0.3.8: updates are handled on one queue, in order
     }
     static string Hello() { return (string)Priv("HelloJson"); }
     static string HelloOf(string root) { string h = Hello(); int i = h.IndexOf("{\"root\":\"" + root + "\""); return i < 0 ? "" : h.Substring(i, h.IndexOf('}', i) - i + 1); }
@@ -234,7 +235,7 @@ public static class DataHarness
             SettleEvent(mnq, 21456.25, Et(2026, 9, 29, 16, 5, 0), false);
             Thread.Sleep(100);
             string dg0 = (string)Priv("DiagJson");
-            Check(!dg0.Contains("\"2026-09-29\":") && dg0.Contains("\"day\":null") && Logged("MNQ settlement 21456.25 (NinjaTrader's, update) is stamped 2026-09-29 16:05:00.000 ET, before the 2026-09-29 session's close at 17:00 ET, and equals 2026-09-28's settlement, so it may still be the day before's: not used"),
+            Check(!dg0.Contains("\"2026-09-29\":") && dg0.Contains("\"day\":null") && Logged("MNQ settlement 21456.25 (NinjaTrader's, update) is stamped 2026-09-29 16:05:00.000 ET (the 2026-09-29 session's), and equals 2026-09-28's settlement, so it may still be the day before's: not used"),
                 "settlement, 16:05 with the old value (0.3.8 buffer): Monday's value stamped 16:05 Tuesday is not Tuesday's settlement; the Output window says why");
             // 16:05 to 18:00: today's settlement arrives (it differs); yesterday's stays the prior
             SettleEvent(mnq, 21470.5, Et(2026, 9, 29, 16, 5, 10), false);
@@ -272,6 +273,12 @@ public static class DataHarness
             Check(sat.EndsWith(SetOf("MNQ", "21480", "2026-10-01")) && sun.EndsWith(SetOf("MNQ", "21500", "2026-10-02")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "21500", "2026-10-02"))
                   && Of(a, "settlement").Contains(Msg("MNQ", "21500", "2026-10-02")),
                 "settlement, weekend: Saturday still Thursday's; from Sunday 18:00 to Monday 17:00 Friday's (" + sat + " | " + sun + ")");
+            // 0.3.8 (coordinator): a value equal to the stored day before's is never used, whatever its stamp: Friday's 21500
+            // again, stamped Monday 17:30 or Tuesday 09:00 (both after Monday's close), is not Monday's
+            SettleEvent(mnq, 21500, Et(2026, 10, 5, 17, 30, 0), false);
+            SettleEvent(mnq, 21500, Et(2026, 10, 6, 9, 0, 0), false);
+            Check(!((string)Priv("DiagJson")).Contains("\"2026-10-05\":") && Logged("MNQ settlement 21500 (NinjaTrader's, update) is stamped 2026-10-05 17:30:00.000 ET (the 2026-10-05 session's), and equals 2026-10-02's settlement"),
+                  "settlement, equal to the stored day before (0.3.8): not used after the close either (17:30, and 09:00 the next morning)");
             string[] file = new string[0];
             WaitFor(() => { try { file = File.Exists(SettleFile()) ? File.ReadAllLines(SettleFile()) : new string[0]; } catch (IOException) { } return file.Length == 2 && file[1].StartsWith("MNQ 2026-10-02"); });
             Check(file.Length == 2 && file[0] == "MNQ 2026-10-01 21480 MNQ 12-26" && file[1] == "MNQ 2026-10-02 21500 MNQ 12-26", "settlement: settlements.txt keeps the last two dated values per root, each with its contract (written off NinjaTrader's thread): " + string.Join(" | ", file));
@@ -343,7 +350,7 @@ public static class DataHarness
             simNow = Et(2026, 10, 6, 16, 6, 0);
             SettleEvent(mnq, 21650, Et(2026, 10, 6, 16, 5, 0), false);
             Thread.Sleep(100);
-            Check(!((string)Priv("DiagJson")).Contains("\"2026-10-06\":") && Logged("no settlement for 2026-10-05 is known to compare it with"),
+            Check(!((string)Priv("DiagJson")).Contains("\"2026-10-06\":") && Logged("with no settlement for 2026-10-05 known to compare it with: not used"),
                   "settlement, 16:05 with no day before's value known (0.3.8 buffer): not used, and said");
             ResetSettlements(true);
             File.WriteAllLines(SettleFile(), new[] { "MNQ 2026-10-05 21600 MNQ 12-26" });
@@ -354,6 +361,19 @@ public static class DataHarness
             Thread.Sleep(100);
             Check(!before && ((string)Priv("DiagJson")).Contains("\"2026-10-06\":21650") && (bool)Field("settleLoaded"),
                   "settlement, 16:05 before settlements.txt is read (a start at 16:06): held, then judged against the file's 2026-10-05 value (it differs: used)");
+            // 0.3.8: updates are handled one at a time in the order they came (one task each took them out of order: the
+            // weekend case flaked). 300 updates for one day, sent as fast as they come: the last one sent is the one kept.
+            ResetSettlements(true);
+            simNow = Et(2026, 10, 7, 19, 0, 0);
+            for (int k = 0; k < 300; k++)
+                Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = 30000 + k * 0.25, Volume = 0, Time = Et(2026, 10, 7, 17, 5, 0).AddMilliseconds(k) });
+            WaitFor(() => ChartBridgeServer.SettlementsIdle);
+            // their saves (off the thread, one at a time) finish before the file cases below rewrite settlements.txt
+            WaitFor(() => { try { return (int)Field("settleSaveQueued") == 0 && File.Exists(SettleFile()) && File.ReadAllText(SettleFile()).Contains("30074.75"); } catch (IOException) { return false; } });
+            Thread.Sleep(300);
+            string dq = (string)Priv("DiagJson");
+            Check(dq.Contains("\"2026-10-07\":30074.75") && dq.Contains("\"p\":30074.75,\"ntTime\":\"2026-10-07 17:05:00.299\""),
+                  "settlement updates one at a time, in order (0.3.8): of 300 sent as fast as they come, the last one is kept");
             // settlements.txt: lines for roots not configured now are kept; a file that cannot be read is not rewritten
             ResetSettlements(true);
             File.WriteAllLines(SettleFile(), new[] { "ZZQ 2026-10-01 100.5 ZZQ 12-26", "MNQ 2026-10-05 21600 MNQ 12-26" });

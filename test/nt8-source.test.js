@@ -721,3 +721,14 @@ test('0.3.8 q: the Time and Sales category comes from the side tagger\'s quote, 
   assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode\)/, 'the held live trades keep their q in the served window');
   assert.match(code, /for \(int i = start; i < raw\.Count; i\+\+\) cache\.Add\(raw\.Time\[i\], raw\.Close\[i\], raw\.Volume\[i\]\);/, 'NinjaTrader\'s answer has no stored quote: unknown');
 });
+
+test('0.3.8 review: never legs from an estimated fill price; settlement updates on one queue', () => {
+  assert.ok(!/can only estimate/.test(ocode), 'the estimate warning (legs placed from an estimate) is gone');
+  const keep = ocode.slice(ocode.indexOf('private static void KeepBracket(Order entry, bool fromScan, double now)'), ocode.indexOf('private static bool NoPlan('));
+  assert.ok(keep.indexOf('if (unknown) { PriceUnknownAlarm(br, inc, where); return; }') > 0 && keep.indexOf('if (unknown) { PriceUnknownAlarm(br, inc, where); return; }') < keep.indexOf('PlaceLegs('),
+    'an unknown increment price returns before PlaceLegs (no legs, an error alarm)');
+  assert.match(ocode, /if \(qty > 0 && unknown\) \{ PriceUnknownAlarm\(br, qty, where\); return; \}/, 'the scan path too');
+  assert.match(ocode, /object\.ReferenceEquals\(x\.Order, entry\) \|\| \(!string\.IsNullOrEmpty\(id\) && x\.OrderId == id\)/, 'the price comes from the entry\'s own executions');
+  assert.ok(!/Task\.Run\(\(\) => NoteSettlement/.test(code), 'no task per settlement update');
+  assert.match(code, /QueueSettlement\(RootOf\(e\.Instrument\)/, 'updates go to the one queue');
+});

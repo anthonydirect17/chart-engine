@@ -793,8 +793,10 @@ public static class BarsHarness
             WaitFor(() => (bf2 = Made(m0).Where(IsBackfill).Skip(1).FirstOrDefault()) != null, 5000);
             if (bf2 != null) bf2.Answer(TicksOf(tape, 0, 160), ErrorCode.NoError);
             WaitFor(() => ((string)Priv("BooksJson")).Contains("\"state\":\"done\""), 3000);
-            ChartBridgeBars.PlanOnce(null);
-            WaitFor(() => BarsMade(m0).Count == 1 && ChartBridgeBarsQueue.IsDone("2026-09-28 MNQ 12-26"), 3000);   // the bars thread sends it (a timing flake in the reviews)
+            // the gate frees a moment after the backfill's state reads done: plan again until the bars request is made
+            // (one plan right after "done" could still find the gate busy: a timing flake in the reviews and in 0.3.8's runs)
+            for (int tries = 0; tries < 20 && BarsMade(m0).Count == 0; tries++) { ChartBridgeBars.PlanOnce(null); if (BarsMade(m0).Count == 0) Thread.Sleep(100); }
+            WaitFor(() => BarsMade(m0).Count == 1 && ChartBridgeBarsQueue.IsDone("2026-09-28 MNQ 12-26"), 3000);   // the bars thread sends it
             Check(bf2 != null && BarsMade(m0).Count == 1 && ChartBridgeBarsQueue.IsDone("2026-09-28 MNQ 12-26"), "S5 NeverBesideTheChart: once the backfill is done, the bars go");
             ChartBridgeServer.BackfillOn = bfOnWas; ChartBridgeServer.BackfillRetryMs = 60000;
 

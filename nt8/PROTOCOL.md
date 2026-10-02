@@ -699,13 +699,15 @@ serve is answered with an `error` and no bars.
   session day's settlement time, it is that day's. So 16:15 Monday, 20:43 Monday evening and 10:00 Tuesday are all Monday's;
   a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session) is Thursday's. This dates the
   snapshot NinjaTrader gives at subscription, which carries the time it was read (HOME, 2026-10-01: a first start at
-  20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). **The buffer** (Anthony): from the
-  settlement time to the session's close (16:00 to 17:00 ET; 12:00 to 13:00 or 13:15 on a holiday or early close)
-  NinjaTrader can still hold the day before's value, so a value stamped then is used only when it differs from the day
-  before's stored value (it changed: it is the new one); otherwise it is not used (one Output line says why) and
-  ChartBridge waits for a value that differs or one stamped from the close on. With no stored value for the day before
-  there is nothing to compare, so it waits too, except that a value that came before `settlements.txt` was read is
-  judged again once it is read. A day with no Globex session, or a value
+  20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). **Equal to the day before's** (Anthony
+  and the coordinator, 0.3.8): NinjaTrader can still hold the day before's value after the settlement time, so a value
+  equal to the stored value of the day before is never used, whatever its stamp (two equal settlements in a row are
+  rare, and a blank is safer than a wrong change); one Output line says why, and ChartBridge waits for a value that
+  differs. A value that differs is used at once, from the settlement time on. With no value stored for the day before:
+  stamped from the session's close (17:00 ET; 13:00 or 13:15 on a holiday or early close) it is the day's (HOME's
+  first evening); stamped between the settlement time and the close it waits. A value that came before
+  `settlements.txt` was read, with nothing stored to compare yet, is held and judged once it is read. Settlement
+  updates are handled one at a time, in the order NinjaTrader sent them. A day with no Globex session, or a value
   that cannot be placed, is not used (one Output line says so; `/diag` shows it with `day` null), and with no other dated
   value the prior is null rather than a wrong one.
 - **Today's settlement after the afternoon close** (in from about 16:15 ET) is kept and shown in `/diag`, but the prior
@@ -1055,9 +1057,12 @@ A market entry is unchanged: ticks from its fill.
 - **At the fill.** Every fill increment's legs go at that increment's fill price minus the stop ticks and plus the
   target ticks (a sell the other way), with the planned ticks as they are when the fill is handled. On a gap or
   slippage the legs are from the actual fill, so the stop is always on the right side of it; the market exit is
-  only for a trade from the last 2 seconds at or through the stop level (see Brackets). After a recompile an
-  increment's fill price can be an estimate (contracts handled with no legs before it have no name to read their
-  prices from); the legs are then placed from it with a `status` `warn` saying so.
+  only for a trade from the last 2 seconds at or through the stop level (see Brackets). After a recompile, contracts
+  handled with no legs before it (no name records their price) make the next increment's price unknown from the
+  names: it is read from NinjaTrader's executions of the entry (`Account.Executions`, the ones whose `Order` is the
+  entry or that carry its `OrderId`). When they cannot give it, NO legs are placed from an estimate: a `status`
+  `error` says "NO STOP: N contract(s) ... filled while ChartBridge was restarting ...; set the stop in NinjaTrader",
+  and the missing-stop alarm watches the position. The stop-already-traded check only ever runs on a real price.
 - **Changing the plan** (`plan`, below) before or between fills: set, change or remove the stop or target distance.
   A distance is a whole number of 1 or more (at most `maxBracketTicks` when `config.txt` sets it); `null` removes it.
   Adding a stop or target to an entry that had none is a new bracket: refused on an order that would reduce the
@@ -1107,7 +1112,9 @@ A market entry is unchanged: ticks from its fill.
   (`plan s<price> t<price>`, its planned prices from its 0.3.7 line in `planned_brackets.txt`, else from its name) is
   converted once, at recovery, to the distances it shows now: stop and target ticks from the entry's current price
   (rounded to the tick; a price on the wrong side of the entry, or none, is no stop or no target). The converted
-  ticks are written as its line, and the pages get a `status` `warn` naming them. From then on it is an ATM entry.
+  ticks are written as its line, and the pages get a `status` `warn` naming them; when its planned stop was on the
+  wrong side (the entry was moved past it), a `status` `error` saying it has NO STOP, and the same error again when
+  it fills, until a `plan` gives it a stop. From then on it is an ATM entry.
   0.3.7 price lines for entries ChartBridge has not seen yet are kept in the file until their entry is converted or
   they are 7 days old.
 
