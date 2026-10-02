@@ -154,7 +154,7 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-alert span { flex: 1 1 auto; white-space: pre-line; }
 .ws-alert.warn { border-color: var(--ws-warn); background: var(--ws-warn-ground); }
 .ws-alert .nostop-send { color: var(--ws-sell); border-color: var(--ws-sell); font-weight: 600; }   /* the NO STOP question's Send (Cancel has the focus) */
-.ws-top > .ws-ns { position: absolute; z-index: 2; top: 4px; bottom: 4px; left: 8px; right: var(--ns-right, 50%); margin: 0; padding: 0 6px 0 10px; gap: 8px; min-width: 0; box-sizing: border-box; }
+.ws-top > .ws-ns { position: absolute; z-index: 2; top: 4px; bottom: 4px; left: var(--ns-left, 8px); right: var(--ns-right, 50%); margin: 0; padding: 0 6px 0 10px; gap: 8px; min-width: 0; box-sizing: border-box; }
 .ws-top > .ws-ns[hidden] { display: none; }
 .ws-top > .ws-ns > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the whole text in its tooltip */
 .ws-top > .ws-ns .ws-btn { flex: none; }

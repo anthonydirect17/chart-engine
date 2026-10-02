@@ -55,6 +55,19 @@ function scan(sel) {
   if (d.scrollWidth > innerWidth + 1 || d.scrollHeight > innerHeight + 1) bad.push('the page scrolls ' + d.scrollWidth + 'x' + d.scrollHeight);
   return { bad, w: Math.round(r.width), h: Math.round(r.height) };
 }
+/* In the page: for each of `sels`, whether the NO STOP question (`q`) leaves it uncovered (no overlap of the two boxes; its
+   own buttons: on top at their center). */
+function uncovered([q, sels]) {
+  const out = {}, qe = document.querySelector(q), qr = qe.getBoundingClientRect();
+  for (const s of sels) {
+    const el = document.querySelector(s);
+    if (!el || !el.getClientRects().length) { out[s] = 'not shown'; continue; }
+    const r = el.getBoundingClientRect();
+    if (qe.contains(el)) { const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); out[s] = !!hit && (hit === el || el.contains(hit)); continue; }
+    out[s] = r.right <= qr.left || r.left >= qr.right || r.bottom <= qr.top || r.top >= qr.bottom;
+  }
+  return out;
+}
 async function expectFits(page, sel, what) {
   await page.waitForTimeout(80);
   const r = await page.evaluate(scan, sel);
@@ -111,6 +124,19 @@ try {
     await page.selectOption('#wsLayout', '\u0001new'); await expectFits(page, '#wsDialog', 'the New layout dialog'); await page.keyboard.press('Escape');
     await page.click('#wsSet'); await page.click('#wsReset'); await expectFits(page, '#wsDialog', 'the Reset dialog'); await page.keyboard.press('Escape');
     if (w === 1366) { await page.click('#wsColors .ce-theme-btn'); await page.screenshot({ path: path.join(out, 'noscroll-ws-colors-1366.png') }); await esc(); }
+    // the NO STOP question (1.13.0; 1.14.0 placed after the connection status): Armed, Buy MKT with the stop at 0
+    if (await page.$('.tk [data-tk-id="armBtn"]')) {
+      await page.click('.tk [data-tk-id="armBtn"]');
+      await page.fill('.tk [data-tk-id="bStop"]', '0'); await page.press('.tk [data-tk-id="bStop"]', 'Enter');
+      await page.click('.tk [data-tk-id="buyMkt"]');
+      await page.waitForSelector('#wsNoStop:not([hidden])', { timeout: 5000 }).catch(() => fail('the NO STOP question did not show'));
+      await expectFits(page, '#wsNoStop', 'the NO STOP question');
+      const u = await page.evaluate(uncovered, ['#wsNoStop', ['#wsConn', '#wsKeys', '#wsFlat', '#wsNoStopCancel', '#wsNoStopSend', '.tk [data-tk-id="flattenBtn"]', '.tk [data-tk-id="armBtn"]']]);
+      check(Object.values(u).every(v => v === true), 'the NO STOP question covers none of: the connection status, KEYS, Flatten all, Cancel, Send, the ticket\'s Close and Armed ' + JSON.stringify(u));
+      await page.screenshot({ path: path.join(out, `noscroll-ws-nostop-${w}.png`) });
+      await page.click('#wsNoStopCancel');
+      await page.click('.tk [data-tk-id="armBtn"]');
+    }
 
     /* ---------------- the single chart page */
     await page.goto(`http://localhost:${PORT}/live/single.html`);
@@ -125,6 +151,17 @@ try {
     check(line.one, 'single: the toolbar is one line (' + line.h + ' px tall)');
     await expectFits(page, '#obar', 'single: the order bar');
     await page.click('.ce-theme-btn'); await expectFits(page, '.ce-theme-panel', 'single: Colors'); await esc();
+    // the NO STOP question: under the legend, the LIVE and ARMED pills in view
+    await page.click('#armBtn');
+    await page.fill('#bStop', '0'); await page.press('#bStop', 'Enter');
+    await page.click('#buyMkt');
+    await page.waitForSelector('#noStopAsk:not([hidden])', { timeout: 5000 }).catch(() => fail('single: the NO STOP question did not show'));
+    await expectFits(page, '#noStopAsk', 'single: the NO STOP question');
+    const su = await page.evaluate(uncovered, ['#noStopAsk', ['#connPill', '#armPill', '#legend', '#flattenBtn', '#armBtn', '#noStopCancel', '#noStopSend']]);
+    check(Object.values(su).every(v => v === true), 'single: the NO STOP question covers none of: LIVE, ARMED, the legend, Flatten, the Armed switch, Cancel, Send ' + JSON.stringify(su));
+    await page.screenshot({ path: path.join(out, `noscroll-single-nostop-${w}.png`) });
+    await page.click('#noStopCancel');
+    await page.click('#armBtn');
     await page.click('#setBtn'); await expectFits(page, '#setPanel', 'single: Settings'); await esc();
     await page.click('#moreBtn'); await expectFits(page, '#moreMenu', 'single: the small menu (drawing tools, Reset view)'); await esc();
     await page.click('#indBtn'); await expectFits(page, '#indPanel', 'single: Indicators');

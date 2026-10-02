@@ -2373,6 +2373,9 @@ function start(container, opt, PAGE) {
   function askNoStop(root, go) {
     noStopGo = go;
     $('noStopText').textContent = 'The ' + root + ' order has no stop (the bracket stop is 0). Send it anyway? Later orders with no stop go without asking until the page is loaded again.';
+    // 1.14.0 (coordinator, layout only): under the legend, so the ARMED pill and the connection pill stay in view
+    const lg = $('legend'), st = lg.parentElement;
+    $('noStopAsk').style.setProperty('--ns-top', Math.round(lg.getBoundingClientRect().bottom - st.getBoundingClientRect().top + 6) + 'px');
     $('noStopAsk').hidden = false;
     $('noStopCancel').focus();
     return true;
@@ -3259,9 +3262,19 @@ function start(container, opt, PAGE) {
   function openMore(v) {
     const menu = $('moreMenu'); if (!menu) return;
     menu.hidden = !v; $('moreBtn').setAttribute('aria-expanded', String(v));
-    if (v) { menu.classList.remove('set-left'); if (menu.getBoundingClientRect().left < 8) menu.classList.add('set-left'); }
+    if (v) fitPop(menu, $('moreWrap'));
+  }
+  /* A popover under its toolbar button (Settings, the small menu): right-aligned with the button, moved sideways just
+     enough to stay on screen (1.14.0: the toolbar is one line, so the button can sit anywhere along it) */
+  function fitPop(panel, wrap) {
+    panel.classList.remove('set-left'); panel.style.left = ''; panel.style.right = '';
+    const r = panel.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+    const shift = r.left < 8 ? 8 - r.left : r.right > window.innerWidth - 8 ? window.innerWidth - 8 - r.right : 0;
+    if (shift) { panel.style.right = 'auto'; panel.style.left = Math.round(r.left + shift - w.left) + 'px'; }
   }
   if ($('moreBtn')) {
+    // a window resized while one is open: kept on screen (the toolbar may have wrapped)
+    listen(window, 'resize', () => { for (const [pn, w] of [['setPanel', 'setWrap'], ['moreMenu', 'moreWrap']]) if ($(pn) && !$(pn).hidden) fitPop($(pn), $(w)); });
     $('moreBtn').addEventListener('click', () => openMore($('moreMenu').hidden));
     listen(document, 'pointerdown', e => { if (!$('moreMenu').hidden && !$('moreWrap').contains(e.target)) openMore(false); });
     listen(document, 'keydown', e => { if (e.key === 'Escape' && !$('moreMenu').hidden && !e.defaultPrevented) { e.preventDefault(); openMore(false); $('moreBtn').focus(); } });
@@ -3297,7 +3310,7 @@ function start(container, opt, PAGE) {
     const openSettings = v => {
       if (v) { readHotkeys(); renderHotkeys(); for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', ''); }
       setPanel.hidden = !v; $('setBtn').setAttribute('aria-expanded', String(v));
-      if (v) { setPanel.classList.remove('set-left'); if (setPanel.getBoundingClientRect().left < 8) setPanel.classList.add('set-left'); }
+      if (v) fitPop(setPanel, setWrap);
     };
     /* Save one action's hotkey (or '' to clear it): read fresh, so another tab's keys are kept; a combo another action
        took meanwhile is refused. Never saved when storage is blocked. */

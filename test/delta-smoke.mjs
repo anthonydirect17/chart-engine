@@ -295,9 +295,11 @@ try {
   const keyed = await state(p), h2 = await saved(p, 'live-pane-heights-v1');
   check(Math.abs(keyed.pane.ratio - (dragged.pane.ratio - 0.02)) < 0.002 && h2.main.delta === keyed.pane.ratio && (await p.evaluate(() => window.liveChart.isLive())), 'ArrowDown on the focused divider: 2% smaller, saved, the chart still on live: ' + keyed.pane.ratio);
   await p.keyboard.press('End'); await p.waitForTimeout(150);
-  check((await state(p)).pane.ratio === CE.PANE_RATIO_MIN && (await state(p)).pane.height >= CE.PANE_MIN, 'End: the smallest pane, still ' + (await state(p)).pane.height + ' px');
+  // the ratio saved is the pane's whole pixels over the chart's height, so it can sit 0.001 off the limit at some heights
+  // (1.14.0: the single chart page's one-line toolbar made the chart taller)
+  check(Math.abs((await state(p)).pane.ratio - CE.PANE_RATIO_MIN) <= 0.002 && (await state(p)).pane.height >= CE.PANE_MIN, 'End: the smallest pane, still ' + (await state(p)).pane.height + ' px');
   await p.keyboard.press('Home'); await p.waitForTimeout(150);
-  check((await state(p)).pane.ratio === CE.PANE_RATIO_MAX && (await state(p)).pane.plotHeight >= CE.PRICE_MIN, 'Home: the largest pane, the chart above still ' + (await state(p)).pane.plotHeight + ' px');
+  check(Math.abs((await state(p)).pane.ratio - CE.PANE_RATIO_MAX) <= 0.002 && (await state(p)).pane.plotHeight >= CE.PRICE_MIN, 'Home: the largest pane, the chart above still ' + (await state(p)).pane.plotHeight + ' px');
   await p.mouse.move(div.x + 300, box.y + (await state(p)).pane.plotHeight + 2); await p.mouse.down();
   await p.mouse.move(div.x + 300, box.y + box.height - 60, { steps: 4 }); await p.mouse.move(div.x + 300, box.y + area * 0.7, { steps: 4 }); await p.mouse.up();
   await p.waitForTimeout(300);

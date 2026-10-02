@@ -1506,7 +1506,12 @@ function askName(title, value, done) {
    sent). Cancel has the focus, so Enter never sends an order with no stop; Escape is Cancel. One question at a time:
    a newer one replaces it (the older order is not sent). */
 /* it sits over the top bar from the left up to KEYS, so KEYS, Flatten all and the right side stay usable */
-function placeNoStop() { const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(); $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px'); }
+/* 1.14.0 (coordinator, layout only): from just after the connection status (which stays in view) up to KEYS */
+function placeNoStop() {
+  const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(), c = $('wsConn').getBoundingClientRect();
+  $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px');
+  $('wsNoStop').style.setProperty('--ns-left', Math.max(8, Math.round(c.right - top.left + 12)) + 'px');
+}
 window.addEventListener('resize', () => { if (noStopQ) placeNoStop(); });
 function askNoStop(text, onSend, onCancel, bound) {
   noStopQ = Object.assign({ onSend, onCancel }, bound || {});

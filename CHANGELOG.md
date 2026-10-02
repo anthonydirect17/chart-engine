@@ -81,6 +81,12 @@ from using 1.12.0 live on HOME:
 - The order bar, hotkeys and order behaviour are exactly 1.13.0's. A host's chart with its own toolbar (`ChartLive.mount`,
   The Desk) keeps its toolbar as it was.
 
+### The NO STOP question's place (the coordinator, layout only)
+- On `/single.html` it opens just under the legend, so the LIVE and ARMED pills stay in view; in the workspace it starts
+  after the connection status (which stays in view) and ends before KEYS. Its rules are 1.13.0's: it takes no layout
+  room, nothing resizes or scrolls, and Close, Flatten, Flatten all, KEYS, Cancel and Send stay uncovered
+  (`smoke:noscroll` checks it at the three sizes, with screenshots). Its logic is unchanged.
+
 ### 7. Versions
 - "chart 1.14.0 · ChartBridge 0.3.8" in the LIVE badge's tooltip (the workspace's top bar, the single chart page's LIVE
   pill) and in Settings (both pages).
@@ -112,8 +118,10 @@ from using 1.12.0 live on HOME:
 - `npm run smoke:noscroll` (new), above.
 - Selectors that follow the new layout: `smoke:live` (Range style and Glide in Settings, the drawing tools in the small
   menu, 2-letter chips on a phone), `smoke:pin` (Change PIN in Settings), `smoke:workspace` (the single chart page's
-  Glide in Settings; the tape's colors by category or side). `smoke:orders`: the drag probe above. `smoke:hotkeys`
-  unchanged.
+  Glide in Settings; the tape's colors by category or side), `smoke:ib` (the light toolbar read on Settings, the toolbar's
+  `.btn`, since Reset view moved into the menu), `smoke:delta` (Home and End on the pane's divider: the ratio within
+  0.001 of the limit, as the pane's whole pixels give it at the taller chart). `smoke:orders`: the drag probe above.
+  `smoke:hotkeys` unchanged (Settings and the small menu stay on screen when the window is resized while open).
 
 ## 1.13.0 (2026-10-02): planned stop and target lines, NO STOP, Armed in deep red
 
