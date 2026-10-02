@@ -408,6 +408,9 @@ test('corner readout: drawn at the plot\'s bottom right, clear of an order label
   S.frame();
   const h = S.chart.orderHandles()[0], c2 = S.chart.corner();
   assert.ok(c2.y + c2.h <= h.box.y || c2.y >= h.box.y + h.box.h || c2.x + c2.w <= h.box.x, 'clear of the label');
+  S.chart.setCorner('Bar 0:23 · ATR(14) 12.50 ' + 'x'.repeat(150), '0:23 · ATR 12.50');
+  S.frame();
+  assert.equal(S.chart.corner().text, '0:23 · ATR 12.50', 'a plot too narrow for the whole text: the short form');
   S.chart.setCorner('');
   S.frame();
   assert.equal(S.chart.corner(), null);

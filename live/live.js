@@ -2812,7 +2812,7 @@ function start(container, opt, PAGE) {
        readout in the chart's corner (shown on small panels and with the header text off too), and the change from the
        settlement is the Quote board's; the single chart page keeps its 1.14.0 legend */
     const inLegend = PAGE;
-    if (!inLegend) chart.setCorner([bar, at].filter(Boolean).join(' · '));
+    if (!inLegend) chart.setCorner([bar, at].filter(Boolean).join(' · '), [bar.replace(/^Bar /, ''), a === null ? '' : 'ATR ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp)].filter(Boolean).join(' · '));
     put($('lgBar'), 'textContent', inLegend ? bar : ''); put($('lgBar'), 'hidden', !inLegend || !bar);
     put($('lgAtr'), 'textContent', inLegend ? at : ''); put($('lgAtr'), 'hidden', !inLegend || !at);
     const st = settlements[D.root], pct = b && st && inLegend ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');

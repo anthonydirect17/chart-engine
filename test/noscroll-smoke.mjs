@@ -1,6 +1,8 @@
 // No scrolling, ever (chart 1.14.0, Anthony's item 1): every panel, menu, popover and dialog fits its content with no
 // scrollbar and nothing cut, at 1366x768, 1920x1080 and 2560x1440, in the workspace (live/index.html) and on the single
 // chart page (/single.html), against the fake bridge (sample data; nothing reaches a broker).
+//   1.15.0: the Account panel (each tab) and the Quote board in Anthony's Main layout (under the ticket) with their figures
+//   never cut, the drawing ring, the bars picker with 4h, 1D and 1W.
 //   Opened one at a time: Colors, Settings, the Indicators menu with each indicator's gear, the chart's instrument and bars
 //   popover and its small menu, Add panel, the Time and Sales gear, the Layout select, the New layout and Reset dialogs;
 //   the order ticket and the order bar as they stand; the single chart page's toolbar on one line.
@@ -36,13 +38,14 @@ function scan(sel) {
   for (const el of all) {
     if (!visible(el) || el.tagName === 'CANVAS' || el.tagName === 'OPTION' || el.tagName === 'svg' || el.closest('svg')) continue;
     if (el.closest('.tp-list')) continue;                                  // Time and Sales rows: the one intended scroll
+    const rowsScroll = el.matches('.ac-list');                             // 1.15.0: the Account panel's rows scroll as the tape's
     if (el.closest('.visually-hidden')) continue;                          // for screen readers only, clipped on purpose
     const s = getComputedStyle(el);
     if (s.textOverflow === 'ellipsis') continue;                           // cut on purpose, the whole text in its tooltip
     const clipsX = s.overflowX !== 'visible', clipsY = s.overflowY !== 'visible';
     const isBox = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
     if ((clipsX || isBox) && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) bad.push(name(el) + ' wide ' + el.scrollWidth + '>' + el.clientWidth);
-    if (clipsY && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0 && !isBox) bad.push(name(el) + ' tall ' + el.scrollHeight + '>' + el.clientHeight);
+    if (clipsY && !rowsScroll && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0 && !isBox) bad.push(name(el) + ' tall ' + el.scrollHeight + '>' + el.clientHeight);
   }
   for (const el of all) {                                                  // a card of its own (an indicator's gear) on screen too
     if (el === rootEl || !visible(el) || !['absolute', 'fixed'].includes(getComputedStyle(el).position) || el.closest('.visually-hidden')) continue;
@@ -123,6 +126,34 @@ try {
     if (tape) { await page.click(`.ws-panel[data-id="${tape}"] [data-act="gear"]`); await expectFits(page, '#wsGear', 'the Time and Sales gear'); await esc(); }
     await page.selectOption('#wsLayout', '\u0001new'); await expectFits(page, '#wsDialog', 'the New layout dialog'); await page.keyboard.press('Escape');
     await page.click('#wsSet'); await page.click('#wsReset'); await expectFits(page, '#wsDialog', 'the Reset dialog'); await page.keyboard.press('Escape');
+    /* 1.15.0: Anthony's Main screen: the ticket with the Account panel and the Quote board under it; the ring; 4h, 1D, 1W */
+    await page.evaluate(() => { const s = JSON.parse(localStorage.getItem('live-workspace-v1')); s.layouts.NS115 = { panels: [
+      { id: 'n1', type: 'chart', root: 'MNQ', tf: 'm5', x: 0, y: 0, w: 6, h: 6 }, { id: 'n2', type: 'chart', root: 'MNQ', tf: 'h4', x: 6, y: 0, w: 4, h: 3 },
+      { id: 'n3', type: 'chart', root: 'ES', tf: 'm1', x: 6, y: 3, w: 2, h: 3 }, { id: 'n4', type: 'quotes', x: 8, y: 3, w: 2, h: 3 },
+      { id: 'n5', type: 'ticket', x: 10, y: 0, w: 2, h: 3 }, { id: 'n6', type: 'account', x: 10, y: 3, w: 2, h: 2 }, { id: 'n7', type: 'quotes', x: 10, y: 5, w: 2, h: 1 }] };
+      localStorage.setItem('live-workspace-v1', JSON.stringify(s)); });
+    const goLayout = async l => {
+      await page.goto(`http://localhost:${PORT}/live/?layout=${l}`);
+      await page.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(page, TEST_PIN);
+      await page.waitForFunction(n => window.workspace && window.workspace.layout === n && window.workspace.views().every(v => v.type !== 'chart' || v.state === 'live'), l, { timeout: 30000 });
+    };
+    await goLayout('NS115');
+    await page.waitForTimeout(1500);
+    for (const [pid, what] of [['n6', 'the Account panel'], ['n7', 'the Quote board (2 x 1)'], ['n4', 'the Quote board (2 x 3)']]) await expectFits(page, `.ws-panel[data-id="${pid}"]`, what);
+    for (const tab of ['ord', 'fil', 'pos']) { await page.click(`.ws-panel[data-id="n6"] .ac-tab[data-tab="${tab}"]`); await expectFits(page, '.ws-panel[data-id="n6"]', '  the Account panel, tab ' + tab); }
+    const cut = await page.evaluate(() => [...document.querySelectorAll('.ws-panel.account .gr-row > *, .ws-panel.account .gr .pr > *, .ws-panel.quotes .gr-row > *, .ws-panel.quotes .gr .pr > *, .ac-sum b')]
+      .filter(e => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1).map(e => e.textContent));
+    check(!cut.length, 'no figure cut in the Account panel or the Quote boards' + (cut.length ? ': ' + cut.join(', ') : ''));
+    await page.click('.ws-panel[data-id="n2"] .ws-view'); await expectFits(page, '#wsView', 'a chart\'s bars with 4h, 1D and 1W'); await esc();
+    const nb = await page.locator('.ws-panel[data-id="n1"] canvas').first().boundingBox();
+    for (const [fx, fy] of [[0.5, 0.5], [0.97, 0.97], [0.02, 0.02]]) {
+      await page.mouse.move(nb.x + nb.width * fx, nb.y + nb.height * fy); await page.mouse.down({ button: 'middle' }); await page.mouse.up({ button: 'middle' });
+      await expectFits(page, '#wsRing', `the drawing ring (at ${fx}, ${fy} of the chart)`);
+      await page.keyboard.press('Escape');
+    }
+    await page.screenshot({ path: path.join(out, `noscroll-ws-115-${w}.png`) });
+    await goLayout('Main');
+    await page.waitForTimeout(800);
     if (w === 1366) { await page.click('#wsColors .ce-theme-btn'); await page.screenshot({ path: path.join(out, 'noscroll-ws-colors-1366.png') }); await esc(); }
     // the NO STOP question (1.13.0; 1.14.0 placed after the connection status): Armed, Buy MKT with the stop at 0
     if (await page.$('.tk [data-tk-id="armBtn"]')) {

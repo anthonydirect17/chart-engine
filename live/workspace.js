@@ -1340,10 +1340,17 @@ function refloorTapes() { for (const v of views.values()) if (v.tape) v.tape.ref
    least ChartBridge sends; a chart's load of the instrument already holds it, so nothing new is asked then): the last
    trade, the session's high and low (from 18:00 ET), the prior settlement (ChartBridge 0.3.7) */
 const QT = new Map();                                  // root -> quote line
-const quoteSubs = new Set();                           // panels redrawn (once a frame at most) when a price changes
-let quoteRaf = 0;
+const quoteSubs = new Set();                           // panels redrawn when a price changes: 4 times a second at most
+/* Anthony's ruling (1.15.0): charts and orders first. A trade only notes the price (a few compares, no DOM); the Quote
+   board and the Account panel's figures are written at most 4 times a second, in one animation frame, and only the
+   cells whose text changed. They may lag a frame or 250 ms; they never cost the charts' frames or the tick path. */
+const QUOTE_MS = 250;
+let quoteTimer = 0;
 const etNowSec = () => U.zoneSeconds(Date.now() / 1000);
-function quoteChanged() { if (!quoteRaf) quoteRaf = requestAnimationFrame(() => { quoteRaf = 0; for (const fn of quoteSubs) fn(); }); }
+function quoteChanged() {
+  if (quoteTimer) return;
+  quoteTimer = setTimeout(() => requestAnimationFrame(() => { quoteTimer = 0; for (const fn of quoteSubs) fn(); }), QUOTE_MS);
+}
 function watchQuote(root) {
   let q = QT.get(root);
   if (!q) {
@@ -1547,7 +1554,9 @@ function mountAccount(v) {
   const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 360, 'gr-short': h < 170 }));
   v.destroy = () => { unfit(); quoteSubs.delete(A.render); for (const off of A.offs.values()) off(); A.offs.clear(); };
 }
-function renderAccounts() { for (const v of accountViews()) v.account.render(); }
+/* order events, fills and positions: the Account panels again, once in the next animation frame */
+let accountRaf = 0;
+function renderAccounts() { if (!accountRaf) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
 setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
 /* ---------------- popovers (Add panel, Settings, a chart's instrument and bars or its menu, a tape's gear): one open at a

@@ -1145,7 +1145,7 @@ function create(container, options) {
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
   /* 1.15.0: the corner readout (the page's text, drawn at the plot's bottom right, cornerPlace) and the order label under
      the mouse (a host's compact labels show the full one on hover) */
-  let cornerText = '', cornerAt = null, labelHover = null;
+  let cornerText = '', cornerShort = '', cornerAt = null, labelHover = null;
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
@@ -2305,12 +2305,14 @@ function create(container, options) {
     cornerAt = null;
     if (cornerText && n >= 0) {
       ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
-      const w = Math.ceil(ctx.measureText(cornerText).width) + 10, h = 16;
-      const at = cornerPlace(plotW, plotH, w, h, labelBoxes.concat(vwapMark ? [vwapMark] : []), o.fitTop);
+      // the short form on a plot too narrow for the whole text (a small panel)
+      let text = cornerText, w = Math.ceil(ctx.measureText(text).width) + 10;
+      if (w > plotW - 12 && cornerShort) { text = cornerShort; w = Math.ceil(ctx.measureText(text).width) + 10; }
+      const h = 16, at = cornerPlace(plotW, plotH, w, h, labelBoxes.concat(vwapMark ? [vwapMark] : []), o.fitTop);
       if (at) {
         roundRect(at.x, at.y, w, h, 4); ctx.fillStyle = T.legendBg; ctx.fill();
-        ctx.fillStyle = T.text2; ctx.fillText(cornerText, at.x + 5, at.y + h / 2 + 0.5);
-        cornerAt = { x: at.x, y: at.y, w, h, text: cornerText };
+        ctx.fillStyle = T.text2; ctx.fillText(text, at.x + 5, at.y + h / 2 + 0.5);
+        cornerAt = { x: at.x, y: at.y, w, h, text };
       }
     }
     for (const f of orderLabels) f();
@@ -2900,8 +2902,12 @@ function create(container, options) {
     /** The VWAP's edge marker as last drawn ({ up, x, y, w, h, price }), or null when the VWAP is on the scale. */
     vwapMarker() { return vwapMark ? Object.assign({}, vwapMark) : null; },
     /** The corner readout (1.15.0): a short quiet text at the plot's bottom right ('' for none), placed clear of the order
-        labels and the VWAP's marker; the page sets it once a second. corner() says where it was last drawn, or null. */
-    setCorner(text) { const t = typeof text === 'string' ? text : ''; if (t !== cornerText) { cornerText = t; dirty = true; } },
+        labels and the VWAP's marker, `short` instead on a plot too narrow for it; the page sets it once a second.
+        corner() says where it was last drawn and which text, or null. */
+    setCorner(text, short) {
+      const t = typeof text === 'string' ? text : '', s2 = typeof short === 'string' ? short : '';
+      if (t !== cornerText || s2 !== cornerShort) { cornerText = t; cornerShort = s2; dirty = true; }
+    },
     corner() { return cornerAt ? Object.assign({}, cornerAt) : null; },
     /** The order label the mouse is over (1.15.0, a host's compact labels: drawn in full while hovered): an order id,
         'position', or null. */
