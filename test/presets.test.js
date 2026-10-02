@@ -105,7 +105,7 @@ test('presets: the storage prefix keeps a host\'s presets apart from the page\'s
 
 test('indicator colors: the house defaults, set by hand one change at a time, and the old VWAP color carried over', () => {
   // the defaults are exactly the engine's house colors
-  assert.deepEqual(LP.IND_COLOR_KEYS, ['vwap', 'prior', 'overnight', 'value', 'close', 'ibHigh', 'ibLow', 'vpPoc']);
+  assert.deepEqual(LP.IND_COLOR_KEYS, ['vwap', 'prior', 'overnight', 'value', 'close', 'ibHigh', 'ibLow', 'vpPoc', 'sigBull', 'sigBullLine', 'sigBear', 'sigBearLine']);
   const def = LP.create(memStorage()).indicatorColors();
   assert.equal(def.vwap, CE.DEFAULT_THEME.vwap); assert.equal(def.vpPoc, CE.DEFAULT_THEME.vpPoc);
   for (const k of ['prior', 'overnight', 'value', 'close', 'ibHigh', 'ibLow']) assert.equal(def[k], CE.LEVEL_COLORS[k], k);

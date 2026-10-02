@@ -1232,12 +1232,20 @@ function floorRow(r) {
 }
 function onFloorInput(e) {
   const i = e.target.closest('input[data-w]'); if (!i) return;
-  if (W.setFloor(store, i.dataset.root, i.dataset.w, i.value)) { floors = W.readFloors(store); refloorTapes(); i.classList.remove('bad'); }
+  if (W.setFloor(store, i.dataset.root, i.dataset.w, i.value)) { floors = W.readFloors(store); refloorTapes(); refloorCharts(); i.classList.remove('bad'); }
   else i.classList.add('bad');
 }
 function onFloorBlur(e) { const i = e.target.closest('input[data-w]'); if (i) { i.value = floors[i.dataset.root][i.dataset.w]; i.classList.remove('bad'); } }
 for (const el of [$('wsSettings'), $('wsGear')]) { el.addEventListener('input', onFloorInput); el.addEventListener('focusout', onFloorBlur); }
 
+/* The charts' bubbles and absorption bars use the same floors (G1c): a floor set here reaches them at once, and one set
+   in a chart's gear ('chartlive-floors') reaches the tapes and this table. */
+function refloorCharts() { for (const v of chartViews()) v.pane.refreshSettings(); }
+window.addEventListener('chartlive-floors', e => {
+  if (!e.detail || e.detail.prefix !== PREFIX) return;
+  floors = W.readFloors(store); refloorTapes();
+  if (pop && pop.el === $('wsSettings')) $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
+});
 function openTapeGear(v, anchor) {
   toggle($('wsGear'), anchor, () => { $('wsGearBody').innerHTML = floorRow(v.tape.root); openPop($('wsGear'), anchor); });
 }

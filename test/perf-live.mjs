@@ -4,7 +4,7 @@
 //
 //   node test/perf-live.mjs [--view=range|m1] [--secs=30] [--root=DIR] [--label=main] [--port=8830]
 //                           [--tick-rate=15] [--live-rate=100] [--range=40] [--et=HH:MM] [--second-tab] [--embed]
-//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--delta=0] [--live-first]
+//                           [--headed] [--profile] [--json=FILE] [--vp[=rth]] [--delta=0] [--live-first] [--signals]
 //
 // --root serves the page from another checkout (the bridge is always this one), so an older version can be measured
 // on the same feed. It sets the saved settings (NQ, the view, Range 40, NinjaTrader style) in both the 1.3 and the
@@ -14,6 +14,8 @@
 // (1.6.0; --vp=rth for its RTH choice), so its build at load and its drawing are measured too. The delta pane (1.7.0)
 // is on by default on the main pane, so it is measured unless --delta=0 turns it off (saved as off before the load).
 // --live-first (1.8.0, ChartBridge 0.3.5) makes the bridge serve the last 2 hours of trades (the served window) and the session table.
+// --signals (G1c) turns the chart signals on before the load: the absorption bars, the large-order bubbles and the delta
+// pane's divergence arrows (a page older than G1c ignores the keys).
 //
 // Measures, over the window after a warm-up: requestAnimationFrame intervals (frames over 16.7 ms and 33 ms), the
 // chart's own frame callback (step and draw), long tasks, each live tick message (JSON, onTick, the bar builders,
@@ -48,6 +50,7 @@ const SECOND = !!arg('second-tab', false), PROFILE = !!arg('profile', false), WA
 const VP = arg('vp', false);               // true, or 'rth'
 const LIVE_FIRST = !!arg('live-first', false);
 const DELTA_OFF = arg('delta', '1') === '0';
+const SIGNALS = !!arg('signals', false);
 
 const SINGLE = fs.existsSync(path.join(ROOT, 'live', 'single.html')) ? 'single.html' : '';
 const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--serve-root=' + ROOT,
@@ -67,6 +70,13 @@ const init = `(() => {
       localStorage.setItem('live-indicator-options-v1', ${JSON.stringify(JSON.stringify({ main: { vp: { session: VP === 'rth' ? 'rth' : 'full' } } }))});
     }
     if (${JSON.stringify(DELTA_OFF)}) localStorage.setItem('live-indicators-v2', ${JSON.stringify(JSON.stringify({ main: { ind: { delta: { on: false, shown: true, pin: false }, vp: { on: !!VP, shown: true, pin: !!VP } } } }))});
+    if (${JSON.stringify(SIGNALS)}) {
+      const ind = JSON.parse(localStorage.getItem('live-indicators-v2') || '{}'); ind.main = ind.main || { ind: {} }; ind.main.ind = ind.main.ind || {};
+      Object.assign(ind.main.ind, { absorption: { on: true, shown: true, pin: false }, bubbles: { on: true, shown: true, pin: true } });
+      localStorage.setItem('live-indicators-v2', JSON.stringify(ind));
+      const op = JSON.parse(localStorage.getItem('live-indicator-options-v1') || '{}'); op.main = Object.assign(op.main || {}, { delta: { show: 'cum', div: 'on' } });
+      localStorage.setItem('live-indicator-options-v1', JSON.stringify(op));
+    }
   } catch (e) {}
   const P = window.__perf = { backfill: 0, tickHours: null, lagMax: 0, lag: [], on: false, tick: [], rafCb: [], ts: [], long: [], heap: [], update: 0, updateN: 0, setBars: 0, setBarsN: 0, add: 0, addN: 0 };
   const now = () => performance.now();

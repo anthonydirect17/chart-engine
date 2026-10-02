@@ -85,6 +85,42 @@ nor `test/fake-orders.mjs` or `test/fake-bridge.mjs`. The engine gets planned li
   new protection line ("NO STOP on 1" in the loss red); `smoke:plan` no longer expects a key to do nothing while the
   question is open.
 
+## Unreleased (G1c, 2026-10-02): chart signals: absorption bars, divergence arrows, large-order bubbles
+
+Page only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); no version bump (the coordinator folds it
+into a release), no ChartBridge change, no new page file. Anthony's two NinjaScript indicators ported from the files he
+sent (`FROM_WORK_2026-10-01_LargeAbsorber.cs`, class AbsorptionTradeCombo, and `FROM_WORK_2026-10-01_DeltaD.cs`, class
+DeltaDivergenceSignal v1.0), with his rulings of 2026-10-01. Every signal counts from the page's opening only, from the
+trades ChartBridge sides (an unknown side is left out). The motion, the live tick path, the bar builder, the candle and
+volume drawing order and the order code are unchanged; a trade costs O(1) more and a bar close one short step.
+
+- **Absorption bars** (Indicators, new "Signals" group; no chip, never counted toward the strip): a large trade, a volume
+  spike and a rejection close on one bar, the large trade's side matching. Painted at the close only, the whole candle in
+  a toned cyan (bullish) or warm yellow (bearish) with a crisp 1 px outline in a brighter shade; an outline only while the
+  bar forms with the three holding (it goes when they stop; NinjaTrader paints mid-bar and never un-paints). No line, no
+  label. LookbackPeriod 20, VolumeMultiplier 1.8, RejectionZone 0.35 and AggregationWindowMs 500 per instrument and
+  chart type, in its gear (`live-signals-v1`); TickTolerance 0 as the file. The large trade's floor is the large-print
+  floor.
+- **Divergence arrows** in the delta pane only (its gear: Show divergences, off by default, per pane; SwingLookback 5,
+  MinBarsBetweenSwings 3, MinDivergencePct 0.10): on the pane's own cumulative delta, at bar close. A hollow arrow from the
+  close of the bar that beats the previous swing while the delta does not; solid when that bar is confirmed as the swing;
+  gone when a later bar takes its high (low) first. Cyan below a bullish swing, yellow above a bearish one.
+- **Large-order bubbles** (Volume group, chip BB / B): same side prints within 100 ms added up, from the floor; circles at
+  the trade price on its bar, the area growing with the square root of the size (6 px radius at the floor, 24 px at
+  most), in the bull and bear colors as they read on the ground, see-through over the candles with a crisp ring; the
+  size beside the larger ones. Floors RTH 09:30 to 16:15 ET / overnight: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100
+  / 50, the same key as the workspace's Time and Sales floors (`live-tape-floors-v1`), editable in the gear and in the
+  workspace's Settings; Auto per instrument: the session's top 1% of group sizes.
+- **Colors** (CHART_STYLE): `--sig-bull` `#38DCE8`, `--sig-bull-line` `#9CF1F7`, `--sig-bear` `#F3D84A`,
+  `--sig-bear-line` `#FFEC8F`, set in the Absorption bars gear and kept by indicator presets (a preset saved before takes
+  the defaults, so none is lost). On other grounds they move as candle bodies and lines do.
+- Engine: `ChartEngine.Absorption`, `LargePrints`, `DeltaDivergence`, `absorptionAt`, `largeFloorAt`, the layers
+  `absorption`, `bubbles`, `divergence`, `chart.setSignals()` and `chart.barToX(i)`. `ChartLive.mount`'s
+  `setIndicatorOption('delta', 'div', 'on')` (live/EMBED.md).
+- Tests: `test/signals.test.js` (the rules on hand-built bars and trades); `npm run smoke:signals` replays a scripted tape
+  (`test/signals-scene.mjs`, the fake bridge's `--scene=signals`, sample data) on MNQ Range 40 in regular hours on the
+  single chart page and in the workspace, with pixel checks of the toned colors and screenshots.
+
 ## 1.12.0 (2026-10-01): the workspace and its order ticket
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling (the PC
