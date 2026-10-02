@@ -17,7 +17,8 @@
  * tab wrote its whole in-memory copy back, which put NQ's range back to 20 when another tab saved).
  *
  * Keys (versioned):
- *   live-settings-v2    { root, tf, glide, rangeMode }
+ *   live-settings-v2    { root, tf, glide, rangeMode, grid, room } (grid 'off' | 'on' and room, the px right of the last
+ *                       bar (0, 40, 80, 160), 1.14.0)
  *   live-range-v2       { NQ: 40, ... } range bar size in ticks, per instrument root; only roots set by hand
  *   live-indicators-v2  { <paneId>: { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null } }
  *                       the Indicators menu per chart pane (1.6.0): on = on this chart, shown = drawn (hidden keeps it on
@@ -44,6 +45,8 @@
  *                       floor per instrument; only what was set by hand
  *   live-tape-floors-v1 { <root>: { rth, eth } } the large-print floors (the workspace's Time and Sales floors, 1.12.0), also
  *                       the bubbles' and the absorption bars' large trade (G1c); only those set by hand
+ *   live-legend-v1      { <paneId>: false } a chart's header text switched off (1.14.0, Anthony); on unless set off
+ *   live-scale-lock-v1  { <paneId>: true } a chart's price scale locked (1.14.0, review D2); unlocked unless set
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
  *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
@@ -60,6 +63,13 @@ const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
 const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range'];
 const GLIDES = ['smooth', 'fast', 'off'];
 const RANGE_MODES = ['nt', 'traded'];
+/* 1.14.0 (Anthony): grid lines off by default; the room right of the last bar in CSS px (the same on screen at every zoom) */
+const GRIDS = ['off', 'on'];
+const ROOMS = [0, 40, 80, 160];
+const DEFAULT_ROOM = 80;
+/* the ATR readout's period (Anthony's answer, review D2): editable in Settings, 14 by default, whole bars 2 to 100 */
+const ATR_MIN = 2, ATR_MAX = 100, DEFAULT_ATR = 14;
+const cleanAtr = v => (Number.isInteger(v) && v >= ATR_MIN && v <= ATR_MAX ? v : DEFAULT_ATR);
 const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };
 const RANGE_MIN = 1, RANGE_MAX = 400;
 /*
@@ -72,12 +82,12 @@ const INDICATORS = [
   { id: 'volume', name: 'Volume bars', code: 'VO', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
     opt: 'Bottom 16% of the plot, in the candle colors' },
   { id: 'vwap', name: 'VWAP', code: 'VW', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
-    opt: 'Session VWAP from 18:00 ET' },
+    opt: 'Volume weighted average price: the full session from 18:00 ET, or RTH only from 09:30 ET' },
+  /* 1.14.0 (Anthony): the Initial Balance is part of Levels (its own indicator and chip retired), and every level line
+     has its own switch in the gear (live-indicator-options-v1 `levels`) */
   { id: 'levels', name: 'Levels', code: 'LV', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
-    alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val value area',
-    opt: 'Prior day high, low, close and value area; overnight high and low' },
-  { id: 'ib', name: 'Initial balance', code: 'IB', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
-    opt: '1 hour, locks 10:30 ET' },
+    alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val poc value area ib ibh ibl initial balance 1h',
+    opt: 'The prior session\'s high, low and close, its value area high, low and point of control (PD VAH, PD VAL, PD POC), the overnight high and low, and today\'s 1 hour Initial Balance (locks 10:30 ET)' },
   { id: 'vp', name: 'Volume profile', code: 'VP', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
     alias: 'vp volume profile poc vah val value area',
     opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
@@ -106,21 +116,34 @@ const RECENT_MAX = 5;
 /* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
    smoke test can lower it. */
 let api = null;
-const pinMax = () => (api ? api.PIN_MAX : 6);
+const pinMax = () => (api ? api.PIN_MAX : 10);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false, delta: false, bubbles: false, absorption: false };
-/* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1). */
-const V1_LISTED = ['volume', 'vwap', 'levels', 'fills', 'ib'];
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false };
+/* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1); the IB is part of Levels
+   since 1.14.0 (migrateIb). */
+const V1_LISTED = ['volume', 'vwap', 'levels', 'fills'];
+/* The level lines, each with its own switch in the Levels gear (1.14.0, Anthony), in the gear's order: the key, the
+   engine's line key (levelLines, ibLines) and the gear's name. */
+const LEVEL_LINES = [
+  { k: 'pdh', name: 'PDH' }, { k: 'pdl', name: 'PDL' }, { k: 'pc', name: 'Prior close' }, { k: 'onh', name: 'ONH' }, { k: 'onl', name: 'ONL' },
+  { k: 'vah', name: 'PD VAH' }, { k: 'val', name: 'PD VAL' }, { k: 'poc', name: 'PD POC' }, { k: 'ibh', name: 'IBH' }, { k: 'ibl', name: 'IBL' },
+];
+const ONOFF = ['on', 'off'];
 /*
  * Options an indicator has besides on and off, each a list of allowed values with the default first (set in its gear
  * panel). The volume profile: the full session from 18:00 ET, or RTH 9:30 to 16:00 ET, 13:00 on NYSE early closes
  * (Anthony's ruling 2026-09-29). The delta pane (1.7.0): the running cumulative as candles ('cum'), or each bar's own
  * buys minus sells around zero ('bar') (Anthony's ruling 2026-09-30).
  */
-const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] }, delta: { show: ['cum', 'bar'], div: ['off', 'on'] } };   // div: the divergence arrows (G1c), off until switched on
+const INDICATOR_OPTIONS = {
+  vp: { session: ['full', 'rth'], dpoc: ONOFF, dvah: ONOFF, dval: ONOFF },          // 1.14.0: the developing POC, VAH and VAL lines
+  delta: { show: ['cum', 'bar'], div: ['off', 'on'] },                             // div: the divergence arrows (G1c), off until switched on
+  vwap: { session: ['full', 'rth'] },                                              // 1.14.0: from 18:00 ET, or RTH only from 09:30 ET
+  levels: Object.fromEntries(LEVEL_LINES.map(L => [L.k, ONOFF])),                  // 1.14.0: each level line on or off
+};
 /* The delta pane's height (1.7.0), a share of the chart height, per pane: the default and the least and most kept,
    read from the engine (PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX; review N8), which also keeps both panes at least a
    few rows tall. The engine loads before this file (live/EMBED.md); in Node it is required. */
@@ -140,10 +163,13 @@ const INDICATOR_COLORS = [
   { key: 'vwap', id: 'vwap', name: 'Line', def: ENGINE.DEFAULT_THEME.vwap },
   { key: 'prior', id: 'levels', name: 'Prior day high and low', def: ENGINE.LEVEL_COLORS.prior },
   { key: 'overnight', id: 'levels', name: 'Overnight high and low', def: ENGINE.LEVEL_COLORS.overnight },
-  { key: 'value', id: 'levels', name: 'Value area high and low', def: ENGINE.LEVEL_COLORS.value },
+  { key: 'value', id: 'levels', name: 'PD VAH, VAL and POC', def: ENGINE.LEVEL_COLORS.value },
   { key: 'close', id: 'levels', name: 'Prior close', def: ENGINE.LEVEL_COLORS.close },
-  { key: 'ibHigh', id: 'ib', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
-  { key: 'ibLow', id: 'ib', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
+  { key: 'ibHigh', id: 'levels', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
+  { key: 'ibLow', id: 'levels', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
+  // 1.14.0 (Anthony): the profile's rows and value area too, brighter by default
+  { key: 'vpRow', id: 'vp', name: 'Profile rows', def: ENGINE.DEFAULT_THEME.vpRow },
+  { key: 'vpValue', id: 'vp', name: 'Value area rows', def: ENGINE.DEFAULT_THEME.vpValue },
   { key: 'vpPoc', id: 'vp', name: 'Point of control', def: ENGINE.DEFAULT_THEME.vpPoc },
   // the signals (G1c): the absorption bars' bodies and outlines; the divergence arrows use the same pair
   { key: 'sigBull', id: 'absorption', name: 'Bullish (cyan)', def: ENGINE.DEFAULT_THEME.sigBull },
@@ -153,7 +179,7 @@ const INDICATOR_COLORS = [
 ];
 /* Colors added after indicator presets were first saved (G1c): a preset saved before has none of them and takes the
    defaults, so no saved preset is lost. */
-const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine'];
+const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine', 'vpRow', 'vpValue'];
 const IND_COLOR_KEYS = INDICATOR_COLORS.map(c => c.key);
 const HEX = /^#[0-9a-f]{6}$/i;
 /** The allowed colors of `v` (#RRGGBB, upper case) for `keys`; the rest left out. */
@@ -172,7 +198,7 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', legend: 'live-legend-v1', scaleLock: 'live-scale-lock-v1' };
 /*
  * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
  * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
@@ -306,7 +332,35 @@ function paneFromV1(v1, paneId) {
   }
   /* 1.7.0: the main pane gets the delta pane on (Anthony), like a 1.6.0 save without it, with no chip (review N5) */
   if (main) out.ind.delta = { on: true, shown: true, pin: false };
+  /* the 1.5.3 IB as it was, for migrateIb (1.14.0: part of Levels) */
+  const ibFlag = v1 && typeof v1.ib === 'boolean' ? v1.ib : main;
+  out.ind.ib = main ? { on: true, shown: ibFlag, pin: true } : { on: ibFlag, shown: true, pin: ibFlag };
   return out;
+}
+/*
+ * 1.14.0 (Anthony): the Initial Balance is part of Levels (its own indicator and chip retired). A pane saved before keeps
+ * what it showed: the IB on and shown means its two lines on in Levels (Levels off before: on now with only the IB lines,
+ * pinned if either was); the IB off or hidden means its lines off. `rawPane` is the pane as saved, `levelOpts` its saved
+ * level options. Returns { pane, levels } (the pane without `ib`, Recent and Restore naming Levels instead, and the level
+ * options to save), or null when there is nothing to carry over.
+ */
+function migrateIb(rawPane, levelOpts) {
+  if (!rawPane || typeof rawPane !== 'object' || isList(rawPane) || !rawPane.ind || typeof rawPane.ind !== 'object' || !own(rawPane.ind, 'ib')) return null;
+  const ind = Object.assign({}, rawPane.ind), ib = ind.ib && typeof ind.ib === 'object' ? ind.ib : {};
+  delete ind.ib;
+  const ibShown = ib.on === true && ib.shown !== false;
+  const lv = ind.levels && typeof ind.levels === 'object' ? ind.levels : null;
+  const lvShown = !!lv && lv.on === true && lv.shown !== false;
+  const levels = Object.assign({}, levelOpts && typeof levelOpts === 'object' && !isList(levelOpts) ? levelOpts : {});
+  if (ibShown) {
+    levels.ibh = 'on'; levels.ibl = 'on';
+    if (!lvShown) {
+      for (const L of LEVEL_LINES) if (L.k !== 'ibh' && L.k !== 'ibl') levels[L.k] = 'off';
+      ind.levels = { on: true, shown: true, pin: !!(lv && lv.pin === true) || ib.pin === true };
+    }
+  } else { levels.ibh = 'off'; levels.ibl = 'off'; }
+  const fix = list => (isList(list) ? list.map(x => (x === 'ib' ? 'levels' : x)).filter((x, i, a) => a.indexOf(x) === i) : list);
+  return { pane: Object.assign({}, rawPane, { ind, recent: fix(rawPane.recent), restore: fix(rawPane.restore) }), levels };
 }
 function copyPane(st) {
   const ind = {};
@@ -457,6 +511,20 @@ function create(storage) {
         raw.set(KEYS.indicators, next);
       }
     }
+    /* 1.14.0: the IB folded into Levels, once per pane saved before (migrateIb); the options first, so a write cut short
+       is done again at the next start */
+    const v2i = raw.get(KEYS.indicators);
+    if (v2i && typeof v2i === 'object' && !isList(v2i)) {
+      const allOpts = obj(KEYS.indicatorOptions);
+      let moved = false;
+      for (const paneId of Object.keys(v2i)) {
+        const po = own(allOpts, paneId) && allOpts[paneId] && typeof allOpts[paneId] === 'object' && !isList(allOpts[paneId]) ? allOpts[paneId] : {};
+        const m = migrateIb(v2i[paneId], po.levels);
+        if (!m) continue;
+        v2i[paneId] = m.pane; allOpts[paneId] = Object.assign({}, po, { levels: m.levels }); moved = true;
+      }
+      if (moved) { raw.set(KEYS.indicatorOptions, allOpts); raw.set(KEYS.indicators, v2i); }
+    }
     /* 1.9.0 (review R1): the VWAP color the Colors panel kept in live-colors-v1 up to 1.8, copied once into the
        indicator colors, before the Colors panel (which no longer holds VWAP) writes that key again without it */
     const ic = cleanColors(obj(KEYS.indicatorColors), IND_COLOR_KEYS), oldVwap = cleanColors(obj(KEYS.colors), ['vwap']);
@@ -477,6 +545,9 @@ function create(storage) {
         tf: TFS.includes(s.tf) ? s.tf : 'm1',
         glide: GLIDES.includes(s.glide) ? s.glide : 'smooth',
         rangeMode: RANGE_MODES.includes(s.rangeMode) ? s.rangeMode : 'nt',
+        grid: GRIDS.includes(s.grid) ? s.grid : 'off',
+        room: ROOMS.includes(s.room) ? s.room : DEFAULT_ROOM,
+        atr: cleanAtr(s.atr),
       };
     },
     setSetting(field, value) { return patch(KEYS.settings, field, value); },
@@ -589,6 +660,22 @@ function create(storage) {
       const all = obj(KEYS.floors), r = own(all, root) && all[root] && typeof all[root] === 'object' && !isList(all[root]) ? all[root] : {};
       r[which] = n; all[root] = r;
       return raw.set(KEYS.floors, all);
+    },
+    /** Whether a chart pane shows its header text (1.14.0): on unless switched off. */
+    legendShown(paneId) { return !(paneOk(paneId) && obj(KEYS.legend)[paneId] === false); },
+    /** Whether a chart pane's price scale is locked (1.14.0, review D2): off unless switched on. */
+    scaleLocked(paneId) { return paneOk(paneId) && obj(KEYS.scaleLock)[paneId] === true; },
+    setScaleLocked(paneId, on) {
+      if (!paneOk(paneId)) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.scaleLock));
+      if (on) all[paneId] = true; else delete all[paneId];
+      return raw.set(KEYS.scaleLock, all);
+    },
+    setLegendShown(paneId, on) {
+      if (!paneOk(paneId)) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.legend));
+      if (on) delete all[paneId]; else all[paneId] = false;
+      return raw.set(KEYS.legend, all);
     },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** The qty picked last for a root (1.10.0): a whole number 1 to 9, else 1. */
@@ -704,6 +791,37 @@ function localPresetStore(storage) {
   };
 }
 
+/*
+ * The page's clock (1.14.0, Anthony's item 9): the browser's monotonic clock (performance.now()) on a wall-clock base. The
+ * base starts at performance.timeOrigin (the page load), and check() moves it to the PC's clock (Date.now()) whenever the
+ * two differ by more than 50 ms, as ChartBridge re-anchors its own every 5 s: after Windows time sync steps the PC clock
+ * the page follows within 5 s instead of showing a false "local -99 ms (PC clock behind)" until it reloads. now() stays
+ * one addition (the live tick path's cost is unchanged), and every user of it (the local delay, the ticket link's
+ * stamps) reads the same clock. Options: perfNow, wallNow (functions), origin (the first base), slackMs (50), everyMs (5000).
+ */
+const CLOCK_SLACK_MS = 50, CLOCK_EVERY_MS = 5000;
+function pageClock(o) {
+  const opt = o || {};
+  const perf = opt.perfNow, wall = opt.wallNow;
+  const slack = isFinite(opt.slackMs) ? +opt.slackMs : CLOCK_SLACK_MS, every = isFinite(opt.everyMs) ? +opt.everyMs : CLOCK_EVERY_MS;
+  let base = typeof opt.origin === 'number' && isFinite(opt.origin) && opt.origin > 0 ? opt.origin : wall() - perf();
+  let timer = null, steps = 0;
+  const now = () => base + perf();
+  /** Re-anchor when the page's clock and the PC's differ by more than slackMs: returns the step taken in ms (0: none). */
+  function check() {
+    const d = wall() - now();
+    if (!(Math.abs(d) > slack)) return 0;
+    base += d; steps++;
+    return d;
+  }
+  return {
+    now, check, everyMs: every, slackMs: slack,
+    get steps() { return steps; },
+    start(setIntervalFn) { if (timer === null) timer = (setIntervalFn || setInterval)(check, every); return this; },
+    stop(clearIntervalFn) { if (timer !== null) (clearIntervalFn || clearInterval)(timer); timer = null; },
+  };
+}
+
 /** Runs fn after `ms` of quiet; flush() runs a waiting call now (on commit, or when the page is closing). */
 function debounce(fn, ms) {
   let timer = null, args = null;
@@ -714,8 +832,8 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
-  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
 
@@ -743,6 +861,8 @@ const TF = {
 };
 const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 20, fit: 60, follow: 60 }, off: { candle: 0, fit: 0, follow: 0 } };
 const SCRIPT = document.currentScript;
+/* One clock for the whole page (every chart, the workspace, the ticket link's stamps): it follows Windows clock fixes. */
+const PAGE_CLOCK = window.ChartLivePageClock || (window.ChartLivePageClock = LP.pageClock({ perfNow: () => performance.now(), wallNow: () => Date.now(), origin: performance.timeOrigin }).start());
 const EMBED_PREFIX = 'embed:';            // storage prefix when a host passes none (live/EMBED.md)
 let mountCount = 0;
 /* The "/" key opens the Indicators menu of the chart under the mouse (1.6.0): each mounted chart notes when the pointer
@@ -769,14 +889,19 @@ function hotkeyHandler(o) {
     const id = OT.hotkeyAction(o.keys(), OT.hotkeyCombo(e));
     if (!id || typeof o.actions[id] !== 'function') return;
     const a = document.activeElement;
-    if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) {
+    /* Close and Flatten all always work while a menu or popover is open (review D2), even from one of its boxes when the
+       combo types nothing there (Ctrl or Alt, or an F-key); never while the PIN pad asks */
+    const urgent = (id === 'close' || id === 'flattenAll') && !document.querySelector('.cb-pin');
+    const inBox = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
+    const popBox = inBox && urgent && (e.ctrlKey || e.altKey || /^F([1-9]|1[0-9]|2[0-4])$/.test(e.key)) && !!a.closest('.ind-panel, .chip-pop, .ce-theme-panel, .set-panel, .more-menu, .ind-chip-list, .ws-pop');
+    if (inBox && !popBox) {
       // Close and Flatten all say why nothing happened (1.12.0, the 1.11.0 review); the box keeps the key
-      if ((id === 'close' || id === 'flattenAll') && !e.repeat && typeof o.ignored === 'function' && o.root.contains(a) && !o.busy()) o.ignored(id);
+      if (urgent && !e.repeat && typeof o.ignored === 'function' && o.root.contains(a)) o.ignored(id);
       return;
     }
     const onBody = !a || a === document.body || a === document.documentElement;
     if (!onBody && !o.root.contains(a)) return;
-    if (o.busy() || OT.isChartKey(e)) return;
+    if ((!urgent && o.busy()) || OT.isChartKey(e)) return;
     e.preventDefault();
     if (e.repeat) return;
     o.actions[id]();
@@ -825,11 +950,25 @@ function markup(p, o) {
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
   /* Settings (1.11.0): the trading hotkeys. Only on the trading page; a mounted chart has none. */
+  /* 1.14.0 (Anthony: the single chart page gets the workspace's cleanup): the general controls (Glide, Range style, grid
+     lines, the room right of price, ChartBridge's PIN) live in Settings, with the versions; the drawing tools and Reset
+     view in a small menu, as in a workspace chart's header. A host's chart (no trading) keeps its toolbar as it was. */
+  const seg = (id, label, list) => `<div class="seg sans" id="${p}${id}" role="group" aria-labelledby="${p}${id}Label">${list.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('')}</div>`;
+  const rangeModeSel = `<select class="acct-sel range-mode" id="${p}rangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
+          <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select>`;
   const settings = !o.trading ? '' : `
     <div class="set-wrap" id="${p}setWrap">
-      <button type="button" class="btn set-btn" id="${p}setBtn" aria-expanded="false" aria-controls="${p}setPanel" aria-haspopup="dialog" title="Settings: trading hotkeys">Settings <span class="ind-caret" aria-hidden="true"></span></button>
+      <button type="button" class="btn set-btn" id="${p}setBtn" aria-expanded="false" aria-controls="${p}setPanel" aria-haspopup="dialog" title="Settings: the chart, trading hotkeys, PIN">Settings <span class="ind-caret" aria-hidden="true"></span></button>
       <div class="set-panel" id="${p}setPanel" role="dialog" aria-label="Settings" hidden>
         <div class="ind-head"><span class="ind-title">Settings</span></div>
+        <div class="ind-cap" id="${p}chartCap">Chart</div>
+        <div class="set-rows" role="group" aria-labelledby="${p}chartCap">
+          <div class="set-row"><span class="set-name" id="${p}glideSegLabel">Glide</span>${seg('glideSeg', 'Glide', [['smooth', 'Smooth'], ['fast', 'Fast'], ['off', 'Off']])}</div>
+          <div class="set-row"><label class="set-name" for="${p}rangeMode">Range style</label>${rangeModeSel}</div>
+          <div class="set-row"><span class="set-name" id="${p}gridSegLabel">Grid lines</span>${seg('gridSeg', 'Grid lines', [['off', 'Off'], ['on', 'On']])}</div>
+          <div class="set-row"><span class="set-name" id="${p}roomSegLabel" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>${seg('roomSeg', 'Room right', [['0', 'None'], ['40', '40 px'], ['80', '80 px'], ['160', '160 px']])}</div>
+          <div class="set-row"><label class="set-name" for="${p}atrIn" title="The ATR readout in the legend: NinjaTrader's ATR of this many closed bars">ATR period</label><input class="ind-hex set-num" id="${p}atrIn" type="number" min="2" max="100" step="1" inputmode="numeric" data-f="atr" aria-label="ATR period, bars"></div>
+        </div>
         <div class="ind-cap" id="${p}hkCap">Hotkeys</div>
         <div class="hk-list" id="${p}hkList" role="group" aria-labelledby="${p}hkCap">${OT.HOTKEY_ACTIONS.map(a => `
           <div class="hk-row" data-hk="${a.id}">
@@ -839,7 +978,20 @@ function markup(p, o) {
             <span class="hk-note" id="${p}hkNote-${a.id}" role="status"></span>
           </div>`).join('')}
         </div>
-        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off, like the Flatten button. Never while typing in a box or with a menu open. Saved in this browser.</p>
+        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off, like the Flatten button. Never while typing in a box or with a menu open. Saved in this browser.</p>${o.pin ? `
+        <div class="set-row set-pin" id="${p}pinRow" hidden><span class="set-name">ChartBridge PIN</span><button type="button" class="btn" id="${p}pinBtn" title="Change this PC's ChartBridge PIN">Change PIN</button></div>` : ''}
+        <p class="set-ver" id="${p}setVer"></p>
+      </div>
+    </div>`;
+  /* the drawing tools and Reset view (the page): a small menu, as in a workspace chart's header */
+  const more = !o.trading ? '' : `
+    <div class="more-wrap" id="${p}moreWrap">
+      <button type="button" class="btn more-btn" id="${p}moreBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="${p}moreMenu" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>
+      <div class="more-menu" id="${p}moreMenu" role="menu" aria-label="Drawing tools and view" hidden>
+        <button type="button" role="menuitem" id="${p}toolTrend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
+        <button type="button" role="menuitem" id="${p}toolHline" aria-pressed="false" title="Horizontal line: click a price">Price line</button>
+        <button type="button" role="menuitem" id="${p}clearDraw" title="Remove all drawings on this instrument">Clear drawings</button>
+        <button type="button" role="menuitem" id="${p}resetBtn">Reset view</button>
       </div>
     </div>`;
   return `
@@ -867,16 +1019,15 @@ function markup(p, o) {
         <button type="button" data-v="h1">1h</button>
         <button type="button" data-v="range">Range</button>
       </div>
-      <span class="range-box" id="${p}rangeBox" hidden><label class="range-box" for="${p}rangeTicks"><input id="${p}rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="${p}rangeUnit">ticks</span></label>
+      <span class="range-box" id="${p}rangeBox" hidden><label class="range-box" for="${p}rangeTicks"><input id="${p}rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="${p}rangeUnit">ticks</span></label>${o.trading ? '' : `
         <label class="glabel" for="${p}rangeMode">Range style</label>
-        <select class="acct-sel range-mode" id="${p}rangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
-          <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
+        ${rangeModeSel}`}</span>
     </div>
 
-    <div class="group ind-group">
+    <div class="group ind-group${o.trading ? ' codes-group' : ''}">
       <div class="ind" id="${p}indWrap" data-pane="${esc(o.paneId)}">
         <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel" aria-haspopup="dialog" title="Indicators on this chart (/ with the mouse over the chart)">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
-        <div class="ind-panel" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
+        <div class="ind-panel${o.sideGears ? ' side-gears' : ''}" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
           <div class="ind-head"><span class="ind-title">Indicators</span><span class="ind-sum" id="${p}indSum"></span></div>
           <div class="ind-search">
             <label class="visually-hidden" for="${p}indQ">Search indicators</label>
@@ -889,9 +1040,10 @@ function markup(p, o) {
           <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
         </div>
       </div>
-      <div class="ind-chips" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
+      <div class="ind-chips${o.trading ? ' codes' : ''}" id="${p}indChips" role="group" aria-label="Pinned indicators: click one for its settings and switch"></div>
+      <button type="button" class="btn lg-tog" id="${p}lgTog" aria-pressed="true" title="Header text on this chart: on (click to turn it off)" aria-label="Header text on this chart">Aa</button>
     </div>
-
+${o.trading ? more : `
     <div class="group" role="group" aria-label="Drawing tools">
       <button type="button" class="btn" id="${p}toolTrend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
       <button type="button" class="btn" id="${p}toolHline" aria-pressed="false" title="Horizontal line: click a price">Price line</button>
@@ -899,18 +1051,17 @@ function markup(p, o) {
     </div>
 
     <div class="group">
-      <span class="glabel" id="${p}glideLabel">Glide</span>
-      <div class="seg sans" id="${p}glideSeg" role="group" aria-labelledby="${p}glideLabel">
+      <span class="glabel" id="${p}glideSegLabel">Glide</span>
+      <div class="seg sans" id="${p}glideSeg" role="group" aria-labelledby="${p}glideSegLabel">
         <button type="button" data-v="smooth">Smooth</button>
         <button type="button" data-v="fast">Fast</button>
         <button type="button" data-v="off">Off</button>
       </div>
-    </div>
+    </div>`}
 
     <span id="${p}colorsHost"></span>
-${settings}
-    <button type="button" class="btn" id="${p}resetBtn">Reset view</button>${o.pin ? `
-    <button type="button" class="btn" id="${p}pinBtn" title="Change this PC's ChartBridge PIN" hidden>PIN</button>` : ''}
+${settings}${o.trading ? '' : `
+    <button type="button" class="btn" id="${p}resetBtn">Reset view</button>`}
   </header>
 ${obar}
   <div class="alert" id="${p}alertBar" role="alert" hidden>
@@ -929,8 +1080,8 @@ ${obar}
   </div>` : ''}
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
-      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
-      <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
+      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-bub" id="${p}lgBub" hidden></span><span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
+      <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span class="lg-br" aria-hidden="true"></span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgDelta" hidden><span id="${p}lgDl">Delta</span> <span class="dv" id="${p}lgDv">-</span><span class="dunk" id="${p}lgDu" hidden></span></span><span id="${p}lgFill"></span></div>
     </div>
     <div class="notice" id="${p}notice" hidden>
@@ -1014,7 +1165,7 @@ function start(container, opt, PAGE) {
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
   rootEl.className = 'chart-live' + (SLIM ? ' slim' : '') + (COMPACT ? ' compact' : '');
-  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN });
+  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN, sideGears: TRADING || SLIM });
   container.appendChild(rootEl);
   const els = {};
   for (const el of rootEl.querySelectorAll('[id]')) if (el.id.startsWith(p)) els[el.id.slice(p.length)] = el;
@@ -1022,6 +1173,10 @@ function start(container, opt, PAGE) {
   let destroyed = false;
   const cleanups = [];                                   // document and window listeners, intervals
   const listen = (target, type, fn) => { target.addEventListener(type, fn); cleanups.push(() => target.removeEventListener(type, fn)); };
+  /* the chip settings popover (1.14.0; see openPop), made up front: the chips are drawn before the menu's code runs */
+  const chipPop = document.createElement('div');
+  chipPop.className = 'ind-set chip-pop'; chipPop.id = p + 'chipPop'; chipPop.setAttribute('role', 'dialog'); chipPop.hidden = true;
+  let popId = null;
   const every = (fn, ms) => { const id = setInterval(fn, ms); cleanups.push(() => clearInterval(id)); };
   const timers = new Set();                              // one-off timers (cancel all pacing)
   const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
@@ -1029,7 +1184,7 @@ function start(container, opt, PAGE) {
   /* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
-  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta') } });   // layers: what is drawn
+  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta'), vwap: prefs.indicatorOptions(PANE, 'vwap'), levels: prefs.indicatorOptions(PANE, 'levels') } });   // layers: what is drawn
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   if (VIEW) {                                            // the host's own view: nothing of it is saved here
@@ -1052,16 +1207,17 @@ function start(container, opt, PAGE) {
   let etOffset = U.zoneSeconds(Date.now() / 1000) - Date.now() / 1000;
   every(() => { etOffset = U.zoneSeconds(Date.now() / 1000) - Date.now() / 1000; }, 60000);
   const etNow = () => Date.now() / 1000 + etOffset;
-  const nowMs = () => (performance.timeOrigin || Date.now() - performance.now()) + performance.now();
+  const nowMs = PAGE_CLOCK.now;                        // 1.14.0: follows the PC's clock (LivePrefs.pageClock)
 
   let IC = prefs.indicatorColors();                    // the indicators' colors (1.9.0), set in their gears
   const AXIS_W = 78;                                   // the price axis width (the engine's default), so the page knows where the plot ends
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false,
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.levels, vp: S.layers.vp, delta: S.layers.delta, trades: false,
       absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' },
-    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
+    grid: S.grid === 'on', room: S.room,                 // 1.14.0: grid lines (off by default) and the room right of price
+    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
   });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
@@ -1183,7 +1339,9 @@ function start(container, opt, PAGE) {
     sigRebuild(tf.mode === 'range' ? rangeFrom : undefined);   // the chart signals on the new bars (G1c), range bars from where the chart's start
     updateLevels();
     applyMarkers();
+    vwapApply();                                         // RTH only VWAP (1.14.0): from the new bars
     legendKey = '';
+    readouts();
   }
 
   /*
@@ -1304,15 +1462,18 @@ function start(container, opt, PAGE) {
     D.ib = ib;
     if (!force && key === D.ibKey) return;
     D.ibKey = key;
-    chart.setLevels(D.lv.concat(U.ibLines(ib, IC)));
+    chart.setLevels(levelsOn(D.lv.concat(U.ibLines(ib, IC))));
     ibNote(ib);
   }
+  /* The level lines switched on in the Levels gear (1.14.0: each line on its own; the IB's two are Levels' too). */
+  const levelsOn = list => list.filter(L => !L.key || S.options.levels[L.key] !== 'off');
+  const ibShown = () => !!S.layers.levels && (S.options.levels.ibh !== 'off' || S.options.levels.ibl !== 'off');
   /* New indicator colors (a gear, an indicator preset, Default colors): the chart's VWAP and profile colors, the level
      and IB lines as they are, and the swatches. Nothing is computed again from the bars. */
   function applyIndicatorColors() {
-    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine });
+    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine });
     if (D.lvSrc) D.lv = U.levelLines(D.lvSrc, IC);
-    if (D.m1) chart.setLevels(D.lv.concat(U.ibLines(D.ib, IC)));
+    if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC))));
     paintColors();
   }
   const IB_NOTES = {
@@ -1324,8 +1485,8 @@ function start(container, opt, PAGE) {
   /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
   function ibNote(ib) {
     const el = $('ibNote'); if (!el) return;
-    let text = ib && S.layers.ib ? IB_NOTES[ib.state] || '' : '';
-    if (ib && S.layers.ib && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
+    let text = ib && ibShown() ? IB_NOTES[ib.state] || '' : '';
+    if (ib && ibShown() && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
       const wd = new Date(ib.start * 1000).getUTCDay();
       text = wd === 0 || wd === 6 ? '' : 'Initial balance: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
     }
@@ -1746,7 +1907,10 @@ function start(container, opt, PAGE) {
     prefs.setIndicatorOption(PANE, id, key, value);
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
-      if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
+      if (id === 'vp' && key === 'session') { vpLegendVer = -1; vpBuild(); }
+      if (id === 'vp' && key !== 'session') profileLines();               // the developing POC, VAH and VAL (1.14.0)
+      if (id === 'levels') { if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC)))); ibNote(D.ib); }
+      if (id === 'vwap') { vwapApply(); legendKey = ''; }
       if (id === 'delta' && key === 'show') { chart.setDeltaView({ mode: value }); deltaLegend(true); }   // the same core, drawn the other way
       if (id === 'delta' && key === 'div') sigApply();               // the divergence arrows (G1c)
     }
@@ -1792,7 +1956,7 @@ function start(container, opt, PAGE) {
     const job = SIG.job = { abs, bub, seg, replay: null };
     const take = (t, p, v, s, barT) => {
       if (job.abs && barT !== undefined) job.abs.add(t, p, v, s, barT, chart.bars());
-      if (job.bub) job.bub.add(t, p, v, s);
+      if (job.bub) job.bub.add(t, p, v, s, barT);          // the bar it traded in (1.14.0): a bubble never straddles bars
     };
     const sink = { addQuiet(t, p, v, s) { const bars = chart.bars(), i = CE.barIndexAt(bars, t); take(t, p, v, s, i >= 0 ? bars[i].t : undefined); } };
     if (range) job.replay = new BB.RangeReplay(D.ticks, SIG.rangeFrom, [seg], rangeBuilder(), (t, v, s2, barT) => take(t, seg.st.price(seg.i), v, s2, barT));
@@ -1843,7 +2007,7 @@ function start(container, opt, PAGE) {
   function sigTrade(t, p, v, s, barT) {
     const job = SIG.job, v0 = sigSum();
     if (SIG.absorption && !(job && job.abs === SIG.absorption)) SIG.absorption.add(t, p, v, s, barT, chart.bars());
-    if (SIG.bubbles && !(job && job.bub === SIG.bubbles)) SIG.bubbles.add(t, p, v, s);
+    if (SIG.bubbles && !(job && job.bub === SIG.bubbles)) SIG.bubbles.add(t, p, v, s, barT);
     if (sigSum() !== v0) SIG.version++;                    // the versions only grow: any change moves the sum
     if (SIG.divergence || divWanted()) sigDivergence(false);
   }
@@ -1900,7 +2064,7 @@ function start(container, opt, PAGE) {
     }
     D.ready = true;
     D.liveFrom = nowEt;
-    if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: nowMs() };
+    if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: performance.now() };   // monotonic (review D2): a clock fix never ages it
     D.backfill = D.ticks.length;
     if (!K.started || K.root !== D.root) countStart();   // the count begins with this instrument's first load (round 5)
     rebuild();
@@ -1910,7 +2074,7 @@ function start(container, opt, PAGE) {
   }
 
   function onTick(m) {
-    if (m.root === D.root) lastSeen[m.root] = { p: m.p, at: nowMs() };   // ChartBridge holds live trades during a load: this is the price when it began
+    if (m.root === D.root) lastSeen[m.root] = { p: m.p, at: performance.now() };   // ChartBridge holds live trades during a load: this is the price when it began
     // the count takes every live trade of its instrument, also one that arrives while a later load of it is on its way
     const countDropped = K.started && m.root === K.root && countAdd(m);
     if (m.root !== D.root || !D.ready) return;
@@ -2031,6 +2195,8 @@ function start(container, opt, PAGE) {
   }
   accountPeers.add({ prefix: PREFIX, follow: followAccount });
   cleanups.push(() => { for (const peer of accountPeers) if (peer.follow === followAccount) accountPeers.delete(peer); });
+  // 1.14.0: Glide, Range style, grid lines and the room right of price changed in another tab or the workspace
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.settings) refreshSettings(); });
   listen(window, 'storage', e => {
     if (e.key !== PREFIX + 'live-account-v1') return;
     try { followAccount(JSON.parse(e.newValue)); } catch (err) { /* not ours */ }
@@ -2144,8 +2310,10 @@ function start(container, opt, PAGE) {
         PROFILE = Array.isArray(m.features) && m.features.includes('profile');
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
+        readSettlements(m.instruments); readouts();
         $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
         bridgeVersion = typeof m.version === 'string' ? m.version : '';
+        syncVersion();
         syncAccounts(m.accounts || []);
         subscribe(S.root);
         if (T) T.hello(m);                                 // protocol v2 (m.trading): sign in; ChartBridge 0.2 has no trading field
@@ -2178,6 +2346,7 @@ function start(container, opt, PAGE) {
         onProfile(m);
         break;
       case 'tick': onTick(m); break;
+      case 'settlement': if (typeof m.root === 'string') { settlements[m.root] = { p: typeof m.p === 'number' ? m.p : null, date: m.date || '' }; readouts(); } break;   // 0.3.7: the prior settlement changed
       case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
       case 'exec': addFill(m); applyMarkers(); break;
       /* 1.13.0: a warning (for example a mistyped maxTicksAway in config.txt, which means NO limit) stays on screen
@@ -2201,7 +2370,7 @@ function start(container, opt, PAGE) {
   const lastPrice = () => {
     if (D.m1 && D.m1.last) return D.m1.last.c;
     const x = lastSeen[D.root];
-    return x && nowMs() - x.at < LAST_SEEN_MS ? x.p : null;
+    return x && performance.now() - x.at < LAST_SEEN_MS ? x.p : null;
   };
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
   const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;
@@ -2322,6 +2491,9 @@ function start(container, opt, PAGE) {
   function askNoStop(root, go) {
     noStopGo = go;
     $('noStopText').textContent = 'The ' + root + ' order has no stop (the bracket stop is 0). Send it anyway? Later orders with no stop go without asking until the page is loaded again.';
+    // 1.14.0 (coordinator, layout only): under the legend, so the ARMED pill and the connection pill stay in view
+    const lg = $('legend'), st = lg.parentElement;
+    $('noStopAsk').style.setProperty('--ns-top', Math.round(lg.getBoundingClientRect().bottom - st.getBoundingClientRect().top + 6) + 'px');
     $('noStopAsk').hidden = false;
     $('noStopCancel').focus();
     return true;
@@ -2396,7 +2568,15 @@ function start(container, opt, PAGE) {
     const map = { connecting: ['CONNECTING', ''], loading: ['LOADING', ''], live: ['LIVE', 'live'], offline: ['OFFLINE', 'bad'] };
     const [text, cls] = map[state] || map.connecting;
     pill.textContent = text; pill.className = 'pill' + (cls ? ' ' + cls : '');
+    syncVersion();
     if (onStatus) { try { onStatus({ state: map[state] ? state : 'connecting', paneId: PANE, root: D.root || S.root, attempt: wsTries }); } catch (e) { setTimeout(() => { throw e; }); } }
+  }
+  /* 1.14.0 (Anthony): the versions, quietly: the LIVE pill's tooltip and the foot of Settings */
+  const versionText = () => 'chart ' + CE.VERSION + ' · ChartBridge ' + (bridgeVersion || '-');
+  function syncVersion() {
+    const t = versionText();
+    put($('connPill'), 'title', t);
+    if ($('setVer')) put($('setVer'), 'textContent', t);
   }
   function setStatus(text, level) { clearTimeout(flashTimer); const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); syncNote(); }
   /* compact (a host's small panel): the status line shows only while it carries a note (live.css .has-note) */
@@ -2424,10 +2604,11 @@ function start(container, opt, PAGE) {
 
   let legendKey = '';
   chart.on('legend', e => {
+    if (!!e.hovering !== lgHover) { lgHover = !!e.hovering; rootEl.classList.toggle('lg-hover', lgHover); }   // the short header's hover line (1.14.0)
     vpLegend();
     legendBarT = e.hovering ? e.bar.t : null; deltaLegend();
     const { bar: b, prev, forming } = e;
-    const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap].join('|');
+    const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap, S.options.vwap.session, vwapVer].join('|');
     if (key === legendKey) return;
     legendKey = key;
     const dp = precisionOf(), fmt = p => U.fmtPrice(p, dp);
@@ -2440,9 +2621,104 @@ function start(container, opt, PAGE) {
     chgEl.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
     $('lgV').textContent = U.fmtVolume(b.v);
     $('lgVwWrap').hidden = !S.layers.vwap;
-    $('lgVw').textContent = b.vw !== undefined && b.vw !== null ? fmt(U.roundTo(b.vw, D.tick)) : '-';   // null: not known yet (served window)
+    const vwv = vwapFor(b, e.index);                    // 1.14.0: the session's, or RTH only (the VWAP gear)
+    $('lgVw').textContent = vwv !== undefined && vwv !== null ? fmt(U.roundTo(vwv, D.tick)) : '-';   // null: not known yet (served window), or outside RTH
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
+
+  /* ---------------- readouts (1.14.0, Anthony's item 5), in the legend: the time left in the bar (Range bars: the ticks
+     left up and down), the ATR of the chart's own closed bars (ATR_PERIOD, NinjaTrader's ATR) and the last price's change
+     from the prior settlement (ChartBridge 0.3.7: hello and "settlement"; blank when ChartBridge gives none, never
+     estimated). Once a second, on the second, and when the view or ChartBridge's settlement changes; never on the tick path. */
+  const settlements = {};                                // root -> { p, date } from ChartBridge
+  function readSettlements(list) { for (const i of list || []) if (i && typeof i.root === 'string') settlements[i.root] = { p: typeof i.settlement === 'number' ? i.settlement : null, date: i.settlementDate || '' }; }
+  function readouts() {
+    if (destroyed) return;
+    const b = D.ready ? chart.lastBar() : null, dp = precisionOf();
+    let bar = '';
+    if (b) {
+      if (S.tf === 'range') { const r = D.cur && D.cur.rangeLeft(); bar = r ? 'Bar ▲' + r.up + ' ▼' + r.down + 't' : ''; }
+      else bar = 'Bar ' + U.barRemain(b.t, TF[S.tf].sec, etNow());
+    }
+    put($('lgBar'), 'textContent', bar); put($('lgBar'), 'hidden', !bar);
+    const a = b ? chart.atr(S.atr) : null, at = a === null ? '' : 'ATR(' + S.atr + ') ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp);
+    put($('lgAtr'), 'textContent', at); put($('lgAtr'), 'hidden', !at);
+    const st = settlements[D.root], pct = b && st ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');
+    const txt = pct === null ? '' : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '% vs settle';
+    put(el, 'textContent', txt); put(el, 'hidden', !txt);
+    put(el, 'className', 'lg-ro' + (pct > 0 ? ' up' : pct < 0 ? ' down' : ''));
+  }
+  later(() => { readouts(); every(readouts, 1000); }, 1000 - Date.now() % 1000 + 5);   // on the second, as the price tag's countdown
+
+  /* The VWAP gear's hours (1.14.0, Anthony): the session's from 18:00 ET (each bar's own vw, as always) or RTH only, from
+     09:30 to 16:00 ET, worked out from the 1-minute bars (every view holds them) as the session's is from history, and
+     read at each bar's end (a bar ending outside RTH has none, so the line breaks). Made again once a second while it
+     is on (a few thousand bars, never per trade) and with the bars. */
+  let vwapSeries = null, vwapVer = 0;
+  function barEnd(b, i) {
+    const bs = chart.bars(), now = etNow();
+    if (S.tf === 'range') return i >= 0 && i < bs.length - 1 ? bs[i + 1].t : now;
+    return Math.min(b.t + TF[S.tf].sec, now);
+  }
+  function vwapFor(b, i) {
+    if (S.options.vwap.session !== 'rth') return b.vw;
+    return vwapSeries ? U.vwapAt(vwapSeries, barEnd(b, i)) : null;
+  }
+  function vwapApply() {
+    if (S.options.vwap.session === 'rth' && D.m1 && D.m1.bars.length) {
+      vwapSeries = U.rthVwapUpdate(vwapSeries, D.m1.bars, { sessionStart: SESSION }); vwapVer++;   // the closed bars once, the forming bar again (review D2)
+      chart.setVwapSource((t, i) => { const bs = chart.bars(); return bs[i] ? U.vwapAt(vwapSeries, barEnd(bs[i], i)) : null; });
+    } else { vwapSeries = null; chart.setVwapSource(null); }
+  }
+  every(() => { if (S.options.vwap.session === 'rth' && S.layers.vwap) vwapApply(); }, 1000);
+  /* the developing POC, VAH and VAL lines (1.14.0, the VP gear) */
+  function profileLines() { const o = S.options.vp; chart.setProfileLines({ poc: o.dpoc === 'on', vah: o.dvah === 'on', val: o.dval === 'on' }); }
+  profileLines();
+
+  /* The header text (1.14.0, Anthony): switched off per chart (live-legend-v1, the Aa toggle beside Indicators): no text at
+     all, not even on hover, and the price scale takes the room back. A small panel (a compact chart under 700 px wide or
+     400 px tall) shows a short header: one quiet line (the name, bars, last price and change, the indicators' values),
+     the bar's open, high, low and volume (and the hovered bubble) on a second line only while the crosshair is over it. */
+  let lgHover = false, lgOn = prefs.legendShown(PANE);
+  function applyLegendShown() {
+    rootEl.classList.toggle('lg-off', !lgOn);
+    const b = $('lgTog');
+    b.setAttribute('aria-pressed', String(lgOn));
+    b.title = 'Header text on this chart: ' + (lgOn ? 'on (click to turn it off)' : 'off (click to turn it on)');
+    fitTop();
+  }
+  function setLegendShown(on) { lgOn = !!on; prefs.setLegendShown(PANE, lgOn); applyLegendShown(); }
+  $('lgTog').addEventListener('click', () => setLegendShown(!lgOn));
+  /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
+  chart.setScaleLock(prefs.scaleLocked(PANE));
+  chart.on('scaleLock', v => prefs.setScaleLocked(PANE, v));
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE)); });
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.legend) { const v = prefs.legendShown(PANE); if (v !== lgOn) { lgOn = v; applyLegendShown(); } } });
+  function shortHeader() {
+    if (!COMPACT) return;
+    const r = rootEl.getBoundingClientRect(), sh = r.width < 700 || r.height < 400;
+    if (rootEl.classList.contains('short') !== sh) rootEl.classList.toggle('short', sh);
+  }
+  if (COMPACT && typeof ResizeObserver === 'function') { const ro2 = new ResizeObserver(shortHeader); ro2.observe(rootEl); cleanups.push(() => ro2.disconnect()); }
+
+  /* The bubble under the mouse (1.14.0, Anthony from WORK: no numbers on the chart, the size on hover), in the legend's
+     top line: "Bubble Buy 142 @ 31,120.25 08:44:05.3". The chart hit-tests on mouse moves only. */
+  const two = n => (n < 10 ? '0' : '') + n;
+  const fmtTenths = t => { const sec = U.tod(t), w = Math.floor(sec); return two(Math.floor(w / 3600)) + ':' + two(Math.floor(w / 60) % 60) + ':' + two(w % 60) + '.' + Math.floor((sec - w) * 10 + 1e-6); };
+  chart.on('bubble', b => {
+    const el = $('lgBub');
+    if (!b) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = 'Bubble ' + (b.side > 0 ? 'Buy ' : 'Sell ') + U.fmtVolume(Math.round(b.v)) + ' @ ' + U.fmtPrice(U.roundTo(b.p, D.tick), precisionOf()) + ' ' + fmtTenths(b.t);
+    el.className = 'lg-bub ' + (b.side > 0 ? 'up' : 'down');
+    el.hidden = false;
+  });
+  /* The price scale keeps the legend's height free at its top (1.14.0, Anthony: on the smaller panels the high ran under
+     the legend's lines), eased in with the 120 ms re-fit; told again whenever the legend's height changes. */
+  /* (the hover line of a short header is left out: the scale does not jump as the mouse comes and goes; with the header
+     text off there is nothing to keep free) */
+  const fitTop = () => { const lg = $('legend'); if (!lg || destroyed || lgHover) return; chart.setFitTop(lgOn && lg.offsetHeight ? lg.offsetTop + lg.offsetHeight + 8 : 0); };   // 8 px: the eased re-fit never brings a new high into the header
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fitTop); ro.observe($('legend')); cleanups.push(() => ro.disconnect()); }
+  applyLegendShown(); shortHeader();
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
   const DRAW_ERR = 'Chart drawing error: ';
   chart.on('error', e => {
@@ -2662,6 +2938,9 @@ function start(container, opt, PAGE) {
     for (const b of $('symSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.root));
     for (const b of $('tfSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.tf));
     for (const b of $('glideSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.glide));
+    if ($('gridSeg')) for (const b of $('gridSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.grid));
+    if ($('roomSeg')) for (const b of $('roomSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === S.room));
+    if ($('atrIn') && document.activeElement !== $('atrIn')) $('atrIn').value = S.atr;
     syncIndicators();
     $('rangeBox').hidden = S.tf !== 'range';
     if (document.activeElement !== $('rangeTicks')) $('rangeTicks').value = ranges[S.root];
@@ -2723,6 +3002,26 @@ function start(container, opt, PAGE) {
     const b = e.target.closest('button'); if (!b) return;
     S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSetting('glide'); syncButtons();
   });
+  /* grid lines and the room right of price (1.14.0, the page's Settings; the workspace's Settings for its charts) */
+  if ($('gridSeg')) $('gridSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
+    S.grid = b.dataset.v; chart.setGrid(S.grid === 'on'); saveSetting('grid'); syncButtons();
+  });
+  /* the ATR period: applied and saved as typed when it is a whole number 2 to 100; leaving the box shows the one in use */
+  if ($('atrIn')) {
+    $('atrIn').addEventListener('input', e => {
+      const n = Number(e.target.value);
+      if (String(e.target.value).trim() === '' || LP.cleanAtr(n) !== n) { e.target.setAttribute('aria-invalid', 'true'); return; }
+      e.target.removeAttribute('aria-invalid');
+      if (n !== S.atr) { S.atr = n; saveSetting('atr'); readouts(); }
+    });
+    $('atrIn').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); e.target.value = S.atr; });
+    $('atrIn').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+  }
+  if ($('roomSeg')) $('roomSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b || !LP.ROOMS.includes(+b.dataset.v)) return;
+    S.room = +b.dataset.v; chart.setRoom(S.room); saveSetting('room'); syncButtons();
+  });
 
   /*
    * Indicators (1.6.0, Anthony's menu "E2"): one menu per chart pane, saved per pane id (LivePrefs.Pane).
@@ -2747,8 +3046,8 @@ function start(container, opt, PAGE) {
     for (const k of Object.keys(drawn)) {
       if (drawn[k] === S.layers[k]) continue;
       S.layers[k] = drawn[k];
-      if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
-      if (k === 'ib') ibNote(D.ib);
+      if (k === 'fills') applyMarkers(); else chart.setLayers(k === 'levels' ? { levels: drawn[k], ib: drawn[k] } : { [k]: drawn[k] });   // the IB is Levels' (1.14.0)
+      if (k === 'levels') ibNote(D.ib);
       if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
     }
     // the delta pane (1.7.0): kept while on the chart, shown or hidden, so the chip or the switch shows it at once
@@ -2786,7 +3085,15 @@ function start(container, opt, PAGE) {
       (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
   }
   /* An indicator's real options in its gear panel (LivePrefs INDICATOR_OPTIONS): today the volume profile's hours. */
-  const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } } },
+  /* on / off switches shown as a group of toggles (1.14.0): each a line of its own (Levels: the prior session's and the IB;
+     the profile: its developing POC, VAH and VAL) */
+  const TOG = (name, what) => ({ toggle: name, label: name, values: { on: ['On', what + ': shown'], off: ['Off', what + ': not shown'] } });
+  const TOGGLE_GROUP = { levels: ['Lines', 'Each line on or off; the prior session\'s levels, the overnight high and low, and today\'s Initial Balance'],
+    vp: ['Developing', 'The current session\'s point of control and value area, drawn as they build'] };
+  const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } },
+      dpoc: TOG('dPOC', 'The developing point of control'), dvah: TOG('dVAH', 'The developing value area high'), dval: TOG('dVAL', 'The developing value area low') },
+    vwap: { session: { label: 'Hours', values: { full: ['Full session', 'From 18:00 ET (the default)'], rth: ['RTH only', 'From 09:30 ET to 16:00 ET; none outside regular hours'] } } },
+    levels: Object.fromEntries(LP.LEVEL_LINES.map(L => [L.k, TOG(L.name, L.name)])),
     delta: { show: { label: 'Show', values: { cum: ['Cumulative', 'Candles of buys minus sells, from 0 at 18:00 ET'], bar: ['Bar delta', 'Each bar\'s own buys minus sells, above or below zero'] } },
       div: { label: 'Show divergences', values: { off: ['Off', 'No divergence arrows'], on: ['On', 'Arrows at swings where price and delta disagree (Anthony\'s DeltaDivergenceSignal), from the page\'s opening'] } } } };
   /*
@@ -2856,11 +3163,18 @@ function start(container, opt, PAGE) {
   }
   function optionsHtml(id) {
     if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return '';
-    return Object.keys(LP.INDICATOR_OPTIONS[id]).map(k => {
+    const keys = Object.keys(LP.INDICATOR_OPTIONS[id]), togs = keys.filter(k => OPTION_TEXT[id][k].toggle);
+    const tg = !togs.length ? '' : (() => {
+      const lblId = p + 'indTog-' + id, g = TOGGLE_GROUP[id];
+      return `<div class="ind-set-opt ind-togs-row"><span class="glabel" id="${lblId}" title="${esc(g[1])}">${esc(g[0])}</span><span class="ind-togs" role="group" aria-labelledby="${lblId}">` +
+        togs.map(k => { const on = S.options[id][k] === 'on', t = OPTION_TEXT[id][k];
+          return `<button type="button" class="ind-tog" data-act="opt" data-id="${id}" data-k="${k}" data-v="${on ? 'off' : 'on'}" data-f="tog:${id}:${k}" aria-pressed="${on}" title="${esc(t.values[on ? 'on' : 'off'][1])}; click to turn it ${on ? 'off' : 'on'}">${esc(t.toggle)}</button>`; }).join('') + '</span></div>';
+    })();
+    return keys.filter(k => !OPTION_TEXT[id][k].toggle).map(k => {
       const t = OPTION_TEXT[id][k], cur = S.options[id][k], lblId = p + 'indOpt-' + id + '-' + k;
       const btns = LP.INDICATOR_OPTIONS[id][k].map(v => `<button type="button" data-act="opt" data-id="${id}" data-k="${k}" data-v="${v}" data-f="opt:${id}:${k}:${v}" aria-pressed="${v === cur}" title="${esc(t.values[v][1])}">${esc(t.values[v][0])}</button>`).join('');
       return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
-    }).join('');
+    }).join('') + tg;
   }
   /* An indicator's colors in its gear panel (1.9.0): a picker and a hex box each, and Default colors. Every chart on
      this page and its storage prefix shares them, as the Colors panel's; an indicator preset saves them all. */
@@ -2916,9 +3230,13 @@ function start(container, opt, PAGE) {
       html += '<div class="ind-coming">Coming: time and sales</div>';
     }
     body.innerHTML = html;
+    /* 1.14.0 (no scrolling, ever): on the page and in the workspace the open gear's settings show in a card beside the
+       menu (live.css .side-gears), not under its row, so the menu keeps its height and fits the screen */
+    $('indPanel').classList.toggle('has-gear', !!body.querySelector('.ind-set'));
     /* one live region, changed only when its text changes, so a screen reader hears the result count and notes once */
     const said = M.note || (q ? (() => { const n = LP.searchIndicators(q).length; return n ? n + (n === 1 ? ' match' : ' matches') : 'No match'; })() : '');
     if ($('indLive').textContent !== said) $('indLive').textContent = said;
+    if (!$('indPanel').hidden && placeMenu) placeMenu();       // its size changed: placed again so it stays on screen
     if (focusKey) {                                                 // keep the keyboard where it was
       const alt = { 'sw:': 'add:', 'add:': 'sw:', 'x:': 'add:', 'rec:': 'rec:' };
       let el = body.querySelector(`[data-f="${focusKey}"]`);
@@ -2931,20 +3249,28 @@ function start(container, opt, PAGE) {
     strip.classList.toggle('is-empty', !pinned.length);
     strip.innerHTML = pinned.map(d => {
       const shown = IS.ind[d.id].shown;
-      return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
+      return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-haspopup="dialog" aria-expanded="${popId === d.id}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown' : 'hidden'}; click for its settings and switch">` +
         `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span>` +
-        (SLIM ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
-    }).join('') + (SLIM ? '<button type="button" class="ind-chip ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>' : '');
+        (SLIM || TRADING ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
+    }).join('') + '<button type="button" class="ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>';
+    strip.appendChild(chipPop);                              // the chip's settings (1.14.0), kept across redraws
     fitChips();
+    if (popId) renderPop();
   }
   /* In a host's slim header (toolbar: false) the strip has the room the header leaves: 2-letter chips, and those that do
-     not fit go behind a "+N" chip that opens a small list of them (the same chips). The header never wraps or scrolls. */
+     not fit go behind a "+N" chip that opens a small list of them (the same chips). The header never wraps or scrolls.
+     1.14.0: with up to ten chips, a host's own toolbar does the same once its one-letter chips do not fit either. */
   let chipListOpen = false;
-  function fitSlimChips() {
+  function unlistChips() {
     const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
     if (!more || !list) return;
     for (const c of [...list.children]) strip.insertBefore(c, more);
     more.hidden = true;
+  }
+  function fitSlimChips() {
+    const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
+    if (!more || !list) return;
+    unlistChips();
     const over = () => strip.scrollWidth > strip.clientWidth + 1;
     if (over()) {
       more.hidden = false;
@@ -2955,6 +3281,65 @@ function start(container, opt, PAGE) {
       more.title = [...list.children].map(c => c.getAttribute('aria-label')).join(', ');
     }
     showChipList(chipListOpen && !more.hidden);
+  }
+  /* A chip opens its indicator's settings (1.14.0, Anthony: "many times a day"): the gear's card, in a popover dropped
+     from the chip, with an on/off switch at the top. Off hides the indicator and keeps the chip, so the same popover
+     turns it back on; unpinning stays in the menu. Closed by a click outside, Escape or the chip again; the focus then
+     leaves it (handBack), so the hotkeys work at once. Placed fixed (a header clips its overflow), under the chip, or
+     flipped up or left near an edge; it never scrolls. */
+  const handBack = el => { if (BAR && BAR.handBack) BAR.handBack(el); else if (el && document.activeElement === el) el.blur(); };
+  function popHtml(id) {
+    const d = defOf(id), st = IS.ind[id], shown = st.on && st.shown, name = esc(d.name);
+    return `<div class="chip-pop-head"><button type="button" class="ind-switch" data-act="popsw" data-id="${id}" data-f="popsw:${id}" aria-pressed="${shown}" aria-label="${shown ? 'Hide' : 'Show'} ${name}" title="${shown ? 'Hide' : 'Show'}; the chip and the settings are kept"><span class="knob" aria-hidden="true"></span></button>` +
+      `<span class="chip-pop-name">${name}</span><span class="chip-pop-state">${shown ? 'On' : 'Off'}</span></div>` +
+      `<div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>` +
+      optionsHtml(id) + signalsHtml(id) + colorsHtml(id);
+  }
+  function chipOf(id) {
+    const strip = $('indChips'), c = strip.querySelector(`:scope > .ind-chip[data-id="${id}"]`);
+    if (c) return c;
+    const more = strip.querySelector('.ind-chip-more');
+    return more && !more.hidden ? more : null;               // behind "+N": dropped from it
+  }
+  function placePop() {
+    const a = chipOf(popId); if (!a) return;
+    const r = a.getBoundingClientRect(), w = chipPop.offsetWidth, h = chipPop.offsetHeight, W = window.innerWidth, H = window.innerHeight;
+    /* clear of the order bar and the order ticket (review D2): on the page below the order bar, as the Indicators menu;
+       in the workspace never over the ticket's panel, so Flatten, Close, Cancel all and the ticket's buttons stay reachable */
+    const ob = !SLIM && $('obar') && !$('obar').hidden ? $('obar').getBoundingClientRect() : null;
+    const avoid = [...document.querySelectorAll('.ws-panel[data-type="ticket"]')].map(e => e.getBoundingClientRect());
+    if (ob) avoid.push(ob);
+    const base = ob ? Math.max(r.bottom, ob.bottom) : r.bottom;
+    const fits = (x, y) => x >= 8 && y >= 8 && x + w <= W - 8 && y + h <= H - 8 && !avoid.some(q => x < q.right && x + w > q.left && y < q.bottom && y + h > q.top);
+    const xs = [r.left, r.right - w].concat(avoid.map(q => q.left - 8 - w), avoid.map(q => q.right + 8));
+    const ys = [base + 6, r.top - 6 - h].concat(avoid.map(q => q.bottom + 6));
+    let at = null;
+    for (const y of ys) { for (const x of xs) if (fits(x, y)) { at = [x, y]; break; } if (at) break; }
+    if (!at) at = [Math.max(8, Math.min(r.left, W - 8 - w)), Math.max(8, Math.min(base + 6, H - 8 - h))];   // whole on screen at least
+    chipPop.style.top = Math.round(at[1]) + 'px'; chipPop.style.left = Math.round(at[0]) + 'px';
+  }
+  function renderPop() {
+    const st = popId && IS.ind[popId];
+    if (!st || !st.on || !st.pin) { closePop(false); return; }   // taken off the chart or unpinned: nothing to show
+    const focusKey = document.activeElement && chipPop.contains(document.activeElement) ? document.activeElement.dataset.f : null;
+    chipPop.innerHTML = popHtml(popId);
+    placePop();
+    if (focusKey) { const el = chipPop.querySelector(`[data-f="${focusKey}"]`); if (el) el.focus(); }
+  }
+  function openPop(id) {
+    if (popId === id) { closePop(true); return; }
+    if (!$('indPanel').hidden && openMenu) openMenu(false);
+    showChipList(false);
+    popId = id; chipPop.hidden = false;
+    chipPop.setAttribute('aria-label', defOf(id).name + ' settings');
+    for (const c of $('indChips').querySelectorAll('.ind-chip[data-id]')) c.setAttribute('aria-expanded', String(c.dataset.id === id));
+    renderPop();
+  }
+  function closePop(back) {
+    if (!popId) return;
+    popId = null; chipPop.hidden = true; chipPop.innerHTML = '';
+    for (const c of $('indChips').querySelectorAll('.ind-chip[data-id]')) c.setAttribute('aria-expanded', 'false');
+    if (back) handBack(document.activeElement);              // the focus goes back to the page: hotkeys work at once
   }
   function showChipList(v) {
     const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
@@ -2970,14 +3355,18 @@ function start(container, opt, PAGE) {
      chips (6), so pinning or unpinning cannot change the toolbar's lines, and chips show their names only when that
      fits without adding a toolbar line; otherwise each is one letter. */
   function fitChips() {
-    if (SLIM) { fitSlimChips(); return; }
+    if (SLIM || TRADING) { fitSlimChips(); return; }       // the page (1.14.0): the workspace's 2-letter chips, the rest behind "+N"
     const strip = $('indChips'), bar = strip.closest('.bar');
-    const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
+    unlistChips();
+    const most = Math.min(LP.PIN_MAX, IND.filter(d => !d.nochip && !d.coming).length);   // room for every chip there can be
+    const room = Math.min(most * 30 + (most - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
     strip.style.setProperty('--chip-room', room + 'px');
     strip.classList.add('is-narrow');
     const h = bar.offsetHeight;
     strip.classList.remove('is-narrow');
     if (bar.offsetHeight > h || strip.scrollWidth > strip.clientWidth + 1) strip.classList.add('is-narrow');
+    if (strip.scrollWidth > strip.clientWidth + 1) fitSlimChips();   // one letter each still too wide: the rest behind "+N"
+    else showChipList(false);
   }
   function syncIndicators() {
     const c = LP.Pane.counts(IS);
@@ -3007,33 +3396,53 @@ function start(container, opt, PAGE) {
     }
     else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
-  let openMenu;
+  let openMenu, placeMenu = null;
   {
     const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel'), q = $('indQ');
     /* The panel stays inside the chart's own element (a pane can be narrow, and a host may clip it). */
     /* It opens below the order bar when there is one, so the Armed switch, the account and the position readout stay
        in view (review N5); its list scrolls inside when the space is short. */
     const place = () => {
-      if (SLIM) {                                                // in the host's header: the window is the room it has
-        const b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
-        panel.style.top = Math.round(b.bottom - w.top + 6) + 'px';
+      /* 1.14.0 (no scrolling, ever): on the page and in the workspace the menu is placed where it fits whole: below the
+         order bar when it fits there (the Armed switch, the account and the position readout stay in view, review N5),
+         else below the button, else as high as it must; moved left to stay on screen. Only a menu taller than the window
+         scrolls its list. */
+      if (SLIM || TRADING) {
+        const b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect(), ob = $('obar');
+        const below = !SLIM && ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom, room = window.innerHeight - 8;
         panel.style.maxWidth = Math.max(220, Math.floor(window.innerWidth - 16)) + 'px';
-        panel.style.maxHeight = Math.max(200, Math.floor(window.innerHeight - b.bottom - 14)) + 'px';
+        panel.style.maxHeight = '';
+        const h = panel.offsetHeight;
+        let top = below + 6;
+        if (top + h > room) top = b.bottom + 6;
+        if (top + h > room) top = Math.max(8, room - h);
+        panel.style.top = Math.round(top - w.top) + 'px';
+        if (top + h > room) panel.style.maxHeight = Math.floor(room - top) + 'px';
         panel.style.left = '0px';
-        const over = panel.getBoundingClientRect().right - (window.innerWidth - 8);
+        const card = panel.querySelector('.ind-set'), extra = card && panel.classList.contains('has-gear') ? card.offsetWidth + 8 : 0;   // the gear's card beside it
+        const over = panel.getBoundingClientRect().right + extra - (window.innerWidth - 8);
         if (over > 0) panel.style.left = -Math.ceil(Math.min(over, w.left - 8)) + 'px';
+        panel.classList.remove('gear-left');
+        if (extra) {                                             // the card on the left when the right has no room; up as needed
+          card.style.top = '';
+          if (card.getBoundingClientRect().right > window.innerWidth - 8) panel.classList.add('gear-left');
+          const cb = card.getBoundingClientRect().bottom - (window.innerHeight - 8);
+          if (cb > 0) card.style.top = Math.round(-1 - cb) + 'px';
+        }
         return;
       }
       const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
-      const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;
+      const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;   // a host's chart with its toolbar: inside the chart, as before
       panel.style.top = Math.round(below - w.top + 6) + 'px';
       panel.style.maxWidth = Math.max(220, Math.floor(r.right - b.left - 8)) + 'px';
       panel.style.maxHeight = Math.max(200, Math.floor(Math.min(r.bottom, window.innerHeight) - below - 14)) + 'px';
     };
+    placeMenu = place;
     openMenu = (v, from) => {
       if (v === !panel.hidden) { if (v) q.focus(); return; }
       panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
       if (v) {
+        closePop(false);
         M.returnTo = from && from !== document.body && !wrap.contains(from) ? from : btn;
         M.cat = null; M.q = ''; q.value = ''; M.note = '';            // groups folded and a clean search on every open (Anthony)
         place(); renderMenu(); q.focus(); q.select();
@@ -3080,16 +3489,54 @@ function start(container, opt, PAGE) {
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
-      if (SLIM && e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
-      const b = e.target.closest('button[data-id]'); if (!b) return;
-      const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
-      changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
+      if (chipPop.contains(e.target)) return;                       // the popover's own clicks (below)
+      if (e.target.closest('.ind-chip-more')) { if (popId) closePop(false); showChipList(!chipListOpen); return; }
+      const b = e.target.closest('button.ind-chip[data-id]'); if (!b) return;
+      openPop(b.dataset.id);                                     // 1.14.0: its settings and switch, not a toggle
+      handBack(b);
     });
+    /* the popover: the gear's own controls, and its switch */
+    chipPop.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]');
+      if (!b || !chipPop.contains(b)) return;
+      const id = b.dataset.id, act = b.dataset.act;
+      if (act === 'popsw') {
+        const v = !(IS.ind[id].on && IS.ind[id].shown);
+        changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // the chip stays
+        renderPop(); return;
+      }
+      if (act === 'opt') { setIndicatorOption(id, b.dataset.k, b.dataset.v); renderPop(); return; }
+      if (act === 'sigauto') { prefs.setBubbleAuto(S.root, b.dataset.v === 'on'); sigChanged(false); renderPop(); return; }
+      if (act === 'coldef') { const set = {}; for (const c of LP.INDICATOR_COLORS) if (c.id === id) set[c.key] = c.def; setIndicatorColors(set); renderPop(); }
+    });
+    chipPop.addEventListener('input', e => {
+      const t = e.target;
+      if (t.dataset.sig) { sigInput(t); return; }
+      const k = t.dataset.ck || t.dataset.hk; if (!k) return;
+      const v = t.dataset.ck ? t.value.toUpperCase() : hexOf(t.value);
+      if (!v) { t.setAttribute('aria-invalid', 'true'); return; }
+      t.removeAttribute('aria-invalid');
+      setIndicatorColors({ [k]: v });
+      const other = chipPop.querySelector(t.dataset.ck ? `input[data-hk="${k}"]` : `input[data-ck="${k}"]`);
+      if (other) other.value = t.dataset.ck ? v : v.toLowerCase();
+    });
+    chipPop.addEventListener('change', e => {
+      const t = e.target;
+      if (t.dataset.sig) { sigShown(t); return; }
+      if (t.dataset.hk) { t.removeAttribute('aria-invalid'); t.value = IC[t.dataset.hk]; }
+      if (t.tagName === 'INPUT' && t.type === 'color') handBack(t);
+    });
+    listen(document, 'pointerdown', e => {
+      if (!popId || chipPop.contains(e.target)) return;
+      const c = e.target.closest && e.target.closest('.ind-chip, .ind-chip-more');
+      if (c && $('indChips').contains(c)) return;                  // a chip: its own click decides
+      closePop(true);
+    });
+    listen(document, 'keydown', e => { if (popId && e.key === 'Escape') { e.preventDefault(); closePop(true); } });
+    listen(window, 'resize', () => { if (popId) placePop(); });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
-    if (SLIM) {
-      listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
-      listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
-    }
+    listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
+    listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
     wrap.addEventListener('keydown', e => {
       if (panel.hidden) return;
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
@@ -3126,16 +3573,37 @@ function start(container, opt, PAGE) {
       const ro = new ResizeObserver(() => { fitChips(); if (!panel.hidden) place(); });
       ro.observe(rootEl);
       ro.observe(rootEl.querySelector('.bar'));                  // the toolbar's own width (a host resizing the pane)
-      if (SLIM) ro.observe($('indChips'));                       // in the host's header: the room the header leaves it
+      if (SLIM || TRADING) ro.observe($('indChips'));            // in the host's header (or the page's line): the room it has
       cleanups.push(() => ro.disconnect());
     }
   }
   $('acctPick').addEventListener('change', e => pickViewAccount(e.target.value));
-  $('toolTrend').addEventListener('click', () => chart.setTool(chart.getTool() === 'trend' ? null : 'trend'));
-  $('toolHline').addEventListener('click', () => chart.setTool(chart.getTool() === 'hline' ? null : 'hline'));
-  $('clearDraw').addEventListener('click', () => chart.clearDrawings());
-  $('resetBtn').addEventListener('click', () => chart.reset());
-  if (PIN) { $('pinBtn').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => PIN.openChange()); }
+  $('toolTrend').addEventListener('click', () => { chart.setTool(chart.getTool() === 'trend' ? null : 'trend'); openMore(false); });
+  $('toolHline').addEventListener('click', () => { chart.setTool(chart.getTool() === 'hline' ? null : 'hline'); openMore(false); });
+  $('clearDraw').addEventListener('click', () => { chart.clearDrawings(); openMore(false); });
+  $('resetBtn').addEventListener('click', () => { chart.reset(); openMore(false); });
+  if (PIN && $('pinBtn')) { $('pinRow').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => { if ($('setPanel')) $('setPanel').hidden = true; PIN.openChange(); }); }
+  /* the page's small menu (1.14.0): the drawing tools and Reset view; Escape or a click outside closes it */
+  function openMore(v) {
+    const menu = $('moreMenu'); if (!menu) return;
+    menu.hidden = !v; $('moreBtn').setAttribute('aria-expanded', String(v));
+    if (v) fitPop(menu, $('moreWrap'));
+  }
+  /* A popover under its toolbar button (Settings, the small menu): right-aligned with the button, moved sideways just
+     enough to stay on screen (1.14.0: the toolbar is one line, so the button can sit anywhere along it) */
+  function fitPop(panel, wrap) {
+    panel.classList.remove('set-left'); panel.style.left = ''; panel.style.right = '';
+    const r = panel.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+    const shift = r.left < 8 ? 8 - r.left : r.right > window.innerWidth - 8 ? window.innerWidth - 8 - r.right : 0;
+    if (shift) { panel.style.right = 'auto'; panel.style.left = Math.round(r.left + shift - w.left) + 'px'; }
+  }
+  if ($('moreBtn')) {
+    // a window resized while one is open: kept on screen (the toolbar may have wrapped)
+    listen(window, 'resize', () => { for (const [pn, w] of [['setPanel', 'setWrap'], ['moreMenu', 'moreWrap']]) if ($(pn) && !$(pn).hidden) fitPop($(pn), $(w)); });
+    $('moreBtn').addEventListener('click', () => openMore($('moreMenu').hidden));
+    listen(document, 'pointerdown', e => { if (!$('moreMenu').hidden && !$('moreWrap').contains(e.target)) openMore(false); });
+    listen(document, 'keydown', e => { if (e.key === 'Escape' && !$('moreMenu').hidden && !e.defaultPrevented) { e.preventDefault(); openMore(false); $('moreBtn').focus(); } });
+  }
   syncButtons();
   syncAccounts();
 
@@ -3167,7 +3635,7 @@ function start(container, opt, PAGE) {
     const openSettings = v => {
       if (v) { readHotkeys(); renderHotkeys(); for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', ''); }
       setPanel.hidden = !v; $('setBtn').setAttribute('aria-expanded', String(v));
-      if (v) { setPanel.classList.remove('set-left'); if (setPanel.getBoundingClientRect().left < 8) setPanel.classList.add('set-left'); }
+      if (v) fitPop(setPanel, setWrap);
     };
     /* Save one action's hotkey (or '' to clear it): read fresh, so another tab's keys are kept; a combo another action
        took meanwhile is refused. Never saved when storage is blocked. */
@@ -3211,7 +3679,7 @@ function start(container, opt, PAGE) {
     listen(window, 'storage', e => { if (e.key === PREFIX + HKKEY) { readHotkeys(); renderHotkeys(); } });
     listen(document, 'keydown', hotkeyHandler({
       keys: () => HK, root: rootEl,
-      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
+      busy: () => destroyed || !setPanel.hidden || !$('moreMenu').hidden || !$('indPanel').hidden || !!popId || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
       actions: { buy: () => T.sendOrder('buy', 'market', null), sell: () => T.sendOrder('sell', 'market', null), be: T.breakEven, close: () => T.flattenHere(), flattenAll: T.flattenAll },
       ignored: () => flash(HOTKEY_IN_BOX, 'warn'),
     }));
@@ -3324,6 +3792,9 @@ function start(container, opt, PAGE) {
     const s = prefs.settings();
     if (s.glide !== S.glide) { S.glide = s.glide; chart.setMotion(GLIDE[S.glide]); }
     if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
+    if (s.grid !== S.grid) { S.grid = s.grid; chart.setGrid(S.grid === 'on'); }
+    if (s.room !== S.room) { S.room = s.room; chart.setRoom(S.room); }
+    if (s.atr !== S.atr) { S.atr = s.atr; readouts(); }
     syncButtons();
     sigRefresh();                                          // the signals' settings and the large-print floors (G1c)
   }
@@ -3348,6 +3819,8 @@ function start(container, opt, PAGE) {
   return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}),
     setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors, setTrade,
     indicators: $('indWrap'), chips: $('indChips'), colors: themePanel.element,
+    /** The header text toggle (1.14.0), for a host to place beside Indicators; legendShown() / setLegendShown(on). */
+    legendToggle: $('lgTog'), legendShown: () => lgOn, setLegendShown,
     /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
     stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), chart: chart.stats() }) };
 }

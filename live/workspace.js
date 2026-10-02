@@ -17,7 +17,9 @@
  * own indicators and drawings under its paneId, the panel id). The workspace's own keys:
  *   live-workspace-v1     { v: 1, layouts: { <name>: { panels: [{ id, type: 'chart' | 'tape' | 'ticket', root, tf, range?,
  *                         x, y, w, h }] } } }  (x, y from 0; w, h in cells; tapes have no tf, the ticket no root)
- *   live-tape-floors-v1   { <root>: { rth, eth } } the large-print floors (Time and Sales), only those set by hand
+ *   live-tape-floors-v1   { <root>: { rth, eth } } the large-print floors (Time and Sales), only those set by hand; the same
+ *                         key as the charts' bubbles (LivePrefs.largeFloors, read through it since 1.14.0)
+ *   live-tape-colors-v1   { above, ask, mid, bid, below } the Time and Sales category colors (1.14.0), only those set by hand
  * Every write reads the key fresh and changes one layout (or one floor), so two windows never undo each other.
  */
 (function (root, factory) {
@@ -31,7 +33,7 @@ const COLS = 12, ROWS = 6, MIN_W = 2, MIN_H = 1, MAX_PANELS = 12, MAX_LAYOUTS = 
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
 const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range'];
 const RANGE_MIN = 1, RANGE_MAX = 400;
-const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1' };
+const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1' };
 const DEFAULT_NAME = 'Main';
 /* Large prints on the tape: RTH 09:30 to 16:15 ET, overnight the rest (Anthony, 2026-10-01). */
 const RTH_START = 9 * 3600 + 30 * 60, RTH_END = 16 * 3600 + 15 * 60;
@@ -174,6 +176,22 @@ function snapMove(p, dx, dy, m) {
 function snapResize(p, dw, dh, m) {
   return { x: p.x, y: p.y, w: clamp(p.w + Math.round(dw / (m.cw + m.gap)), MIN_W, m.cols - p.x), h: clamp(p.h + Math.round(dh / (m.ch + m.gap)), MIN_H, m.rows - p.y) };
 }
+/* The resize handles (1.14.0, Anthony: "from any edge or corner"): the edges each handle moves. */
+const EDGES = { n: 'n', s: 's', e: 'e', w: 'w', ne: 'ne', nw: 'nw', se: 'se', sw: 'sw' };
+/**
+ * A panel resized from an edge or corner (`edge`: 'n', 's', 'e', 'w' or two of them, 'ne', 'nw', 'se', 'sw') by (dx, dy)
+ * pixels, snapped to whole cells: the edges handled move, the opposite ones stay put; at least 2 x 1, inside the grid.
+ */
+function snapResizeEdge(p, edge, dx, dy, m) {
+  const e = typeof edge === 'string' ? edge : '';
+  const kx = Math.round(dx / (m.cw + m.gap)), ky = Math.round(dy / (m.ch + m.gap));
+  let x0 = p.x, x1 = p.x + p.w, y0 = p.y, y1 = p.y + p.h;
+  if (e.includes('e')) x1 = clamp(x1 + kx, x0 + MIN_W, m.cols);
+  if (e.includes('w')) x0 = clamp(x0 + kx, 0, x1 - MIN_W);
+  if (e.includes('s')) y1 = clamp(y1 + ky, y0 + MIN_H, m.rows);
+  if (e.includes('n')) y0 = clamp(y0 + ky, 0, y1 - MIN_H);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
 
 /* ---------------- Time and Sales: large prints */
 /** Seconds into the New York day of a bar-time stamp (exchange wall clock stored as if UTC). */
@@ -197,6 +215,44 @@ function floorAt(root, t, floors) {
   const f = floors && own(floors, root) ? floors[root] : DEFAULT_FLOORS[root] || { rth: Infinity, eth: Infinity };
   return isRth(t) ? f.rth : f.eth;
 }
+
+/* ---------------- Time and Sales categories (1.14.0, Anthony: "NinjaTrader style"; ChartBridge 0.3.8's q): where a trade
+   printed against the quote, each with its own color (CHART_STYLE --tape-*), editable in the tape's gear. Above the ask and
+   below the bid are the brighter pair. A trade with no q (ChartBridge before 0.3.8, or no usable quote) is colored by its
+   side as before (buy green, sell red, unknown plain). */
+const TAPE_CATS = [
+  { q: 2, key: 'above', name: 'Above the ask', def: '#9CF5CB' },
+  { q: 1, key: 'ask', name: 'At the ask', def: '#3DDC97' },
+  { q: 0, key: 'mid', name: 'Between', def: '#9AA8B8' },
+  { q: -1, key: 'bid', name: 'At the bid', def: '#FF5C7A' },
+  { q: -2, key: 'below', name: 'Below the bid', def: '#FFA3B4' },
+];
+const TAPE_HEX = /^#[0-9a-f]{6}$/i;
+/** The category colors: the ones set by hand (#RRGGBB, upper case) where valid, else the defaults. */
+function cleanTapeColors(v) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  const out = {};
+  for (const c of TAPE_CATS) out[c.key] = own(v, c.key) && typeof v[c.key] === 'string' && TAPE_HEX.test(v[c.key]) ? v[c.key].toUpperCase() : c.def;
+  return out;
+}
+/** The row class of a trade: its category ('q2', 'q1', 'q0', 'qm1', 'qm2') when q is known, else its side ('buy',
+    'sell') or '' (unknown side). q: -2 to 2, or anything else for unknown. */
+function tapeClass(q, s) {
+  if (q === 2 || q === 1 || q === 0 || q === -1 || q === -2) return q < 0 ? 'qm' + -q : 'q' + q;
+  return s > 0 ? 'buy' : s < 0 ? 'sell' : '';
+}
+function readTapeColors(storage) { try { return cleanTapeColors(storage.getItem(KEYS.tapeColors)); } catch (e) { return cleanTapeColors(null); } }
+/** Set one category's color (read fresh, only that one written); null goes back to its default. false when not allowed. */
+function setTapeColor(storage, key, hex) {
+  if (!TAPE_CATS.some(c => c.key === key) || (hex !== null && !(typeof hex === 'string' && TAPE_HEX.test(hex)))) return false;
+  let saved = {};
+  try { const v = JSON.parse(storage.getItem(KEYS.tapeColors)); if (v && typeof v === 'object' && !Array.isArray(v)) saved = v; } catch (e) { saved = {}; }
+  const out = {};
+  for (const c of TAPE_CATS) if (own(saved, c.key) && typeof saved[c.key] === 'string' && TAPE_HEX.test(saved[c.key])) out[c.key] = saved[c.key].toUpperCase();
+  if (hex === null) delete out[key]; else out[key] = hex.toUpperCase();
+  try { storage.setItem(KEYS.tapeColors, JSON.stringify(out)); return true; } catch (e) { return false; }
+}
+function resetTapeColors(storage) { try { storage.setItem(KEYS.tapeColors, JSON.stringify({})); return true; } catch (e) { return false; } }
 
 /* ---------------- formatting */
 const p2 = n => (n < 10 ? '0' : '') + n;
@@ -276,9 +332,10 @@ function setFloor(storage, root, which, value) {
 }
 
 return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
-  layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize,
+  layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
-  readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor };
+  readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor,
+  TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
 
@@ -327,7 +384,15 @@ const grid = $('wsGrid'), ghost = $('wsGhost');
 let layout = '';                                   // the open layout's name
 let panels = [];                                   // its panels (the saved shape)
 const views = new Map();                           // panel id -> { panel, el, head, body, destroy, state, ... }
-let floors = W.readFloors(store);
+/* The large-print floors: the one key the charts' bubbles use (LivePrefs.largeFloors, live-tape-floors-v1), looked up by
+   the signals' own rule (ChartEngine.largeFloorAt: RTH 09:30 to 16:15 ET, else overnight). */
+let floors = prefs.largeFloors();
+const bigFloor = (root, t) => window.ChartEngine.largeFloorAt(floors[root] || { rth: Infinity, eth: Infinity }, t);
+const readFloorsNow = () => { floors = prefs.largeFloors(); };
+/* The Time and Sales category colors (1.14.0): CSS variables on the page, so every tape follows a change at once. */
+let tapeColors = W.readTapeColors(store);
+function applyTapeColors() { for (const c of W.TAPE_CATS) document.documentElement.style.setProperty('--tape-' + c.key, tapeColors[c.key]); }
+applyTapeColors();
 
 /* ---------------- top bar: clock, connection, notes */
 const clockFmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -344,7 +409,12 @@ function syncConn() {
   else if (states.every(s => s === 'live')) { text = 'LIVE · ChartBridge'; cls = 'live'; }
   else { text = (states.includes('loading') ? 'LOADING' : 'CONNECTING') + ' · ChartBridge'; cls = 'wait'; }
   if (el.dataset.text !== text) { el.dataset.text = text; el.className = 'ws-conn' + (cls ? ' ' + cls : ''); $('wsConnText').textContent = text; }
+  const t = versionText();
+  if (el.title !== t) el.title = t;
 }
+/* 1.14.0 (Anthony): the versions, quietly: the LIVE badge's tooltip and the foot of Settings */
+let bridgeVer = '';
+const versionText = () => 'chart ' + (window.ChartEngine ? window.ChartEngine.VERSION : '') + ' · ChartBridge ' + (bridgeVer || '-');
 let noteTimer = 0;
 function note(text, warn, ms) {
   const el = $('wsNote');
@@ -501,6 +571,7 @@ function tretry() { tTries++; tTimer = setTimeout(tconnect, Math.min(5000, 500 *
 function tmessage(m) {
   switch (m.type) {
     case 'hello':
+      bridgeVer = typeof m.version === 'string' ? m.version : ''; syncConn();
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
@@ -852,7 +923,7 @@ setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);
 /* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
-const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
+const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .chip-pop:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
 /* a Buy or Sell key forwarded names the instrument this window knows the ticket is on (F2 review) */
 const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
@@ -915,11 +986,12 @@ function addView(p) {
   } else if (p.type === 'tape') {
     mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
-      '<button type="button" class="ws-ic" data-act="gear" aria-label="Large prints" title="Large prints" aria-expanded="false">⚙</button>';
+      '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
   } else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
+  // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
   el.innerHTML = `<header class="ws-head"><span class="ws-grip" aria-hidden="true">⋮⋮</span>${mid}${close}</header>` +
-    '<div class="ws-body"></div><div class="ws-size" aria-hidden="true" title="Resize"></div>';
+    '<div class="ws-body"></div>' + Object.keys(W.EDGES).map(k => `<div class="ws-edge ws-edge-${k}${k === 'se' ? ' ws-size' : ''}" data-edge="${k}" aria-hidden="true" title="Resize"></div>`).join('');
   place(el, p);
   grid.appendChild(el);
   if (sizes) sizes.observe(el);
@@ -930,7 +1002,7 @@ function addView(p) {
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
-  el.querySelector('.ws-size').addEventListener('pointerdown', e => startDrag(e, v, 'size'));
+  for (const h of el.querySelectorAll('.ws-edge')) h.addEventListener('pointerdown', e => startDrag(e, v, 'size', h.dataset.edge));
   v.head.addEventListener('click', e => {
     const b = e.target.closest('[data-act]'); if (!b || !v.head.contains(b) || b.closest('.ws-lv')) return;
     if (b.dataset.act === 'close') closePanel(p.id);
@@ -960,11 +1032,11 @@ function mountChart(v) {
   });
   v.pane = pane;
   pane.setTrade(chartTrade(v));                             // its instrument's orders, position and fills on the ticket's account
-  v.head.querySelector('.ws-ind').append(pane.indicators, pane.chips);   // the chart's own Indicators button and menu, its chips
+  v.head.querySelector('.ws-ind').append(pane.indicators, pane.legendToggle, pane.chips);   // the chart's own Indicators button and menu, its header text toggle (1.14.0), its chips
   const indBtn = pane.indicators.querySelector('.ind-btn');
   const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
   if (mo) mo.observe(indBtn, { attributes: true, attributeFilter: ['aria-expanded'] });
-  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.chips.remove(); };
+  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.legendToggle.remove(); pane.chips.remove(); };
 }
 function viewChanged(v, nv) {
   const p = v.panel;
@@ -1009,7 +1081,7 @@ function addPanel(type) {
 
 /* ---------------- drag and resize: the ghost shows the snapped cells; a place that overlaps is refused */
 let dragging = null;
-function startDrag(e, v, mode) {
+function startDrag(e, v, mode, edge) {
   if (e.button !== 0 || dragging) return;
   e.preventDefault();
   closePops();
@@ -1021,9 +1093,10 @@ function startDrag(e, v, mode) {
   place(ghost, r); ghost.hidden = false; ghost.className = 'ws-ghost';
   v.el.classList.add(mode === 'move' ? 'dragging' : 'sizing');
   document.body.classList.add('ws-busy');
+  if (mode === 'size') document.body.dataset.edge = edge || 'se';      // the resize cursor stays while dragging
   const move = ev => {
     const dx = ev.clientX - sx, dy = ev.clientY - sy;
-    r = mode === 'move' ? W.snapMove(p, dx, dy, m) : W.snapResize(p, dx, dy, m);
+    r = mode === 'move' ? W.snapMove(p, dx, dy, m) : W.snapResizeEdge(p, edge || 'se', dx, dy, m);
     ok = W.fits(r, panels, p.id);
     place(ghost, r);
     ghost.className = 'ws-ghost' + (ok ? '' : ' blocked');
@@ -1031,7 +1104,7 @@ function startDrag(e, v, mode) {
   };
   const end = ev => {
     target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end);
-    v.el.style.transform = ''; v.el.classList.remove('dragging', 'sizing'); document.body.classList.remove('ws-busy');
+    v.el.style.transform = ''; v.el.classList.remove('dragging', 'sizing'); document.body.classList.remove('ws-busy'); delete document.body.dataset.edge;
     ghost.hidden = true; dragging = null;
     if (ev.type === 'pointercancel') return;
     const changed = r.x !== p.x || r.y !== p.y || r.w !== p.w || r.h !== p.h;
@@ -1053,7 +1126,7 @@ function mountTape(v) {
   sel.value = p.root;
   v.body.innerHTML = '<div class="tp-cols"><span>Time</span><span>Price</span><span>Size</span></div><div class="tp-list" role="log" aria-label="Time and Sales trades" aria-live="off"></div>';
   const list = v.body.querySelector('.tp-list');
-  const T = new Float64Array(TAPE_MAX), P = new Float64Array(TAPE_MAX), V = new Float64Array(TAPE_MAX), S = new Int8Array(TAPE_MAX), B = new Uint8Array(TAPE_MAX);
+  const T = new Float64Array(TAPE_MAX), P = new Float64Array(TAPE_MAX), V = new Float64Array(TAPE_MAX), S = new Int8Array(TAPE_MAX), B = new Uint8Array(TAPE_MAX), Q = new Int8Array(TAPE_MAX);
   let head = -1, count = 0, seq = 0, drawnSeq = 0, full = true, raf = 0, dec = 2;
   const rows = [];                                     // in page order, top first
   let ws = null, tries = 0, reconnect = 0, destroyed = false, root = p.root, ready = false, instruments = [];
@@ -1077,7 +1150,7 @@ function mountTape(v) {
   function fill(row, i) {
     if (i >= count) { if (!row.el.hidden) row.el.hidden = true; return; }
     const j = (head - i + TAPE_MAX) % TAPE_MAX;
-    const cls = 'tp-row' + (S[j] > 0 ? ' buy' : S[j] < 0 ? ' sell' : '') + (B[j] ? ' big' : '');
+    const k = W.tapeClass(Q[j], S[j]), cls = 'tp-row' + (k ? ' ' + k : '') + (B[j] ? ' big' : '');
     if (row.cls !== cls) { row.el.className = cls; row.cls = cls; }
     row.t.textContent = W.fmtClock(T[j]); row.p.textContent = W.fmtPrice(P[j], dec); row.v.textContent = String(V[j]);
     if (row.el.hidden) row.el.hidden = false;
@@ -1099,7 +1172,8 @@ function mountTape(v) {
     head = (head + 1) % TAPE_MAX; if (count < TAPE_MAX) count++;
     const t = +m.t, v2 = +m.v;
     T[head] = t; P[head] = +m.p; V[head] = v2; S[head] = m.s === 1 ? 1 : m.s === -1 ? -1 : 0;
-    B[head] = v2 >= W.floorAt(root, t, floors) ? 1 : 0;
+    Q[head] = typeof m.q === 'number' ? m.q : -128;     // 0.3.8: the Time and Sales category; -128 unknown
+    B[head] = v2 >= bigFloor(root, t) ? 1 : 0;
     seq++;
     schedule();
   }
@@ -1140,7 +1214,7 @@ function mountTape(v) {
   if (ro) ro.observe(list);
   fitRows();
   connect();
-  v.tape = { get root() { return root; }, count: () => count, refloor: () => { for (let i = 0; i < count; i++) { const j = (head - i + TAPE_MAX) % TAPE_MAX; B[j] = V[j] >= W.floorAt(root, T[j], floors) ? 1 : 0; } full = true; schedule(); } };
+  v.tape = { get root() { return root; }, count: () => count, refloor: () => { for (let i = 0; i < count; i++) { const j = (head - i + TAPE_MAX) % TAPE_MAX; B[j] = V[j] >= bigFloor(root, T[j]) ? 1 : 0; } full = true; schedule(); } };
   v.destroy = () => {
     destroyed = true; clearTimeout(reconnect); if (raf) cancelAnimationFrame(raf); raf = 0;
     if (ro) ro.disconnect();
@@ -1158,10 +1232,14 @@ function openPop(el, anchor, onClose, align) {
   if (anchor) {
     anchor.setAttribute('aria-expanded', 'true'); raise(anchor, true);
     const a = anchor.getBoundingClientRect(), w = el.offsetWidth;
-    el.style.top = Math.round(a.bottom + 6) + 'px';
+    /* 1.14.0 (no scrolling, ever): under its button when it fits, else moved up until it does; only one taller than the
+       window scrolls */
+    el.style.maxHeight = '';
+    const h = el.offsetHeight, room = window.innerHeight - 8, top = Math.max(8, Math.min(a.bottom + 6, room - h));
+    el.style.top = Math.round(top) + 'px';
+    if (top + h > room) el.style.maxHeight = Math.floor(room - top) + 'px';
     const x = align === 'left' ? a.left : a.right - w;
     el.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, x))) + 'px';
-    el.style.maxHeight = Math.max(160, Math.floor(window.innerHeight - a.bottom - 14)) + 'px';
   }
   pop = { el, anchor, onClose };
 }
@@ -1245,7 +1323,7 @@ function floorRow(r) {
 }
 function onFloorInput(e) {
   const i = e.target.closest('input[data-w]'); if (!i) return;
-  if (W.setFloor(store, i.dataset.root, i.dataset.w, i.value)) { floors = W.readFloors(store); refloorTapes(); refloorCharts(); i.classList.remove('bad'); }
+  if (prefs.setLargeFloor(i.dataset.root, i.dataset.w, i.value)) { readFloorsNow(); refloorTapes(); refloorCharts(); i.classList.remove('bad'); }
   else i.classList.add('bad');
 }
 function onFloorBlur(e) { const i = e.target.closest('input[data-w]'); if (i) { i.value = floors[i.dataset.root][i.dataset.w]; i.classList.remove('bad'); } }
@@ -1256,20 +1334,62 @@ for (const el of [$('wsSettings'), $('wsGear')]) { el.addEventListener('input', 
 function refloorCharts() { for (const v of chartViews()) v.pane.refreshSettings(); }
 window.addEventListener('chartlive-floors', e => {
   if (!e.detail || e.detail.prefix !== PREFIX) return;
-  floors = W.readFloors(store); refloorTapes();
+  readFloorsNow(); refloorTapes();
   if (pop && pop.el === $('wsSettings')) $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
 });
 function openTapeGear(v, anchor) {
-  toggle($('wsGear'), anchor, () => { $('wsGearBody').innerHTML = floorRow(v.tape.root); openPop($('wsGear'), anchor); });
+  toggle($('wsGear'), anchor, () => { $('wsGearBody').innerHTML = floorRow(v.tape.root); renderTapeColors(); openPop($('wsGear'), anchor); });
 }
+/* The tape's gear: the five category colors (1.14.0), a picker and a hex box each, and Default colors. */
+function renderTapeColors() {
+  $('wsTapeColors').innerHTML = W.TAPE_CATS.map(c => `<div class="tc-row" data-key="${c.key}"><span class="tc-name">${esc(c.name)}</span>` +
+    `<input type="color" data-tc="${c.key}" value="${tapeColors[c.key].toLowerCase()}" aria-label="${esc(c.name)} color">` +
+    `<input type="text" class="tc-hex" data-tchex="${c.key}" value="${tapeColors[c.key]}" maxlength="7" spellcheck="false" autocomplete="off" aria-label="${esc(c.name)} color, hex"></div>`).join('');
+}
+function setTapeColorHere(key, hex) {
+  if (!W.setTapeColor(store, key, hex)) return false;
+  tapeColors = W.readTapeColors(store); applyTapeColors(); return true;
+}
+$('wsGear').addEventListener('input', e => {
+  const c = e.target.closest('input[data-tc]');
+  if (c && setTapeColorHere(c.dataset.tc, c.value)) { const h = $('wsGear').querySelector(`[data-tchex="${c.dataset.tc}"]`); if (h) h.value = tapeColors[c.dataset.tc]; }
+  const h = e.target.closest('input[data-tchex]');
+  if (h) { const v = h.value.trim(), hex = /^#?[0-9a-f]{6}$/i.test(v) ? (v[0] === '#' ? v : '#' + v) : ''; h.classList.toggle('bad', !hex); if (hex && setTapeColorHere(h.dataset.tchex, hex)) { const p = $('wsGear').querySelector(`[data-tc="${h.dataset.tchex}"]`); if (p) p.value = hex.toLowerCase(); } }
+});
+$('wsGear').addEventListener('focusout', e => { const h = e.target.closest('input[data-tchex]'); if (h) { h.value = tapeColors[h.dataset.tchex]; h.classList.remove('bad'); } });
+$('wsTapeDefault').addEventListener('click', () => { if (W.resetTapeColors(store)) { tapeColors = W.readTapeColors(store); applyTapeColors(); renderTapeColors(); } });
 
 /* ---------------- Settings: everything general (Anthony): Glide and Range style for every chart (and the single chart
    page), the trading hotkeys (the 1.11.0 Settings), the large-print floors, ChartBridge's PIN, the layout. */
 function renderGeneral() {
   const s = prefs.settings();
   for (const b of $('wsGlide').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.glide));
+  for (const b of $('wsGridLines').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.grid));
+  for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === s.room));
+  if (document.activeElement !== $('wsAtr')) $('wsAtr').value = s.atr;
   $('wsRangeMode').value = s.rangeMode;
 }
+/* 1.14.0: grid lines (off by default) and the room right of price, for every chart and the single chart page */
+$('wsGridLines').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
+  prefs.setSetting('grid', b.dataset.v); renderGeneral();
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
+/* the ATR period (review D2, Anthony): every chart's ATR readout; saved as typed when a whole number 2 to 100 */
+$('wsAtr').addEventListener('input', e => {
+  const n = Number(e.target.value);
+  if (String(e.target.value).trim() === '' || LP.cleanAtr(n) !== n) { e.target.setAttribute('aria-invalid', 'true'); return; }
+  e.target.removeAttribute('aria-invalid');
+  prefs.setSetting('atr', n);
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
+$('wsAtr').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); e.target.value = prefs.settings().atr; });
+$('wsAtr').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+$('wsRoom').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b || !LP.ROOMS.includes(+b.dataset.v)) return;
+  prefs.setSetting('room', +b.dataset.v); renderGeneral();
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
 $('wsGlide').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b) return;
   prefs.setSetting('glide', b.dataset.v); renderGeneral();
@@ -1325,7 +1445,7 @@ function renderSettings() {
   $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
   $('wsPinSec').hidden = !(PIN && PIN.active());
   $('wsResetName').textContent = layout;
-  $('wsVersion').textContent = 'Chart ' + (window.ChartEngine ? window.ChartEngine.VERSION : '') + ' · Layouts and settings are kept in this browser.';
+  $('wsVersion').textContent = versionText() + '. Layouts and settings are kept in this browser.';
 }
 $('wsSet').addEventListener('click', e => toggle($('wsSettings'), e.currentTarget, () => { renderSettings(); openPop($('wsSettings'), e.currentTarget); }));
 $('wsReset').addEventListener('click', () => { closePops(); confirmBox('Reset "' + layout + '" to the default layout? Its panels close and the default ones open.', 'Reset', () => {
@@ -1397,13 +1517,25 @@ function askName(title, value, done) {
    sent). Cancel has the focus, so Enter never sends an order with no stop; Escape is Cancel. One question at a time:
    a newer one replaces it (the older order is not sent). */
 /* it sits over the top bar from the left up to KEYS, so KEYS, Flatten all and the right side stay usable */
-function placeNoStop() { const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(); $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px'); }
+/* 1.14.0 (coordinator, layout only): from just after the connection status (which stays in view) up to KEYS */
+function placeNoStop() {
+  const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(), c = $('wsConn').getBoundingClientRect();
+  $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px');
+  $('wsNoStop').style.setProperty('--ns-left', Math.max(8, Math.round(c.right - top.left + 12)) + 'px');
+  /* one line, never cut (review D2): the whole text when it fits, else a shorter one, then the shorter title too; the
+     whole text stays in the tooltip, Cancel and Send always in view */
+  const full = $('wsNoStop').dataset.text || '', t = $('wsNoStopText'), b = $('wsNoStopTitle');
+  const m = /^The (\S+) order has no stop/.exec(full);
+  const first = full.split('. ')[0].replace(/\.?$/, '.');
+  const tries = [[full, 'No stop: send anyway?'], [first, 'No stop: send anyway?'], [m ? m[0] + '.' : first, 'No stop: send anyway?'], [m ? m[1] + ': no stop.' : 'No stop.', 'No stop: send anyway?'], [m ? m[1] + ': no stop.' : '', 'No stop: send?'], ['', 'No stop: send?']];
+  for (const [txt, ttl] of tries) { t.textContent = txt; t.hidden = !txt; b.textContent = ttl; if (t.scrollWidth <= t.clientWidth + 1 && b.scrollWidth <= b.clientWidth + 1 && $('wsNoStop').scrollWidth <= $('wsNoStop').clientWidth + 1) break; }
+}
 window.addEventListener('resize', () => { if (noStopQ) placeNoStop(); });
 function askNoStop(text, onSend, onCancel, bound) {
   noStopQ = Object.assign({ onSend, onCancel }, bound || {});
-  $('wsNoStopText').textContent = text; $('wsNoStop').title = 'No stop: send anyway? ' + text;
-  placeNoStop();
+  $('wsNoStopText').textContent = text; $('wsNoStop').dataset.text = text; $('wsNoStop').title = 'No stop: send anyway? ' + text;
   $('wsNoStop').hidden = false;
+  placeNoStop();
   $('wsNoStopCancel').focus();
 }
 /* A Close or Flatten (r) or Flatten all (null) in any window: every window drops its question for it, and the ticket's
@@ -1471,7 +1603,8 @@ window.addEventListener('storage', e => {
   const k = e.key === null ? null : e.key.slice(PREFIX.length);
   if (k === null) return;
   if (k === W.KEYS.store) syncSelect();
-  else if (k === W.KEYS.floors) { floors = W.readFloors(store); refloorTapes(); }
+  else if (k === W.KEYS.floors) { readFloorsNow(); refloorTapes(); }
+  else if (k === W.KEYS.tapeColors) { tapeColors = W.readTapeColors(store); applyTapeColors(); if (pop && pop.el === $('wsGear')) renderTapeColors(); }
   else if (k === LP.KEYS.settings) { for (const v of chartViews()) v.pane.refreshSettings(); if (pop && pop.el === $('wsSettings')) renderGeneral(); }
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
   else if (k === HKKEY) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }

@@ -1,5 +1,271 @@
 # Changelog
 
+## 1.14.0 (2026-10-02): the display round
+
+Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The Time and
+Sales categories need ChartBridge 0.3.8 (`q`) and the change from the prior settlement 0.3.7 (`settlement`); with an
+older one the tape colors by side and that readout stays blank. Nothing under `nt8/` changes, nor the order code
+(`live/trade.js`, `live/order-ticket.js`, order drawing), the motion (the time constants, the live tick path,
+`live/bar-builder.js`) or the signals' drawing. `ChartLive.mount` takes no new options. Anthony's list of 2026-10-01,
+from using 1.12.0 live on HOME:
+
+### 1. No scrolling, ever
+- **Colors** in two columns (the colors on the left, the preset groups on the right, 560 px): it fits a 1366x768 screen
+  whole. In the workspace's top bar it no longer scrolls sideways or cuts the Black swatch and the hex boxes (the top
+  bar's `nowrap` reached into it; its popovers wrap their text now).
+- **Settings** in the workspace in two columns (the charts and hotkeys; large prints, the PIN, the layout and the
+  versions), 800 px; it fits at 1366x768.
+- **The Indicators menu**: an open gear's settings sit in a column beside the list (the menu grows sideways, not down),
+  and the menu is placed where it fits whole: below the order bar when it fits there (the Armed switch, the account
+  and the position stay in view, as before), else below its button, else as high as it must. Only a menu taller than
+  the window scrolls its list (none at 1366x768 with the defaults).
+- **The workspace's popovers** (a chart's instrument and bars and its small menu, Add panel, the Time and Sales gear,
+  Settings) open under their button when they fit, else moved up until they do, never with a scrollbar.
+- `npm run smoke:noscroll` (new) opens every panel, menu, popover and dialog at 1366x768, 1920x1080 and 2560x1440, in the
+  workspace and on `/single.html`, and fails on anything that would scroll or is cut (Time and Sales rows are the only
+  intended scroll; text cut on purpose with an ellipsis and its tooltip is not counted), or off the screen.
+
+### 2. Panels resize from any edge or corner
+- A handle on every edge (7 px, 3 px of it in the gap between panels) and corner (14 px), snapped to whole cells as
+  before; overlap still refused ("That place overlaps another panel: put back"). Quiet: nothing shows until the pointer
+  is on one, then a 2 px accent line on that edge (an L at a corner), and its resize cursor stays while dragging; the
+  bottom right corner keeps its grip lines. Moving stays on the header. `WorkspaceCore.snapResizeEdge`.
+
+### 3. Time and Sales, NinjaTrader style (ChartBridge 0.3.8)
+- Each trade's category from `q`: above the ask, at the ask, between, at the bid, below the bid, each with its own color
+  (tokens `--tape-above` `#9CF5CB`, `--tape-ask` `#3DDC97`, `--tape-mid` `#9AA8B8`, `--tape-bid` `#FF5C7A`,
+  `--tape-below` `#FFA3B4`: the house buy green and the tape's sell red at the quote, the brighter pair outside it, the
+  quiet grey between). Editable in the tape's gear (a picker and a hex box each, Default colors), saved in this browser
+  (`live-tape-colors-v1`) for every tape. A trade with no `q` (ChartBridge before 0.3.8, or no usable quote) colors by
+  its side as before.
+- **Big trades** (the large-print floor: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, RTH / overnight): bold, the
+  price and size brighter, on a tint of their color with a bar at the left edge. The floors are the bubbles' one
+  setting (`live-tape-floors-v1`, read through `LivePrefs.largeFloors` and looked up by `ChartEngine.largeFloorAt`, the
+  signals' own rule); the bubbles' Auto applies to the bubbles only (Anthony).
+- `live/feed.js` keeps each trade's `q` with it (LiveLog), so a tape that joins later, or a replay, colors the trades it
+  starts with the same; a backfill row keeps it in the 6th place as ChartBridge sends it.
+
+### 4. Grid lines
+- An option in Settings (Grid lines Off / On), **off by default**, for every chart and the single chart page
+  (`live-settings-v2` `grid`). Off leaves the session dividers, the RTH shading and the delta pane's zero line.
+  Engine: option `grid` (default on), `setGrid(on)`, `getGrid()`.
+
+### 5. Chart display
+- **Room right of price**: 80 px of empty space right of the last bar by default, the same on screen at every zoom (it
+  was 8 bars, a few px zoomed out); None, 40, 80 or 160 px in Settings (`room`). Jump to live and End keep it; zooming
+  while following keeps the live edge in place. Engine: option `room` (CSS px; none keeps `rightOffset` bars),
+  `setRoom(px)`, `room()`.
+- **Zoom to brackets**: the auto-fit price scale takes in every working order, the position's stop and target legs and
+  the planned stop and target lines (1.13.0), so they are always on screen. It eases in with the existing 120 ms axis
+  re-fit, never a snap; an order being dragged keeps the scale still under the pointer (it counts at its confirmed or
+  asked price). Engine: option `fitOrders` (default on), `priceScale()`.
+- **The VWAP no longer sizes the chart**: a VWAP far from price draws off the scale, and a marker at the plot's top or
+  bottom right edge says where it is (a small triangle and "VWAP 25,512.25" in its color on the legend ground).
+  Engine: `vwapMarker()`.
+- **Readouts** in the legend (once a second, on the second; never on the tick path): **Bar 0:23**, the time left in the
+  bar (Range bars: **Bar ▲3 ▼5t**, the ticks left up and down), and **ATR(14) 12.50**, NinjaTrader's ATR (period 14, the
+  first 14 true ranges averaged then Wilder's smoothing) of the chart's own closed bars, on the legend's first line;
+  **+0.42% vs settle**, the last price's change from the prior settlement (ChartBridge 0.3.7: hello's `settlement`
+  and the `settlement` message; blank, never estimated, when there is none), beside the bar's change. In the
+  workspace's compact legend the change from the settlement follows the bar's change, the bar time and ATR come last
+  (shown when the panel has room). Engine: `lastBar()`, `atr(period)`; `util.fmtRemain`, `barRemain`, `atr`, `pctFrom`,
+  `roomBars`, `fitRange`.
+
+### 6. `/single.html` gets the workspace's cleanup
+- One toolbar line (at 1366, 1920 and 2560 px): the instruments, Bars and the range size, Indicators and its chips (the
+  workspace's 2-letter chips: VO VW LV FL; those that do not fit go behind a **+N** chip), a small **⋯** menu (Trend line, Price line, Clear
+  drawings, Reset view), Colors, Settings.
+- **Settings** hold the general controls: Glide, Range style, Grid lines, Room right, then the hotkeys, Change PIN and
+  the versions.
+- While Armed the chart is outlined in the workspace accent purple with the soft glow; the order bar stays deep red.
+- The order bar, hotkeys and order behaviour are exactly 1.13.0's. A host's chart with its own toolbar (`ChartLive.mount`,
+  The Desk) keeps its toolbar as it was.
+
+### From Anthony at WORK (on 1.12.1)
+- **Bubble size shows the order size.** The area follows the size against the floor: radius = 4.8 px x sqrt(size /
+  floor), 4.8 px at the floor, 6.8 px at twice it, 9.6 at four times, 15.2 at ten times, 27 px at most (about 32 times).
+  Before, the radius grew with the fourth root, so prints near the floor all looked the same small size. Fill, ring and
+  alpha unchanged. `util.bubbleRadius`.
+- **No numbers on the chart; the size on hover.** The size beside the larger bubbles is gone. With the mouse over a
+  bubble (the topmost under the pointer, 3 px of slop) the chart's top legend line says "Bubble Buy 142 @ 31,120.25
+  08:44:05.3", in the workspace's panels and on `/single.html`. The hit test runs on mouse moves only, on the bubbles as
+  last drawn; the per-frame cost is unchanged. Engine: `on('bubble', { t, p, v, side, floor } | null)`, `bubbleHover()`,
+  `bubbles()` (each bubble as last drawn, its size as drawn).
+- **The high no longer runs into the legend** (the 5 min and 1 hour panels): the price scale keeps the legend's height
+  and 8 px free at its top (8% when that is more; at most 45% of the plot), told again whenever the legend's height
+  changes and eased with the 120 ms re-fit, never a snap; with zoom to brackets and the VWAP rule as above. The time axis
+  is below the plot, so nothing changes at the bottom. Engine: option `fitTop`, `setFitTop(px)`; `util.fitRange` takes it.
+
+### From Anthony live on 1.13.0: the header room, by itself, and Jump to live
+- **Price never runs into the header** as it trends, without resizing or squashing by hand: the auto-fit counts the
+  forming bar's real high and low (not only its eased candle), so the scale makes room before the candle gets there, and
+  the room under the header is 8 px. A price scale zoomed or moved by hand stays as set while the price is inside it;
+  once a new trade takes the forming bar within 12 px of the header (or the bottom) while following live, the auto-fit
+  takes over again, eased with the same 120 ms re-fit. Going back to live (End, the icon, or scrolling back to the live
+  edge) brings the auto-fit back too. The fit is the bars in view (and orders), so the candles are never squashed more
+  than the move needs. The time constants are unchanged.
+- **Jump to live is a small icon** (24 x 22 px, the same purple, a play-to-end glyph, tooltip "Jump to live (End)") at
+  the top of the price scale instead of the pill over the plot, on both pages and in every panel. It shows only while
+  not following live, sits clear of every tag in that column (the last price with its countdown, orders, the position,
+  levels: it moves down below them when they are at the top, and the axis prices under it are not drawn), never over the
+  plot, and takes no layout room. End still works.
+
+### The NO STOP question's place (the coordinator, layout only)
+- On `/single.html` it opens just under the legend, so the LIVE and ARMED pills stay in view; in the workspace it starts
+  after the connection status (which stays in view) and ends before KEYS. Its rules are 1.13.0's: it takes no layout
+  room, nothing resizes or scrolls, and Close, Flatten, Flatten all, KEYS, Cancel and Send stay uncovered
+  (`smoke:noscroll` checks it at the three sizes, with screenshots). Its logic is unchanged.
+
+### 7. Versions
+- "chart 1.14.0 · ChartBridge 0.3.8" in the LIVE badge's tooltip (the workspace's top bar, the single chart page's LIVE
+  pill) and in Settings (both pages).
+
+### 8. The `smoke:orders` flake
+- "a drag on order NT208 while it waits in a Cancel all" failed now and then. Root cause: the probe took the first order
+  still queued, whose cancel goes out at the very next slot of the pace (1.1 s after the click), while the wait for the
+  chart to settle takes 0.5 to over 1 s; when the cancel went first, ChartBridge removed the order before the drag,
+  which then pressed on an empty chart (no note, the check failed). The probe now drags the order cancelled last (3.3 s
+  after the click) and checks it is still queued right before the press. Nothing skipped; the page is unchanged.
+
+### 9. The page's clock follows Windows clock fixes
+- `nowMs` was `performance.timeOrigin + performance.now()`, fixed at page load, while ChartBridge re-anchors to the PC
+  clock every 5 s: after Windows time sync stepped the clock the page showed a false "local -99 ms (PC clock behind)"
+  until it reloaded (HOME). The page's clock (`LivePrefs.pageClock`, one per page) now compares itself with
+  `Date.now()` every 5 s and re-anchors when off by more than 50 ms, as ChartBridge does. `now()` is still one addition
+  (the tick path's cost is unchanged), and every user reads it: the local delay and the order ticket link's stamps
+  (`TicketLink.browserNow`).
+
+### From Anthony at WORK: bubble placement (59.png, 60.png)
+- A bubble sat over a bar whose range did not hold its price, or one bar early. Cause: same-side prints at one price
+  within the aggregation window were grouped across a bar change, and the group was placed by its first print's time
+  while its price was the group's VWAP. Now a bar change closes the group (`LargePrints.add(t, p, v, side, barT)`), each
+  group keeps its bar's start, and the chart places it by that bar. Range bar and minute boundaries and the "one bar
+  early" case are in the test, which failed before the fix. Absorption and divergence unchanged.
+
+### Batch 2 (Anthony, 2026-10-02)
+- **A. Volume profile colors**: rows, value area rows and POC each a picker and hex box in the profile's gear (indicator
+  colors `vpRow`, `vpValue`, `vpPoc`; an indicator preset saved before takes the defaults for the new two). Brighter
+  rows outside the value area by default: `#19212C` (was `#141C26`), 7.5% toward the text color on other grounds (was
+  7%). The value area is capped at 1.13.0's `#212C3B` (14%), so a bear candle over it keeps 1.99:1 on the default ground
+  (Anthony's answer to the review); POC gold unchanged; he can still raise them in the gear. Measured on the default
+  ground: bear 1.99:1 over the value area, 2.28:1 over the other rows; bull 4.70:1.
+- **B. Levels**: the Initial Balance is part of Levels (its own indicator and IB chip retired; search "ib" finds Levels).
+  Every line its own toggle in the Levels gear: PDH, PDL, Prior close, ONH, ONL, PD VAH, PD VAL, PD POC, IBH, IBL. The
+  prior day's value area is named **PD VAH** / **PD VAL**, and its point of control **PD POC** is drawn (the value-area
+  gold, a dash-dot 8/3/2/3 no other level uses). The IB's colors moved into the Levels gear. Saved choices carried over
+  once per chart (`LivePrefs.migrateIb`): an IB shown means its two lines on in Levels (Levels off before: on now with
+  only the IB lines, pinned if either was), an IB off or hidden its lines off; Recent and Restore name Levels.
+- **C. Developing POC, VAH and VAL** of the profile on the chart, each a toggle in the profile's gear (dPOC, dVAH, dVAL,
+  on by default with the profile): solid lines across the plot (the prior day's are dashed), the POC 1.5 px in its gold,
+  the value area's edges 1 px in the secondary text color, named at the profile's left edge. From the profile's columns,
+  which it keeps per version: nothing is walked per frame or per tick. Engine: `setProfileLines({ poc, vah, val })`,
+  `getProfileLines()`.
+- **D. Chips**: up to 10 pinned (was 6); a strip that does not fit puts the rest behind **+N**, which opens a small list
+  of them, on both pages at 1366, 1920 and 2560 px; a host's own toolbar (`ChartLive.mount`) does the same once its
+  one-letter chips do not fit either, and keeps room for every chip there can be (7 today). The +N button is not an
+  `.ind-chip`.
+- **E. VWAP hours** in the VWAP gear, per chart: **Full session (from 18:00 ET)**, the default and as before, or **RTH
+  only (from 09:30 ET)**, from the 1-minute bars' typical prices, none outside 09:30 to 16:00 ET. Engine:
+  `setVwapSource(fn)`, `util.rthVwap`, `util.vwapAt`.
+- **F. Short header on small panels**: a workspace chart under 700 px wide or 400 px tall shows one quiet line (the name,
+  bars, last price and change, the indicators' values); the bar's open, high, low and volume and a hovered bubble come on
+  a second line only while the crosshair is over the chart (the scale does not move for it). Bigger panels keep the full
+  header; `/single.html` always does. The room kept at the top follows the header's real height.
+- **G. No numbers on the bubbles** anywhere (the size is on hover, above).
+- **Header text toggle** (**Aa**, next to Indicators in each panel header and on `/single.html`): off hides the header
+  text, even on hover, and the hovered bubble's text; the price scale takes the room back, eased with the 120 ms re-fit.
+  On by default, saved per chart (`live-legend-v1`). `ChartLive.mount` returns `legendToggle`, `legendShown()` and
+  `setLegendShown(on)`; the engine `getFitTop()`.
+
+### From Anthony: a chip opens its settings
+- **A chip click opens that indicator's settings** in a popover dropped from the chip, instead of switching it off: the
+  gear's own card (Hours, toggles, numbers, colors and Default colors, exactly as in the menu), with an **on/off switch**
+  at the top. Off hides the indicator and keeps the chip, so the same popover turns it back on; unpinning stays in the
+  menu. A click outside, Escape or the chip again closes it, and the focus leaves it (as the order bar's `handBack`), so
+  the hotkeys work at once; the workspace's KEYS reads OFF while it is open (the single chart page's hotkeys wait too).
+  It never scrolls: fixed under the chip, flipped up or left near an edge, whole at 1366, 1920 and 2560 px. Both pages,
+  the 2-letter chips, a host's own toolbar, and the chips behind "+N" (dropped from "+N").
+
+### Review D2 fixes and Anthony's answers
+- **Chip popovers never block the order bar or the ticket**: on `/single.html` the popover opens below the order bar
+  (as the Indicators menu), in the workspace never over the ticket's panel. **Close and Flatten all always act** while any
+  menu, popover or panel is open (their keys and buttons), also from a popover's box when the combo types nothing there
+  (Ctrl, Alt or an F-key); Buy, Sell and B/E keys stay blocked there with the note, as before.
+- **An order drag holds the price scale still**: no take-over, no auto-fit easing, no zoom-to-brackets re-fit while an
+  order's line is dragged; the line stays under the pointer and the price sent is the price drawn; it eases on after the
+  drop.
+- **Ticket link**: every cross-window stamp and age check on `Date.now()` (the same in every window, also after a clock
+  fix); `move()` counts its own waits for its 1.5 s deadline. `/single.html`'s last-seen price guard on
+  `performance.now()`, as the workspace's.
+- **The workspace's NO STOP strip** is one line at every width: the text shortens ("The MNQ order has no stop.", "MNQ:
+  no stop.") before it would be cut; the whole text is in its tooltip; Cancel and Send always in view.
+- **RTH-only VWAP** kept up to date bar by bar (`util.rthVwapUpdate`: the closed bars once, the forming bar again), not
+  recomputed over every 1-minute bar each second.
+- `--tape-big-lift` token for a big trade's lift (was a literal white).
+- The 1h panel's overlapping day labels ("Tue 29", "Thu 1") come from code unchanged since main (the session-start labels
+  are not spaced); not this branch's, left as is.
+- The fake bridge's `weekProfile` serves a fixed set (the 5 weekday sessions before today), so its test passes at any
+  hour (it failed 14:15Z to 15:45Z on every branch).
+- **Profile contrast (Anthony)**: the value area capped at 1.13.0's (see A); rows outside it stay brighter.
+- **Price scale lock (Anthony)**: a small padlock in the corner under the price axis (no layout room, no tag ever goes
+  there), on both pages and every panel, saved per chart (`live-scale-lock-v1`), unlocked by default. Locked, a price zoom
+  set by hand is kept as price moves (no take-over near the edge, none on scrolling back to the live edge; price may
+  leave the view) until it is unlocked, End or Jump to live. Engine: option `lockButton`, `setScaleLock(on)`,
+  `scaleLock()`, `on('scaleLock')`.
+- **ATR period (Anthony)**: editable in Settings on both pages (a whole number 2 to 100, 14 by default), saved with the
+  settings (`live-settings-v2` `atr`), every chart's readout follows.
+- Tests: `smoke:dragfreeze` (new, the reviewer's probe: four events during a drag), `smoke:chippop` (every chip's popover
+  at three sizes: Flatten, B/E, Cancel all, Buy, Sell, Armed and the ticket's buttons reachable; the Close and Flatten
+  all keys act, also from a popover's box), `smoke:hotkeys` (Flatten all acts while Settings is open, Buy does not),
+  `smoke:noscroll` (the NO STOP text not cut), `smoke:headroom` (the lock), `smoke:display` (the ATR period); unit tests
+  for the ticket link's clock and deadline, the incremental VWAP, the lock, the ATR setting.
+
+### Tests
+- `test/display.test.js` (new): the room, the scale with orders and planned lines, the countdown, the ATR, the change
+  from the settlement, the settings, the tape categories and colors, the floors, the feed carrying `q` and the
+  settlement, the page clock, the edge resize, the bubble radius (1x, 2x, 4x, 10x, over the cap), the legend's
+  room at the top, the bubble placement repro (range bar and minute boundaries, one bar early), the VWAP anchors (full
+  session from 18:00 and RTH from 09:30, each resetting), the level toggles and `migrateIb` (through the store too) with
+  an old indicator preset, the chip cap and the header toggle. `test/vp-draw.test.js`: the developing lines, each its own
+  toggle, per profile version; the profile contrast guards moved to the brighter rows' measured values.
+- `npm run smoke:display` (new): grid off by default and on from Settings, the room at any zoom and after End, zoom to
+  brackets eased, planned lines and the VWAP in the engine, the readouts (Range too; a new and a missing settlement),
+  the versions, the single chart page's layout and Armed outline, the tape by category (gear, Default colors, big
+  trades, a tape that joins later) and by side with an older ChartBridge, edge and corner resize with an overlap refused,
+  bubbles sized by the order and told in the legend on hover, the high below the legend on every chart,
+  screenshots of both pages at 1366x768, 1920x1080 and 2560x1440 and close crops of the tape and the Colors panel.
+  Batch 2: the Levels gear's ten toggles and PD POC, the developing lines and profile colors, VWAP RTH against its own
+  computation, every chip pinned at three sizes on both pages, the short header and its hover line, no numbers drawn on a
+  bubble, the header toggle on both pages (none on hover, the room back eased, saved per panel across a reload).
+- `npm run smoke:noscroll` (new), above.
+- `npm run smoke:headroom` (new): a fake-bridge trend of +60 points in 2 minutes on MNQ, watched on a big workspace
+  panel (full header, its price scale squashed by hand after a first leg up) and a small one (the short header), then
+  on `/single.html`: the last price, the forming high and every high in view stay at least 4 px below the header at
+  every sample, the scale is never more than 1.1 times the fit of the bars in view, the auto-fit takes over by itself
+  near the header; Jump to live as an icon at the top of the price scale, clear of the last price tag, no layout room,
+  a click and End. `test/vp-draw.test.js`: the takeover (kept while the price is inside, on a trade near the header, on
+  going back to live) and the icon (hidden while following, at the top of the price scale, below two order tags priced
+  at the top).
+- Selectors that follow the new layout: `smoke:live` (Range style and Glide in Settings, the drawing tools in the small
+  menu, 2-letter chips on a phone), `smoke:pin` (Change PIN in Settings), `smoke:workspace` (the single chart page's
+  Glide in Settings; the tape's colors by category or side), `smoke:ib` (the light toolbar read on Settings, the toolbar's
+  `.btn`, since Reset view moved into the menu), `smoke:delta` (Home and End on the pane's divider: the ratio within
+  0.001 of the limit, as the pane's whole pixels give it at the taller chart). `smoke:orders`: the drag probe above.
+  `smoke:hotkeys` unchanged (Settings and the small menu stay on screen when the window is resized while open).
+- Batch 2 in the older smokes: `smoke:live` (5 indicators on at first run, the IB in the Levels gear, the cap rule at 3),
+  `smoke:ib` (IBH and IBL toggles in the Levels gear), `smoke:presets` (the IB colors in the Levels gear, the profile's
+  row colors), `smoke:settings` (a 1.3 save: Levels on with only the IB lines), `smoke:delta` (the counts without the IB),
+  `smoke:vp` (the hours switch read apart from the new toggles; the developing POC off while the POC bar's own pixels are
+  measured, since its line runs through the bar), `smoke:workspace` (no IB chip; a small panel's legend is the short
+  header) and `smoke:embed` (no IB chip; seven chips, the narrow pane's rest behind +N).
+- `npm run smoke:chippop` (new): on both pages at 1366x768, 1920x1080 and 2560x1440 (and a 1000 px window for the flip): a
+  chip opens its settings under it, whole on screen and not scrolling; an edit applies and is saved; the switch hides the
+  indicator and keeps the chip, and shows it again; Escape, the chip again and a click outside close it with the focus
+  back on the page; KEYS OFF while open and ON after; a chip behind "+N". The smokes that clicked a chip to hide or show
+  now use its popover's switch: `smoke:live`, `smoke:orders`, `smoke:delta`, `smoke:embed`, `smoke:workspace`.
+- `test/trade-sides.test.js` (ChartBridge 0.3.8's): the hub now keeps a trade's `q` (it said chart 1.12.0 read none);
+  the chart, the bar builder and the order code still read no `q`.
+
 ## 1.13.0 (2026-10-02): planned stop and target lines, NO STOP, Armed in deep red
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The planned lines need

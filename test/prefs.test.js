@@ -12,10 +12,12 @@ function mem(init) {
 
 test('defaults with empty storage: what the page showed before', () => {
   const p = LP.create(mem());
-  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
+  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt', grid: 'off', room: 80, atr: 14 });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): on; the signals (G1c) off
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): on; the signals (G1c) off
+  // 1.14.0: the IB is part of Levels; every level line on by default, the PD POC with them
+  assert.ok(Object.values(p.indicatorOptions('main', 'levels')).every(v => v === 'on') && p.indicatorOptions('main', 'levels').poc === 'on' && p.indicatorOptions('main', 'levels').ibh === 'on');
 });
 
 test('range size is per root, and one write never undoes another tab', () => {
@@ -28,7 +30,7 @@ test('range size is per root, and one write never undoes another tab', () => {
   assert.equal(fresh.range('MNQ'), 16);
   assert.equal(fresh.range('ES'), 8);
   tabA.setSetting('tf', 'range'); tabB.setSetting('glide', 'fast');
-  assert.deepEqual(LP.create(s).settings(), { root: 'MNQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
+  assert.deepEqual(LP.create(s).settings(), { root: 'MNQ', tf: 'range', glide: 'fast', rangeMode: 'nt', grid: 'off', room: 80, atr: 14 });
 });
 
 test('range size validation: whole ticks 1 to 400', () => {
@@ -51,10 +53,11 @@ test('1.3 keys are read once and carry over', () => {
     'live-range-v1': { MNQ: 20, NQ: 40, MES: 8, ES: 'junk' },
   });
   const p = LP.create(s);
-  assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
+  assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt', grid: 'off', room: 80, atr: 14 });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true, vp: false, delta: true, bubbles: false, absorption: false });   // IB (1.5.3) and the delta pane (1.7.0): the main pane defaults
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): the main pane default
+  assert.equal(p.indicatorOptions('main', 'levels').ibh, 'on', 'IB (1.5.3, in Levels since 1.14.0): the main pane default');
   // later changes to the old keys (an older page in another tab) are not read again
   s.setItem('live-range-v1', JSON.stringify({ NQ: 12 }));
   s.setItem('live-settings-v1', JSON.stringify({ root: 'ES' }));
@@ -64,12 +67,15 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(s.dump('live-range-v1'), { NQ: 12 });   // left in place
 });
 
-const ALL = ['volume', 'vwap', 'levels', 'ib', 'fills'];
-const IDS = LP.INDICATORS.map(d => d.id);                        // the five, the volume profile (off by default) and the delta pane (1.7.0)
+// the main pane's own four (1.14.0: the IB is part of Levels), and the bubbles, a pinnable one off by default, for the
+// Pane rules that once used the IB
+const ALL = ['volume', 'vwap', 'levels', 'fills'];
+const SEEN = ['volume', 'vwap', 'levels', 'fills', 'bubbles'];
+const IDS = LP.INDICATORS.map(d => d.id);                        // the four, the volume profile (off by default) and the delta pane (1.7.0)
 const flags = on => Object.fromEntries(IDS.map(id => [id, on.includes(id)]));
-const onIds = st => ALL.filter(id => st.ind[id].on);
-const shownIds = st => ALL.filter(id => st.ind[id].on && st.ind[id].shown);
-const pinIds = st => ALL.filter(id => st.ind[id].pin);
+const onIds = st => SEEN.filter(id => st.ind[id].on);
+const shownIds = st => SEEN.filter(id => st.ind[id].on && st.ind[id].shown);
+const pinIds = st => SEEN.filter(id => st.ind[id].pin);
 
 test('indicators (1.6.0): the main pane starts with the five on, shown and pinned (and the delta pane on without a chip, 1.7.0); a new pane with none on', () => {
   const p = LP.create(mem());
@@ -78,7 +84,7 @@ test('indicators (1.6.0): the main pane starts with the five on, shown and pinne
   assert.deepEqual(main.ind.delta, { on: true, shown: true, pin: false });
   assert.deepEqual([onIds(fresh), pinIds(fresh)], [[], []]);
   assert.deepEqual(p.indicators('pane-2'), flags([]));
-  assert.deepEqual(LP.Pane.counts(main), { shown: 6, on: 6, hidden: 0 });
+  assert.deepEqual(LP.Pane.counts(main), { shown: 5, on: 5, hidden: 0 });
   assert.deepEqual(LP.Pane.counts(fresh), { shown: 0, on: 0, hidden: 0 });
   assert.deepEqual(main.recent, []);
   assert.equal(main.restore, null);
@@ -87,9 +93,11 @@ test('indicators (1.6.0): the main pane starts with the five on, shown and pinne
 test('1.3 keys: the indicators chosen on 1.3 draw the same after the update (through live-indicators-v1)', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
-  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false });
+  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false });
+  // 1.14.0: the IB (on by default then) brought Levels on with only its own two lines, as 1.13 drew it
+  assert.deepEqual(Object.entries(p.indicatorOptions('main', 'levels')).filter(([, v]) => v === 'on').map(([k]) => k), ['ibh', 'ibl']);
   assert.deepEqual(p.indicators('pane-2'), flags([]));
-  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false } });   // left in place
+  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, vp: false, delta: true, bubbles: false, absorption: false } });   // left in place
 });
 
 test('migration from live-indicators-v1: on and off carried over exactly, an explicit off stays off', () => {
@@ -107,6 +115,8 @@ test('migration from live-indicators-v1: on and off carried over exactly, an exp
   assert.deepEqual(p.indicators('pane-2'), flags(['vwap']));
   assert.deepEqual(p.indicators('pane-3'), flags(['levels']));
   assert.deepEqual(p.indicators('old'), flags(['volume', 'vwap', 'levels', 'fills']));   // not main: IB stays off, as 1.5.3 had it
+  assert.equal(p.indicatorOptions('old', 'levels').ibh, 'off');
+  assert.deepEqual([p.indicatorOptions('main', 'levels').ibh, p.indicatorOptions('main', 'levels').pdh], ['off', 'on'], 'main: IB off there, its other levels on');
   // the main pane keeps all five on its chart; the ones that were off are hidden (one click back) and all are pinned
   const main = p.pane('main');
   assert.deepEqual([onIds(main), shownIds(main), pinIds(main)], [ALL, ['vwap', 'levels'], ALL]);
@@ -123,10 +133,11 @@ test('migration from live-indicators-v1: on and off carried over exactly, an exp
   assert.deepEqual(again.indicators('pane-9'), flags([]));
 });
 
-test('migration: a main pane saved before 1.5.3 gets IB on, with its other choices kept', () => {
+test('migration: a main pane saved before 1.5.3 gets IB on (in Levels since 1.14.0), with its other choices kept', () => {
   const p = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { volume: true, vwap: false, levels: true, fills: true } } }));
-  assert.deepEqual(p.indicators('main'), flags(['volume', 'levels', 'ib', 'fills', 'delta']));
-  assert.deepEqual(shownIds(p.pane('main')), ['volume', 'levels', 'ib', 'fills']);
+  assert.deepEqual(p.indicators('main'), flags(['volume', 'levels', 'fills', 'delta']));
+  assert.deepEqual(shownIds(p.pane('main')), ['volume', 'levels', 'fills']);
+  assert.equal(p.indicatorOptions('main', 'levels').ibh, 'on');
   assert.equal(p.pane('main').ind.vwap.on, true);
 });
 
@@ -177,15 +188,21 @@ test('Pane: the switch and + show, hide and add; one added gets a chip; the x ta
   assert.equal(P.setShown(st, 'levels', true), before, 'a chip only acts on one that is on the chart');
   assert.equal(P.toggle(st, 'profile'), before, 'coming indicators cannot be added');
   assert.equal(P.toggle(st, 'bogus'), before);
-  const again = P.toggle(before, 'ib');
-  assert.equal(before.ind.ib.on, false, 'the state given is never changed');
-  assert.equal(again.ind.ib.on, true);
+  const again = P.toggle(before, 'bubbles');
+  assert.equal(before.ind.bubbles.on, false, 'the state given is never changed');
+  assert.equal(again.ind.bubbles.on, true);
+  assert.equal(P.toggle(before, 'ib'), before, 'the IB is no indicator of its own any more (1.14.0)');
 });
 
-test('Pane: the chip strip holds 6; when full an added one gets no chip and pinning by hand is refused', () => {
+test('Pane: the chip strip holds 10 (1.14.0, Anthony; 6 before); when full an added one gets no chip and pinning by hand is refused', () => {
   const P = LP.Pane;
-  assert.equal(LP.PIN_MAX, 6);
-  assert.equal(P.pinned(LP.defaultPane('main')), 5, 'the main pane: the five (the delta pane has no chip by default, review N5)');
+  assert.equal(LP.PIN_MAX, 10);
+  assert.equal(P.pinned(LP.defaultPane('main')), 4, 'the main pane: the four (the delta pane has no chip by default, review N5)');
+  // ten chips: every indicator that can have one, on a pane
+  let ten = LP.defaultPane('pane-2');
+  for (const d of LP.INDICATORS) ten = P.toggle(ten, d.id);
+  assert.equal(P.pinned(ten), LP.INDICATORS.filter(d => !d.nochip).length, 'all eight pinnable ones fit');
+  assert.equal(P.pinFull(ten), false);
   assert.equal(P.pinFull(LP.defaultPane('main')), false);
   const cap = LP.PIN_MAX;
   try {
@@ -194,12 +211,12 @@ test('Pane: the chip strip holds 6; when full an added one gets no chip and pinn
     st = P.toggle(st, 'vwap'); st = P.toggle(st, 'levels');
     assert.deepEqual(pinIds(st), ['vwap', 'levels']);
     assert.equal(P.pinFull(st), true);
-    st = P.toggle(st, 'ib');                                     // added while full: on the chart, no chip
-    assert.deepEqual([onIds(st), pinIds(st)], [['vwap', 'levels', 'ib'], ['vwap', 'levels']]);
-    assert.equal(P.pin(st, 'ib', true), st, 'pinning by hand when full is refused');
+    st = P.toggle(st, 'bubbles');                                // added while full: on the chart, no chip
+    assert.deepEqual([onIds(st), pinIds(st)], [['vwap', 'levels', 'bubbles'], ['vwap', 'levels']]);
+    assert.equal(P.pin(st, 'bubbles', true), st, 'pinning by hand when full is refused');
     st = P.pin(st, 'vwap', false);                               // make room
-    st = P.pin(st, 'ib', true);
-    assert.deepEqual(pinIds(st).filter(id => st.ind[id].on), ['levels', 'ib']);
+    st = P.pin(st, 'bubbles', true);
+    assert.deepEqual(pinIds(st).filter(id => st.ind[id].on), ['levels', 'bubbles']);
     // a pin kept on one taken off does not count, and never takes a chip beyond the cap when it comes back
     st = P.remove(st, 'levels');
     st = P.toggle(st, 'fills');
@@ -211,36 +228,36 @@ test('Pane: the chip strip holds 6; when full an added one gets no chip and pinn
 test('Pane: Recent holds the last 5 used from the menu, newest first; a chip click is not a recent use', () => {
   const P = LP.Pane;
   let st = LP.defaultPane('pane-2');
-  for (const id of ['vwap', 'levels', 'ib', 'fills', 'volume', 'vwap']) st = P.toggle(st, id);
-  assert.deepEqual(st.recent, ['vwap', 'volume', 'fills', 'ib', 'levels']);
+  for (const id of ['vwap', 'levels', 'bubbles', 'fills', 'volume', 'vwap']) st = P.toggle(st, id);
+  assert.deepEqual(st.recent, ['vwap', 'volume', 'fills', 'bubbles', 'levels']);
   st = P.setShown(st, 'levels', false);
-  assert.deepEqual(st.recent, ['vwap', 'volume', 'fills', 'ib', 'levels']);
+  assert.deepEqual(st.recent, ['vwap', 'volume', 'fills', 'bubbles', 'levels']);
   assert.equal(LP.RECENT_MAX, 5);
 });
 
 test('Pane: Hide all then Restore brings back the same mix, not everything', () => {
   const P = LP.Pane;
-  let st = LP.defaultPane('main');
+  let st = P.toggle(LP.defaultPane('main'), 'bubbles');         // the bubbles added (1.14.0: in place of the IB)
   st = P.toggle(st, 'volume');                                   // Volume hidden by hand before Hide all
   st = P.remove(st, 'fills');
-  assert.equal(P.hideLabel(st), 'Hide all (4)');                 // VWAP, Levels, IB and the delta pane (1.7.0)
+  assert.equal(P.hideLabel(st), 'Hide all (4)');                 // VWAP, Levels, the bubbles and the delta pane (1.7.0)
   st = P.hideAll(st);
   assert.deepEqual(shownIds(st), []);
   assert.equal(P.drawn(st).delta, false);
-  assert.deepEqual(onIds(st), ['volume', 'vwap', 'levels', 'ib'], 'hidden, not removed');
-  assert.deepEqual(st.restore, ['vwap', 'levels', 'ib', 'delta']);
+  assert.deepEqual(onIds(st), ['volume', 'vwap', 'levels', 'bubbles'], 'hidden, not removed');
+  assert.deepEqual(st.restore, ['vwap', 'levels', 'delta', 'bubbles']);
   assert.equal(P.hideLabel(st), 'Restore');
   st = P.hideAll(st);                                            // the same button: Restore
-  assert.deepEqual(shownIds(st), ['vwap', 'levels', 'ib'], 'Volume stays hidden');
+  assert.deepEqual(shownIds(st), ['vwap', 'levels', 'bubbles'], 'Volume stays hidden');
   assert.equal(P.drawn(st).delta, true);
   assert.equal(st.restore, null);
   // any other show or hide in between drops the saved mix
   st = P.hideAll(st);
-  st = P.setShown(st, 'ib', true);
+  st = P.setShown(st, 'bubbles', true);
   assert.equal(st.restore, null);
   assert.equal(P.hideLabel(st), 'Hide all (1)');
   // one taken off after Hide all is not brought back by Restore
-  st = P.hideAll(st); st = P.remove(st, 'ib'); st = P.remove(st, 'delta');
+  st = P.hideAll(st); st = P.remove(st, 'bubbles'); st = P.remove(st, 'delta');
   assert.equal(P.hideLabel(st), 'Hide all (0)');
   assert.equal(P.hideAll(st), st, 'nothing to hide and nothing to restore: no change');
   // with the ones in the saved mix taken off, nothing to restore
@@ -296,12 +313,12 @@ test('two tabs: showing writes on and shown, so a tab that shows one another tab
   assert.equal(LP.create(s).indicators('main').vwap, true, 'saved as tab B shows it');
   // Restore likewise
   const c = menuTab(s, 'pane-3'), d = menuTab(s, 'pane-3');
-  c.toggle('ib'); d.toggle('ib');
-  d.hideAll();                                                   // tab D hides IB (remembered for Restore)
-  c.remove('ib');                                                // tab C takes it off
+  c.toggle('bubbles'); d.toggle('bubbles');
+  d.hideAll();                                                   // tab D hides the bubbles (remembered for Restore)
+  c.remove('bubbles');                                           // tab C takes them off
   d.hideAll();                                                   // Restore in tab D
-  assert.equal(LP.Pane.drawn(d.IS).ib, true);
-  assert.equal(LP.create(s).indicators('pane-3').ib, true);
+  assert.equal(LP.Pane.drawn(d.IS).bubbles, true);
+  assert.equal(LP.create(s).indicators('pane-3').bubbles, true);
 });
 
 test('updatePane reads fresh: two tabs changing one pane each keep the other\'s change (review S2)', () => {
@@ -309,12 +326,12 @@ test('updatePane reads fresh: two tabs changing one pane each keep the other\'s 
   const a = LP.create(s), b = LP.create(s);                      // both loaded before either change
   a.updatePane('main', st => LP.Pane.toggle(st, 'vwap'));        // tab A hides VWAP
   b.updatePane('main', st => LP.Pane.toggle(st, 'volume'));      // tab B, still holding VWAP shown, hides Volume
-  b.updatePane('pane-2', st => LP.Pane.toggle(st, 'ib'));
+  b.updatePane('pane-2', st => LP.Pane.toggle(st, 'bubbles'));
   a.updatePane('main', st => LP.Pane.pin(st, 'levels', false));
   const fresh = LP.create(s);
-  assert.deepEqual(fresh.indicators('main'), flags(['levels', 'ib', 'fills', 'delta']));
+  assert.deepEqual(fresh.indicators('main'), flags(['levels', 'fills', 'delta']));
   assert.equal(fresh.pane('main').ind.levels.pin, false);
-  assert.deepEqual(fresh.indicators('pane-2'), flags(['ib']));
+  assert.deepEqual(fresh.indicators('pane-2'), flags(['bubbles']));
   assert.equal(a.updatePane('', st => st), false);
   assert.equal(a.updatePane('__proto__', st => st), false);
 });
@@ -325,9 +342,9 @@ test('cleanPane: junk in storage never breaks a pane', () => {
     assert.deepEqual(onIds(st), ALL, JSON.stringify(junk));
     assert.ok(Array.isArray(st.recent) && st.restore === null);
   }
-  const st = LP.cleanPane({ ind: { vwap: { on: false, shown: 1, pin: false } }, recent: ['ib', 'ib', 'x', 'vwap', 'levels', 'fills', 'volume', 'profile'], restore: ['vwap', 'nope'] }, 'main');
+  const st = LP.cleanPane({ ind: { vwap: { on: false, shown: 1, pin: false } }, recent: ['vp', 'vp', 'x', 'ib', 'vwap', 'levels', 'fills', 'volume', 'profile'], restore: ['vwap', 'nope'] }, 'main');
   assert.deepEqual([st.ind.vwap.on, st.ind.vwap.shown, st.ind.vwap.pin], [false, true, false]);
-  assert.deepEqual(st.recent, ['ib', 'vwap', 'levels', 'fills', 'volume']);
+  assert.deepEqual(st.recent, ['vp', 'vwap', 'levels', 'fills', 'volume'], 'the IB (1.14.0: no indicator) is dropped like junk');
   assert.deepEqual(st.restore, ['vwap']);
   const s = mem(); s.m.set('live-settings-v2', '{}'); s.m.set('live-indicators-v2', '{not json');
   const p = LP.create(s);
@@ -339,8 +356,7 @@ test('cleanPane: junk in storage never breaks a pane', () => {
 test('search matches names and short names', () => {
   const ids = q => LP.searchIndicators(q).map(d => d.id);
   assert.deepEqual(ids('vwap'), ['vwap']);
-  for (const q of ['ib', 'ibh', 'ibl', 'initial', 'IB']) assert.deepEqual(ids(q), ['ib'], q);
-  for (const q of ['pdh', 'pdl', 'onh', 'onl', 'levels', 'prior day']) assert.deepEqual(ids(q), ['levels'], q);
+  for (const q of ['ib', 'ibh', 'ibl', 'initial', 'IB', 'pdh', 'pdl', 'onh', 'onl', 'levels', 'prior day']) assert.deepEqual(ids(q), ['levels'], q);   // the IB is in Levels (1.14.0)
   assert.deepEqual(ids('vol'), ['volume', 'vp']);
   assert.deepEqual(ids('volume bars'), ['volume']);
   assert.deepEqual(ids('fills'), ['fills']);
@@ -351,10 +367,10 @@ test('search matches names and short names', () => {
 });
 
 test('the menu lists only real indicators, in four groups; the volume profile (1.6.0), the cumulative delta (1.7.0), the bubbles and the absorption bars (G1c) are among them', () => {
-  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'ib', 'vp', 'delta', 'bubbles', 'fills', 'absorption']);
+  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'vp', 'delta', 'bubbles', 'fills', 'absorption']);
   assert.deepEqual(LP.CATEGORIES.map(c => c.name), ['Price', 'Volume', 'Trades', 'Signals']);
   const byCat = c => LP.INDICATORS.concat(LP.COMING).filter(d => d.cat === c).map(d => d.name);
-  assert.deepEqual(byCat('price'), ['VWAP', 'Levels', 'Initial balance']);
+  assert.deepEqual(byCat('price'), ['VWAP', 'Levels']);
   assert.deepEqual(byCat('volume'), ['Volume bars', 'Volume profile', 'Cumulative delta', 'Large-order bubbles']);
   assert.deepEqual(byCat('trades'), ['Fills']);
   assert.deepEqual(byCat('signals'), ['Absorption bars']);
@@ -370,8 +386,8 @@ test('the volume profile in the menu: off on every pane (also a main pane carrie
   assert.deepEqual([v1.ind.vp.on, v1.ind.vp.pin], [false, false], 'a 1.5.3 save has no vp key: off after the carry-over');
   const two = P.toggle(LP.defaultPane('pane-2'), 'vp');          // a pane with room: a chip
   assert.deepEqual([two.ind.vp.on, two.ind.vp.shown, two.ind.vp.pin, P.pinned(two)], [true, true, true, 1]);
-  let st = P.toggle(LP.defaultPane('main'), 'vp');               // added on the main pane: the sixth chip (the delta pane has none, review N5)
-  assert.deepEqual([st.ind.vp.on, st.ind.vp.shown, st.ind.vp.pin, P.pinned(st), P.pinFull(st)], [true, true, true, 6, true]);
+  let st = P.toggle(LP.defaultPane('main'), 'vp');               // added on the main pane: the fifth chip (the delta pane has none, review N5)
+  assert.deepEqual([st.ind.vp.on, st.ind.vp.shown, st.ind.vp.pin, P.pinned(st), P.pinFull(st)], [true, true, true, 5, false]);
   st = P.hideAll(st);
   assert.equal(P.drawn(st).vp, false);
   assert.ok(st.restore.includes('vp'));
@@ -380,9 +396,10 @@ test('the volume profile in the menu: off on every pane (also a main pane carrie
   const ids = q => LP.searchIndicators(q).map(d => d.id);
   for (const q of ['vp', 'profile', 'poc', 'value area']) assert.ok(ids(q).includes('vp'), q);
   assert.deepEqual(ids('vah'), ['levels', 'vp']);
+  assert.deepEqual(ids('poc'), ['levels', 'vp'], 'the PD POC (1.14.0) and the profile');
 });
 
-test('the volume profile carried over from live-indicators-v1: off from a 1.5.3 save, kept on from a save that had it on, under the 6-chip cap', () => {
+test('the volume profile carried over from live-indicators-v1: off from a 1.5.3 save, kept on from a save that had it on, under the chip cap', () => {
   const P = LP.Pane;
   // (a) every 1.5.3 save: the five flags and no vp key, on the main pane and any other
   const s153 = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': {
@@ -391,26 +408,26 @@ test('the volume profile carried over from live-indicators-v1: off from a 1.5.3 
     const st = s153.pane(pane);
     assert.deepEqual([st.ind.vp.on, st.ind.vp.pin, P.drawn(st).vp], [false, false, false], pane + ': off, no chip, not drawn');
   }
-  assert.equal(pinIds(s153.pane('main')).length, 5, 'the main pane keeps its five chips');
+  assert.equal(pinIds(s153.pane('main')).length, 4, 'the main pane keeps its chips (the IB\'s went with it into Levels)');
   assert.deepEqual(s153.pane('main').ind.delta, { on: true, shown: true, pin: false }, 'and the delta pane (1.7.0) on, with no chip');
   // (b) a save from the unreleased profile test build with vp on: on, shown and pinned, as it was drawn
   const on = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { vp: true }, 'pane-2': { vp: true } } }));
   const main = on.pane('main');
   assert.deepEqual(main.ind.vp, { on: true, shown: true, pin: true });
   assert.equal(P.drawn(main).vp, true);
-  assert.deepEqual(main.ind.delta, { on: true, shown: true, pin: false }, 'the delta pane on, no chip: the strip is full');
-  assert.deepEqual([P.pinned(main), P.pinFull(main), LP.PIN_MAX], [6, true, 6], 'six chips on the main pane: the strip is full, not over it');
+  assert.deepEqual(main.ind.delta, { on: true, shown: true, pin: false }, 'the delta pane on, no chip (review N5)');
+  assert.deepEqual([P.pinned(main), P.pinFull(main), LP.PIN_MAX], [5, false, 10], 'five chips on the main pane, under the cap of ten');
   const two = on.pane('pane-2');
   assert.deepEqual([two.ind.vp, P.pinned(two), onIds(two)], [{ on: true, shown: true, pin: true }, 1, []], 'another pane: only the profile');
   // with the main pane's explicit offs next to it: those stay hidden, the profile stays on
   const mixed = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { vwap: false, vp: true } } })).pane('main');
-  assert.deepEqual([mixed.ind.vp, shownIds(mixed), P.pinned(mixed), mixed.ind.delta.pin], [{ on: true, shown: true, pin: true }, ['volume', 'levels', 'ib', 'fills'], 6, false]);
+  assert.deepEqual([mixed.ind.vp, shownIds(mixed), P.pinned(mixed), mixed.ind.delta.pin], [{ on: true, shown: true, pin: true }, ['volume', 'levels', 'fills'], 5, false]);
 });
 
 test('storage that throws or holds junk never breaks the page', () => {
   const throwing = { getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('QuotaExceeded'); } };
   const p = LP.create(throwing);
-  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
+  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt', grid: 'off', room: 80, atr: 14 });
   assert.equal(p.setRange('NQ', 40), false);
   assert.equal(p.range('NQ'), 20);
   const none = LP.create(null);
@@ -487,6 +504,8 @@ test('setBracketField: whole ticks 0 to 100000 for stop or target on a known roo
   assert.deepEqual(p.bracket('MNQ'), { stop: 40 });
 });
 
+/* the profile's options: its hours, and (1.14.0) its developing POC, VAH and VAL lines, on by default */
+const vpo = session => ({ session, dpoc: 'on', dvah: 'on', dval: 'on' });
 test('volume profile (1.6.0): the vp indicator, off on every pane; its Session / RTH option saved per pane', () => {
   assert.ok(LP.INDICATORS.some(x => x.id === 'vp' && x.name === 'Volume profile'));
   assert.equal(LP.DEFAULT_INDICATORS.vp, false);
@@ -494,7 +513,7 @@ test('volume profile (1.6.0): the vp indicator, off on every pane; its Session /
   assert.deepEqual(LP.INDICATOR_OPTIONS.vp.session, ['full', 'rth']);
   const s = mem();
   const a = LP.create(s), b = LP.create(s);
-  assert.deepEqual(a.indicatorOptions('main', 'vp'), { session: 'full' }, 'the full session by default');
+  assert.deepEqual(a.indicatorOptions('main', 'vp'), vpo('full'), 'the full session by default');
   assert.deepEqual(a.indicatorOptions('main', 'nope'), {});
   assert.equal(a.setIndicatorOption('main', 'vp', 'session', 'rth'), true);
   assert.equal(b.setIndicatorOption('pane-2', 'vp', 'session', 'full'), true);   // another tab, another pane: both kept
@@ -503,12 +522,12 @@ test('volume profile (1.6.0): the vp indicator, off on every pane; its Session /
   assert.equal(a.setIndicatorOption('main', 'ib', 'session', 'rth'), false, 'an indicator without options');
   assert.equal(a.setIndicatorOption('', 'vp', 'session', 'rth'), false);
   const fresh = LP.create(s);
-  assert.deepEqual(fresh.indicatorOptions('main', 'vp'), { session: 'rth' });
-  assert.deepEqual(fresh.indicatorOptions('pane-2', 'vp'), { session: 'full' });
-  assert.deepEqual(s.dump('live-indicator-options-v1'), { main: { vp: { session: 'rth' } }, 'pane-2': { vp: { session: 'full' } } });
+  assert.deepEqual(fresh.indicatorOptions('main', 'vp'), vpo('rth'));
+  assert.deepEqual(fresh.indicatorOptions('pane-2', 'vp'), vpo('full'));
+  assert.deepEqual(s.dump('live-indicator-options-v1'), { main: { vp: vpo('rth') }, 'pane-2': { vp: vpo('full') } });
   // junk in storage falls back to the default
   const junk = mem({ 'live-indicator-options-v1': { main: { vp: { session: 'overnight' } }, x: 5 } });
-  assert.deepEqual(LP.create(junk).indicatorOptions('main', 'vp'), { session: 'full' });
+  assert.deepEqual(LP.create(junk).indicatorOptions('main', 'vp'), vpo('full'));
   assert.equal(LP.create(junk).setIndicatorOption('x', 'vp', 'session', 'rth'), true);
   a.updatePane('main', st => LP.Pane.add(st, 'vp'));
   assert.equal(LP.create(s).indicators('main').vp, true);
@@ -527,19 +546,19 @@ test('indicator options: inherited names are never options, and a pane id such a
   assert.deepEqual(p.indicatorOptions('main', '__proto__'), {});
   for (const pane of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
     assert.equal(p.setIndicatorOption(pane, 'vp', 'session', 'rth'), true, pane);
-    assert.deepEqual(LP.create(s).indicatorOptions(pane, 'vp'), { session: 'rth' }, pane + ' read back');
+    assert.deepEqual(LP.create(s).indicatorOptions(pane, 'vp'), vpo('rth'), pane + ' read back');
   }
   assert.equal(Object.prototype.vp, undefined, 'Object.prototype untouched');
   assert.equal({}.vp, undefined);
-  assert.deepEqual(LP.create(s).indicatorOptions('main', 'vp'), { session: 'full' }, 'main untouched');
+  assert.deepEqual(LP.create(s).indicatorOptions('main', 'vp'), vpo('full'), 'main untouched');
   const saved = JSON.parse(s.m.get('live-indicator-options-v1'));
   assert.ok(Object.prototype.hasOwnProperty.call(saved, '__proto__') && saved.constructor.vp.session === 'rth', 'stored as plain keys: ' + s.m.get('live-indicator-options-v1'));
   // a stored __proto__ key read back is a plain key too, and a new pane keeps it
   const t = mem(); t.m.set('live-indicator-options-v1', '{"__proto__":{"vp":{"session":"rth"}}}');
-  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), { session: 'rth' });
-  assert.deepEqual(LP.create(t).indicatorOptions('main', 'vp'), { session: 'full' });
+  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), vpo('rth'));
+  assert.deepEqual(LP.create(t).indicatorOptions('main', 'vp'), vpo('full'));
   assert.equal(LP.create(t).setIndicatorOption('main', 'vp', 'session', 'rth'), true);
-  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), { session: 'rth' }, 'the other pane kept');
+  assert.deepEqual(LP.create(t).indicatorOptions('__proto__', 'vp'), vpo('rth'), 'the other pane kept');
   assert.equal(Object.prototype.vp, undefined);
 });
 
@@ -552,7 +571,7 @@ test('delta pane: a normal indicator, on for the main pane by default (without a
   assert.equal(LP.NEW_PANE_INDICATORS.delta, false);
   const p = LP.create(mem());
   assert.deepEqual(p.pane('main').ind.delta, { on: true, shown: true, pin: false });
-  assert.deepEqual([P.pinned(p.pane('main')), P.pinFull(p.pane('main'))], [5, false], 'the 1.6.0 five chips: room for one more');
+  assert.deepEqual([P.pinned(p.pane('main')), P.pinFull(p.pane('main'))], [4, false], 'the main pane\'s four chips (1.14.0: the IB\'s is gone): room for more');
   assert.deepEqual(p.pane('pane-2').ind.delta, { on: false, shown: true, pin: false });
   assert.equal(p.indicators('pane-2').delta, false);
   const ids = q => LP.searchIndicators(q).map(x => x.id);
@@ -564,9 +583,9 @@ test('delta pane: a normal indicator, on for the main pane by default (without a
   st = P.toggle(st, 'delta');
   assert.equal(P.drawn(st).delta, true);
   st = P.pin(st, 'delta', true);
-  assert.deepEqual([st.ind.delta.pin, P.pinned(st)], [true, 6], 'pinned by hand: a chip like any other');
+  assert.deepEqual([st.ind.delta.pin, P.pinned(st)], [true, 5], 'pinned by hand: a chip like any other');
   st = P.remove(st, 'delta');
-  assert.deepEqual([st.ind.delta.on, P.pinned(st)], [false, 5]);
+  assert.deepEqual([st.ind.delta.on, P.pinned(st)], [false, 4]);
   st = P.toggle(st, 'delta');
   assert.deepEqual(st.ind.delta, { on: true, shown: true, pin: true }, 'added from the menu: a chip while there is room (the E2 rule)');
   // a second pane adds it from the menu: on, shown, a chip
@@ -588,15 +607,15 @@ test('delta pane: an existing saved layout with no delta key gets it on for the 
   // with the profile pinned (six chips already): on, no chip, never over the cap
   const six = JSON.parse(JSON.stringify(saved)); six.main.ind.vp = { on: true, shown: true, pin: true };
   const q = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v2': six })).pane('main');
-  assert.deepEqual([q.ind.delta, P.pinned(q)], [{ on: true, shown: true, pin: false }, 6]);
+  assert.deepEqual([q.ind.delta, P.pinned(q)], [{ on: true, shown: true, pin: false }, 5], '(the IB\'s chip went with it into Levels, 1.14.0)');
   // saved after Hide all (review N6): as it was, the delta pane hidden with the rest, and Restore brings back the old mix and it
   const hid = JSON.parse(JSON.stringify(saved));
   for (const id of ['volume', 'levels', 'ib', 'fills']) hid.main.ind[id].shown = false;
   hid.main.restore = ['volume', 'levels', 'ib', 'fills'];
   const h = LP.create(mem({ 'live-settings-v2': {}, 'live-indicators-v2': hid })).pane('main');
-  assert.deepEqual([h.ind.delta, P.counts(h).shown, P.hideLabel(h), h.restore], [{ on: true, shown: false, pin: false }, 0, 'Restore', ['volume', 'levels', 'ib', 'fills', 'delta']]);
+  assert.deepEqual([h.ind.delta, P.counts(h).shown, P.hideLabel(h), h.restore], [{ on: true, shown: false, pin: false }, 0, 'Restore', ['volume', 'levels', 'fills', 'delta']]);
   const back = P.hideAll(h);
-  assert.deepEqual(Object.entries(P.drawn(back)).filter(([, v]) => v).map(([k]) => k).sort(), ['delta', 'fills', 'ib', 'levels', 'volume'], 'Restore: the old mix (VWAP stays hidden, as it was) and the delta pane');
+  assert.deepEqual(Object.entries(P.drawn(back)).filter(([, v]) => v).map(([k]) => k).sort(), ['delta', 'fills', 'levels', 'volume'], 'Restore: the old mix (VWAP stays hidden, as it was) and the delta pane');
   // an explicit off (or hidden) is kept, on the main pane and elsewhere
   const off = JSON.parse(JSON.stringify(saved));
   off.main.ind.delta = { on: false, shown: true, pin: false }; off['pane-2'].ind.delta = { on: true, shown: false, pin: true };
@@ -616,8 +635,9 @@ test('delta pane: carried over from live-indicators-v1 (1.5.3): on for the main 
   const s = mem({ 'live-settings-v2': {}, 'live-indicators-v1': { main: { volume: true, vwap: false, levels: true, fills: false, ib: true }, 'pane-2': { vwap: true } } });
   const p = LP.create(s);
   assert.deepEqual(p.pane('main').ind.delta, { on: true, shown: true, pin: false });
-  assert.deepEqual([pinIds(p.pane('main')), P.pinned(p.pane('main'))], [ALL, 5]);
-  assert.deepEqual(p.indicators('main'), flags(['volume', 'levels', 'ib', 'delta']), 'the 1.5.3 choices exactly, and the delta pane');
+  assert.deepEqual([pinIds(p.pane('main')), P.pinned(p.pane('main'))], [ALL, 4]);
+  assert.deepEqual(p.indicators('main'), flags(['volume', 'levels', 'delta']), 'the 1.5.3 choices exactly (the IB in Levels), and the delta pane');
+  assert.equal(p.indicatorOptions('main', 'levels').ibh, 'on');
   assert.deepEqual(p.indicators('pane-2'), flags(['vwap']));
   assert.equal(s.dump('live-indicators-v2').main.ind.delta.on, true, 'written with the carry-over');
   // a 1.3 save goes the same way (through live-indicators-v1)

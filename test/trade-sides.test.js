@@ -175,7 +175,9 @@ test('q: chart 1.12.0 ignores a 6th element: [t, p, v, s, sm, q] and [t, p, v, n
   }
 });
 
-test('q: chart 1.12.0 reads no q: its hub keeps places 1 to 5 of a trade and live fields by name', async () => {
+// chart 1.12.0 read no q; 1.14.0 (Time and Sales by category) keeps it in the hub, so a panel that joins later colors
+// the trades it starts with the same, and never reads it as a side
+test('q: the hub keeps a trade\'s 6th place and a tick\'s q (chart 1.14.0), never as a side', async () => {
   const F = require('../live/feed.js');
   class WS {
     constructor() { this.sent = []; this.readyState = 0; WS.all.push(this); }
@@ -201,10 +203,11 @@ test('q: chart 1.12.0 reads no q: its hub keeps places 1 to 5 of a trade and liv
   await new Promise(r => setTimeout(r, 30));
   const late = got.filter(([p]) => p === 2).map(([, m]) => m);
   const ticks = late.find(m => m.type === 'ticks'), tick = late.find(m => m.type === 'tick');
-  assert.deepEqual(ticks.ticks, [[61, 1.25, 1], [62, 1.5, 2], [63, 1.25, 1, -1, 2]], 'the 6th element is not kept (nor misread as a side)');
-  assert.ok(tick && !('q' in tick) && tick.s === 1, 'a replayed tick carries the fields 1.12.0 knows');
-  const src = ['live.js', 'feed.js', 'bar-builder.js', 'workspace.js', 'trade.js'].map(f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8')).join('\n');
-  assert.ok(!/\bx\[5\]|\bm\.q\b|\bmsg\.q\b/.test(src), 'no page file reads a trade\'s 6th place or a tick\'s q');
+  assert.deepEqual(ticks.ticks, [[61, 1.25, 1], [62, 1.5, 2, null, null, 2], [63, 1.25, 1, -1, 2, -1]], 'the 6th element kept as sent, the side places as they were (null: no side)');
+  assert.ok(tick && tick.q === 1 && tick.s === 1, 'a replayed tick carries its q');
+  // only the hub (keeping it) and the tape (coloring by it) read q; the chart, the bar builder and the order code never do
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8');
+  assert.ok(!/\bx\[5\]|\bm\.q\b|\bmsg\.q\b/.test(['live.js', 'bar-builder.js', 'trade.js'].map(read).join('\n')), 'the chart, the bar builder and the order code read no q');
 });
 
 test('fake bridge: live ticks carry q (or none when unknown) and backfill trades a 6th place when known; --no-q sends none', async () => {

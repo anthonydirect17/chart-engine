@@ -145,12 +145,13 @@ try {
   check(hd.every(x => x.grip && x.view && x.ind && x.more && x.x), 'every chart header: handle, instrument and bars, Indicators, the small menu, the x');
   check(hd.every(x => x.bar === 'none' && x.h === 28), 'the chart\'s own toolbar is not shown; the header is 28 px');
   const chips = await page.evaluate(id => [...document.querySelectorAll(`.ws-panel[data-id="${id}"] .ws-head .ind-chip[data-id]`)].map(c => c.textContent), main.id);
-  check(chips.join(' ') === 'VO VW LV IB FL', 'the main chart\'s pinned indicators as 2-letter chips in its header (' + chips.join(' ') + ')');
+  check(chips.join(' ') === 'VO VW LV FL', 'the main chart\'s pinned indicators as 2-letter chips in its header (' + chips.join(' ') + ')');
   const vw = `.ws-panel[data-id="${main.id}"] .ws-head .ind-chip[data-id="vwap"]`;
-  await page.click(vw);
+  const vwSw = async () => { await page.click(vw); await page.click(`.ws-panel[data-id="${main.id}"] .chip-pop [data-act="popsw"]`); await page.keyboard.press('Escape'); };   // 1.14.0: the chip's popover switch
+  await vwSw();
   const vwSaved = await page.evaluate(id => { const v = JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')[id]; return v ? v.ind.vwap.shown : 'none: ' + Object.keys(JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')).join(','); }, main.id);
-  check(await page.getAttribute(vw, 'aria-pressed') === 'false' && vwSaved === false, 'a chip click hides that indicator, as the toolbar\'s chips do (' + vwSaved + ')');
-  await page.click(vw);
+  check(await page.getAttribute(vw, 'aria-pressed') === 'false' && vwSaved === false, 'the chip\'s popover switch hides that indicator, as the toolbar\'s chips do (' + vwSaved + ')');
+  await vwSw();
   check(await page.getAttribute(vw, 'aria-pressed') === 'true', 'and shows it again');
   const one = await page.evaluate(() => ({ footers: [...document.querySelectorAll('.ws-body > .chart-live > .status')].map(f => getComputedStyle(f).display), feed: document.getElementById('wsFeed').textContent,
     local: document.getElementById('wsLocal').textContent, fps: document.getElementById('wsFps').textContent, tip: document.getElementById('wsStat').title }));
@@ -271,7 +272,7 @@ try {
   check(sl.src && sl.pill && sl.time && sl.grid === 'grid' && sl.status, 'the single chart page keeps its full legend (source line, LIVE, bar time) and its status line');
   check(sv.glide === 'fast' && sv.mode === 'traded', 'with the Glide and Range style set in the workspace');
   // and back: Glide set on the single chart page reaches the workspace's charts
-  await sp.click('#glideSeg [data-v="off"]');
+  await sp.click('#setBtn'); await sp.click('#glideSeg [data-v="off"]'); await sp.keyboard.press('Escape');   // 1.14.0: Glide in the page's Settings
   await page.waitForTimeout(300);
   await page.click('#wsSet');
   check(await page.evaluate(() => document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v) === 'off', 'Glide set on the single chart page shows in the workspace\'s Settings');
@@ -293,15 +294,18 @@ try {
     const list = document.querySelector('.tp-list');
     const col = r => getComputedStyle(r.querySelector('.tp-p')).color;
     return { n: rs.length, fit: Math.ceil(list.clientHeight / 18), times: rs.map(r => r.querySelector('.tp-t').textContent),
-      buy: rs.filter(r => r.classList.contains('buy')).map(col)[0], sell: rs.filter(r => r.classList.contains('sell')).map(col)[0],
-      big: rs.filter(r => r.classList.contains('big')).length, bigBg: (rs.find(r => r.classList.contains('big')) || rs[0]).style && getComputedStyle(rs.find(r => r.classList.contains('big')) || rs[0]).backgroundColor,
+      // 1.14.0: with ChartBridge 0.3.8's q each row has its category's color (its own test: smoke:display); without, its side
+      q: rs.filter(r => /\bq(m?\d)\b/.test(r.className)).length,
+      buy: rs.filter(r => r.classList.contains('buy') && !r.classList.contains('big')).map(col)[0], sell: rs.filter(r => r.classList.contains('sell') && !r.classList.contains('big')).map(col)[0],
+      big: rs.filter(r => r.classList.contains('big')).length, bigBold: rs.filter(r => r.classList.contains('big')).every(r => +getComputedStyle(r).fontWeight >= 700),
+      bigBg: rs.filter(r => r.classList.contains('big')).every(r => !/rgba\(0, 0, 0, 0\)|transparent/.test(getComputedStyle(r).backgroundColor)),
       small: rs.filter(r => !r.classList.contains('big')).every(r => +r.querySelector('.tp-v').textContent < 4),
       bigOk: rs.filter(r => r.classList.contains('big')).every(r => +r.querySelector('.tp-v').textContent >= 4), dom: list.children.length };
   });
   check(tp.n > 10 && tp.dom === tp.fit, 'only the rows that fit are in the page (' + tp.dom + ' rows for ' + tp.fit + ' visible)');
   check(tp.times.every((t, i) => i === 0 || t <= tp.times[i - 1]), 'times run newest first');
-  check(tp.buy === 'rgb(61, 220, 151)' && tp.sell === 'rgb(255, 92, 122)', 'buys green, sells red');
-  check(tp.big > 0 && tp.bigOk && tp.small && tp.bigBg === 'rgb(42, 31, 77)', 'large prints (size 4 or more here) highlighted purple, ' + tp.big + ' on screen');
+  check(tp.q === tp.n || (tp.buy === 'rgb(61, 220, 151)' && tp.sell === 'rgb(255, 92, 122)'), tp.q === tp.n ? 'every row by its Time and Sales category (ChartBridge 0.3.8)' : 'buys green, sells red');
+  check(tp.big > 0 && tp.bigOk && tp.small && tp.bigBg && tp.bigBold, 'large prints (size 4 or more here) bold on a tint of their color, ' + tp.big + ' on screen');
   const keptN = await page.evaluate(() => window.workspace.views().find(v => v.type === 'tape').count);
   check(keptN <= 500, 'at most 500 trades kept (' + keptN + ')');
   await shot(page, 'workspace-tape.png');
@@ -456,13 +460,13 @@ try {
   s = await state();
   const nq3 = s.panels.find(p => p.type === 'chart' && p.root === 'NQ');
   await page.click(`.ws-panel[data-id="${nq3.id}"] .ws-head .ind-btn`);
-  for (const q of ['vwap', 'levels', 'ib', 'fills', 'volume bars']) { await page.fill(`.ws-panel[data-id="${nq3.id}"] .ind-panel input[data-f="q"]`, q); await page.keyboard.press('Enter'); }
+  for (const q of ['vwap', 'levels', 'profile', 'fills', 'volume bars', 'bubbles']) { await page.fill(`.ws-panel[data-id="${nq3.id}"] .ind-panel input[data-f="q"]`, q); await page.keyboard.press('Enter'); }
   await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
   const ch = await page.evaluate(id => { const h = document.querySelector(`.ws-panel[data-id="${id}"] .ws-head`), more = h.querySelector('.ind-chip-more');
     return { shown: [...h.querySelectorAll('.ind-chips > .ind-chip[data-id]')].map(c => c.textContent), more: more && !more.hidden ? more.textContent : '', listed: h.querySelectorAll('.ind-chip-list .ind-chip').length,
       fits: h.scrollWidth <= h.clientWidth + 1 && h.offsetHeight === 28, all: [...document.querySelectorAll('.ws-head')].every(x => x.scrollWidth <= x.clientWidth + 1 && x.offsetHeight === 28) }; }, nq3.id);
-  check(ch.more === '+' + ch.listed && ch.listed > 0 && ch.shown.length + ch.listed === 5, 'the chips that do not fit go behind "' + ch.more + '" (' + ch.shown.join(' ') + ' shown)');
+  check(ch.more === '+' + ch.listed && ch.listed > 0 && ch.shown.length + ch.listed === 6, 'the chips that do not fit go behind "' + ch.more + '" (' + ch.shown.join(' ') + ' shown)');
   check(ch.fits && ch.all, 'the header does not wrap or scroll, and no header does');
   await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-more`);
   const lst = await page.evaluate(id => { const l = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`); const r = l.getBoundingClientRect(); return { open: !l.hidden, n: l.querySelectorAll('.ind-chip').length, inside: r.right <= innerWidth && r.bottom <= innerHeight }; }, nq3.id);
@@ -474,10 +478,13 @@ try {
     const hidden = sel => { const e = el.querySelector(sel); return !e || getComputedStyle(e).display === 'none'; };
     const inside = sel => { const e = el.querySelector(sel); const q = e.getBoundingClientRect(); return q.height > 0 && q.bottom <= r.bottom + 0.5; };
     const tops = new Set([...el.querySelectorAll('.lg1 > *, .lg2 > *, .lg3 > *')].filter(e => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().top < r.bottom - 1).map(e => Math.round(e.getBoundingClientRect().top)));
-    return { src: hidden('[id$="lgSrc"]'), pill: hidden('[id$="connPill"]'), h: r.height, rows: tops.size, close: inside('.lg2 > :nth-child(5)') && inside('[id$="lgChg"]') && inside('[id$="lgName"]'), text: el.innerText.replace(/\s+/g, ' ').slice(0, 80) };
+    const short = el.closest('.ws-panel').querySelector('.chart-live.compact').classList.contains('short'), w = Math.round(r.width);
+    return { short, w, src: hidden('[id$="lgSrc"]'), pill: hidden('[id$="connPill"]'), h: r.height, rows: tops.size, close: inside('.lg2 > :nth-child(5)') && (short && w < 400 || inside('[id$="lgChg"]')) && inside('[id$="lgName"]'), text: el.innerText.replace(/\s+/g, ' ').slice(0, 80) };
   }, esP.id);
   check(lg.src && lg.pill, 'the panel legend has no source and version line and no LIVE pill (the top bar says LIVE · ChartBridge)');
-  check(lg.rows <= 2 && lg.h <= 40 && lg.close, 'ES 1 min at 1366x768: the legend fits in 2 lines (' + lg.rows + ' rows, ' + Math.round(lg.h) + ' px: ' + lg.text + ')');
+  // 1.14.0: a panel under 700 x 400 px has the short header, one line (the name and the last price; the change too when
+  // the panel has the room), the rest while the crosshair is over it
+  check(lg.short ? lg.rows === 1 && lg.h <= 22 && lg.close : lg.rows <= 2 && lg.h <= 40 && lg.close, 'ES 1 min at 1366x768: the legend fits in ' + (lg.short ? 'one line (the short header, ' + lg.w + ' px wide' : '2 lines (') + ', ' + lg.rows + ' rows, ' + Math.round(lg.h) + ' px: ' + lg.text + ')');
   await control('status?level=warn&text=' + encodeURIComponent('Test note for the chart'));
   await page.waitForTimeout(400);
   const nt = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`), st = c.querySelector(':scope > .status'), m = st.querySelector('.msg'), r = st.getBoundingClientRect(), b = c.getBoundingClientRect();
@@ -490,7 +497,7 @@ try {
   const nc = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`); return { on: c.classList.contains('has-note'), shown: getComputedStyle(c.querySelector(':scope > .status')).display !== 'none' }; }, esP.id);
   check(!nc.on && !nc.shown, 'and clears: no line and no space when there is no note');
   const first = await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip`).dataset.id, nq3.id);
-  await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-list .ind-chip[data-id="${first}"]`);
+  await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-list .ind-chip[data-id="${first}"]`); await page.click(`.ws-panel[data-id="${nq3.id}"] .chip-pop [data-act="popsw"]`);   // 1.14.0: its popover's switch
   check(await page.evaluate(([id, f]) => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip[data-id="${f}"]`); return !!c && c.getAttribute('aria-pressed') === 'false'; }, [nq3.id, first]), 'a chip in the list works like the others, and the list stays open');
   await page.keyboard.press('Escape');
   check(await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`).hidden, nq3.id), 'Esc closes the list');

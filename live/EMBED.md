@@ -62,7 +62,9 @@ marks that account's fills only (there is no "All accounts" any more). It lists 
 mounted chart still follows a pick made by another chart or tab with its prefix (1.6.1 changes this only on the
 trading page, where each tab keeps its own order account).
 
-`mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`:
+`mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }` and,
+since 1.14.0, `legendToggle` (the **Aa** header text button, for a host to place beside Indicators), `legendShown()`
+and `setLegendShown(on)` (saved per pane in `live-legend-v1`):
 `chart` is the chart-engine instance (for reading, such as `chart.bars()`), `element` the `.chart-live` element it
 created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (1.6.0). There
 are three:
@@ -72,6 +74,9 @@ are three:
 | `pane.setIndicatorOption('vp', 'session', 'rth')` | the volume profile's hours: `'rth'` for RTH 9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default) |
 | `pane.setIndicatorOption('delta', 'show', 'bar')` | the cumulative delta pane (1.7.0): `'bar'` for each bar's own buys minus sells around zero, `'cum'` for candles of the running cumulative from 18:00 ET (the default) |
 | `pane.setIndicatorOption('delta', 'div', 'on')` | the delta pane's divergence arrows (G1c, Anthony's DeltaDivergenceSignal): `'on'` to show them, `'off'` (the default) |
+| `pane.setIndicatorOption('vwap', 'session', 'rth')` | 1.14.0: the VWAP's hours: `'rth'` from 09:30 ET (none outside 09:30 to 16:00), `'full'` from 18:00 ET (the default) |
+| `pane.setIndicatorOption('vp', 'dpoc', 'off')` | 1.14.0: the profile's developing POC line (`dvah`, `dval` the same), `'on'` (the default) or `'off'` |
+| `pane.setIndicatorOption('levels', 'ibh', 'off')` | 1.14.0: each level line its own switch (`pdh`, `pdl`, `pc`, `onh`, `onl`, `vah`, `val`, `poc`, `ibh`, `ibl`), `'on'` (the default) or `'off'`; the Initial Balance is part of Levels (the `ib` indicator is retired, a pane saved before is carried over) |
 
 It returns false (and never throws) for an option or value that does not exist, including inherited names such as
 `toString`. `indicatorOptions('vp')` and `indicatorOptions('delta')` read them back (`{ session: 'full' }`,

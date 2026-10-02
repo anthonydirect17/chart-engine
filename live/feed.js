@@ -22,6 +22,8 @@
  * line's socket closes, every stand-in on it closes; each panel reconnects as it always has, and the first one back
  * opens the line again.
  *
+ * 1.14.0: a load keeps each trade's Time and Sales category (q, ChartBridge 0.3.8) with it, so a tape that joins later or
+ * a replay colours its trades as one there from the start; a "settlement" (0.3.7) is kept in the line's hello.
  * Seams for the next build (E2b): order messages (trading, orders, order, position, reject) are passed to every panel
  * of the line as ChartBridge sends them, and a stand-in drops anything a panel sends but subscribe and ping.
  *
@@ -66,29 +68,40 @@ function covers(have, want, windowed) {
 
 /* Trades in columns (no object or array per trade): a load's tick backfill, and its live trades since ready. */
 class LiveLog {
-  constructor(max) { this.max = max || LIVE_MAX; this.n = 0; this.cap = 0; this.t = this.p = this.v = null; this.s = this.sm = null; this.dropped = false; }
-  /** One trade as ChartBridge sends it in a "ticks" list: [t, p, v] or [t, p, v, s, sm]. */
-  pushRow(x) { this.push({ t: x[0], p: x[1], v: x[2], s: x[3], sm: x[4] }); }
-  row(i) { return this.s[i] === -128 ? [this.t[i], this.p[i], this.v[i]] : [this.t[i], this.p[i], this.v[i], this.s[i], this.sm[i] === -128 ? 0 : this.sm[i]]; }
+  constructor(max) { this.max = max || LIVE_MAX; this.n = 0; this.cap = 0; this.t = this.p = this.v = null; this.s = this.sm = this.q = null; this.dropped = false; }
+  /** One trade as ChartBridge sends it in a "ticks" list: [t, p, v], [t, p, v, s, sm] or (0.3.8) [t, p, v, s, sm, q]. */
+  pushRow(x) { this.push({ t: x[0], p: x[1], v: x[2], s: x[3], sm: x[4], q: x[5] }); }
+  /* the row as ChartBridge sent it: q (the Time and Sales category, 0.3.8) in the 6th place when known, with null sides
+     when it had none (as ChartBridge 0.3.8 sends a served-window trade) */
+  row(i) {
+    const q = this.q[i];
+    if (this.s[i] === -128) return q === -128 ? [this.t[i], this.p[i], this.v[i]] : [this.t[i], this.p[i], this.v[i], null, null, q];
+    const r = [this.t[i], this.p[i], this.v[i], this.s[i], this.sm[i] === -128 ? 0 : this.sm[i]];
+    if (q !== -128) r.push(q);
+    return r;
+  }
   push(m) {
     if (this.dropped) return;
-    if (this.n >= this.max) { this.dropped = true; this.t = this.p = this.v = this.s = this.sm = null; return; }
+    if (this.n >= this.max) { this.dropped = true; this.t = this.p = this.v = this.s = this.sm = this.q = null; return; }
     if (this.n === this.cap) {
       const cap = Math.min(this.max, Math.max(4096, this.cap * 2));
       const grow = (a, T) => { const b = new T(cap); if (a) b.set(a); return b; };
       this.t = grow(this.t, Float64Array); this.p = grow(this.p, Float64Array); this.v = grow(this.v, Float64Array);
-      this.s = grow(this.s, Int8Array); this.sm = grow(this.sm, Int8Array);
+      this.s = grow(this.s, Int8Array); this.sm = grow(this.sm, Int8Array); this.q = grow(this.q, Int8Array);
       this.cap = cap;
     }
     const i = this.n++;
     this.t[i] = +m.t; this.p[i] = +m.p; this.v[i] = +m.v || 0;
     // -128: no side given (ChartBridge before 0.3.4); the trade is replayed without one
     this.s[i] = typeof m.s === 'number' ? m.s : -128; this.sm[i] = typeof m.sm === 'number' ? m.sm : -128;
+    // 1.14.0: the Time and Sales category (ChartBridge 0.3.8, -2 to 2), so a tape that joins later or a replay keeps it
+    this.q[i] = typeof m.q === 'number' && m.q >= -2 && m.q <= 2 ? m.q : -128;
   }
   tick(root, i) {
     const m = { type: 'tick', root, t: this.t[i], p: this.p[i], v: this.v[i] };
     if (this.s[i] !== -128) m.s = this.s[i];
     if (this.sm[i] !== -128) m.sm = this.sm[i];
+    if (this.q[i] !== -128) m.q = this.q[i];
     return m;                                          // no u or rx: a replayed trade is never counted as a delay
   }
 }
@@ -201,6 +214,10 @@ function create(options) {
       for (const V of [...L.clients]) if (!V.helloed && V.readyState === OPEN) { V.helloed = true; V._deliver(m); }
       queueFlush(L);
       return;
+    }
+    // 0.3.7: the prior settlement changed: a panel that joins later gets it in the line's hello
+    if (t === 'settlement' && L.hello && Array.isArray(L.hello.instruments)) {
+      L.hello = Object.assign({}, L.hello, { instruments: L.hello.instruments.map(i => i && i.root === m.root ? Object.assign({}, i, { settlement: m.p === undefined ? null : m.p, settlementDate: m.date }) : i) });
     }
     if (t === 'execs') { L.fills.clear(); for (const f of m.list || []) if (f && f.id) L.fills.set(f.account + '|' + f.id, f); }
     else if (t === 'exec' && m.id) L.fills.set(m.account + '|' + m.id, m);

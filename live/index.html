@@ -66,6 +66,8 @@
 </div>
 
 <div class="ws-pop ws-settings" id="wsSettings" role="dialog" aria-label="Settings" hidden>
+  <!-- 1.14.0: two columns, so Settings fits a 1366x768 screen whole (Anthony: no scrolling, ever) -->
+  <div class="ws-cols"><div class="ws-col">
   <section class="ws-sec">
     <h2>Charts <span>every chart, and the single chart page</span></h2>
     <div class="ws-field"><span class="ws-flabel" id="wsGlideLbl">Glide</span>
@@ -73,15 +75,22 @@
     <div class="ws-field"><label class="ws-flabel" for="wsRangeMode">Range style</label>
       <select class="ws-sel" id="wsRangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
         <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></div>
+    <div class="ws-field"><span class="ws-flabel" id="wsGridLinesLbl">Grid lines</span>
+      <span class="ws-seg" id="wsGridLines" role="group" aria-labelledby="wsGridLinesLbl"><button type="button" data-v="off">Off</button><button type="button" data-v="on">On</button></span></div>
+    <div class="ws-field"><span class="ws-flabel" id="wsRoomLbl" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>
+      <span class="ws-seg" id="wsRoom" role="group" aria-labelledby="wsRoomLbl"><button type="button" data-v="0">None</button><button type="button" data-v="40">40 px</button><button type="button" data-v="80">80 px</button><button type="button" data-v="160">160 px</button></span></div>
+    <div class="ws-field"><label class="ws-flabel" for="wsAtr" title="The ATR readout in every chart's legend: NinjaTrader's ATR of this many closed bars">ATR period</label>
+      <input class="ws-num" id="wsAtr" type="number" min="2" max="100" step="1" inputmode="numeric" aria-label="ATR period, bars"></div>
   </section>
   <section class="ws-sec">
     <h2 id="wsHkCap">Hotkeys <span>the same keys as the single chart page</span></h2>
     <div class="chart-live ws-lv" id="wsHotkeys"></div>
     <p class="ws-help">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Saved in this browser.</p>
   </section>
+  </div><div class="ws-col">
   <section class="ws-sec">
     <h2>Large prints <span>Time and Sales, contracts</span></h2>
-    <p class="ws-help">A trade this size or bigger is highlighted. RTH is 09:30 to 16:15 ET.</p>
+    <p class="ws-help">A trade this size or bigger is shown brighter and bold, and is a bubble on the charts. RTH is 09:30 to 16:15 ET.</p>
     <div id="wsFloors"></div>
   </section>
   <section class="ws-sec" id="wsPinSec" hidden>
@@ -93,11 +102,16 @@
     <button type="button" class="ws-btn" id="wsReset">Reset "<span id="wsResetName"></span>" to the default</button>
   </section>
   <p class="ws-ver" id="wsVersion"></p>
+  </div></div>
 </div>
 
-<div class="ws-pop ws-settings ws-gearpop" id="wsGear" role="dialog" aria-label="Large prints" hidden>
+<div class="ws-pop ws-settings ws-gearpop" id="wsGear" role="dialog" aria-label="Time and Sales settings" hidden>
   <section class="ws-sec"><h2>Large prints <span>contracts</span></h2><div id="wsGearBody"></div>
-  <p class="ws-help">RTH is 09:30 to 16:15 ET. All floors are in Settings.</p></section>
+  <p class="ws-help">Shown brighter and bold. RTH is 09:30 to 16:15 ET. The same floors as the charts' bubbles; all of them are in Settings.</p></section>
+  <!-- 1.14.0: NinjaTrader's Time and Sales colors, from where each trade printed (ChartBridge 0.3.8) -->
+  <section class="ws-sec"><h2>Colors <span>where each trade printed</span></h2><div class="tc-list" id="wsTapeColors"></div>
+  <p class="ws-help">From ChartBridge 0.3.8. A trade with no usable quote, or from an older ChartBridge, shows its side: buys green, sells red.</p>
+  <button type="button" class="ws-btn" id="wsTapeDefault">Default colors</button></section>
 </div>
 
 <dialog class="ws-dialog" id="wsDialog"></dialog>

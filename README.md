@@ -5,7 +5,7 @@ Anthony's trading chart. A Canvas 2D candlestick engine built to feel as smooth 
 - wheel and pinch zoom that eases in and stays anchored under the pointer;
 - a price axis that re-fits smoothly instead of snapping;
 - a live candle that grows toward each tick, with a flashing price tag and a bar-close countdown;
-- throw-to-pan, live-edge following and a "Jump to live" button;
+- throw-to-pan, live-edge following and a "Jump to live" icon at the top of the price scale;
 - levels, session VWAP, trade marks and volume;
 - a Colors panel so the candles can be any colors you like.
 
@@ -36,14 +36,30 @@ showing it. Colors sit in the top bar, everything general (Glide, Range style, h
 Settings, and both are shared with the single chart page. The top bar also has **Flatten all** and **KEYS ON / OFF**.
 The **single chart page** with its order bar and hotkeys is `http://localhost:8765/single.html`.
 
+**The display round (1.14.0, Anthony's list):** nothing scrolls (every menu, popover and dialog fits at 1366x768 and up;
+Colors and Settings in two columns, an indicator's gear beside the list); panels resize from any edge or corner;
+Time and Sales colors each trade by where it printed against the quote (ChartBridge 0.3.8's `q`: above the ask, at it,
+between, at the bid, below it; editable in the tape's gear; by side with an older ChartBridge), big trades (the bubbles'
+floors) bold and brighter; grid lines off by default (Settings); 80 px of room right of the last bar at any zoom
+(Settings); working orders, bracket legs and planned stop and target lines always on the price scale; the VWAP no longer
+sizes the chart (off the scale it gets an edge marker); the legend shows the time left in the bar (Range: ticks left),
+ATR(14) and the change from the prior settlement (ChartBridge 0.3.7; blank with none). Bubbles are sized by the order
+(area by size over the floor), placed on the bar their prints traded in, and say their size in the legend on hover; the price scale keeps the legend clear. Batch 2: the profile's colors in its gear (brighter rows), the IB folded into
+Levels with PD VAH, PD VAL and a drawn PD POC, each level its own toggle, the developing POC, VAH and VAL, up to 10 chips,
+the VWAP from 09:30 ET (RTH only) or 18:00 ET per chart, a short header on small panels, and an **Aa** header text toggle
+per chart. The single chart page has the
+workspace's cleanup (one toolbar line, 2-letter chips, the drawing tools and Reset view in a small menu, Glide, Range
+style, grid, room and the PIN in Settings). "chart x.y.z · ChartBridge a.b.c" is in the LIVE badge's tooltip and in
+Settings. The page's clock follows Windows clock fixes (re-anchored to the PC's clock every 5 s, as ChartBridge does).
+
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
 On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills, the
-**Initial balance** (today's 1-hour IB, 1.5.3), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
+**Initial balance** (today's 1-hour IB, 1.5.3; part of Levels since 1.14.0, each level line its own switch), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
 buys minus market sells below the chart, counted from when the page opens or the trades' sides were measured, and from
 0 again at 18:00 ET; the sides from ChartBridge 0.3.4) per chart pane, with a search box ("/" opens it), a Recent line, Hide
-all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). **Chart
+all and Restore, and a pin for each on the chip strip beside the button (1.14.0: a click opens the indicator's settings with an on/off switch at the top; at most 10, the rest behind +N when they do not fit). **Chart
 signals** (1.12.1, Anthony's NinjaScript indicators, counted from the page's opening from the trades' sides): **Absorption
 bars** (Signals group, no chip; a large trade, a volume spike and a rejection close on one bar paint it cyan or yellow at
 the close, an outline while it forms; settings per instrument and bar type in its gear), **Large-order bubbles** (Volume
@@ -560,6 +576,9 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 | `theme` | Carolina blue / deep purple | Any key of `ChartEngine.DEFAULT_THEME`. |
 | `clock` | New York now | Returns the current time in bar-time seconds (drives the countdown). |
 | `rightOffset`, `barSpacing` | `8`, `7` | Empty bars past the last bar; starting bar width in px. |
+| `room` | none | 1.14.0: empty room right of the last bar in CSS px, the same at every zoom (replaces `rightOffset` when set; the live page uses 80). |
+| `grid` | `true` | 1.14.0: the price and time grid lines (the live page turns them off by default). |
+| `fitOrders` | `true` | 1.14.0: the auto-fit price scale takes in every order price (working orders, bracket legs, planned lines), eased like any re-fit. The VWAP never sizes the scale. |
 | `motion` | `{ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }` | Time constants in ms. These are the approved feel; change with care. |
 | `unit` | `'pt'` | Suffix on trade result chips. Set `label` on a trade to override. |
 | `pointValue` | `0` | Dollars per point, for the position line's open P&L (or pass it to `setPosition`). |
@@ -569,7 +588,12 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `setBars(bars, { barSeconds })` · `update(bar)` · `setLevels(list)` · `getLevels()` · `setTrades(list)` ·
 `setLayers(partial)` · `setTheme(partial)` · `getTheme()` · `colors()` · `setPaused(bool)` ·
 `setBarSeconds(sec)` · `goLive()` · `reset()` · `isLive()` · `bars()` · `stats()` · `resize()` ·
-`destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)`
+`destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)` · 1.14.0: `setGrid(on)` · `getGrid()` ·
+`setRoom(px)` · `room()` (`{ px, bars, gap }`) · `priceScale()` (`{ lo, hi, target, auto, plotHeight }`) · `vwapMarker()` ·
+`lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's) · `setFitTop(px)` (room kept at the top of the
+price scale) · `getFitTop()` · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()` ·
+`setProfileLines({ poc, vah, val })` · `getProfileLines()` (the developing profile lines) · `setVwapSource(fn)` (a page's own VWAP per bar) · `redraw()` ·
+`setScaleLock(on)` · `scaleLock()` · `on('scaleLock', fn)` (the price scale lock; option `lockButton`)
 
 Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
 trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only
@@ -611,7 +635,10 @@ those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-ho
 10:30 ET) from 1-minute bars or trades, with its state (`before`, `forming`, `locked`, or why there is none), and
 `ibLines(ib)` turns it into lines; `rthDay(t)` and `nyseHolidays(year)` say which days have a regular session;
 `profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
-formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`).
+formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`); 1.14.0: `roomBars(px, spacing,
+bars)`, `fitRange(lo, hi, extraPrices, plotHeight, tick, volume)`, `fmtRemain(seconds)`, `barRemain(t, barSeconds, now)`,
+`atr(bars, period, count)`, `pctFrom(price, base)`, `bubbleRadius(size, floor)`, `rthVwap(bars, opts)`, `rthVwapUpdate(series, bars, opts)`, `vwapAt(series, time)`
+and `PD_POC_DASH`.
 
 ## Colors
 

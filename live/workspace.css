@@ -14,6 +14,9 @@
   --ws-text: #E6EDF5; --ws-text2: #9AA8B8; --ws-muted: #7F8C9C; --ws-grip: #4A5566;
   --ws-accent: #7B5CFF; --ws-accent-deep: #2A1F4D; --ws-tint: #1A1230; --ws-tint-line: #3B2A6B; --ws-soft: #D8CCFF;
   --ws-buy: #3DDC97; --ws-sell: #FF5C7A; --ws-sell-ground: #2A0F17; --ws-warn: #FFC266; --ws-warn-ground: #2A2110; --ws-warn-text: #FFE2B0;
+  /* Time and Sales categories (1.14.0, CHART_STYLE): above the ask and below the bid the brighter pair; set by the tape's gear */
+  --tape-above: #9CF5CB; --tape-ask: #3DDC97; --tape-mid: #9AA8B8; --tape-bid: #FF5C7A; --tape-below: #FFA3B4;
+  --tape-big-lift: #FFFFFF;   /* what a big trade's color is mixed toward (30%) */
   --ws-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --ws-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
@@ -79,7 +82,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-view .ws-tf, .ws-view .ws-caret { flex: none; }
 /* the chart's pinned indicators as 2-letter chips (live.js renders them; those that do not fit go behind "+N") */
 .ws-head .ind-chips { flex: 1 1 0; min-width: 0; min-height: 0; gap: 4px; overflow: hidden; }
-.ws-head .ind-chip { height: 22px; padding: 0 6px; gap: 5px; border-radius: 5px; font-size: 10px; letter-spacing: .04em; }
+.ws-head .ind-chip, .ws-head .ind-chip-more { height: 22px; padding: 0 6px; gap: 5px; border-radius: 5px; font-size: 10px; letter-spacing: .04em; }
 .ws-head .ind-chip .sw { width: 8px; }
 .ws-head .ind-chip-more { border-style: solid; color: var(--ws-text2); }
 .ws-head .ind-chip-more .sw { display: none; }
@@ -88,6 +91,9 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-head .ind-chip-list .ind-chip::after { content: attr(aria-label); font-family: var(--ws-sans); font-weight: 500; letter-spacing: 0; color: var(--ws-text2); margin-left: 4px; }
 .ws-caret { width: 5px; height: 5px; flex: none; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
 .ws-head .ind { flex: none; }
+.ws-head .lg-tog { flex: none; min-height: 22px; height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; font-size: 10px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
+.ws-head .lg-tog:hover { background: var(--ws-field); color: var(--ws-text); }
+.ws-head .lg-tog[aria-pressed="false"] { color: var(--ws-muted); }
 .ws-head .ind-btn { min-height: 22px; height: 22px; padding: 0 8px; border-radius: 5px; gap: 6px; font-size: 12px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
 .ws-head .ind-btn:hover { background: var(--ws-field); color: var(--ws-text); }
 .ws-head .ind-panel { white-space: normal; cursor: auto; user-select: text; text-align: left; }
@@ -95,14 +101,41 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 /* narrow panels (a 1366 px screen): the header keeps the instrument, bars and buttons on one line. The classes come
    from workspace.js (a ResizeObserver): container queries made every chart frame slower (perf:workspace). */
 .ws-x, .ws-ic, .ws-head .ws-sel, .ws-head .ind { flex: none; }
+.ws-head .lg-tog { flex: none; min-height: 22px; height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; font-size: 10px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
+.ws-head .lg-tog:hover { background: var(--ws-field); color: var(--ws-text); }
+.ws-head .lg-tog[aria-pressed="false"] { color: var(--ws-muted); }
 .ws-panel.narrow .ws-grip { display: none; }
 .ws-panel.narrow .ws-head { padding-left: 8px; gap: 6px; }
 .ws-panel.narrower .ws-head .ind-btn { font-size: 0; gap: 4px; }
 .ws-panel.narrower .ws-head .ind-btn::before { content: "Ind"; font-size: 12px; }
 .ws-x[aria-expanded="true"], .ws-ic[aria-expanded="true"] { color: var(--ws-text); background: var(--ws-field); }
-.ws-size { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 4; touch-action: none;
-  background: linear-gradient(135deg, transparent 0 55%, var(--ws-grip) 55% 62%, transparent 62% 72%, var(--ws-grip) 72% 79%, transparent 79%); }
-.ws-size:hover { background: linear-gradient(135deg, transparent 0 55%, var(--ws-accent) 55% 62%, transparent 62% 72%, var(--ws-accent) 72% 79%, transparent 79%); }
+/* resize from any edge or corner (1.14.0, Anthony): 7 px bands on the edges (3 px of them in the gap between panels),
+   14 px squares at the corners. Quiet: nothing shows until the pointer is on one, then a 2 px accent line on that edge
+   (an L at a corner); the bottom right corner keeps its grip lines. Moving stays on the header. */
+.ws-edge { position: absolute; z-index: 4; touch-action: none; }
+.ws-edge-n, .ws-edge-s { left: 10px; right: 10px; height: 7px; cursor: ns-resize; }
+.ws-edge-n { top: -3px; } .ws-edge-s { bottom: -3px; }
+.ws-edge-e, .ws-edge-w { top: 10px; bottom: 10px; width: 7px; cursor: ew-resize; }
+.ws-edge-e { right: -3px; } .ws-edge-w { left: -3px; }
+.ws-edge-ne, .ws-edge-nw, .ws-edge-se, .ws-edge-sw { width: 14px; height: 14px; z-index: 5; }
+.ws-edge-ne { top: -3px; right: -3px; cursor: nesw-resize; } .ws-edge-sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+.ws-edge-nw { top: -3px; left: -3px; cursor: nwse-resize; } .ws-edge-se { bottom: -3px; right: -3px; cursor: nwse-resize; }
+/* the line on the panel's own border (3 px into the band), in the accent, while the pointer is on the handle */
+.ws-edge { --ln: linear-gradient(var(--ws-accent), var(--ws-accent)); background-repeat: no-repeat; }
+.ws-edge-n:hover, .ws-panel.sizing .ws-edge-n:active { background-image: var(--ln); background-position: 0 2px; background-size: 100% 2px; }
+.ws-edge-s:hover, .ws-panel.sizing .ws-edge-s:active { background-image: var(--ln); background-position: 0 3px; background-size: 100% 2px; }
+.ws-edge-e:hover, .ws-panel.sizing .ws-edge-e:active { background-image: var(--ln); background-position: 3px 0; background-size: 2px 100%; }
+.ws-edge-w:hover, .ws-panel.sizing .ws-edge-w:active { background-image: var(--ln); background-position: 2px 0; background-size: 2px 100%; }
+.ws-edge-nw:hover { background-image: var(--ln), var(--ln); background-position: 2px 2px, 2px 2px; background-size: 12px 2px, 2px 12px; }
+.ws-edge-ne:hover { background-image: var(--ln), var(--ln); background-position: 0 2px, 10px 2px; background-size: 12px 2px, 2px 12px; }
+.ws-edge-sw:hover { background-image: var(--ln), var(--ln); background-position: 2px 10px, 2px 0; background-size: 12px 2px, 2px 12px; }
+/* the bottom right corner: its grip lines as before (accent on hover) */
+.ws-edge-se { background-image: linear-gradient(135deg, transparent 0 55%, var(--ws-grip) 55% 62%, transparent 62% 72%, var(--ws-grip) 72% 79%, transparent 79%); background-position: 0 0; background-size: 11px 11px; }
+.ws-edge-se:hover { background-image: linear-gradient(135deg, transparent 0 55%, var(--ws-accent) 55% 62%, transparent 62% 72%, var(--ws-accent) 72% 79%, transparent 79%); }
+body.ws-busy[data-edge="n"], body.ws-busy[data-edge="s"], body.ws-busy[data-edge="n"] *, body.ws-busy[data-edge="s"] * { cursor: ns-resize !important; }
+body.ws-busy[data-edge="e"], body.ws-busy[data-edge="w"], body.ws-busy[data-edge="e"] *, body.ws-busy[data-edge="w"] * { cursor: ew-resize !important; }
+body.ws-busy[data-edge="ne"], body.ws-busy[data-edge="sw"], body.ws-busy[data-edge="ne"] *, body.ws-busy[data-edge="sw"] * { cursor: nesw-resize !important; }
+body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-edge="nw"] *, body.ws-busy[data-edge="se"] * { cursor: nwse-resize !important; }
 
 /* the mounted chart fills its panel; a short panel keeps a small plot instead of the page's 360 px; its status line is
    one line (what does not fit is cut, the chart keeps its height) */
@@ -128,7 +161,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-alert span { flex: 1 1 auto; white-space: pre-line; }
 .ws-alert.warn { border-color: var(--ws-warn); background: var(--ws-warn-ground); }
 .ws-alert .nostop-send { color: var(--ws-sell); border-color: var(--ws-sell); font-weight: 600; }   /* the NO STOP question's Send (Cancel has the focus) */
-.ws-top > .ws-ns { position: absolute; z-index: 2; top: 4px; bottom: 4px; left: 8px; right: var(--ns-right, 50%); margin: 0; padding: 0 6px 0 10px; gap: 8px; min-width: 0; box-sizing: border-box; }
+.ws-top > .ws-ns { position: absolute; z-index: 2; top: 4px; bottom: 4px; left: var(--ns-left, 8px); right: var(--ns-right, 50%); margin: 0; padding: 0 6px 0 10px; gap: 8px; min-width: 0; box-sizing: border-box; }
 .ws-top > .ws-ns[hidden] { display: none; }
 .ws-top > .ws-ns > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* the whole text in its tooltip */
 .ws-top > .ws-ns .ws-btn { flex: none; }
@@ -192,9 +225,26 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .tp-row { height: 18px; line-height: 18px; color: var(--ws-text); contain: strict; }
 .tp-row > span { overflow: hidden; white-space: nowrap; }
 .tp-t { color: var(--ws-muted); }
-.tp-row.buy .tp-p, .tp-row.buy .tp-v { color: var(--ws-buy); }
-.tp-row.sell .tp-p, .tp-row.sell .tp-v { color: var(--ws-sell); }
-.tp-row.big { background: var(--ws-accent-deep); font-weight: 700; }
+/* each row's color: its Time and Sales category (ChartBridge 0.3.8, 1.14.0), else its side as before */
+.tp-row.q2 { --tp-c: var(--tape-above); }
+.tp-row.q1 { --tp-c: var(--tape-ask); }
+.tp-row.q0 { --tp-c: var(--tape-mid); }
+.tp-row.qm1 { --tp-c: var(--tape-bid); }
+.tp-row.qm2 { --tp-c: var(--tape-below); }
+.tp-row.buy { --tp-c: var(--ws-buy); }
+.tp-row.sell { --tp-c: var(--ws-sell); }
+.tp-row .tp-p, .tp-row .tp-v { color: var(--tp-c, var(--ws-text)); }
+/* a big trade (the large-print floor, the bubbles' own): bold, its color brighter on a tint of it, a bar at the left edge */
+.tp-row.big { background: color-mix(in srgb, var(--tp-c, var(--ws-accent)) 24%, var(--ws-panel)); box-shadow: inset 3px 0 0 var(--tp-c, var(--ws-accent)); font-weight: 700; }
+.tp-row.big .tp-p, .tp-row.big .tp-v { color: color-mix(in srgb, var(--tp-c, var(--ws-text)) 70%, var(--tape-big-lift)); }
+.tp-row.big .tp-t { color: var(--ws-text2); }
+/* the tape's gear: the category colors */
+.tc-list { display: grid; gap: 4px; }
+.tc-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px 76px; gap: 8px; align-items: center; }
+.tc-name { color: var(--ws-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc-row input[type="color"] { width: 28px; height: 22px; padding: 0; border: 1px solid var(--ws-line2); border-radius: 4px; background: var(--ws-field); cursor: pointer; }
+.tc-row .tc-hex { width: 76px; height: 24px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 6px; font: 12px var(--ws-mono); }
+.tc-row .tc-hex.bad { border-color: var(--ws-sell); }
 
 /* ---------------- popovers and dialogs */
 .ws-pop { position: fixed; z-index: 50; background: var(--ws-pop); border: 1px solid var(--ws-tint-line); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
@@ -232,7 +282,8 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .fl-row { display: grid; grid-template-columns: 40px 1fr 1fr; gap: 8px; align-items: center; padding: 3px 0; }
 .fl-root { font-weight: 600; }
 .fl-row label { display: flex; align-items: center; gap: 6px; color: var(--ws-muted); }
-.fl-row input { width: 60px; height: 24px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 6px; font: 12px var(--ws-mono); }
+.ws-num[aria-invalid="true"], .fl-row input[aria-invalid="true"] { border-color: var(--ws-sell); }
+.ws-num, .fl-row input { width: 60px; height: 24px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 6px; font: 12px var(--ws-mono); }
 .fl-row input.bad { border-color: var(--ws-sell); }
 .ws-dialog { background: var(--ws-pop); color: var(--ws-text); border: 1px solid var(--ws-tint-line); border-radius: 8px; padding: 0; width: min(360px, calc(100vw - 32px)); box-shadow: 0 12px 32px rgba(0, 0, 0, .55); font: 12px var(--ws-sans); }
 .ws-dialog::backdrop { background: rgba(0, 0, 0, .5); }
@@ -247,3 +298,11 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 
 /* a window opened while the PC updater wrote the page files (workspace.js, the mid-install guard) */
 .ws-reload { position: relative; z-index: 40; padding: 8px 12px; background: var(--ws-warn-ground); color: var(--ws-warn-text); border-bottom: 1px solid var(--ws-warn); }
+
+/* 1.14.0 (Anthony: "no scrolling, ever"): the top bar keeps its own line (nowrap), but the popovers it holds wrap their
+   text, so the Colors panel fits its 268 px and never scrolls sideways or cuts the Black swatch and the hex boxes */
+.ws-top .ce-theme-panel, .ws-top .ws-pop { white-space: normal; }
+/* Settings in two columns (1.14.0): the charts and hotkeys, then large prints, the PIN, the layout and the versions */
+#wsSettings { width: 800px; }
+.ws-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.ws-col + .ws-col { border-left: 1px solid var(--ws-line); }

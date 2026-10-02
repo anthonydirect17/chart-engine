@@ -152,10 +152,11 @@ try {
     check(after.pos && after.pos.qty === 2 && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Hide all keeps the open position, both legs and its entry fill, and drops the past fills: ' + JSON.stringify(after));
     await shot(page, 'orders-1440-hide-all-open-position.png');
     await page.click('#indBtn'); await page.click('#indHideAll'); await page.keyboard.press('Escape');   // Restore
-    await page.click('#indChips .ind-chip[data-id="fills"]');                                           // the Fills chip alone
+    const fillsSw = async () => { await page.click('#indChips .ind-chip[data-id="fills"]'); await page.click('body .chip-pop [data-act="popsw"]'); await page.keyboard.press('Escape'); };   // 1.14.0: the chip's popover switch
+    await fillsSw();                                                                                      // the Fills chip alone
     after = await live();
     check(after.pos && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Fills hidden: the entry fill, position and legs stay: ' + JSON.stringify(after));
-    await page.click('#indChips .ind-chip[data-id="fills"]');
+    await fillsSw();
     check((await live()).marks.length === 3, 'Fills shown again');
   }
 
@@ -916,9 +917,19 @@ try {
     await onChart(20);
     await A.evaluate(() => { window.__sent.length = 0; window.__statusSeen.length = 0; });
     await armOn(); await A.click('#cancelAllBtn');
+    const t0q = Date.now();
     const sentNow = await A.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.id));
-    const queued = (await A.evaluate(() => window.liveChart.getOrders().map(o => ({ id: o.id, price: o.price })))).find(o => !sentNow.includes(o.id));
+    // 1.14.0, the flake's root cause: the probe took the first order still queued, whose cancel goes out at the very next
+    // slot of the pace (1.1 s after the click); settle() takes 0.5 to over 1 s, so now and then the cancel went out and
+    // ChartBridge removed the order before the drag, which then pressed on an empty chart (no note, the check failed).
+    // The order cancelled last (20 orders at 6 a 1.1 s: the fourth slot, 3.3 s after the click) leaves seconds to spare,
+    // and it is checked to be still queued, and its label read again, right before the press.
+    const orderIds = await A.evaluate(() => window.liveChart.getOrders().map(o => o.id));
+    const queuedIds = orderIds.filter(id => !sentNow.includes(id));
+    const queued = (await A.evaluate(() => window.liveChart.getOrders().map(o => ({ id: o.id, price: o.price })))).find(o => o.id === queuedIds[queuedIds.length - 1]);
     await settle(queued.price);
+    const stillQueued = await A.evaluate(id => !window.__sent.some(m => m.type === 'cancel' && m.id === id), queued.id);
+    check(stillQueued, 'the drag probe: order ' + queued.id + ' is still waiting in the Cancel all when it is pressed (' + (Date.now() - t0q) + ' ms after the click)');
     const hq = await handle(queued.id), bq = await A.locator('#chart canvas').boundingBox();
     await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2); await A.mouse.down();
     await A.mouse.move(bq.x + hq.box.x + hq.box.w / 2, bq.y + hq.box.y + hq.box.h / 2 + 25, { steps: 5 }); await A.mouse.up();

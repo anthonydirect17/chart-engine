@@ -121,11 +121,13 @@ try {
     });
     await p.reload(); await live(p); await p.waitForTimeout(400);
     const layers = await p.evaluate(() => window.liveChart.getLayers());
-    check(layers.volume === false && layers.vwap === true && layers.levels === false, '1.3 indicator choices carried over: ' + JSON.stringify(layers));
+    check(layers.volume === false && layers.vwap === true && layers.levels === true && layers.ib === true, '1.3 indicator choices carried over (Levels on with only the IB lines, as 1.13 drew the IB on by default): ' + JSON.stringify(layers));
     check(await p.inputValue('#rangeTicks') === '40' && /Range 40t/.test(await p.textContent('#lgTf')), '1.3 NQ range 40 carried over');
     // 1.3 had no IB: the main pane gets the Initial balance default (on, 1.5.3), so 2 of the 1.3 four plus IB; since 1.6.0 the two
     // that were off stay on the main pane's chart, hidden; since 1.7.0 the delta pane is on too (shown/on: 4/6)
-    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '4/6' && layers.ib === true && layers.delta === true, 'indicator count 4/6 (Initial balance and the delta pane on by default)');
+    if (await p.$('#indCount')) check(await p.textContent('#indCount') === '4/5' && layers.delta === true, 'indicator count 4/5 (the IB in Levels and the delta pane on by default)');
+    const lvNames = await p.evaluate(() => window.liveChart.getLevels().filter(l => l.layer !== 'ib').map(l => l.name));
+    check(lvNames.length === 0, 'only the IB lines of Levels drawn: ' + JSON.stringify(lvNames));
     await ctx.close();
   }
 } finally {

@@ -82,22 +82,23 @@ try {
   if (lateMain !== /less tick history than asked/.test(await page.textContent('#statusMsg'))) fail('partial history note wrong with the full backfill: ' + lateMain + ' "' + await page.textContent('#statusMsg') + '"');
   console.log('full history: first range bar mid-session ' + lateMain);
   await page.screenshot({ path: path.join(out, 'live-range.png') });
-  await page.selectOption('#rangeMode', 'traded'); await page.waitForTimeout(400);
+  // 1.14.0: Range style is in Settings (the single chart page's cleanup), as in the workspace
+  await page.click('#setBtn'); await page.selectOption('#rangeMode', 'traded'); await page.keyboard.press('Escape'); await page.waitForTimeout(400);
   if (!/Range 12t traded/.test(await page.textContent('#lgTf'))) fail('traded mode label: ' + await page.textContent('#lgTf'));
   await page.screenshot({ path: path.join(out, 'live-range-traded.png') });
   await page.reload();
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(400);
   if (await page.inputValue('#rangeMode') !== 'traded' || await page.inputValue('#rangeTicks') !== '12') fail('range mode or size not remembered: ' + await page.inputValue('#rangeMode') + ' ' + await page.inputValue('#rangeTicks'));
-  await page.selectOption('#rangeMode', 'nt'); await page.waitForTimeout(300);
+  await page.click('#setBtn'); await page.selectOption('#rangeMode', 'nt'); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
 
   // Indicators menu (1.6.0, Anthony's "E2"): search, switch, pin, chips, Hide all and Restore, remove and add, "/" key
   const L = () => page.evaluate(() => window.liveChart.getLayers());
   const count = () => page.textContent('#indCount');
   const chips = () => page.$$eval('#indChips .ind-chip', bs => bs.map(b => b.dataset.id + (b.getAttribute('aria-pressed') === 'true' ? '+' : '-')));
-  if (await count() !== '6/6') fail('indicators on at first run (the 1.3 four, IB 1.5.3 and the delta pane 1.7.0): ' + await count());
+  if (await count() !== '5/5') fail('indicators on at first run (the 1.3 four and the delta pane 1.7.0; the IB is in Levels since 1.14.0): ' + await count());
   if (!(await page.isHidden('#indPanel'))) fail('indicator menu open at load');
-  if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap+', 'levels+', 'ib+', 'fills+'])) fail('chip strip at first run (the delta pane on, with no chip): ' + JSON.stringify(await chips()));
+  if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap+', 'levels+', 'fills+'])) fail('chip strip at first run (the delta pane on, with no chip): ' + JSON.stringify(await chips()));
   // ChartBridge 0.2 sends no trade sides: the delta pane is there, draws nothing, and says why (1.7.0)
   const dp = await page.evaluate(() => ({ pane: window.liveChart.deltaPane(), delta: window.liveChart.getDelta(), legend: document.getElementById('lgDelta').textContent.trim() }));
   if (!dp.pane.on || dp.delta !== null || dp.pane.note !== 'Delta needs ChartBridge 0.3.4 on this PC' || dp.legend !== dp.pane.note) fail('delta pane on ChartBridge 0.2: ' + JSON.stringify(dp));
@@ -105,7 +106,7 @@ try {
   if (await page.isHidden('#indPanel') || await page.getAttribute('#indBtn', 'aria-expanded') !== 'true') fail('Enter did not open the indicator menu');
   if (await page.evaluate(() => document.activeElement.id) !== 'indQ') fail('focus not on the search box when the menu opens');
   const onRows = await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id));
-  if (JSON.stringify(onRows) !== JSON.stringify(['volume', 'vwap', 'levels', 'ib', 'delta', 'fills'])) fail('On this chart rows: ' + JSON.stringify(onRows));
+  if (JSON.stringify(onRows) !== JSON.stringify(['volume', 'vwap', 'levels', 'delta', 'fills'])) fail('On this chart rows: ' + JSON.stringify(onRows));
   if (await page.$$eval('#indBody .ind-cat', els => els.map(e => e.textContent.replace(/\d+$/, '').trim()).join(',')) !== 'Price,Volume,Trades,Signals') fail('groups');   // Signals: the absorption bars (G1c)
   if (!/Coming: time and sales/.test(await page.textContent('#indBody'))) fail('coming line missing');
   // search: short names, then Enter acts on the first match
@@ -113,14 +114,14 @@ try {
   let found = await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id));
   if (JSON.stringify(found) !== '["levels"]') fail('search "pdh": ' + JSON.stringify(found));
   await page.keyboard.press('Enter');
-  if ((await L()).levels !== true || await count() !== '6/6') fail('Enter on a shown match must not hide it: ' + await count());
+  if ((await L()).levels !== true || await count() !== '5/5') fail('Enter on a shown match must not hide it: ' + await count());
   await page.click('#indBody [data-f="sw:levels"]');
-  if ((await L()).levels !== false || await count() !== '5/6') fail('the Levels switch did not hide Levels: ' + await count());
+  if ((await L()).levels !== false || await count() !== '4/5') fail('the Levels switch did not hide Levels: ' + await count());
   await page.focus('#indQ'); await page.keyboard.press('Enter');
   if ((await L()).levels !== true) fail('Enter on a hidden match shows it');
   await page.click('#indBody [data-f="sw:levels"]');
   await page.fill('#indQ', 'ibh');
-  if (JSON.stringify(await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) !== '["ib"]') fail('search "ibh"');
+  if (JSON.stringify(await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) !== '["levels"]') fail('search "ibh": the IB is in Levels (1.14.0)');
   await page.fill('#indQ', 'profile');
   if (!(await page.isVisible('#indBody [data-f="add:vp"]')) || await page.$('#indBody .ind-tag')) fail('volume profile (1.6.0): found by "profile", with a + to add it, no "coming" tag');
   await page.fill('#indQ', 'zzz');
@@ -133,47 +134,49 @@ try {
   const recent = await page.$$eval('#indBody .ind-rec', bs => bs.map(b => b.textContent));
   if (JSON.stringify(recent) !== '["VOL","LEVELS"]') fail('Recent: ' + JSON.stringify(recent));
   // one settings panel at a time
-  await page.click('#indBody [data-act="gear"][data-id="ib"]');
+  await page.click('#indBody [data-act="gear"][data-id="levels"]');
   await page.click('#indBody [data-act="gear"][data-id="vwap"]');
   if (await page.$$eval('#indBody .ind-set', els => els.map(e => e.dataset.id).join()) !== 'vwap') fail('more than one settings panel open');
-  await page.click('#indBody [data-act="gear"][data-id="ib"]');
-  if (!/1 hour, locks 10:30 ET/.test(await page.textContent('#indBody .ind-set[data-id="ib"]'))) fail('IB settings text');
+  await page.click('#indBody [data-act="gear"][data-id="levels"]');
+  const lvSet = await page.textContent('#indBody .ind-set[data-id="levels"]');
+  if (!/PD VAH/.test(lvSet) || !/PD POC/.test(lvSet) || !/IBH/.test(lvSet) || !/IBL/.test(lvSet)) fail('Levels settings: each line its own toggle, the IB among them (1.14.0): ' + lvSet.slice(0, 200));
   await page.screenshot({ path: path.join(out, 'live-indicators-open.png') });
   await page.keyboard.press('Escape');
   if (!(await page.isHidden('#indPanel'))) fail('Escape did not close the indicator menu');
   if (await page.evaluate(() => document.activeElement.id) !== 'indBtn') fail('focus not back on the Indicators button');
-  if (await count() !== '4/6') fail('count after two hidden: ' + await count());
-  if (JSON.stringify(await chips()) !== JSON.stringify(['volume-', 'vwap+', 'levels-', 'ib+', 'fills+'])) fail('chips after two hidden: ' + JSON.stringify(await chips()));
+  if (await count() !== '3/5') fail('count after two hidden: ' + await count());
+  if (JSON.stringify(await chips()) !== JSON.stringify(['volume-', 'vwap+', 'levels-', 'fills+'])) fail('chips after two hidden: ' + JSON.stringify(await chips()));
   const chipLook = await page.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(b => getComputedStyle(b).borderTopStyle + ' ' + getComputedStyle(b.querySelector('.sw')).backgroundColor));
   if (!/^dashed/.test(chipLook[0]) || !/^solid/.test(chipLook[1]) || chipLook[0].split(' ').slice(1).join(' ') === chipLook[1].split(' ').slice(1).join(' ')) fail('hidden and shown chips must differ by more than color: ' + JSON.stringify(chipLook));
-  // a chip: one click shows or hides
-  await page.click('#indChips .ind-chip[data-id="vwap"]'); await page.waitForTimeout(300);
+  // a chip opens its settings (1.14.0); the switch at their top shows or hides
+  const chipSw = async (pg, id) => { await pg.click(`#indChips .ind-chip[data-id="${id}"]`); await pg.click('body .chip-pop [data-act="popsw"]'); await pg.keyboard.press('Escape'); };
+  await chipSw(page, 'vwap'); await page.waitForTimeout(300);
   if ((await L()).vwap !== false || !(await page.isHidden('#lgVwWrap'))) fail('VWAP chip did not hide VWAP (and its legend)');
-  await page.click('#indChips .ind-chip[data-id="volume"]');
+  await chipSw(page, 'volume');
   if ((await L()).volume !== true) fail('Volume chip did not show Volume');
   // Hide all, then Restore brings back the same mix (not everything)
   await page.click('#indBtn');
-  if (await page.textContent('#indHideAll') !== 'Hide all (4)') fail('hide all label: ' + await page.textContent('#indHideAll'));
+  if (await page.textContent('#indHideAll') !== 'Hide all (3)') fail('hide all label: ' + await page.textContent('#indHideAll'));
   await page.click('#indHideAll');
   let lay = await L();
-  if (lay.volume || lay.vwap || lay.levels || lay.ib || lay.delta || await count() !== '0/6' || await page.textContent('#indHideAll') !== 'Restore') fail('Hide all: ' + JSON.stringify(lay) + ' ' + await count());
+  if (lay.volume || lay.vwap || lay.levels || lay.ib || lay.delta || await count() !== '0/5' || await page.textContent('#indHideAll') !== 'Restore') fail('Hide all: ' + JSON.stringify(lay) + ' ' + await count());
   if (await page.evaluate(() => window.liveChart.deltaPane().on)) fail('Hide all left the delta pane');
   if ((await page.textContent('#lgFill')).trim() !== '') fail('fills still marked after Hide all');
   await page.screenshot({ path: path.join(out, 'live-indicators-hidden-all.png') });
   await page.click('#indHideAll');
   lay = await L();
-  if (!lay.volume || lay.vwap || lay.levels || !lay.ib || !lay.delta || await count() !== '4/6') fail('Restore did not bring back the same mix: ' + JSON.stringify(lay) + ' ' + await count());
+  if (!lay.volume || lay.vwap || lay.levels || lay.ib || !lay.delta || await count() !== '3/5') fail('Restore did not bring back the same mix: ' + JSON.stringify(lay) + ' ' + await count());
   // pin: off takes the chip away; x takes Fills off the chart; + in its group adds it back
   await page.click('#indBody [data-act="pin"][data-id="levels"]');
   if (await page.$('#indChips .ind-chip[data-id="levels"]')) fail('unpinned Levels still on the chip strip');
   await page.click('#indBody [data-act="remove"][data-id="fills"]');
-  if (await count() !== '3/5' || await page.$('#indBody [data-f="sw:fills"]') || (await page.textContent('#lgFill')).trim() !== '') fail('x did not take Fills off: ' + await count());
+  if (await count() !== '2/4' || await page.$('#indBody [data-f="sw:fills"]') || (await page.textContent('#lgFill')).trim() !== '') fail('x did not take Fills off: ' + await count());
   await page.click('#indBody .ind-cat[data-id="trades"]');
   await page.click('#indBody .ind-cat[data-id="price"]');
   if (await page.getAttribute('#indBody .ind-cat[data-id="trades"]', 'aria-expanded') !== 'false') fail('two groups open at once');
   await page.click('#indBody .ind-cat[data-id="trades"]');
   await page.click('#indBody [data-f="add:fills"]');
-  if (await count() !== '4/6' || (await page.textContent('#lgFill')).trim() === '' || await page.evaluate(() => document.activeElement.dataset.f) !== 'sw:fills') fail('+ did not add Fills back (focus on its switch): ' + await count() + ' ' + await page.evaluate(() => document.activeElement.outerHTML.slice(0, 80)));
+  if (await count() !== '3/5' || (await page.textContent('#lgFill')).trim() === '' || await page.evaluate(() => document.activeElement.dataset.f) !== 'sw:fills') fail('+ did not add Fills back (focus on its switch): ' + await count() + ' ' + await page.evaluate(() => document.activeElement.outerHTML.slice(0, 80)));
   await page.mouse.click(700, 600);                                                     // outside: closes
   if (!(await page.isHidden('#indPanel'))) fail('outside click did not close the indicator menu');
   // "/" opens the menu of the chart under the mouse, never while typing in a box
@@ -194,8 +197,8 @@ try {
   await page.waitForFunction(isLive, null, { timeout: 15000 });
   await page.waitForTimeout(400);
   const layers = await L();
-  if (!layers.volume || layers.vwap || layers.levels || !layers.ib || !layers.delta) fail('indicators not remembered: ' + JSON.stringify(layers));
-  if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap-', 'ib+', 'fills+'])) fail('chips after a reload: ' + JSON.stringify(await chips()));
+  if (!layers.volume || layers.vwap || layers.levels || layers.ib || !layers.delta) fail('indicators not remembered: ' + JSON.stringify(layers));
+  if (JSON.stringify(await chips()) !== JSON.stringify(['volume+', 'vwap-', 'fills+'])) fail('chips after a reload: ' + JSON.stringify(await chips()));
   const savedInd = await page.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2')));
   if (!savedInd || !savedInd.main || savedInd.main.ind.vwap.shown !== false || savedInd.main.ind.levels.pin !== false || JSON.stringify(await page.evaluate(() => localStorage.getItem('live-indicators-v2'))) !== JSON.stringify(before)) fail('indicators not saved under the pane id: ' + JSON.stringify(savedInd));
   if (await page.evaluate(() => localStorage.getItem('live-indicators-v1')) !== null) fail('live-indicators-v1 written by 1.6.0');
@@ -203,30 +206,30 @@ try {
   for (const k of ['vwap', 'levels']) await page.click(`#indBody [data-f="sw:${k}"]`);
   await page.click('#indBody [data-act="pin"][data-id="levels"]');
   await page.keyboard.press('Escape');
-  if (await count() !== '6/6' || (await chips()).length !== 5) fail('indicators back on: ' + await count());
-  // the chip strip holds 6 (Anthony); the cap is lowered here to show the rule
-  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 4; });
+  if (await count() !== '5/5' || (await chips()).length !== 4) fail('indicators back on: ' + await count());
+  // the chip strip holds 10 (Anthony, 1.14.0); the cap is lowered here to show the rule
+  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 3; });
   await page.click('#indBtn');
-  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // unpin: 4 chips, the strip is full
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // unpin: 3 chips, the strip is full
   await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // pin again: refused, with a note
-  if (!/holds 4/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="vwap"]') || await page.getAttribute('#indBody [data-act="pin"][data-id="vwap"]', 'aria-pressed') !== 'false') fail('pinning onto a full strip was not refused with a note');
-  if (!/holds 4/.test(await page.textContent('#indLive'))) fail('the note is not announced');
-  await page.click('#indBody [data-act="remove"][data-id="fills"]');                // 3 chips: room for VWAP again
-  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // 4: full
+  if (!/holds 3/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="vwap"]') || await page.getAttribute('#indBody [data-act="pin"][data-id="vwap"]', 'aria-pressed') !== 'false') fail('pinning onto a full strip was not refused with a note');
+  if (!/holds 3/.test(await page.textContent('#indLive'))) fail('the note is not announced');
+  await page.click('#indBody [data-act="remove"][data-id="fills"]');                // 2 chips: room for VWAP again
+  await page.click('#indBody [data-act="pin"][data-id="vwap"]');                 // 3: full
   await page.click('#indBody .ind-cat[data-id="trades"]'); await page.click('#indBody [data-f="add:fills"]');
   if (!/Fills added without a chip/.test(await page.textContent('#indBody .ind-note')) || await page.$('#indChips .ind-chip[data-id="fills"]')) fail('an indicator added to a full strip got a chip');
   await page.screenshot({ path: path.join(out, 'live-indicators-strip-full.png') });
-  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 6; });
+  await page.evaluate(() => { window.LivePrefs.PIN_MAX = 10; });
   await page.click('#indBody [data-act="pin"][data-id="fills"]');
   if (await page.$('#indBody [data-act="pin"][data-id="profile"]') || await page.$$eval('#indBody .ind-cat ~ .ind-item [data-act="pin"]', b => b.length)) fail('a pin on a row that is not on the chart');
   await page.keyboard.press('Escape');
-  if ((await chips()).length !== 5) fail('five chips again: ' + JSON.stringify(await chips()));
+  if ((await chips()).length !== 4) fail('four chips again: ' + JSON.stringify(await chips()));
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();
-  await page.click('#toolHline');
+  await page.click('#moreBtn'); await page.click('#toolHline');                 // 1.14.0: the drawing tools in the small menu
   await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.3);
-  await page.click('#toolTrend');
+  await page.click('#moreBtn'); await page.click('#toolTrend');
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6);
   await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.4, { steps: 8 }); await page.mouse.up();
   await page.waitForTimeout(300);
@@ -245,7 +248,9 @@ try {
   if (!/ES 12-26/.test(esName)) fail('ES name: ' + esName);
   const status = (await page.textContent('.status')).replace(/\s+/g, ' ');
   if (!/feed \d+ ms/.test(status)) fail('delay readout missing: ' + status);
+  await page.click('#setBtn');                                                    // 1.14.0: Glide is in Settings
   for (const g of ['Fast', 'Off', 'Smooth']) await page.click(`#glideSeg >> text="${g}"`);
+  await page.keyboard.press('Escape');
   await page.screenshot({ path: path.join(out, 'live-es.png') });
   console.log('status:', status.slice(0, 160));
 
@@ -279,11 +284,14 @@ try {
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
   const phoneChips = await phone.evaluate(() => { const s = document.getElementById('indChips'), cs = [...s.querySelectorAll('.ind-chip')];
     return { narrow: s.classList.contains('is-narrow'), tops: [...new Set(cs.map(c => Math.round(c.getBoundingClientRect().top)))].length, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1, n: cs.length }; });
-  if (!phoneChips.narrow || phoneChips.tops !== 1 || phoneChips.text !== 'VWLIF' || !phoneChips.fits || phoneChips.n !== 5) fail('phone: chips should be one letter each, on one line: ' + JSON.stringify(phoneChips));
-  await phone.click('#indChips .ind-chip[data-id="levels"]');
-  if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: letter chip did not hide Levels');
+  // 1.14.0: the page's chips are the workspace's 2-letter ones, on one line on a phone too
+  if (phoneChips.tops !== 1 || phoneChips.text !== 'VOVWLVFL' || !phoneChips.fits || phoneChips.n !== 4) fail('phone: chips should be two letters each, on one line: ' + JSON.stringify(phoneChips));
+  await phone.click('#indChips .ind-chip[data-id="levels"]'); await phone.click('body .chip-pop [data-act="popsw"]');
+  if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: the chip\'s switch did not hide Levels');
+  const pp = await phone.locator('body .chip-pop').boundingBox();
+  if (!pp || pp.x < 0 || pp.x + pp.width > 400) fail('phone: the chip popover off screen ' + JSON.stringify(pp));
   await phone.screenshot({ path: path.join(out, 'live-phone-chips.png') });
-  await phone.click('#indChips .ind-chip[data-id="levels"]');
+  await phone.click('body .chip-pop [data-act="popsw"]'); await phone.keyboard.press('Escape');
   await phone.click('#indBtn');
   const pb = await phone.locator('#indPanel').boundingBox();
   if (!pb || pb.x < 0 || pb.x + pb.width > 400) fail('phone: indicator menu off screen ' + JSON.stringify(pb));

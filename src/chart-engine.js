@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.13.0
+ * chart-engine 1.14.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.13.0';
+const VERSION = '1.14.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -270,8 +270,9 @@ const DEFAULT_THEME = {
   profit: '#3DDC97', loss: '#FF7A7A',    // trade result
   exit: '#F2F6FA', live: '#F2F6FA',
   drawing: '#D8CCFF',                    // trend lines and horizontal lines
-  // volume profile (1.6.0): rows a tint of the ground, value area a step stronger, POC in the value-level gold
-  vpRow: '#141C26', vpValue: '#212C3B', vpPoc: '#E0B45A',
+  // volume profile (1.6.0): rows a tint of the ground, value area a step stronger, POC in the value-level gold;
+  // 1.14.0 (Anthony: too dark on the dark ground) brighter: rows 1.31:1 on the ground, value area 1.74:1 (were 1.15, 1.40)
+  vpRow: '#19212C', vpValue: '#212C3B', vpPoc: '#E0B45A',
   // chart signals (G1c, Anthony: his NinjaTrader cyan and yellow toned to the house palette, not pure #00FFFF and
   // #FFFF00): a softer cyan and a warm yellow for the absorption bars' bodies and the divergence arrows, each with a
   // slightly brighter shade for the 1 px outline (CHART_STYLE --sig-bull, --sig-bull-line, --sig-bear, --sig-bear-line)
@@ -308,7 +309,7 @@ const NEUTRAL_MIX = [
   ['rth', 0.025, 0], ['grid', 0.06, FLOOR.grid], ['axisLine', 0.09, 0], ['divider', 0.2, FLOOR.divider],
   ['cross', 0.4, FLOOR.cross], ['axisText', 0.57, FLOOR.text], ['axisTextStrong', 0.95, FLOOR.strong],
   ['tagFill', 0.07, 0], ['tagBorder', 0.2, FLOOR.divider], ['exit', 1, FLOOR.text], ['live', 1, FLOOR.text],
-  ['vpRow', 0.07, 0], ['vpValue', 0.14, 0],
+  ['vpRow', 0.075, 0], ['vpValue', 0.14, 0],
 ];
 
 /**
@@ -547,17 +548,21 @@ function levelColors(colors) {
   if (colors) for (const k of Object.keys(LEVEL_COLORS)) if (/^#[0-9a-f]{6}$/i.test(colors[k])) out[k] = colors[k].toUpperCase();
   return out;
 }
-/** sessionLevels() result -> level lines in the house style, or in `colors` ({ prior, overnight, value, close }). */
+/** sessionLevels() result -> level lines in the house style, or in `colors` ({ prior, overnight, value, close }). Each
+    line has a `key` (pdh, pdl, pc, onh, onl, vah, val, poc) so a page can switch it on or off. 1.14.0 (Anthony): the
+    prior day's value area is named "PD VAH" / "PD VAL", and its point of control "PD POC" is drawn too (the value-area
+    color, a dash-dot 8/3/2/3 no other level uses). */
+const PD_POC_DASH = [8, 3, 2, 3];
 function levelLines(lv, colors) {
   if (!lv) return [];
   const C = levelColors(colors);
   const L = [
-    ['PDH', lv.pdh, C.prior, [6, 4]], ['VAH', lv.vah, C.value, [3, 4]],
-    ['ONH', lv.onh, C.overnight, [6, 4]], ['Prior close', lv.pc, C.close, [2, 3]],
-    ['ONL', lv.onl, C.overnight, [6, 4]], ['VAL', lv.val, C.value, [3, 4]],
-    ['PDL', lv.pdl, C.prior, [6, 4]],
+    ['pdh', 'PDH', lv.pdh, C.prior, [6, 4]], ['vah', 'PD VAH', lv.vah, C.value, [3, 4]], ['poc', 'PD POC', lv.poc, C.value, PD_POC_DASH],
+    ['onh', 'ONH', lv.onh, C.overnight, [6, 4]], ['pc', 'Prior close', lv.pc, C.close, [2, 3]],
+    ['onl', 'ONL', lv.onl, C.overnight, [6, 4]], ['val', 'PD VAL', lv.val, C.value, [3, 4]],
+    ['pdl', 'PDL', lv.pdl, C.prior, [6, 4]],
   ];
-  return L.filter(x => x[1] !== null && x[1] !== undefined).map(([name, price, color, dash]) => ({ name, price, color, dash }));
+  return L.filter(x => x[2] !== null && x[2] !== undefined).map(([key, name, price, color, dash]) => ({ key, name, price, color, dash: dash.slice() }));
 }
 
 /* ---------------------------------------------------------------- initial balance (1.5.3) */
@@ -749,8 +754,8 @@ function ibLines(ib, colors) {
   if (!ib || ib.high === null || ib.low === null || (ib.state !== 'forming' && ib.state !== 'locked')) return [];
   const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [], C = levelColors(colors);
   return [
-    { name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
-    { name: 'IBL', price: ib.low, color: C.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
+    { key: 'ibh', name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
+    { key: 'ibl', name: 'IBL', price: ib.low, color: C.ibLow, dash: dash.slice(), layer: 'ib', from: ib.start, tone: 'low' },
   ];
 }
 
@@ -812,8 +817,15 @@ const CSS = `
 .ce-host{position:relative;overflow:hidden;outline:none}
 .ce-host:focus-visible{box-shadow:inset 0 0 0 2px #B69CFF}
 .ce-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair;user-select:none;-webkit-user-select:none}
-.ce-live{position:absolute;right:90px;bottom:38px;z-index:3;font:600 12px "IBM Plex Sans",system-ui,sans-serif;color:#B69CFF;background:#1A1230;border:1px solid #3B2A6B;border-radius:999px;padding:5px 12px;min-height:30px;cursor:pointer}
-.ce-live:hover{color:#fff}
+.ce-live{position:absolute;top:4px;left:0;z-index:3;width:24px;height:22px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#B69CFF;background:#1A1230;border:1px solid #3B2A6B;border-radius:6px;cursor:pointer}
+.ce-live[hidden]{display:none}
+.ce-live svg{width:12px;height:12px;display:block}
+.ce-live:hover{color:#fff;border-color:#B69CFF}
+.ce-lock{position:absolute;bottom:3px;z-index:3;width:24px;height:20px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#7F8C9C;background:transparent;border:1px solid transparent;border-radius:5px;cursor:pointer}
+.ce-lock svg{width:12px;height:12px;display:block}
+.ce-lock:hover{color:#E6EDF5;border-color:#2A3645}
+.ce-lock[aria-pressed="true"]{color:#B69CFF;background:#1A1230;border-color:#3B2A6B}
+.ce-lock:focus-visible{outline:2px solid #B69CFF;outline-offset:1px}
 .ce-live:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
 .ce-theme{position:relative;display:inline-block}
 .ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5);background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
@@ -852,6 +864,124 @@ function injectStyle() {
 /* ---------------------------------------------------------------- the chart */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 
+/* ---------------------------------------------------------------- display helpers (1.14.0, Anthony's list) */
+/** The empty room right of the last bar, in bars: `roomPx` CSS px at this bar spacing (so it stays the same on screen at
+    any zoom), or the fixed bar count `bars` when no room in px is set (the engine's rightOffset, as before 1.14.0). */
+function roomBars(roomPx, spacing, bars) {
+  return roomPx === null || roomPx === undefined || !isFinite(roomPx) || !(spacing > 0) ? bars : Math.max(0, roomPx) / spacing;
+}
+/** The price scale the auto-fit eases to: the candles' low and high (mn, mx), widened to take in every price of
+    `extra` (working orders, bracket legs, planned stop and target lines: they stay on screen), at least 8 ticks, with
+    8% free at the top and 8% at the bottom (20% with the volume bars under the candles). `topPx` (1.14.0, Anthony: the
+    high ran into the legend on the smaller panels): at least this many px free at the top (the legend's height and a
+    few px; at most 45% of the plot). null when there is nothing. */
+function fitRange(mn, mx, extra, plotH, tick, volume, topPx) {
+  if (extra) for (let i = 0; i < extra.length; i++) { const p = extra[i]; if (isFinite(p) && p !== null) { if (p > mx) mx = p; if (p < mn) mn = p; } }
+  if (!(mx >= mn) || !(plotH > 0)) return null;
+  const minRange = (tick || Math.abs(mx) * 1e-4 || 1) * 8;
+  const range = Math.max(mx - mn, minRange), mt = Math.min(0.45, Math.max(0.08, (topPx > 0 ? topPx : 0) / plotH)), mb = volume ? 0.2 : 0.08;
+  const ppp = plotH * (1 - mt - mb) / range;
+  return { hi: mx + plotH * mt / ppp, lo: mn - plotH * mb / ppp };
+}
+/** Time left in a bar, from whole seconds: "0:23", "4:05", "1:02:03", "2d 04h" (the price tag's countdown). */
+function fmtRemain(remain) {
+  remain = Math.max(0, Math.ceil(remain));
+  if (remain >= DAY) return Math.floor(remain / DAY) + 'd ' + pad(Math.floor(remain % DAY / 3600)) + 'h';
+  if (remain >= 3600) return Math.floor(remain / 3600) + ':' + pad(Math.floor(remain % 3600 / 60)) + ':' + pad(remain % 60);
+  return Math.floor(remain / 60) + ':' + pad(remain % 60);
+}
+/** The time left in the bar that opened at `t` (bar time, exchange seconds) of `barSeconds`, at exchange time `now`. */
+const barRemain = (t, barSeconds, now) => fmtRemain(t + barSeconds - now);
+/**
+ * The average true range of the closed bars (`bars[0..count-1]`, oldest first; the forming bar is left out), as
+ * NinjaTrader's ATR: the true range of each bar (its high minus low, or to the previous close when that is further), the
+ * first `period` averaged, then Wilder's smoothing ((period - 1) * ATR + TR) / period. null with fewer than `period` bars.
+ */
+function atr(bars, period, count) {
+  const n = count === undefined ? bars.length : Math.min(count, bars.length);
+  period = Math.max(1, Math.round(period || 14));
+  if (n < period) return null;
+  let sum = 0, a = 0;
+  for (let i = 0; i < n; i++) {
+    const b = bars[i], pc = i ? bars[i - 1].c : b.c;
+    const tr = Math.max(b.h - b.l, Math.abs(b.h - pc), Math.abs(b.l - pc));
+    if (i < period) { sum += tr; if (i === period - 1) a = sum / period; }
+    else a = ((period - 1) * a + tr) / period;
+  }
+  return a;
+}
+/**
+ * The VWAP of 1-minute bars anchored at a time of day (1.14.0, the VWAP gear's "RTH only"): from `from` (09:30 ET) up to
+ * `to` (16:00 ET) each trading day, each bar's typical price (high + low + close) / 3 times its volume, as addSessionVwap
+ * works out the session's from 18:00 ET from bars. Returns { t, vw }: each bar's end time (t + barSeconds) and the VWAP as
+ * of that end, for the bars inside the window only (sorted). vwapAt(series, time) reads it at a time (null outside).
+ */
+function rthVwap(bars, opts) {
+  const o = Object.assign({ from: 34200, to: 57600, barSeconds: 60, sessionStart: 18 * 3600 }, opts || {});
+  const t = [], vw = [];
+  let day = null, pv = 0, vol = 0;
+  for (const b of bars || []) {
+    const s = tod(b.t);
+    if (s < o.from || s >= o.to) continue;
+    const d = tradeDay(b.t, o.sessionStart);
+    if (d !== day) { day = d; pv = 0; vol = 0; }
+    const v = b.v || 0; pv += (b.h + b.l + b.c) / 3 * v; vol += v;
+    t.push(b.t + o.barSeconds); vw.push(vol > 0 ? pv / vol : b.c);
+  }
+  return { t, vw, from: o.from, to: o.to, sessionStart: o.sessionStart };
+}
+/** rthVwap() kept up to date as bars come (review D2: not every bar again each second): `series` from an earlier call
+    (or null) and the same bars array grown or its last bar changed. The closed bars are added once; only the last bar
+    (the forming one) is worked out again. Starts over when the bars are not the ones it saw (a reload, another view).
+    Returns the series, the same as rthVwap(bars, opts) would. */
+function rthVwapUpdate(series, bars, opts) {
+  const o = Object.assign({ from: 34200, to: 57600, barSeconds: 60, sessionStart: 18 * 3600 }, opts || {});
+  bars = bars || [];
+  let S = series;
+  const same = S && S.from === o.from && S.to === o.to && S.sessionStart === o.sessionStart && S.done <= bars.length &&
+    (S.done === 0 || (bars[S.done - 1] && bars[S.done - 1].t === S.lastT));
+  if (!same) S = { t: [], vw: [], from: o.from, to: o.to, sessionStart: o.sessionStart, done: 0, lastT: null, day: null, pv: 0, vol: 0, tail: false };
+  if (S.tail) { S.t.pop(); S.vw.pop(); S.tail = false; }
+  const add = (b, keep) => {
+    const sec = tod(b.t);
+    if (sec < o.from || sec >= o.to) return;
+    const d = tradeDay(b.t, o.sessionStart);
+    let pv = S.pv, vol = S.vol;
+    if (d !== S.day) { pv = 0; vol = 0; }
+    const v = b.v || 0; pv += (b.h + b.l + b.c) / 3 * v; vol += v;
+    S.t.push(b.t + o.barSeconds); S.vw.push(vol > 0 ? pv / vol : b.c);
+    if (keep) { S.day = d; S.pv = pv; S.vol = vol; } else S.tail = true;
+  };
+  for (; S.done < bars.length - 1; S.done++) add(bars[S.done], true);      // the closed bars, once
+  S.lastT = S.done > 0 ? bars[S.done - 1].t : null;
+  if (bars.length) add(bars[bars.length - 1], false);                     // the last bar, again each time
+  return S;
+}
+/** The anchored VWAP of rthVwap() at `time` (a bar's end): the value of the last bar ending at or before it in the same
+    window of the same day, or null outside the window or before its first bar. */
+function vwapAt(series, time) {
+  const T = series.t;
+  let lo = 0, hi = T.length - 1, k = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (T[m] <= time + 1e-3) { k = m; lo = m + 1; } else hi = m - 1; }
+  if (k < 0) return null;
+  const end = time - 1e-3, s = tod(end);                                       // a millisecond before the bar's end
+  if (s < series.from || s >= series.to) return null;                         // outside RTH (a bar ending at 16:00 is in)
+  if (tradeDay(T[k] - 1e-3, series.sessionStart) !== tradeDay(end, series.sessionStart)) return null;
+  return series.vw[k];
+}
+/** A large-order bubble's radius in CSS px (1.14.0, Anthony from WORK: "bubble size must show the order size"): the area
+    follows the size against the floor, so radius = 4.8 px x sqrt(size / floor): 4.8 px at the floor, 6.8 at twice it,
+    9.6 at four times, 15.2 at ten times, 27 px at most (about 32 times the floor). */
+const BUBBLE_R_MIN = 4.8, BUBBLE_R_MAX = 27;
+function bubbleRadius(size, floor) {
+  const f = floor > 0 ? floor : 1, k = size > 0 ? size / f : 1;
+  return Math.min(BUBBLE_R_MAX, BUBBLE_R_MIN * Math.sqrt(Math.max(1, k)));
+}
+/** The percent change of `price` from `base` (the prior settlement), or null when either is missing (never estimated). */
+function pctFrom(price, base) {
+  return typeof price === 'number' && typeof base === 'number' && isFinite(price) && isFinite(base) && base > 0 ? (price - base) / base * 100 : null;
+}
+
 function create(container, options) {
   if (!container) throw new Error('ChartEngine.create needs a container element');
   const opt = options || {};
@@ -860,6 +990,10 @@ function create(container, options) {
     precision: opt.precision !== undefined ? opt.precision : 2,
     tick: opt.tick !== undefined ? opt.tick : 0.25,
     rightOffset: opt.rightOffset !== undefined ? opt.rightOffset : 8,
+    room: opt.room !== undefined && opt.room !== null && isFinite(opt.room) ? Math.max(0, +opt.room) : null,   // 1.14.0: room right in CSS px
+    grid: opt.grid !== false,                                                                           // 1.14.0: grid lines (the live page: off by default)
+    fitOrders: opt.fitOrders !== false,                                                                 // 1.14.0: the auto-fit keeps orders on screen
+    fitTop: opt.fitTop > 0 ? +opt.fitTop : 0,                                                          // 1.14.0: px kept free at the top (the page's legend)
     barSpacing: opt.barSpacing || 7,
     minSpacing: opt.minSpacing || 0.6,
     maxSpacing: opt.maxSpacing || 48,
@@ -870,6 +1004,7 @@ function create(container, options) {
     motion: Object.assign({ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }, opt.motion || {}),
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
+    lockButton: opt.lockButton !== undefined ? opt.lockButton !== false : opt.liveButton !== false,
     unit: opt.unit !== undefined ? opt.unit : 'pt',
     pointValue: opt.pointValue || 0,
   };
@@ -884,9 +1019,32 @@ function create(container, options) {
   const ctx = cv.getContext('2d', { alpha: false });
   let liveBtn = null;
   if (o.liveButton) {
+    /* 1.14.0 (Anthony): a small icon at the top of the price scale, not a pill over the plot; placed each frame where no
+       price, order or level tag is (placeLive) */
     liveBtn = document.createElement('button'); liveBtn.type = 'button'; liveBtn.className = 'ce-live';
-    liveBtn.textContent = 'Jump to live ›'; liveBtn.hidden = true; container.appendChild(liveBtn);
+    liveBtn.title = 'Jump to live (End)'; liveBtn.setAttribute('aria-label', 'Jump to live (End)');
+    liveBtn.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2.25 7.25 6 2 9.75z" fill="currentColor"/><rect x="8.25" y="2.25" width="1.75" height="7.5" rx=".5" fill="currentColor"/></svg>';
+    liveBtn.hidden = true; container.appendChild(liveBtn);
   }
+  /* 1.14.0 (Anthony, review D2): the price scale lock, in the corner under the price axis (no layout room, never over a
+     tag): locked, a price zoom set by hand is kept (the auto-fit does not take over near the edge, nor on scrolling back
+     to the live edge) until it is unlocked, End or Jump to live */
+  let lockBtn = null, scaleLocked = false;
+  if (o.lockButton) {
+    lockBtn = document.createElement('button'); lockBtn.type = 'button'; lockBtn.className = 'ce-lock';
+    lockBtn.style.right = Math.round((o.axisWidth - 24) / 2) + 'px';
+    container.appendChild(lockBtn);
+  }
+  function syncLock() {
+    if (!lockBtn) return;
+    lockBtn.setAttribute('aria-pressed', String(scaleLocked));
+    const t = scaleLocked ? 'Price scale locked: a zoom set by hand is kept (click to unlock; End or Jump to live also fit it again)' : 'Lock the price scale: keep a zoom set by hand as price moves';
+    lockBtn.title = t; lockBtn.setAttribute('aria-label', scaleLocked ? 'Price scale locked' : 'Lock the price scale');
+    lockBtn.innerHTML = scaleLocked
+      ? '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.25" width="8" height="5.75" rx="1" fill="currentColor"/><path d="M3.75 5.5V3.75a2.25 2.25 0 0 1 4.5 0V5.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>'
+      : '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.25" width="8" height="5.75" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3.75 5.5V3.75a2.25 2.25 0 0 1 4.4-.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+  }
+  syncLock();
   /* The divider between the plot and the delta pane (1.7.0): drag it, or focus it and use the arrow keys. */
   const divEl = document.createElement('div');
   divEl.className = 'ce-divider'; divEl.hidden = true; divEl.tabIndex = 0;
@@ -932,7 +1090,7 @@ function create(container, options) {
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [], scaleLock: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -943,7 +1101,7 @@ function create(container, options) {
   const paneOn = () => !!o.layers.delta;
   const V = {
     spacing: o.barSpacing, logS: Math.log(o.barSpacing), logT: Math.log(o.barSpacing), right: 0,
-    follow: true, anchor: null, kin: null, auto: true, lo: 0, hi: 1, init: false,
+    follow: true, anchor: null, kin: null, auto: true, lo: 0, hi: 1, init: false, edgeKey: '',
   };
   const disp = { c: 0, h: 0, l: 0, n: -1 };
   let hover = null, drag = null, dirty = true, flash = 0, pulseT0 = -1e9, lastSec = -1, hoverIdx = null;
@@ -964,7 +1122,8 @@ function create(container, options) {
     if (h) { ctx.strokeStyle = h; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.setLineDash([]); ctx.strokeText(text, x, y); }
     ctx.fillStyle = col; ctx.fillText(text, x, y);
   }
-  const followRight = () => last() + o.rightOffset;
+  const roomNow = () => roomBars(o.room, V.spacing, o.rightOffset);
+  const followRight = () => last() + roomNow();
   const sessionOf = t => tradeDay(t, o.session.start);
   const isSessionStart = i => i > 0 && o.barSeconds < DAY && sessionOf(bars[i].t) !== sessionOf(bars[i - 1].t);
   const isRTH = t => { if (o.session.rthStart === null || o.session.rthStart === undefined) return false; const s = tod(t); return s >= o.session.rthStart && s < o.session.rthEnd; };
@@ -1049,7 +1208,7 @@ function create(container, options) {
 
   function clampRight() {
     const vis = plotW / V.spacing;
-    const lo = Math.min(10, Math.max(0, last())), hi = last() + Math.max(o.rightOffset, vis * 0.5);
+    const lo = Math.min(10, Math.max(0, last())), hi = last() + Math.max(roomNow(), vis * 0.5);
     const r = clamp(V.right, lo, hi);
     const hit = r !== V.right; V.right = r; return hit;
   }
@@ -1073,7 +1232,6 @@ function create(container, options) {
     const area = H - TIME_H;
     if (!paneOn()) {
       plotH = Math.max(10, H - TIME_H); paneTop = plotH; paneH = 0; timeY = plotH; divEl.hidden = true;
-      if (liveBtn && liveBtn.style.bottom) liveBtn.style.bottom = '';
       return;
     }
     const least = Math.min(PANE_MIN, Math.floor(area * 0.3)), most = Math.max(least, area - PANE_GAP - PRICE_MIN);
@@ -1084,7 +1242,6 @@ function create(container, options) {
     // the band starts where the plot ends (its last row, order tags there and the wheel stay the plot's) and stops at
     // the price axis: the 4 px gap and the top 6 px of the pane (review N2)
     divEl.style.top = Math.round(plotH) + 'px'; divEl.style.right = AXIS_W + 'px';
-    if (liveBtn) liveBtn.style.bottom = Math.round(H - plotH + 12) + 'px';   // "Jump to live" over the plot, above the pane (review N3)
     divEl.setAttribute('aria-valuenow', String(Math.round(pane.ratio * 100)));
     divEl.setAttribute('aria-valuetext', 'Delta pane ' + Math.round(pane.ratio * 100) + '% of the chart height');
   }
@@ -1110,15 +1267,29 @@ function create(container, options) {
     const from = Math.max(0, Math.floor(indexAt(0))), to = Math.min(n, Math.ceil(indexAt(plotW)));
     if (to < from) return null;
     let mn = Infinity, mx = -Infinity;
+    // 1.14.0 (Anthony): the VWAP no longer sizes the chart (one far from price squashed the candles); it draws off the
+    // scale with an edge marker instead
     for (let i = from; i <= to; i++) {
-      const b = bars[i], h = i === n ? disp.h : b.h, l = i === n ? disp.l : b.l;
+      // the forming bar: its real high and low too (1.14.0), so the scale makes room before the candle eases up to them
+      const b = bars[i], h = i === n ? Math.max(disp.h, b.h) : b.h, l = i === n ? Math.min(disp.l, b.l) : b.l;
       if (h > mx) mx = h; if (l < mn) mn = l;
-      if (o.layers.vwap && b.vw !== undefined && b.vw !== null) { if (b.vw > mx) mx = b.vw; if (b.vw < mn) mn = b.vw; }
     }
-    const minRange = (o.tick || Math.abs(mx) * 1e-4 || 1) * 8;
-    const range = Math.max(mx - mn, minRange), mt = 0.08, mb = o.layers.volume ? 0.2 : 0.08;
-    const ppp = plotH * (1 - mt - mb) / range;
-    return { hi: mx + plotH * mt / ppp, lo: mn - plotH * mb / ppp };
+    // 1.14.0 (Anthony, "zoom to brackets"): working orders, the position's stop and target and the planned stop and
+    // target lines are always on screen, eased in with the axis re-fit like any other change of the range
+    if (o.fitOrders && orders.length) for (let k = 0; k < orders.length; k++) { const p = fitPrice(orders[k]); if (p > mx) mx = p; if (p < mn) mn = p; }
+    return fitRange(mn, mx, null, plotH, o.tick, o.layers.volume, o.fitTop);
+  }
+  /* An order's price for the auto-fit: as confirmed, or as asked for while a move waits for its answer; a planned line
+     from its entry's. Never the price under a drag in progress, so the scale holds still under the pointer. */
+  function fitPrice(ord) {
+    if (pendingMoves.has(ord.id)) return pendingMoves.get(ord.id);
+    if (ord.plan) {
+      for (let k = 0; k < orders.length; k++) if (orders[k].id === ord.plan.parent) {
+        const pp = pendingMoves.has(orders[k].id) ? pendingMoves.get(orders[k].id) : orders[k].price;
+        return roundTo(pp + ord.plan.offset * o.tick, o.tick);
+      }
+    }
+    return ord.price;
   }
 
   /* The delta pane's value range for the bars in view (1.7.0): the lows and highs of the candles, or with bar delta
@@ -1174,10 +1345,12 @@ function create(container, options) {
       }
     }
     if (V.logS !== V.logT) {
+      const atEdge = V.follow && !V.anchor && V.right === followRight();   // room in px (1.14.0): the live edge stays put
       V.logS = approach(V.logS, V.logT, dt, o.motion.zoom);
       if (Math.abs(V.logS - V.logT) < 1e-4) V.logS = V.logT;
       V.spacing = Math.exp(V.logS);
       if (V.anchor && !V.follow) V.right = V.anchor.i + (plotW - V.anchor.x) / V.spacing;
+      else if (atEdge) V.right = followRight();
       if (V.logS === V.logT) V.anchor = null;
       clampRight(); moving = true;
     }
@@ -1190,7 +1363,22 @@ function create(container, options) {
       const tr = followRight();
       if (V.right !== tr) { V.right = approach(V.right, tr, dt, o.motion.follow); if (Math.abs(V.right - tr) < 1e-3) V.right = tr; moving = true; }
     }
-    if (V.auto) {
+    /* 1.14.0 (Anthony, live on 1.13.0: "price keeps running up into the header"): a price scale zoomed or moved by hand
+       stays as set while the price is inside it, but once a new trade takes the forming bar within 12 px of the header
+       (or of the bottom) while following live, the auto-fit takes over again, eased as ever. */
+    if (n >= 0) {
+      const b = bars[n], key = bars.length + '|' + b.h + '|' + b.l + '|' + b.c;
+      if (key !== V.edgeKey) {                                   // a new trade (never a change made by hand)
+        V.edgeKey = key;
+        if (!V.auto && !scaleLocked && V.follow && V.init && !drag && !od && !pinch) {
+          const yh = yOf(Math.max(b.h, disp.h)), yl = yOf(Math.min(b.l, disp.l));
+          if (yh < (o.fitTop || 0) + 12 || yl > plotH - 12) V.auto = true;
+        }
+      }
+    }
+    /* while an order is dragged the price scale holds still (review D2): no easing, no re-fit for a new order or trade,
+       so the line stays under the pointer and the price sent is the price drawn; after the drop it eases on as before */
+    if (V.auto && !od) {
       const t = autoTarget();
       if (t) {
         if (!V.init) { V.lo = t.lo; V.hi = t.hi; V.init = true; moving = true; }
@@ -1226,9 +1414,72 @@ function create(container, options) {
     return moving;
   }
 
+  /* The developing POC, VAH and VAL of the profile on the chart (1.14.0, Anthony): solid lines across the plot (the prior
+     day's levels are dashed), the POC 1.5 px in its gold, the value area's edges 1 px in the secondary text color, each
+     named at the left of the profile ("dPOC", "dVAH", "dVAL", 600 10px Condensed). From the profile's columns, which it
+     keeps per version: nothing is walked per frame. */
+  function drawProfileLines() {
+    const c = profile.columns();
+    if (!c || c.max <= 0) return;
+    const xl = plotW * (1 - VP_WIDTH) - 6;
+    ctx.font = '600 10px ' + T.fontCond; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.setLineDash([]);
+    const one = (on, row, name, col, w) => {
+      if (!on || row === null || row === undefined || row < 0) return;
+      const price = c.low + row * c.step, y = crisp(yOf(price), w);
+      if (y < -2 || y > plotH + 2) return;
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.globalAlpha = 0.85; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke(); ctx.globalAlpha = 1;
+      ctx.fillStyle = col; ctx.fillText(name, xl, y - 2);
+    };
+    one(profLines.vah, c.vaHigh, 'dVAH', T.text2, 1);
+    one(profLines.val, c.vaLow, 'dVAL', T.text2, 1);
+    one(profLines.poc, c.poc, 'dPOC', T.vpPocText, 1.5);
+  }
+  let profLines = { poc: false, vah: false, val: false };
+  /* The VWAP drawn (1.14.0): each bar's own (the session's, from 18:00 ET), or the page's source (RTH only from 09:30 ET,
+     the VWAP gear), asked for the bars in view only. */
+  let vwapSrc = null;
+  const vwapOf = i => (vwapSrc ? vwapSrc(bars[i].t, i) : bars[i].vw);
+  /* 1.14.0: the VWAP no longer sizes the chart, so it can be off the scale: then a marker at the plot's top or bottom
+     right edge says where it is (a small triangle pointing to it and "VWAP 25,512.25" in its color on the legend ground). */
+  function vwapEdge(i) {
+    const vw = i >= 0 && bars[i] ? vwapOf(i) : null;
+    if (vw === undefined || vw === null || !isFinite(vw) || (vw <= V.hi && vw >= V.lo)) return;
+    const up = vw > V.hi, text = 'VWAP ' + fmtPrice(vw, o.precision);
+    ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+    const w = Math.ceil(ctx.measureText(text).width) + 22, h = 16, x = plotW - 6 - w, y = up ? 4 : plotH - 4 - h;
+    roundRect(x, y, w, h, 3); ctx.fillStyle = T.legendBg; ctx.fill();
+    ctx.fillStyle = T.vwap; ctx.beginPath();
+    const tx = x + 8, ty = y + h / 2;
+    if (up) { ctx.moveTo(tx - 4, ty + 2.5); ctx.lineTo(tx + 4, ty + 2.5); ctx.lineTo(tx, ty - 3); }
+    else { ctx.moveTo(tx - 4, ty - 2.5); ctx.lineTo(tx + 4, ty - 2.5); ctx.lineTo(tx, ty + 3); }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = T.vwapText; ctx.fillText(text, x + w - 5, ty + 0.5);
+    vwapMark = { up, x, y, w, h, price: vw };
+  }
+  let vwapMark = null, atrCache = { key: '', v: null };
   function roundRect(x, y, w, h, r) {
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+  }
+  /* The Jump to live icon's place (1.14.0): in the price scale's column, at its top, or lower down at the first place
+     clear of every tag drawn there (the last price with its countdown, orders, the position, levels), so it never covers
+     a price or an order; it takes no room of its own. */
+  let liveAt = null;
+  const LIVE_W = 24, LIVE_H = 22;
+  function placeLive(tags, pTop) {
+    const busy = tags.map(t => { const y0 = clamp(t.y - 9, 0, Math.max(0, plotH - 18)); return [y0, y0 + 18]; });
+    if (pTop !== null) busy.push([pTop, pTop + 32]);
+    let y = 4;
+    for (let k = 0; k < busy.length + 1; k++) {
+      const hit = busy.find(r => y < r[1] + 3 && y + LIVE_H > r[0] - 3);
+      if (!hit) break;
+      y = hit[1] + 4;
+    }
+    const at = { x: plotW + Math.round((AXIS_W - LIVE_W) / 2), y: Math.round(Math.min(y, Math.max(4, plotH - LIVE_H - 4))), w: LIVE_W, h: LIVE_H };
+    const top = at.y + 'px', left = at.x + 'px';
+    if (liveBtn.style.top !== top) liveBtn.style.top = top;
+    if (liveBtn.style.left !== left) liveBtn.style.left = left;
+    return at;
   }
   function axisTag(y, text, fill, fg, border, sub) {
     const h = sub ? 32 : 18;
@@ -1245,10 +1496,7 @@ function create(container, options) {
     const n = last(); if (n < 0) return '';
     if (paused) return 'paused';
     if (countdownFn) { try { return String(countdownFn(bars[n]) || ''); } catch (e) { return ''; } }
-    const remain = Math.max(0, Math.ceil(bars[n].t + o.barSeconds - o.clock()));
-    if (remain >= DAY) return Math.floor(remain / DAY) + 'd ' + pad(Math.floor(remain % DAY / 3600)) + 'h';
-    if (remain >= 3600) return Math.floor(remain / 3600) + ':' + pad(Math.floor(remain % 3600 / 60)) + ':' + pad(remain % 60);
-    return Math.floor(remain / 60) + ':' + pad(remain % 60);
+    return barRemain(bars[n].t, o.barSeconds, o.clock());
   }
 
   function timeLabels(from, to) {
@@ -1333,13 +1581,15 @@ function create(container, options) {
    * it reads on this ground (bull for buys, bear for sells) at BUBBLE_FILL, with a crisp ring in the same color at
    * BUBBLE_RING. Drawn over the candles but see-through, so the candle it sits on always shows (a range bar's body spans
    * nearly the whole bar, so a bubble behind it would be hidden); the larger ones first, so a smaller one on a larger one
-   * shows. The size beside the circle in 10 px mono (as the fill quantities) from four times the floor up. Zoomed in past
+   * shows. 1.14.0 (Anthony, from WORK): the radius is bubbleRadius (the area follows the size, from 4.8 px at the floor to
+   * 27 px), and no size is written on the chart: the bubble under the mouse is told to the page (on('bubble')), which
+   * shows it in the legend. Zoomed in past
    * the default spacing, every radius grows with the square root of the spacing, at most BUBBLE_ZOOM times, so a bubble
    * keeps its weight against wider candles.
    */
-  const BUBBLE_R0 = 6, BUBBLE_RMAX = 24, BUBBLE_FILL = 0.32, BUBBLE_RING = 0.92, BUBBLE_ZOOM = 1.6;
+  const BUBBLE_FILL = 0.32, BUBBLE_RING = 0.92, BUBBLE_ZOOM = 1.6;
   const bubbleZoom = () => clamp(Math.sqrt(V.spacing / o.barSpacing), 1, BUBBLE_ZOOM);
-  const bubbleR = b => clamp(BUBBLE_R0 * Math.pow(Math.max(1, b.v / (b.f > 0 ? b.f : 1)), 0.25), BUBBLE_R0, BUBBLE_RMAX) * bubbleZoom();
+  const bubbleR = b => bubbleRadius(b.v, b.f) * bubbleZoom();     // 1.14.0: the area follows the size (bubbleRadius)
   /* The bubbles of this frame (for their labels after the candles), in pooled objects: no allocation per frame. Their
      colors are made once per theme. */
   const bubbleShown = [], bubblePool = [];
@@ -1349,7 +1599,7 @@ function create(container, options) {
     if (bubbleT !== T) {
       bubbleT = T;
       bubbleCol = { upFill: rgba(T.upText, BUBBLE_FILL), upRing: rgba(T.upText, BUBBLE_RING), dnFill: rgba(T.downText, BUBBLE_FILL), dnRing: rgba(T.downText, BUBBLE_RING),
-        edge: rgba(T.bg, 0.75), halo: rgba(T.bg, 0.85), font: '500 10px ' + T.fontMono };
+        edge: rgba(T.bg, 0.75) };
     }
     return bubbleCol;
   }
@@ -1359,10 +1609,10 @@ function create(container, options) {
     if (!list || !list.length || to < from) return;
     const n = last(), t0 = bars[from].t, t1 = to < n ? bars[to + 1].t : Infinity;
     for (let k = firstAt(list, t0); k < list.length && list[k].t < t1; k++) {
-      const b = list[k], i = idxAtTime(b.t), y = yOf(b.p), r = bubbleR(b);
+      const b = list[k], i = idxAtTime(b.b !== undefined ? b.b : b.t), y = yOf(b.p), r = bubbleR(b);   // on its own bar (1.14.0)
       if (y < -r || y > plotH + r) continue;
-      const s = bubblePool[bubbleN] || (bubblePool[bubbleN] = { b: null, x: 0, y: 0, r: 0 });
-      s.b = b; s.x = xOf(i); s.y = y; s.r = r;
+      const s = bubblePool[bubbleN] || (bubblePool[bubbleN] = { b: null, x: 0, y: 0, r: 0, v: 0 });
+      s.b = b; s.x = xOf(i); s.y = y; s.r = r; s.v = b.v;
       bubbleShown.push(s); bubbleN++;
     }
     if (!bubbleN) return;
@@ -1380,18 +1630,23 @@ function create(container, options) {
       ctx.strokeStyle = up ? C.upRing : C.dnRing; ctx.lineWidth = lw; ctx.stroke();
     }
   }
-  function drawBubbleLabels() {
-    if (!bubbleN || V.spacing < 4) return;
-    const C = bubbleColors();
-    ctx.font = C.font; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round'; ctx.setLineDash([]);
-    for (let k = 0; k < bubbleN; k++) {
-      const s = bubbleShown[k];
-      if (s.b.v < 4 * s.b.f) continue;                    // from four times the floor (a radius of 8.5 px or more)
-      const text = fmtPrice(Math.round(s.b.v), 0), x = s.x + s.r + 3;
-      ctx.strokeStyle = C.halo; ctx.lineWidth = 3; ctx.strokeText(text, x, s.y);
-      ctx.fillStyle = s.b.side > 0 ? T.upText : T.downText; ctx.fillText(text, x, s.y);
+  /* The bubble under the pointer (1.14.0): the topmost one drawn in the last frame (the smaller ones are drawn last) within
+     BUBBLE_SLOP px of its ring. Run on pointer moves only, never per frame. */
+  const BUBBLE_SLOP = 3;
+  let bubbleHover = null;
+  function bubbleAtPoint(p) {
+    if (!p || p.x > plotW || p.y > plotH) return null;
+    for (let k = bubbleN - 1; k >= 0; k--) {
+      const s = bubbleShown[k], dx = p.x - s.x, dy = p.y - s.y, r = s.r + BUBBLE_SLOP;
+      if (dx * dx + dy * dy <= r * r) return s.b;
     }
+    return null;
+  }
+  function hoverBubble(p) {
+    const b = bubbleAtPoint(p);
+    if (b === bubbleHover) return;
+    bubbleHover = b;
+    emit('bubble', b ? { t: b.t, p: b.p, v: b.v, side: b.side, floor: b.f } : null);
   }
   /*
    * Absorption bars (Anthony's AbsorptionTradeCombo): a painted bar is the whole candle in the signal color with a crisp
@@ -1483,7 +1738,7 @@ function create(container, options) {
       }
     }
     ctx.lineWidth = 1 / dpr; ctx.strokeStyle = T.grid; ctx.beginPath();
-    for (const l of labels) if (!l.strong) { const x = crisp(l.x, 1); ctx.moveTo(x, top); ctx.lineTo(x, bottom); }
+    if (o.grid) for (const l of labels) if (!l.strong) { const x = crisp(l.x, 1); ctx.moveTo(x, top); ctx.lineTo(x, bottom); }
     ctx.stroke();
     ctx.beginPath(); ctx.strokeStyle = T.divider; ctx.setLineDash([2, 4]);
     for (const l of labels) if (l.strong) { const x = crisp(l.x - V.spacing / 2, 1); ctx.moveTo(x, top); ctx.lineTo(x, bottom); }
@@ -1492,7 +1747,7 @@ function create(container, options) {
     if (show) {
       vStep = niceStep(range * 34 / Math.max(1, h), 1); g0 = Math.ceil(pane.lo / vStep); g1 = Math.floor(pane.hi / vStep);
       ctx.strokeStyle = T.grid; ctx.beginPath();
-      for (let k = g0; k <= g1 && k - g0 < 60; k++) if (k) { const y = crisp(yD(k * vStep), 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
+      if (o.grid) for (let k = g0; k <= g1 && k - g0 < 60; k++) if (k) { const y = crisp(yD(k * vStep), 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
       ctx.stroke();
       if (pane.lo <= 0 && pane.hi >= 0) { const y = crisp(yD(0), 1); ctx.strokeStyle = T.divider; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke(); }
       const db = delta.bars;
@@ -1611,6 +1866,7 @@ function create(container, options) {
 
   function draw(now) {
     const n = last();
+    vwapMark = null;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
     const from = Math.max(0, Math.floor(indexAt(-V.spacing))), to = Math.min(n, Math.ceil(indexAt(plotW + V.spacing)));
@@ -1632,15 +1888,20 @@ function create(container, options) {
     // price grid
     const pStep = niceStep(pRange * 52 / plotH, o.tick);
     const k0 = Math.ceil(V.lo / pStep), k1 = Math.floor(V.hi / pStep);
-    ctx.lineWidth = 1 / dpr; ctx.strokeStyle = T.grid; ctx.beginPath();
-    for (let k = k0; k <= k1 && k - k0 < 400; k++) { const y = crisp(yOf(k * pStep), 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
-    ctx.stroke();
+    ctx.lineWidth = 1 / dpr;
+    if (o.grid) {                                                    // 1.14.0: grid lines can be off (the live page's default)
+      ctx.strokeStyle = T.grid; ctx.beginPath();
+      for (let k = k0; k <= k1 && k - k0 < 400; k++) { const y = crisp(yOf(k * pStep), 1); ctx.moveTo(0, y); ctx.lineTo(plotW, y); }
+      ctx.stroke();
+    }
 
     // time grid and session dividers
     const labels = timeLabels(from, to);
-    ctx.beginPath(); ctx.strokeStyle = T.grid;
-    for (const l of labels) if (!l.strong) { const x = crisp(l.x, 1); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); }
-    ctx.stroke();
+    if (o.grid) {
+      ctx.beginPath(); ctx.strokeStyle = T.grid;
+      for (const l of labels) if (!l.strong) { const x = crisp(l.x, 1); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); }
+      ctx.stroke();
+    }
     ctx.beginPath(); ctx.strokeStyle = T.divider; ctx.setLineDash([2, 4]);
     for (const l of labels) if (l.strong) { const x = crisp(l.x - V.spacing / 2, 1); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); }
     ctx.stroke(); ctx.setLineDash([]);
@@ -1686,17 +1947,20 @@ function create(container, options) {
       for (const g of groups) { ctx.fillStyle = g.color; ctx.fillText(g.names.join(' · '), plotW - 8, g.y - 3); }
     }
 
+    if (profile && o.layers.vp && (profLines.poc || profLines.vah || profLines.val)) drawProfileLines();
+
     // VWAP, broken at each session start
     if (o.layers.vwap && to > from) {
       ctx.strokeStyle = T.vwap; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.globalAlpha = 0.9;
       ctx.beginPath(); let pen = false;
       for (let i = from; i <= to; i++) {
-        const vw = bars[i].vw;
+        const vw = vwapOf(i);
         if (isSessionStart(i) || vw === undefined || vw === null) { pen = false; if (vw === undefined || vw === null) continue; }
         const x = xOf(i), y = yOf(vw);
         if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
       }
       ctx.stroke(); ctx.globalAlpha = 1;
+      vwapEdge(Math.min(to, n));
     }
 
     // candles
@@ -1717,7 +1981,6 @@ function create(container, options) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     drawBubbles(from, to);                                          // large-order bubbles (G1c): see-through, over the candles
-    drawBubbleLabels();
 
     // trades
     if (o.layers.trades && trades.length && n >= 0) {
@@ -1961,10 +2224,12 @@ function create(container, options) {
       let prev = -1e9; for (const t of tags) { t.y = Math.max(t.y, prev + 19); prev = t.y; }
       let lim = plotH - 9; for (let k = tags.length - 1; k >= 0; k--) { tags[k].y = Math.min(tags[k].y, lim); lim = tags[k].y - 19; }
     }
+    liveAt = liveBtn && !V.follow ? placeLive(tags, n >= 0 ? clamp(ly - 9, 0, Math.max(0, plotH - 32)) : null) : null;
     ctx.font = '400 11px ' + T.fontMono; ctx.fillStyle = T.axisText; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (let k = k0; k <= k1 && k - k0 < 400; k++) {
       const y = yOf(k * pStep); if (y < 8 || y > plotH - 8) continue;
       if (tags.some(t => Math.abs(t.y - y) < 18) || (n >= 0 && Math.abs(ly - y) < 22)) continue;
+      if (liveAt && y > liveAt.y - 8 && y < liveAt.y + liveAt.h + 8) continue;     // under the Jump to live icon
       ctx.fillText(fmtPrice(k * pStep, o.precision), plotW + 8, y);
     }
     ctx.textAlign = 'center';
@@ -2150,6 +2415,7 @@ function create(container, options) {
         V.spacing = Math.exp(V.logS); clampRight();
       }
     }
+    if (!drag && e.pointerType === 'mouse') hoverBubble(p);      // 1.14.0: the bubble under the mouse, for the legend
     setCursor(zoneOf(p), p);
     dirty = true;
   }
@@ -2205,7 +2471,7 @@ function create(container, options) {
     if (e.pointerType !== 'mouse') hover = null;
     setCursor('plot'); dirty = true;
   }
-  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; dirty = true; } }
+  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; hoverBubble(null); dirty = true; } }
   function onDbl(e) {
     const z = zoneOf(local(e));
     if (z === 'price') V.auto = true;
@@ -2222,7 +2488,7 @@ function create(container, options) {
       V.follow = false; V.kin = { v: dist / o.motion.friction };
     } else if (e.key === '+' || e.key === '=') zoomBy(0.3, plotW * 0.75);
     else if (e.key === '-' || e.key === '_') zoomBy(-0.3, plotW * 0.75);
-    else if (e.key === 'End') { V.kin = null; V.follow = true; }
+    else if (e.key === 'End') { V.kin = null; V.follow = true; V.auto = true; }
     else if (e.key === 'a' || e.key === 'A') V.auto = true;
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) { drawings = drawings.filter(d => d.id !== selectedId); selectedId = null; drawingsChanged(); }
     else if (e.key === 'Escape' && (tool || draft || selectedId)) { selectedId = null; setToolInternal(null); }
@@ -2274,6 +2540,7 @@ function create(container, options) {
   const onKeyUp = e => { if (e.key === 'Shift' && shiftHeld) { shiftHeld = false; dirty = true; } };
   container.addEventListener('keyup', onKeyUp);
   if (liveBtn) liveBtn.addEventListener('click', () => api.goLive());
+  if (lockBtn) lockBtn.addEventListener('click', () => { api.setScaleLock(!scaleLocked); emit('scaleLock', scaleLocked); });
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
   if (ro) ro.observe(container);
   resize();
@@ -2303,7 +2570,11 @@ function create(container, options) {
         emitLegend();
       }
       const live = V.follow;
-      if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+      if (live !== wasLive) {
+        wasLive = live; if (liveBtn) liveBtn.hidden = live;
+        if (live && !V.auto && !scaleLocked) { V.auto = true; dirty = true; }   // following live again: the auto-fit takes over (1.14.0), unless locked
+        emit('live', live);
+      }
       if (failing) { failing = false; reported.clear(); emit('error', null); }   // a clean frame: recovered
     } catch (e) {
       // draw() has one save() (the plot clip); restore() with nothing saved does nothing, so one call balances it.
@@ -2415,6 +2686,48 @@ function create(container, options) {
     setMotion(partial) { Object.assign(o.motion, partial || {}); dirty = true; },
     getMotion() { return Object.assign({}, o.motion); },
     setPriceFormat(f) { if (f && f.precision !== undefined) o.precision = f.precision; if (f && f.tick !== undefined) o.tick = f.tick; V.init = false; dirty = true; },
+    /** Grid lines on or off (1.14.0; the engine's default is on, the live page's off). */
+    setGrid(on) { o.grid = !!on; dirty = true; },
+    getGrid() { return o.grid; },
+    /** Empty room right of the last bar in CSS px (1.14.0), kept at every zoom; null goes back to rightOffset bars. Jump
+        to live and End keep it. */
+    setRoom(px) {
+      const had = followRight();
+      o.room = px === null || px === undefined || !isFinite(px) ? null : Math.max(0, +px);
+      if (V.follow && V.right === had) V.right = followRight();   // following: the new room at once, with no glide
+      clampRight(); dirty = true;
+    },
+    /** The developing POC, VAH and VAL lines of the profile (1.14.0): { poc, vah, val } booleans; only those given change. */
+    setProfileLines(v) { if (v) { profLines = { poc: v.poc !== undefined ? !!v.poc : profLines.poc, vah: v.vah !== undefined ? !!v.vah : profLines.vah, val: v.val !== undefined ? !!v.val : profLines.val }; dirty = true; } },
+    getProfileLines() { return Object.assign({}, profLines); },
+    /** The VWAP to draw instead of each bar's own (1.14.0): fn(barTime, index) -> price or null (no line there), or null
+        for the bars' own. The page calls it again (or redraw()) when its values change. */
+    setVwapSource(fn) { vwapSrc = typeof fn === 'function' ? fn : null; dirty = true; },
+    /** Draw the next frame (a page whose own data changed, such as the VWAP source's). */
+    redraw() { dirty = true; },
+    /** px kept free at the top of the price scale (1.14.0: the page's legend sits there), eased in with the re-fit. */
+    setFitTop(px) { const v = px > 0 && isFinite(px) ? +px : 0; if (v !== o.fitTop) { o.fitTop = v; dirty = true; } },
+    getFitTop() { return o.fitTop || 0; },
+    /** The bubble under the mouse as the page was last told it ({ t, p, v, side, floor } or null). */
+    bubbleHover() { return bubbleHover ? { t: bubbleHover.t, p: bubbleHover.p, v: bubbleHover.v, side: bubbleHover.side } : null; },
+    /** The bubbles as drawn in the last frame, for tests: [{ x, y, r, v, side }]. */
+    bubbles() { const out = []; for (let k = 0; k < bubbleN; k++) { const q = bubbleShown[k]; out.push({ x: q.x, y: q.y, r: q.r, v: q.v, side: q.b.side, t: q.b.t, p: q.b.p }); } return out; },
+    /** The room right of the last bar now: { px (as set, or null), bars (at this zoom), gap (CSS px from the last bar's
+        center to the price axis, as drawn now) }. */
+    room() { const n = last(); return { px: o.room, bars: roomNow(), gap: n >= 0 ? plotW - xOf(n) : null }; },
+    /** The price scale's target and where it is now (1.14.0, for tests): { lo, hi, target: { lo, hi } | null, auto }. */
+    priceScale() { const t = V.auto ? autoTarget() : null; return { lo: V.lo, hi: V.hi, target: t, auto: V.auto, plotHeight: plotH }; },
+    /** The newest bar as drawn now (a copy), or null with no bars (1.14.0, for the page's readouts). */
+    lastBar() { const n = last(); return n >= 0 ? Object.assign({}, bars[n]) : null; },
+    /** The ATR of the closed bars (every bar but the forming one; util.atr), worked out again only when a bar closes. */
+    atr(period) {
+      const n = last(), p = Math.max(1, Math.round(period || 14)), b = n >= 1 ? bars[n - 1] : null;
+      const key = p + '|' + n + '|' + (b ? b.t + '|' + b.h + '|' + b.l + '|' + b.c : '');
+      if (atrCache.key !== key) atrCache = { key, v: n >= 1 ? atr(bars, p, n) : null };
+      return atrCache.v;
+    },
+    /** The VWAP's edge marker as last drawn ({ up, x, y, w, h, price }), or null when the VWAP is on the scale. */
+    vwapMarker() { return vwapMark ? Object.assign({}, vwapMark) : null; },
     /** Replace the bar-close countdown under the price tag (e.g. ticks left in a range bar). null restores it. */
     setCountdown(fn) { countdownFn = typeof fn === 'function' ? fn : null; dirty = true; },
     /** Fill markers: [{ t, price, side: 'buy' | 'sell', qty }] */
@@ -2469,7 +2782,11 @@ function create(container, options) {
     /** The x of bar i's centre, CSS px from the left of the chart (as last drawn; G1c, for tests and hosts). */
     barToX(i) { return xOf(i); },
     yToPrice(y) { return priceAt(y); },
-    goLive() { V.kin = null; V.follow = true; dirty = true; },
+    goLive() { V.kin = null; V.follow = true; V.auto = true; dirty = true; },
+    /** The price scale lock (1.14.0): locked, a zoom set by hand is kept (no auto-fit near the edge or on scrolling back to
+        live) until unlocked (the auto-fit then takes over), End or goLive(). on('scaleLock', locked) after a click on it. */
+    setScaleLock(on) { const v = !!on; if (v === scaleLocked) return; scaleLocked = v; if (!v) V.auto = true; syncLock(); dirty = true; },
+    scaleLock() { return scaleLocked; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
     isLive() { return V.follow; },
     bars() { return bars; },
@@ -2483,7 +2800,7 @@ function create(container, options) {
       cancelAnimationFrame(raf); if (ro) ro.disconnect();
       container.removeEventListener('keydown', onKey);
       container.removeEventListener('keyup', onKeyUp);
-      cv.remove(); if (liveBtn) liveBtn.remove(); divEl.remove();
+      cv.remove(); if (liveBtn) liveBtn.remove(); if (lockBtn) lockBtn.remove(); divEl.remove();
       container.classList.remove('ce-host');
     },
   };
@@ -3218,19 +3535,25 @@ class LargePrints {
     this.autoFloor = f === null ? null : Math.max(2, f);
     this.autoAt = this.n + Math.max(1, Math.floor(this.n / 50));
   }
-  add(t, p, v, s) {
+  /* `barT` (1.14.0, Anthony's WORK screenshots): the start of the bar the print belongs to. A group never spans two bars:
+     a new bar closes it, as a change of side or the window's end does, and the bubble is placed on its bar (`b`), not by
+     its first print's time (a sweep that closed a range bar and opened the next within 100 ms put a bubble on the old
+     bar at the new bar's price). Without it, groups go by time and side alone, as before. */
+  add(t, p, v, s, barT) {
     if (typeof t !== 'number' || !isFinite(t) || (s !== 1 && s !== -1)) return;
+    const bar = typeof barT === 'number' && isFinite(barT) ? barT : undefined;
     const day = tradeDay(t, this.sessionStart);
     if (this.day !== day) { if (this.day !== null) { this._closeGroup(); this.hist = new Map(); this.n = 0; this.autoFloor = null; this.autoAt = 0; } this.day = day; }
     const vol = +v || 0;
     let g = this.g;
-    if (g && (g.side !== s || (t - g.t) * 1000 > this.windowMs)) { this._closeGroup(); g = null; }
-    if (!g) g = this.g = { t, side: s, v: 0, pv: 0, f: this.floor(t), item: null };
+    if (g && (g.side !== s || (t - g.t) * 1000 > this.windowMs || g.b !== bar)) { this._closeGroup(); g = null; }
+    if (!g) g = this.g = { t, side: s, v: 0, pv: 0, f: this.floor(t), item: null, b: bar };
     g.v += vol; g.pv += p * vol;
     if (g.v >= g.f) {
       const price = g.v > 0 ? Math.round(g.pv / g.v / this.tick) * this.tick : p;
       if (!g.item) {
         g.item = { t: g.t, p: price, v: g.v, side: s, f: g.f };
+        if (g.b !== undefined) g.item.b = g.b;
         this.list.push(g.item);
         // past the cap, the oldest tenth goes at once (not one splice per new bubble)
         if (this.list.length > this.max) this.list.splice(0, this.list.length - this.max + Math.ceil(this.max / 10));
@@ -3342,6 +3665,7 @@ return {
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
+    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,
   // chart signals (G1c)

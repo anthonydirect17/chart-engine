@@ -244,7 +244,7 @@ test('theme: on the default ground the profile colors are the chosen ones; on ev
   for (const bg of grounds) {
     const T = U.buildTheme({ bg });
     const rest = U.contrast(T.vpRow, bg), va = U.contrast(T.vpValue, bg);
-    assert.ok(rest > 1.05 && rest < 1.3, bg + ' rest rows a tint of the ground: ' + rest.toFixed(2));
+    assert.ok(rest > 1.05 && rest < 1.4, bg + ' rest rows a tint of the ground: ' + rest.toFixed(2));
     assert.ok(va > rest * 1.1, bg + ' value area a step stronger than the rest: ' + va.toFixed(2) + ' over ' + rest.toFixed(2));
     assert.ok(U.contrast(T.vpPoc, T.vpValue) >= CE.FLOOR.line - 0.02 || U.contrast(T.vpPoc, T.vpValue) >= Math.max(U.contrast('#FFFFFF', T.vpValue), U.contrast('#000000', T.vpValue)) - 0.02,
       bg + ' POC reads on the value-area rows: ' + U.contrast(T.vpPoc, T.vpValue).toFixed(2));
@@ -256,7 +256,9 @@ test('theme: on the default ground the profile colors are the chosen ones; on ev
 /* Candles and VWAP over the profile rows (review S3): measured and reported, not held to a floor. The candle floor
    (2.5:1, FLOOR.candle) is against the bare ground, and buildTheme keeps it there; over the profile's rows the ratios
    are lower, and what floor they should keep is Anthony's call. The bounds below are the current code's measured
-   minimums over these grounds and presets (a guard against a change making it worse unnoticed), not a floor. */
+   minimums over these grounds and presets (a guard against a change making it worse unnoticed), not a floor.
+   1.14.0 made the rows outside the value area brighter (Anthony) and kept the value area at 1.13.0's, so a bear candle
+   over it keeps 1.99:1 on the default ground (Anthony's answer, review D2). */
 test('theme: candle and VWAP contrast over the profile rows, measured on every preset and odd ground', t => {
   const grounds = CE.BACKGROUNDS.map(b => b.bg).concat(['#FFFFFF', '#777777', '#B0102A', '#123456', '#E8E0C8']);
   const rows = [], min = {};
@@ -277,13 +279,13 @@ test('theme: candle and VWAP contrast over the profile rows, measured on every p
   t.diagnostic('minimums: ' + Object.entries(min).map(([k, m]) => k + ' ' + m.v.toFixed(2) + ' (' + m.at + ')').join(', '));
   // the current code's measured minimums (not a floor; see above)
   assert.ok(min.upVA.v >= 1.85 && min.downVA.v >= 1.75, 'candles over the value-area rows: ' + min.upVA.v.toFixed(2) + ' / ' + min.downVA.v.toFixed(2));
-  assert.ok(min.upRow.v >= 2.15 && min.downRow.v >= 2.15, 'candles over the other rows: ' + min.upRow.v.toFixed(2) + ' / ' + min.downRow.v.toFixed(2));
+  assert.ok(min.upRow.v >= 2.14 && min.downRow.v >= 2.14, 'candles over the other rows: ' + min.upRow.v.toFixed(2) + ' / ' + min.downRow.v.toFixed(2));
   assert.ok(min.vwapVA.v >= 2.25, 'VWAP over the value-area rows: ' + min.vwapVA.v.toFixed(2));
   // the default ground and palette, as the CHANGELOG states them
   const D = U.buildTheme();
-  assert.equal(U.contrast(D.down, D.vpValue).toFixed(2), '1.99', 'default: bear over the value area');
+  assert.equal(U.contrast(D.down, D.vpValue).toFixed(2), '1.99', 'default: bear over the value area, as 1.13.0');
   assert.equal(U.contrast(D.up, D.vpValue).toFixed(2), '4.70', 'default: bull over the value area');
-  assert.equal(U.contrast(D.down, D.vpRow).toFixed(2), '2.42', 'default: bear over the other rows');
+  assert.equal(U.contrast(D.down, D.vpRow).toFixed(2), '2.28', 'default: bear over the other rows');
 });
 
 /* ---- the chart on a stand-in canvas */
@@ -303,14 +305,15 @@ function stubChart() {
     },
     set(t, k, v) { t[k] = v; return true; },
   });
-  const element = () => ({
+  const made = [];
+  const element = () => made[made.push({
     handlers: {}, style: {}, dataset: {}, hidden: false, textContent: '', tabIndex: -1,
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
     appendChild(c) { return c; }, remove() {}, setAttribute() {}, hasAttribute() { return false; },
     getContext: () => ctx, focus() {}, setPointerCapture() {},
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 1078, height: 626, right: 1078, bottom: 626 }),
-  });
+  }) - 1];
   let frameFn = null;
   global.document = { createElement: element, getElementById: () => null, head: { appendChild() {} } };
   global.window = { devicePixelRatio: 1 };
@@ -325,7 +328,7 @@ function stubChart() {
   const chart = E.create(element(), { clock: () => bars[bars.length - 1].t + 30 });
   chart.setBars(bars);
   let ts = 1000;
-  return { E, chart, ops, bars, T0, frame() { ops.length = 0; const f = frameFn; frameFn = null; if (f) f(ts += 16); } };
+  return { E, chart, ops, bars, T0, made, frame() { ops.length = 0; const f = frameFn; frameFn = null; if (f) f(ts += 16); } };
 }
 
 test('chart: the profile draws only with the vp layer, off by default, at the right edge, behind the candles and in front of the grid', () => {
@@ -393,4 +396,118 @@ test('chart: on a light ground the profile uses the ground-derived colors', () =
   assert.ok(U.luminance(T.vpRow) < U.luminance('#F5F7FA') && U.luminance(T.vpValue) < U.luminance(T.vpRow), 'darker tints on a light ground');
   const colors = [...new Set(ops.filter(o => o.op === 'rect' && [T.vpRow, T.vpValue, T.vpPoc].includes(o.color)).map(o => o.color))];
   assert.deepEqual(colors, [T.vpRow, T.vpValue, T.vpPoc]);
+});
+
+/* ---- the developing POC, VAH and VAL (1.14.0, Anthony: batch 2 C) */
+test('chart: the developing POC, VAH and VAL lines, each its own toggle, from the profile kept per version', () => {
+  const { E, chart, ops, T0, frame } = stubChart();
+  const vp = new E.VolumeProfile();
+  for (let i = 0; i < 400; i++) vp.add(T0 + i, 98 + (i % 17) * 0.25, 1 + (i % 5 === 0 ? 20 : 0));
+  chart.setProfile(vp); chart.setLayers({ vp: true });
+  const names = () => ops.filter(o => o.op === 'text' && /^d(POC|VAH|VAL)$/.test(o.s)).map(o => o.s).sort();
+  assert.deepEqual(chart.getProfileLines(), { poc: false, vah: false, val: false }, 'the engine draws none until asked');
+  frame();
+  assert.deepEqual(names(), []);
+  chart.setProfileLines({ poc: true }); frame();
+  assert.deepEqual(names(), ['dPOC'], 'only the POC');
+  chart.setProfileLines({ vah: true, val: true }); frame();
+  assert.deepEqual(names(), ['dPOC', 'dVAH', 'dVAL'], 'only the given keys change');
+  assert.deepEqual(chart.getProfileLines(), { poc: true, vah: true, val: true });
+  const T = chart.colors();
+  assert.ok(ops.some(o => o.op === 'stroke' && o.color === T.vpPocText), 'the POC line in its gold');
+  chart.setProfileLines({ vah: false }); frame();
+  assert.deepEqual(names(), ['dPOC', 'dVAL']);
+  // nothing is walked per frame: the profile's columns are the same object until a trade changes it
+  const c1 = vp.columns();
+  for (let i = 0; i < 5; i++) { chart.setLayers({}); frame(); }
+  assert.equal(vp.columns(), c1, 'the same columns while nothing changed');
+  vp.add(T0 + 500, 99, 3); frame();
+  assert.notEqual(vp.columns(), c1, 'a new version after a trade');
+  // with the profile layer off, no developing lines either
+  chart.setLayers({ vp: false }); frame();
+  assert.deepEqual(names(), []);
+});
+
+/* ---- the header room and Jump to live (1.14.0, Anthony live on 1.13.0) */
+test('chart: a price scale set by hand gives way to the auto-fit when a new trade nears the header, and on going back to live', () => {
+  const { chart, bars, made, frame } = stubChart();
+  const cv = made.find(m => m.handlers.wheel);
+  chart.setFitTop(60);
+  for (let i = 0; i < 40; i++) frame();
+  assert.equal(chart.priceScale().auto, true);
+  // stretch the price by hand over the axis: auto off, and nothing changes it while no trade comes
+  cv.handlers.wheel({ deltaX: 0, deltaY: -300, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  for (let i = 0; i < 20; i++) frame();
+  assert.equal(chart.priceScale().auto, false, 'set by hand: kept');
+  const ps = chart.priceScale(), last = bars[bars.length - 1];
+  // a trade inside the free area: still as set
+  const mid = (ps.lo + ps.hi) / 2;
+  chart.update(Object.assign({}, last, { c: mid, h: Math.max(last.h, mid), l: Math.min(last.l, mid) })); frame();
+  assert.equal(chart.priceScale().auto, chart.priceToY(Math.max(last.h, mid)) < 60 + 12, 'only when the bar nears the header');
+  // a trade that takes the high into the header's 12 px: the auto-fit takes over, eased
+  const up = ps.hi - (ps.hi - ps.lo) * (50 / chart.priceScale().plotHeight);
+  chart.update(Object.assign({}, last, { c: up, h: up })); frame();
+  assert.equal(chart.priceScale().auto, true, 'the auto-fit took over');
+  for (let i = 0; i < 60; i++) frame();
+  assert.ok(chart.priceToY(up) >= 60 - 0.5, 'and the high is below the header again: ' + chart.priceToY(up).toFixed(1));
+  // by hand again, then End: following live again brings the auto-fit back
+  cv.handlers.wheel({ deltaX: 0, deltaY: 200, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  assert.equal(chart.priceScale().auto, false);
+  chart.goLive(); frame();
+  assert.equal(chart.priceScale().auto, true, 'Jump to live: the auto-fit back');
+});
+
+test('chart: Jump to live is a small icon at the top of the price scale, only while not following, below any tags there', () => {
+  const { chart, bars, made, frame } = stubChart();
+  const btn = made.find(m => m.className === 'ce-live'), box = made.find(m => m.handlers.keydown);
+  assert.ok(btn, 'the icon exists');
+  assert.equal(btn.title, 'Jump to live (End)');
+  for (let i = 0; i < 30; i++) frame();
+  assert.equal(btn.hidden, true, 'following live: hidden');
+  for (let i = 0; i < 30; i++) box.handlers.keydown({ key: 'ArrowLeft', preventDefault() {}, stopPropagation() {} });
+  for (let i = 0; i < 60; i++) frame();
+  assert.equal(chart.isLive(), false);
+  assert.equal(btn.hidden, false, 'scrolled back: shown');
+  assert.deepEqual([btn.style.left, btn.style.top], [(1078 - 78 + 27) + 'px', '4px'], 'in the price scale column, at its top');
+  // the price scale set by hand, and two orders priced at its very top: their tags sit under the top edge (0 to 37 px);
+  // the icon goes below them, never over one
+  const cv = made.find(m => m.handlers.wheel);
+  cv.handlers.wheel({ deltaX: 0, deltaY: -100, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  const ps = chart.priceScale(), at = y => Math.round((ps.hi - (ps.hi - ps.lo) * y / ps.plotHeight) * 4) / 4;
+  chart.setOrders([{ id: 'O1', side: 'sell', kind: 'limit', price: at(4), qty: 1 }, { id: 'O2', side: 'sell', kind: 'limit', price: at(14), qty: 1 }]);
+  for (let i = 0; i < 10; i++) frame();
+  assert.equal(chart.priceScale().auto, false);
+  const y = parseFloat(btn.style.top);
+  assert.ok(y >= 37 + 3, 'moved down below the two order tags: ' + y);
+  chart.goLive(); frame();
+  assert.equal(btn.hidden, true, 'back to live: hidden');
+  assert.ok(bars.length > 0);
+});
+
+test('chart: the price scale lock keeps a zoom set by hand near the edge and on scrolling back; End or unlocking fits it again (review D2)', () => {
+  const { chart, bars, made, frame } = stubChart();
+  const cv = made.find(m => m.handlers.wheel), lock = made.find(m => m.className === 'ce-lock'), box = made.find(m => m.handlers.keydown);
+  assert.ok(lock, 'a lock button');
+  chart.setFitTop(60);
+  for (let i = 0; i < 30; i++) frame();
+  const got = []; chart.on('scaleLock', v => got.push(v));
+  lock.handlers.click();
+  assert.deepEqual([chart.scaleLock(), got], [true, [true]], 'a click locks it and says so');
+  cv.handlers.wheel({ deltaX: 0, deltaY: -300, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  const ps = chart.priceScale(), last = bars[bars.length - 1];
+  const up = ps.hi - (ps.hi - ps.lo) * (50 / ps.plotHeight);
+  chart.update(Object.assign({}, last, { c: up, h: up })); frame();
+  assert.equal(chart.priceScale().auto, false, 'locked: no take-over near the header');
+  for (let i = 0; i < 30; i++) box.handlers.keydown({ key: 'ArrowLeft', preventDefault() {}, stopPropagation() {} });
+  for (let i = 0; i < 40; i++) frame();
+  chart.goLive(); for (let i = 0; i < 5; i++) frame();
+  assert.equal(chart.priceScale().auto, true, 'Jump to live fits it again');
+  assert.equal(chart.scaleLock(), true, 'and the lock stays on');
+  cv.handlers.wheel({ deltaX: 0, deltaY: -300, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  chart.setScaleLock(false); frame();
+  assert.deepEqual([chart.scaleLock(), chart.priceScale().auto], [false, true], 'unlocked: the auto-fit takes over');
 });

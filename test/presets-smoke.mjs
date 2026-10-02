@@ -80,7 +80,7 @@ const pressed = (p, g) => p.$$eval(group(g) + ' .pr-pick[aria-pressed="true"] .p
 const note = (p, g) => p.textContent(group(g) + ' .pr-note');
 const rowBtn = (g, name, act) => `${group(g)} .pr-row:has(.pr-n:text-is("${name}")) [data-act="${act}"]`;
 const setBg = (p, hex) => p.evaluate(v => { const h = document.querySelector('.ce-theme-panel input[data-hex="bg"]'); h.value = v; h.dispatchEvent(new Event('input', { bubbles: true })); }, hex);
-const theme = p => p.evaluate(() => { const t = window.liveChart.getTheme(); return { up: t.up, down: t.down, bg: t.bg, vwap: t.vwap, vpPoc: t.vpPoc }; });
+const theme = p => p.evaluate(() => { const t = window.liveChart.getTheme(); return { up: t.up, down: t.down, bg: t.bg, vwap: t.vwap, vpPoc: t.vpPoc, vpRow: t.vpRow, vpValue: t.vpValue }; });
 const levelColor = (p, name) => p.evaluate(n => { const l = window.liveChart.getLevels().find(x => x.name === n); return l ? l.color : null; }, name);
 async function openGear(p, id) {
   if (await p.isHidden('#indPanel')) await p.click('#indBtn');
@@ -331,15 +331,20 @@ try {
   await a.press('.ind-set[data-id="vwap"] input[data-hk="vwap"]', 'Tab');
   check((await a.inputValue('.ind-set[data-id="vwap"] input[data-hk="vwap"]')) === '#FF8800', 'leaving the box puts the color in use back');
   await openGear(a, 'levels');
-  check((await a.$$('.ind-set[data-id="levels"] .ind-color')).length === 4, 'Levels gear: prior day, overnight, value area, prior close');
+  check((await a.$$('.ind-set[data-id="levels"] .ind-color')).length === 6, 'Levels gear: prior day, overnight, value area, prior close and the IB high and low (1.14.0)');
   await typeHex(a, '.ind-set[data-id="levels"] input[data-hk="prior"]', '#00AAFF');
   check((await levelColor(a, 'PDH')) === '#00AAFF' && (await levelColor(a, 'PDL')) === '#00AAFF', 'prior day high and low drawn in #00AAFF at once');
-  await openGear(a, 'ib');
-  await typeHex(a, '.ind-set[data-id="ib"] input[data-hk="ibHigh"]', '#FFD0F0');
+  await typeHex(a, '.ind-set[data-id="levels"] input[data-hk="ibHigh"]', '#FFD0F0');
   check((await levelColor(a, 'IBH')) === '#FFD0F0', 'IB high #FFD0F0 at once: ' + await levelColor(a, 'IBH'));
   await openGear(a, 'vp');
   await typeHex(a, '.ind-set[data-id="vp"] input[data-hk="vpPoc"]', '#FFFFFF');
   check((await theme(a)).vpPoc === '#FFFFFF', 'profile POC #FFFFFF');
+  // 1.14.0 (Anthony): the profile's rows and value area in its gear too
+  check((await a.$$('.ind-set[data-id="vp"] .ind-color')).length === 3, 'Profile gear: rows, value area rows, point of control');
+  await typeHex(a, '.ind-set[data-id="vp"] input[data-hk="vpRow"]', '#334455');
+  await typeHex(a, '.ind-set[data-id="vp"] input[data-hk="vpValue"]', '#556677');
+  t = await theme(a);
+  check(t.vpRow === '#334455' && t.vpValue === '#556677', 'profile rows #334455 and value area #556677 drawn at once: ' + t.vpRow + ' ' + t.vpValue);
   await openGear(a, 'vwap');
   await a.mouse.move(700, 600);
   await shot(a, 'presets-gear-colors-dark');

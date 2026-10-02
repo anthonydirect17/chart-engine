@@ -107,11 +107,14 @@ try {
   check((await fields()).close === '' && JSON.parse(await stored()).close === '', 'Clear empties and saves');
   await setKey('close', KEYS.close);
   await page.screenshot({ path: path.join(out, 'hotkeys-1440-settings.png') });
-  // while Settings is open, a hotkey does nothing (the box takes it, and outside it the panel is a dialog)
+  // while Settings is open Buy, Sell and B/E do nothing; Close and Flatten all still act (review D2: they always work
+  // while a menu or popover is open)
   await clearSent();
   await page.click('#setPanel .hk-foot');
+  await page.keyboard.press(KEYS.buy); await page.waitForTimeout(200);
+  check((await sent()).length === 0 && (await statusSeen()).length === 0, 'Buy does nothing while Settings is open');
   await page.keyboard.press(KEYS.flattenAll); await page.waitForTimeout(200);
-  check((await sent()).length === 0 && (await statusSeen()).length === 0, 'nothing fires while Settings is open');
+  check((await statusSeen()).some(t => /^Flatten all/.test(t)), 'Flatten all acts while Settings is open: ' + JSON.stringify(await statusSeen()));
   await page.keyboard.press('Escape');
   check(await page.isHidden('#setPanel'), 'Escape closes Settings');
 

@@ -21,7 +21,7 @@
  * A forward the holder gets later than ACT_MS after it was made is not acted on (answered "too late"); the asking window
  * waits ANSWER_MS for an answer, then says nothing was sent. So a late answer cannot have sent anything, except on a
  * PC so busy that the answer itself takes longer than the gap between the two (it is then shown as it comes: onLate).
- * The stamps are the browser's own clock (performance.timeOrigin + performance.now(), the same for every window); a
+ * The stamps are Date.now() (the same for every window at the same moment, also right after a Windows clock fix); a
  * forward stamped more than CLOCK_SLACK_MS in the future is refused too (the clocks cannot be trusted then).
  *
  * No DOM; it also loads in Node for test/ticket-link.test.js (pass `channel`, `locks` and `now`).
@@ -43,7 +43,10 @@ const NO_TICKET = 'No window has the order ticket: nothing was sent. Add the tic
 const NO_CHANNEL = 'This browser cannot reach the order ticket\'s window (no BroadcastChannel): nothing was sent.';
 const BAD_CLOCK = 'The order ticket\'s window could not tell when this was made: nothing was sent.';
 const CLOCK_SLACK_MS = 50;
-const browserNow = () => (typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now());
+/* Every cross-window stamp and age check is on Date.now() (review D2): the one clock every window reads alike at the
+   same moment, also right after a Windows clock fix (a per-window re-anchored clock, or performance.timeOrigin, can
+   disagree between windows for a while). */
+const browserNow = () => Date.now();
 
 function create(o) {
   const wid = o.wid || ('w' + Math.random().toString(36).slice(2, 10));
@@ -88,12 +91,14 @@ function create(o) {
   function move() {
     if (!locks) return Promise.resolve('unsupported');
     if (held) return Promise.resolve('held');
-    const id = wid + '-m' + (++seq), until = now() + MOVE_MS;
+    const id = wid + '-m' + (++seq);
     post({ t: 'release', from: wid, id });
+    /* the deadline counts the waits themselves (review D2), never a clock a Windows fix can step */
+    let waited = 30;
     return new Promise(resolve => {
       const tryNow = () => take().then(r => {
-        if (r === 'held' || now() >= until || closed) { resolve(r); return; }
-        later(tryNow, 50);
+        if (r === 'held' || waited >= MOVE_MS || closed) { resolve(r); return; }
+        waited += 50; later(tryNow, 50);
       });
       later(tryNow, 30);
     });
@@ -188,5 +193,5 @@ function browserChannel(name) {
   return ch;
 }
 
-return { create, browserChannel, LOCK, CHANNEL, ANSWER_MS, ACT_MS, MOVE_MS, CLOCK_SLACK_MS, NO_ANSWER, TOO_LATE, NO_TICKET, NO_CHANNEL, BAD_CLOCK };
+return { create, browserChannel, browserNow, LOCK, CHANNEL, ANSWER_MS, ACT_MS, MOVE_MS, CLOCK_SLACK_MS, NO_ANSWER, TOO_LATE, NO_TICKET, NO_CHANNEL, BAD_CLOCK };
 });

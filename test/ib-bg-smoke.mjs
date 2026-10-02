@@ -117,7 +117,7 @@ try {
     }, ib[0].price);
     check(drawn.n > 20 && drawn.first > 200, 'IBH pixels start well right of the left edge (at the 9:30 bar): first orchid at x ' + drawn.first);
     check((await p.evaluate(() => window.liveChart.getLayers().ib)) === true, 'Initial balance on by default on the main pane');
-    check(/6\/6/.test(await p.textContent('#indCount')), 'indicator count 6/6 (the delta pane on too, 1.7.0): ' + await p.textContent('#indCount'));
+    check(/5\/5/.test(await p.textContent('#indCount')), 'indicator count 5/5 (the delta pane on too, 1.7.0; the IB in Levels, 1.14.0): ' + await p.textContent('#indCount'));
     await p.screenshot({ path: path.join(SHOTS, 'ib-forming-1000.png') });
     // the same IB on every view
     for (const tf of ['15s', '30s', '5m', '15m', '1h', 'Range', '1m']) {
@@ -128,14 +128,22 @@ try {
     // after a reload
     await p.reload(); await live(p);
     check(JSON.stringify(await ibOf(p)) === JSON.stringify(ib), 'same IB after a reload');
-    // the menu entry: off hides the lines and is saved for this pane only
+    // the IB in the Levels gear (1.14.0, its own indicator retired): IBH and IBL each a toggle, saved for this pane only
     await p.click('#indBtn');
-    check(await p.isVisible('#indPanel [data-f="sw:ib"]') && /Initial balance/.test(await p.textContent('#indPanel')), 'Indicators menu has "Initial balance" (1.6.0; IB 1h before)');
-    await p.click('#indPanel [data-f="sw:ib"]'); await p.keyboard.press('Escape');
-    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false && (await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicators-v2')).main.ind.ib.shown)) === false, 'Initial balance hidden: layer off and saved for the main pane');
+    check(!(await p.$('#indPanel [data-f="sw:ib"]')), 'no Initial balance row of its own (1.14.0)');
+    await p.click('#indPanel [data-act="gear"][data-id="levels"]');
+    check(await p.getAttribute('#indPanel [data-f="tog:levels:ibh"]', 'aria-pressed') === 'true' && await p.getAttribute('#indPanel [data-f="tog:levels:ibl"]', 'aria-pressed') === 'true', 'the Levels gear has IBH and IBL toggles, on');
+    await p.click('#indPanel [data-f="tog:levels:ibh"]');
+    check(JSON.stringify((await ibOf(p)).map(l => l.name)) === '["IBL"]', 'IBH off: only IBL drawn: ' + JSON.stringify((await ibOf(p)).map(l => l.name)));
+    await p.click('#indPanel [data-f="tog:levels:ibl"]'); await p.keyboard.press('Escape');
+    const saved = await p.evaluate(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.levels);
+    check((await ibOf(p)).length === 0 && saved.ibh === 'off' && saved.ibl === 'off' && (await p.evaluate(() => window.liveChart.getLayers().levels)) === true, 'both IB lines off, Levels still on, saved for the main pane: ' + JSON.stringify(saved));
+    check(await p.isHidden('#ibNote'), 'no IB note while its lines are off');
     await p.reload(); await live(p);
-    check((await p.evaluate(() => window.liveChart.getLayers().ib)) === false, 'Initial balance hidden after a reload');
-    await p.click('#indBtn'); await p.click('#indPanel [data-f="sw:ib"]'); await p.keyboard.press('Escape');
+    check((await ibOf(p)).length === 0, 'IB lines off after a reload');
+    await p.click('#indBtn'); await p.click('#indPanel [data-act="gear"][data-id="levels"]');
+    await p.click('#indPanel [data-f="tog:levels:ibh"]'); await p.click('#indPanel [data-f="tog:levels:ibl"]'); await p.keyboard.press('Escape');
+    check(JSON.stringify(await ibOf(p)) === JSON.stringify(ib), 'both back on: the same IB');
     // the mounted chart (The Desk): same IB; a new pane starts with it off
     const host = await openPageEmbed(ctx, br.port);
     const mA = await ibOf(host, '__a');
@@ -313,7 +321,8 @@ try {
     // a light ground takes the toolbar, menus and status line light too, text at the floors
     const chrome = await a.evaluate(() => {
       const cs = el => getComputedStyle(el);
-      const btn = document.getElementById('resetBtn'), tf = document.querySelector('#tfSeg [aria-pressed="true"]'), stat = document.querySelector('.status');
+      // 1.14.0: Reset view moved into the small menu; Settings is the toolbar's own .btn
+      const btn = document.getElementById('setBtn'), tf = document.querySelector('#tfSeg [aria-pressed="true"]'), stat = document.querySelector('.status');
       return { root: cs(document.querySelector('.chart-live')).backgroundColor, btnBg: cs(btn).backgroundColor, btnFg: cs(btn).color, tfFg: cs(tf).color, tfBg: cs(tf).backgroundColor,
         status: cs(stat).color, colorsBtn: cs(document.querySelector('.ce-theme-btn')).backgroundColor, colorsFg: cs(document.querySelector('.ce-theme-btn')).color, scheme: cs(document.querySelector('.chart-live')).colorScheme };
     });

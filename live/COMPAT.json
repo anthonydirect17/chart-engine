@@ -1,8 +1,9 @@
 {
   "about": "The oldest ChartBridge each page version works with. nt8/update-pc.ps1 installs a page automatically only when the ChartBridge compiled on the PC is this version or newer. Keep it with the CHANGELOG: every release that needs a newer ChartBridge raises minChartBridge (and adds a line to history), and page follows package.json.",
-  "page": "1.13.0",
+  "page": "1.14.0",
   "minChartBridge": "0.3.2",
   "history": [
+    { "page": "1.14.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.14.0: the display round (no scrolling, panels resized from any edge, Time and Sales colors by ChartBridge 0.3.8's q, grid lines off by default, room right of price, zoom to brackets, the VWAP off the scale, bar countdown, ATR and % from the prior settlement (0.3.7), the single chart page's cleanup, versions shown, the page clock following the PC's); older ChartBridge: the tape by side and no settlement change; page only, no recompile" },
     { "page": "1.13.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.13.0: planned stop and target lines on a resting entry need ChartBridge 0.3.8 (older: no planned lines, as 1.12.0), no 200-tick bracket cap with 0.3.7 or newer, the NO STOP tag and one question per page load, Armed in deep red, the position readout redesign; page only, no recompile" },
     { "page": "1.12.1", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.12.1: chart signals (absorption bars, divergence arrows in the delta pane, large-order bubbles); page and engine only, no recompile; the signals need trade sides (ChartBridge 0.3.4)" },
     { "page": "1.12.0", "minChartBridge": "0.3.2", "note": "CHANGELOG 1.12.0: the workspace is the main page (one connection per instrument, slim chart headers), its order ticket, order clicks on every chart of the ticket's instrument, one ticket across windows, the window's Flatten all; page only, no recompile" },
