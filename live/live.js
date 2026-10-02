@@ -3214,17 +3214,23 @@ function start(container, opt, PAGE) {
       return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
         `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span>` +
         (SLIM || TRADING ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
-    }).join('') + (SLIM || TRADING ? '<button type="button" class="ind-chip ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>' : '');
+    }).join('') + '<button type="button" class="ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>';
     fitChips();
   }
   /* In a host's slim header (toolbar: false) the strip has the room the header leaves: 2-letter chips, and those that do
-     not fit go behind a "+N" chip that opens a small list of them (the same chips). The header never wraps or scrolls. */
+     not fit go behind a "+N" chip that opens a small list of them (the same chips). The header never wraps or scrolls.
+     1.14.0: with up to ten chips, a host's own toolbar does the same once its one-letter chips do not fit either. */
   let chipListOpen = false;
-  function fitSlimChips() {
+  function unlistChips() {
     const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
     if (!more || !list) return;
     for (const c of [...list.children]) strip.insertBefore(c, more);
     more.hidden = true;
+  }
+  function fitSlimChips() {
+    const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
+    if (!more || !list) return;
+    unlistChips();
     const over = () => strip.scrollWidth > strip.clientWidth + 1;
     if (over()) {
       more.hidden = false;
@@ -3252,12 +3258,16 @@ function start(container, opt, PAGE) {
   function fitChips() {
     if (SLIM || TRADING) { fitSlimChips(); return; }       // the page (1.14.0): the workspace's 2-letter chips, the rest behind "+N"
     const strip = $('indChips'), bar = strip.closest('.bar');
-    const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
+    unlistChips();
+    const most = Math.min(LP.PIN_MAX, IND.filter(d => !d.nochip && !d.coming).length);   // room for every chip there can be
+    const room = Math.min(most * 30 + (most - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
     strip.style.setProperty('--chip-room', room + 'px');
     strip.classList.add('is-narrow');
     const h = bar.offsetHeight;
     strip.classList.remove('is-narrow');
     if (bar.offsetHeight > h || strip.scrollWidth > strip.clientWidth + 1) strip.classList.add('is-narrow');
+    if (strip.scrollWidth > strip.clientWidth + 1) fitSlimChips();   // one letter each still too wide: the rest behind "+N"
+    else showChipList(false);
   }
   function syncIndicators() {
     const c = LP.Pane.counts(IS);
@@ -3379,16 +3389,14 @@ function start(container, opt, PAGE) {
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
-      if ((SLIM || TRADING) && e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
+      if (e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
       const b = e.target.closest('button[data-id]'); if (!b) return;
       const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
       changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
     });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
-    if (SLIM || TRADING) {
-      listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
-      listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
-    }
+    listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
+    listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
     wrap.addEventListener('keydown', e => {
       if (panel.hidden) return;
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }

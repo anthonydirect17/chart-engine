@@ -200,8 +200,8 @@ try {
   layers = await page.evaluate(() => [window.__a.chart.getLayers(), window.__b.chart.getLayers()]);
   check(layers[0].volume && !layers[0].vwap && layers[0].levels && layers[1].volume && layers[1].vwap && !layers[1].levels, 'indicator choices stay per pane: ' + JSON.stringify(layers));
   // pane A (main): the five and the delta pane (1.7.0) less VWAP (hidden, still on its chart); pane B (new): the two added
-  check(await page.textContent('#paneA .ind-count') === '5/6' && await page.textContent('#paneB .ind-count') === '2/2' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane: ' + await page.textContent('#paneA .ind-count') + ' ' + await page.textContent('#paneB .ind-count'));
-  check(await page.$$eval('#paneB .ind-chip', c => c.map(x => x.dataset.id).join()) === 'volume,vwap' && await page.$$eval('#paneA .ind-chip', c => c.length) === 5, 'chips: pane A\'s five (the delta pane on, with no chip), pane B\'s two added ones (added ones get a chip)');
+  check(await page.textContent('#paneA .ind-count') === '4/5' && await page.textContent('#paneB .ind-count') === '2/2' && layers[0].ib === true && layers[1].ib === false, 'indicator counts per pane: ' + await page.textContent('#paneA .ind-count') + ' ' + await page.textContent('#paneB .ind-count'));
+  check(await page.$$eval('#paneB .ind-chip', c => c.map(x => x.dataset.id).join()) === 'volume,vwap' && await page.$$eval('#paneA .ind-chip', c => c.length) === 4, 'chips: pane A\'s four (the delta pane on, with no chip; the IB in Levels, 1.14.0), pane B\'s two added ones (added ones get a chip)');
   check(await page.evaluate(() => window.__a.chart.deltaPane().on && !window.__b.chart.deltaPane().on), 'the delta pane on the main pane only (1.7.0)');
   // one account picker (1.6.0): no order bar in a mounted chart, so a compact picker in its toolbar drives the fills
   {
@@ -267,13 +267,14 @@ try {
       while (await page.$('#paneB .ind-body [data-f^="add:"]')) await page.click('#paneB .ind-body [data-f^="add:"]');   // each add redraws the list
     }
     await page.keyboard.press('Escape');
-    check(await page.textContent('#paneB .ind-count') === '8/8' && await page.$$eval('#paneB .ind-chip', c => c.length) === 6 && !(await page.$('#paneB .ind-chip[data-id="fills"]')) && !(await page.$('#paneB .ind-chip[data-id="bubbles"]')), 'pane B: all eight added (the volume profile, the delta pane and the bubbles too), the first six with a chip: the strip is full, the bubbles and Fills without one');
+    check(await page.textContent('#paneB .ind-count') === '7/7' && await page.$$eval('#paneB .ind-chip', c => c.length) === 7, 'pane B: all seven added (the volume profile, the delta pane and the bubbles too), each with a chip (the strip holds ten, 1.14.0)');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = '3 1 0'; });
     await page.waitForTimeout(300);
-    const nb = await page.evaluate(() => { const s = document.querySelector('#paneB .ind-chips'), cs = [...s.querySelectorAll('.ind-chip')];
-      return { w: Math.round(document.getElementById('paneB').getBoundingClientRect().width), narrow: s.classList.contains('is-narrow'), lines: new Set(cs.map(c => Math.round(c.getBoundingClientRect().top))).size, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1 }; });
+    const nb = await page.evaluate(() => { const s = document.querySelector('#paneB .ind-chips'), cs = [...s.querySelectorAll(':scope > .ind-chip')], more = s.querySelector('.ind-chip-more');
+      return { w: Math.round(document.getElementById('paneB').getBoundingClientRect().width), narrow: s.classList.contains('is-narrow'), lines: new Set(cs.map(c => Math.round(c.getBoundingClientRect().top))).size, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1,
+        more: more && !more.hidden ? more.textContent : '', listed: s.querySelectorAll('.ind-chip-list .ind-chip').length }; });
     const na = await page.evaluate(() => document.querySelector('#paneA .ind-chips').classList.contains('is-narrow'));
-    check(nb.narrow && nb.lines === 1 && nb.text === 'VWLIPD' && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
+    check(nb.narrow && nb.lines === 1 && 'VWLPDBF'.startsWith(nb.text) && nb.text.length + nb.listed === 7 && (nb.listed ? nb.more === '+' + nb.listed : true) && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line, the rest behind +N (1.14.0) (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
     await page.click('#paneB .ind-chip[data-id="levels"]');
     check(await page.evaluate(() => window.__b.chart.getLayers().levels === false && window.__a.chart.getLayers().levels === true), 'a letter chip hides Levels on its own pane only');
     await shot(page, 'embed-narrow-pane-chips.png');
@@ -284,7 +285,7 @@ try {
     await page.keyboard.press('Escape');
     // back to pane B's earlier set: Volume and VWAP only, not pinned
     await page.click('#paneB .ind-btn');
-    for (const id of ['levels', 'ib', 'vp', 'delta', 'bubbles', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
+    for (const id of ['levels', 'vp', 'delta', 'bubbles', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = ''; });
     check(await page.textContent('#paneB .ind-count') === '2/2', 'pane B back to Volume and VWAP');
@@ -405,7 +406,7 @@ try {
     const gone = await p2.evaluate(() => { const sel = document.querySelector('#paneA [id$="-acctPick"]'); return { value: sel.value, text: sel.selectedOptions[0].textContent, marks: window.__a.chart.getMarkers().length }; });
     check(gone.value === 'GONE-ACCT' && gone.text === 'GONE-ACCT (no longer listed)' && gone.marks === 0, 'a saved account ChartBridge no longer lists is shown plainly, with no fills: ' + JSON.stringify(gone));
     const mig = await p2.evaluate(() => ({ layers: window.__a.chart.getLayers(), count: document.querySelector('#paneA .ind-count').textContent, v2: JSON.parse(localStorage.getItem(ChartLive.EMBED_PREFIX + 'live-indicators-v2')), plain: localStorage.getItem('live-indicators-v2') }));
-    check(mig.layers.vwap === false && mig.layers.volume === true && mig.layers.delta === true && mig.count === '5/6' && mig.v2 && mig.v2.main.ind.vwap.on === true && mig.v2.main.ind.vwap.shown === false && mig.v2.main.ind.delta.on === true && mig.plain === null,
+    check(mig.layers.vwap === false && mig.layers.volume === true && mig.layers.delta === true && mig.count === '4/5' && mig.v2 && mig.v2.main.ind.vwap.on === true && mig.v2.main.ind.vwap.shown === false && mig.v2.main.ind.delta.on === true && mig.plain === null,
       'a 1.5.3 embed\'s indicators carried over under its own prefix, VWAP still off, the delta pane on (1.7.0): ' + JSON.stringify(mig));
     // phone width: no sideways scroll
     await p2.setViewportSize({ width: 400, height: 820 });

@@ -44,7 +44,10 @@ floors) bold and brighter; grid lines off by default (Settings); 80 px of room r
 (Settings); working orders, bracket legs and planned stop and target lines always on the price scale; the VWAP no longer
 sizes the chart (off the scale it gets an edge marker); the legend shows the time left in the bar (Range: ticks left),
 ATR(14) and the change from the prior settlement (ChartBridge 0.3.7; blank with none). Bubbles are sized by the order
-(area by size over the floor) and say their size in the legend on hover; the price scale keeps the legend clear. The single chart page has the
+(area by size over the floor), placed on the bar their prints traded in, and say their size in the legend on hover; the price scale keeps the legend clear. Batch 2: the profile's colors in its gear (brighter rows), the IB folded into
+Levels with PD VAH, PD VAL and a drawn PD POC, each level its own toggle, the developing POC, VAH and VAL, up to 10 chips,
+the VWAP from 09:30 ET (RTH only) or 18:00 ET per chart, a short header on small panels, and an **Aa** header text toggle
+per chart. The single chart page has the
 workspace's cleanup (one toolbar line, 2-letter chips, the drawing tools and Reset view in a small menu, Glide, Range
 style, grid, room and the PIN in Settings). "chart x.y.z · ChartBridge a.b.c" is in the LIVE badge's tooltip and in
 Settings. The page's clock follows Windows clock fixes (re-anchored to the PC's clock every 5 s, as ChartBridge does).
@@ -53,10 +56,10 @@ Live CME data is licensed for your own screen: never publish it (the GitHub Page
 data).
 
 On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volume bars, VWAP, Levels, Fills, the
-**Initial balance** (today's 1-hour IB, 1.5.3), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
+**Initial balance** (today's 1-hour IB, 1.5.3; part of Levels since 1.14.0, each level line its own switch), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
 buys minus market sells below the chart, counted from when the page opens or the trades' sides were measured, and from
 0 again at 18:00 ET; the sides from ChartBridge 0.3.4) per chart pane, with a search box ("/" opens it), a Recent line, Hide
-all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 6). **Chart
+all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 10 since 1.14.0, the rest behind +N when they do not fit). **Chart
 signals** (1.12.1, Anthony's NinjaScript indicators, counted from the page's opening from the trades' sides): **Absorption
 bars** (Signals group, no chip; a large trade, a volume spike and a rejection close on one bar paint it cyan or yellow at
 the close, an outline while it forms; settings per instrument and bar type in its gear), **Large-order bubbles** (Volume
@@ -588,7 +591,8 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)` · 1.14.0: `setGrid(on)` · `getGrid()` ·
 `setRoom(px)` · `room()` (`{ px, bars, gap }`) · `priceScale()` (`{ lo, hi, target, auto, plotHeight }`) · `vwapMarker()` ·
 `lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's) · `setFitTop(px)` (room kept at the top of the
-price scale) · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()`
+price scale) · `getFitTop()` · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()` ·
+`setProfileLines({ poc, vah, val })` · `getProfileLines()` (the developing profile lines) · `setVwapSource(fn)` (a page's own VWAP per bar) · `redraw()`
 
 Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
 trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only
@@ -632,7 +636,8 @@ those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-ho
 `profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
 formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`); 1.14.0: `roomBars(px, spacing,
 bars)`, `fitRange(lo, hi, extraPrices, plotHeight, tick, volume)`, `fmtRemain(seconds)`, `barRemain(t, barSeconds, now)`,
-`atr(bars, period, count)`, `pctFrom(price, base)` and `bubbleRadius(size, floor)`.
+`atr(bars, period, count)`, `pctFrom(price, base)`, `bubbleRadius(size, floor)`, `rthVwap(bars, opts)`, `vwapAt(series, time)`
+and `PD_POC_DASH`.
 
 ## Colors
 

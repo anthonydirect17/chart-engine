@@ -1519,8 +1519,8 @@ function create(container, options) {
     for (let k = firstAt(list, t0); k < list.length && list[k].t < t1; k++) {
       const b = list[k], i = idxAtTime(b.b !== undefined ? b.b : b.t), y = yOf(b.p), r = bubbleR(b);   // on its own bar (1.14.0)
       if (y < -r || y > plotH + r) continue;
-      const s = bubblePool[bubbleN] || (bubblePool[bubbleN] = { b: null, x: 0, y: 0, r: 0 });
-      s.b = b; s.x = xOf(i); s.y = y; s.r = r;
+      const s = bubblePool[bubbleN] || (bubblePool[bubbleN] = { b: null, x: 0, y: 0, r: 0, v: 0 });
+      s.b = b; s.x = xOf(i); s.y = y; s.r = r; s.v = b.v;
       bubbleShown.push(s); bubbleN++;
     }
     if (!bubbleN) return;
@@ -2608,10 +2608,11 @@ function create(container, options) {
     redraw() { dirty = true; },
     /** px kept free at the top of the price scale (1.14.0: the page's legend sits there), eased in with the re-fit. */
     setFitTop(px) { const v = px > 0 && isFinite(px) ? +px : 0; if (v !== o.fitTop) { o.fitTop = v; dirty = true; } },
+    getFitTop() { return o.fitTop || 0; },
     /** The bubble under the mouse as the page was last told it ({ t, p, v, side, floor } or null). */
     bubbleHover() { return bubbleHover ? { t: bubbleHover.t, p: bubbleHover.p, v: bubbleHover.v, side: bubbleHover.side } : null; },
     /** The bubbles as drawn in the last frame, for tests: [{ x, y, r, v, side }]. */
-    bubbles() { const out = []; for (let k = 0; k < bubbleN; k++) { const q = bubbleShown[k]; out.push({ x: q.x, y: q.y, r: q.r, v: q.b.v, side: q.b.side, t: q.b.t, p: q.b.p }); } return out; },
+    bubbles() { const out = []; for (let k = 0; k < bubbleN; k++) { const q = bubbleShown[k]; out.push({ x: q.x, y: q.y, r: q.r, v: q.v, side: q.b.side, t: q.b.t, p: q.b.p }); } return out; },
     /** The room right of the last bar now: { px (as set, or null), bars (at this zoom), gap (CSS px from the last bar's
         center to the price axis, as drawn now) }. */
     room() { const n = last(); return { px: o.room, bars: roomNow(), gap: n >= 0 ? plotW - xOf(n) : null }; },

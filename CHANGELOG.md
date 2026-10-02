@@ -73,7 +73,7 @@ from using 1.12.0 live on HOME:
 
 ### 6. `/single.html` gets the workspace's cleanup
 - One toolbar line (at 1366, 1920 and 2560 px): the instruments, Bars and the range size, Indicators and its chips (the
-  workspace's 2-letter chips: VO VW LV IB FL, room kept for six), a small **⋯** menu (Trend line, Price line, Clear
+  workspace's 2-letter chips: VO VW LV FL; those that do not fit go behind a **+N** chip), a small **⋯** menu (Trend line, Price line, Clear
   drawings, Reset view), Colors, Settings.
 - **Settings** hold the general controls: Glide, Range style, Grid lines, Room right, then the hotkeys, Change PIN and
   the versions.
@@ -121,17 +121,62 @@ from using 1.12.0 live on HOME:
   (the tick path's cost is unchanged), and every user reads it: the local delay and the order ticket link's stamps
   (`TicketLink.browserNow`).
 
+### From Anthony at WORK: bubble placement (59.png, 60.png)
+- A bubble sat over a bar whose range did not hold its price, or one bar early. Cause: same-side prints at one price
+  within the aggregation window were grouped across a bar change, and the group was placed by its first print's time
+  while its price was the group's VWAP. Now a bar change closes the group (`LargePrints.add(t, p, v, side, barT)`), each
+  group keeps its bar's start, and the chart places it by that bar. Range bar and minute boundaries and the "one bar
+  early" case are in the test, which failed before the fix. Absorption and divergence unchanged.
+
+### Batch 2 (Anthony, 2026-10-02)
+- **A. Volume profile colors**: rows, value area rows and POC each a picker and hex box in the profile's gear (indicator
+  colors `vpRow`, `vpValue`, `vpPoc`; an indicator preset saved before takes the defaults for the new two). Brighter
+  defaults: rows `#1E2733`, value area `#2F3B4F` (were `#141C26` and `#212C3B`), POC gold unchanged; on other grounds the
+  rows are 10% and the value area 20% toward the text color (were 7% and 14%). Measured: bear candles over the value area 1.59:1
+  on the default ground (was 1.99), bull 3.76:1 (was 4.70); the candle floor against the bare ground is unchanged.
+- **B. Levels**: the Initial Balance is part of Levels (its own indicator and IB chip retired; search "ib" finds Levels).
+  Every line its own toggle in the Levels gear: PDH, PDL, Prior close, ONH, ONL, PD VAH, PD VAL, PD POC, IBH, IBL. The
+  prior day's value area is named **PD VAH** / **PD VAL**, and its point of control **PD POC** is drawn (the value-area
+  gold, a dash-dot 8/3/2/3 no other level uses). The IB's colors moved into the Levels gear. Saved choices carried over
+  once per chart (`LivePrefs.migrateIb`): an IB shown means its two lines on in Levels (Levels off before: on now with
+  only the IB lines, pinned if either was), an IB off or hidden its lines off; Recent and Restore name Levels.
+- **C. Developing POC, VAH and VAL** of the profile on the chart, each a toggle in the profile's gear (dPOC, dVAH, dVAL,
+  on by default with the profile): solid lines across the plot (the prior day's are dashed), the POC 1.5 px in its gold,
+  the value area's edges 1 px in the secondary text color, named at the profile's left edge. From the profile's columns,
+  which it keeps per version: nothing is walked per frame or per tick. Engine: `setProfileLines({ poc, vah, val })`,
+  `getProfileLines()`.
+- **D. Chips**: up to 10 pinned (was 6); a strip that does not fit puts the rest behind **+N**, which opens a small list
+  of them, on both pages at 1366, 1920 and 2560 px. The +N button is not an `.ind-chip`.
+- **E. VWAP hours** in the VWAP gear, per chart: **Full session (from 18:00 ET)**, the default and as before, or **RTH
+  only (from 09:30 ET)**, from the 1-minute bars' typical prices, none outside 09:30 to 16:00 ET. Engine:
+  `setVwapSource(fn)`, `util.rthVwap`, `util.vwapAt`.
+- **F. Short header on small panels**: a workspace chart under 700 px wide or 400 px tall shows one quiet line (the name,
+  bars, last price and change, the indicators' values); the bar's open, high, low and volume and a hovered bubble come on
+  a second line only while the crosshair is over the chart (the scale does not move for it). Bigger panels keep the full
+  header; `/single.html` always does. The room kept at the top follows the header's real height.
+- **G. No numbers on the bubbles** anywhere (the size is on hover, above).
+- **Header text toggle** (**Aa**, next to Indicators in each panel header and on `/single.html`): off hides the header
+  text, even on hover, and the hovered bubble's text; the price scale takes the room back, eased with the 120 ms re-fit.
+  On by default, saved per chart (`live-legend-v1`). `ChartLive.mount` returns `legendToggle`, `legendShown()` and
+  `setLegendShown(on)`; the engine `getFitTop()`.
+
 ### Tests
 - `test/display.test.js` (new): the room, the scale with orders and planned lines, the countdown, the ATR, the change
   from the settlement, the settings, the tape categories and colors, the floors, the feed carrying `q` and the
   settlement, the page clock, the edge resize, the bubble radius (1x, 2x, 4x, 10x, over the cap), the legend's
-  room at the top.
+  room at the top, the bubble placement repro (range bar and minute boundaries, one bar early), the VWAP anchors (full
+  session from 18:00 and RTH from 09:30, each resetting), the level toggles and `migrateIb` (through the store too) with
+  an old indicator preset, the chip cap and the header toggle. `test/vp-draw.test.js`: the developing lines, each its own
+  toggle, per profile version; the profile contrast guards moved to the brighter rows' measured values.
 - `npm run smoke:display` (new): grid off by default and on from Settings, the room at any zoom and after End, zoom to
   brackets eased, planned lines and the VWAP in the engine, the readouts (Range too; a new and a missing settlement),
   the versions, the single chart page's layout and Armed outline, the tape by category (gear, Default colors, big
   trades, a tape that joins later) and by side with an older ChartBridge, edge and corner resize with an overlap refused,
   bubbles sized by the order and told in the legend on hover, the high below the legend on every chart,
   screenshots of both pages at 1366x768, 1920x1080 and 2560x1440 and close crops of the tape and the Colors panel.
+  Batch 2: the Levels gear's ten toggles and PD POC, the developing lines and profile colors, VWAP RTH against its own
+  computation, every chip pinned at three sizes on both pages, the short header and its hover line, no numbers drawn on a
+  bubble, the header toggle on both pages (none on hover, the room back eased, saved per panel across a reload).
 - `npm run smoke:noscroll` (new), above.
 - Selectors that follow the new layout: `smoke:live` (Range style and Glide in Settings, the drawing tools in the small
   menu, 2-letter chips on a phone), `smoke:pin` (Change PIN in Settings), `smoke:workspace` (the single chart page's
@@ -139,6 +184,10 @@ from using 1.12.0 live on HOME:
   `.btn`, since Reset view moved into the menu), `smoke:delta` (Home and End on the pane's divider: the ratio within
   0.001 of the limit, as the pane's whole pixels give it at the taller chart). `smoke:orders`: the drag probe above.
   `smoke:hotkeys` unchanged (Settings and the small menu stay on screen when the window is resized while open).
+- Batch 2 in the older smokes: `smoke:live` (5 indicators on at first run, the IB in the Levels gear, the cap rule at 3),
+  `smoke:ib` (IBH and IBL toggles in the Levels gear), `smoke:presets` (the IB colors in the Levels gear, the profile's
+  row colors), `smoke:settings` (a 1.3 save: Levels on with only the IB lines), `smoke:workspace` and `smoke:embed` (no
+  IB chip).
 - `test/trade-sides.test.js` (ChartBridge 0.3.8's): the hub now keeps a trade's `q` (it said chart 1.12.0 read none);
   the chart, the bar builder and the order code still read no `q`.
 

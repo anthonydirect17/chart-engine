@@ -115,7 +115,7 @@ const state = p => p.evaluate(() => {
     poc: vp && vp.poc() ? vp.poc().price : null, va: vp && vp.valueArea() ? [vp.valueArea().val, vp.valueArea().vah] : null,
     expect: { session, rth, rthLow: lo, rthHigh: hi }, legend: lg && !lg.hidden ? lg.textContent : null,
     // the Session / RTH switch in the profile's gear panel (Indicators menu, 1.6.0), when that panel is open
-    pressed: (() => { const b = [...document.querySelectorAll('#indBody [data-act="opt"][data-id="vp"]')]; return b.length ? b.filter(x => x.getAttribute('aria-pressed') === 'true').map(x => x.dataset.v) : null; })(),
+    pressed: (() => { const b = [...document.querySelectorAll('#indBody [data-act="opt"][data-id="vp"][data-k="session"]')]; return b.length ? b.filter(x => x.getAttribute('aria-pressed') === 'true').map(x => x.dataset.v) : null; })(),
     note: document.getElementById('vpNote').hidden ? '' : document.getElementById('vpNote').textContent,
     day: vp && vp.day !== null ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(vp.day * 86400000).getUTCDay()] : null,   // the session's trading day (1.6.1)
   };
@@ -163,7 +163,7 @@ try {
   /* off by default, listed in the Indicators menu */
   const s0 = await state(p), px0 = await pixels(p);
   check(s0.on === false && s0.has === false && s0.legend === null, 'volume profile off by default: no layer, no profile, no legend');
-  check(await p.textContent('#indCount') === '6/6', 'Indicators count 6/6 (shown / on this chart; the profile is not on it, the delta pane is, 1.7.0): ' + await p.textContent('#indCount'));
+  check(await p.textContent('#indCount') === '5/5', 'Indicators count 5/5 (shown / on this chart; the profile is not on it, the delta pane is, 1.7.0; the IB in Levels, 1.14.0): ' + await p.textContent('#indCount'));
   check(px0.column.poc === 0 && px0.column.value === 0, 'nothing of the profile at the right edge while off: ' + JSON.stringify(px0.column));
 
   /* on from the menu: the full session */
@@ -173,13 +173,16 @@ try {
   await p.click('#indBody [data-act="gear"][data-id="vp"]');
   check(JSON.stringify((await state(p)).pressed) === '["full"]' && /Hours/.test(await p.textContent('#indBody .ind-set[data-id="vp"]')), 'its gear panel: the Session / RTH switch shows Session');
   await p.screenshot({ path: path.join(SHOTS, 'vp-indicators-menu.png') });
-  await p.click('#indBody [data-f="add:vp"]'); await p.keyboard.press('Escape');
-  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,ib,vp,fills', 'added: its chip on the strip (the sixth: full; the delta pane has none)');
+  await p.click('#indBody [data-f="add:vp"]');
+  // 1.14.0: the developing POC line runs through the POC bar; off here, so the bar's own pixels are measured
+  if (await p.isHidden('#indBody .ind-set[data-id="vp"]')) await p.click('#indBody [data-act="gear"][data-id="vp"]');
+  await p.click('#indBody [data-f="tog:vp:dpoc"]'); await p.keyboard.press('Escape');
+  check(await p.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(c => c.dataset.id).join()) === 'volume,vwap,levels,vp,fills', 'added: its chip on the strip (the delta pane has none)');
   await p.mouse.move(10, 400); await p.waitForTimeout(600);
   const s1 = await state(p), px1 = await pixels(p);
   check(s1.on === true && s1.has === true && s1.rth === false, 'on: the chart has a session profile');
   check(s1.total === s1.expect.session && s1.total > 0, 'session profile holds every trade from 18:00 ET the page got: ' + s1.total + ' = ' + s1.expect.session);
-  check(await p.textContent('#indCount') === '7/7', 'Indicators count 7/7');
+  check(await p.textContent('#indCount') === '6/6', 'Indicators count 6/6');
   const fmt = v => U.fmtPrice(v, 2);
   const today = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(U.zoneSeconds(Date.now() / 1000 + off) * 1000).getUTCDay()];
   check(s1.legend === 'POC ' + fmt(s1.poc) + ' · VA ' + fmt(s1.va[0]) + ' to ' + fmt(s1.va[1]) + ' (' + today + ')' && s1.day === today, 'legend, with the session\'s day (1.6.1): ' + s1.legend);

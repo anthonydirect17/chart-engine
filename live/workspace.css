@@ -81,7 +81,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-view .ws-tf, .ws-view .ws-caret { flex: none; }
 /* the chart's pinned indicators as 2-letter chips (live.js renders them; those that do not fit go behind "+N") */
 .ws-head .ind-chips { flex: 1 1 0; min-width: 0; min-height: 0; gap: 4px; overflow: hidden; }
-.ws-head .ind-chip { height: 22px; padding: 0 6px; gap: 5px; border-radius: 5px; font-size: 10px; letter-spacing: .04em; }
+.ws-head .ind-chip, .ws-head .ind-chip-more { height: 22px; padding: 0 6px; gap: 5px; border-radius: 5px; font-size: 10px; letter-spacing: .04em; }
 .ws-head .ind-chip .sw { width: 8px; }
 .ws-head .ind-chip-more { border-style: solid; color: var(--ws-text2); }
 .ws-head .ind-chip-more .sw { display: none; }

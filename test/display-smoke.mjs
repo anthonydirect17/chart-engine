@@ -10,7 +10,10 @@
 //   - panels resized from an edge and a corner, an overlap refused;
 //   - the single chart page's layout: one toolbar line, 2-letter chips, the small menu, Settings with the general controls,
 //     Colors in the toolbar, Armed: the chart's outline purple with the glow, the order bar deep red;
-//   - the versions in the LIVE badge's tooltip and in Settings.
+//   - the versions in the LIVE badge's tooltip and in Settings;
+//   - batch 2 (2026-10-02): the Levels gear's toggles (the IB in it, PD POC), the profile's developing lines and colors,
+//     the VWAP's hours, every chip pinned at three sizes on both pages, the short header on small panels, no numbers on
+//     the bubbles, and the header text toggle on both pages.
 // Screenshots in test/out/ at 1366x768, 1920x1080 and 2560x1440 of both pages, and close crops of the tape and the Colors
 // panel.
 //   npm run smoke:display        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
@@ -218,6 +221,15 @@ try {
 
   // Anthony from WORK: the bubble's size shows the order size (area by size / floor), no numbers on the chart, the size
   // in the legend on hover
+  // G (batch 2): the text the chart draws is recorded, to show no numbers are drawn on the bubbles
+  await ctx.addInitScript(() => {
+    const f = CanvasRenderingContext2D.prototype.fillText;
+    window.__texts = [];
+    CanvasRenderingContext2D.prototype.fillText = function (s, x, y) {
+      if (window.__texts.length < 50000) { const m = this.getTransform(); window.__texts.push({ s: String(s), x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f, c: this.canvas }); }
+      return f.apply(this, arguments);
+    };
+  });
   await C(() => { localStorage.setItem('live-tape-floors-v1', JSON.stringify({ NQ: { rth: 2, eth: 2 } })); });
   await page.reload(); await page.waitForFunction(() => document.getElementById('connPill') || document.querySelector('.cb-pin-key'));
   if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
@@ -239,6 +251,11 @@ try {
   await page.mouse.move(cb.x + 40, cb.y + cb.height - 60);
   await page.waitForTimeout(150);
   check(await C(() => document.getElementById('lgBub').hidden), 'away from it: gone');
+  const onBub = await C(() => { const cv = document.querySelector('#chart canvas'), dpr = window.devicePixelRatio || 1; window.__texts.length = 0;
+    return new Promise(res => setTimeout(() => { const bs = window.liveChart.bubbles();
+      const hits = window.__texts.filter(t => t.c === cv && /\d/.test(t.s) && bs.some(q => Math.hypot(t.x / dpr - q.x, t.y / dpr - q.y) <= q.r + 2));
+      res({ n: bs.length, texts: window.__texts.filter(t => t.c === cv).length, hits: hits.map(t => t.s) }); }, 600)); });
+  check(onBub.n > 0 && onBub.texts > 0 && onBub.hits.length === 0, 'G: no numbers drawn on the ' + onBub.n + ' bubbles (' + onBub.texts + ' texts drawn, ' + JSON.stringify(onBub.hits.slice(0, 5)) + ' on a bubble)');
   await C(() => localStorage.removeItem('live-tape-floors-v1'));
   await page.click('#symSeg [data-v="MNQ"]'); await singleLive(page);
 
@@ -358,6 +375,170 @@ try {
       await wp.keyboard.press('Escape'); await wp.mouse.click(w - 4, h - 4);
     }
   }
+
+  /* ================================================================ batch 2 (Anthony, 2026-10-02): A to G and the header toggle */
+  console.log('batch 2: levels, the profile, VWAP hours, chips, short header, header text');
+  await page.bringToFront();                            // the workspace tab opened last: this one drawn again (rAF and resize)
+  await page.setViewportSize({ width: 1920, height: 1080 }); await page.waitForTimeout(500);
+  const gear = async (p, scope, id) => {
+    if (await p.isHidden(scope + ' .ind-panel')) await p.click(scope + ' .ind-btn');
+    if (!(await p.$(`${scope} .ind-set[data-id="${id}"]`))) await p.click(`${scope} .ind-body [data-act="gear"][data-id="${id}"]`);
+  };
+  const addInd = async (p, scope, q) => {
+    if (await p.isHidden(scope + ' .ind-panel')) await p.click(scope + ' .ind-btn');
+    await p.fill(scope + ' .ind-panel input[data-f="q"]', q); await p.press(scope + ' .ind-panel input[data-f="q"]', 'Enter');
+    await p.fill(scope + ' .ind-panel input[data-f="q"]', '');
+  };
+  const spRoot = 'body';
+  // B: Levels, each line its own toggle; the IB in it; the prior day's POC drawn and named PD POC
+  await gear(page, spRoot, 'levels');
+  const togs = await page.$$eval(spRoot + ' .ind-set[data-id="levels"] .ind-tog', bs => bs.map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '+' : '-')));
+  check(togs.join(' ') === 'PDH+ PDL+ Prior close+ ONH+ ONL+ PD VAH+ PD VAL+ PD POC+ IBH+ IBL+', 'B: Levels gear, each line its own toggle, on by default: ' + togs.join(' '));
+  const lvNames = () => C(() => window.liveChart.getLevels().map(l => l.name));
+  let names = await lvNames();
+  check(names.includes('PD VAH') && names.includes('PD VAL') && !names.includes('VAH') && !names.includes('VAL'), 'B: the prior day\'s value area named PD VAH and PD VAL: ' + names.join(', '));
+  check(names.includes('PD POC') && (await C(() => window.liveChart.getLevels().find(l => l.name === 'PD POC').dash.join('/'))) === '8/3/2/3', 'B: PD POC drawn, dash-dot');
+  await shot(page, 'display-b2-levels-gear.png');
+  await page.click(spRoot + ' [data-f="tog:levels:poc"]');
+  names = await lvNames();
+  check(!names.includes('PD POC') && names.includes('PDH'), 'B: PD POC off alone, the others kept');
+  await page.click(spRoot + ' [data-f="tog:levels:poc"]');
+  check((await lvNames()).includes('PD POC'), 'B: and back on');
+  // C and A: the volume profile, its developing lines (on by default) and its three colors
+  await addInd(page, spRoot, 'profile');
+  await gear(page, spRoot, 'vp');
+  const vpt = await page.$$eval(spRoot + ' .ind-set[data-id="vp"] .ind-tog', bs => bs.map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '+' : '-')));
+  check(vpt.join(' ') === 'dPOC+ dVAH+ dVAL+', 'C: the profile gear: dPOC, dVAH, dVAL toggles, on: ' + vpt.join(' '));
+  check(JSON.stringify(await C(() => window.liveChart.getProfileLines())) === '{"poc":true,"vah":true,"val":true}', 'C: the chart draws all three');
+  check((await page.$$(spRoot + ' .ind-set[data-id="vp"] .ind-color')).length === 3, 'A: the profile gear has rows, value area rows and POC colors');
+  await shot(page, 'display-b2-vp-gear.png');
+  await page.click(spRoot + ' [data-f="tog:vp:dvah"]');
+  check(JSON.stringify(await C(() => window.liveChart.getProfileLines())) === '{"poc":true,"vah":false,"val":true}', 'C: dVAH off alone');
+  await page.click(spRoot + ' [data-f="tog:vp:dvah"]');
+  const vpCols = await C(() => { const t = window.liveChart.colors(); return [t.vpRow, t.vpValue]; });
+  check(vpCols[0] === CE.DEFAULT_THEME.vpRow && vpCols[1] === CE.DEFAULT_THEME.vpValue, 'A: the brighter profile defaults in use: ' + vpCols.join(' '));
+  // E: VWAP hours: full session by default, RTH only from the gear; the legend reads the anchored value
+  await gear(page, spRoot, 'vwap');
+  check(await page.getAttribute(spRoot + ' [data-f="opt:vwap:session:full"]', 'aria-pressed') === 'true', 'E: VWAP full session by default');
+  await page.click(spRoot + ' [data-f="opt:vwap:session:rth"]');
+  await page.keyboard.press('Escape');
+  await page.click('#tfSeg [data-v="m1"]'); await page.waitForTimeout(600);
+  const cbx = await page.locator('#chart canvas').boundingBox();
+  await page.mouse.move(cbx.x + cbx.width * 0.45, cbx.y + cbx.height * 0.5); await page.waitForTimeout(200);
+  await C(() => { window.__lgE = null; window.liveChart.on('legend', e => { if (e && e.hovering) window.__lgE = e.index; }); });
+  // pan back (drags) until the bar under the mouse is inside RTH, so the RTH value is a number, not "-"
+  const hovered = async () => {
+    for (const f of [0.3, 0.32, 0.34]) { await page.mouse.move(cbx.x + cbx.width * f, cbx.y + cbx.height * 0.5); await page.waitForTimeout(100); }
+    await page.waitForTimeout(150);
+    return C(() => { const c = window.liveChart, U = window.ChartEngine.util, bs = c.bars(), i = window.__lgE, b = bs[i];
+      if (!b) return { i, n: bs.length, tod: -1, want: null, text: 'no hover' };
+      const s = U.rthVwap(bs, { sessionStart: 18 * 3600 }), want = U.vwapAt(s, b.t + 60);
+      return { i, n: bs.length, tod: U.tod(b.t), want, full: b.vw, text: document.getElementById('lgVw').textContent }; });
+  };
+  let vw = await hovered();
+  for (let k = 0; k < 24 && !(vw.tod >= 34200 + 900 && vw.tod < 57600 - 60); k++) {
+    await page.mouse.move(cbx.x + cbx.width * 0.1, cbx.y + cbx.height * 0.6); await page.mouse.down();
+    await page.mouse.move(cbx.x + cbx.width * 0.9, cbx.y + cbx.height * 0.6, { steps: 6 }); await page.mouse.up();
+    await page.waitForTimeout(150);
+    vw = await hovered();
+  }
+  const fmtWant = vw.want === null ? '-' : CE.util.fmtPrice(CE.util.roundTo(vw.want, 0.25), 2);
+  check(vw.text === fmtWant, `E: RTH only: the legend shows the VWAP from 09:30 ET (${vw.text}, expected ${fmtWant} at ${Math.floor(vw.tod / 3600)}:${String(Math.floor(vw.tod / 60) % 60).padStart(2, '0')} ET)`);
+  check(vw.want !== null && Math.abs(vw.want - vw.full) > 0.01, 'E: an RTH bar found in the history, its RTH-only VWAP apart from the full session\'s (' + (vw.full === undefined ? '-' : vw.full.toFixed(2)) + ')');
+  await shot(page, 'display-b2-vwap-rth.png');
+  await page.focus('#chart'); await page.keyboard.press('End'); await page.waitForTimeout(400);
+  await gear(page, spRoot, 'vwap'); await page.click(spRoot + ' [data-f="opt:vwap:session:full"]'); await page.keyboard.press('Escape');
+  check((await C(() => JSON.parse(localStorage.getItem('live-indicator-options-v1')).main.vwap.session)) === 'full', 'E: saved per chart');
+  // the header text toggle (single page): off hides it even on hover, the scale takes the room back, eased
+  const highY = () => C(() => { const c = window.liveChart, box = document.getElementById('chart').getBoundingClientRect(), w = box.width - 78, bs = c.bars(); let hi = -Infinity;
+    for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; } return c.priceToY(hi); });
+  await page.mouse.move(cbx.x + 40, cbx.y + cbx.height + 40); await page.waitForTimeout(400);
+  const topOn = await C(() => window.liveChart.getFitTop());
+  check(topOn > 20, 'header on: the scale keeps ' + topOn + ' px free at the top');
+  const yOn = await highY();
+  const easing = C(() => new Promise(res => { const ys = [], c = window.liveChart; let n = 0;
+    const box = document.getElementById('chart').getBoundingClientRect(), w = box.width - 78;
+    const step = () => { const bs = c.bars(); let hi = -Infinity; for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; }
+      ys.push(Math.round(c.priceToY(hi) * 10) / 10); if (++n < 24) requestAnimationFrame(step); else res(ys); };
+    requestAnimationFrame(step); }));
+  await page.click('#lgTog');
+  const ys = await easing;
+  check(await C(() => document.querySelector('.chart-live').classList.contains('lg-off') && getComputedStyle(document.getElementById('legend')).display === 'none'), 'header text off: no header text');
+  check((await C(() => window.liveChart.getFitTop())) === 0 && (await highY()) < yOn - 10, 'header text off: the scale takes the room back (' + Math.round(yOn) + ' px to ' + Math.round(await highY()) + ' px)');
+  check(new Set(ys).size >= 3, 'the room shrinks eased, never a snap: ' + [...new Set(ys)].length + ' steps');
+  await page.mouse.move(cbx.x + cbx.width * 0.4, cbx.y + cbx.height * 0.5); await page.waitForTimeout(200);
+  check(await C(() => getComputedStyle(document.getElementById('legend')).display === 'none' && document.getElementById('lgBub').offsetParent === null), 'header text off: none on hover either');
+  check((await C(() => JSON.parse(localStorage.getItem('live-legend-v1') || '{}').main)) === false && (await page.getAttribute('#lgTog', 'aria-pressed')) === 'false', 'saved for this chart');
+  await shot(page, 'display-b2-header-off-single.png');
+  await page.click('#lgTog'); await page.waitForTimeout(400);
+  check(await C(() => !document.querySelector('.chart-live').classList.contains('lg-off') && window.liveChart.getFitTop() > 20), 'header text back on');
+  check(await C(() => !document.querySelector('.chart-live').classList.contains('short')), 'F: /single.html keeps its full header');
+  // D: every chip pinned (7 today, room for 10): one line at every size, the rest behind +N
+  await addInd(page, spRoot, 'bubbles');
+  if (await page.isHidden(spRoot + ' .ind-panel')) await page.click(spRoot + ' .ind-btn');
+  for (const id of ['delta', 'levels', 'vp', 'bubbles']) { const b = await page.$(`${spRoot} .ind-body [data-act="pin"][data-id="${id}"]`); if (b && (await b.getAttribute('aria-pressed')) === 'false') await b.click(); }
+  await page.keyboard.press('Escape');
+  const chipState = (p, scope) => p.evaluate(sc => { const s = document.querySelector(sc + ' .ind-chips'), more = s.querySelector('.ind-chip-more');
+    return { shown: s.querySelectorAll(':scope > .ind-chip[data-id]').length, listed: s.querySelectorAll('.ind-chip-list .ind-chip').length, more: more && !more.hidden ? more.textContent : '',
+      fits: s.scrollWidth <= s.clientWidth + 1 }; }, scope);
+  for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
+    await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(600);
+    const st = await chipState(page, spRoot);
+    const one = await C(() => { const rs = [...document.querySelector('header.bar').children].filter(c => c.getClientRects().length).map(c => c.getBoundingClientRect()); return Math.max(...rs.map(r => r.top)) < Math.min(...rs.map(r => r.bottom)); });
+    check(st.shown + st.listed === 7 && st.fits && one && (st.listed === 0 ? st.more === '' : st.more === '+' + st.listed), `D: single ${w}x${h}: ${st.shown} chips shown${st.listed ? ', ' + st.more : ''}, one toolbar line`);
+    await shot(page, `display-b2-chips-single-${w}.png`);
+  }
+  await page.setViewportSize({ width: 1920, height: 1080 });
+
+  // the workspace: chips at three sizes, the short header on small panels, the header toggle per panel
+  await wp.bringToFront();
+  const wch = (await W(() => window.workspace.panels().filter(p => p.type === 'chart').map(p => p.id)))[0];
+  const WS = `.ws-panel[data-id="${wch}"]`;
+  await wp.setViewportSize({ width: 1920, height: 1080 }); await wp.waitForTimeout(600);
+  for (const q of ['volume bars', 'vwap', 'levels', 'profile', 'bubbles', 'fills']) await addInd(wp, WS, q);
+  for (const id of ['volume', 'vwap', 'levels', 'vp', 'delta', 'bubbles', 'fills']) { const b = await wp.$(`${WS} .ind-body [data-act="pin"][data-id="${id}"]`); if (b && (await b.getAttribute('aria-pressed')) === 'false') await b.click(); }
+  await wp.keyboard.press('Escape');
+  for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
+    await wp.setViewportSize({ width: w, height: h }); await wp.waitForTimeout(900);
+    const st = await chipState(wp, WS);
+    const hd = await W(sc => { const h = document.querySelector(sc + ' .ws-head'); return h.scrollWidth <= h.clientWidth + 1 && h.offsetHeight === 28; }, WS);
+    check(st.shown + st.listed === 7 && hd && (st.listed === 0 ? st.more === '' : st.more === '+' + st.listed), `D: workspace ${w}x${h}: ${st.shown} chips shown${st.listed ? ', ' + st.more : ''}, the header one line`);
+    // F: a short header on a panel under 700 px wide or 400 px tall, the full one on a bigger panel
+    const sh = await W(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => { const r = p.querySelector('.chart-live.compact'), b = r.getBoundingClientRect();
+      return { id: p.dataset.id, short: r.classList.contains('short'), want: b.width < 700 || b.height < 400, lg: p.querySelector('.legend').offsetHeight }; }));
+    check(sh.every(x => x.short === x.want), `F: ${w}x${h}: short header exactly on the small panels (${sh.filter(x => x.short).length} of ${sh.length})`);
+    check(sh.filter(x => x.short).every(x => x.lg <= 22), `F: ${w}x${h}: a short header is one line (px): ` + sh.filter(x => x.short).map(x => x.lg).join(','));
+    await shot(wp, `display-b2-ws-${w}.png`);
+    if (w === 1366) {
+      const sp = sh.find(x => x.short);
+      if (sp) {
+        const box = await wp.locator(`.ws-panel[data-id="${sp.id}"] .chart-box`).boundingBox();
+        await wp.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.55); await wp.waitForTimeout(250);
+        const hov = await W(id => { const pn = document.querySelector(`.ws-panel[data-id="${id}"]`), r = pn.querySelector('.chart-live.compact'); return { cls: r.classList.contains('lg-hover'), h: pn.querySelector('.legend').offsetHeight }; }, sp.id);
+        check(hov.cls && hov.h > 24, 'F: the crosshair over a short header\'s chart brings its second line (OHLC, volume): ' + hov.h + ' px');
+        await shot(wp, 'display-b2-short-header-hover.png', { x: box.x, y: Math.max(0, box.y - 30), width: Math.min(box.width, 700), height: 120 });
+        await wp.mouse.move(4, h - 4); await wp.waitForTimeout(250);
+        check(await W(id => !document.querySelector(`.ws-panel[data-id="${id}"] .chart-live.compact`).classList.contains('lg-hover'), sp.id), 'F: and it goes when the crosshair leaves');
+      } else check(false, 'F: no small panel at 1366x768');
+    }
+  }
+  // the header toggle in a panel's header, next to Indicators: off for that panel only, saved, none on hover
+  await wp.setViewportSize({ width: 1920, height: 1080 }); await wp.waitForTimeout(600);
+  const tog = await W(sc => { const t = document.querySelector(sc + ' .ws-head .lg-tog'), i = document.querySelector(sc + ' .ws-head .ind-btn'); return !!t && !!i && !!t.previousElementSibling && t.previousElementSibling.contains(i); }, WS);
+  check(tog, 'the header text toggle sits next to Indicators in the panel header');
+  await wp.click(`${WS} .ws-head .lg-tog`); await wp.waitForTimeout(400);
+  const offs = await W(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => ({ id: p.dataset.id, off: p.querySelector('.chart-live.compact').classList.contains('lg-off'), top: window.workspace.chart(p.dataset.id).getFitTop() })));
+  check(offs.filter(x => x.off).map(x => x.id).join() === wch && offs.find(x => x.id === wch).top === 0 && offs.filter(x => x.id !== wch).every(x => x.top > 0), 'workspace: header text off for that panel only, its scale takes the room back');
+  const pbox = await wp.locator(`${WS} .chart-box`).boundingBox();
+  await wp.mouse.move(pbox.x + pbox.width * 0.4, pbox.y + pbox.height * 0.5); await wp.waitForTimeout(250);
+  check(await W(sc => getComputedStyle(document.querySelector(sc + ' .legend')).display === 'none', WS), 'workspace: no header text on hover either');
+  await shot(wp, 'display-b2-header-off-ws.png');
+  await wp.reload(); await wp.waitForFunction(() => document.getElementById('wsConn') || document.querySelector('.cb-pin-key'));
+  if (await wp.$('.cb-pin-key')) await enterPin(wp, TEST_PIN);
+  await wsLive(wp); await wp.waitForTimeout(1200);
+  check(await W(sc => document.querySelector(sc + ' .chart-live.compact').classList.contains('lg-off') && document.querySelector(sc + ' .ws-head .lg-tog').getAttribute('aria-pressed') === 'false', WS), 'workspace: saved per panel across a reload');
+  await wp.click(`${WS} .ws-head .lg-tog`); await wp.waitForTimeout(300);
+  check(await W(sc => !document.querySelector(sc + ' .chart-live.compact').classList.contains('lg-off'), WS), 'workspace: back on');
   await ctx.close();
 
   /* ================================================================ an older ChartBridge: no q, no settlement */

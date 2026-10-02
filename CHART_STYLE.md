@@ -132,8 +132,8 @@ should have their own preset group, so I can set colors for indicators on a whit
   (a swatch and the name; the one matching the colors in use is shown pressed), a pencil to rename, an x to delete
   (a second click confirms, Escape keeps it), and a name box with Save (Replace when the name is taken, any case).
 - Indicator colors are set in each indicator's gear, a picker and a hex box each, and Default colors: VWAP (line),
-  Levels (prior day, overnight, value area, prior close), Initial balance (high, low), Volume profile (point of
-  control). The volume bars and the delta pane keep the candle colors; fills keep the house trade-side colors (no
+  Levels (prior day, overnight, value area, prior close, and since 1.14.0 the IB high and low), Volume profile (rows,
+  value area rows and point of control, 1.14.0). The volume bars and the delta pane keep the candle colors; fills keep the house trade-side colors (no
   colors of their own, Anthony). On a ground other than the default they move to read exactly as the house colors do.
 - The IB high stays the brighter with any colors (Anthony): on the default ground the chosen IB colors are drawn as
   chosen while the high is the brighter by 1.25:1; when it is not (a high picked darker than its low, or the same),
@@ -213,15 +213,21 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     Independence, Labor, Thanksgiving, Christmas, with the NYSE's observed-day rules) have no regular session:
     nothing, even though Globex trades; a holiday gets a note naming the day, a weekend none. Early-close days have
     an IB. Not detectable from bars: a minute that has a bar but lost some trades.
-  - Its own Indicators entry, **Initial balance** (chip "IB"; "IB 1h" in 1.5.3; its status notes read "Initial
-    balance not shown: ..."), per pane: on for the main pane
-    (also for a main pane saved before 1.5.3), off for a new pane. It is independent of Levels.
+  - Part of **Levels** since 1.14.0 (Anthony): IBH and IBL are two of the Levels gear's toggles (its own entry and
+    "IB" chip retired; its status notes still read "Initial balance not shown: ..."). A pane saved before keeps what
+    it showed (`LivePrefs.migrateIb`).
+- **Levels' lines, each its own toggle (1.14.0, Anthony):** the Levels gear lists PDH, PDL, Prior close, ONH, ONL,
+  PD VAH, PD VAL, PD POC, IBH and IBL as a row of small toggles (`.ind-tog`, 24 px, 600 11px mono, styled as the chips: on = solid border on `--s3`,
+  off = dashed in the quiet grey), all on
+  by default, saved per chart. The prior day's value area reads **PD VAH** / **PD VAL**, and its point of control
+  **PD POC** is drawn in the value-area gold with a dash-dot 8/3/2/3 (`PD_POC_DASH`, no other level uses it).
 - **Volume profile (1.6.0; Anthony's ruling 2026-09-29):** the session's traded volume per price,
   1-tick rows, as horizontal bars from the right edge of the plot, in front of the grid and behind the volume bars,
   levels, VWAP and candles. The largest row (the POC) is 25% of the plot width (`VP_WIDTH`), the rest in proportion.
-  Opaque fills: rows outside the value area `#141C26`, the 70% value area a step stronger `#212C3B`, the POC row in
+  Opaque fills (brighter in 1.14.0, Anthony; each editable in the profile's gear, `--vp-row`, `--vp-value`): rows
+  outside the value area `#1E2733`, the 70% value area a step stronger `#2F3B4F`, the POC row in
   the value-level gold `#E0B45A`. On another ground the two row colors are mixed from the ground toward the ink
-  (7% and 14%) and the POC moves until it reads at 3:1 on the value-area rows. Each row is its price span tall
+  (10% and 20%) and the POC moves until it reads at 3:1 on the value-area rows. Each row is its price span tall
   (price minus half a tick to plus half a tick) in whole device pixels, with a 1 px gap once rows are 4 px or taller;
   rows thinner than a pixel share it, the bar as long as the largest of them and the POC winning, so it always
   shows; the POC bar is at least 2 CSS px tall, centred on its row. Off by default on every pane; the Indicators menu adds it (Volume group), and its gear panel holds a Session (from 18:00 ET) or RTH (9:30:00 up to 16:00:00 ET, 13:00 on NYSE early-close days, none on
@@ -229,8 +235,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   Anthony's rulings 2026-09-30): the full session over weekends and NYSE holidays (on weekday evenings it moves at
   18:00 as before), RTH also through the weekday night until the next 9:30; for the ticks the page has (no more
   tick history is loaded for it); the IB keeps its own rule. Candles over the rows
-  read lower than on the bare ground (default: bear 1.99:1 over the value area, 2.42:1 over the other rows); their
-  floor there is open for Anthony. The legend adds "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", the POC price
+  read lower than on the bare ground (default since 1.14.0: bear 1.59:1 over the value area, 2.12:1 over the other
+  rows; were 1.99 and 2.42); their floor there is open for Anthony.
+  - **Developing POC, VAH and VAL (1.14.0):** toggles dPOC, dVAH, dVAL in the profile's gear, on by default. Solid
+    lines across the plot at 85% (the prior day's levels are dashed): the POC 1.5 px in `vpPocText`, the value area's
+    edges 1 px in the secondary text color, each named at the profile's left edge (600 10px Condensed, right aligned,
+    2 px above its line). From the profile's per-version columns: never walked per frame or per tick. The legend adds "POC 26,150.50 · VA 26,101.50 to 26,289.50 (Fri)", the POC price
   in the gold and the session's day in the quiet grey.
 - **Cumulative delta pane (1.7.0; Anthony's rulings 2026-09-30):** market buys minus market sells (contracts), each
   trade's side from ChartBridge 0.3.4 (the page never works one out), in a pane **below** the plot, on the plot's own
@@ -280,7 +290,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     label. Settings per instrument and chart type (Range 40, 1 minute, ...; the file's defaults for each: LookbackPeriod 20,
     VolumeMultiplier 1.8, RejectionZone 0.35, AggregationWindowMs 500), inside the file's ranges.
   - **Large-order bubbles** (Volume group, chip BB / B): same side prints within 100 ms of the first added up, from the
-    floor, a circle centred on the trade price (volume weighted, on the tick) and its bar. 1.14.0 (Anthony, from WORK:
+    floor, a circle centred on the trade price (volume weighted, on the tick) and its bar (1.14.0: a bar change closes a
+    group, so a bubble is always placed on the bar its prints traded in). 1.14.0 (Anthony, from WORK:
     "bubble size must show the order size"): the area follows the size against the floor, radius = 4.8 px x sqrt(size /
     floor): 4.8 px at the floor, 6.8 at twice it, 9.6 at four times, 15.2 at ten times, 27 px at most (about 32 times);
     before, the fourth root put every print near the floor at the same small size. Zoomed in past the default 7 px spacing every radius grows with the square root of the spacing, at most 1.6
@@ -300,7 +311,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     takes its high (low) first.
 - **VWAP:** 1.5 px line at 90% opacity, restarting each session. 1.14.0: off the price scale (it no longer sizes it), a
   marker at the plot's top or bottom right edge, 16 px tall, radius 3, on the legend ground: a small triangle pointing
-  to it and "VWAP 25,512.25" in 500 10px mono, both in the VWAP color.
+  to it and "VWAP 25,512.25" in 500 10px mono, both in the VWAP color. Its gear's **Hours** (1.14.0, per chart):
+  **Full session** from 18:00 ET (the default) or **RTH only** from 09:30 ET, from the 1-minute bars' typical prices,
+  none drawn outside 09:30 to 16:00 ET (the legend "VWAP -").
 - **Trades:** entry triangle pointing the trade's way, exit dot, dashed line and chip ("+8.75 pt") in
   the result color. Chips step down so they never overlap.
 - **Fills (1.3.1):** a triangle in the side color with its tip at the fill price (buy up, sell down),
@@ -355,7 +368,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   colors; the order bar does not change.
 - **The single chart page's cleanup (1.14.0, Anthony: "the 1m format with everything on one line").** One toolbar line
   at 1366, 1920 and 2560 px: the instruments, Bars and the range size, Indicators and its chips (the workspace's 2-letter
-  chips, VO VW LV IB FL, 30 px tall, room kept for six), a **⋯** `.btn` opening a small menu (Trend line, Price line,
+  chips, VO VW LV FL, 30 px tall; up to ten pinned, those that do not fit behind a **+N** chip that opens a small
+  list of them), a **⋯** `.btn` opening a small menu (Trend line, Price line,
   Clear drawings, Reset view; 500 13px, the accent tint on hover and while a tool is on), Colors, Settings. Settings
   gain a "CHART" section above the hotkeys: Glide, Range style, Grid lines (Off / On), Room right (None, 40, 80, 160 px),
   each a 32 px row of its name (13px) and the toolbar's control; then Change PIN and the versions (400 11px mono, the
@@ -391,7 +405,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     open at a time (`#0F151D`, what the indicator does, read only, and its real options: the Volume profile's Hours,
     Session or RTH, and the Cumulative delta's Show, Cumulative or Bar delta, in the toolbar's segmented style at 11 px), and an x that takes it off the chart. Pins only on
     these rows; group rows have the + and the gear.
-  - The groups, folded, one open at a time: Price (VWAP, Levels, Initial balance), Volume (Volume bars, Volume
+  - The groups, folded, one open at a time: Price (VWAP, Levels), Volume (Volume bars, Volume
     profile, Cumulative delta, Large-order bubbles), Trades (Fills), Signals (Absorption bars, G1c); a dashed + adds one.
     Then "Coming: time and sales".
   - "Hide all (n)", which becomes "Restore" and brings back the same mix (not everything). Fills are included.
@@ -460,6 +474,13 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   1 px ring and an 8 px shadow at 45%); no new color, no animation. 1.13.0: the Armed switch and the ticket's outline
   are deep red (the house crimson, Anthony); the chart borders stay purple with the glow, and the single chart page's
   chart takes the same purple glow (`--armed-ring`), only its order bar deep red.
+- **Short header (1.14.0, Anthony):** a chart panel under 700 px wide or 400 px tall shows its header text as one quiet
+  line (17 px: the name, bars, last price and change, the indicators' values); the bar's open, high, low, volume, the
+  readouts and a hovered bubble come on a second line only while the crosshair is over the chart (the price scale does
+  not move for it). A bigger panel shows the full header; `/single.html` always does.
+- **Header text toggle (1.14.0):** **Aa** (`.lg-tog`, the header's 22 px button style, pressed = on) next to
+  Indicators in each panel header and on `/single.html`. Off: no header text at all, not even on hover, nor the hovered
+  bubble's; the price scale takes the room back with the 120 ms re-fit. Saved per chart (`live-legend-v1`).
 - **The NO STOP question (1.13.0)** takes no room and is never modal, so nothing resizes or scrolls: on the single
   chart page a strip over the top centre of the chart (the ChartBridge alert's shape, the loss red border and title,
   a shadow); in the workspace a strip over the top bar from the left up to KEYS, one line, the text cut short with

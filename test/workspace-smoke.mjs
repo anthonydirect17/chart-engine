@@ -145,7 +145,7 @@ try {
   check(hd.every(x => x.grip && x.view && x.ind && x.more && x.x), 'every chart header: handle, instrument and bars, Indicators, the small menu, the x');
   check(hd.every(x => x.bar === 'none' && x.h === 28), 'the chart\'s own toolbar is not shown; the header is 28 px');
   const chips = await page.evaluate(id => [...document.querySelectorAll(`.ws-panel[data-id="${id}"] .ws-head .ind-chip[data-id]`)].map(c => c.textContent), main.id);
-  check(chips.join(' ') === 'VO VW LV IB FL', 'the main chart\'s pinned indicators as 2-letter chips in its header (' + chips.join(' ') + ')');
+  check(chips.join(' ') === 'VO VW LV FL', 'the main chart\'s pinned indicators as 2-letter chips in its header (' + chips.join(' ') + ')');
   const vw = `.ws-panel[data-id="${main.id}"] .ws-head .ind-chip[data-id="vwap"]`;
   await page.click(vw);
   const vwSaved = await page.evaluate(id => { const v = JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')[id]; return v ? v.ind.vwap.shown : 'none: ' + Object.keys(JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')).join(','); }, main.id);
@@ -459,13 +459,13 @@ try {
   s = await state();
   const nq3 = s.panels.find(p => p.type === 'chart' && p.root === 'NQ');
   await page.click(`.ws-panel[data-id="${nq3.id}"] .ws-head .ind-btn`);
-  for (const q of ['vwap', 'levels', 'ib', 'fills', 'volume bars']) { await page.fill(`.ws-panel[data-id="${nq3.id}"] .ind-panel input[data-f="q"]`, q); await page.keyboard.press('Enter'); }
+  for (const q of ['vwap', 'levels', 'profile', 'fills', 'volume bars', 'bubbles']) { await page.fill(`.ws-panel[data-id="${nq3.id}"] .ind-panel input[data-f="q"]`, q); await page.keyboard.press('Enter'); }
   await page.keyboard.press('Escape');
   await page.waitForTimeout(400);
   const ch = await page.evaluate(id => { const h = document.querySelector(`.ws-panel[data-id="${id}"] .ws-head`), more = h.querySelector('.ind-chip-more');
     return { shown: [...h.querySelectorAll('.ind-chips > .ind-chip[data-id]')].map(c => c.textContent), more: more && !more.hidden ? more.textContent : '', listed: h.querySelectorAll('.ind-chip-list .ind-chip').length,
       fits: h.scrollWidth <= h.clientWidth + 1 && h.offsetHeight === 28, all: [...document.querySelectorAll('.ws-head')].every(x => x.scrollWidth <= x.clientWidth + 1 && x.offsetHeight === 28) }; }, nq3.id);
-  check(ch.more === '+' + ch.listed && ch.listed > 0 && ch.shown.length + ch.listed === 5, 'the chips that do not fit go behind "' + ch.more + '" (' + ch.shown.join(' ') + ' shown)');
+  check(ch.more === '+' + ch.listed && ch.listed > 0 && ch.shown.length + ch.listed === 6, 'the chips that do not fit go behind "' + ch.more + '" (' + ch.shown.join(' ') + ' shown)');
   check(ch.fits && ch.all, 'the header does not wrap or scroll, and no header does');
   await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-more`);
   const lst = await page.evaluate(id => { const l = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`); const r = l.getBoundingClientRect(); return { open: !l.hidden, n: l.querySelectorAll('.ind-chip').length, inside: r.right <= innerWidth && r.bottom <= innerHeight }; }, nq3.id);

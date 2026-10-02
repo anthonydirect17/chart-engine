@@ -172,7 +172,7 @@
 /* chip strip: pinned indicators only; lit = shown (solid, its color line), dashed grey = hidden */
 .chart-live .ind-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-width: var(--chip-room, 0px); min-height: 30px; overflow-x: auto; scrollbar-width: none; }
 .chart-live .ind-chips::-webkit-scrollbar { display: none; }
-.chart-live .ind-chip { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; font: 600 11px var(--mono); letter-spacing: .06em; cursor: pointer; background: transparent; color: var(--text3); border: 1px dashed var(--line-strong); }
+.chart-live .ind-chip, .chart-live .ind-chip-more { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 30px; box-sizing: border-box; padding: 0 10px; border-radius: 8px; font: 600 11px var(--mono); letter-spacing: .06em; cursor: pointer; background: transparent; color: var(--text3); border: 1px dashed var(--line-strong); }
 .chart-live .ind-chip[aria-pressed="true"] { background: var(--s3); color: var(--text); border-style: solid; }
 .chart-live .ind-chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--sw); }
 .chart-live .ind-chip-l { display: none; }
@@ -181,14 +181,16 @@
    and pinning never moves the toolbar. */
 .chart-live .ind-group.codes-group { flex: 1 1 0; min-width: 300px; }
 .chart-live .ind-chips.codes { flex: 1 1 0; min-width: 0; gap: 4px; overflow: hidden; }
-.chart-live .ind-chips.codes .ind-chip { padding: 0 9px; gap: 6px; }
+.chart-live .ind-chips.codes .ind-chip, .chart-live .ind-chips.codes .ind-chip-more { padding: 0 9px; gap: 6px; }
 .chart-live .ind-chips.codes .ind-chip .sw { width: 9px; }
-.chart-live .ind-chips.codes .ind-chip-more { border-style: solid; color: var(--text2); }
-.chart-live .ind-chips.codes .ind-chip-more .sw { display: none; }
-.chart-live .ind-chips.codes .ind-chip-list { position: fixed; z-index: 60; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 6px; background: var(--panel, #0B1016); border: 1px solid var(--accent-border); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
-.chart-live .ind-chips.codes .ind-chip-list[hidden] { display: none; }
-.chart-live .ind-chips.codes .ind-chip-list .ind-chip { justify-content: flex-start; }
-.chart-live .ind-chips.codes .ind-chip-list .ind-chip::after { content: attr(aria-label); font-family: var(--sans); font-weight: 500; letter-spacing: 0; color: var(--text2); margin-left: 4px; }
+.chart-live .ind-chip-more { border-style: solid; color: var(--text2); }
+.chart-live .ind-chip-more .sw { display: none; }
+.chart-live .ind-chip-list { position: fixed; z-index: 60; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 6px; background: var(--panel, #0B1016); border: 1px solid var(--accent-border); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
+.chart-live .ind-chip-list[hidden] { display: none; }
+.chart-live .ind-chip-list .ind-chip { justify-content: flex-start; }
+.chart-live .ind-chips.is-narrow .ind-chip-list .ind-chip { width: auto; flex-direction: row; padding: 0 9px; gap: 6px; }
+.chart-live .ind-chips.is-narrow .ind-chip-list .ind-chip .sw { order: 0; }
+.chart-live .ind-chip-list .ind-chip::after { content: attr(aria-label); font-family: var(--sans); font-weight: 500; letter-spacing: 0; color: var(--text2); margin-left: 4px; }
 .chart-live .ind-chips.is-narrow { gap: 4px; }
 .chart-live .ind-chips.is-narrow .ind-chip { width: 30px; padding: 0; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; letter-spacing: 0; }
 .chart-live .ind-chips.is-narrow .ind-chip .sw { height: 2px; order: 2; }   /* the letter over its line */
@@ -398,7 +400,7 @@
 
 @media (max-width: 720px) {
   .chart-live .ind-group.codes-group { min-width: 0; flex-basis: 100%; }   /* a phone: Indicators and its chips on a line of their own, the rest behind "+N" */
-  .chart-live .ind-chips.codes .ind-chip { padding: 0 6px; gap: 4px; }
+  .chart-live .ind-chips.codes .ind-chip, .chart-live .ind-chips.codes .ind-chip-more { padding: 0 6px; gap: 4px; }
   .chart-live .ind-chips.codes .ind-chip .sw { width: 7px; }
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
   .chart-live .obtn { padding: 4px 10px; }
