@@ -944,6 +944,84 @@ Test 'the write order: the engine first, the libraries and styles, live.js, inde
   Assert ([array]::IndexOf($w, 'workspace.js') -gt [array]::IndexOf($w, 'live.js') -and [array]::IndexOf($w, 'feed.js') -lt [array]::IndexOf($w, 'live.js')) ($w -join ',')
 }
 
+# ---------------------------------------------------------------------------------------------- 0.3.8: a network not up yet, a held files.zip
+
+$script:Waits = New-Object System.Collections.ArrayList
+$script:RealGit = ${function:Invoke-Git}
+$script:RealWait = ${function:Wait-Ms}
+$script:NetDown = 0; $script:FetchErr = ''; $script:Fetches = 0
+function Use-FlakyFetch {
+  ${function:script:Wait-Ms} = { param([int]$Ms) [void]$script:Waits.Add($Ms) }
+  ${function:script:Invoke-Git} = {
+    param([string[]]$ArgList, [int]$TimeoutSec = 120)
+    if ($ArgList[0] -eq 'fetch') {
+      $script:Fetches++
+      if ($script:NetDown -ne 0) { $script:NetDown--; return @{ code = 128; out = ''; err = $script:FetchErr } }
+    }
+    return (& $script:RealGit $ArgList $TimeoutSec)
+  }
+}
+function Reset-FlakyFetch { ${function:script:Invoke-Git} = $script:RealGit; ${function:script:Wait-Ms} = $script:RealWait; $script:NetDown = 0; $script:Waits.Clear(); $script:Fetches = 0 }
+$script:NoNet = "fatal: unable to access 'https://github.com/owner/chart-engine/': Failed to connect to github.com port 443 after 21 ms: Couldn't connect to server"
+
+Test 'sign-in before the network is up: the fetch is tried again every 10 s, and the run carries on once it is up' {
+  Use-FlakyFetch
+  try {
+    $script:NetDown = 3; $script:FetchErr = $script:NoNet
+    $r = Run-Update
+    Assert ($script:StopOutcomes -notcontains $r.outcome -and $r.outcome -ne 'offline') "$($r.outcome): $($r.reason)"
+    Assert ($script:Fetches -eq 4 -and $script:Waits.Count -eq 3 -and @($script:Waits | Where-Object { $_ -ne 10000 }).Count -eq 0) "fetches $($script:Fetches), waits $($script:Waits -join ',')"
+  } finally { Reset-FlakyFetch }
+}
+Test 'no network for about 2 minutes: given up quietly (offline, INFO, OK), nothing changed, the next run tries again' {
+  Use-FlakyFetch
+  try {
+    $before = Get-Text (Join-Path $script:P.Www 'update.json')
+    $script:NetDown = -1; $script:FetchErr = $script:NoNet
+    $logBefore = (Get-Text $script:P.Log).Length
+    Assert-Code (Invoke-Update) 0 'not a STOP'
+    $st = Read-JsonFile $script:P.Status
+    Assert ($st['outcome'] -eq 'offline' -and $st['reason'] -match 'network was not up' -and $st['reason'] -match '13 tries') $st['reason']
+    Assert ($script:Waits.Count -eq 12 -and ($script:Waits | Measure-Object -Sum).Sum -eq 120000) "waits $($script:Waits.Count)"
+    $log = (Get-Text $script:P.Log).Substring($logBefore)
+    Assert ($log -match 'INFO.*offline' -and $log -notmatch 'WARN') $log
+    Assert ((Get-Text (Join-Path $script:P.Www 'update.json')) -eq $before) 'update.json untouched'
+    Assert ($script:Toasts.Count -eq 0 -or $script:Toasts[-1] -notmatch 'network') 'no toast'
+  } finally { Reset-FlakyFetch }
+}
+Test 'a fetch refused for another reason is not waited for (fetch_failed, a STOP); check never waits' {
+  Use-FlakyFetch
+  try {
+    $script:NetDown = 1; $script:FetchErr = "remote: Repository not found.`nfatal: repository 'https://github.com/owner/chart-engine/' not found"
+    $r = Run-Update
+    Assert ($r.outcome -eq 'fetch_failed' -and $script:Waits.Count -eq 0 -and $script:Fetches -eq 1) "$($r.outcome) waits $($script:Waits.Count)"
+    $script:NetDown = 1; $script:FetchErr = $script:NoNet; $script:Fetches = 0
+    $s = Read-State; $r = Invoke-Pass -DryRun -State $s
+    Assert ($r.outcome -eq 'offline' -and $script:Waits.Count -eq 0 -and $script:Fetches -eq 1) "check: $($r.outcome) waits $($script:Waits.Count)"
+    Assert ((Test-NetworkDown 'fatal: unable to access ''https://github.com/x/'': Could not resolve host: github.com') -and (Test-NetworkDown 'ssh: connect to host github.com port 22: Network is unreachable') -and -not (Test-NetworkDown 'fatal: Authentication failed')) 'network errors told apart'
+  } finally { Reset-FlakyFetch }
+}
+Test 'staged.tmp\files.zip held by an antivirus for a moment: its delete is tried again, and staging carries on' {
+  $keepIntact = ${function:Test-StagedIntact}; $keepDel = ${function:Remove-FileOnce}
+  $script:Held = 2; $script:DelTries = 0
+  ${function:script:Wait-Ms} = { param([int]$Ms) [void]$script:Waits.Add($Ms) }
+  ${function:script:Test-StagedIntact} = { param($Stage) $false }
+  ${function:script:Remove-FileOnce} = { param([string]$Path) $script:DelTries++; if ($Path -like '*files.zip' -and $script:Held -gt 0) { $script:Held--; throw (New-Object System.UnauthorizedAccessException "Access to the path '$Path' is denied.") }; Remove-Item -LiteralPath $Path -Force }
+  try {
+    $info = Get-CommitInfo (G $clone @('rev-parse', 'refs/remotes/origin/main'))
+    $st = Invoke-Stage $info
+    Assert ($st -and (Get-Field $st 'commit') -eq $info.commit) 'staged'
+    Assert ($script:DelTries -eq 3 -and $script:Waits.Count -eq 2 -and $script:Waits[0] -eq 500) "tries $($script:DelTries), waits $($script:Waits -join ',')"
+    Assert (-not (Test-Path (Join-Path $script:P.Staged 'files.zip'))) 'no zip left in staged'
+    $script:Held = 99; $script:Waits.Clear(); $threw = ''
+    try { [void](Invoke-Stage $info) } catch { $threw = $_.Exception.Message }
+    Assert ($threw -match 'after 10 tries over about 5 s' -and $threw -match 'denied' -and $script:Waits.Count -eq 9) $threw
+  } finally {
+    ${function:script:Test-StagedIntact} = $keepIntact; ${function:script:Remove-FileOnce} = $keepDel; Reset-FlakyFetch
+    Remove-Dir (Join-Path $script:P.Dir 'staged.tmp')
+  }
+}
+
 # ---------------------------------------------------------------------------------------------- the rest
 
 Test 'one run at a time' {

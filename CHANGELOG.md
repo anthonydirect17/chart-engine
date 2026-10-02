@@ -1,5 +1,68 @@
 # Changelog
 
+## ChartBridge 0.3.8 (2026-10-02): stop and target in ticks from the fill (the ATM rule), Time and Sales category
+
+ChartBridge (nt8/) and the PC updater only; the page and the engine are unchanged (chart 1.12.0 works against it as it
+is: it already sends `bracket` in ticks and ignores the new keys). **Needs a recompile:** while flat and with no resting
+orders if you can, run `update-pc.ps1 -InstallChartBridge` (README: Keep this PC up to date) or `nt8\install.ps1`, then
+compile in NinjaTrader (F5). Entries still resting at the recompile are handled as below.
+
+### The rule change (Anthony): a resting entry's stop and target are ticks from the fill again
+- **0.3.7's planned PRICES are gone.** A limit or stop entry's stop and target are distances in ticks from its
+  ACTUAL fill, like a NinjaTrader ATM: every fill increment gets its legs at the fill price plus or minus those ticks
+  (better fill, better legs; slippage moves them with it). They travel with the entry when it is dragged, and moving
+  the entry onto or past where its stop or target would be is never refused. Market entries are unchanged.
+- **The market exit** at a fill now happens only when a trade in the last 2 seconds went through the stop level
+  (a fresh trade, never an estimate); otherwise the stop goes in as usual.
+- **Protocol** (`nt8/PROTOCOL.md`, "Planned stop and target on a resting entry (0.3.8)"): `order` keeps `bracket` in
+  ticks; `stopPrice` and `targetPrice` are no longer accepted, and the price checks went with them. `plan` is
+  `{type, cid?, id, stopTicks?, targetTicks?}`: a whole number of 1 or more sets a distance, `null` removes it, a key
+  left out is unchanged, at least one is needed; strict, rate-limited, the same gates as `change` (and
+  `maxBracketTicks` when set). A bracket on a reducing order is still refused. `order` messages for a working resting
+  entry carry `"planned": {"stopTicks", "targetTicks"}` (null for none).
+- **Kept from 0.3.7, now in ticks:** the plan-versus-fill race check under the fill path's lock; the ticks in the
+  order name (`CB#1a2b3c4d atm s8 t16`) and `planned_brackets.txt` (`<tag> ticks <stop> <target> <saved>`); file I/O
+  off NinjaTrader's thread and outside every lock; fills found by the 2 second check left to that path; recovery that
+  never guesses (a missing record uses the name's ticks, with an alarm); the warning when legs were placed from an
+  estimated fill price. The remembered sent price of a move (0.3.7, P9) is removed: plans no longer depend on the
+  entry's price.
+- **Entries placed before 0.3.8 and still resting:** a 0.3.6 entry (`s8 t16`, already ticks) is recovered as it is,
+  and `plan` now accepts it. A 0.3.7 entry (`plan s<price> t<price>`) is converted once, at recovery, to the ticks it
+  shows now from the entry's current price (a price on the wrong side is no stop or no target), written to the file,
+  with a `status` `warn` to the pages naming them.
+- **The empty `planned_brackets.txt` seen on HOME.** In 0.3.7 a failed write (an antivirus such as Norton holding the
+  file just written) was only logged, so an earlier empty write could stay as the file, and a failed read at start
+  was followed by rewrites from memory that dropped the lines not read. Now: writes are tried again a few times,
+  raise an alarm when they still fail and are retried every 2 seconds until they succeed ("saved again"); a read is
+  tried again for a few seconds and, if it still fails, the file is never rewritten that run (with an alarm); and
+  every 2 seconds each working resting entry with a bracket is checked to have its line.
+
+### Settlement dating (Anthony)
+- A value stamped after a session's settlement time (16:00 ET, 12:00 ET on an early close) and before the next
+  session's settlement time is that session's. The snapshot NinjaTrader gives at a first start in the evening (HOME,
+  20:43 ET on 2026-10-01) is now that day's settlement; a morning start dates it the day before, a weekend one Friday.
+
+### Time and Sales category (`q`)
+- Every live `tick` carries `q`: 2 above the ask, 1 at the ask, 0 between, -1 at the bid, -2 below the bid, from the
+  same quote the side tagger uses (no request added, no string made per trade); no field when unknown. A served-window
+  trade ChartBridge saw live with a quote is `[t, p, v, null, null, q]`; trades from NinjaTrader's answer, tables and
+  files stay `[t, p, v]` (unknown, never guessed). Chart 1.12.0 ignores both. `/diag` counts trades by category.
+
+### PC updater (`nt8/update-pc.ps1`)
+- The delete of `staged.tmp\files.zip` is tried again for about 5 seconds (Norton held it: "Access to the path is
+  denied").
+- A fetch that fails because the network is not up yet (the run at sign-in) is tried again every 10 seconds for up
+  to 2 minutes; then the run ends quietly (`offline`, logged as INFO, not a STOP) and the next run tries again.
+  Other fetch failures stop as before. The scheduled task runs the pinned copy: this applies after `update-pc.ps1
+  register` or `-InstallChartBridge`.
+
+### Checks
+- `npm run check:orders`: OrdersHarness (the 0.3.8 ATM checks and the planned_brackets.txt faults), DataHarness
+  (settlement dating: evening, morning, Saturday and Sunday first starts), SidesHarness (`q`, and a flood probe:
+  OnMarketData cost unchanged within noise). `test/pc-updater.tests.ps1` (the fetch wait, the held zip),
+  `test/trade-sides.test.js` (1.12.0 ignores `q`), the fakes (`test/fake-orders.mjs`, `test/fake-bridge.mjs`
+  with `--no-q`) and the source guards.
+
 ## 1.12.0 (2026-10-01): the workspace and its order ticket
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile. Run `nt8\install.ps1` again after pulling (the PC

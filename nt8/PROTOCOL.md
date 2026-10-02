@@ -693,11 +693,15 @@ serve is answered with an `error` and no bars.
   takes every Settlement event after that. Only a price above 0 counts; a reset event is never one; `LastClose` (the prior
   session's close) is never used.
 - **Each value is dated** with the trading date it settles, from NinjaTrader's time on it: a date-only stamp (00:00) is that
-  date, once that date's settlement time (below) has passed (before it, the day has not settled: not used); otherwise the latest session day whose settlement could be out by then (16:00 ET, or 12:00 ET on an NYSE holiday or
-  early close, when CME halts early), as long as the next session has not opened (its 18:00 ET open; a weekend or a CME
-  holiday in between counts as before it). A value stamped inside a later session (a snapshot stamped when it was read,
-  say) could settle any earlier day: it is not used (one Output line says so; `/diag` shows it with `day` null), and with no
-  other dated value the prior is null rather than a wrong one.
+  date, once that date's settlement time (below) has passed (before it, the day has not settled: not used). A timed stamp
+  (0.3.8, Anthony's ruling) belongs to the session whose settlement time it comes after: stamped after a session day's
+  settlement time (16:00 ET, or 12:00 ET on an NYSE holiday or early close, when CME halts early) and before the next
+  session day's settlement time, it is that day's. So 16:15 Monday, 20:43 Monday evening and 10:00 Tuesday are all Monday's;
+  a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session) is Thursday's. This dates the
+  snapshot NinjaTrader gives at subscription, which carries the time it was read (HOME, 2026-10-01: a first start at
+  20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). A day with no Globex session, or a value
+  that cannot be placed, is not used (one Output line says so; `/diag` shows it with `day` null), and with no other dated
+  value the prior is null rather than a wrong one.
 - **Today's settlement after the afternoon close** (in from about 16:15 ET) is kept and shown in `/diag`, but the prior
   stays the day before's until the next session starts at 18:00 ET; then today's becomes the prior and every page gets a
   `settlement` message. ChartBridge checks every second, so the roll reaches pages within a second of 18:00.
@@ -889,7 +893,7 @@ sends each session's 1-minute bars to The Desk (`nt8/ChartBridgeBars.cs`).
   or posted to The Desk: the worker leaves any wait at once, a post in flight is aborted (the message stays
   queued), an answer that comes later is not copied or queued. `Stop()` runs on NinjaTrader's thread, so it waits
   250 ms for the worker at most, as for the gate's worker.
-- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.7","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
+- **Message:** `{"v":1,"source":"chartbridge","bridge":"0.3.8","pc":"HOME","contract":"MNQ 12-26","root":"MNQ",
   "tick":0.25,"session":"2026-09-30","tf":"1m","stamp":"open","bars":[[t,o,h,l,c,v],...],"complete":true}`,
   one per contract per session. Market data and the PC name only.
 - **Queue:** each message is written to `pending_bars.jsonl` (next to `pending_fills.jsonl`, replaced
