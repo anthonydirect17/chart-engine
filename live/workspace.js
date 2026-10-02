@@ -1556,7 +1556,7 @@ function mountAccount(v) {
 }
 /* order events, fills and positions: the Account panels again, once in the next animation frame */
 let accountRaf = 0;
-function renderAccounts() { if (!accountRaf) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
+function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
 setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
 /* ---------------- popovers (Add panel, Settings, a chart's instrument and bars or its menu, a tape's gear): one open at a

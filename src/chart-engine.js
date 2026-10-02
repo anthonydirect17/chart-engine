@@ -1146,6 +1146,7 @@ function create(container, options) {
   /* 1.15.0: the corner readout (the page's text, drawn at the plot's bottom right, cornerPlace) and the order label under
      the mouse (a host's compact labels show the full one on hover) */
   let cornerText = '', cornerShort = '', cornerAt = null, labelHover = null;
+  const cornerWidths = new Map();                         // text -> its width in the readout's font (cleared with the fonts)
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
@@ -2306,8 +2307,9 @@ function create(container, options) {
     if (cornerText && n >= 0) {
       ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
       // the short form on a plot too narrow for the whole text (a small panel)
-      let text = cornerText, w = Math.ceil(ctx.measureText(text).width) + 10;
-      if (w > plotW - 12 && cornerShort) { text = cornerShort; w = Math.ceil(ctx.measureText(text).width) + 10; }
+      const mw = t => { let v = cornerWidths.get(t); if (v === undefined) { if (cornerWidths.size > 64) cornerWidths.clear(); v = Math.ceil(ctx.measureText(t).width) + 10; cornerWidths.set(t, v); } return v; };   // measured once per text
+      let text = cornerText, w = mw(text);
+      if (w > plotW - 12 && cornerShort) { text = cornerShort; w = mw(text); }
       const h = 16, at = cornerPlace(plotW, plotH, w, h, labelBoxes.concat(vwapMark ? [vwapMark] : []), o.fitTop);
       if (at) {
         roundRect(at.x, at.y, w, h, 4); ctx.fillStyle = T.legendBg; ctx.fill();
@@ -2803,7 +2805,7 @@ function create(container, options) {
       const had = paneOn();
       Object.assign(o.layers, partial || {});
       if (paneOn() !== had) { layout(); clampRight(); pane.init = false; }   // the delta pane came or went (1.7.0)
-      pane.widths.clear();                                         // a page redraws this way when its web fonts arrive
+      pane.widths.clear(); cornerWidths.clear();                   // a page redraws this way when its web fonts arrive
       dirty = true;
     },
     getLayers() { return Object.assign({}, o.layers); },
