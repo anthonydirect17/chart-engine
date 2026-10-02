@@ -120,7 +120,10 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(legs, /"CB#" \+ br\.Tag \+ " stop" \+ mark/);
   assert.match(legs, /"CB#" \+ br\.Tag \+ " target" \+ mark/);
   assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/);   // a stop through the market becomes a market exit
-  assert.match(legs, /bool byFill = hasStop && br\.Priced && !br\.ValueEstimated && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
+  // 0.3.8 (the ATM rule): legs are ticks from the actual fill; the market exit only on a recent trade through the stop
+  assert.match(legs, /sp = Round\(br\.EntryIsBuy \? incPrice - br\.StopTicks \* tick : incPrice \+ br\.StopTicks \* tick, tick\);/);
+  assert.match(legs, /if \(fresh && \(br\.EntryIsBuy \? sp >= last : sp <= last\)\)/);
+  assert.ok(!/bool byFill|StopPx|Priced/.test(ocode), 'no price-anchored planned bracket left (0.3.7)');
   const keep = fnBody('KeepBracket');
   assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
   assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)\s*\{\s*bool first;\s*lock \(Sync\) \{ first = !PlanDeferred\.ContainsKey\(entry\); if \(first\) PlanDeferred\[entry\] = true; \}[^\n]*\s*if \(first\)[^\n]*\s*return;\s*\}\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
@@ -155,9 +158,9 @@ test('bracket upkeep runs even with trading off; pages hear only about tradable 
 });
 
 test('strict messages: known keys only, bracket must be an object', () => {
-  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket", "stopPrice", "targetPrice" \} \}/);
+  assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" \} \}/);
   assert.match(ocode, /\{ "change", new\[\] \{ "type", "cid", "id", "price" \} \}/);
-  assert.match(ocode, /\{ "plan", new\[\] \{ "type", "cid", "id", "stopPrice", "targetPrice" \} \}/);   // 0.3.7
+  assert.match(ocode, /\{ "plan", new\[\] \{ "type", "cid", "id", "stopTicks", "targetTicks" \} \}/);   // 0.3.8: ticks
   assert.match(ocode, /\{ "cancel", new\[\] \{ "type", "cid", "id" \} \}/);
   assert.match(ocode, /\{ "flatten", new\[\] \{ "type", "cid", "account", "root" \} \}/);
   assert.match(ocode, /BracketKeys = \{ "stop", "target" \}/);
@@ -200,21 +203,20 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.match(fnBody('PendingOrders'), /MayFill\(o\.OrderState\)/);
   assert.match(fnBody('PendingOrders'), /foreach \(Order o in Ours\)/);
   assert.match(fnBody('PlaceOrderLocked'), /long worst = isBuy \? \(long\)pos \+ pendBuy \+ qty : \(long\)\(-pos\) \+ pendSell \+ qty;\s*if \(worst > cap\)/);
-  assert.match(fnBody('PlaceOrderLocked'), /bool wantsLegs = stopTicks > 0 \|\| targetTicks > 0 \|\| stopPx > 0 \|\| targetPx > 0;/);
+  assert.match(fnBody('PlaceOrderLocked'), /bool wantsLegs = stopTicks > 0 \|\| targetTicks > 0;/);
   assert.match(fnBody('PlaceOrderLocked'), /if \(wantsLegs && reduces\) return/);
-  // 0.3.7: a planned stop or target is checked against the entry's price at placement, on a plan change and on an entry move
-  assert.match(fnBody('PlaceOrderLocked'), /PlanProblem\(tick, isBuy, price, stopPx, targetPx\)/);
-  assert.match(fnBody('PlanOrder'), /PlanProblem\(tick, buy, entryPx, newSp, newTp\)/);
-  assert.match(fnBody('ChangeOrder'), /cannot move to or past its own planned stop/);
+  // 0.3.8: a move is never refused for its bracket (the ticks travel with the entry); a plan is ticks, 1 or more, or null
+  assert.ok(!/planned stop|PlanLock|BracketFor/.test(fnBody('ChangeOrder')), 'ChangeOrder never looks at the planned bracket');
+  assert.match(fnBody('TicksOf'), /if \(Int\(top, key, out v\) != 1 \|\| v < 1\) return -1;/);
   for (const f of ['ChangeOrder', 'PlanOrder']) {
     assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
   // a plan change that cannot be saved changes nothing
   // a plan is set in memory with the check that no fill waits, under Sync; the file is written afterwards, outside the locks
-  assert.match(fnBody('PlanOrder'), /lock \(Sync\)\s*\{\s*waiting = o\.Filled - br\.Covered;\s*if \(waiting <= 0\) \{ br\.StopPx = newSp; br\.TargetPx = newTp;/);
+  assert.match(fnBody('PlanOrder'), /lock \(Sync\)\s*\{\s*waiting = o\.Filled - br\.Covered;\s*if \(waiting <= 0\) \{ br\.StopTicks = newSt; br\.TargetTicks = newTt;/);
   const plan = fnBody('PlanOrder');
-  assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.lastIndexOf('SetPlan(br.Tag, newSp, newTp);') && plan.lastIndexOf('SetPlan(') > 0, 'the file is written after the plan is set');
+  assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.lastIndexOf('SetPlan(br.Tag, newSt, newTt);') && plan.lastIndexOf('SetPlan(') > 0, 'the file is written after the plan is set');
   assert.ok(plan.indexOf('saveErr = WritePlans();') > plan.indexOf('lock (PlanLock)') && /\}\s*ChartBridgeServer\.Log\("planned bracket set/.test(plan), 'and after PlanLock is released');
   assert.match(fnBody('ChangeOrder'), /OrderType\.StopLimit\) return/);
   assert.match(fnBody('PlaceOrderLocked'), /PriceProblem\(root, tick, kind, isBuy, price\)/);

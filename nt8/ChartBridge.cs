@@ -3616,10 +3616,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Day(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
 
         // The trading day a settlement stamped at NinjaTrader time ntTime belongs to, or null when the time cannot say. A
-        // date-only stamp (00:00) is that date. Otherwise: the latest day with a Globex session whose settlement could be out
-        // by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early), and only while the next session
-        // has not opened yet (its 18:00 ET open; a weekend or a CME holiday in between counts as before it). A value stamped
-        // inside a later session (a snapshot stamped when it was read, say) could be any earlier day's: null, not used.
+        // date-only stamp (00:00) is that date. Otherwise (0.3.8, Anthony 2026-10-01): the latest day with a Globex session
+        // whose settlement could be out by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early),
+        // as long as the next session's settlement time has not come yet: NinjaTrader keeps the last settlement and stamps
+        // it when it is read, so on HOME 10-01's settlement came stamped 20:43 ET that evening (inside the next session),
+        // and it is 10-01's. A value stamped after the next session's settlement time could be either day's: null, not used.
         public static DateTime? SettlementDay(DateTime ntTime) { return SettlementDay(ntTime, NowNt()); }
         // nowNt: a date-only stamp for a day counts only once that day's settlement time has passed (review B2 N1).
         public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt)
@@ -3636,7 +3637,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             for (DateTime d = et.Date; d > et.Date.AddDays(-14); d = d.AddDays(-1))
             {
                 if (!ChartBridgeCme.SessionDay(d) || d.Add(ChartBridgeCme.EarliestSettlement(d)) > et) continue;
-                return et < ChartBridgeCme.NextSessionOpen(d) ? d : (DateTime?)null;
+                for (DateTime n = d.AddDays(1); n < d.AddDays(15); n = n.AddDays(1))
+                    if (ChartBridgeCme.SessionDay(n)) return et < n.Add(ChartBridgeCme.EarliestSettlement(n)) ? d : (DateTime?)null;
+                return null;
             }
             return null;
         }
@@ -3650,7 +3653,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return "is dated " + Day(d0) + ", and that day's settlement is not due before " + d0.Add(ChartBridgeCme.EarliestSettlement(d0)).ToString("HH:mm", CultureInfo.InvariantCulture) +
                        " ET, so it is not used yet (a date-only stamp counts once that time has passed)";
             }
-            return "is stamped " + EtText(ntTime) + " ET, inside a later session: which session it settles is not known, so it is not used";
+            return "is stamped " + EtText(ntTime) + " ET, after the next session's settlement time (or before any): which session it settles is not known, so it is not used";
         }
         // The prior settlement for the session running at NinjaTrader time now: its day, and the value (NaN when none).
         private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p)

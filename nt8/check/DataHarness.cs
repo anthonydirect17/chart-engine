@@ -183,11 +183,13 @@ public static class DataHarness
     {
         // which session a value settles, from NinjaTrader's time on it; and which session's settlement is the prior now
         Func<DateTime, string> SD = nt => { DateTime? d = ChartBridgeServer.SettlementDay(nt, Et(2026, 10, 5, 11, 0, 0)); return d.HasValue ? d.Value.ToString("yyyy-MM-dd") : "null"; };
-        Check(SD(Et(2026, 9, 28, 16, 15, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 17, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 10, 0, 0)) == "null" && SD(Et(2026, 9, 28, 18, 30, 0)) == "null"
-              && SD(Et(2026, 9, 28, 15, 0, 0)) == "null",
-            "settlement day: stamped 16:15 or 17:59 ET is that day's; stamped inside a later session (10:00 the next day, 18:30) or before 16:00 is not known (null)");
-        Check(SD(Et(2026, 10, 3, 10, 0, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 17, 59, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 18, 30, 0)) == "null",
-            "settlement day: over a weekend (Saturday, Sunday 17:59) it is Friday's; after Sunday's 18:00 open it is not known");
+        Check(SD(Et(2026, 9, 28, 16, 15, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 17, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 10, 0, 0)) == "2026-09-28" && SD(Et(2026, 9, 28, 18, 30, 0)) == "2026-09-28"
+              && SD(Et(2026, 9, 29, 15, 59, 0)) == "2026-09-28" && SD(Et(2026, 9, 29, 16, 0, 0)) == "2026-09-29" && SD(Et(2026, 9, 28, 15, 0, 0)) == "2026-09-25",
+            "settlement day (0.3.8, Anthony): stamped after a session's settlement time (16:00 ET) and before the next one's is that session's: 16:15, 17:59, 18:30 and 10:00 the next day are Monday's; from Tuesday 16:00 Tuesday's; Monday 15:00 is Friday's");
+        Check(SD(Et(2026, 10, 3, 10, 0, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 17, 59, 0)) == "2026-10-02" && SD(Et(2026, 10, 4, 18, 30, 0)) == "2026-10-02" && SD(Et(2026, 10, 5, 15, 0, 0)) == "2026-10-02",
+            "settlement day (0.3.8): over a weekend (Saturday, Sunday 17:59 and 18:30, Monday 15:00) it is Friday's");
+        Check(ChartBridgeServer.SettlementDay(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0)).HasValue && ChartBridgeServer.SettlementDay(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0)).Value == new DateTime(2026, 10, 1),
+            "settlement day (0.3.8, HOME 2026-10-01): stamped 20:43 ET that evening is 10-01's");
         Check(SD(Et(2026, 4, 3, 12, 0, 0)) == "2026-04-02" && SD(Et(2026, 1, 19, 13, 30, 0)) == "2026-01-19" && SD(new DateTime(2026, 9, 28)) == "2026-09-28" && SD(new DateTime(2026, 10, 3)) == "null",
             "settlement day: Good Friday 2026 (no session) is Thursday's; MLK Day's halt settles at noon; a date-only stamp is its date (a Saturday is none)");
         DateTime? early = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 10, 0, 0)), late = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 16, 30, 0));
@@ -206,15 +208,16 @@ public static class DataHarness
         ResetSettlements(true);
         simNow = Et(2026, 9, 29, 11, 0, 0);
         MarketData.SettlementFor = i => i == mnq ? new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = 21456.25, Time = Et(2026, 9, 28, 16, 15, 0) }
-            : i == nq ? new MarketDataEventArgs { Instrument = nq, MarketDataType = MarketDataType.Settlement, Price = 25010, Time = Et(2026, 9, 29, 10, 59, 0) } : null;
+            : i == nq ? new MarketDataEventArgs { Instrument = nq, MarketDataType = MarketDataType.Settlement, Price = 25010, Time = new DateTime(2026, 9, 26) } : null;
         List<MarketData> feeds = (List<MarketData>)Field("Feeds");
         int feedsBefore = feeds.Count;
         try { Priv("SubscribeMarketData"); }
         finally { MarketData.SettlementFor = null; feeds.RemoveRange(feedsBefore, feeds.Count - feedsBefore); }
         Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21456.25", "2026-09-28")) && HelloOf("NQ").EndsWith(SetOf("NQ", "null", "2026-09-28")) && HelloOf("ES").EndsWith(SetOf("ES", "null", "2026-09-28")),
-            "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is stamped inside Tuesday's session (no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
+            "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is dated a Saturday (no session: no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
         Check(Hello().Contains("\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\"]"), "hello: features list settlement, htf and weekProfile");
-        Check(Logged("NQ settlement 25010 (NinjaTrader's, snapshot) is stamped 2026-09-29 10:59:00.000 ET, inside a later session"), "settlement: the undated one is said in the Output window");
+        Check(Logged("NQ settlement 25010 (NinjaTrader's, snapshot) is dated 2026-09-26, a day with no Globex session"), "settlement: the undated one is said in the Output window");
+        StartChecks();
         List<string> a = new List<string>(), b = new List<string>();
         ChartBridgeClient pa = Page(5101, a), pb = Page(5102, b);
         try
@@ -345,6 +348,39 @@ public static class DataHarness
     }
 
     // ------------------------------------------------------------ higher-timeframe bars: the pure rules
+    // 0.3.8 (Anthony, 2026-10-01): a first start in the evening, in the morning and on a weekend, with NinjaTrader's settlement
+    // snapshot stamped when it was read (as on HOME: 10-01's came stamped 20:43 ET): it is used as the prior.
+    static void StartWith(DateTime nowEt, DateTime stampEt, double p)
+    {
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        ResetSettlements(true);
+        simNow = nowEt;
+        MarketData.SettlementFor = i => i == mnq ? new MarketDataEventArgs { Instrument = mnq, MarketDataType = MarketDataType.Settlement, Price = p, Time = stampEt } : null;
+        List<MarketData> feeds = (List<MarketData>)Field("Feeds");
+        int before = feeds.Count;
+        try { Priv("SubscribeMarketData"); }
+        finally { MarketData.SettlementFor = null; feeds.RemoveRange(before, feeds.Count - before); }
+        Thread.Sleep(100);
+    }
+    static void StartChecks()
+    {
+        try
+        {
+            StartWith(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0), 30760.5);
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "30760.5", "2026-10-01")), "settlement, a first start in the evening (HOME 10-01): the snapshot stamped 20:43 ET is 10-01's, the prior of the session running: " + HelloOf("MNQ"));
+            StartWith(Et(2026, 10, 2, 9, 30, 0), Et(2026, 10, 2, 9, 30, 0), 30760.5);
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "30760.5", "2026-10-01")), "settlement, a first start in the morning: the snapshot stamped 09:30 ET is the day before's, the prior: " + HelloOf("MNQ"));
+            StartWith(Et(2026, 10, 3, 12, 0, 0), Et(2026, 10, 3, 12, 0, 0), 30800);
+            string sat = HelloOf("MNQ");
+            simNow = Et(2026, 10, 4, 19, 0, 0);
+            Check(sat.EndsWith(SetOf("MNQ", "null", "2026-10-01")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "30800", "2026-10-02")),
+                  "settlement, a first start on a Saturday: the snapshot is Friday's; Saturday's prior is still Thursday's (none known: null), and from Sunday 18:00 Friday's: " + sat + " | " + HelloOf("MNQ"));
+            StartWith(Et(2026, 10, 4, 19, 30, 0), Et(2026, 10, 4, 19, 30, 0), 30800);
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "30800", "2026-10-02")), "settlement, a first start on Sunday evening: the snapshot stamped 19:30 is Friday's, the prior: " + HelloOf("MNQ"));
+        }
+        finally { ResetSettlements(true); }
+    }
+
     static void HtfPure()
     {
         Func<string, double, string> S = (tf, et) => new DateTime(1970, 1, 1).AddSeconds(ChartBridgeServer.HtfStart(tf, et)).ToString("yyyy-MM-dd HH:mm");
