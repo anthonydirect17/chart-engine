@@ -37,6 +37,13 @@
  *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
  *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
  *                       live-colors-v1 up to 1.8 is copied in once, on page start, when this key has no VWAP.
+ *   live-signals-v1     { abs: { <root>: { <chart type>: { LookbackPeriod, VolumeMultiplier, RejectionZone,
+ *                       AggregationWindowMs } } }, div: { SwingLookback, MinBarsBetweenSwings, MinDivergencePct },
+ *                       auto: { <root>: true } } the chart signals' settings (G1c): absorption per instrument and chart type
+ *                       ('range:40', 'm1', ...; the same defaults for every one), the divergence's, and the bubbles' Auto
+ *                       floor per instrument; only what was set by hand
+ *   live-tape-floors-v1 { <root>: { rth, eth } } the large-print floors (the workspace's Time and Sales floors, 1.12.0), also
+ *                       the bubbles' and the absorption bars' large trade (G1c); only those set by hand
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
  *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
@@ -75,16 +82,25 @@ const INDICATORS = [
     alias: 'vp volume profile poc vah val value area',
     opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
   { id: 'delta', name: 'Cumulative delta', code: 'CD', short: 'DELTA', letter: 'D', cat: 'volume', sw: 'var(--delta-sw)',
-    alias: 'delta cd cvd cumulative order flow',
+    alias: 'delta cd cvd cumulative order flow divergence',
     opt: 'Market buys minus market sells from 18:00 ET, in a pane below the chart; each trade\'s side comes from ChartBridge 0.3.4. Drag the line above the pane (or focus it and use the arrow keys) to resize it.' },
+  { id: 'bubbles', name: 'Large-order bubbles', code: 'BB', short: 'BUBBLES', letter: 'B', cat: 'volume', sw: 'var(--up-text)',
+    alias: 'bubbles bb large orders prints big trades block',
+    opt: 'Circles at large trades from the page\'s opening: same side prints within 100 ms added up, from the floor up, at the trade price on its bar. The area grows with the square root of the size; buys in the bull color, sells in the bear color.' },
   { id: 'fills', name: 'Fills', code: 'FL', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
+  /* nochip (G1c, Anthony): no chip on the strip and never counted toward it */
+  { id: 'absorption', name: 'Absorption bars', code: 'AB', short: 'ABSORB', letter: 'A', cat: 'signals', sw: 'var(--sig-bull)', nochip: true,
+    alias: 'absorption absorb combo large trade spike rejection signals bars cyan yellow',
+    opt: 'Anthony\'s AbsorptionTradeCombo, from the page\'s opening: a large trade, a volume spike and a rejection close on one bar. Bullish (a large buy, the close in the top of the bar) paints cyan, bearish (a large sell, the close in the bottom) yellow, at the close; an outline while the bar forms.' },
 ];
 /* code: the 2-letter chip in a host's slim header (the workspace, E2a; Anthony approved VO VW LV IB VP CD FL). */
 /* Listed in the menu, tagged "coming" and not selectable until they exist (none since the volume profile, 1.6.0, and
    the cumulative delta, 1.7.0). */
 const COMING = [];
-const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }];
+const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }, { id: 'signals', name: 'Signals' }];
+/* No chip, never counted toward the strip (the absorption bars, G1c). */
+const NOCHIP = INDICATORS.filter(d => d.nochip).map(d => d.id);
 const IND_IDS = INDICATORS.map(x => x.id);
 const RECENT_MAX = 5;
 /* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
@@ -93,9 +109,9 @@ let api = null;
 const pinMax = () => (api ? api.PIN_MAX : 6);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false, delta: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false, delta: false, bubbles: false, absorption: false };
 /* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1). */
 const V1_LISTED = ['volume', 'vwap', 'levels', 'fills', 'ib'];
 /*
@@ -104,7 +120,7 @@ const V1_LISTED = ['volume', 'vwap', 'levels', 'fills', 'ib'];
  * (Anthony's ruling 2026-09-29). The delta pane (1.7.0): the running cumulative as candles ('cum'), or each bar's own
  * buys minus sells around zero ('bar') (Anthony's ruling 2026-09-30).
  */
-const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] }, delta: { show: ['cum', 'bar'] } };
+const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] }, delta: { show: ['cum', 'bar'], div: ['off', 'on'] } };   // div: the divergence arrows (G1c), off until switched on
 /* The delta pane's height (1.7.0), a share of the chart height, per pane: the default and the least and most kept,
    read from the engine (PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX; review N8), which also keeps both panes at least a
    few rows tall. The engine loads before this file (live/EMBED.md); in Node it is required. */
@@ -129,7 +145,15 @@ const INDICATOR_COLORS = [
   { key: 'ibHigh', id: 'ib', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
   { key: 'ibLow', id: 'ib', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
   { key: 'vpPoc', id: 'vp', name: 'Point of control', def: ENGINE.DEFAULT_THEME.vpPoc },
+  // the signals (G1c): the absorption bars' bodies and outlines; the divergence arrows use the same pair
+  { key: 'sigBull', id: 'absorption', name: 'Bullish (cyan)', def: ENGINE.DEFAULT_THEME.sigBull },
+  { key: 'sigBullLine', id: 'absorption', name: 'Bullish outline', def: ENGINE.DEFAULT_THEME.sigBullLine },
+  { key: 'sigBear', id: 'absorption', name: 'Bearish (yellow)', def: ENGINE.DEFAULT_THEME.sigBear },
+  { key: 'sigBearLine', id: 'absorption', name: 'Bearish outline', def: ENGINE.DEFAULT_THEME.sigBearLine },
 ];
+/* Colors added after indicator presets were first saved (G1c): a preset saved before has none of them and takes the
+   defaults, so no saved preset is lost. */
+const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine'];
 const IND_COLOR_KEYS = INDICATOR_COLORS.map(c => c.key);
 const HEX = /^#[0-9a-f]{6}$/i;
 /** The allowed colors of `v` (#RRGGBB, upper case) for `keys`; the rest left out. */
@@ -148,7 +172,35 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1' };
+/*
+ * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
+ * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
+ * defaults), DeltaDivergenceSignal one set. Whole numbers where the file has an int.
+ */
+const ABS_SPEC = { LookbackPeriod: { min: 5, max: 200, int: true }, VolumeMultiplier: { min: 1, max: 10 }, RejectionZone: { min: 0.1, max: 0.5 },
+  AggregationWindowMs: { min: 50, max: 5000, int: true } };
+const DIV_SPEC = { SwingLookback: { min: 2, max: 15, int: true }, MinBarsBetweenSwings: { min: 2, max: 30, int: true }, MinDivergencePct: { min: 0.01, max: 0.5 } };
+const FLOOR_MAX = 100000;
+/** A setting's value as kept: a number inside its range (a whole one where it must be), else null. */
+function cleanSpec(spec, v) {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  if (typeof n !== 'number' || !isFinite(n) || n < spec.min || n > spec.max || (spec.int && !Number.isInteger(n))) return null;
+  return n;
+}
+/** The chart type the absorption settings are kept for: 'range:40' for Range 40, else the bars ('m1', 's15', ...). */
+const chartType = (tf, range) => tf === 'range' ? 'range:' + range : String(tf);
+const cleanFloor = v => { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return Number.isInteger(n) && n >= 1 && n <= FLOOR_MAX ? n : null; };
+/** The large-print floors for every root (the workspace's Time and Sales ones): saved ones where valid, else the defaults. */
+function cleanLargeFloors(v) {
+  const out = {};
+  for (const r of ROOTS) {
+    const sv = own(v, r) ? v[r] : null, d = ENGINE.LARGE_FLOORS[r];
+    const rth = own(sv, 'rth') ? cleanFloor(sv.rth) : null, eth = own(sv, 'eth') ? cleanFloor(sv.eth) : null;
+    out[r] = { rth: rth !== null ? rth : d.rth, eth: eth !== null ? eth : d.eth };
+  }
+  return out;
+}
 const BRACKET_SELS = ['custom', '1:1', '1:1.5', '1:2'];
 /** A bracket preset pick as kept: Custom, a ratio, or 'p:' and a saved preset's name (1 to 24 characters); else Custom. */
 function cleanBracketSel(v) {
@@ -203,7 +255,7 @@ function indicatorOptionAllowed(id, key, value) {
 const isList = v => Array.isArray(v);
 function defaultPane(paneId) {
   const main = paneId === MAIN_PANE, ind = {};
-  for (const id of IND_IDS) { const on = main && DEFAULT_INDICATORS[id]; ind[id] = { on, shown: true, pin: on && !UNPINNED_BY_DEFAULT.includes(id) }; }
+  for (const id of IND_IDS) { const on = main && DEFAULT_INDICATORS[id]; ind[id] = { on, shown: true, pin: on && !UNPINNED_BY_DEFAULT.includes(id) && !NOCHIP.includes(id) }; }
   return { ind, recent: [], restore: null };
 }
 function cleanIdList(v, max) {
@@ -220,6 +272,7 @@ function cleanPane(v, paneId) {
     const x = ind[id];
     if (!x || typeof x !== 'object') continue;
     for (const f of ['on', 'shown', 'pin']) if (typeof x[f] === 'boolean') out.ind[id][f] = x[f];
+    if (NOCHIP.includes(id)) out.ind[id].pin = false;
   }
   out.recent = cleanIdList(v.recent, RECENT_MAX);
   out.restore = isList(v.restore) ? cleanIdList(v.restore) : null;
@@ -265,7 +318,7 @@ const pinnedCount = st => IND_IDS.filter(id => st.ind[id].on && st.ind[id].pin).
 /* On the chart and shown (in a copy): one that was off gets a chip while the strip has room. */
 function putOn(n, id) {
   const x = n.ind[id];
-  if (!x.on) { x.pin = pinnedCount(n) < pinMax(); x.on = true; }
+  if (!x.on) { x.pin = !NOCHIP.includes(id) && pinnedCount(n) < pinMax(); x.on = true; }
   x.shown = true;
 }
 const Pane = {
@@ -344,7 +397,7 @@ const Pane = {
   },
   /** Pin or unpin; pinning one that is on the chart while the strip is full is refused (the same state comes back). */
   pin(st, id, pinned) {
-    if (!IND_IDS.includes(id)) return st;
+    if (!IND_IDS.includes(id) || NOCHIP.includes(id)) return st;   // no chip for it, ever
     const v = pinned === undefined ? !st.ind[id].pin : !!pinned;
     if (v && !st.ind[id].pin && st.ind[id].on && pinnedCount(st) >= pinMax()) return st;
     const n = copyPane(st);
@@ -489,6 +542,54 @@ function create(storage) {
       if (!Object.keys(set).length) return false;
       return raw.set(KEYS.indicatorColors, Object.assign(savedIndColors(), set));
     },
+    /** The absorption settings for a root and chart type (G1c): the file's defaults for anything not set by hand. */
+    absorptionSettings(root, type) {
+      const all = obj(KEYS.signals), a = own(all, 'abs') && own(all.abs, root) && own(all.abs[root], type) ? all.abs[root][type] : null, out = {};
+      for (const k of Object.keys(ABS_SPEC)) { const v = own(a, k) ? cleanSpec(ABS_SPEC[k], a[k]) : null; out[k] = v !== null ? v : ENGINE.ABSORPTION_DEFAULTS[k]; }
+      return out;
+    },
+    /** Set one absorption setting for a root and chart type (read fresh, only that field written); false when not allowed. */
+    setAbsorptionSetting(root, type, key, value) {
+      const n = own(ABS_SPEC, key) ? cleanSpec(ABS_SPEC[key], value) : null;
+      if (n === null || !ROOTS.includes(root) || typeof type !== 'string' || !/^(range:\d{1,3}|[a-z]\d{1,2})$/.test(type)) return false;
+      const all = obj(KEYS.signals), abs = own(all, 'abs') && all.abs && typeof all.abs === 'object' && !isList(all.abs) ? all.abs : {};
+      const r = own(abs, root) && abs[root] && typeof abs[root] === 'object' && !isList(abs[root]) ? abs[root] : {};
+      const t = own(r, type) && r[type] && typeof r[type] === 'object' && !isList(r[type]) ? r[type] : {};
+      t[key] = n; r[type] = t; abs[root] = r; all.abs = abs;
+      return raw.set(KEYS.signals, all);
+    },
+    /** The divergence settings (G1c): DeltaDivergenceSignal's defaults for anything not set by hand. */
+    divergenceSettings() {
+      const all = obj(KEYS.signals), d = own(all, 'div') ? all.div : null, out = {};
+      for (const k of Object.keys(DIV_SPEC)) { const v = own(d, k) ? cleanSpec(DIV_SPEC[k], d[k]) : null; out[k] = v !== null ? v : ENGINE.DIVERGENCE_DEFAULTS[k]; }
+      return out;
+    },
+    setDivergenceSetting(key, value) {
+      const n = own(DIV_SPEC, key) ? cleanSpec(DIV_SPEC[key], value) : null;
+      if (n === null) return false;
+      const all = obj(KEYS.signals), d = own(all, 'div') && all.div && typeof all.div === 'object' && !isList(all.div) ? all.div : {};
+      d[key] = n; all.div = d;
+      return raw.set(KEYS.signals, all);
+    },
+    /** The bubbles' Auto floor (the session's top 1%) for a root: off unless switched on. */
+    bubbleAuto(root) { const all = obj(KEYS.signals); return own(all, 'auto') && own(all.auto, root) && all.auto[root] === true; },
+    setBubbleAuto(root, on) {
+      if (!ROOTS.includes(root)) return false;
+      const all = obj(KEYS.signals), a = own(all, 'auto') && all.auto && typeof all.auto === 'object' && !isList(all.auto) ? all.auto : {};
+      if (on) a[root] = true; else delete a[root];
+      all.auto = a;
+      return raw.set(KEYS.signals, all);
+    },
+    /** The large-print floors { <root>: { rth, eth } } (the workspace's Time and Sales floors, one key for both). */
+    largeFloors() { return cleanLargeFloors(obj(KEYS.floors)); },
+    /** Set one floor ('rth' or 'eth') of one root, a whole number 1 to 100000 (read fresh, only that one written). */
+    setLargeFloor(root, which, value) {
+      const n = cleanFloor(value);
+      if (n === null || !ROOTS.includes(root) || (which !== 'rth' && which !== 'eth')) return false;
+      const all = obj(KEYS.floors), r = own(all, root) && all[root] && typeof all[root] === 'object' && !isList(all[root]) ? all[root] : {};
+      r[which] = n; all[root] = r;
+      return raw.set(KEYS.floors, all);
+    },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** The qty picked last for a root (1.10.0): a whole number 1 to 9, else 1. */
     qty(root) { const v = obj(KEYS.qty)[root]; return Number.isInteger(v) && v >= 1 && v <= 9 ? v : 1; },
@@ -548,6 +649,7 @@ function cleanPresets(v) {
     for (const p of list) {
       if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id || ids.has(p.id)) continue;
       const name = presetName(p.name), colors = cleanColors(p.colors, PRESET_GROUPS[g]);
+      if (g === 'indicator') for (const k of IND_COLOR_LATER) if (!colors[k]) colors[k] = INDICATOR_COLORS.find(c => c.key === k).def.toUpperCase();
       if (!name || names.has(name.toLowerCase()) || Object.keys(colors).length !== PRESET_GROUPS[g].length) continue;
       names.add(name.toLowerCase()); ids.add(p.id);
       const q = { id: p.id, name, colors };
@@ -611,7 +713,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+api = { ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -648,6 +750,8 @@ let hoverRoot = null;
 const mountedRoots = new Set();
 /* Charts on one page that share a storage prefix follow each other's account pick (review 2, N6). */
 const accountPeers = new Set();
+/* Charts on one page that share a storage prefix take a change of the signals' settings or floors at once (G1c). */
+const signalPeers = new Set();
 
 /*
  * Trading hotkeys (1.11.0): the one keydown handler, so a later page with several charts can use it for its execution
@@ -949,8 +1053,9 @@ function start(container, opt, PAGE) {
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false },
-    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc },
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false,
+      absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' },
+    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
   });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
@@ -964,6 +1069,11 @@ function start(container, opt, PAGE) {
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null };   // served window and session table (1.8.0): see "Served window" below
+  /* The chart signals' objects (G1c, see sigReplay below): what the chart draws, made again with the bars. */
+  // version: a counter the page bumps on any change of what is drawn (the chart redraws when it moves)
+  const SIG = { absorption: null, bubbles: null, divergence: null, cd: null, version: 0, job: null, rangeFrom: undefined };
+  const sigSum = () => (SIG.absorption ? SIG.absorption.version : 0) + (SIG.bubbles ? SIG.bubbles.version : 0) + (SIG.divergence ? SIG.divergence.version : 0);
+  let sigFloors = prefs.largeFloors();
   let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
      Range bars need the backfill to reach back to a session start (see rangeHistoryFrom in bar-builder.js).
@@ -1023,6 +1133,7 @@ function start(container, opt, PAGE) {
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
+    if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -1063,6 +1174,7 @@ function start(container, opt, PAGE) {
       if (!D.ticks.length) setStatus('No tick history came back from NinjaTrader, so ' + tf.label + ' bars start with the next live tick.', 'warn');
     }
     deltaStart({ rangeFrom: tf.mode === 'range' ? rangeFrom : undefined });   // the delta pane, from the same store, in slices (review S5)
+    sigRebuild(tf.mode === 'range' ? rangeFrom : undefined);   // the chart signals on the new bars (G1c), range bars from where the chart's start
     updateLevels();
     applyMarkers();
     legendKey = '';
@@ -1192,7 +1304,7 @@ function start(container, opt, PAGE) {
   /* New indicator colors (a gear, an indicator preset, Default colors): the chart's VWAP and profile colors, the level
      and IB lines as they are, and the swatches. Nothing is computed again from the bars. */
   function applyIndicatorColors() {
-    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc });
+    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine });
     if (D.lvSrc) D.lv = U.levelLines(D.lvSrc, IC);
     if (D.m1) chart.setLevels(D.lv.concat(U.ibLines(D.ib, IC)));
     paintColors();
@@ -1473,7 +1585,7 @@ function start(container, opt, PAGE) {
     }
     if (K.lastT === null || t > K.lastT) K.lastT = t;
     K.trades.push(t, m.p, m.v || 0, m.s, m.sm);
-    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; dropped = true; }
+    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; dropped = true; sigCountTrimmed(500000); }
     return dropped;
   }
   const countMissed = () => K.started && K.root === D.root ? K.missed : 0;
@@ -1575,7 +1687,7 @@ function start(container, opt, PAGE) {
   }
   /* Off the chart: no delta at all. */
   function deltaStop() { deltaJob = null; deltaSet(null); }
-  function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); }
+  function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); if (typeof sigDivergence === 'function') sigDivergence(false); }
   const deltaBuilding = () => deltaJob !== null;
   /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
      session may count from later than 18:00, for its title. */
@@ -1629,11 +1741,141 @@ function start(container, opt, PAGE) {
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
       if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
-      if (id === 'delta') { chart.setDeltaView({ mode: value }); deltaLegend(true); }   // the same core, drawn the other way
+      if (id === 'delta' && key === 'show') { chart.setDeltaView({ mode: value }); deltaLegend(true); }   // the same core, drawn the other way
+      if (id === 'delta' && key === 'div') sigApply();               // the divergence arrows (G1c)
     }
     syncIndicators();
     return true;
   }
+
+
+  /*
+   * Chart signals (G1c): absorption bars, large-order bubbles and the delta pane's divergence arrows (ChartEngine's
+   * Absorption, LargePrints and DeltaDivergence, ported from Anthony's NinjaScript files). Fed the live trades of this
+   * instrument with their sides as they come (onTick, one trade at a time: never a loop over history per trade), so
+   * they count from the page's opening only. A rebuild (another bar type or size, a reload) or a change of settings
+   * replays the count's live trades (K above: every live trade of this instrument since the page opened, kept across
+   * loads) in slices, as the delta build does; the divergence is worked out again from the bars when the bars or the
+   * delta core change, once per bar close after that.
+   * Settings: the absorption's per instrument and chart type, the divergence's, the bubbles' Auto (live-signals-v1),
+   * the large-print floors (live-tape-floors-v1, the workspace's Time and Sales floors; RTH 09:30 to 16:15 ET).
+   */
+  const sigType = () => LP.chartType(S.tf, ranges[S.root]);
+  const sigFloorAt = root => { const f = sigFloors[root]; return f ? t => CE.largeFloorAt(f, t) : () => Infinity; };
+  const sigWanted = () => ({ abs: !!IS.ind.absorption.on, bub: !!IS.ind.bubbles.on, div: !!IS.ind.delta.on && S.options.delta.div === 'on' });
+  const SIG_GEARS = ['absorption', 'bubbles', 'delta'];
+  const newAbsorption = () => new CE.Absorption({ settings: prefs.absorptionSettings(D.root, sigType()), floorAt: sigFloorAt(D.root), tick: D.tick });
+  const newBubbles = () => new CE.LargePrints({ floorAt: sigFloorAt(D.root), auto: prefs.bubbleAuto(D.root), tick: D.tick, sessionStart: SESSION });
+  chart.setSignals(SIG);
+  /* Start over from the count's live trades: `what` names the ones to make again ({ abs, bub }); the others keep going. */
+  function sigReplay(what) {
+    const want = sigWanted(), was = SIG.job;
+    SIG.job = null;
+    // a replay still going for the other one is stopped here, so it starts again with this one
+    const doAbs = what.abs || !!(was && was.abs && was.abs === SIG.absorption), doBub = what.bub || !!(was && was.bub && was.bub === SIG.bubbles);
+    if (doAbs) SIG.absorption = want.abs && D.root ? newAbsorption() : null;
+    if (doBub) SIG.bubbles = want.bub && D.root ? newBubbles() : null;
+    SIG.version++;
+    const abs = doAbs ? SIG.absorption : null, bub = doBub ? SIG.bubbles : null;
+    if (!abs && !bub) return;
+    if (!(K.started && K.root === D.root && D.ready)) return;
+    // range bars: each counted trade in the bar it made, by its order in the store, as the delta pane does (BB.RangeReplay),
+    // so a rebuild paints the bars that live trading painted; time bars bucket by time
+    const range = TF[S.tf].mode === 'range' && SIG.rangeFrom !== undefined;
+    const seg = { st: K.trades, i: 0, end: null }, from = D.tickFrom;
+    const job = SIG.job = { abs, bub, seg, replay: null };
+    const take = (t, p, v, s, barT) => {
+      if (job.abs && barT !== undefined) job.abs.add(t, p, v, s, barT, chart.bars());
+      if (job.bub) job.bub.add(t, p, v, s);
+    };
+    const sink = { addQuiet(t, p, v, s) { const bars = chart.bars(), i = CE.barIndexAt(bars, t); take(t, p, v, s, i >= 0 ? bars[i].t : undefined); } };
+    if (range) job.replay = new BB.RangeReplay(D.ticks, SIG.rangeFrom, [seg], rangeBuilder(), (t, v, s2, barT) => take(t, seg.st.price(seg.i), v, s2, barT));
+    const slice = () => {
+      if (destroyed || SIG.job !== job) return;
+      // the count dropped its trades (18:00 ET), or the store was trimmed under a range replay: again
+      if (seg.st !== K.trades || (job.replay && D.tickFrom !== from)) { sigReplay({ abs: !!job.abs, bub: !!job.bub }); return; }
+      const t0 = performance.now();
+      if (job.replay) {
+        let done;
+        do done = job.replay.step(DELTA_SLICE_TRADES);
+        while (!done && performance.now() - t0 < DELTA_SLICE_MS);
+        SIG.version++;
+        if (!done) { later(slice, 0); return; }
+      } else {
+        do seg.i = seg.st.feedSides(sink, seg.i, null, seg.i + DELTA_SLICE_TRADES);
+        while (seg.i < seg.st.length && performance.now() - t0 < DELTA_SLICE_MS);
+        SIG.version++;
+        if (seg.i < seg.st.length) { later(slice, 0); return; }
+      }
+      SIG.job = null; SIG.version++;                       // through: live trades from here on
+    };
+    slice();
+  }
+  /* The count dropped its oldest n trades (countAdd): a replay reading it keeps its place. */
+  function sigCountTrimmed(n) { const j = SIG.job; if (j && j.seg.st === K.trades) j.seg.i = Math.max(0, j.seg.i - n); }
+  /* The divergence: made again when its settings, the bars or the delta core change; then one step per bar close. */
+  const divWanted = () => S.options.delta.div === 'on' && IS.ind.delta.on;
+  function sigDivergence(force) {
+    const want = divWanted() && !!D.delta;
+    if (!want) { if (SIG.divergence) { SIG.divergence = null; SIG.cd = null; SIG.version++; } return; }
+    if (force || !SIG.divergence || SIG.cd !== D.delta) { SIG.divergence = new CE.DeltaDivergence({ settings: prefs.divergenceSettings() }); SIG.cd = D.delta; SIG.version++; }
+    const bars = chart.bars(), dv = SIG.divergence;
+    if (bars === dv.bars && dv.next >= bars.length - 1) return;   // no bar closed since: nothing to do
+    const cd = D.delta, cb = cd.bars, v0 = dv.version;
+    dv.update(bars, i => {                                 // the delta at the close of bar i, carried over a bar with no trade
+      const t = bars[i].t, k = cd.lowerBound(t);
+      if (k < cb.length && cb[k].t === t) return cb[k].c;
+      const j = k - 1;
+      return j >= 0 && U.tradeDay(cb[j].t, SESSION) === U.tradeDay(t, SESSION) ? cb[j].c : null;
+    });
+    if (dv.version !== v0) SIG.version++;
+  }
+  /* On new bars (a load, another bar type or size): the absorption bars again; the bubbles only after a new load (they
+     are kept by time, whatever the bars); the divergence from the bars. */
+  function sigRebuild(rangeFrom) { SIG.rangeFrom = rangeFrom; sigReplay({ abs: true, bub: !SIG.bubbles }); sigDivergence(true); }
+  /* One live trade, after the chart and the delta core took it (onTick). */
+  function sigTrade(t, p, v, s, barT) {
+    const job = SIG.job, v0 = sigSum();
+    if (SIG.absorption && !(job && job.abs === SIG.absorption)) SIG.absorption.add(t, p, v, s, barT, chart.bars());
+    if (SIG.bubbles && !(job && job.bub === SIG.bubbles)) SIG.bubbles.add(t, p, v, s);
+    if (sigSum() !== v0) SIG.version++;                    // the versions only grow: any change moves the sum
+    if (SIG.divergence || divWanted()) sigDivergence(false);
+  }
+  /* The signals' layers on the chart: the absorption bars and bubbles as drawn, the arrows with the delta pane. */
+  function sigLayers() {
+    const div = !!S.layers.delta && S.options.delta.div === 'on';
+    chart.setLayers({ absorption: !!S.layers.absorption, bubbles: !!S.layers.bubbles, divergence: div });
+  }
+  /* What is on the chart changed: make what is wanted and drop what is not (kept while hidden, as the delta pane). */
+  function sigApply() {
+    const want = sigWanted(), what = { abs: want.abs !== !!SIG.absorption, bub: want.bub !== !!SIG.bubbles };
+    if (what.abs || what.bub) sigReplay(what);
+    sigDivergence(false);
+    sigLayers();
+  }
+  /* Settings read again (another chart or window changed them, or this one did): replay only what they change. */
+  function sigRefresh(render) {
+    if (destroyed) return;
+    const f = prefs.largeFloors(), floorsNew = JSON.stringify(f) !== JSON.stringify(sigFloors);
+    sigFloors = f;
+    const want = sigWanted(), a = SIG.absorption, b = SIG.bubbles;
+    const absNew = want.abs && (!a || floorsNew || JSON.stringify(a.s) !== JSON.stringify(Object.assign({}, CE.ABSORPTION_DEFAULTS, prefs.absorptionSettings(D.root, sigType()))));
+    const bubNew = want.bub && (!b || floorsNew || b.auto !== prefs.bubbleAuto(D.root));
+    if (absNew || bubNew) sigReplay({ abs: absNew, bub: bubNew });
+    if (want.div && SIG.divergence && JSON.stringify(SIG.divergence.s) !== JSON.stringify(prefs.divergenceSettings())) sigDivergence(true);
+    if (render !== false && !$('indPanel').hidden && M.gear && SIG_GEARS.includes(M.gear)) renderMenu();
+  }
+  /* Charts on this page with this prefix follow a change made in one of them at once; other windows by the storage
+     event. The workspace's own floors (its Settings and tape gears) call refreshSettings, and hear of a change made
+     here through the window event 'chartlive-floors'. */
+  signalPeers.add({ prefix: PREFIX, refresh: sigRefresh });
+  cleanups.push(() => { for (const peer of signalPeers) if (peer.refresh === sigRefresh) signalPeers.delete(peer); });
+  const sigChanged = floors => {
+    sigRefresh(false);                                     // this chart's gear shows what was typed already
+    for (const peer of signalPeers) if (peer.prefix === PREFIX && peer.refresh !== sigRefresh) peer.refresh();
+    if (floors) { try { window.dispatchEvent(new CustomEvent('chartlive-floors', { detail: { prefix: PREFIX } })); } catch (e) { /* old browser */ } }
+  };
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.signals || e.key === PREFIX + LP.KEYS.floors) sigRefresh(); });
 
   /* readyAt (ms): when the shared feed's load became ready, for a chart that joins it later (live/feed.js); else now */
   function onReady(readyAt) {
@@ -1715,6 +1957,7 @@ function start(container, opt, PAGE) {
       barT = r.bar.t;
     }
     if (D.delta && !deltaFed) D.delta.add(t, v, m.s, barT, m.sm);   // one trade, one bar: never a rebuild per trade
+    sigTrade(t, p, v, m.s, barT);                      // the chart signals (G1c): O(1) a trade, a step per bar close
     const now = nowMs();
     pushDelay(delays.feed, m.rx - m.u);
     pushDelay(delays.local, now - m.rx);
@@ -2206,10 +2449,11 @@ function start(container, opt, PAGE) {
     st.setProperty('--vp-sw', onChrome(IC.vpPoc));
     st.setProperty('--vp-poc', T.vpPocText);                      // the legend's POC, on the chart ground
     st.setProperty('--delta-sw', T.upText);                       // the delta pane's swatch: the bull candle color, readable here
+    st.setProperty('--sig-bull', onChrome(T.sigBull)); st.setProperty('--sig-bear', onChrome(T.sigBear));   // the signals (G1c)
     deltaLegendKey = '';
     legendKey = '';
     // a host's slim header holds the Indicators menu and the chips outside this element: their swatches follow too
-    if (SLIM) for (const el of [$('indWrap'), $('indChips')]) for (const k of ['--vwap-sw', '--up-text', '--down-text', '--ib-sw', '--vp-sw', '--delta-sw', '--vp-poc']) el.style.setProperty(k, st.getPropertyValue(k));
+    if (SLIM) for (const el of [$('indWrap'), $('indChips')]) for (const k of ['--vwap-sw', '--up-text', '--down-text', '--ib-sw', '--vp-sw', '--delta-sw', '--vp-poc', '--sig-bull', '--sig-bear']) el.style.setProperty(k, st.getPropertyValue(k));
   }
 
   /*
@@ -2475,6 +2719,7 @@ function start(container, opt, PAGE) {
     if (deltaWanted() && !D.delta && !deltaBuilding()) deltaStart();
     else if (!IS.ind.delta.on && (D.delta || deltaBuilding())) deltaStop();
     else { deltaView(); deltaLegend(true); }
+    sigApply();                                                    // the chart signals (G1c): made when added, dropped when off
     legendKey = '';
     syncIndicators();
   }
@@ -2494,17 +2739,84 @@ function start(container, opt, PAGE) {
       : `<button type="button" class="ind-add" data-act="toggle" data-id="${d.id}" data-f="add:${d.id}" aria-label="Add ${name} to this chart" title="Add to this chart">${SVG.plus}</button>`;
     /* the pin only on rows on this chart (Anthony); the gear wherever there is something to read */
     const tools = coming ? '<span class="ind-ic-sp" aria-hidden="true"></span>'
-      : (on ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '') +
+      : (on && !d.nochip ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>`
+        : on ? '<span class="ind-ic-sp" aria-hidden="true" title="No chip: it stays off the strip"></span>' : '') +
         `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
     const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
-    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}${colorsHtml(d.id)}</div>` : '';
+    const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}${signalsHtml(d.id)}${colorsHtml(d.id)}</div>` : '';
     return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
       `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span><span class="ind-name">${name}</span>` +
       (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
   }
   /* An indicator's real options in its gear panel (LivePrefs INDICATOR_OPTIONS): today the volume profile's hours. */
   const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } } },
-    delta: { show: { label: 'Show', values: { cum: ['Cumulative', 'Candles of buys minus sells, from 0 at 18:00 ET'], bar: ['Bar delta', 'Each bar\'s own buys minus sells, above or below zero'] } } } };
+    delta: { show: { label: 'Show', values: { cum: ['Cumulative', 'Candles of buys minus sells, from 0 at 18:00 ET'], bar: ['Bar delta', 'Each bar\'s own buys minus sells, above or below zero'] } },
+      div: { label: 'Show divergences', values: { off: ['Off', 'No divergence arrows'], on: ['On', 'Arrows at swings where price and delta disagree (Anthony\'s DeltaDivergenceSignal), from the page\'s opening'] } } } };
+  /*
+   * The signals' own settings in their gears (G1c), each a number box with the NinjaScript file's name for it and its
+   * range: the absorption bars' per instrument and chart type, the divergence's (with Show divergences on), and the
+   * large-print floors with the bubbles' Auto. A box applies as it is typed when it holds an allowed value (saved, the
+   * signals replayed); leaving it puts the value in use back.
+   */
+  const SIG_TEXT = {
+    LookbackPeriod: ['Lookback period', 'bars', 'Bars averaged for the volume spike (LookbackPeriod)'],
+    VolumeMultiplier: ['Volume multiplier', 'x', 'The bar\'s volume against that average (VolumeMultiplier)'],
+    RejectionZone: ['Rejection zone', 'of bar', 'The close in the top or bottom of the bar\'s range (RejectionZone)'],
+    AggregationWindowMs: ['Aggregation window', 'ms', 'Same side prints at one price within this, added up (AggregationWindowMs)'],
+    SwingLookback: ['Swing lookback', 'bars', 'Bars each side that confirm a swing (SwingLookback)'],
+    MinBarsBetweenSwings: ['Min bars between swings', 'bars', 'MinBarsBetweenSwings'],
+    MinDivergencePct: ['Min divergence', '', 'Price apart by this times 1% or delta by this share of the earlier swing\'s (MinDivergencePct)'],
+  };
+  const sigStep = spec => spec.int ? '1' : spec.max <= 1 ? '0.01' : '0.1';
+  function numRow(group, key, spec, value) {
+    const t = SIG_TEXT[key], id = p + 'sig-' + group + '-' + key;
+    return `<div class="ind-num"><label class="ind-num-n" for="${id}" title="${esc(t[2])}">${esc(t[0])}</label>` +
+      `<input class="ind-hex ind-num-in" id="${id}" type="number" inputmode="decimal" min="${spec.min}" max="${spec.max}" step="${sigStep(spec)}" value="${value}" data-sig="${group}:${key}" data-f="sig:${group}:${key}" title="${esc(t[2])}, ${spec.min} to ${spec.max}">` +
+      `<span class="ind-num-u">${esc(t[1])}</span></div>`;
+  }
+  const typeLabel = () => S.tf === 'range' ? 'Range ' + ranges[S.root] : TF[S.tf].label;
+  function floorsHtml() {
+    const f = sigFloors[S.root], id = p + 'sigFloor-';
+    return `<div class="ind-num ind-num-2"><span class="ind-num-n">Large trade, ${esc(S.root)}</span>` +
+      `<label class="ind-num-l" for="${id}rth">RTH</label><input class="ind-hex ind-num-in" id="${id}rth" type="number" inputmode="numeric" min="1" max="100000" step="1" value="${f.rth}" data-sig="floor:rth" data-f="sig:floor:rth" title="${esc(S.root)} large trade floor, 09:30 to 16:15 ET">` +
+      `<label class="ind-num-l" for="${id}eth">Overnight</label><input class="ind-hex ind-num-in" id="${id}eth" type="number" inputmode="numeric" min="1" max="100000" step="1" value="${f.eth}" data-sig="floor:eth" data-f="sig:floor:eth" title="${esc(S.root)} large trade floor, the rest of the session"></div>`;
+  }
+  /* A signal's number box: an allowed value is saved and applied at once; anything else is marked and kept as typed. */
+  function sigInput(el) {
+    const [g, k] = el.dataset.sig.split(':'), v = el.value;
+    const ok = g === 'abs' ? prefs.setAbsorptionSetting(S.root, sigType(), k, v) : g === 'div' ? prefs.setDivergenceSetting(k, v) : g === 'floor' ? prefs.setLargeFloor(S.root, k, v) : false;
+    if (!ok) { el.setAttribute('aria-invalid', 'true'); return; }
+    el.removeAttribute('aria-invalid');
+    sigChanged(g === 'floor');
+  }
+  /* Leaving a box: the value in use back in it. */
+  function sigShown(el) {
+    const [g, k] = el.dataset.sig.split(':');
+    el.removeAttribute('aria-invalid');
+    el.value = g === 'abs' ? prefs.absorptionSettings(S.root, sigType())[k] : g === 'div' ? prefs.divergenceSettings()[k] : sigFloors[S.root][k];
+  }
+  function signalsHtml(id) {
+    if (id === 'absorption') {
+      const a = prefs.absorptionSettings(S.root, sigType());
+      return `<div class="ind-nums"><div class="ind-cap-in">${esc(S.root)}, ${esc(typeLabel())}</div>` +
+        Object.keys(LP.ABS_SPEC).map(k => numRow('abs', k, LP.ABS_SPEC[k], a[k])).join('') + floorsHtml() +
+        '<span class="ind-set-note">Each instrument and bar type keeps its own. The floors are the bubbles\' and Time and Sales\' too.</span></div>';
+    }
+    if (id === 'bubbles') {
+      const auto = prefs.bubbleAuto(S.root), lbl = p + 'sigAuto';
+      return `<div class="ind-nums">${floorsHtml()}` +
+        `<div class="ind-set-opt"><span class="glabel" id="${lbl}">Floor</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lbl}">` +
+        `<button type="button" data-act="sigauto" data-v="off" data-f="sigauto:off" aria-pressed="${!auto}" title="The RTH and overnight floors above">Fixed</button>` +
+        `<button type="button" data-act="sigauto" data-v="on" data-f="sigauto:on" aria-pressed="${auto}" title="The session's top 1% of trade sizes">Auto</button></span>` +
+        `<span class="ind-set-note">${auto ? 'Auto: the session\'s top 1% of sizes' + (SIG.bubbles && SIG.bubbles.autoFloor !== null ? ' (now ' + SIG.bubbles.autoFloor + ')' : ', the fixed floor until 200 have traded') : 'The floors above, for ' + esc(S.root)}</span></div></div>`;
+    }
+    if (id === 'delta' && S.options.delta.div === 'on') {
+      const d = prefs.divergenceSettings();
+      return '<div class="ind-nums">' + Object.keys(LP.DIV_SPEC).map(k => numRow('div', k, LP.DIV_SPEC[k], d[k])).join('') +
+        '<span class="ind-set-note">Cyan below a bullish swing, yellow above a bearish one; hollow until the swing is confirmed (the colors are the absorption bars\').</span></div>';
+    }
+    return '';
+  }
   function optionsHtml(id) {
     if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return '';
     return Object.keys(LP.INDICATOR_OPTIONS[id]).map(k => {
@@ -2709,10 +3021,12 @@ function start(container, opt, PAGE) {
       const b = e.target.closest('button[data-act]');
       if (!b || !panel.contains(b)) return;
       if (b.dataset.act === 'opt') { M.note = ''; setIndicatorOption(b.dataset.id, b.dataset.k, b.dataset.v); return; }   // saved per pane, as it is
+      if (b.dataset.act === 'sigauto') { prefs.setBubbleAuto(S.root, b.dataset.v === 'on'); sigChanged(false); renderMenu(); return; }
       indAction(b.dataset.act, b.dataset.id);
     });
     /* a color picker or hex box in a gear: applied as it changes, the menu is not drawn again (a picker stays open) */
     panel.addEventListener('input', e => {
+      if (e.target.dataset.sig && panel.contains(e.target)) { sigInput(e.target); return; }
       const t = e.target, k = t.dataset.ck || t.dataset.hk;
       if (!k || !panel.contains(t)) return;
       const v = t.dataset.ck ? t.value.toUpperCase() : hexOf(t.value);
@@ -2723,6 +3037,7 @@ function start(container, opt, PAGE) {
       if (other) other.value = t.dataset.ck ? v : v.toLowerCase();
     });
     panel.addEventListener('change', e => {
+      if (e.target.dataset.sig && panel.contains(e.target)) { sigShown(e.target); return; }
       const t = e.target, k = t.dataset.hk;
       if (k && panel.contains(t)) { t.removeAttribute('aria-invalid'); t.value = IC[k]; }   // leaving the box puts the color in use back
     });
@@ -2969,6 +3284,7 @@ function start(container, opt, PAGE) {
     if (s.glide !== S.glide) { S.glide = s.glide; chart.setMotion(GLIDE[S.glide]); }
     if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
     syncButtons();
+    sigRefresh();                                          // the signals' settings and the large-print floors (G1c)
   }
   function refreshColors() {
     if (destroyed) return;

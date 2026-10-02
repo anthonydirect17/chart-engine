@@ -65,17 +65,23 @@ trading page, where each tab keeps its own order account).
 `mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }`:
 `chart` is the chart-engine instance (for reading, such as `chart.bars()`), `element` the `.chart-live` element it
 created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (1.6.0). There
-are two:
+are three:
 
 | Call | What it does |
 |---|---|
 | `pane.setIndicatorOption('vp', 'session', 'rth')` | the volume profile's hours: `'rth'` for RTH 9:30 to 16:00 ET, `'full'` for the whole session from 18:00 ET (the default) |
 | `pane.setIndicatorOption('delta', 'show', 'bar')` | the cumulative delta pane (1.7.0): `'bar'` for each bar's own buys minus sells around zero, `'cum'` for candles of the running cumulative from 18:00 ET (the default) |
+| `pane.setIndicatorOption('delta', 'div', 'on')` | the delta pane's divergence arrows (G1c, Anthony's DeltaDivergenceSignal): `'on'` to show them, `'off'` (the default) |
 
 It returns false (and never throws) for an option or value that does not exist, including inherited names such as
 `toString`. `indicatorOptions('vp')` and `indicatorOptions('delta')` read them back (`{ session: 'full' }`,
-`{ show: 'cum' }`). The gear panels in the Indicators menu have the same switches (Hours: Session or RTH; Show:
-Cumulative or Bar delta).
+`{ show: 'cum', div: 'off' }`). The gear panels in the Indicators menu have the same switches (Hours: Session or RTH; Show:
+Cumulative or Bar delta; Show divergences).
+
+Chart signals (G1c): the Indicators menu also has **Absorption bars** (a Signals group; no chip) and **Large-order
+bubbles** (Volume; chip BB), off on every pane until added, with their settings in their gears (`live-signals-v1`, and the
+large-print floors in `live-tape-floors-v1`, the workspace's Time and Sales floors, under the storage prefix). They count
+from the chart's opening only, from the trades' sides as ChartBridge sends them, so a relay must pass `s` through.
 
 Cumulative delta (1.7.0): a pane under the chart with market buys minus market sells, on for `paneId` `'main'` and off
 for any other pane until added from its Indicators menu. The side of each trade comes from ChartBridge 0.3.4 (every

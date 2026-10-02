@@ -15,7 +15,7 @@ test('defaults with empty storage: what the page showed before', () => {
   assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true });   // the delta pane (1.7.0): on
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): on; the signals (G1c) off
 });
 
 test('range size is per root, and one write never undoes another tab', () => {
@@ -54,7 +54,7 @@ test('1.3 keys are read once and carry over', () => {
   assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
-  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true, vp: false, delta: true });   // IB (1.5.3) and the delta pane (1.7.0): the main pane defaults
+  assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true, vp: false, delta: true, bubbles: false, absorption: false });   // IB (1.5.3) and the delta pane (1.7.0): the main pane defaults
   // later changes to the old keys (an older page in another tab) are not read again
   s.setItem('live-range-v1', JSON.stringify({ NQ: 12 }));
   s.setItem('live-settings-v1', JSON.stringify({ root: 'ES' }));
@@ -87,9 +87,9 @@ test('indicators (1.6.0): the main pane starts with the five on, shown and pinne
 test('1.3 keys: the indicators chosen on 1.3 draw the same after the update (through live-indicators-v1)', () => {
   const s = mem({ 'live-settings-v1': { layers: { volume: false, vwap: true, levels: false, fills: true } } });
   const p = LP.create(s);
-  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false, delta: true });
+  assert.deepEqual(p.indicators('main'), { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false });
   assert.deepEqual(p.indicators('pane-2'), flags([]));
-  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false, delta: true } });   // left in place
+  assert.deepEqual(s.dump('live-indicators-v1'), { main: { volume: false, vwap: true, levels: false, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false } });   // left in place
 });
 
 test('migration from live-indicators-v1: on and off carried over exactly, an explicit off stays off', () => {
@@ -350,13 +350,14 @@ test('search matches names and short names', () => {
   assert.deepEqual(ids('zzz'), []);
 });
 
-test('the menu lists only real indicators, in three groups; the volume profile (1.6.0) and the cumulative delta (1.7.0) are among them', () => {
-  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'ib', 'vp', 'delta', 'fills']);
-  assert.deepEqual(LP.CATEGORIES.map(c => c.name), ['Price', 'Volume', 'Trades']);
+test('the menu lists only real indicators, in four groups; the volume profile (1.6.0), the cumulative delta (1.7.0), the bubbles and the absorption bars (G1c) are among them', () => {
+  assert.deepEqual(LP.INDICATORS.map(d => d.id), ['volume', 'vwap', 'levels', 'ib', 'vp', 'delta', 'bubbles', 'fills', 'absorption']);
+  assert.deepEqual(LP.CATEGORIES.map(c => c.name), ['Price', 'Volume', 'Trades', 'Signals']);
   const byCat = c => LP.INDICATORS.concat(LP.COMING).filter(d => d.cat === c).map(d => d.name);
   assert.deepEqual(byCat('price'), ['VWAP', 'Levels', 'Initial balance']);
-  assert.deepEqual(byCat('volume'), ['Volume bars', 'Volume profile', 'Cumulative delta']);
+  assert.deepEqual(byCat('volume'), ['Volume bars', 'Volume profile', 'Cumulative delta', 'Large-order bubbles']);
   assert.deepEqual(byCat('trades'), ['Fills']);
+  assert.deepEqual(byCat('signals'), ['Absorption bars']);
   assert.deepEqual(LP.COMING, []);
   for (const d of LP.INDICATORS) assert.ok(d.opt && d.short && d.letter.length === 1 && d.sw, d.id);
   assert.equal(new Set(LP.INDICATORS.map(d => d.letter)).size, LP.INDICATORS.length, 'narrow chips: one letter each, all different');
@@ -627,20 +628,20 @@ test('delta pane: its Show option (Cumulative or Bar delta) is saved per pane, o
   assert.deepEqual(LP.INDICATOR_OPTIONS.delta.show, ['cum', 'bar']);
   const s = mem({ 'live-indicator-options-v1': { main: { vp: { session: 'rth' } } } });
   const a = LP.create(s), b = LP.create(s);
-  assert.deepEqual(a.indicatorOptions('main', 'delta'), { show: 'cum' }, 'Cumulative by default');
+  assert.deepEqual(a.indicatorOptions('main', 'delta'), { show: 'cum', div: 'off' }, 'Cumulative by default, no divergence arrows (G1c)');
   assert.equal(a.setIndicatorOption('main', 'delta', 'show', 'bar'), true);
   assert.equal(b.setIndicatorOption('pane-2', 'delta', 'show', 'cum'), true);   // another tab, another pane
   assert.equal(b.setIndicatorOption('main', 'delta', 'show', 'bars'), false, 'an unknown value is refused');
   assert.equal(b.setIndicatorOption('main', 'delta', 'session', 'rth'), false, 'another indicator\'s option is refused');
   assert.equal(b.setIndicatorOption('main', 'delta', 'toString', 'bar'), false);
-  assert.deepEqual(s.dump('live-indicator-options-v1'), { main: { vp: { session: 'rth' }, delta: { show: 'bar' } }, 'pane-2': { delta: { show: 'cum' } } }, 'the profile\'s option kept');
+  assert.deepEqual(s.dump('live-indicator-options-v1'), { main: { vp: { session: 'rth' }, delta: { show: 'bar', div: 'off' } }, 'pane-2': { delta: { show: 'cum', div: 'off' } } }, 'the profile\'s option kept');
   // always saved, also when the tab already shows it (another tab may have saved the other one since; 1.6.0 review S2)
   const c = LP.create(s);
   assert.equal(c.setIndicatorOption('main', 'delta', 'show', 'bar'), true);
   b.setIndicatorOption('main', 'delta', 'show', 'cum');
   c.setIndicatorOption('main', 'delta', 'show', 'bar');
-  assert.deepEqual(LP.create(s).indicatorOptions('main', 'delta'), { show: 'bar' });
-  assert.deepEqual(LP.create(mem({ 'live-indicator-options-v1': { main: { delta: { show: 'x' } } } })).indicatorOptions('main', 'delta'), { show: 'cum' }, 'junk: the default');
+  assert.deepEqual(LP.create(s).indicatorOptions('main', 'delta'), { show: 'bar', div: 'off' });
+  assert.deepEqual(LP.create(mem({ 'live-indicator-options-v1': { main: { delta: { show: 'x', div: 'yes' } } } })).indicatorOptions('main', 'delta'), { show: 'cum', div: 'off' }, 'junk: the default');
 });
 
 test('delta pane: its height is saved per pane (a share of the chart), kept between 8% and 60%, on a fresh read', () => {

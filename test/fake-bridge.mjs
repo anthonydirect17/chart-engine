@@ -110,6 +110,11 @@
 //   ("htfBar" at most once a second), and "weekProfile" with the last 5 sessions' volume at price of the sample minutes
 //   (one listed "missing", as a session ChartBridge has no table for). With --test-controls, POST
 //   /test/settlement?root=MNQ&p=21456.25&date=2026-09-28 sends a "settlement" message to every page (p=null: none known).
+// --scene=signals (chart signals, G1c): once a page is live on MNQ, MNQ's random walk stops and a scripted tape replays
+//   instead (test/signals-scene.mjs: sample trades with sides that read like a real stretch of regular hours, with a few
+//   large prints), --scene-warp=36 times faster than the clock (each trade stamped on the scene's own clock from the
+//   moment it started, so bars and times read as a real market's), after --scene-delay=1500 ms. With --test-controls,
+//   GET /test/scene says how far it got ({ started, sent, total, done }). Sample data, never market data.
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -119,6 +124,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { OrderDesk } from './fake-orders.mjs';
 import { PinLock, HEADER as PIN_HEADER } from './fake-pin.mjs';
+import { signalScene } from './signals-scene.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
@@ -129,6 +135,7 @@ const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
 const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
+const SCENE = flagValue('scene'), SCENE_WARP = +flagValue('scene-warp') || 36, SCENE_DELAY = flagValue('scene-delay') === '' ? 1500 : +flagValue('scene-delay');
 const PIN_OFF = !!flag('pin-off');
 const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
 const DATA_037 = !!flag('data-037');
@@ -529,6 +536,7 @@ function subscribe(c, m) {
     }
     send(c, { type: 'ready', root: r });
     c.ready = true;
+    sceneReady(r);
   };
   if (LOAD_DELAY_MS) setTimeout(finish, LOAD_DELAY_MS); else finish();   // --load-delay-ms: NinjaTrader's tick request taking that long
 }
@@ -552,7 +560,7 @@ function subscribeTape(c, m, r) {
     const end = k.n;
     if (from !== null) sendTicks(from, end);
     if (c.profile) send(c, tag(profileMsg(r, end)));
-    send(c, tag({ type: 'ready', root: r })); c.ready = true;
+    send(c, tag({ type: 'ready', root: r })); c.ready = true; sceneReady(r);
   };
   if (!(hours > 0)) { finish(null); return; }       // a minute chart: no trades
   if (!liveFirstOn && m.liveFirst !== true) { finish(k.at(etNow() - hours * 3600)); return; }   // an old bridge: the full load
@@ -589,9 +597,33 @@ function trade(r, p) {
   if (DATA_037) htfTrade(r, msg.t, p, msg.v);   // the forming 4h, 1D and 1W bars follow the trades
   desk.tick(r, p);                        // the matching engine sees every trade
 }
+/* --scene=signals: the scripted MNQ tape (see the header), replayed once from the first page that is live on MNQ. */
+const scene = { started: false, sent: 0, total: 0, done: false, t0: 0 };
+function sceneReady(r) {
+  if (SCENE !== 'signals' || r !== 'MNQ' || scene.started) return;
+  scene.started = true; held.MNQ = true;                 // the random walk stops; only the scene trades MNQ from here
+  setTimeout(() => {
+    const t0 = +(etNow() + 0.2).toFixed(3), list = signalScene({ t0, p0: last.MNQ, tick: INSTR.MNQ.tick }), wall0 = Date.now();
+    scene.total = list.length; scene.t0 = t0;
+    const timer = setInterval(() => {
+      const upTo = t0 + (Date.now() - wall0) / 1000 * SCENE_WARP;
+      while (scene.sent < list.length && list[scene.sent][0] <= upTo) { const [t, p, v, sd] = list[scene.sent++]; sceneTrade('MNQ', t, p, v, sd); }
+      if (scene.sent >= list.length) { scene.done = true; clearInterval(timer); }
+    }, 10);
+  }, SCENE_DELAY);
+}
+function sceneTrade(r, t, p, v, sd) {
+  last[r] = p; lastSide[r] = sd;
+  const now = Date.now();
+  const msg = { type: 'tick', root: r, t, u: now + CLOCK_OFFSET * 1000 - 25, rx: now + PC_CLOCK_OFFSET * 1000, p, v };
+  if (SIDES) { msg.s = sd; msg.sm = 2; }
+  if (LIVE_FIRST) { const k = tapes[r]; if (k.n && msg.t < k.t[k.n - 1]) msg.t = k.t[k.n - 1]; k.push(msg.t, p, v, sd, 2); }
+  for (const c of clients) if (c.ready && c.root === r) send(c, msg);
+  desk.tick(r, p);
+}
 if (!LIVE_RATE) setInterval(() => {
   if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
-  for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
+  for (const r of Object.keys(INSTR)) if (!(scene.started && r === 'MNQ')) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 else {
   // --live-rate: a busy market. Every 10 ms a Poisson number of trades; mostly 0 or 1 tick apart, and a fast jump of
@@ -603,7 +635,7 @@ else {
   setInterval(() => {
     const burst = ((Date.now() - t0) % 10000) < 1500 ? 3 : 1;
     for (const r of Object.keys(INSTR)) {
-      if (held[r] || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
+      if (held[r] || (scene.started && r === 'MNQ') || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
       const n = poisson(LIVE_RATE * burst / 100);
       for (let k = 0; k < n; k++) {
         const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
@@ -661,6 +693,7 @@ const server = http.createServer((req, res) => {
       for (const x of Object.values(books)) if (x.window && !x.gapAsked) { x.window = null; x.gapAsked = true; }   // asked again once (ChartBridge: at most once in 10 minutes)
       for (const c of clients) if (c.ready && c.profile && tapes[c.root]) { send(c, profileMsg(c.root, tapes[c.root].n)); books[c.root].pushed++; }
     }
+    else if (p === '/test/scene') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(scene)); }
     else if (p === '/test/tape') {
       const k = tapes[r], from = k ? k.at(+q.get('from') || 0) : 0;
       res.writeHead(200, { 'Content-Type': 'application/json' });

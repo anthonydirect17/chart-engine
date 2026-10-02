@@ -106,7 +106,7 @@ try {
   if (await page.evaluate(() => document.activeElement.id) !== 'indQ') fail('focus not on the search box when the menu opens');
   const onRows = await page.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id));
   if (JSON.stringify(onRows) !== JSON.stringify(['volume', 'vwap', 'levels', 'ib', 'delta', 'fills'])) fail('On this chart rows: ' + JSON.stringify(onRows));
-  if (await page.$$eval('#indBody .ind-cat', els => els.map(e => e.textContent.replace(/\d+$/, '').trim()).join(',')) !== 'Price,Volume,Trades') fail('groups');
+  if (await page.$$eval('#indBody .ind-cat', els => els.map(e => e.textContent.replace(/\d+$/, '').trim()).join(',')) !== 'Price,Volume,Trades,Signals') fail('groups');   // Signals: the absorption bars (G1c)
   if (!/Coming: time and sales/.test(await page.textContent('#indBody'))) fail('coming line missing');
   // search: short names, then Enter acts on the first match
   await page.keyboard.type('pdh');
