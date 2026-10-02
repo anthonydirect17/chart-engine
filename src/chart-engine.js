@@ -1334,7 +1334,7 @@ function create(container, options) {
   const bubbleR = b => clamp(BUBBLE_R0 * Math.pow(Math.max(1, b.v / (b.f > 0 ? b.f : 1)), 0.25), BUBBLE_R0, BUBBLE_RMAX) * bubbleZoom();
   let bubbleShown = [];                 // the bubbles of this frame, for their labels after the candles
   function drawBubbles(from, to) {
-    bubbleShown = [];
+    if (bubbleShown.length) bubbleShown = [];
     const list = signals && o.layers.bubbles && signals.bubbles ? signals.bubbles.list : null;
     if (!list || !list.length || to < from) return;
     const n = last(), t0 = bars[from].t, t1 = to < n ? bars[to + 1].t : Infinity;
