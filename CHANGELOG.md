@@ -4,9 +4,10 @@
 
 Page and engine only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); works with ChartBridge 0.3.2 and
 newer, no recompile (the signals need the trade sides of 0.3.4 and newer), no new page file. Run `nt8\install.ps1` again
-after pulling (the PC updater installs it by itself; the open pages say "Update ready: reload when flat"). Anthony's two NinjaScript indicators ported from the files he
-sent (`FROM_WORK_2026-10-01_LargeAbsorber.cs`, class AbsorptionTradeCombo, and `FROM_WORK_2026-10-01_DeltaD.cs`, class
-DeltaDivergenceSignal v1.0), with his rulings of 2026-10-01. Every signal counts from the page's opening only, from the
+after pulling (the PC updater installs it by itself; the open pages say "Update ready: reload when flat").
+Anthony's two NinjaScript indicators ported from the files he sent (`FROM_WORK_2026-10-01_LargeAbsorber.cs`, class
+AbsorptionTradeCombo, and `FROM_WORK_2026-10-01_DeltaD.cs`, class DeltaDivergenceSignal v1.0), with his rulings of
+2026-10-01. Every signal counts from the page's opening only, from the
 trades ChartBridge sides (an unknown side is left out). The motion, the live tick path, the bar builder, the candle and
 volume drawing order and the order code are unchanged; a trade costs O(1) more and a bar close one short step.
 
