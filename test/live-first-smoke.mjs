@@ -62,6 +62,7 @@ const control = (p, what, q) => fetch(`http://localhost:${p}/test/${what}?` + ne
 /* A context on the fake's clock, recording what the page sends and the profile messages it gets. */
 async function context(browser, offset, settings, ranges) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+  await ctx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await ctx.addInitScript(`(() => {
     const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000};
     try {

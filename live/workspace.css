@@ -152,7 +152,7 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .chart-live .tk-three .btn { font-size: 11px; white-space: nowrap; }
 .chart-live .tk-bar .bsave { flex: 1 1 auto; }
 .chart-live .tk-bar .bsave .oin.bname { flex: 1 1 auto; width: 0; }
-.chart-live .tk-state { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; }
+.chart-live .tk-state { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; min-height: 0; min-width: 0; }   /* nowrap: a wrapping column is as wide as its longest line (a long note), past the panel */
 .chart-live .tk-state > * { overflow-wrap: anywhere; }
 /* the position in the ticket's narrow column: the side tag and the average price, the P&L under them, large, at the left
    edge (so it never moves as the numbers change) */

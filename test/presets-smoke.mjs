@@ -60,6 +60,7 @@ const br = await startBridge(offset);
 const URL = `http://localhost:${br.port}/live/single.html`;
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+await ctx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
 await ctx.addInitScript(`(() => { const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000}; })();`);
 await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
 const live = p => p.waitForFunction(() => document.getElementById('connPill') && document.getElementById('connPill').textContent === 'LIVE', null, { timeout: 20000 }).then(() => p.waitForTimeout(600));
@@ -162,6 +163,7 @@ const contrastSweep = (p, grounds) => p.evaluate(grounds => {
 /* A fresh browser profile at `origin` with only `seed` in its storage, loaded and live. */
 async function freshPage(seed) {
   const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await c.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await c.addInitScript(`(() => { const realNow = Date.now; Date.now = () => realNow() + ${offset * 1000}; })();`);
   await c.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const p = await c.newPage();
@@ -237,7 +239,7 @@ try {
   check(px(ob.buy).g > px(ob.buy).r && px(ob.sell).r > px(ob.sell).g, 'Buy stays green, Sell red');
   await a.mouse.move(700, 600);
   await shot(a, 'presets-light-top-bar');
-  // Armed on the light bar: amber, readable, and it still arms and disarms the same way
+  // Armed on the light bar: deep red (1.13.0; amber before), readable, and it still arms and disarms the same way
   await a.click('#armBtn'); await a.waitForTimeout(150);
   ob = await obar(a);
   check((await a.getAttribute('#armBtn', 'aria-checked')) === 'true' && U.contrast(hexOf(ob.arm), hexOf(ob.armBg)) >= 4.5 && await a.isVisible('#armPill'),
