@@ -543,12 +543,16 @@ const core = TC.create({
   confirmNoStop: (root, go) => {
     if (forwarding) return false;
     askNoStop('The ' + root + ' order has no stop (the bracket stop is 0). Later orders with no stop go without asking until this window is loaded again.', go,
-      () => tnote('Not sent: no stop. Set the bracket stop, or send again and choose Send.', 'warn'));
+      () => tnote('Not sent: no stop. Set the bracket stop, or send again and choose Send.', 'warn'), { root });
     return true;
   },
   dropNoStop: () => dropNoStop(),
+  flattened: r => flattenedHere(r),
 });
 let forwarding = false;                               // acting on another window's forward (it asked its own questions)
+let noStopQ = null;                                   // the NO STOP question open in this window (askNoStop, below)
+const flatAt = { all: 0 };                            // the last Close or Flatten per instrument, Flatten all, any window
+const noteFlat = (r, at) => { if (r) flatAt[r] = Math.max(flatAt[r] || 0, at); else flatAt.all = Math.max(flatAt.all, at); };
 
 /* ---------------- this window's order connection: no subscribe, only sign-in and order messages */
 function tconnect() {
@@ -643,12 +647,14 @@ function forward(action) {
   /* NO STOP: the ticket's window has a stop of 0 and has not been told "Send" yet; an order that opens or adds is asked
      about here, where Anthony clicked, and goes with his answer (the ticket's window never asks for another window) */
   const hd = holder(), side = action.kind === 'place' ? action.side : action.kind === 'buy' || action.kind === 'sell' ? action.kind : '';
-  if (side && hd && hd.stop === 0 && !hd.noStopOk && !action.noStopOk) {
+  if (side && hd && hd.armed && hd.stop === 0 && !hd.noStopOk && !action.noStopOk) {
     const pos = core.TR.positions.get((hd.account || '') + '|' + (hd.root || ''));
     if (OT.opensPosition(side, pos && pos.qty, hd.qty)) {
-      // the answer goes with the instrument it was asked about: the ticket's window refuses it for another (F2 review)
+      /* the answer goes with the instrument and account it was asked about and the time it was asked: the ticket's
+         window refuses it for another, or after a Close or Flatten of that instrument since (F2 review, re-review) */
+      const asked = { root: hd.root, account: hd.account, askedAt: Date.now() };
       askNoStop('The ' + hd.root + ' order has no stop (the order ticket\'s bracket stop is 0). Later orders with no stop go without asking.',
-        () => forward(Object.assign({}, action, { noStopOk: true, root: hd.root })), () => { note('Not sent: no stop.', true); renderCharts(); });
+        () => forward(Object.assign({}, action, { noStopOk: true }, asked)), () => { note('Not sent: no stop.', true); renderCharts(); }, Object.assign({ fwd: true }, asked));
       return;
     }
   }
@@ -666,9 +672,14 @@ function actHere(a) {
   try {
     const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
     const otherRoot = !!a.root && a.root !== R && ['place', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
-    // asked in the window it came from, and Anthony said Send: only for the instrument he was asked about (F2 review)
-    if (a.noStopOk === true && !otherRoot) core.allowNoStop();
+    // asked in the window it came from, and Anthony said Send: only for the instrument and account he was asked about,
+    // and not when a Close or Flatten of it went out after he was asked (F2 review, re-review)
+    const otherAcct = a.noStopOk === true && !!a.account && a.account !== core.TR.account;
+    const stale = a.noStopOk === true && !(a.askedAt > Math.max(flatAt.all, flatAt[R] || 0));
+    if (a.noStopOk === true && !otherRoot && !otherAcct && !stale) core.allowNoStop();
     if (otherRoot) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
+    else if (otherAcct) tnote('Not sent: the order ticket is on ' + core.TR.account + ' now, not ' + a.account + '.', 'warn');
+    else if (stale) tnote('Not sent: a Close or Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
     else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
@@ -716,6 +727,8 @@ function linkChanged() {
   // another window's ticket: this window's orders go to its instrument and account (Close, Flatten all, the charts),
   // and keep doing so once no window has it (the last ticket's instrument, live-ticket-v1; the default account)
   const hd = holder();
+  // a question asked here for the ticket's window goes when the ticket is not as it was asked (F2 re-review)
+  if (noStopQ && noStopQ.fwd && (h || !hd || !hd.armed || hd.root !== noStopQ.root || hd.account !== noStopQ.account)) dropNoStop();
   if (!h && hd && W.ROOTS.includes(hd.root)) TK.root = hd.root;
   if (!h && hd && hd.account && hd.account !== core.TR.account && core.TR.accounts.includes(hd.account)) core.pickAccount(hd.account);
   if (!h && !hd) noTicketAccount();
@@ -1492,13 +1505,29 @@ function askName(title, value, done) {
    Close, the top bar's Flatten all and the hotkeys work while it is open (they close it: dropNoStop, its order not
    sent). Cancel has the focus, so Enter never sends an order with no stop; Escape is Cancel. One question at a time:
    a newer one replaces it (the older order is not sent). */
-let noStopQ = null;
-function askNoStop(text, onSend, onCancel) {
-  noStopQ = { onSend, onCancel };
-  $('wsNoStopText').textContent = text;
+/* it sits over the top bar from the left up to KEYS, so KEYS, Flatten all and the right side stay usable */
+function placeNoStop() { const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(); $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px'); }
+window.addEventListener('resize', () => { if (noStopQ) placeNoStop(); });
+function askNoStop(text, onSend, onCancel, bound) {
+  noStopQ = Object.assign({ onSend, onCancel }, bound || {});
+  $('wsNoStopText').textContent = text; $('wsNoStop').title = 'No stop: send anyway? ' + text;
+  placeNoStop();
   $('wsNoStop').hidden = false;
   $('wsNoStopCancel').focus();
 }
+/* A Close or Flatten (r) or Flatten all (null) in any window: every window drops its question for it, and the ticket's
+   window refuses an answer given before it (F2 re-review). Flatten itself never waits on this. */
+const flatChan = TL.browserChannel('chartbridge-noflat-v1');
+function flattenedHere(r) {
+  const at = Date.now();
+  noteFlat(r, at);
+  try { if (flatChan) flatChan.post({ t: 'flat', root: r || null, at }); } catch (e) { /* closed */ }
+}
+if (flatChan) flatChan.onmessage = m => {
+  if (!m || m.t !== 'flat' || !isFinite(m.at)) return;
+  noteFlat(m.root || null, +m.at);
+  if (noStopQ && (!m.root || !noStopQ.root || m.root === noStopQ.root)) dropNoStop();
+};
 function closeNoStopQ(how) {
   const q = noStopQ; noStopQ = null;
   if (document.activeElement && $('wsNoStop').contains(document.activeElement)) document.activeElement.blur();

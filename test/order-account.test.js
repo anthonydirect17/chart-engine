@@ -68,9 +68,9 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   // Flatten (the button and the Close hotkey, 1.11.0) and Flatten all: ready() first; Flatten all names TR.account then
   assert.match(CORE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.flattenHere\(\)\)\);/);
   // 1.13.0 (the F2 review): an open NO STOP question is closed first (dropNoStop sends nothing), then ready() as before
-  assert.match(CORE, /function flattenHere\(other\) \{\n\s+(dropNoStop\(\);\n\s+)?if \(!ready\(false\)\) return;/);
-  assert.match(CORE, /function flattenAll\(\) \{\n\s+(dropNoStop\(\);\n\s+)?if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
-  assert.match(CORE, /const dropNoStop = \(\) => \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \};/, 'dropNoStop only closes the question');
+  assert.match(CORE, /function flattenHere\(other\) \{\n\s+(dropNoStop\(\); flattened\(other \|\| root\(\)\);\n\s+)?if \(!ready\(false\)\) return;/);
+  assert.match(CORE, /function flattenAll\(\) \{\n\s+(dropNoStop\(\); flattened\(null\);\n\s+)?if \(!ready\(false\)\) return;\n\s+const account = TR\.account;/);
+  assert.match(CORE, /function dropNoStop\(\) \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \}/, 'dropNoStop only closes the question');
   // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
   assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
   assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);

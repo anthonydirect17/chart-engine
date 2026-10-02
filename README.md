@@ -446,12 +446,14 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   fill and travel with it (ChartBridge 0.3.8, see below).
 - **NO STOP** (1.13.0, Anthony): while the stop box is 0 a red NO STOP tag shows beside the bracket boxes. The first
   order with no stop after each page load (Buy MKT, Sell MKT, their hotkeys, a Shift+click or Ctrl+click on the chart)
-  asks "No stop: send anyway?" in a strip under the order bar, with **Send** and **Cancel** (Cancel has the focus, so
+  asks "No stop: send anyway?" in a strip over the top of the chart, with **Send** and **Cancel** (Cancel has the focus, so
   Enter does not send; Escape is Cancel). Cancel sends nothing; Send sends it, and nothing asks again until the page is
   loaded again. An order that reduces the position never asks, nor do Close, Flatten, Flatten all, B/E or a cancel; a
   reversal (Sell 3 while long 1) asks, since it opens a position (and, as before, goes with no bracket). The question
-  never blocks anything: Flatten, Close and Flatten all work while it is open and close it, its order not sent. In the
-  workspace the question shows under the top bar of the window you clicked or pressed the key in.
+  never blocks anything: Flatten, Close and Flatten all work while it is open and close it, its order not sent; Armed
+  going off or another instrument or account closes it too, and a Send is only for what was asked. In the workspace
+  the question shows over the top bar of the window you clicked or pressed the key in, and a Close or Flatten in any
+  window closes it.
 - **B/E** (1.10.0, next to Flatten, needs Armed): moves the stop of the open position to break-even, the average
   price rounded a tick toward safety (long up, short down). On only with a position on this account and instrument
   and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past

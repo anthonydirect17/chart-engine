@@ -321,8 +321,10 @@
 .chart-live .pill.armed { color: #FFE4EA; background: var(--crimson); border-color: var(--crimson-word); }
 /* NO STOP (1.13.0, Anthony): the stop box is 0; and the one question before the first order with no stop */
 .chart-live .nostop { display: inline-flex; align-items: center; font: 700 10px var(--cond); letter-spacing: .1em; color: var(--loss); border: 1px solid var(--loss); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
-/* the NO STOP question (F2 review): a strip in the page's flow under the order bar, like the ChartBridge alert, never a
-   modal overlay; it covers nothing, so the order bar and the hotkeys stay usable */
+/* the NO STOP question (F2 review): a strip over the top of the chart, in the ChartBridge alert's shape, never a modal
+   overlay and never in the page's flow (F2 re-review: the chart must not resize); the order bar, its Flatten and the
+   hotkeys stay usable */
+.chart-live .stage > .nostop-ask { position: absolute; z-index: 6; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; background: color-mix(in srgb, var(--loss) 14%, var(--s2)); box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
 .chart-live .nostop-ask[hidden] { display: none; }
 .chart-live .nostop-btns { display: flex; justify-content: flex-end; gap: 8px; flex: none; }
 .chart-live .nostop-send { color: var(--loss); border-color: var(--loss); font-weight: 600; }

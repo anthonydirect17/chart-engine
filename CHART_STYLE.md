@@ -454,10 +454,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   1 px ring and an 8 px shadow at 45%); no new color, no animation. 1.13.0: the Armed switch and the ticket's outline
   are deep red (the house crimson, Anthony); the chart borders stay purple with the glow, and the single chart page's
   chart takes the same purple glow (`--armed-ring`), only its order bar deep red.
-- **The NO STOP question (1.13.0)** is a strip in the page's flow, never a modal overlay: under the order bar on the
-  single chart page (the ChartBridge alert's shape, the loss red border and title), under the top bar in the workspace
-  (the `.ws-alert` shape). Cancel then Send, Send in the loss red; Cancel has the focus. It covers nothing, so the
-  order bar, the ticket and the top bar stay usable while it is open. The protection line's gap ("NO STOP on 1") is
+- **The NO STOP question (1.13.0)** takes no room and is never modal, so nothing resizes or scrolls: on the single
+  chart page a strip over the top centre of the chart (the ChartBridge alert's shape, the loss red border and title,
+  a shadow); in the workspace a strip over the top bar from the left up to KEYS, one line, the text cut short with
+  the whole of it in the tooltip (the `.ws-alert` shape). Cancel then Send, Send in the loss red; Cancel has the
+  focus. It covers no order control (the order bar, KEYS, Flatten all, the ticket). The protection line's gap ("NO STOP on 1") is
   the loss red of the NO STOP tag.
 - **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
   instrument and account; Armed (the crimson switch, the ticket outlined in `--crimson-word` while Armed, 1.13.0); Qty with "max N" and the

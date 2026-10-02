@@ -187,6 +187,38 @@ test('NO STOP: a reversal is asked as an entry and goes with no bracket; Close a
   assert.equal(asks.length, 1, 'long 1, sell 3: asked');
   asks[0]();
   assert.equal(sent.length, 1); assert.equal(sent[0].qty, 3); assert.equal(sent[0].bracket, undefined, 'the reversal goes with no bracket (1.12.0 rule)');
+  drops = 0;
   core.flattenHere(); core.flattenAll();
   assert.equal(drops, 2, 'Close and Flatten all each close an open question first');
+  core.setArmed(false);
+  assert.equal(drops, 3, 'Armed off closes it too');
+});
+
+test('NO STOP (the F2 re-review): an answer is for the instrument, account and Armed it was asked in; else nothing is sent', () => {
+  const store = new Map(), sent = [], notes = [], asks = []; let clock = 1000, R = 'MNQ';
+  const prefs = LP.create({ getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) });
+  const core = TC.create({ LP, prefs, fetch: () => new Promise(() => {}), send: m => sent.push(m), open: () => true, sock: () => 1, root: () => R, lastPrice: () => 100,
+    qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => 'Sim101', tick: () => 0.25, served: () => true, fmt: p => String(p), flash: (t, l) => notes.push(t),
+    later: () => 0, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {}, batch: () => {}, unsent: () => {}, destroyed: () => false, now: () => (clock += 500),
+    confirmNoStop: (root, go) => { asks.push(go); return true; } });
+  core.hello({ version: '0.3.8' });
+  core.applyTrading({ enabled: true, accounts: ['Sim101', 'Sim102'], maxQty: { MNQ: 5, NQ: 2 } }); core.setArmed(true);
+  core.sendOrder('buy', 'market', null);                       // asked for MNQ
+  R = 'NQ'; core.setArmed(false); core.setArmed(true);         // the instrument changed, armed again
+  asks[0]();
+  assert.equal(sent.length, 0, 'Send after the instrument changed: nothing');
+  assert.match(notes.pop(), /^Not sent: that question was for MNQ on Sim101/);
+  R = 'MNQ';
+  core.sendOrder('buy', 'market', null);
+  core.setArmed(false); core.setArmed(true);                   // Armed off and on again
+  asks[1]();
+  assert.equal(sent.length, 0, 'Send after Armed went off: nothing');
+  core.sendOrder('buy', 'market', null);
+  core.pickAccount('Sim102'); core.setArmed(true);             // another account
+  asks[2]();
+  assert.equal(sent.length, 0, 'Send after the account changed: nothing');
+  core.pickAccount('Sim101'); core.setArmed(true);
+  core.sendOrder('buy', 'market', null);
+  asks[3]();
+  assert.deepEqual(sent.map(m => m.type + ' ' + m.root), ['order MNQ'], 'as asked: it goes');
 });

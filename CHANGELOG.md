@@ -151,10 +151,16 @@ nor `test/fake-orders.mjs` or `test/fake-bridge.mjs`. The engine gets planned li
   Buy MKT, Sell MKT, their hotkeys and chart clicks. After Send nothing asks again until the page is loaded again. An
   order that reduces the position never asks (it takes no bracket); Close, Flatten, Flatten all, B/E and cancels are
   never asked.
-- **The question never blocks Close or Flatten.** It is a strip in the page's flow (under the order bar on
-  `/single.html`, under the top bar in the workspace), never a modal overlay, so it covers nothing. The Flatten button,
-  the ticket's Close, the top bar's Flatten all and the Close and Flatten all keys work while it is open: they act at
-  once and close the question, its order not sent.
+- **The question never blocks Close or Flatten.** It is a strip that takes no room and is never modal: over the top
+  of the chart on `/single.html`, over the left part of the top bar (up to KEYS) in the workspace. Nothing resizes or
+  scrolls when it shows, and it covers no order control. The Flatten button, the ticket's Close, the top bar's Flatten
+  all and the Close and Flatten all keys work while it is open: they act at once and close it, its order not sent. A
+  Close, Flatten or Flatten all in any window closes the question in every window for that instrument (every
+  instrument for Flatten all).
+- **An answer is for what was asked.** Armed going off, another instrument or account, or the ticket moving or being
+  released closes the question; a Send is checked against the instrument, the account and the arming it was asked in
+  and otherwise sends nothing, with a note. The ticket's window refuses an answer from another window given before
+  its last Close or Flatten of that instrument (a late message), and is not told "Send" by it.
 - **A reversal is asked as an entry** (long 1, Sell 3 opens short 2): with the stop at 0 it asks. The bracket rule is
   as in 1.12.0: an order that reduces or reverses the position goes with no bracket, so the opening part of a reversal
   has no stop whatever the bracket boxes say.
@@ -189,8 +195,10 @@ nor `test/fake-orders.mjs` or `test/fake-bridge.mjs`. The engine gets planned li
   the clicking window), deep red Armed, purple workspace borders, and screenshots at 1920x1080.
 - `npm run smoke:nostop` (new, the F2 review's probes): with the question open, the Close and Flatten all keys, the
   Flatten button, the ticket's Close and the top bar's Flatten all send at once on both pages and in a forwarding
-  window; the question covers nothing; Cancel has the focus (Enter sends nothing); a reversal is asked; a Buy
-  confirmed in another window is refused once the ticket is on another instrument.
+  window; the question covers no control and nothing resizes or scrolls (the ticket at 1366x768, 1920x1080 and
+  2560x1440); Cancel has the focus (Enter sends nothing); a reversal is asked; Armed off, another instrument and Armed
+  again, or a Close in the other window drops the question; an answer that reaches the ticket's window after a Close
+  (the drop missed) is refused.
 - `smoke:plan` also drags a planned stop while the entry's move waits for its answer (the change held back in the
   page) and checks the ticks sent are the chart's.
 - `test/plan.test.js` (new): the tick math and the drag rules (with `from`), the 200 cap by version, the protection
