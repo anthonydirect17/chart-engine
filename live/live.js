@@ -893,7 +893,7 @@ function hotkeyHandler(o) {
        combo types nothing there (Ctrl or Alt, or an F-key); never while the PIN pad asks */
     const urgent = (id === 'close' || id === 'flattenAll') && !document.querySelector('.cb-pin');
     const inBox = a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName));
-    const popBox = inBox && urgent && (e.ctrlKey || e.altKey || /^F([1-9]|1[0-9]|2[0-4])$/.test(e.key)) && !!a.closest('.ind-panel, .chip-pop, .ce-theme-panel, .set-panel, .more-menu, .ind-chip-list');
+    const popBox = inBox && urgent && (e.ctrlKey || e.altKey || /^F([1-9]|1[0-9]|2[0-4])$/.test(e.key)) && !!a.closest('.ind-panel, .chip-pop, .ce-theme-panel, .set-panel, .more-menu, .ind-chip-list, .ws-pop');
     if (inBox && !popBox) {
       // Close and Flatten all say why nothing happened (1.12.0, the 1.11.0 review); the box keeps the key
       if (urgent && !e.repeat && typeof o.ignored === 'function' && o.root.contains(a)) o.ignored(id);
