@@ -2045,7 +2045,7 @@ function start(container, opt, PAGE) {
     }
     D.ready = true;
     D.liveFrom = nowEt;
-    if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: nowMs() };
+    if (D.m1.last) lastSeen[D.root] = { p: D.m1.last.c, at: performance.now() };   // monotonic (review D2): a clock fix never ages it
     D.backfill = D.ticks.length;
     if (!K.started || K.root !== D.root) countStart();   // the count begins with this instrument's first load (round 5)
     rebuild();
@@ -2055,7 +2055,7 @@ function start(container, opt, PAGE) {
   }
 
   function onTick(m) {
-    if (m.root === D.root) lastSeen[m.root] = { p: m.p, at: nowMs() };   // ChartBridge holds live trades during a load: this is the price when it began
+    if (m.root === D.root) lastSeen[m.root] = { p: m.p, at: performance.now() };   // ChartBridge holds live trades during a load: this is the price when it began
     // the count takes every live trade of its instrument, also one that arrives while a later load of it is on its way
     const countDropped = K.started && m.root === K.root && countAdd(m);
     if (m.root !== D.root || !D.ready) return;
@@ -2351,7 +2351,7 @@ function start(container, opt, PAGE) {
   const lastPrice = () => {
     if (D.m1 && D.m1.last) return D.m1.last.c;
     const x = lastSeen[D.root];
-    return x && nowMs() - x.at < LAST_SEEN_MS ? x.p : null;
+    return x && performance.now() - x.at < LAST_SEEN_MS ? x.p : null;
   };
   const qtyNow = () => Number($('oQty').value === '' ? NaN : +$('oQty').value);
   const tickOf = root => (instruments[root] && instruments[root].tick) || (root === D.root ? D.tick : 0) || 0.25;

@@ -1318,13 +1318,15 @@ function create(container, options) {
       const b = bars[n], key = bars.length + '|' + b.h + '|' + b.l + '|' + b.c;
       if (key !== V.edgeKey) {                                   // a new trade (never a change made by hand)
         V.edgeKey = key;
-        if (!V.auto && V.follow && V.init && !drag && !pinch) {
+        if (!V.auto && V.follow && V.init && !drag && !od && !pinch) {
           const yh = yOf(Math.max(b.h, disp.h)), yl = yOf(Math.min(b.l, disp.l));
           if (yh < (o.fitTop || 0) + 12 || yl > plotH - 12) V.auto = true;
         }
       }
     }
-    if (V.auto) {
+    /* while an order is dragged the price scale holds still (review D2): no easing, no re-fit for a new order or trade,
+       so the line stays under the pointer and the price sent is the price drawn; after the drop it eases on as before */
+    if (V.auto && !od) {
       const t = autoTarget();
       if (t) {
         if (!V.init) { V.lo = t.lo; V.hi = t.hi; V.init = true; moving = true; }

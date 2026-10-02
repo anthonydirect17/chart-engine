@@ -493,11 +493,15 @@ function onDataRequest(c, m, text) {
   // weekProfile: the last 5 finished sample sessions, each bar's volume at its close (sample data, not a real profile)
   const tick = INSTR[m.root].tick, byDay = new Map();
   for (const b of data[m.root]) { const d = CE.util.tradeDay(b.t, 64800); if (!byDay.has(d)) byDay.set(d, new Map()); const rows = byDay.get(d), k = Math.round(b.c / tick); rows.set(k, (rows.get(k) || 0) + b.v); }
-  const today = CE.util.tradeDay(etNow(), 64800), days = [...byDay.keys()].filter(d => d < today).sort((a, b) => a - b).slice(-5);
+  // a fixed set (review D2): the 5 weekday sessions before today by the calendar, whatever hours the sample's window
+  // covers now; a session the sample has no minutes for takes the rows of the nearest one it has
+  const today = CE.util.tradeDay(etNow(), 64800), days = [], have = [...byDay.keys()].sort((a, b) => a - b);
+  for (let d = today - 1; days.length < 5 && have.length; d--) { const wd = new Date(d * 86400000).getUTCDay(); if (wd !== 0 && wd !== 6) days.unshift(d); }
+  const nearest = d => (byDay.has(d) ? d : have.reduce((x, y) => (Math.abs(y - d) < Math.abs(x - d) ? y : x), have[0]));
   const all = new Map(), sessions = days.map((d, i) => {
     const date = new Date(d * 86400000).toISOString().slice(0, 10);
     if (i === 1) return { date, missing: 'no table: ChartBridge was not running for this session, or its file is gone' };
-    const rows = [...byDay.get(d)].sort((a, b) => a[0] - b[0]);
+    const rows = [...byDay.get(nearest(d))].sort((a, b) => a[0] - b[0]);
     for (const [k, v] of rows) all.set(k, (all.get(k) || 0) + v);
     return { date, from: d * 86400 - 21600, whole: true, coveredFrom: d * 86400 - 21600, drop: null, rows };
   });

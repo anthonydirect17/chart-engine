@@ -234,15 +234,22 @@ test('the page\'s clock follows the PC\'s clock fixes (item 9): re-anchored when
   assert.strictEqual(LP.CLOCK_SLACK_MS, 50); assert.strictEqual(LP.CLOCK_EVERY_MS, 5000);
 });
 
-test('the ticket link\'s stamps read the page\'s clock when there is one', () => {
+test('the ticket link\'s stamps and its move deadline never read a stepped clock (review D2)', async () => {
   const TL = require('../live/ticket-link.js');
   const saved = global.self;
   try {
-    global.self = { ChartLivePageClock: { now: () => 42 } };
-    assert.strictEqual(TL.browserNow(), 42, 'the same clock as the local delay');
-    global.self = {};
-    assert.ok(Math.abs(TL.browserNow() - Date.now()) < 1000, 'no page clock (Node): the browser\'s own');
+    global.self = { ChartLivePageClock: { now: () => 42 } };            // a page clock re-anchored per window: not used
+    assert.ok(Math.abs(TL.browserNow() - Date.now()) < 50, 'cross-window stamps are Date.now()');
   } finally { if (saved === undefined) delete global.self; else global.self = saved; }
+  // move(): the deadline counts its own waits; a clock that jumps back 10 s does not keep it going
+  let t = 1e6, n = 0;
+  const timers = [];
+  const link = TL.create({ wid: 'A', channel: { post() {}, onmessage: null }, locks: { request: (name, o, fn) => Promise.resolve(fn(null)) },
+    now: () => (t -= 10000), setTimeout: (fn, ms) => { timers.push(fn); return timers.length; }, clearTimeout() {} });
+  const m = link.move();
+  for (let k = 0; k < 200 && timers.length; k++) { const f = timers.shift(); n++; f(); await new Promise(r => setImmediate(r)); }
+  assert.equal(await m, 'busy');
+  assert.ok(n >= 25 && n <= 35, 'about ' + TL.MOVE_MS + ' ms of 50 ms waits, whatever the clock did: ' + n + ' tries');
 });
 
 test('panels resize from any edge or corner: whole cells, the opposite edges stay put, at least 2 x 1, inside the grid', () => {
