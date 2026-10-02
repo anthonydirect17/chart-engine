@@ -863,12 +863,17 @@ function wire($, core, ui) {
     $('unsentText').textContent = n.text;
   }
   /* Position and other accounts in the bar (P&L refreshes with the status line). */
+  let posKey = null;                                   // what the state row shows now: it is written only when that changes
   function renderPositionInfo() {
     const el = $('oPos'), other = $('oOther'), legsEl = $('oLegs');
-    if (!TR.v2 || !TR.enabled) { el.textContent = ''; other.textContent = ''; legsEl.textContent = ''; return; }
+    if (!TR.v2 || !TR.enabled) { if (posKey !== '') { posKey = ''; el.textContent = ''; other.textContent = ''; legsEl.textContent = ''; } return; }
     const r = ui.root(), pos = TR.positions.get(TR.account + '|' + r), dp = ui.precision();
+    const last = pos && pos.qty ? ui.lastPrice() : null;
+    const key = [r, TR.account, pos ? pos.qty + '@' + pos.avgPrice : '', last, dp, ui.pointValue(r), TR.orders.size, [...TR.orders.values()].map(o => o.id + o.state + o.qty + o.filled + o.price).join(), [...TR.positions].map(([k, v]) => k + v.qty).join()].join('|');
+    if (key === posKey) return;
+    posKey = key;
     if (pos && pos.qty) {
-      const pnl = U.openPnl(pos.qty, pos.avgPrice, ui.lastPrice(), ui.pointValue(r));
+      const pnl = U.openPnl(pos.qty, pos.avgPrice, last, ui.pointValue(r));
       const cls = pnl.points > 0 ? 'profit' : pnl.points < 0 ? 'loss' : '';
       el.innerHTML = '';
       const side = document.createElement('span'); side.className = pos.qty > 0 ? 'long' : 'short'; side.textContent = (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty);

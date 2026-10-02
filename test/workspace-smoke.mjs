@@ -131,7 +131,7 @@ try {
   check(k.length === 3 && k.every(x => x.open), 'three WebSockets for six panels: one per instrument (' + k.map(x => x.subs.join('+')).join(', ') + ')');
   check((await allSockets(page)).filter(x => x.auth && x.open && !x.subs.length).length === 1, 'and one order connection for the window, which subscribes to nothing');
   check(subsOf('MNQ') === 1 && subsOf('NQ') === 1 && subsOf('ES') === 1, 'one subscribe per instrument (MNQ feeds two charts and the tape)');
-  check(s.feed.lines.find(l => l.root === 'MNQ').clients === 3, 'the MNQ connection feeds 3 panels');
+  check(s.feed.lines.find(l => l.root === 'MNQ').clients === 4, 'the MNQ connection feeds 3 panels and the order ticket\'s price (1.12.0)');
   await page.waitForTimeout(1500);
   const counts = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"] [id$="ticksSeen"]')].map(e => +e.textContent.replace(/\D/g, '')));
   check(counts.every(n => n > 0), 'every chart takes live trades from it (' + counts.join(', ') + ')');
@@ -244,7 +244,7 @@ try {
   const pre = await page.evaluate(() => [...document.querySelectorAll('#wsColors .ce-preset')].map(b => b.dataset.id));
   await page.click(`#wsColors .ce-preset[data-id="${pre[pre.length - 1]}"]`);
   await page.waitForTimeout(200);
-  const ups = await page.evaluate(() => [...document.querySelectorAll('.ws-body > .chart-live')].map(e => e.style.getPropertyValue('--up-text')));
+  const ups = await page.evaluate(() => [...document.querySelectorAll('.ws-body > .chart-live:not(.tk)')].map(e => e.style.getPropertyValue('--up-text')));
   check(ups.length === 4 && new Set(ups).size === 1 && ups[0] !== '', 'a preset picked there colors every chart at once (' + ups[0] + ')');
   await page.click('#wsColors .ce-reset');
   await page.keyboard.press('Escape');

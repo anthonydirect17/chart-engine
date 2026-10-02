@@ -36,6 +36,9 @@ export async function run({ browser, check, fail, shot, root, port }) {
       function Spy(url, p) { const sock = p === undefined ? new Real(url) : new Real(url, p); const rec = { sent: [], sock }; const send = sock.send.bind(sock); sock.send = d => { rec.sent.push(d); return send(d); }; S.sockets.push(rec); return sock; }
       Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
       window.WebSocket = Spy;
+      // every note the top bar shows (a later one can replace it before a check reads it)
+      window.__notes = [];
+      const iv = setInterval(() => { const el = document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__notes.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
       // a window that does not answer: its BroadcastChannel messages arrive __bcDelay ms late (0: as they come)
       const RealBC = window.BroadcastChannel;
       if (RealBC) window.BroadcastChannel = function (name) {
@@ -259,8 +262,7 @@ export async function run({ browser, check, fail, shot, root, port }) {
         await wait(450);
         await clickChart(B, mesB.id, X - 45 - i);
         await wait(700);
-        const n = await wnote(B);
-        if (/^Refused by ChartBridge/.test(n)) refused = n;
+        refused = (await B.evaluate(() => window.__notes.find(t => /^Refused by ChartBridge/.test(t)))) || '';
       }
       check(/^Refused by ChartBridge: .*MES/.test(refused), 'ChartBridge\'s refusal of an order sent for B\'s click shows in B: "' + refused + '"');
       await A.click('[data-tk-id="armBtn"]');
