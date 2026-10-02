@@ -58,8 +58,8 @@ nor `test/fake-orders.mjs` or `test/fake-bridge.mjs`. The engine gets planned li
   config warning staying, NO STOP and its one question on both pages (Flatten and Close never asked, the question in
   the clicking window), deep red Armed, purple workspace borders, and screenshots at 1920x1080.
 - `test/plan.test.js` (new): the tick math and the drag rules, the 200 cap by version, the protection line.
-- Expectations changed: `smoke:orders`, `smoke:hotkeys` and `smoke:workspace` answer Send to the one NO STOP question
-  (they place orders with no stop); `smoke:orders` reads the new protection line ("NO STOP on 1" in the warning color).
+- Expectations changed: `smoke:orders`, `smoke:hotkeys`, `smoke:workspace`, `smoke:pin`, `smoke:live-first` and
+  `smoke:presets` answer Send to the one NO STOP question (they place orders with no stop); `smoke:orders` reads the new protection line ("NO STOP on 1" in the warning color).
 
 ## 1.12.0 (2026-10-01): the workspace and its order ticket
 
