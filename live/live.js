@@ -499,9 +499,10 @@ function create(storage) {
     /** The bracket boxes' unit (1.10.0): 't' (ticks, the default) or 'pt' (points). */
     bracketUnit() { return raw.get(KEYS.bracketUnit) === 'pt' ? 'pt' : 't'; },
     setBracketUnit(u) { return raw.set(KEYS.bracketUnit, u === 'pt' ? 'pt' : 't'); },
-    /** Set one bracket field ('stop' or 'target', whole ticks 0 to 200) for one root; the other field is kept. */
+    /** Set one bracket field ('stop' or 'target', whole ticks 0 to 100000; the page caps what it sends by ChartBridge's
+        version, 200 before 0.3.7) for one root; the other field is kept. */
     setBracketField(root, field, ticks) {
-      if (!ROOTS.includes(root) || (field !== 'stop' && field !== 'target') || !Number.isInteger(ticks) || ticks < 0 || ticks > 200) return false;
+      if (!ROOTS.includes(root) || (field !== 'stop' && field !== 'target') || !Number.isInteger(ticks) || ticks < 0 || ticks > 100000) return false;
       const all = obj(KEYS.bracket);
       const cur = all[root] && typeof all[root] === 'object' && !Array.isArray(all[root]) ? all[root] : {};
       cur[field] = ticks; all[root] = cur;
@@ -708,7 +709,8 @@ function markup(p, o) {
       <span class="bsave" id="${p}bSaveBox" hidden><input class="oin bname" id="${p}bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" id="${p}bSaveOk">Save</button><button type="button" class="btn" id="${p}bSaveNo" aria-label="Do not save">x</button></span>
       <input class="oin" id="${p}bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
       <input class="oin" id="${p}bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
-      <span class="seg sans bunit" id="${p}bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span></span>
+      <span class="seg sans bunit" id="${p}bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
+      <span class="nostop" id="${p}bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></span>
     <span class="ofield">
       <button type="button" class="btn" id="${p}flattenBtn" title="Cancel every working order on this account and instrument, then close the position at market">Flatten</button>
       <button type="button" class="btn" id="${p}beBtn" title="Move the stop to break-even">B/E</button>
@@ -716,6 +718,10 @@ function markup(p, o) {
     </span>
     <span class="ostate"><span class="oinfo" id="${p}oPos"></span><span class="oinfo olegs" id="${p}oLegs"></span><span class="oinfo dim oother" id="${p}oOther"></span><span class="oinfo acct-note" id="${p}oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" id="${p}oCancel" role="status"></span><span class="ooff" id="${p}oOff"></span></span>
   </section></div>
+  <div class="nostop-ask" id="${p}noStopAsk" role="alertdialog" aria-modal="true" aria-labelledby="${p}noStopTitle" aria-describedby="${p}noStopText" hidden>
+    <div class="nostop-card"><b id="${p}noStopTitle">No stop: send anyway?</b><span id="${p}noStopText"></span>
+      <span class="nostop-btns"><button type="button" class="btn" id="${p}noStopCancel">Cancel</button><button type="button" class="btn nostop-send" id="${p}noStopSend">Send</button></span></div>
+  </div>
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
   /* Settings (1.11.0): the trading hotkeys. Only on the trading page; a mounted chart has none. */
@@ -1965,6 +1971,7 @@ function start(container, opt, PAGE) {
     lost: was => { if (was) lastOrderAccount = was; clearAccountNote(); },   // it named an account and "Armed is off" (review S2)
     syncAccounts: () => syncAccounts(), batch: () => { if (BAR) BAR.renderBatch(); }, unsent: () => { if (BAR) BAR.renderUnsent(); },
     positionChanged: () => applyMarkers(),
+    confirmNoStop: (root, go) => askNoStop(root, go),
   });
   const TR = T ? T.TR : { v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false, armed: false, account: '', orders: new Map(), positions: new Map() };
   /* A host's chart (ChartLive.mount's `trade`, the workspace): the host says what to show (its order account's working
@@ -2060,6 +2067,27 @@ function start(container, opt, PAGE) {
     host.addEventListener('pointercancel', up, true);
   }
 
+  /* NO STOP (1.13.0, Anthony): the first order with no stop after the page loads asks here, in the page; Send sends it
+     (and no later one asks), Cancel or Escape sends nothing. */
+  let noStopGo = null;
+  function askNoStop(root, go) {
+    noStopGo = go;
+    $('noStopText').textContent = 'The ' + root + ' order has no stop (the bracket stop is 0). Send it anyway? Later orders with no stop go without asking until the page is loaded again.';
+    $('noStopAsk').hidden = false;
+    $('noStopCancel').focus();
+    return true;
+  }
+  function closeNoStop(send) {
+    const go = noStopGo; noStopGo = null;
+    if (document.activeElement && $('noStopAsk').contains(document.activeElement)) document.activeElement.blur();
+    $('noStopAsk').hidden = true;
+    if (send && go) go();
+  }
+  if (TRADING) {
+    $('noStopSend').addEventListener('click', () => closeNoStop(true));
+    $('noStopCancel').addEventListener('click', () => { closeNoStop(false); flash('Not sent: no stop. Set the bracket stop, or send again and choose Send.', 'warn'); });
+    listen(document, 'keydown', e => { if (e.key === 'Escape' && !$('noStopAsk').hidden) { e.preventDefault(); closeNoStop(false); flash('Not sent: no stop.', 'warn'); } });
+  }
   /* setArmed's page part: the switch, the bar, the chart's border and ARMED pill, order editing on the chart. */
   function armedUi(v) {
     const btn = $('armBtn');
@@ -2081,7 +2109,7 @@ function start(container, opt, PAGE) {
     if (PAGE) document.title = on && TR.account ? (TR.armed ? 'ARMED · ' : '') + root + ' · ' + TR.account + (TR.armed ? '' : ' · Live Chart') : 'Live Chart';
     $('armPill').textContent = 'ARMED' + (TR.account ? ' · ' + TR.account : '');
     $('statusRo').textContent = on ? 'Trading through ChartBridge. Live CME data is for this screen only.' : 'Read only. Orders are placed in NinjaTrader. Live CME data is for this screen only.';
-    chart.setOrders(on ? T.working(TR.account, D.root) : []);
+    chart.setOrders(on ? T.chartOrders(TR.account, D.root) : []);   // with each resting entry's planned stop and target (0.3.8)
     const pos = on ? TR.positions.get(TR.account + '|' + root) : null;
     const inst = instruments[root] || {};
     chart.setPosition(pos && pos.qty ? pos : null, { pointValue: inst.pointValue || 0 });
@@ -2859,7 +2887,7 @@ function start(container, opt, PAGE) {
     listen(window, 'storage', e => { if (e.key === PREFIX + HKKEY) { readHotkeys(); renderHotkeys(); } });
     listen(document, 'keydown', hotkeyHandler({
       keys: () => HK, root: rootEl,
-      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),
+      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin') || !$('noStopAsk').hidden,
       actions: { buy: () => T.sendOrder('buy', 'market', null), sell: () => T.sendOrder('sell', 'market', null), be: T.breakEven, close: () => T.flattenHere(), flattenAll: T.flattenAll },
       ignored: () => flash(HOTKEY_IN_BOX, 'warn'),
     }));
@@ -2873,8 +2901,11 @@ function start(container, opt, PAGE) {
       T.sendOrder('buy', OT.placeKind('buy', e.price, lastPrice()), e.price);
     });
     setupSellClicks(price => T.sendOrder('sell', OT.placeKind('sell', price, lastPrice()), price));
-    chart.on('orderMove', e => T.moveOrder(e.id, e.price));
-    chart.on('orderCancel', e => T.cancelOrder(e.id));
+    /* a planned stop or target line (ids "o5:sl", "o5:tp", 0.3.8): its drag sets the distance, its x removes it, "+SL" /
+       "+TP" on the entry adds it */
+    chart.on('orderMove', e => (OT.planIdOf(e.id) ? T.planMove(e.id, e.price) : T.moveOrder(e.id, e.price)));
+    chart.on('orderCancel', e => (OT.planIdOf(e.id) ? T.planRemove(e.id) : T.cancelOrder(e.id)));
+    chart.on('orderPlanAdd', e => T.planAdd(e.id, e.which));
   } else if (HOST) {
     /* A host's chart (the workspace): the same mouse rules, handed to the host with this chart's instrument and the kind
        this chart's own price gives (a limit or a stop, as on the single chart page; null with no price yet). */
@@ -2888,6 +2919,7 @@ function start(container, opt, PAGE) {
     setupSellClicks(price => call(HOST.place, ['sell', price, D.root, kindAt('sell', price)]));
     chart.on('orderMove', e => { if (armedHere()) call(HOST.move, [e.id, e.price, D.root]); else renderHost(); });
     chart.on('orderCancel', e => { if (armedHere()) call(HOST.cancel, [e.id, D.root]); });
+    chart.on('orderPlanAdd', e => { if (armedHere() && typeof HOST.planAdd === 'function') call(HOST.planAdd, [e.id, e.which, D.root]); });
   }
 
   /* Anything typed but not yet saved is saved when the page is closed, reloaded or hidden, and on destroy(). */

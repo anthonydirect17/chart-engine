@@ -33,6 +33,9 @@
  *   batch(), unsent()    render the Cancel all line and the note of what was not sent
  *   positionChanged()    a position message (the host marks fills)
  *   armBlocked()         '' or why Armed cannot come on here (the workspace: only the ticket's window arms)
+ *   confirmNoStop(root, go)  1.13.0: the first order with no stop after a page load asks "No stop: send anyway?" in the
+ *                        page; the host shows its dialog and calls go() on Send (then false: nothing is asked again
+ *                        this page load). Returns false when it cannot ask here (a click forwarded from another window).
  *   destroyed()          the host went away
  *   prefs, LP            LivePrefs (the saved bracket, qty and presets) and its module
  *   pin, fetch, framed, framedReason, now
@@ -44,7 +47,7 @@
 'use strict';
 
 const OT = typeof self !== 'undefined' && self.OrderTicket ? self.OrderTicket : require('./order-ticket.js');
-const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten'];   // what ChartBridge counts, 10 a second at most
+const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan'];   // what ChartBridge counts, 10 a second at most (plan: 0.3.8)
 const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
 const RATE_REFUSAL = /order actions/i;
@@ -66,18 +69,22 @@ function create(env) {
   const PIN = env.pin || null;
 
   const TR = {
-    v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, signInStarted: false,
+    v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, maxBracketTicks: 0, version: '', signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
     account: '',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
   };
+  /* The bracket's cap (1.13.0): 200 ticks for ChartBridge before 0.3.7, none for 0.3.7 and newer unless config.txt sets
+     maxBracketTicks. Read as saved (up to OT.NO_CAP) and cut to the cap once ChartBridge says which it is. */
+  const cap = () => OT.bracketCap(TR.version, TR.maxBracketTicks);
   const brackets = {};
-  for (const r of ROOTS) brackets[r] = OT.cleanBracket(prefs.bracket(r));
+  for (const r of ROOTS) brackets[r] = OT.cleanBracket(prefs.bracket(r), OT.NO_CAP);
+  const recap = () => { for (const r of ROOTS) brackets[r] = OT.cleanBracket(brackets[r], cap()); };
   /* 1.10.0: the qty picked last per root (1 to 9), the bracket preset picked per root, and the bracket unit. */
   const qtys = {};
   for (const r of ROOTS) qtys[r] = prefs.qty(r);
-  const BK = { sel: {}, unit: prefs.bracketUnit(), presets: OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets)) };
+  const BK = { sel: {}, unit: prefs.bracketUnit(), presets: OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets), OT.NO_CAP) };
   for (const r of ROOTS) BK.sel[r] = prefs.bracketSel(r);
   const sameAction = OT.repeatGuard(400);
   let cidSeq = 0;
@@ -125,6 +132,8 @@ function create(env) {
     TR.reason = FRAMED ? FRAMED_REASON : t.enabled ? '' : (t.reason || 'Trading is not enabled in ChartBridge.');
     TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
     TR.maxQty = t.maxQty || {};
+    TR.maxBracketTicks = Number.isInteger(t.maxBracketTicks) && t.maxBracketTicks > 0 ? t.maxBracketTicks : 0;   // 0.3.7: only when config.txt sets it
+    recap();
     // a Cancel all under way stops for what ChartBridge would refuse: all of it while trading is off, and the orders of
     // an account no longer on its list (review 2 S1; they cannot be cancelled from the page then)
     if (!TR.enabled) batchStop(() => true, 'trading went off (' + TR.reason.replace(/\.$/, '') + ')');
@@ -156,7 +165,11 @@ function create(env) {
     env.changed();
   }
   /** ChartBridge's `hello`: protocol v2 carries `trading`; sign in. */
-  function hello(m) { if (m && m.trading) { applyTrading(m.trading); signIn(); } }
+  function hello(m) {
+    TR.version = m && typeof m.version === 'string' ? m.version : '';   // 0.3.7 and newer: no 200-tick cap on the page
+    recap();
+    if (m && m.trading) { applyTrading(m.trading); signIn(); }
+  }
   /** A message from ChartBridge about trading; true when it was one. */
   function message(m) {
     switch (m && m.type) {
@@ -183,18 +196,28 @@ function create(env) {
     if (env.pickerAccount() !== TR.account) { env.syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
-  function sendOrder(side, kind, price) {
+  /* NO STOP (1.13.0, Anthony): the first order after a page load that would open or add with no stop asks first, in the
+     page ("No stop: send anyway?"); after Send, the others of that page load go as before. Flatten, Close, Flatten all,
+     B/E and cancels never ask. `again` sends it once Anthony says Send. */
+  let noStopOk = false;
+  function allowNoStop() { noStopOk = true; }
+  function sendOrder(side, kind, price, again) {
     if (!ready()) return;
     const R = root();
     // a price order needs the last price to be a limit or a stop (OT.placeKind): until one is known, only market orders
     if (kind !== 'market' && !(lastPrice() > 0)) { flash('No price yet: nothing was sent. Market orders and Flatten work.', 'warn'); return; }
     const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), R);
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
+    const b = OT.cleanBracket(brackets[R], cap()), pos = TR.positions.get(TR.account + '|' + R);
+    const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
+    if (!reduces && !(b.stop > 0) && !noStopOk && typeof env.confirmNoStop === 'function') {
+      const go = again || (() => sendOrder(side, kind, price));
+      if (env.confirmNoStop(R, () => { noStopOk = true; go(); }) === false) flash('No stop on ' + R + ': nothing was sent. Set a stop, or send it from the order ticket\'s window to be asked.', 'warn');
+      return;
+    }
     if (!sameAction.call(null, [side, kind, price, qty].join('|'), now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
     const msg = { type: 'order', cid: newCid(), account: TR.account, root: R, side, kind, qty };
     if (kind !== 'market') msg.price = price;
-    const b = brackets[R], pos = TR.positions.get(TR.account + '|' + R);
-    const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
     if ((b.stop > 0 || b.target > 0) && !reduces) msg.bracket = { stop: b.stop, target: b.target };   // JSON numbers, 0 = none
     send(msg);
     sentCid = msg.cid;
@@ -220,7 +243,7 @@ function create(env) {
     if (!(last > 0)) { flash('Not sent: the order ticket has no recent ' + R + ' price to check the click against. Click again in a moment.', 'warn'); return ''; }
     const mine = OT.placeKind(side, price, last);
     if (mine !== kind) { flash('Not sent: the chart and the order ticket see ' + R + ' differently (the chart: ' + side.toUpperCase() + ' ' + (kind === 'limit' ? 'LMT' : 'STP') + ', the ticket: ' + (mine === 'limit' ? 'LMT' : 'STP') + ' by ' + fmt(last) + '). Click again.', 'warn'); return ''; }
-    sendOrder(side, kind, price);
+    sendOrder(side, kind, price, () => placeChecked(side, kind, price));
     return sentCid;
   }
 
@@ -558,6 +581,57 @@ function create(env) {
     flash('Cancelling order ' + id, '');
   }
 
+  /*
+   * Planned stop and target (ChartBridge 0.3.8, Anthony's ATM rule 2026-10-01): a resting entry's stop and target are
+   * ticks from its fill. Dragging a planned line sends `plan` with the new distance (whole ticks, at least 1); its x
+   * removes it (null); "+SL" / "+TP" on the entry adds it at the bracket's distance shown. The gates of a leg's drag:
+   * ready() (trading on, Armed, connected, the account shown), the order on that account, not in a Cancel all.
+   */
+  function planTarget(entryId) {
+    if (!ready()) { env.changed(); return null; }
+    if (notShown(entryId)) return null;
+    if (inCancelAll(entryId)) { env.changed(); flash('Not changed: order ' + entryId + ' is in the Cancel all under way, which cancels it.', 'warn'); return null; }
+    const o = TR.orders.get(entryId);
+    if (!o.planned) { env.changed(); flash('Not sent: order ' + entryId + ' has no planned stop and target (ChartBridge 0.3.8 or newer, a resting entry).', 'warn'); return null; }
+    return o;
+  }
+  const whichKey = w => (w === 'stop' ? 'stopTicks' : 'targetTicks'), whichName = w => (w === 'stop' ? 'stop' : 'target');
+  function sendPlan(o, which, ticks, said) {
+    send({ type: 'plan', cid: newCid(), id: o.id, [whichKey(which)]: ticks });
+    flash(said, '');
+  }
+  function planMove(planId, price) {
+    const p = OT.planIdOf(planId); if (!p) return;
+    const o = planTarget(p.entry); if (!o) return;
+    const r = OT.planDrag(o, p.which, price, tickOf(o.root));
+    if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
+    if (r.ticks > cap()) { env.changed(); flash('Not sent: ' + r.ticks + ' ticks is more than ChartBridge takes (' + cap() + ').', 'warn'); return; }
+    sendPlan(o, p.which, r.ticks, 'Planned ' + whichName(p.which) + ' of order ' + o.id + ': ' + r.ticks + ' ticks from the fill.');
+  }
+  function planRemove(planId) {
+    const p = OT.planIdOf(planId); if (!p) return;
+    const o = planTarget(p.entry); if (!o) return;
+    sendPlan(o, p.which, null, 'Removing the planned ' + whichName(p.which) + ' of order ' + o.id + '.');
+  }
+  function planAdd(entryId, which) {
+    if (which !== 'stop' && which !== 'target') return;
+    const o = planTarget(entryId); if (!o) return;
+    const t = OT.cleanBracket(brackets[o.root], cap())[which];
+    if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + o.root + ' is 0. Set it in the bracket boxes, then click +' + (which === 'stop' ? 'SL' : 'TP') + ' again.', 'warn'); return; }
+    sendPlan(o, which, t, 'Planned ' + whichName(which) + ' added to order ' + o.id + ': ' + t + ' ticks from the fill.');
+  }
+  /** What a chart of root r shows for one account: the working orders, each resting entry's planned lines (0.3.8), and on
+      an entry what can be added ("+SL", "+TP"). */
+  function chartOrders(account, r) {
+    const out = [];
+    for (const o of working(account, r)) {
+      const pl = OT.plannedLines(o, tickOf(r));
+      out.push(pl.adds.length && o.planned ? Object.assign({}, o, { adds: pl.adds }) : o);
+      for (const l of pl.lines) out.push(l);
+    }
+    return out;
+  }
+
   function setArmed(on) {
     const v = !!on && TR.enabled && !(on && env.armBlocked && env.armBlocked());
     TR.armed = v;
@@ -578,7 +652,7 @@ function create(env) {
   /* The preset picked for a root, as shown: a ratio or a saved preset only while the stop and target still match it. */
   function bracketSelShown(r) {
     const sel = BK.sel[r] || 'custom', br = brackets[r] || { stop: 0, target: 0 }, k = OT.ratioOf(sel);
-    if (k !== null) return OT.ratioBracket(br.stop, k).target === br.target ? sel : 'custom';
+    if (k !== null) return OT.ratioBracket(br.stop, k, cap()).target === br.target ? sel : 'custom';
     if (sel.startsWith('p:')) {
       const pr = BK.presets.find(x => x.name === sel.slice(2));
       return pr && pr.stop === br.stop && pr.target === br.target ? sel : 'custom';
@@ -589,10 +663,10 @@ function create(env) {
      and at once on Enter or leaving the box, where points round to the nearest tick. Each save writes one field. */
   const typedTicks = (text, r) => {
     const v = String(text).trim();
-    if (BK.unit === 't') return /^\d+$/.test(v) && +v <= OT.MAX_BRACKET_TICKS ? +v : null;
+    if (BK.unit === 't') return /^\d+$/.test(v) && +v <= cap() ? +v : null;
     if (!/^(\d+\.?\d*|\.\d+)$/.test(v)) return null;
     const t = +v / tickOf(r), n = Math.round(t);
-    return Math.abs(t - n) < 1e-6 && n <= OT.MAX_BRACKET_TICKS ? n : null;
+    return Math.abs(t - n) < 1e-6 && n <= cap() ? n : null;
   };
   const committedTicks = (text, r) => {
     const v = String(text).trim();
@@ -603,11 +677,11 @@ function create(env) {
      saved preset, makes it Custom. `now`: save at once (a commit), else after a pause (typing). */
   function setBracket(r, k, ticks, saveNow) {
     const sel = bracketSelShown(r), ratio = OT.ratioOf(sel);
-    brackets[r] = OT.cleanBracket(Object.assign({}, brackets[r], { [k]: ticks }));
+    brackets[r] = OT.cleanBracket(Object.assign({}, brackets[r], { [k]: ticks }), cap());
     const fields = [k];
     if (k === 'stop' && ratio !== null) {
-      const linked = OT.ratioBracket(brackets[r].stop, ratio);
-      if (Math.round(brackets[r].stop * ratio) > OT.MAX_BRACKET_TICKS) flash('Target capped at ' + OT.MAX_BRACKET_TICKS + ' ticks, the most ChartBridge takes.', 'warn');
+      const linked = OT.ratioBracket(brackets[r].stop, ratio, cap());
+      if (Math.round(brackets[r].stop * ratio) > cap()) flash('Target capped at ' + cap() + ' ticks, the most ChartBridge takes.', 'warn');
       brackets[r].target = linked.target; fields.push('target');
     } else if (sel !== 'custom') { BK.sel[r] = 'custom'; prefs.setBracketSel(r, 'custom'); }
     for (const f of fields) {
@@ -619,7 +693,7 @@ function create(env) {
   function setQty(r, v) { if (Number.isInteger(v) && v >= 1 && v <= OT.QTY_CHOICES) { qtys[r] = v; prefs.setQty(r, v); } }
   /* The preset select: a ratio sets the target from the stop; a saved preset sets both; Delete removes the saved preset
      shown. ('save' is the host's: it asks for a name, then savePreset.) */
-  const readPresets = () => { BK.presets = OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets)); };
+  const readPresets = () => { BK.presets = OT.cleanBracketPresets(prefs.raw.get(LP.KEYS.bracketPresets), OT.NO_CAP); };
   const pickSel = (r, v) => { BK.sel[r] = v; prefs.setBracketSel(r, v); };
   function pickPreset(r, v) {
     const shown = bracketSelShown(r);
@@ -633,14 +707,14 @@ function create(env) {
       const pr = BK.presets.find(x => x.name === v.slice(2));
       if (!pr) { flash('That bracket preset is gone (deleted in another window).', 'warn'); pickSel(r, 'custom'); }
       else {
-        brackets[r] = OT.cleanBracket(pr);
+        brackets[r] = OT.cleanBracket(pr, cap());
         for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(r, f, brackets[r][f]); }
         pickSel(r, v);
       }
     } else if (OT.ratioOf(v) !== null) {
       const k = OT.ratioOf(v);
-      if (Math.round(brackets[r].stop * k) > OT.MAX_BRACKET_TICKS) flash('Target capped at ' + OT.MAX_BRACKET_TICKS + ' ticks, the most ChartBridge takes.', 'warn');
-      brackets[r] = OT.ratioBracket(brackets[r].stop, k);          // the target follows the stop
+      if (Math.round(brackets[r].stop * k) > cap()) flash('Target capped at ' + cap() + ' ticks, the most ChartBridge takes.', 'warn');
+      brackets[r] = OT.ratioBracket(brackets[r].stop, k, cap());          // the target follows the stop
       for (const f of ['stop', 'target']) { bracketSaved[f].cancel(); prefs.setBracketField(r, f, brackets[r][f]); }
       pickSel(r, v);
     } else pickSel(r, 'custom');
@@ -654,7 +728,7 @@ function create(env) {
     const pr = { name, stop: br.stop, target: br.target };
     if (same >= 0) list[same] = pr; else list.push(pr);
     if (!prefs.raw.set(LP.KEYS.bracketPresets, list)) { flash('Not saved: this browser blocks site storage.', 'error'); return false; }
-    BK.presets = OT.cleanBracketPresets(list);
+    BK.presets = OT.cleanBracketPresets(list, OT.NO_CAP);
     pickSel(r, 'p:' + name);
     flash((same >= 0 ? 'Replaced' : 'Saved') + ' bracket preset ' + name + ': ' + br.stop + ' / ' + br.target + ' ticks.', '');
     return true;
@@ -664,7 +738,8 @@ function create(env) {
   const cancelBrackets = () => { bracketSaved.stop.cancel(); bracketSaved.target.cancel(); };
 
   return {
-    TR, brackets, qtys, BK, framed: FRAMED, framedReason: FRAMED_REASON, tradeMode,
+    TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
+    planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
@@ -819,12 +894,14 @@ function wire($, core, ui) {
     const br = brackets[r] || { stop: 0, target: 0 }, pt = BK.unit === 'pt', tick = ui.tick(r);
     for (const [id, k, what] of [['bStop', 'stop', 'stop'], ['bTarget', 'target', 'target']]) {
       const el = $(id);
-      el.step = pt ? String(tick) : '1'; el.max = pt ? String(OT.MAX_BRACKET_TICKS * tick) : String(OT.MAX_BRACKET_TICKS);
+      el.step = pt ? String(tick) : '1'; el.max = pt ? String(core.cap() * tick) : String(core.cap());
       if (force || document.activeElement !== el) el.value = core.fmtUnit(br[k], r);
       el.setAttribute('aria-label', 'Bracket ' + what + ' for ' + r + ' in ' + (pt ? 'points' : 'ticks') + ', 0 for none');
       el.title = (what === 'stop' ? 'Stop' : 'Target') + ', ' + (pt ? 'points' : 'ticks') + ' from the fill (0 = none)' + (pt ? ': ' + br[k] + ' ticks' : '');
     }
     for (const b of $('bUnit').children) b.setAttribute('aria-pressed', String(b.dataset.v === BK.unit));
+    const ns = $('bNoStop');                             // NO STOP (1.13.0, Anthony): the stop box is 0
+    if (ns && ns.hidden !== (br.stop > 0)) ns.hidden = br.stop > 0;
     const shown = core.bracketSelShown(r), sel = $('bPreset');
     const key = BK.presets.map(x => x.name + '|' + x.stop + '|' + x.target).join(',') + '#' + (shown.startsWith('p:') ? shown : '') + '#' + BK.unit + tick;
     if (key !== bpreKey) {

@@ -479,10 +479,10 @@ test('two tabs: a stop set in one and a target in the other both stick (review S
   assert.deepEqual(LP.create(s).bracket('MNQ'), { stop: 30, target: 80 });
 });
 
-test('setBracketField: whole ticks 0 to 200 for stop or target on a known root only', () => {
+test('setBracketField: whole ticks 0 to 100000 for stop or target on a known root only (1.13.0: the 200 cap is on the page, by the ChartBridge version)', () => {
   const s = mem(), p = LP.create(s);
   assert.equal(p.setBracketField('MNQ', 'stop', 40), true);
-  for (const [r, k, v] of [['XX', 'stop', 4], ['MNQ', 'size', 4], ['MNQ', 'stop', 201], ['MNQ', 'stop', -1], ['MNQ', 'stop', 4.5], ['MNQ', 'stop', '4']]) assert.equal(p.setBracketField(r, k, v), false, [r, k, v].join(' '));
+  for (const [r, k, v] of [['XX', 'stop', 4], ['MNQ', 'size', 4], ['MNQ', 'stop', 100001], ['MNQ', 'stop', -1], ['MNQ', 'stop', 4.5], ['MNQ', 'stop', '4']]) assert.equal(p.setBracketField(r, k, v), false, [r, k, v].join(' '));
   assert.deepEqual(p.bracket('MNQ'), { stop: 40 });
 });
 

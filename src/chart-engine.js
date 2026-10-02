@@ -69,6 +69,7 @@ const roundTo = (p, tick) => tick ? Math.round(p / tick) * tick : p;
 const KIND_ABBR = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL' };
 /** Short order label: "BUY LMT 2"; bracket legs read "SELL TGT 2" and "SELL STP 2". Qty is what is left to fill. */
 function orderLabel(ord) {
+  if (ord.plan) return (ord.plan.role === 'stop' ? 'SL plan -' : 'TP plan +') + Math.abs(ord.plan.ticks) + 't';   // 1.13.0: a planned stop or target
   const side = ord.side === 'sell' ? 'SELL' : 'BUY';
   const kind = ord.role === 'target' ? 'TGT' : ord.role === 'stop' ? 'STP' : (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase());
   const left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
@@ -919,9 +920,9 @@ function create(container, options) {
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
   // working orders and the position (1.3.0): shown always; moved, cancelled and placed only while editing is on
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
-  let od = null, xDown = null, orderHits = [];
+  let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], error: [], paneResize: [] };
+  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1014,10 +1015,17 @@ function create(container, options) {
     if (!orderEditing) return null;
     const inR = r => r && p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
     for (let k = orderHits.length - 1; k >= 0; k--) if (inR(orderHits[k].xbox)) return { id: orderHits[k].id, part: 'x' };
+    for (let k = orderHits.length - 1; k >= 0; k--) for (const a of orderHits[k].adds || []) if (inR(a.box)) return { id: orderHits[k].id, part: 'add', which: a.which };
     for (let k = orderHits.length - 1; k >= 0; k--) if (inR(orderHits[k].box) || inR(orderHits[k].tag)) return { id: orderHits[k].id, part: 'body' };
     return null;
   }
-  const orderPrice = ord => od && od.id === ord.id ? od.price : pendingMoves.has(ord.id) ? pendingMoves.get(ord.id) : ord.price;
+  const orderPrice = ord => {
+    if (od && od.id === ord.id) return od.price;
+    if (pendingMoves.has(ord.id)) return pendingMoves.get(ord.id);
+    // 1.13.0: a planned stop or target is ticks from its entry, so it travels with the entry while that is dragged
+    const parent = ord.plan ? orders.find(x => x.id === ord.plan.parent) : null;
+    return parent ? roundTo(orderPrice(parent) + ord.plan.offset * o.tick, o.tick) : ord.price;
+  };
   const cloneDrawing = d => JSON.parse(JSON.stringify(d));
   function drawingsChanged() { emit('drawings', drawings.map(cloneDrawing)); }
   function setToolInternal(t) { if (tool !== t) { tool = t; draft = null; emit('tool', tool); } dirty = true; }
@@ -1639,9 +1647,11 @@ function create(container, options) {
         ctx.beginPath(); ctx.moveTo(0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha = 1;
       };
-      const label = (y, parts, border, dash, alpha, closer) => {   // parts: [[text, color], ...]
+      const label = (y, parts, border, dash, alpha, closer, extras) => {   // parts: [[text, color], ...]; extras: [[which, text]] cells (1.13.0)
         const gap = 7, widths = parts.map(pt => ctx.measureText(pt[0]).width);
-        const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + (closer ? LH : 0);
+        const ex = (extras || []).map(e => ({ which: e[0], text: e[1], w: ctx.measureText(e[1]).width + 10 }));
+        const ew = ex.reduce((a, e) => a + e.w, 0);
+        const tw = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1) + 10, w = tw + ew + (closer ? LH : 0);
         const { x, top } = place(y, w);
         orderLabels.push(() => {
           ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
@@ -1650,8 +1660,13 @@ function create(container, options) {
           ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]);
           let cx = x + 5; ctx.textAlign = 'left';
           parts.forEach((pt, k) => { inkText(pt[0], cx, top + LH / 2 + 0.5, pt[1]); cx += widths[k] + gap; });
+          let ex0 = x + tw;
+          for (const e of ex) {                                     // an add cell ("+SL"): a divider, then its text
+            ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(ex0 + 0.5, top + 3); ctx.lineTo(ex0 + 0.5, top + LH - 3); ctx.stroke();
+            inkText(e.text, ex0 + 5, top + LH / 2 + 0.5, T.tagText); ex0 += e.w;
+          }
           if (closer) {                                             // close handle: a small x in its own cell
-            const bx = x + tw;
+            const bx = x + tw + ew;
             ctx.strokeStyle = border; ctx.beginPath(); ctx.moveTo(bx + 0.5, top + 3); ctx.lineTo(bx + 0.5, top + LH - 3); ctx.stroke();
             const mx = bx + LH / 2, my = top + LH / 2;
             ctx.strokeStyle = T.tagText; ctx.lineWidth = 1.5; ctx.beginPath();
@@ -1659,7 +1674,9 @@ function create(container, options) {
           }
           ctx.globalAlpha = 1;
         });
-        return { box: { x, y: top, w: tw, h: LH }, xbox: closer ? { x: x + tw, y: top, w: LH, h: LH } : null };
+        let ax = x + tw;
+        const adds = ex.map(e => { const b = { which: e.which, box: { x: ax, y: top, w: e.w, h: LH } }; ax += e.w; return b; });
+        return { box: { x, y: top, w: tw, h: LH }, xbox: closer ? { x: x + tw + ew, y: top, w: LH, h: LH } : null, adds };
       };
       // position: neutral line at the average price, open P&L in points and dollars
       if (position && position.qty) {
@@ -1677,11 +1694,24 @@ function create(container, options) {
       for (const ord of orders) {
         const price = orderPrice(ord), y = yOf(price);
         if (y < 0 || y > plotH) continue;
-        const col = ord.side === 'sell' ? T.short : T.long, stop = ord.kind === 'stop' || ord.kind === 'stopLimit', dash = stop ? [6, 4] : null;
-        const dragging = od && od.id === ord.id, alpha = pendingMoves.has(ord.id) && !dragging ? 0.55 : 1;
+        const col = ord.side === 'sell' ? T.short : T.long, stop = ord.kind === 'stop' || ord.kind === 'stopLimit';
+        const dragging = od && od.id === ord.id;
+        if (ord.plan) {                                            // a planned stop or target (1.13.0): fainter, finely dashed
+          const parent = orders.find(x => x.id === ord.plan.parent);
+          const ticks = parent ? Math.round(Math.abs(price - orderPrice(parent)) / o.tick) : Math.abs(ord.plan.ticks);
+          const alpha = pendingMoves.has(ord.id) && !dragging ? 0.4 : 0.7;
+          hline(y, col, [2, 4], 0.75 * alpha, dragging ? 1.5 : 1);
+          const hit = label(y, [[orderLabel({ plan: { role: ord.plan.role, ticks } }), col]], col, [2, 3], alpha, orderEditing);
+          orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
+          orderTags.push({ price, id: ord.id, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
+          continue;
+        }
+        const dash = stop ? [6, 4] : null;
+        const alpha = pendingMoves.has(ord.id) && !dragging ? 0.55 : 1;
         hline(y, col, dash, 0.9 * alpha, dragging ? 1.5 : 1);
-        const hit = label(y, [[orderLabel(ord), col]], col, dash ? [3, 2] : null, alpha, orderEditing);
-        orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox });
+        const extras = orderEditing && ord.adds && ord.adds.length ? ord.adds.map(w => [w, w === 'stop' ? '+SL' : '+TP']) : null;
+        const hit = label(y, [[orderLabel(ord), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras);
+        orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, adds: hit.adds });
         orderTags.push({ price, id: ord.id, style: stop ? { fill: T.bg, fg: col, border: col, dash: [3, 2] } : { fill: col, fg: readableOn(col), border: null } });
       }
       // Shift+click preview: what one click would place here
@@ -1846,7 +1876,7 @@ function create(container, options) {
   function setCursor(z, p) {
     if (od) { cv.style.cursor = 'ns-resize'; return; }
     if (dd && dd.mode !== 'draft') { cv.style.cursor = 'grabbing'; return; }
-    if (!drag && !tool && !draft && p && orderEditing) { const h = hitOrder(p); if (h) { cv.style.cursor = h.part === 'x' ? 'pointer' : 'ns-resize'; return; } }
+    if (!drag && !tool && !draft && p && orderEditing) { const h = hitOrder(p); if (h) { cv.style.cursor = h.part === 'x' || h.part === 'add' ? 'pointer' : 'ns-resize'; return; } }
     if (tool || draft) { cv.style.cursor = 'crosshair'; return; }
     if (!drag && p && z === 'plot' && drawings.length) { const h = hitDrawing(p); if (h) { cv.style.cursor = h.part === 'body' ? 'move' : 'pointer'; return; } }
     cv.style.cursor = drag ? (drag.zone === 'plot' || drag.zone === 'pane' ? 'grabbing' : drag.zone === 'price' ? 'ns-resize' : 'ew-resize') : z === 'price' ? 'ns-resize' : z === 'time' ? 'ew-resize' : 'crosshair';
@@ -1876,7 +1906,7 @@ function create(container, options) {
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, logS0: V.logS, i: indexAt((a.x + b.x) / 2) };
-      drag = null; dd = null; draft = null; od = null; xDown = null; V.follow = false; return;
+      drag = null; dd = null; draft = null; od = null; xDown = null; addDown = null; V.follow = false; return;
     }
     shiftHeld = !!e.shiftKey;
     const primary = e.button === 0 || e.button === undefined;
@@ -1885,6 +1915,7 @@ function create(container, options) {
     if (primary && orderEditing && !tool && !draft) {
       const oh = hitOrder(p);
       if (oh && oh.part === 'x') { xDown = oh.id; return; }
+      if (oh && oh.part === 'add') { addDown = { id: oh.id, which: oh.which }; return; }
       if (oh) {
         const ord = orders.find(x => x.id === oh.id);
         if (ord) { const p0 = orderPrice(ord); od = { id: ord.id, y0: p.y, price0: p0, price: p0, moved: false }; setCursor('plot', p); dirty = true; return; }
@@ -1966,6 +1997,11 @@ function create(container, options) {
     pointers.delete(e.pointerId);
     if (pinch) { if (pointers.size < 2) { pinch = null; setFollowFromPosition(); } return; }
     const cancelled = e.type === 'pointercancel';
+    if (addDown) {                                               // an add cell ("+SL", "+TP"): pressed and released on the same one
+      const h = cancelled ? null : hitOrder(local(e)), a = addDown; addDown = null;
+      if (h && h.part === 'add' && h.id === a.id && h.which === a.which && orderEditing) emit('orderPlanAdd', { id: a.id, which: a.which });
+      dirty = true; return;
+    }
     if (xDown !== null) {                                        // close handle: pressed and released on the same order
       const h = cancelled ? null : hitOrder(local(e)), id = xDown; xDown = null;
       if (h && h.part === 'x' && h.id === id && orderEditing) emit('orderCancel', { id });
@@ -2014,7 +2050,7 @@ function create(container, options) {
   function onKey(e) {
     const vis = plotW / V.spacing;
     if (e.key === 'Shift') { if (!shiftHeld) { shiftHeld = true; dirty = true; } return; }
-    if (e.key === 'Escape' && (od || xDown !== null)) { od = null; xDown = null; setCursor('plot'); e.preventDefault(); dirty = true; return; }   // revert the drag
+    if (e.key === 'Escape' && (od || xDown !== null || addDown)) { od = null; xDown = null; addDown = null; setCursor('plot'); e.preventDefault(); dirty = true; return; }   // revert the drag
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dist = vis * 0.2 * (e.key === 'ArrowLeft' ? -1 : 1);
       V.follow = false; V.kin = { v: dist / o.motion.friction };
@@ -2222,10 +2258,20 @@ function create(container, options) {
     /**
      * Working orders: [{ id, side: 'buy' | 'sell', kind: 'limit' | 'stop' | 'market', price, qty, filled, role }].
      * role 'stop' / 'target' marks bracket legs. Replaces the list and drops prices still waiting on a move.
+     * 1.13.0: `plan: { parent, offset, role, ticks }` marks a planned stop or target of a resting entry (`parent` its id,
+     * `offset` signed ticks from the entry's price, `role` 'stop' or 'target'): drawn fainter and finely dashed, labelled
+     * "SL plan -12t" / "TP plan +24t", it follows the entry while that is dragged and is dragged and closed like an
+     * order (orderMove, orderCancel with its own id). `adds: ['stop', 'target']` on an entry draws "+SL" / "+TP" cells on
+     * its label while editing; a click on one emits orderPlanAdd { id, which }.
      */
     setOrders(list) {
       orders = (list || []).filter(x => x && x.id !== undefined && isFinite(x.price) && x.price !== null)
-        .map(x => ({ id: x.id, side: x.side === 'sell' ? 'sell' : 'buy', kind: x.kind, price: +x.price, qty: +x.qty || 0, filled: +x.filled || 0, role: x.role || null }));
+        .map(x => {
+          const y = { id: x.id, side: x.side === 'sell' ? 'sell' : 'buy', kind: x.kind, price: +x.price, qty: +x.qty || 0, filled: +x.filled || 0, role: x.role || null };
+          if (x.plan && x.plan.parent !== undefined && isFinite(x.plan.offset)) y.plan = { parent: x.plan.parent, offset: Math.round(+x.plan.offset), role: x.plan.role === 'target' ? 'target' : 'stop', ticks: Math.abs(Math.round(+x.plan.offset)) };
+          if (Array.isArray(x.adds)) y.adds = x.adds.filter(w => w === 'stop' || w === 'target');
+          return y;
+        });
       pendingMoves.clear();
       if (od && !orders.some(x => x.id === od.id)) od = null;
       dirty = true;
@@ -2239,7 +2285,7 @@ function create(container, options) {
     },
     getPosition() { return position ? Object.assign({}, position) : null; },
     /** Order editing on: drag order labels to move, x to cancel, Shift+click to place. Off: orders are display only. */
-    setOrderEditing(on) { orderEditing = !!on; if (!orderEditing) { od = null; xDown = null; } dirty = true; },
+    setOrderEditing(on) { orderEditing = !!on; if (!orderEditing) { od = null; xDown = null; addDown = null; } dirty = true; },
     /** fn(price) -> { side, kind, qty, note } or null: what Shift+click would place, shown while Shift is held. */
     setOrderPreview(fn) { orderPreview = typeof fn === 'function' ? fn : null; dirty = true; },
     /** Where each order's label, close handle and axis tag were last drawn (CSS px in the chart), for tests and tooltips. */
