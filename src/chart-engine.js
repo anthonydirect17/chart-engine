@@ -270,8 +270,9 @@ const DEFAULT_THEME = {
   profit: '#3DDC97', loss: '#FF7A7A',    // trade result
   exit: '#F2F6FA', live: '#F2F6FA',
   drawing: '#D8CCFF',                    // trend lines and horizontal lines
-  // volume profile (1.6.0): rows a tint of the ground, value area a step stronger, POC in the value-level gold
-  vpRow: '#141C26', vpValue: '#212C3B', vpPoc: '#E0B45A',
+  // volume profile (1.6.0): rows a tint of the ground, value area a step stronger, POC in the value-level gold;
+  // 1.14.0 (Anthony: too dark on the dark ground) brighter: rows 1.31:1 on the ground, value area 1.74:1 (were 1.15, 1.40)
+  vpRow: '#1E2733', vpValue: '#2F3B4F', vpPoc: '#E0B45A',
   // chart signals (G1c, Anthony: his NinjaTrader cyan and yellow toned to the house palette, not pure #00FFFF and
   // #FFFF00): a softer cyan and a warm yellow for the absorption bars' bodies and the divergence arrows, each with a
   // slightly brighter shade for the 1 px outline (CHART_STYLE --sig-bull, --sig-bull-line, --sig-bear, --sig-bear-line)
@@ -308,7 +309,7 @@ const NEUTRAL_MIX = [
   ['rth', 0.025, 0], ['grid', 0.06, FLOOR.grid], ['axisLine', 0.09, 0], ['divider', 0.2, FLOOR.divider],
   ['cross', 0.4, FLOOR.cross], ['axisText', 0.57, FLOOR.text], ['axisTextStrong', 0.95, FLOOR.strong],
   ['tagFill', 0.07, 0], ['tagBorder', 0.2, FLOOR.divider], ['exit', 1, FLOOR.text], ['live', 1, FLOOR.text],
-  ['vpRow', 0.07, 0], ['vpValue', 0.14, 0],
+  ['vpRow', 0.1, 0], ['vpValue', 0.2, 0],
 ];
 
 /**
@@ -547,17 +548,21 @@ function levelColors(colors) {
   if (colors) for (const k of Object.keys(LEVEL_COLORS)) if (/^#[0-9a-f]{6}$/i.test(colors[k])) out[k] = colors[k].toUpperCase();
   return out;
 }
-/** sessionLevels() result -> level lines in the house style, or in `colors` ({ prior, overnight, value, close }). */
+/** sessionLevels() result -> level lines in the house style, or in `colors` ({ prior, overnight, value, close }). Each
+    line has a `key` (pdh, pdl, pc, onh, onl, vah, val, poc) so a page can switch it on or off. 1.14.0 (Anthony): the
+    prior day's value area is named "PD VAH" / "PD VAL", and its point of control "PD POC" is drawn too (the value-area
+    color, a dash-dot 8/3/2/3 no other level uses). */
+const PD_POC_DASH = [8, 3, 2, 3];
 function levelLines(lv, colors) {
   if (!lv) return [];
   const C = levelColors(colors);
   const L = [
-    ['PDH', lv.pdh, C.prior, [6, 4]], ['VAH', lv.vah, C.value, [3, 4]],
-    ['ONH', lv.onh, C.overnight, [6, 4]], ['Prior close', lv.pc, C.close, [2, 3]],
-    ['ONL', lv.onl, C.overnight, [6, 4]], ['VAL', lv.val, C.value, [3, 4]],
-    ['PDL', lv.pdl, C.prior, [6, 4]],
+    ['pdh', 'PDH', lv.pdh, C.prior, [6, 4]], ['vah', 'PD VAH', lv.vah, C.value, [3, 4]], ['poc', 'PD POC', lv.poc, C.value, PD_POC_DASH],
+    ['onh', 'ONH', lv.onh, C.overnight, [6, 4]], ['pc', 'Prior close', lv.pc, C.close, [2, 3]],
+    ['onl', 'ONL', lv.onl, C.overnight, [6, 4]], ['val', 'PD VAL', lv.val, C.value, [3, 4]],
+    ['pdl', 'PDL', lv.pdl, C.prior, [6, 4]],
   ];
-  return L.filter(x => x[1] !== null && x[1] !== undefined).map(([name, price, color, dash]) => ({ name, price, color, dash }));
+  return L.filter(x => x[2] !== null && x[2] !== undefined).map(([key, name, price, color, dash]) => ({ key, name, price, color, dash: dash.slice() }));
 }
 
 /* ---------------------------------------------------------------- initial balance (1.5.3) */
@@ -749,8 +754,8 @@ function ibLines(ib, colors) {
   if (!ib || ib.high === null || ib.low === null || (ib.state !== 'forming' && ib.state !== 'locked')) return [];
   const dash = ib.state === 'forming' ? IB_FORMING_DASH.slice() : [], C = levelColors(colors);
   return [
-    { name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
-    { name: 'IBL', price: ib.low, color: C.ibLow, dash, layer: 'ib', from: ib.start, tone: 'low' },
+    { key: 'ibh', name: 'IBH', price: ib.high, color: C.ibHigh, dash, layer: 'ib', from: ib.start, tone: 'high' },
+    { key: 'ibl', name: 'IBL', price: ib.low, color: C.ibLow, dash: dash.slice(), layer: 'ib', from: ib.start, tone: 'low' },
   ];
 }
 
@@ -897,6 +902,38 @@ function atr(bars, period, count) {
     else a = ((period - 1) * a + tr) / period;
   }
   return a;
+}
+/**
+ * The VWAP of 1-minute bars anchored at a time of day (1.14.0, the VWAP gear's "RTH only"): from `from` (09:30 ET) up to
+ * `to` (16:00 ET) each trading day, each bar's typical price (high + low + close) / 3 times its volume, as addSessionVwap
+ * works out the session's from 18:00 ET from bars. Returns { t, vw }: each bar's end time (t + barSeconds) and the VWAP as
+ * of that end, for the bars inside the window only (sorted). vwapAt(series, time) reads it at a time (null outside).
+ */
+function rthVwap(bars, opts) {
+  const o = Object.assign({ from: 34200, to: 57600, barSeconds: 60, sessionStart: 18 * 3600 }, opts || {});
+  const t = [], vw = [];
+  let day = null, pv = 0, vol = 0;
+  for (const b of bars || []) {
+    const s = tod(b.t);
+    if (s < o.from || s >= o.to) continue;
+    const d = tradeDay(b.t, o.sessionStart);
+    if (d !== day) { day = d; pv = 0; vol = 0; }
+    const v = b.v || 0; pv += (b.h + b.l + b.c) / 3 * v; vol += v;
+    t.push(b.t + o.barSeconds); vw.push(vol > 0 ? pv / vol : b.c);
+  }
+  return { t, vw, from: o.from, to: o.to, sessionStart: o.sessionStart };
+}
+/** The anchored VWAP of rthVwap() at `time` (a bar's end): the value of the last bar ending at or before it in the same
+    window of the same day, or null outside the window or before its first bar. */
+function vwapAt(series, time) {
+  const T = series.t;
+  let lo = 0, hi = T.length - 1, k = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (T[m] <= time + 1e-3) { k = m; lo = m + 1; } else hi = m - 1; }
+  if (k < 0) return null;
+  const end = time - 1e-3, s = tod(end);                                       // a millisecond before the bar's end
+  if (s < series.from || s >= series.to) return null;                         // outside RTH (a bar ending at 16:00 is in)
+  if (tradeDay(T[k] - 1e-3, series.sessionStart) !== tradeDay(end, series.sessionStart)) return null;
+  return series.vw[k];
 }
 /** A large-order bubble's radius in CSS px (1.14.0, Anthony from WORK: "bubble size must show the order size"): the area
     follows the size against the floor, so radius = 4.8 px x sqrt(size / floor): 4.8 px at the floor, 6.8 at twice it,
@@ -1305,10 +1342,35 @@ function create(container, options) {
     return moving;
   }
 
+  /* The developing POC, VAH and VAL of the profile on the chart (1.14.0, Anthony): solid lines across the plot (the prior
+     day's levels are dashed), the POC 1.5 px in its gold, the value area's edges 1 px in the secondary text color, each
+     named at the left of the profile ("dPOC", "dVAH", "dVAL", 600 10px Condensed). From the profile's columns, which it
+     keeps per version: nothing is walked per frame. */
+  function drawProfileLines() {
+    const c = profile.columns();
+    if (!c || c.max <= 0) return;
+    const xl = plotW * (1 - VP_WIDTH) - 6;
+    ctx.font = '600 10px ' + T.fontCond; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.setLineDash([]);
+    const one = (on, row, name, col, w) => {
+      if (!on || row === null || row === undefined || row < 0) return;
+      const price = c.low + row * c.step, y = crisp(yOf(price), w);
+      if (y < -2 || y > plotH + 2) return;
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.globalAlpha = 0.85; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke(); ctx.globalAlpha = 1;
+      ctx.fillStyle = col; ctx.fillText(name, xl, y - 2);
+    };
+    one(profLines.vah, c.vaHigh, 'dVAH', T.text2, 1);
+    one(profLines.val, c.vaLow, 'dVAL', T.text2, 1);
+    one(profLines.poc, c.poc, 'dPOC', T.vpPocText, 1.5);
+  }
+  let profLines = { poc: false, vah: false, val: false };
+  /* The VWAP drawn (1.14.0): each bar's own (the session's, from 18:00 ET), or the page's source (RTH only from 09:30 ET,
+     the VWAP gear), asked for the bars in view only. */
+  let vwapSrc = null;
+  const vwapOf = i => (vwapSrc ? vwapSrc(bars[i].t, i) : bars[i].vw);
   /* 1.14.0: the VWAP no longer sizes the chart, so it can be off the scale: then a marker at the plot's top or bottom
      right edge says where it is (a small triangle pointing to it and "VWAP 25,512.25" in its color on the legend ground). */
   function vwapEdge(i) {
-    const vw = i >= 0 && bars[i] ? bars[i].vw : null;
+    const vw = i >= 0 && bars[i] ? vwapOf(i) : null;
     if (vw === undefined || vw === null || !isFinite(vw) || (vw <= V.hi && vw >= V.lo)) return;
     const up = vw > V.hi, text = 'VWAP ' + fmtPrice(vw, o.precision);
     ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
@@ -1455,7 +1517,7 @@ function create(container, options) {
     if (!list || !list.length || to < from) return;
     const n = last(), t0 = bars[from].t, t1 = to < n ? bars[to + 1].t : Infinity;
     for (let k = firstAt(list, t0); k < list.length && list[k].t < t1; k++) {
-      const b = list[k], i = idxAtTime(b.t), y = yOf(b.p), r = bubbleR(b);
+      const b = list[k], i = idxAtTime(b.b !== undefined ? b.b : b.t), y = yOf(b.p), r = bubbleR(b);   // on its own bar (1.14.0)
       if (y < -r || y > plotH + r) continue;
       const s = bubblePool[bubbleN] || (bubblePool[bubbleN] = { b: null, x: 0, y: 0, r: 0 });
       s.b = b; s.x = xOf(i); s.y = y; s.r = r;
@@ -1793,12 +1855,14 @@ function create(container, options) {
       for (const g of groups) { ctx.fillStyle = g.color; ctx.fillText(g.names.join(' · '), plotW - 8, g.y - 3); }
     }
 
+    if (profile && o.layers.vp && (profLines.poc || profLines.vah || profLines.val)) drawProfileLines();
+
     // VWAP, broken at each session start
     if (o.layers.vwap && to > from) {
       ctx.strokeStyle = T.vwap; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.globalAlpha = 0.9;
       ctx.beginPath(); let pen = false;
       for (let i = from; i <= to; i++) {
-        const vw = bars[i].vw;
+        const vw = vwapOf(i);
         if (isSessionStart(i) || vw === undefined || vw === null) { pen = false; if (vw === undefined || vw === null) continue; }
         const x = xOf(i), y = yOf(vw);
         if (!pen) { ctx.moveTo(x, y); pen = true; } else ctx.lineTo(x, y);
@@ -2534,6 +2598,14 @@ function create(container, options) {
       if (V.follow && V.right === had) V.right = followRight();   // following: the new room at once, with no glide
       clampRight(); dirty = true;
     },
+    /** The developing POC, VAH and VAL lines of the profile (1.14.0): { poc, vah, val } booleans; only those given change. */
+    setProfileLines(v) { if (v) { profLines = { poc: v.poc !== undefined ? !!v.poc : profLines.poc, vah: v.vah !== undefined ? !!v.vah : profLines.vah, val: v.val !== undefined ? !!v.val : profLines.val }; dirty = true; } },
+    getProfileLines() { return Object.assign({}, profLines); },
+    /** The VWAP to draw instead of each bar's own (1.14.0): fn(barTime, index) -> price or null (no line there), or null
+        for the bars' own. The page calls it again (or redraw()) when its values change. */
+    setVwapSource(fn) { vwapSrc = typeof fn === 'function' ? fn : null; dirty = true; },
+    /** Draw the next frame (a page whose own data changed, such as the VWAP source's). */
+    redraw() { dirty = true; },
     /** px kept free at the top of the price scale (1.14.0: the page's legend sits there), eased in with the re-fit. */
     setFitTop(px) { const v = px > 0 && isFinite(px) ? +px : 0; if (v !== o.fitTop) { o.fitTop = v; dirty = true; } },
     /** The bubble under the mouse as the page was last told it ({ t, p, v, side, floor } or null). */
@@ -3359,19 +3431,25 @@ class LargePrints {
     this.autoFloor = f === null ? null : Math.max(2, f);
     this.autoAt = this.n + Math.max(1, Math.floor(this.n / 50));
   }
-  add(t, p, v, s) {
+  /* `barT` (1.14.0, Anthony's WORK screenshots): the start of the bar the print belongs to. A group never spans two bars:
+     a new bar closes it, as a change of side or the window's end does, and the bubble is placed on its bar (`b`), not by
+     its first print's time (a sweep that closed a range bar and opened the next within 100 ms put a bubble on the old
+     bar at the new bar's price). Without it, groups go by time and side alone, as before. */
+  add(t, p, v, s, barT) {
     if (typeof t !== 'number' || !isFinite(t) || (s !== 1 && s !== -1)) return;
+    const bar = typeof barT === 'number' && isFinite(barT) ? barT : undefined;
     const day = tradeDay(t, this.sessionStart);
     if (this.day !== day) { if (this.day !== null) { this._closeGroup(); this.hist = new Map(); this.n = 0; this.autoFloor = null; this.autoAt = 0; } this.day = day; }
     const vol = +v || 0;
     let g = this.g;
-    if (g && (g.side !== s || (t - g.t) * 1000 > this.windowMs)) { this._closeGroup(); g = null; }
-    if (!g) g = this.g = { t, side: s, v: 0, pv: 0, f: this.floor(t), item: null };
+    if (g && (g.side !== s || (t - g.t) * 1000 > this.windowMs || g.b !== bar)) { this._closeGroup(); g = null; }
+    if (!g) g = this.g = { t, side: s, v: 0, pv: 0, f: this.floor(t), item: null, b: bar };
     g.v += vol; g.pv += p * vol;
     if (g.v >= g.f) {
       const price = g.v > 0 ? Math.round(g.pv / g.v / this.tick) * this.tick : p;
       if (!g.item) {
         g.item = { t: g.t, p: price, v: g.v, side: s, f: g.f };
+        if (g.b !== undefined) g.item.b = g.b;
         this.list.push(g.item);
         // past the cap, the oldest tenth goes at once (not one splice per new bubble)
         if (this.list.length > this.max) this.list.splice(0, this.list.length - this.max + Math.ceil(this.max / 10));
@@ -3483,7 +3561,7 @@ return {
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
-    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX,
+    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,
   // chart signals (G1c)

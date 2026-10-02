@@ -296,3 +296,128 @@ test('the price scale keeps the legend free at the top (the high never under the
   const both = U.fitRange(100, 110, [90], H, tick, false, 60);
   assert.ok(Math.abs(yOf(both, 110) - 60) < 1e-9 && yOf(both, 90) < H, 'with orders (zoom to brackets) too');
 });
+
+test('bubbles: a group never straddles bars (Anthony, WORK 59.png: a bubble above a bar whose range did not hold it)', () => {
+  const lp = new CE.LargePrints({ floorAt: () => 10, tick: 0.25 });
+  // a fast sweep: a range bar closes at 100.04 s and the next opens; same side prints within 100 ms
+  lp.add(36000.00, 20000.00, 6, 1, 35990);                 // bar A (from 35990)
+  lp.add(36000.03, 20000.25, 6, 1, 35990);                 // still bar A: the group reaches the floor, 12 at 20000.25 vwap
+  lp.add(36000.05, 20010.00, 30, 1, 36000.04);             // bar B, 50 ms later: a new group, not merged into A's
+  assert.strictEqual(lp.list.length, 2, 'two bubbles, one per bar: ' + JSON.stringify(lp.list));
+  const [a, b] = lp.list;
+  assert.strictEqual(a.b, 35990, 'the first on bar A');
+  assert.ok(a.p >= 20000 && a.p <= 20000.25, 'at bar A\'s prices (' + a.p + ')');
+  assert.strictEqual(b.b, 36000.04, 'the second on bar B');
+  assert.strictEqual(b.p, 20010, 'at bar B\'s price');
+  // "one bar early" (60.png): the group's first print was the last of bar A, its size and price came in bar B; before
+  // the fix the bubble sat on A (its first print's time) at B's price
+  const e = new CE.LargePrints({ floorAt: () => 10, tick: 0.25 });
+  e.add(36000.00, 20000, 1, 1, 35990);                     // A's last print, alone under the floor
+  e.add(36000.04, 20005, 20, 1, 36000.04);                 // B's sweep, 40 ms later
+  assert.deepStrictEqual(e.list.map(x => [x.b, x.p]), [[36000.04, 20005]], 'on bar B, the bar it traded in, not one bar early');
+  // a time bar: a minute boundary splits a group too
+  const t = new CE.LargePrints({ floorAt: () => 5, tick: 0.25 });
+  t.add(36059.98, 20000, 6, -1, 36000); t.add(36060.02, 19990, 6, -1, 36060);
+  assert.deepStrictEqual(t.list.map(x => [x.b, x.p]), [[36000, 20000], [36060, 19990]], 'one bubble per minute bar');
+  // without a bar (an older caller): grouped by time and side as before
+  const o = new CE.LargePrints({ floorAt: () => 5, tick: 0.25 });
+  o.add(1, 100, 3, 1); o.add(1.05, 101, 3, 1);
+  assert.strictEqual(o.list.length, 1);
+});
+
+/* ---- batch 2 (Anthony, 2026-10-02) */
+const etT = (y, mo, d, h, mi) => Date.UTC(y, mo - 1, d, h, mi, 0) / 1000;   // New York wall clock stored as UTC, as the engine keeps it
+
+test('VWAP anchor: full session from 18:00 ET (the default), RTH only from 09:30 ET, each resetting at its own start', () => {
+  // one-minute bars from 17:58 on Monday to 16:02 on Tuesday, every 30 minutes plus the minutes around each anchor
+  const bars = [], add = (t, p, v) => bars.push({ t, o: p, h: p + 1, l: p - 1, c: p, v });
+  add(etT(2026, 9, 28, 16, 58), 50, 10);                                  // Monday's session, before the break
+  for (let m = 0; m <= 22 * 60; m += 30) add(etT(2026, 9, 28, 18, 0) + m * 60, 100 + (m >= 15.5 * 60 ? 20 : 0), 10);
+  add(etT(2026, 9, 29, 9, 29), 110, 10); add(etT(2026, 9, 29, 15, 59), 130, 10);
+  add(etT(2026, 9, 29, 18, 0), 140, 10);                                   // Wednesday's session starts
+  bars.sort((a, b) => a.t - b.t);
+  const full = U.addSessionVwap(bars.map(b => Object.assign({}, b)), 18 * 3600);
+  const at = t => full.find(b => b.t === t);
+  assert.equal(at(etT(2026, 9, 28, 16, 58)).vw, 50, 'Monday alone');
+  assert.equal(at(etT(2026, 9, 28, 18, 0)).vw, 100, 'reset at 18:00 ET');
+  assert.equal(at(etT(2026, 9, 29, 9, 0)).vw, 100, 'the overnight is in the full-session VWAP');
+  assert.ok(at(etT(2026, 9, 29, 15, 30)).vw > 100 && at(etT(2026, 9, 29, 15, 30)).vw < 120, 'and still weighs at 15:30');
+  assert.equal(at(etT(2026, 9, 29, 18, 0)).vw, 140, 'reset at the next 18:00');
+  const rth = U.rthVwap(bars, { sessionStart: 18 * 3600 });
+  const end = t => t + 60;                                                 // read at a bar's end, as the page does
+  assert.equal(U.vwapAt(rth, end(etT(2026, 9, 29, 9, 29))), null, 'nothing before 09:30');
+  assert.equal(U.vwapAt(rth, end(etT(2026, 9, 29, 9, 30))), 120, 'from 09:30 ET only: the first bar alone (the 09:29 one at 110 is not in)');
+  const r1530 = U.vwapAt(rth, end(etT(2026, 9, 29, 15, 30)));
+  assert.ok(r1530 > at(etT(2026, 9, 29, 15, 30)).vw, 'without the overnight, RTH only is nearer the late prices');
+  assert.ok(U.vwapAt(rth, end(etT(2026, 9, 29, 15, 59))) > r1530, 'the 15:59 bar (ending at 16:00) still in');
+  assert.equal(U.vwapAt(rth, end(etT(2026, 9, 29, 18, 0))), null, 'nothing after 16:00');
+  assert.equal(U.vwapAt(rth, end(etT(2026, 9, 28, 18, 0))), null, 'nor overnight');
+  // a bar between two series points reads the last one at or before it in the same day
+  assert.equal(U.vwapAt(rth, end(etT(2026, 9, 29, 9, 45))), 120);
+  // the gear: the full session by default, only the two values kept, per chart
+  const p = LP.create(memStorage());
+  assert.equal(p.indicatorOptions('main', 'vwap').session, 'full');
+  assert.equal(p.setIndicatorOption('pane-2', 'vwap', 'session', 'rth'), true);
+  assert.equal(p.indicatorOptions('pane-2', 'vwap').session, 'rth');
+  assert.equal(p.indicatorOptions('main', 'vwap').session, 'full', 'per chart');
+  assert.equal(p.setIndicatorOption('main', 'vwap', 'session', 'eth'), false);
+});
+
+test('Levels: each line its own toggle; the IB folded in (migrateIb) and old indicator presets kept', () => {
+  assert.deepEqual(LP.LEVEL_LINES.map(L => L.k), ['pdh', 'pdl', 'pc', 'onh', 'onl', 'vah', 'val', 'poc', 'ibh', 'ibl']);
+  assert.ok(!LP.INDICATORS.some(d => d.id === 'ib'), 'no IB indicator or chip of its own');
+  const p = LP.create(memStorage());
+  assert.ok(LP.LEVEL_LINES.every(L => p.indicatorOptions('main', 'levels')[L.k] === 'on'), 'every line on by default');
+  assert.equal(p.setIndicatorOption('main', 'levels', 'poc', 'off'), true);
+  assert.equal(p.indicatorOptions('main', 'levels').poc, 'off');
+  assert.equal(p.indicatorOptions('main', 'levels').pdh, 'on', 'the others unchanged');
+  assert.equal(p.setIndicatorOption('main', 'levels', 'poc', 'maybe'), false);
+  // migrateIb: IB shown and Levels shown: both IB lines on, the saved choices kept
+  const m1 = LP.migrateIb({ ind: { levels: { on: true, shown: true, pin: true }, ib: { on: true, shown: true, pin: true } }, recent: ['ib', 'vwap', 'levels'], restore: null }, { pdh: 'off' });
+  assert.deepEqual(m1.levels, { pdh: 'off', ibh: 'on', ibl: 'on' });
+  assert.ok(!('ib' in m1.pane.ind));
+  assert.deepEqual(m1.pane.recent, ['levels', 'vwap'], 'Recent names Levels once');
+  // IB shown, Levels off: Levels on with only the IB lines, pinned as the IB was
+  const m2 = LP.migrateIb({ ind: { levels: { on: false, shown: true, pin: false }, ib: { on: true, shown: true, pin: true } } }, null);
+  assert.deepEqual(m2.pane.ind.levels, { on: true, shown: true, pin: true });
+  assert.deepEqual(Object.entries(m2.levels).filter(([, v]) => v === 'on').map(([k]) => k), ['ibh', 'ibl']);
+  // IB hidden or off: its lines off, Levels as it was
+  for (const ib of [{ on: true, shown: false, pin: true }, { on: false, shown: true, pin: false }]) {
+    const m = LP.migrateIb({ ind: { levels: { on: true, shown: true, pin: true }, ib } }, { vah: 'on' });
+    assert.deepEqual(m.levels, { vah: 'on', ibh: 'off', ibl: 'off' });
+    assert.deepEqual(m.pane.ind.levels, { on: true, shown: true, pin: true });
+  }
+  assert.equal(LP.migrateIb({ ind: { levels: { on: true } } }, {}), null, 'nothing to carry over');
+  assert.equal(LP.migrateIb(null), null);
+  // through the store: a pane saved by 1.13 with the IB, read once, written back without it
+  const st = memStorage({ 'live-indicators-v2': JSON.stringify({ 'pane-2': { ind: { levels: { on: false, shown: true, pin: false }, ib: { on: true, shown: true, pin: true } }, recent: ['ib'] } }) });
+  const q = LP.create(st);
+  assert.equal(q.indicators('pane-2').levels, true);
+  assert.deepEqual([q.indicatorOptions('pane-2', 'levels').ibh, q.indicatorOptions('pane-2', 'levels').pdh], ['on', 'off']);
+  assert.ok(!('ib' in JSON.parse(st.getItem('live-indicators-v2'))['pane-2'].ind), 'written back without the IB');
+  // an indicator preset saved before 1.14.0 (no profile row colors) is kept, the IB colors with it (now in the Levels gear)
+  const old = { vwap: '#B69CFF', prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ibHigh: '#F7C6EC', ibLow: '#E58BD2', vpPoc: '#E0B45A',
+    sigBull: '#38DCE8', sigBullLine: '#9CF1F7', sigBear: '#F3D84A', sigBearLine: '#FFEC8F' };
+  const kept = LP.cleanPresets({ chart: [], indicator: [{ id: 'p1', name: 'Mine', colors: old }] }).indicator;
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].colors.ibHigh, '#F7C6EC');
+  assert.deepEqual([kept[0].colors.vpRow, kept[0].colors.vpValue], [CE.DEFAULT_THEME.vpRow.toUpperCase(), CE.DEFAULT_THEME.vpValue.toUpperCase()]);
+  assert.equal(LP.INDICATOR_COLORS.find(c => c.key === 'ibHigh').id, 'levels');
+  assert.deepEqual(LP.INDICATOR_COLORS.filter(c => c.id === 'vp').map(c => c.key), ['vpRow', 'vpValue', 'vpPoc'], 'the profile gear: rows, value area, POC');
+});
+
+test('chips: up to ten, the eleventh refused; the header text toggle saved per chart, on by default', () => {
+  assert.equal(LP.PIN_MAX, 10);
+  let st = LP.defaultPane('main');
+  for (const d of LP.INDICATORS) st = LP.Pane.add(st, d.id);
+  assert.ok(LP.Pane.pinned(st) <= 10);
+  const p = LP.create(memStorage());
+  assert.equal(p.legendShown('main'), true, 'on by default');
+  assert.equal(p.setLegendShown('pane-3', false), true);
+  assert.equal(p.legendShown('pane-3'), false);
+  assert.equal(p.legendShown('main'), true, 'per chart');
+  assert.equal(p.setLegendShown('pane-3', true), true);
+  assert.equal(p.legendShown('pane-3'), true);
+  assert.equal(p.setLegendShown('', false), false, 'a pane id is needed');
+  assert.equal(p.setLegendShown('__proto__', false), false);
+});

@@ -105,7 +105,7 @@ test('presets: the storage prefix keeps a host\'s presets apart from the page\'s
 
 test('indicator colors: the house defaults, set by hand one change at a time, and the old VWAP color carried over', () => {
   // the defaults are exactly the engine's house colors
-  assert.deepEqual(LP.IND_COLOR_KEYS, ['vwap', 'prior', 'overnight', 'value', 'close', 'ibHigh', 'ibLow', 'vpPoc', 'sigBull', 'sigBullLine', 'sigBear', 'sigBearLine']);
+  assert.deepEqual(LP.IND_COLOR_KEYS, ['vwap', 'prior', 'overnight', 'value', 'close', 'ibHigh', 'ibLow', 'vpRow', 'vpValue', 'vpPoc', 'sigBull', 'sigBullLine', 'sigBear', 'sigBearLine']);
   const def = LP.create(memStorage()).indicatorColors();
   assert.equal(def.vwap, CE.DEFAULT_THEME.vwap); assert.equal(def.vpPoc, CE.DEFAULT_THEME.vpPoc);
   for (const k of ['prior', 'overnight', 'value', 'close', 'ibHigh', 'ibLow']) assert.equal(def[k], CE.LEVEL_COLORS[k], k);
@@ -158,7 +158,7 @@ test('level and IB lines take the indicator colors; without them, the house colo
   assert.deepEqual(house.map(L => L.color), [CE.LEVEL_COLORS.prior, CE.LEVEL_COLORS.value, CE.LEVEL_COLORS.overnight, CE.LEVEL_COLORS.close,
     CE.LEVEL_COLORS.overnight, CE.LEVEL_COLORS.value, CE.LEVEL_COLORS.prior]);
   const mine = U.levelLines(lv, { prior: '#111111', overnight: '#222222', value: '#333333', close: '#444444', vwap: '#FFFFFF' });
-  assert.deepEqual(mine.map(L => [L.name, L.color]), [['PDH', '#111111'], ['VAH', '#333333'], ['ONH', '#222222'], ['Prior close', '#444444'], ['ONL', '#222222'], ['VAL', '#333333'], ['PDL', '#111111']]);
+  assert.deepEqual(mine.map(L => [L.name, L.color]), [['PDH', '#111111'], ['PD VAH', '#333333'], ['ONH', '#222222'], ['Prior close', '#444444'], ['ONL', '#222222'], ['PD VAL', '#333333'], ['PDL', '#111111']]);
   assert.deepEqual(U.levelLines(lv, { prior: 'red' }).map(L => L.color), house.map(L => L.color), 'a color that is not #RRGGBB is ignored');
   const ib = { state: 'locked', high: 102, low: 98, start: 1000 };
   assert.deepEqual(U.ibLines(ib).map(L => L.color), [CE.LEVEL_COLORS.ibHigh, CE.LEVEL_COLORS.ibLow]);

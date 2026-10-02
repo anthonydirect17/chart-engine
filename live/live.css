@@ -94,6 +94,11 @@
 .chart-live .ind-set-sw { width: 14px; height: 14px; flex: none; border-radius: 4px; background: var(--sw); border: 1px solid var(--line-strong); box-sizing: border-box; }
 .chart-live .ind-set-t { font: 500 11px var(--mono); color: var(--text); }
 .chart-live .ind-set-opt { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+/* the on / off switches of a gear's lines (1.14.0: Levels, the profile's developing lines), small toggles in a wrap */
+.chart-live .ind-togs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 100%; }
+.chart-live .ind-tog { height: 24px; padding: 0 8px; border-radius: 6px; background: transparent; border: 1px dashed var(--line-strong); color: var(--text3); font: 600 11px var(--mono); cursor: pointer; }
+.chart-live .ind-tog[aria-pressed="true"] { background: var(--s3); border-style: solid; color: var(--text); }
+.chart-live .ind-tog:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .chart-live .ind-opt { padding: 1px; flex: none; flex-wrap: nowrap; }
 .chart-live .ind-opt button { font-size: 11px; min-height: 24px; padding: 2px 8px; }
 .chart-live .ind-set-note { font-size: 11px; color: var(--text2); }
@@ -171,11 +176,19 @@
 .chart-live .ind-chip[aria-pressed="true"] { background: var(--s3); color: var(--text); border-style: solid; }
 .chart-live .ind-chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--sw); }
 .chart-live .ind-chip-l { display: none; }
-/* the page's strip (1.14.0, as the workspace's headers): 2-letter chips; room kept for six, so pinning never moves the
-   toolbar, and nothing scrolls or is cut */
-.chart-live .ind-chips.codes { gap: 4px; min-width: calc(6 * 46px + 5 * 4px); overflow: visible; }
+/* the page's strip (1.14.0, as the workspace's headers): 2-letter chips (up to 10 pinned) in the room the toolbar line
+   leaves; those that do not fit go behind a "+N" chip that opens a small list of them. Nothing scrolls, wraps or is cut,
+   and pinning never moves the toolbar. */
+.chart-live .ind-group.codes-group { flex: 1 1 0; min-width: 300px; }
+.chart-live .ind-chips.codes { flex: 1 1 0; min-width: 0; gap: 4px; overflow: hidden; }
 .chart-live .ind-chips.codes .ind-chip { padding: 0 9px; gap: 6px; }
 .chart-live .ind-chips.codes .ind-chip .sw { width: 9px; }
+.chart-live .ind-chips.codes .ind-chip-more { border-style: solid; color: var(--text2); }
+.chart-live .ind-chips.codes .ind-chip-more .sw { display: none; }
+.chart-live .ind-chips.codes .ind-chip-list { position: fixed; z-index: 60; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 6px; background: var(--panel, #0B1016); border: 1px solid var(--accent-border); border-radius: 8px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55); }
+.chart-live .ind-chips.codes .ind-chip-list[hidden] { display: none; }
+.chart-live .ind-chips.codes .ind-chip-list .ind-chip { justify-content: flex-start; }
+.chart-live .ind-chips.codes .ind-chip-list .ind-chip::after { content: attr(aria-label); font-family: var(--sans); font-weight: 500; letter-spacing: 0; color: var(--text2); margin-left: 4px; }
 .chart-live .ind-chips.is-narrow { gap: 4px; }
 .chart-live .ind-chips.is-narrow .ind-chip { width: 30px; padding: 0; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; letter-spacing: 0; }
 .chart-live .ind-chips.is-narrow .ind-chip .sw { height: 2px; order: 2; }   /* the letter over its line */
@@ -384,7 +397,7 @@
 .chart-live .legend [id$="connPill"] { pointer-events: auto; cursor: default; }
 
 @media (max-width: 720px) {
-  .chart-live .ind-chips.codes { min-width: 0; flex-wrap: wrap; }   /* a phone: narrower chips, on one line beside Indicators */
+  .chart-live .ind-group.codes-group { min-width: 0; flex-basis: 100%; }   /* a phone: Indicators and its chips on a line of their own, the rest behind "+N" */
   .chart-live .ind-chips.codes .ind-chip { padding: 0 6px; gap: 4px; }
   .chart-live .ind-chips.codes .ind-chip .sw { width: 7px; }
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
@@ -417,11 +430,34 @@
 .chart-live.compact .legend .lg2 > :nth-child(2) { order: 7; }
 .chart-live.compact .legend .lg2 > :nth-child(3) { order: 8; }
 .chart-live.compact .legend .lg2 > :nth-child(4) { order: 9; }
-.chart-live.compact .legend .lg2 > :nth-child(8) { order: 10; }
+.chart-live.compact .legend .lg2 > :nth-child(9) { order: 10; }
 .chart-live.compact .legend :is([id$="lgBar"], [id$="lgAtr"]) { order: 13; font-size: 11px; }
 .chart-live.compact .legend [id$="lgFill"] { order: 11; }
 .chart-live.compact .legend [id$="lgVp"] { order: 12; }
 .chart-live.compact .legend :is([id$="lgSrc"], [id$="connPill"], [id$="lgTime"]) { display: none; }
+.chart-live .legend .lg-br { display: none; }
+/* the header text off (1.14.0, Anthony): none at all, not even on hover */
+.chart-live.lg-off .legend { display: none !important; }
+.chart-live .lg-tog { min-width: 30px; padding-inline: 7px; font: 600 11px var(--sans); letter-spacing: .02em; }
+.chart-live .lg-tog[aria-pressed="false"] { color: var(--text3); border-style: dashed; text-decoration: line-through; }
+/* A short header (1.14.0, Anthony: a compact chart under 700 x 400 px): one quiet line (the name, bars, last price and
+   change, the indicators' values, whole items only); the bar's open, high, low and volume, the hovered bubble and the
+   readouts on a second line only while the crosshair is over the chart */
+.chart-live.compact.short .legend { max-height: 17px; }
+.chart-live.compact.short.lg-hover .legend { max-height: 35px; }
+.chart-live.compact.short .legend [id$="lgVwWrap"] { order: 5; }
+.chart-live.compact.short .legend [id$="lgDelta"] { order: 6; }
+.chart-live.compact.short .legend [id$="lgVp"] { order: 7; }
+.chart-live.compact.short .legend .lg-br { order: 8; flex-basis: 100%; height: 0; }
+.chart-live.compact.short .legend .lg2 > :nth-child(2) { order: 9; }
+.chart-live.compact.short .legend .lg2 > :nth-child(3) { order: 10; }
+.chart-live.compact.short .legend .lg2 > :nth-child(4) { order: 11; }
+.chart-live.compact.short .legend .lg2 > :nth-child(9) { order: 12; }
+.chart-live.compact.short .legend [id$="lgBub"] { order: 13; }
+.chart-live.compact.short .legend :is([id$="lgBar"], [id$="lgAtr"]) { order: 14; }
+.chart-live.compact.short .legend [id$="lgFill"] { order: 15; }
+.chart-live.compact.short:not(.lg-hover) .legend :is(.lg-br, .lg2 > :nth-child(2), .lg2 > :nth-child(3), .lg2 > :nth-child(4), .lg2 > :nth-child(9), [id$="lgBub"], [id$="lgBar"], [id$="lgAtr"], [id$="lgFill"]) { display: none; }
+.chart-live.compact.short.lg-hover .legend .lg-br { display: block; }
 .chart-live.compact > .status { display: none; }
 .chart-live.compact.has-note > .status { display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; min-width: 0; font: 400 11px var(--sans); color: var(--text3); }
 .chart-live.compact > .status > :not(.msg):not(.ibnote) { display: none; }

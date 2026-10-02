@@ -90,6 +90,9 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-head .ind-chip-list .ind-chip::after { content: attr(aria-label); font-family: var(--ws-sans); font-weight: 500; letter-spacing: 0; color: var(--ws-text2); margin-left: 4px; }
 .ws-caret { width: 5px; height: 5px; flex: none; border-right: 1.5px solid var(--ws-muted); border-bottom: 1.5px solid var(--ws-muted); transform: translateY(-2px) rotate(45deg); }
 .ws-head .ind { flex: none; }
+.ws-head .lg-tog { flex: none; min-height: 22px; height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; font-size: 10px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
+.ws-head .lg-tog:hover { background: var(--ws-field); color: var(--ws-text); }
+.ws-head .lg-tog[aria-pressed="false"] { color: var(--ws-muted); }
 .ws-head .ind-btn { min-height: 22px; height: 22px; padding: 0 8px; border-radius: 5px; gap: 6px; font-size: 12px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
 .ws-head .ind-btn:hover { background: var(--ws-field); color: var(--ws-text); }
 .ws-head .ind-panel { white-space: normal; cursor: auto; user-select: text; text-align: left; }
@@ -97,6 +100,9 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 /* narrow panels (a 1366 px screen): the header keeps the instrument, bars and buttons on one line. The classes come
    from workspace.js (a ResizeObserver): container queries made every chart frame slower (perf:workspace). */
 .ws-x, .ws-ic, .ws-head .ws-sel, .ws-head .ind { flex: none; }
+.ws-head .lg-tog { flex: none; min-height: 22px; height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; font-size: 10px; background: transparent; border-color: var(--ws-line2); color: var(--ws-text2); }
+.ws-head .lg-tog:hover { background: var(--ws-field); color: var(--ws-text); }
+.ws-head .lg-tog[aria-pressed="false"] { color: var(--ws-muted); }
 .ws-panel.narrow .ws-grip { display: none; }
 .ws-panel.narrow .ws-head { padding-left: 8px; gap: 6px; }
 .ws-panel.narrower .ws-head .ind-btn { font-size: 0; gap: 4px; }

@@ -330,14 +330,15 @@ test('settings: the divergence\'s, the bubbles\' Auto per instrument, the large-
 test('menu: the absorption bars never get a chip and never count toward the strip; the bubbles do', () => {
   const P = LP.Pane;
   let st = LP.defaultPane('main');
-  assert.equal(P.pinned(st), 5);
+  assert.equal(P.pinned(st), 4, 'IB now lives in Levels');
   st = P.add(st, 'absorption');
   assert.deepEqual(st.ind.absorption, { on: true, shown: true, pin: false }, 'added without a chip');
-  assert.equal(P.pinned(st), 5, 'not counted');
+  assert.equal(P.pinned(st), 4, 'not counted');
   assert.equal(P.pin(st, 'absorption', true), st, 'pinning it is refused');
   st = P.add(st, 'bubbles');
-  assert.deepEqual(st.ind.bubbles, { on: true, shown: true, pin: true }, 'the bubbles take the sixth chip');
-  assert.equal(P.pinFull(st), true);
+  assert.deepEqual(st.ind.bubbles, { on: true, shown: true, pin: true }, 'the bubbles take the fifth chip');
+  assert.equal(P.pinned(st), 5);
+  assert.equal(P.pinFull(st), false, 'room up to ten');
   // a saved pin is dropped on read
   const s = mem({ 'live-indicators-v2': { main: { ind: { absorption: { on: true, shown: true, pin: true } } } } });
   assert.equal(LP.create(s).pane('main').ind.absorption.pin, false);

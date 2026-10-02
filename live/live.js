@@ -45,6 +45,7 @@
  *                       floor per instrument; only what was set by hand
  *   live-tape-floors-v1 { <root>: { rth, eth } } the large-print floors (the workspace's Time and Sales floors, 1.12.0), also
  *                       the bubbles' and the absorption bars' large trade (G1c); only those set by hand
+ *   live-legend-v1      { <paneId>: false } a chart's header text switched off (1.14.0, Anthony); on unless set off
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
  *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
@@ -77,12 +78,12 @@ const INDICATORS = [
   { id: 'volume', name: 'Volume bars', code: 'VO', short: 'VOL', letter: 'V', cat: 'volume', sw: 'var(--text3)', alias: 'vol volume bars',
     opt: 'Bottom 16% of the plot, in the candle colors' },
   { id: 'vwap', name: 'VWAP', code: 'VW', short: 'VWAP', letter: 'W', cat: 'price', sw: 'var(--vwap-sw)', alias: 'vwap',
-    opt: 'Session VWAP from 18:00 ET' },
+    opt: 'Volume weighted average price: the full session from 18:00 ET, or RTH only from 09:30 ET' },
+  /* 1.14.0 (Anthony): the Initial Balance is part of Levels (its own indicator and chip retired), and every level line
+     has its own switch in the gear (live-indicator-options-v1 `levels`) */
   { id: 'levels', name: 'Levels', code: 'LV', short: 'LEVELS', letter: 'L', cat: 'price', sw: 'var(--info)',
-    alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val value area',
-    opt: 'Prior day high, low, close and value area; overnight high and low' },
-  { id: 'ib', name: 'Initial balance', code: 'IB', short: 'IB', letter: 'I', cat: 'price', sw: 'var(--ib-sw)', alias: 'ib ibh ibl initial balance 1h',
-    opt: '1 hour, locks 10:30 ET' },
+    alias: 'levels pdh pdl onh onl prior day high low close pc overnight vah val poc value area ib ibh ibl initial balance 1h',
+    opt: 'The prior session\'s high, low and close, its value area high, low and point of control (PD VAH, PD VAL, PD POC), the overnight high and low, and today\'s 1 hour Initial Balance (locks 10:30 ET)' },
   { id: 'vp', name: 'Volume profile', code: 'VP', short: 'PROFILE', letter: 'P', cat: 'volume', sw: 'var(--vp-sw)',
     alias: 'vp volume profile poc vah val value area',
     opt: 'Traded volume per price at the right edge: 1-tick rows, the point of control and the 70% value area' },
@@ -111,21 +112,34 @@ const RECENT_MAX = 5;
 /* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
    smoke test can lower it. */
 let api = null;
-const pinMax = () => (api ? api.PIN_MAX : 6);
+const pinMax = () => (api ? api.PIN_MAX : 10);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false, delta: false, bubbles: false, absorption: false };
-/* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1). */
-const V1_LISTED = ['volume', 'vwap', 'levels', 'fills', 'ib'];
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false };
+/* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1); the IB is part of Levels
+   since 1.14.0 (migrateIb). */
+const V1_LISTED = ['volume', 'vwap', 'levels', 'fills'];
+/* The level lines, each with its own switch in the Levels gear (1.14.0, Anthony), in the gear's order: the key, the
+   engine's line key (levelLines, ibLines) and the gear's name. */
+const LEVEL_LINES = [
+  { k: 'pdh', name: 'PDH' }, { k: 'pdl', name: 'PDL' }, { k: 'pc', name: 'Prior close' }, { k: 'onh', name: 'ONH' }, { k: 'onl', name: 'ONL' },
+  { k: 'vah', name: 'PD VAH' }, { k: 'val', name: 'PD VAL' }, { k: 'poc', name: 'PD POC' }, { k: 'ibh', name: 'IBH' }, { k: 'ibl', name: 'IBL' },
+];
+const ONOFF = ['on', 'off'];
 /*
  * Options an indicator has besides on and off, each a list of allowed values with the default first (set in its gear
  * panel). The volume profile: the full session from 18:00 ET, or RTH 9:30 to 16:00 ET, 13:00 on NYSE early closes
  * (Anthony's ruling 2026-09-29). The delta pane (1.7.0): the running cumulative as candles ('cum'), or each bar's own
  * buys minus sells around zero ('bar') (Anthony's ruling 2026-09-30).
  */
-const INDICATOR_OPTIONS = { vp: { session: ['full', 'rth'] }, delta: { show: ['cum', 'bar'], div: ['off', 'on'] } };   // div: the divergence arrows (G1c), off until switched on
+const INDICATOR_OPTIONS = {
+  vp: { session: ['full', 'rth'], dpoc: ONOFF, dvah: ONOFF, dval: ONOFF },          // 1.14.0: the developing POC, VAH and VAL lines
+  delta: { show: ['cum', 'bar'], div: ['off', 'on'] },                             // div: the divergence arrows (G1c), off until switched on
+  vwap: { session: ['full', 'rth'] },                                              // 1.14.0: from 18:00 ET, or RTH only from 09:30 ET
+  levels: Object.fromEntries(LEVEL_LINES.map(L => [L.k, ONOFF])),                  // 1.14.0: each level line on or off
+};
 /* The delta pane's height (1.7.0), a share of the chart height, per pane: the default and the least and most kept,
    read from the engine (PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX; review N8), which also keeps both panes at least a
    few rows tall. The engine loads before this file (live/EMBED.md); in Node it is required. */
@@ -147,8 +161,11 @@ const INDICATOR_COLORS = [
   { key: 'overnight', id: 'levels', name: 'Overnight high and low', def: ENGINE.LEVEL_COLORS.overnight },
   { key: 'value', id: 'levels', name: 'Value area high and low', def: ENGINE.LEVEL_COLORS.value },
   { key: 'close', id: 'levels', name: 'Prior close', def: ENGINE.LEVEL_COLORS.close },
-  { key: 'ibHigh', id: 'ib', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
-  { key: 'ibLow', id: 'ib', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
+  { key: 'ibHigh', id: 'levels', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
+  { key: 'ibLow', id: 'levels', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
+  // 1.14.0 (Anthony): the profile's rows and value area too, brighter by default
+  { key: 'vpRow', id: 'vp', name: 'Profile rows', def: ENGINE.DEFAULT_THEME.vpRow },
+  { key: 'vpValue', id: 'vp', name: 'Value area rows', def: ENGINE.DEFAULT_THEME.vpValue },
   { key: 'vpPoc', id: 'vp', name: 'Point of control', def: ENGINE.DEFAULT_THEME.vpPoc },
   // the signals (G1c): the absorption bars' bodies and outlines; the divergence arrows use the same pair
   { key: 'sigBull', id: 'absorption', name: 'Bullish (cyan)', def: ENGINE.DEFAULT_THEME.sigBull },
@@ -158,7 +175,7 @@ const INDICATOR_COLORS = [
 ];
 /* Colors added after indicator presets were first saved (G1c): a preset saved before has none of them and takes the
    defaults, so no saved preset is lost. */
-const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine'];
+const IND_COLOR_LATER = ['sigBull', 'sigBullLine', 'sigBear', 'sigBearLine', 'vpRow', 'vpValue'];
 const IND_COLOR_KEYS = INDICATOR_COLORS.map(c => c.key);
 const HEX = /^#[0-9a-f]{6}$/i;
 /** The allowed colors of `v` (#RRGGBB, upper case) for `keys`; the rest left out. */
@@ -177,7 +194,7 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', legend: 'live-legend-v1' };
 /*
  * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
  * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
@@ -311,7 +328,35 @@ function paneFromV1(v1, paneId) {
   }
   /* 1.7.0: the main pane gets the delta pane on (Anthony), like a 1.6.0 save without it, with no chip (review N5) */
   if (main) out.ind.delta = { on: true, shown: true, pin: false };
+  /* the 1.5.3 IB as it was, for migrateIb (1.14.0: part of Levels) */
+  const ibFlag = v1 && typeof v1.ib === 'boolean' ? v1.ib : main;
+  out.ind.ib = main ? { on: true, shown: ibFlag, pin: true } : { on: ibFlag, shown: true, pin: ibFlag };
   return out;
+}
+/*
+ * 1.14.0 (Anthony): the Initial Balance is part of Levels (its own indicator and chip retired). A pane saved before keeps
+ * what it showed: the IB on and shown means its two lines on in Levels (Levels off before: on now with only the IB lines,
+ * pinned if either was); the IB off or hidden means its lines off. `rawPane` is the pane as saved, `levelOpts` its saved
+ * level options. Returns { pane, levels } (the pane without `ib`, Recent and Restore naming Levels instead, and the level
+ * options to save), or null when there is nothing to carry over.
+ */
+function migrateIb(rawPane, levelOpts) {
+  if (!rawPane || typeof rawPane !== 'object' || isList(rawPane) || !rawPane.ind || typeof rawPane.ind !== 'object' || !own(rawPane.ind, 'ib')) return null;
+  const ind = Object.assign({}, rawPane.ind), ib = ind.ib && typeof ind.ib === 'object' ? ind.ib : {};
+  delete ind.ib;
+  const ibShown = ib.on === true && ib.shown !== false;
+  const lv = ind.levels && typeof ind.levels === 'object' ? ind.levels : null;
+  const lvShown = !!lv && lv.on === true && lv.shown !== false;
+  const levels = Object.assign({}, levelOpts && typeof levelOpts === 'object' && !isList(levelOpts) ? levelOpts : {});
+  if (ibShown) {
+    levels.ibh = 'on'; levels.ibl = 'on';
+    if (!lvShown) {
+      for (const L of LEVEL_LINES) if (L.k !== 'ibh' && L.k !== 'ibl') levels[L.k] = 'off';
+      ind.levels = { on: true, shown: true, pin: !!(lv && lv.pin === true) || ib.pin === true };
+    }
+  } else { levels.ibh = 'off'; levels.ibl = 'off'; }
+  const fix = list => (isList(list) ? list.map(x => (x === 'ib' ? 'levels' : x)).filter((x, i, a) => a.indexOf(x) === i) : list);
+  return { pane: Object.assign({}, rawPane, { ind, recent: fix(rawPane.recent), restore: fix(rawPane.restore) }), levels };
 }
 function copyPane(st) {
   const ind = {};
@@ -462,6 +507,20 @@ function create(storage) {
         raw.set(KEYS.indicators, next);
       }
     }
+    /* 1.14.0: the IB folded into Levels, once per pane saved before (migrateIb); the options first, so a write cut short
+       is done again at the next start */
+    const v2i = raw.get(KEYS.indicators);
+    if (v2i && typeof v2i === 'object' && !isList(v2i)) {
+      const allOpts = obj(KEYS.indicatorOptions);
+      let moved = false;
+      for (const paneId of Object.keys(v2i)) {
+        const po = own(allOpts, paneId) && allOpts[paneId] && typeof allOpts[paneId] === 'object' && !isList(allOpts[paneId]) ? allOpts[paneId] : {};
+        const m = migrateIb(v2i[paneId], po.levels);
+        if (!m) continue;
+        v2i[paneId] = m.pane; allOpts[paneId] = Object.assign({}, po, { levels: m.levels }); moved = true;
+      }
+      if (moved) { raw.set(KEYS.indicatorOptions, allOpts); raw.set(KEYS.indicators, v2i); }
+    }
     /* 1.9.0 (review R1): the VWAP color the Colors panel kept in live-colors-v1 up to 1.8, copied once into the
        indicator colors, before the Colors panel (which no longer holds VWAP) writes that key again without it */
     const ic = cleanColors(obj(KEYS.indicatorColors), IND_COLOR_KEYS), oldVwap = cleanColors(obj(KEYS.colors), ['vwap']);
@@ -596,6 +655,14 @@ function create(storage) {
       const all = obj(KEYS.floors), r = own(all, root) && all[root] && typeof all[root] === 'object' && !isList(all[root]) ? all[root] : {};
       r[which] = n; all[root] = r;
       return raw.set(KEYS.floors, all);
+    },
+    /** Whether a chart pane shows its header text (1.14.0): on unless switched off. */
+    legendShown(paneId) { return !(paneOk(paneId) && obj(KEYS.legend)[paneId] === false); },
+    setLegendShown(paneId, on) {
+      if (!paneOk(paneId)) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.legend));
+      if (on) delete all[paneId]; else all[paneId] = false;
+      return raw.set(KEYS.legend, all);
     },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** The qty picked last for a root (1.10.0): a whole number 1 to 9, else 1. */
@@ -753,7 +820,7 @@ function debounce(fn, ms) {
 }
 
 api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM,
-  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
 
@@ -938,7 +1005,7 @@ function markup(p, o) {
         ${rangeModeSel}`}</span>
     </div>
 
-    <div class="group ind-group">
+    <div class="group ind-group${o.trading ? ' codes-group' : ''}">
       <div class="ind" id="${p}indWrap" data-pane="${esc(o.paneId)}">
         <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel" aria-haspopup="dialog" title="Indicators on this chart (/ with the mouse over the chart)">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
         <div class="ind-panel${o.sideGears ? ' side-gears' : ''}" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
@@ -955,6 +1022,7 @@ function markup(p, o) {
         </div>
       </div>
       <div class="ind-chips${o.trading ? ' codes' : ''}" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
+      <button type="button" class="btn lg-tog" id="${p}lgTog" aria-pressed="true" title="Header text on this chart: on (click to turn it off)" aria-label="Header text on this chart">Aa</button>
     </div>
 ${o.trading ? more : `
     <div class="group" role="group" aria-label="Drawing tools">
@@ -994,7 +1062,7 @@ ${obar}
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-bub" id="${p}lgBub" hidden></span><span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
-      <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span>Vol <span id="${p}lgV">-</span></span></div>
+      <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span class="lg-br" aria-hidden="true"></span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgDelta" hidden><span id="${p}lgDl">Delta</span> <span class="dv" id="${p}lgDv">-</span><span class="dunk" id="${p}lgDu" hidden></span></span><span id="${p}lgFill"></span></div>
     </div>
     <div class="notice" id="${p}notice" hidden>
@@ -1093,7 +1161,7 @@ function start(container, opt, PAGE) {
   /* Saved choices: read once here, written one field at a time as they change (LivePrefs above). */
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
-  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta') } });   // layers: what is drawn
+  const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta'), vwap: prefs.indicatorOptions(PANE, 'vwap'), levels: prefs.indicatorOptions(PANE, 'levels') } });   // layers: what is drawn
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   if (VIEW) {                                            // the host's own view: nothing of it is saved here
@@ -1123,10 +1191,10 @@ function start(container, opt, PAGE) {
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false,
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.levels, vp: S.layers.vp, delta: S.layers.delta, trades: false,
       absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' },
     grid: S.grid === 'on', room: S.room,                 // 1.14.0: grid lines (off by default) and the room right of price
-    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
+    motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
   });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
@@ -1248,6 +1316,7 @@ function start(container, opt, PAGE) {
     sigRebuild(tf.mode === 'range' ? rangeFrom : undefined);   // the chart signals on the new bars (G1c), range bars from where the chart's start
     updateLevels();
     applyMarkers();
+    vwapApply();                                         // RTH only VWAP (1.14.0): from the new bars
     legendKey = '';
     readouts();
   }
@@ -1370,15 +1439,18 @@ function start(container, opt, PAGE) {
     D.ib = ib;
     if (!force && key === D.ibKey) return;
     D.ibKey = key;
-    chart.setLevels(D.lv.concat(U.ibLines(ib, IC)));
+    chart.setLevels(levelsOn(D.lv.concat(U.ibLines(ib, IC))));
     ibNote(ib);
   }
+  /* The level lines switched on in the Levels gear (1.14.0: each line on its own; the IB's two are Levels' too). */
+  const levelsOn = list => list.filter(L => !L.key || S.options.levels[L.key] !== 'off');
+  const ibShown = () => !!S.layers.levels && (S.options.levels.ibh !== 'off' || S.options.levels.ibl !== 'off');
   /* New indicator colors (a gear, an indicator preset, Default colors): the chart's VWAP and profile colors, the level
      and IB lines as they are, and the swatches. Nothing is computed again from the bars. */
   function applyIndicatorColors() {
-    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine });
+    chart.setTheme({ vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine });
     if (D.lvSrc) D.lv = U.levelLines(D.lvSrc, IC);
-    if (D.m1) chart.setLevels(D.lv.concat(U.ibLines(D.ib, IC)));
+    if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC))));
     paintColors();
   }
   const IB_NOTES = {
@@ -1390,8 +1462,8 @@ function start(container, opt, PAGE) {
   /* A quiet note on the status line, only while the IB indicator is on and the IB cannot be shown for a reason. */
   function ibNote(ib) {
     const el = $('ibNote'); if (!el) return;
-    let text = ib && S.layers.ib ? IB_NOTES[ib.state] || '' : '';
-    if (ib && S.layers.ib && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
+    let text = ib && ibShown() ? IB_NOTES[ib.state] || '' : '';
+    if (ib && ibShown() && ib.state === 'closed') {                     // a holiday gets a note (naming the day), a weekend none
       const wd = new Date(ib.start * 1000).getUTCDay();
       text = wd === 0 || wd === 6 ? '' : 'Initial balance: no stock market session on ' + U.fmtDate(ib.start) + ' (NYSE holiday).';
     }
@@ -1812,7 +1884,10 @@ function start(container, opt, PAGE) {
     prefs.setIndicatorOption(PANE, id, key, value);
     if (S.options[id][key] !== value) {
       S.options[id][key] = value;
-      if (id === 'vp') { vpLegendVer = -1; vpBuild(); }
+      if (id === 'vp' && key === 'session') { vpLegendVer = -1; vpBuild(); }
+      if (id === 'vp' && key !== 'session') profileLines();               // the developing POC, VAH and VAL (1.14.0)
+      if (id === 'levels') { if (D.m1) chart.setLevels(levelsOn(D.lv.concat(U.ibLines(D.ib, IC)))); ibNote(D.ib); }
+      if (id === 'vwap') { vwapApply(); legendKey = ''; }
       if (id === 'delta' && key === 'show') { chart.setDeltaView({ mode: value }); deltaLegend(true); }   // the same core, drawn the other way
       if (id === 'delta' && key === 'div') sigApply();               // the divergence arrows (G1c)
     }
@@ -1858,7 +1933,7 @@ function start(container, opt, PAGE) {
     const job = SIG.job = { abs, bub, seg, replay: null };
     const take = (t, p, v, s, barT) => {
       if (job.abs && barT !== undefined) job.abs.add(t, p, v, s, barT, chart.bars());
-      if (job.bub) job.bub.add(t, p, v, s);
+      if (job.bub) job.bub.add(t, p, v, s, barT);          // the bar it traded in (1.14.0): a bubble never straddles bars
     };
     const sink = { addQuiet(t, p, v, s) { const bars = chart.bars(), i = CE.barIndexAt(bars, t); take(t, p, v, s, i >= 0 ? bars[i].t : undefined); } };
     if (range) job.replay = new BB.RangeReplay(D.ticks, SIG.rangeFrom, [seg], rangeBuilder(), (t, v, s2, barT) => take(t, seg.st.price(seg.i), v, s2, barT));
@@ -1909,7 +1984,7 @@ function start(container, opt, PAGE) {
   function sigTrade(t, p, v, s, barT) {
     const job = SIG.job, v0 = sigSum();
     if (SIG.absorption && !(job && job.abs === SIG.absorption)) SIG.absorption.add(t, p, v, s, barT, chart.bars());
-    if (SIG.bubbles && !(job && job.bub === SIG.bubbles)) SIG.bubbles.add(t, p, v, s);
+    if (SIG.bubbles && !(job && job.bub === SIG.bubbles)) SIG.bubbles.add(t, p, v, s, barT);
     if (sigSum() !== v0) SIG.version++;                    // the versions only grow: any change moves the sum
     if (SIG.divergence || divWanted()) sigDivergence(false);
   }
@@ -2506,10 +2581,11 @@ function start(container, opt, PAGE) {
 
   let legendKey = '';
   chart.on('legend', e => {
+    if (!!e.hovering !== lgHover) { lgHover = !!e.hovering; rootEl.classList.toggle('lg-hover', lgHover); }   // the short header's hover line (1.14.0)
     vpLegend();
     legendBarT = e.hovering ? e.bar.t : null; deltaLegend();
     const { bar: b, prev, forming } = e;
-    const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap].join('|');
+    const key = [b.t, b.o, b.h, b.l, b.c, b.v, forming, S.tf, S.layers.vwap, S.options.vwap.session, vwapVer].join('|');
     if (key === legendKey) return;
     legendKey = key;
     const dp = precisionOf(), fmt = p => U.fmtPrice(p, dp);
@@ -2522,7 +2598,8 @@ function start(container, opt, PAGE) {
     chgEl.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
     $('lgV').textContent = U.fmtVolume(b.v);
     $('lgVwWrap').hidden = !S.layers.vwap;
-    $('lgVw').textContent = b.vw !== undefined && b.vw !== null ? fmt(U.roundTo(b.vw, D.tick)) : '-';   // null: not known yet (served window)
+    const vwv = vwapFor(b, e.index);                    // 1.14.0: the session's, or RTH only (the VWAP gear)
+    $('lgVw').textContent = vwv !== undefined && vwv !== null ? fmt(U.roundTo(vwv, D.tick)) : '-';   // null: not known yet (served window), or outside RTH
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
 
@@ -2551,6 +2628,53 @@ function start(container, opt, PAGE) {
   }
   later(() => { readouts(); every(readouts, 1000); }, 1000 - Date.now() % 1000 + 5);   // on the second, as the price tag's countdown
 
+  /* The VWAP gear's hours (1.14.0, Anthony): the session's from 18:00 ET (each bar's own vw, as always) or RTH only, from
+     09:30 to 16:00 ET, worked out from the 1-minute bars (every view holds them) as the session's is from history, and
+     read at each bar's end (a bar ending outside RTH has none, so the line breaks). Made again once a second while it
+     is on (a few thousand bars, never per trade) and with the bars. */
+  let vwapSeries = null, vwapVer = 0;
+  function barEnd(b, i) {
+    const bs = chart.bars(), now = etNow();
+    if (S.tf === 'range') return i >= 0 && i < bs.length - 1 ? bs[i + 1].t : now;
+    return Math.min(b.t + TF[S.tf].sec, now);
+  }
+  function vwapFor(b, i) {
+    if (S.options.vwap.session !== 'rth') return b.vw;
+    return vwapSeries ? U.vwapAt(vwapSeries, barEnd(b, i)) : null;
+  }
+  function vwapApply() {
+    if (S.options.vwap.session === 'rth' && D.m1 && D.m1.bars.length) {
+      vwapSeries = U.rthVwap(D.m1.bars, { sessionStart: SESSION }); vwapVer++;
+      chart.setVwapSource((t, i) => { const bs = chart.bars(); return bs[i] ? U.vwapAt(vwapSeries, barEnd(bs[i], i)) : null; });
+    } else { vwapSeries = null; chart.setVwapSource(null); }
+  }
+  every(() => { if (S.options.vwap.session === 'rth' && S.layers.vwap) vwapApply(); }, 1000);
+  /* the developing POC, VAH and VAL lines (1.14.0, the VP gear) */
+  function profileLines() { const o = S.options.vp; chart.setProfileLines({ poc: o.dpoc === 'on', vah: o.dvah === 'on', val: o.dval === 'on' }); }
+  profileLines();
+
+  /* The header text (1.14.0, Anthony): switched off per chart (live-legend-v1, the Aa toggle beside Indicators): no text at
+     all, not even on hover, and the price scale takes the room back. A small panel (a compact chart under 700 px wide or
+     400 px tall) shows a short header: one quiet line (the name, bars, last price and change, the indicators' values),
+     the bar's open, high, low and volume (and the hovered bubble) on a second line only while the crosshair is over it. */
+  let lgHover = false, lgOn = prefs.legendShown(PANE);
+  function applyLegendShown() {
+    rootEl.classList.toggle('lg-off', !lgOn);
+    const b = $('lgTog');
+    b.setAttribute('aria-pressed', String(lgOn));
+    b.title = 'Header text on this chart: ' + (lgOn ? 'on (click to turn it off)' : 'off (click to turn it on)');
+    fitTop();
+  }
+  function setLegendShown(on) { lgOn = !!on; prefs.setLegendShown(PANE, lgOn); applyLegendShown(); }
+  $('lgTog').addEventListener('click', () => setLegendShown(!lgOn));
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.legend) { const v = prefs.legendShown(PANE); if (v !== lgOn) { lgOn = v; applyLegendShown(); } } });
+  function shortHeader() {
+    if (!COMPACT) return;
+    const r = rootEl.getBoundingClientRect(), sh = r.width < 700 || r.height < 400;
+    if (rootEl.classList.contains('short') !== sh) rootEl.classList.toggle('short', sh);
+  }
+  if (COMPACT && typeof ResizeObserver === 'function') { const ro2 = new ResizeObserver(shortHeader); ro2.observe(rootEl); cleanups.push(() => ro2.disconnect()); }
+
   /* The bubble under the mouse (1.14.0, Anthony from WORK: no numbers on the chart, the size on hover), in the legend's
      top line: "Bubble Buy 142 @ 31,120.25 08:44:05.3". The chart hit-tests on mouse moves only. */
   const two = n => (n < 10 ? '0' : '') + n;
@@ -2564,9 +2688,11 @@ function start(container, opt, PAGE) {
   });
   /* The price scale keeps the legend's height free at its top (1.14.0, Anthony: on the smaller panels the high ran under
      the legend's lines), eased in with the 120 ms re-fit; told again whenever the legend's height changes. */
-  const fitTop = () => { const lg = $('legend'); if (lg && !destroyed) chart.setFitTop(lg.offsetTop + lg.offsetHeight + 4); };
+  /* (the hover line of a short header is left out: the scale does not jump as the mouse comes and goes; with the header
+     text off there is nothing to keep free) */
+  const fitTop = () => { const lg = $('legend'); if (!lg || destroyed || lgHover) return; chart.setFitTop(lgOn && lg.offsetHeight ? lg.offsetTop + lg.offsetHeight + 4 : 0); };
   if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fitTop); ro.observe($('legend')); cleanups.push(() => ro.disconnect()); }
-  fitTop();
+  applyLegendShown(); shortHeader();
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
   const DRAW_ERR = 'Chart drawing error: ';
   chart.on('error', e => {
@@ -2882,8 +3008,8 @@ function start(container, opt, PAGE) {
     for (const k of Object.keys(drawn)) {
       if (drawn[k] === S.layers[k]) continue;
       S.layers[k] = drawn[k];
-      if (k === 'fills') applyMarkers(); else chart.setLayers({ [k]: drawn[k] });
-      if (k === 'ib') ibNote(D.ib);
+      if (k === 'fills') applyMarkers(); else chart.setLayers(k === 'levels' ? { levels: drawn[k], ib: drawn[k] } : { [k]: drawn[k] });   // the IB is Levels' (1.14.0)
+      if (k === 'levels') ibNote(D.ib);
       if (k === 'vp') vpBuild();                                   // built from the tick store when shown, dropped when not
     }
     // the delta pane (1.7.0): kept while on the chart, shown or hidden, so the chip or the switch shows it at once
@@ -2921,7 +3047,15 @@ function start(container, opt, PAGE) {
       (coming ? '<span class="ind-tag">coming</span>' : '') + tools + x + `</div>${set}</div>`;
   }
   /* An indicator's real options in its gear panel (LivePrefs INDICATOR_OPTIONS): today the volume profile's hours. */
-  const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } } },
+  /* on / off switches shown as a group of toggles (1.14.0): each a line of its own (Levels: the prior session's and the IB;
+     the profile: its developing POC, VAH and VAL) */
+  const TOG = (name, what) => ({ toggle: name, label: name, values: { on: ['On', what + ': shown'], off: ['Off', what + ': not shown'] } });
+  const TOGGLE_GROUP = { levels: ['Lines', 'Each line on or off; the prior session\'s levels, the overnight high and low, and today\'s Initial Balance'],
+    vp: ['Developing', 'The current session\'s point of control and value area, drawn as they build'] };
+  const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } },
+      dpoc: TOG('dPOC', 'The developing point of control'), dvah: TOG('dVAH', 'The developing value area high'), dval: TOG('dVAL', 'The developing value area low') },
+    vwap: { session: { label: 'Hours', values: { full: ['Full session', 'From 18:00 ET (the default)'], rth: ['RTH only', 'From 09:30 ET to 16:00 ET; none outside regular hours'] } } },
+    levels: Object.fromEntries(LP.LEVEL_LINES.map(L => [L.k, TOG(L.name, L.name)])),
     delta: { show: { label: 'Show', values: { cum: ['Cumulative', 'Candles of buys minus sells, from 0 at 18:00 ET'], bar: ['Bar delta', 'Each bar\'s own buys minus sells, above or below zero'] } },
       div: { label: 'Show divergences', values: { off: ['Off', 'No divergence arrows'], on: ['On', 'Arrows at swings where price and delta disagree (Anthony\'s DeltaDivergenceSignal), from the page\'s opening'] } } } };
   /*
@@ -2991,11 +3125,18 @@ function start(container, opt, PAGE) {
   }
   function optionsHtml(id) {
     if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return '';
-    return Object.keys(LP.INDICATOR_OPTIONS[id]).map(k => {
+    const keys = Object.keys(LP.INDICATOR_OPTIONS[id]), togs = keys.filter(k => OPTION_TEXT[id][k].toggle);
+    const tg = !togs.length ? '' : (() => {
+      const lblId = p + 'indTog-' + id, g = TOGGLE_GROUP[id];
+      return `<div class="ind-set-opt ind-togs-row"><span class="glabel" id="${lblId}" title="${esc(g[1])}">${esc(g[0])}</span><span class="ind-togs" role="group" aria-labelledby="${lblId}">` +
+        togs.map(k => { const on = S.options[id][k] === 'on', t = OPTION_TEXT[id][k];
+          return `<button type="button" class="ind-tog" data-act="opt" data-id="${id}" data-k="${k}" data-v="${on ? 'off' : 'on'}" data-f="tog:${id}:${k}" aria-pressed="${on}" title="${esc(t.values[on ? 'on' : 'off'][1])}; click to turn it ${on ? 'off' : 'on'}">${esc(t.toggle)}</button>`; }).join('') + '</span></div>';
+    })();
+    return keys.filter(k => !OPTION_TEXT[id][k].toggle).map(k => {
       const t = OPTION_TEXT[id][k], cur = S.options[id][k], lblId = p + 'indOpt-' + id + '-' + k;
       const btns = LP.INDICATOR_OPTIONS[id][k].map(v => `<button type="button" data-act="opt" data-id="${id}" data-k="${k}" data-v="${v}" data-f="opt:${id}:${k}:${v}" aria-pressed="${v === cur}" title="${esc(t.values[v][1])}">${esc(t.values[v][0])}</button>`).join('');
       return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
-    }).join('');
+    }).join('') + tg;
   }
   /* An indicator's colors in its gear panel (1.9.0): a picker and a hex box each, and Default colors. Every chart on
      this page and its storage prefix shares them, as the Colors panel's; an indicator preset saves them all. */
@@ -3073,7 +3214,7 @@ function start(container, opt, PAGE) {
       return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
         `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span>` +
         (SLIM || TRADING ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
-    }).join('') + (SLIM ? '<button type="button" class="ind-chip ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>' : '');
+    }).join('') + (SLIM || TRADING ? '<button type="button" class="ind-chip ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>' : '');
     fitChips();
   }
   /* In a host's slim header (toolbar: false) the strip has the room the header leaves: 2-letter chips, and those that do
@@ -3109,8 +3250,7 @@ function start(container, opt, PAGE) {
      chips (6), so pinning or unpinning cannot change the toolbar's lines, and chips show their names only when that
      fits without adding a toolbar line; otherwise each is one letter. */
   function fitChips() {
-    if (SLIM) { fitSlimChips(); return; }
-    if (TRADING) return;                                   // the page (1.14.0): 2-letter chips in a strip that keeps room for six
+    if (SLIM || TRADING) { fitSlimChips(); return; }       // the page (1.14.0): the workspace's 2-letter chips, the rest behind "+N"
     const strip = $('indChips'), bar = strip.closest('.bar');
     const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
     strip.style.setProperty('--chip-room', room + 'px');
@@ -3239,13 +3379,13 @@ function start(container, opt, PAGE) {
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
-      if (SLIM && e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
+      if ((SLIM || TRADING) && e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
       const b = e.target.closest('button[data-id]'); if (!b) return;
       const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
       changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
     });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
-    if (SLIM) {
+    if (SLIM || TRADING) {
       listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
       listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
     }
@@ -3285,7 +3425,7 @@ function start(container, opt, PAGE) {
       const ro = new ResizeObserver(() => { fitChips(); if (!panel.hidden) place(); });
       ro.observe(rootEl);
       ro.observe(rootEl.querySelector('.bar'));                  // the toolbar's own width (a host resizing the pane)
-      if (SLIM) ro.observe($('indChips'));                       // in the host's header: the room the header leaves it
+      if (SLIM || TRADING) ro.observe($('indChips'));            // in the host's header (or the page's line): the room it has
       cleanups.push(() => ro.disconnect());
     }
   }
@@ -3530,6 +3670,8 @@ function start(container, opt, PAGE) {
   return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}),
     setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors, setTrade,
     indicators: $('indWrap'), chips: $('indChips'), colors: themePanel.element,
+    /** The header text toggle (1.14.0), for a host to place beside Indicators; legendShown() / setLegendShown(on). */
+    legendToggle: $('lgTog'), legendShown: () => lgOn, setLegendShown,
     /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
     stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), chart: chart.stats() }) };
 }

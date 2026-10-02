@@ -80,7 +80,10 @@ test('sessionLevels finds prior-day, overnight and value-area levels', () => {
   assert.ok(lv.val <= lv.poc && lv.poc <= lv.vah, JSON.stringify(lv));
   assert.ok(lv.val >= 95 && lv.vah <= 111, JSON.stringify(lv));
   const lines = U.levelLines(lv);
-  assert.deepEqual(lines.map(l => l.name), ['PDH', 'VAH', 'ONH', 'Prior close', 'ONL', 'VAL', 'PDL']);
+  assert.deepEqual(lines.map(l => l.name).filter(n => n !== 'PD POC'), ['PDH', 'PD VAH', 'ONH', 'Prior close', 'ONL', 'PD VAL', 'PDL']);
+  const poc = lines.find(l => l.name === 'PD POC');
+  assert.ok(poc && poc.price === lv.poc && poc.key === 'poc', 'the prior day POC is drawn and named');
+  assert.deepEqual(poc.dash, U.PD_POC_DASH);
 });
 
 test('colors: tag text and legend text stay readable on the default candles', () => {
@@ -108,7 +111,7 @@ test('sample feed is seeded, and ticks keep bars consistent', () => {
   const a = SampleFeed.create(), b = SampleFeed.create();
   assert.equal(a.base.length, b.base.length);
   assert.deepEqual(a.base[a.base.length - 2], b.base[b.base.length - 2]);
-  assert.equal(a.levels.length, 7);
+  assert.equal(a.levels.length, 8, 'the seven levels and the prior day POC');
   assert.equal(a.trades.length, 4);
   let ticks = 0; a.onTick(() => ticks++);
   a.setSpeed(30);

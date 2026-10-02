@@ -1032,11 +1032,11 @@ function mountChart(v) {
   });
   v.pane = pane;
   pane.setTrade(chartTrade(v));                             // its instrument's orders, position and fills on the ticket's account
-  v.head.querySelector('.ws-ind').append(pane.indicators, pane.chips);   // the chart's own Indicators button and menu, its chips
+  v.head.querySelector('.ws-ind').append(pane.indicators, pane.legendToggle, pane.chips);   // the chart's own Indicators button and menu, its header text toggle (1.14.0), its chips
   const indBtn = pane.indicators.querySelector('.ind-btn');
   const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
   if (mo) mo.observe(indBtn, { attributes: true, attributeFilter: ['aria-expanded'] });
-  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.chips.remove(); };
+  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.legendToggle.remove(); pane.chips.remove(); };
 }
 function viewChanged(v, nv) {
   const p = v.panel;
