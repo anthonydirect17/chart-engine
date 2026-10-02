@@ -2310,7 +2310,7 @@ function start(container, opt, PAGE) {
       'Trying ' + shownUrl(lastUrl) + ' again. Check that NinjaTrader is running and ChartBridge compiled (messages appear in New > NinjaScript Output).');
     reconnectTimer = setTimeout(connect, wait);
   }
-  /* Read only: nothing but subscribe and ping ever leaves this chart, whatever calls send. */
+  /* Read only: nothing but subscribe, ping and htf (1.15.0, a request for bars) ever leaves this chart, whatever calls send. */
   const READ_ONLY_TYPES = ['subscribe', 'ping', 'htf'];   // htf (0.3.7): a request for NinjaTrader's 4h, 1D or 1W bars, never an order
   function send(obj) {
     if (!TRADING && !READ_ONLY_TYPES.includes(obj && obj.type)) return;
@@ -2550,7 +2550,7 @@ function start(container, opt, PAGE) {
      orders and position on this chart's instrument) and whether the chart is live for orders (the ticket's instrument
      while Armed); the chart hands it Shift+click, Shift+right click, Ctrl+click, drags and the x. The host sends them
      through its TradeCore with every check, or forwards them to the window that has the ticket. The chart itself still
-     sends only subscribe and ping. */
+     sends only subscribe, ping and htf. */
   const HOST = !TRADING && opt.trade && typeof opt.trade.place === 'function' && typeof opt.trade.move === 'function' && typeof opt.trade.cancel === 'function' ? opt.trade : null;
   const HT = { root: '', live: false, account: '', orders: [], position: null, pointValue: 0, qty: 1 };
   const armedHere = () => TRADING ? TR.armed : HT.live && HT.root === D.root;

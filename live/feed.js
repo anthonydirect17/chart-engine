@@ -25,7 +25,7 @@
  * 1.14.0: a load keeps each trade's Time and Sales category (q, ChartBridge 0.3.8) with it, so a tape that joins later or
  * a replay colours its trades as one there from the start; a "settlement" (0.3.7) is kept in the line's hello.
  * Seams for the next build (E2b): order messages (trading, orders, order, position, reject) are passed to every panel
- * of the line as ChartBridge sends them, and a stand-in drops anything a panel sends but subscribe and ping.
+ * of the line as ChartBridge sends them, and a stand-in drops anything a panel sends but subscribe, ping and (1.15.0) htf.
  *
  * No DOM; it also loads in Node for test/feed.test.js (pass `WebSocket` and, if wanted, `now` in the options).
  */

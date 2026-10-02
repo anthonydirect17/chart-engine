@@ -16,7 +16,9 @@ fantastic chart. Thats what I want to actually trade on."
   `--sig-bear`, `--sig-bear-line`; with them off the chart draws exactly as in 1.12.0). Page and engine 1.14.0 (the
   display round, Anthony's list of 2026-10-01): the live pages draw no grid lines by default, keep 80 px of room right of
   the last bar at any zoom, keep every order on the price scale and no longer size it by the VWAP; everything else draws
-  as in 1.13.0.
+  as in 1.13.0. Page and engine 1.15.0 (the workspace only; `/single.html` draws exactly as 1.14.0): the Zone drawing, the
+  corner readout, compact order labels and spaced day labels on a host's charts (engine options `compactLabels`,
+  `toolOrders`, `spacedDays`, all off by default), 4h, 1D and 1W charts; no new colors.
 
 ## Colors
 
@@ -160,7 +162,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Volume sits in the bottom 16% of the plot, scaled to the largest bar in view.
 - Right offset: 8 empty bars past the last bar (the engine's default). The live pages (1.14.0, Anthony: price was
   jammed against the scale): **room right** of 80 px, the same on screen at every zoom (8 bars shrank to a few px zoomed
-  out); None, 40, 80 or 160 px in Settings; Jump to live and End keep it. Default bar spacing 7 px; zoom range 0.6 to 48 px.
+  out); None, 40, 80 or 160 px in Settings; Jump to live and End keep it. 1.15.0 (Anthony's review): the workspace offers 80,
+  120 and 160 px, **120** until one is picked (a value saved before is kept; `/single.html` keeps its 1.14.0 choices).
+  Default bar spacing 7 px; zoom range 0.6 to 48 px.
 - **The price scale** fits the candles in view, eased with the 120 ms re-fit. 1.14.0 (Anthony, from WORK: on the smaller
   panels the high ran under the legend): the top keeps the legend's height and 8 px free (8% when that is more, 45% of
   the plot at most). 1.14.0: it also takes in every working
@@ -174,6 +178,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   (NinjaTrader's ATR of the chart's own closed bars); after the bar's change "+0.42% vs settle" in the bull or bear text
   color (the last price against the prior settlement from ChartBridge 0.3.7; blank, never estimated, with none). Once a
   second, on the second.
+- **Corner readout (1.15.0, the workspace, Anthony's item 9):** the bar countdown and the ATR leave the header text and live in
+  one quiet readout at the plot's bottom right, 6 px in: "Bar 0:23 · ATR(14) 12.50" (Range "Bar ▲3 ▼5t", 4h/1D/1W to the bar's
+  real close) in 500 10px mono, the secondary text color on the legend ground, radius 4, 16 px tall; moved up past any order
+  label and the VWAP's marker (never on the price axis, the padlock or Jump to live, which sit in the axis column); on a plot
+  too narrow for it the short form "0:23 · ATR 12.50". Shown on small panels and with the header text off. The workspace's
+  headers no longer show the change from the settlement (the Quote board has it).
 
 ## Drawing
 
@@ -328,6 +338,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   stops), plus a close x while order editing is on. Labels that would overlap step left. The price-axis tag
   is filled in the side color for limits and outlined (dashed) for stops, and stacks with the level tags.
   An order moved and waiting for its answer draws at 55%. Labels draw above the last price line and live dot.
+- **Compact labels (1.15.0, a host's charts: the workspace; Anthony from his two-monitor setup, images/67.webp):** the same
+  colors, borders and dashes, the text 500 10px mono in a 14 px box with 4 px padding, right-aligned where the full label
+  would end: "TGT 1", "STP 1" (a leg's side is its color), "BUY LMT 1", planned "SL -12t" / "TP +24t", the position "L1
+  +4.50 +$90" (side letter and size, points, whole dollars). The full label (the 1.14.0 one) while the mouse is over it, and
+  while it has "+SL" / "+TP" cells. The hit areas, the stacking and the x (its 18 px cell) are the full label's, so nothing
+  that was clickable shrank.
 - **Planned stop and target (1.13.0, ChartBridge 0.3.8):** a resting entry's planned legs draw as its legs would (the
   leg's side color), but clearly planned: the line finely dashed 2/4 at 70% (40% while a move waits for its answer),
   the label "SL plan -12t" / "TP plan +24t" (ticks from the fill, from the line's live distance while dragged) with a
@@ -340,6 +356,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   close. Each tick flashes the tag white (38%, fading over about 160 ms) and pulses a ring from the
   live dot (500 ms).
 - **Crosshair:** dashed 4/4, snaps to the bar center, with price and date/time tags.
+- **Zone (1.15.0, Anthony):** a box between two prices (on the tick) and two times: the drawing color at 10% (16% while
+  selected or being drawn) with a crisp 1 device pixel edge at 85%, above the grid and the profile, behind the volume bars,
+  levels and candles; its four corners get the drawings' handles when selected. A corner resizes it, an edge moves it (the
+  inside only once it is selected, so a pan over a big zone stays a pan); Delete removes it; saved with the chart's drawings.
+- **Day labels (1.15.0, a host's charts):** a session's day label closer than 70 px to the last one drawn keeps its divider
+  and leaves out its text (4h and 1h bars no longer print days over each other).
 
 ## Motion (the feel Anthony approved)
 
@@ -401,6 +423,14 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   never on an order's label or tag; such a press does not pan or pick a drawing). Ctrl and Shift together send nothing.
   The preview shows the buy and names the sell ("click · right click: SELL STP"). No browser menu over the plot.
 - Switching timeframe keeps bar spacing and the live edge (or the time at the right edge).
+- **The drawing ring (1.15.0, the workspace, Anthony):** a middle-click (no modifier) on a chart's plot opens four 32 px round
+  tools 40 px around the pointer, on the menus' ground and border (`#0F141C`, `#3B2A6B`, the accent tint and `#7B5CFF` border
+  on hover): Trend line (top), Price line (right), Clear this chart (bottom), Zone (left), and a 6 px accent dot at the
+  centre. Moved in to stay inside the plot; fixed, never scrolling. A tool arms on that chart, draws one drawing and goes
+  off; Escape takes back the ring, an armed tool or a drawing half made; a click outside closes it; the focus goes back to
+  the page. The middle button never places, moves or cancels an order, and its press is kept from the browser over the
+  charts (no auto-scroll). While a tool is armed a Shift or Ctrl click is an order click as with none. The small menu (⋯)
+  keeps Reset view and says "Drawing tools: middle-click the chart".
 - Live page, **Indicators menu "E2"** (1.6.0, as Anthony approved it in the design canvas): one per chart pane, a
   `.btn` showing shown/on-this-chart ("4/5"), opening a 460 px panel (never wider than the pane) on `#0B1016` with a
   `#2A3645` border, radius 12, the Colors panel's shadow, padding 8:
@@ -511,6 +541,23 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   loss colors). It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel scrolls inside. The placeholder
   in another window says "Ticket is in the other window" with Move the ticket here; with no ticket anywhere "No window
   has the ticket" with Use the ticket here.
+
+- **4h, 1D and 1W (1.15.0, ChartBridge 0.3.7):** NinjaTrader's own bars (`htf`, the forming one by `htfBar` and the live
+  trades' close, high and low), on their own row of the bars picker ("Needs ChartBridge 0.3.7 or newer", dashed, with an
+  older one). No RTH shading or delta pane on them; VWAP (the session's, from the 1-minute bars) and levels on 4h; on 1D and
+  1W no VWAP, levels or profile, and the chart's note says so. Daily labels as for daily bars.
+- **History (1.15.0):** a 1 hour chart loads 30 days of 1-minute history, a 15 minute chart 10, the rest 5.
+- **Account panel (1.15.0, Anthony's consolidated form):** a 28 px header (Account and the ticket's account in 500 11px mono),
+  a summary strip of four (Open, Realized, Day in 600 14px mono in the buy green or sell red, Trades), tabs (600 11px,
+  the selected one with a 2 px accent underline and a count badge), the rows (12px mono, a hairline `#121922` between, the
+  only scroll), a quiet foot. Positions with a Close (the sell red border), Orders with an x, Fills with each flat-to-flat
+  trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today). On a narrow panel (under 360 px)
+  the summary goes two by two and each pair of columns stacks in one cell, so nothing is cut at 1366 px.
+- **Quote board (1.15.0):** NQ, MNQ, ES, MES: last, change and % from the prior settlement (buy green or sell red; blank
+  without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
+  stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
+- **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures
+  are written at most 4 times a second, in one animation frame, only the cells that changed; a trade only notes the price.
 
 ## Honesty rules
 
