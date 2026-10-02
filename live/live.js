@@ -159,7 +159,7 @@ const INDICATOR_COLORS = [
   { key: 'vwap', id: 'vwap', name: 'Line', def: ENGINE.DEFAULT_THEME.vwap },
   { key: 'prior', id: 'levels', name: 'Prior day high and low', def: ENGINE.LEVEL_COLORS.prior },
   { key: 'overnight', id: 'levels', name: 'Overnight high and low', def: ENGINE.LEVEL_COLORS.overnight },
-  { key: 'value', id: 'levels', name: 'Value area high and low', def: ENGINE.LEVEL_COLORS.value },
+  { key: 'value', id: 'levels', name: 'PD VAH, PD VAL and PD POC', def: ENGINE.LEVEL_COLORS.value },
   { key: 'close', id: 'levels', name: 'Prior close', def: ENGINE.LEVEL_COLORS.close },
   { key: 'ibHigh', id: 'levels', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
   { key: 'ibLow', id: 'levels', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
@@ -2690,7 +2690,7 @@ function start(container, opt, PAGE) {
      the legend's lines), eased in with the 120 ms re-fit; told again whenever the legend's height changes. */
   /* (the hover line of a short header is left out: the scale does not jump as the mouse comes and goes; with the header
      text off there is nothing to keep free) */
-  const fitTop = () => { const lg = $('legend'); if (!lg || destroyed || lgHover) return; chart.setFitTop(lgOn && lg.offsetHeight ? lg.offsetTop + lg.offsetHeight + 4 : 0); };
+  const fitTop = () => { const lg = $('legend'); if (!lg || destroyed || lgHover) return; chart.setFitTop(lgOn && lg.offsetHeight ? lg.offsetTop + lg.offsetHeight + 8 : 0); };   // 8 px: the eased re-fit never brings a new high into the header
   if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fitTop); ro.observe($('legend')); cleanups.push(() => ro.disconnect()); }
   applyLegendShown(); shortHeader();
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */

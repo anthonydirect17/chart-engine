@@ -30,6 +30,7 @@
     "smoke:nostop": "node test/nostop-smoke.mjs",
     "smoke:signals": "node test/signals-smoke.mjs",
     "smoke:noscroll": "node test/noscroll-smoke.mjs",
+    "smoke:headroom": "node test/headroom-smoke.mjs",
     "smoke:display": "node test/display-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",

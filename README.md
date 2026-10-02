@@ -5,7 +5,7 @@ Anthony's trading chart. A Canvas 2D candlestick engine built to feel as smooth 
 - wheel and pinch zoom that eases in and stays anchored under the pointer;
 - a price axis that re-fits smoothly instead of snapping;
 - a live candle that grows toward each tick, with a flashing price tag and a bar-close countdown;
-- throw-to-pan, live-edge following and a "Jump to live" button;
+- throw-to-pan, live-edge following and a "Jump to live" icon at the top of the price scale;
 - levels, session VWAP, trade marks and volume;
 - a Colors panel so the candles can be any colors you like.
 

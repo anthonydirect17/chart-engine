@@ -285,7 +285,8 @@ try {
   const div = await p.locator('#chart .ce-divider').boundingBox();
   check(!!div && Math.abs(div.y - (box.y + s.pane.plotHeight)) <= 1 && div.y + div.height <= box.y + s.pane.top + 6.5 && div.x + div.width <= box.x + box.width - 78 + 1,
     'the divider\'s band: from where the plot ends, into the pane by at most 6 px, not over the price axis (review N2): ' + JSON.stringify(div));
-  check(await p.evaluate(() => { const b = document.querySelector('#chart .ce-live'); return getComputedStyle(b).bottom; }) === Math.round(box.height - s.pane.plotHeight + 12) + 'px', '"Jump to live" sits above the pane (review N3)');
+  // 1.14.0: "Jump to live" is a small icon at the top of the price scale, never over the plot or the pane
+  check(await p.evaluate(() => { const b = document.querySelector('#chart .ce-live'); return b.style.bottom === '' && parseFloat(getComputedStyle(b).top) < 100; }), '"Jump to live" at the top of the price scale, clear of the pane (review N3, 1.14.0)');
   await p.mouse.move(div.x + 300, div.y + div.height / 2); await p.mouse.down();
   await p.mouse.move(div.x + 300, div.y + div.height / 2 - 120, { steps: 6 }); await p.mouse.up();
   await p.waitForTimeout(300);

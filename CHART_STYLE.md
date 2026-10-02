@@ -161,7 +161,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   jammed against the scale): **room right** of 80 px, the same on screen at every zoom (8 bars shrank to a few px zoomed
   out); None, 40, 80 or 160 px in Settings; Jump to live and End keep it. Default bar spacing 7 px; zoom range 0.6 to 48 px.
 - **The price scale** fits the candles in view, eased with the 120 ms re-fit. 1.14.0 (Anthony, from WORK: on the smaller
-  panels the high ran under the legend): the top keeps the legend's height and 4 px free (8% when that is more, 45% of
+  panels the high ran under the legend): the top keeps the legend's height and 8 px free (8% when that is more, 45% of
   the plot at most). 1.14.0: it also takes in every working
   order, the position's stop and target legs and the planned stop and target lines ("zoom to brackets", Anthony: on HOME
   the stop sat off the chart), and no longer the VWAP (one far from price squashed the candles).
@@ -375,9 +375,13 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   each a 32 px row of its name (13px) and the toolbar's control; then Change PIN and the versions (400 11px mono, the
   quiet grey). A host's chart with its own toolbar keeps the 1.13.0 toolbar.
 - Drag to pan and throw. Wheel or pinch zooms at the pointer; a sideways trackpad swipe pans.
-- While following the live edge, zoom keeps the live edge in place. Panning away shows "Jump to live";
-  End or the button returns.
-- Drag the price axis to stretch price (auto-fit off; chart drag then pans price too). Double-click
+- While following the live edge, zoom keeps the live edge in place. Panning away shows "Jump to live": since 1.14.0 a
+  small icon (24 x 22 px, radius 6, `#B69CFF` on `#1A1230` with a `#3B2A6B` border, a play-to-end glyph, tooltip "Jump
+  to live (End)") at the top of the price scale, moved down only to stay clear of the tags there; the axis prices under
+  it are not drawn. End or the icon returns.
+- Drag the price axis to stretch price (auto-fit off; chart drag then pans price too). 1.14.0: while following live, a
+  new trade that takes the forming bar within 12 px of the header or the bottom brings the auto-fit back (eased), and
+  so does going back to live. Double-click
   the price axis or press A for auto-fit. Drag the time axis to zoom. Double-click the chart to reset.
 - Keys: left/right pan with a glide, + and - zoom, End live, A auto-fit. The chart is focusable.
 - Orders (only while order editing is on, which the live page ties to Armed): drag an order's label or

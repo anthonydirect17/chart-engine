@@ -92,9 +92,23 @@ from using 1.12.0 live on HOME:
   last drawn; the per-frame cost is unchanged. Engine: `on('bubble', { t, p, v, side, floor } | null)`, `bubbleHover()`,
   `bubbles()` (each bubble as last drawn, its size as drawn).
 - **The high no longer runs into the legend** (the 5 min and 1 hour panels): the price scale keeps the legend's height
-  and 4 px free at its top (8% when that is more; at most 45% of the plot), told again whenever the legend's height
+  and 8 px free at its top (8% when that is more; at most 45% of the plot), told again whenever the legend's height
   changes and eased with the 120 ms re-fit, never a snap; with zoom to brackets and the VWAP rule as above. The time axis
   is below the plot, so nothing changes at the bottom. Engine: option `fitTop`, `setFitTop(px)`; `util.fitRange` takes it.
+
+### From Anthony live on 1.13.0: the header room, by itself, and Jump to live
+- **Price never runs into the header** as it trends, without resizing or squashing by hand: the auto-fit counts the
+  forming bar's real high and low (not only its eased candle), so the scale makes room before the candle gets there, and
+  the room under the header is 8 px. A price scale zoomed or moved by hand stays as set while the price is inside it;
+  once a new trade takes the forming bar within 12 px of the header (or the bottom) while following live, the auto-fit
+  takes over again, eased with the same 120 ms re-fit. Going back to live (End, the icon, or scrolling back to the live
+  edge) brings the auto-fit back too. The fit is the bars in view (and orders), so the candles are never squashed more
+  than the move needs. The time constants are unchanged.
+- **Jump to live is a small icon** (24 x 22 px, the same purple, a play-to-end glyph, tooltip "Jump to live (End)") at
+  the top of the price scale instead of the pill over the plot, on both pages and in every panel. It shows only while
+  not following live, sits clear of every tag in that column (the last price with its countdown, orders, the position,
+  levels: it moves down below them when they are at the top, and the axis prices under it are not drawn), never over the
+  plot, and takes no layout room. End still works.
 
 ### The NO STOP question's place (the coordinator, layout only)
 - On `/single.html` it opens just under the legend, so the LIVE and ARMED pills stay in view; in the workspace it starts
@@ -180,6 +194,14 @@ from using 1.12.0 live on HOME:
   computation, every chip pinned at three sizes on both pages, the short header and its hover line, no numbers drawn on a
   bubble, the header toggle on both pages (none on hover, the room back eased, saved per panel across a reload).
 - `npm run smoke:noscroll` (new), above.
+- `npm run smoke:headroom` (new): a fake-bridge trend of +60 points in 2 minutes on MNQ, watched on a big workspace
+  panel (full header, its price scale squashed by hand after a first leg up) and a small one (the short header), then
+  on `/single.html`: the last price, the forming high and every high in view stay at least 4 px below the header at
+  every sample, the scale is never more than 1.1 times the fit of the bars in view, the auto-fit takes over by itself
+  near the header; Jump to live as an icon at the top of the price scale, clear of the last price tag, no layout room,
+  a click and End. `test/vp-draw.test.js`: the takeover (kept while the price is inside, on a trade near the header, on
+  going back to live) and the icon (hidden while following, at the top of the price scale, below two order tags priced
+  at the top).
 - Selectors that follow the new layout: `smoke:live` (Range style and Glide in Settings, the drawing tools in the small
   menu, 2-letter chips on a phone), `smoke:pin` (Change PIN in Settings), `smoke:workspace` (the single chart page's
   Glide in Settings; the tape's colors by category or side), `smoke:ib` (the light toolbar read on Settings, the toolbar's

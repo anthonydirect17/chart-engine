@@ -536,7 +536,7 @@ test('chart: a width change that leaves the bars in view and their right edge as
   }
 });
 
-test('chart: the divider\'s band covers the gap and the top of the pane only, never the plot or the price axis; "Jump to live" sits above the pane (review N2, N3)', () => {
+test('chart: the divider\'s band covers the gap and the top of the pane only, never the plot or the price axis (review N2, N3)', () => {
   const { chart, settle, divider, W, H, E } = stubChart();
   const btn = { style: {} };
   chart.setLayers({ delta: true }); settle();

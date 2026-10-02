@@ -817,8 +817,10 @@ const CSS = `
 .ce-host{position:relative;overflow:hidden;outline:none}
 .ce-host:focus-visible{box-shadow:inset 0 0 0 2px #B69CFF}
 .ce-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair;user-select:none;-webkit-user-select:none}
-.ce-live{position:absolute;right:90px;bottom:38px;z-index:3;font:600 12px "IBM Plex Sans",system-ui,sans-serif;color:#B69CFF;background:#1A1230;border:1px solid #3B2A6B;border-radius:999px;padding:5px 12px;min-height:30px;cursor:pointer}
-.ce-live:hover{color:#fff}
+.ce-live{position:absolute;top:4px;left:0;z-index:3;width:24px;height:22px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#B69CFF;background:#1A1230;border:1px solid #3B2A6B;border-radius:6px;cursor:pointer}
+.ce-live[hidden]{display:none}
+.ce-live svg{width:12px;height:12px;display:block}
+.ce-live:hover{color:#fff;border-color:#B69CFF}
 .ce-live:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
 .ce-theme{position:relative;display:inline-block}
 .ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5);background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
@@ -984,8 +986,12 @@ function create(container, options) {
   const ctx = cv.getContext('2d', { alpha: false });
   let liveBtn = null;
   if (o.liveButton) {
+    /* 1.14.0 (Anthony): a small icon at the top of the price scale, not a pill over the plot; placed each frame where no
+       price, order or level tag is (placeLive) */
     liveBtn = document.createElement('button'); liveBtn.type = 'button'; liveBtn.className = 'ce-live';
-    liveBtn.textContent = 'Jump to live ›'; liveBtn.hidden = true; container.appendChild(liveBtn);
+    liveBtn.title = 'Jump to live (End)'; liveBtn.setAttribute('aria-label', 'Jump to live (End)');
+    liveBtn.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2.25 7.25 6 2 9.75z" fill="currentColor"/><rect x="8.25" y="2.25" width="1.75" height="7.5" rx=".5" fill="currentColor"/></svg>';
+    liveBtn.hidden = true; container.appendChild(liveBtn);
   }
   /* The divider between the plot and the delta pane (1.7.0): drag it, or focus it and use the arrow keys. */
   const divEl = document.createElement('div');
@@ -1043,7 +1049,7 @@ function create(container, options) {
   const paneOn = () => !!o.layers.delta;
   const V = {
     spacing: o.barSpacing, logS: Math.log(o.barSpacing), logT: Math.log(o.barSpacing), right: 0,
-    follow: true, anchor: null, kin: null, auto: true, lo: 0, hi: 1, init: false,
+    follow: true, anchor: null, kin: null, auto: true, lo: 0, hi: 1, init: false, edgeKey: '',
   };
   const disp = { c: 0, h: 0, l: 0, n: -1 };
   let hover = null, drag = null, dirty = true, flash = 0, pulseT0 = -1e9, lastSec = -1, hoverIdx = null;
@@ -1174,7 +1180,6 @@ function create(container, options) {
     const area = H - TIME_H;
     if (!paneOn()) {
       plotH = Math.max(10, H - TIME_H); paneTop = plotH; paneH = 0; timeY = plotH; divEl.hidden = true;
-      if (liveBtn && liveBtn.style.bottom) liveBtn.style.bottom = '';
       return;
     }
     const least = Math.min(PANE_MIN, Math.floor(area * 0.3)), most = Math.max(least, area - PANE_GAP - PRICE_MIN);
@@ -1185,7 +1190,6 @@ function create(container, options) {
     // the band starts where the plot ends (its last row, order tags there and the wheel stay the plot's) and stops at
     // the price axis: the 4 px gap and the top 6 px of the pane (review N2)
     divEl.style.top = Math.round(plotH) + 'px'; divEl.style.right = AXIS_W + 'px';
-    if (liveBtn) liveBtn.style.bottom = Math.round(H - plotH + 12) + 'px';   // "Jump to live" over the plot, above the pane (review N3)
     divEl.setAttribute('aria-valuenow', String(Math.round(pane.ratio * 100)));
     divEl.setAttribute('aria-valuetext', 'Delta pane ' + Math.round(pane.ratio * 100) + '% of the chart height');
   }
@@ -1214,7 +1218,8 @@ function create(container, options) {
     // 1.14.0 (Anthony): the VWAP no longer sizes the chart (one far from price squashed the candles); it draws off the
     // scale with an edge marker instead
     for (let i = from; i <= to; i++) {
-      const b = bars[i], h = i === n ? disp.h : b.h, l = i === n ? disp.l : b.l;
+      // the forming bar: its real high and low too (1.14.0), so the scale makes room before the candle eases up to them
+      const b = bars[i], h = i === n ? Math.max(disp.h, b.h) : b.h, l = i === n ? Math.min(disp.l, b.l) : b.l;
       if (h > mx) mx = h; if (l < mn) mn = l;
     }
     // 1.14.0 (Anthony, "zoom to brackets"): working orders, the position's stop and target and the planned stop and
@@ -1306,6 +1311,19 @@ function create(container, options) {
       const tr = followRight();
       if (V.right !== tr) { V.right = approach(V.right, tr, dt, o.motion.follow); if (Math.abs(V.right - tr) < 1e-3) V.right = tr; moving = true; }
     }
+    /* 1.14.0 (Anthony, live on 1.13.0: "price keeps running up into the header"): a price scale zoomed or moved by hand
+       stays as set while the price is inside it, but once a new trade takes the forming bar within 12 px of the header
+       (or of the bottom) while following live, the auto-fit takes over again, eased as ever. */
+    if (n >= 0) {
+      const b = bars[n], key = bars.length + '|' + b.h + '|' + b.l + '|' + b.c;
+      if (key !== V.edgeKey) {                                   // a new trade (never a change made by hand)
+        V.edgeKey = key;
+        if (!V.auto && V.follow && V.init && !drag && !pinch) {
+          const yh = yOf(Math.max(b.h, disp.h)), yl = yOf(Math.min(b.l, disp.l));
+          if (yh < (o.fitTop || 0) + 12 || yl > plotH - 12) V.auto = true;
+        }
+      }
+    }
     if (V.auto) {
       const t = autoTarget();
       if (t) {
@@ -1388,6 +1406,26 @@ function create(container, options) {
   function roundRect(x, y, w, h, r) {
     ctx.beginPath();
     if (ctx.roundRect) ctx.roundRect(x, y, w, h, r); else ctx.rect(x, y, w, h);
+  }
+  /* The Jump to live icon's place (1.14.0): in the price scale's column, at its top, or lower down at the first place
+     clear of every tag drawn there (the last price with its countdown, orders, the position, levels), so it never covers
+     a price or an order; it takes no room of its own. */
+  let liveAt = null;
+  const LIVE_W = 24, LIVE_H = 22;
+  function placeLive(tags, pTop) {
+    const busy = tags.map(t => { const y0 = clamp(t.y - 9, 0, Math.max(0, plotH - 18)); return [y0, y0 + 18]; });
+    if (pTop !== null) busy.push([pTop, pTop + 32]);
+    let y = 4;
+    for (let k = 0; k < busy.length + 1; k++) {
+      const hit = busy.find(r => y < r[1] + 3 && y + LIVE_H > r[0] - 3);
+      if (!hit) break;
+      y = hit[1] + 4;
+    }
+    const at = { x: plotW + Math.round((AXIS_W - LIVE_W) / 2), y: Math.round(Math.min(y, Math.max(4, plotH - LIVE_H - 4))), w: LIVE_W, h: LIVE_H };
+    const top = at.y + 'px', left = at.x + 'px';
+    if (liveBtn.style.top !== top) liveBtn.style.top = top;
+    if (liveBtn.style.left !== left) liveBtn.style.left = left;
+    return at;
   }
   function axisTag(y, text, fill, fg, border, sub) {
     const h = sub ? 32 : 18;
@@ -2132,10 +2170,12 @@ function create(container, options) {
       let prev = -1e9; for (const t of tags) { t.y = Math.max(t.y, prev + 19); prev = t.y; }
       let lim = plotH - 9; for (let k = tags.length - 1; k >= 0; k--) { tags[k].y = Math.min(tags[k].y, lim); lim = tags[k].y - 19; }
     }
+    liveAt = liveBtn && !V.follow ? placeLive(tags, n >= 0 ? clamp(ly - 9, 0, Math.max(0, plotH - 32)) : null) : null;
     ctx.font = '400 11px ' + T.fontMono; ctx.fillStyle = T.axisText; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     for (let k = k0; k <= k1 && k - k0 < 400; k++) {
       const y = yOf(k * pStep); if (y < 8 || y > plotH - 8) continue;
       if (tags.some(t => Math.abs(t.y - y) < 18) || (n >= 0 && Math.abs(ly - y) < 22)) continue;
+      if (liveAt && y > liveAt.y - 8 && y < liveAt.y + liveAt.h + 8) continue;     // under the Jump to live icon
       ctx.fillText(fmtPrice(k * pStep, o.precision), plotW + 8, y);
     }
     ctx.textAlign = 'center';
@@ -2394,7 +2434,7 @@ function create(container, options) {
       V.follow = false; V.kin = { v: dist / o.motion.friction };
     } else if (e.key === '+' || e.key === '=') zoomBy(0.3, plotW * 0.75);
     else if (e.key === '-' || e.key === '_') zoomBy(-0.3, plotW * 0.75);
-    else if (e.key === 'End') { V.kin = null; V.follow = true; }
+    else if (e.key === 'End') { V.kin = null; V.follow = true; V.auto = true; }
     else if (e.key === 'a' || e.key === 'A') V.auto = true;
     else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) { drawings = drawings.filter(d => d.id !== selectedId); selectedId = null; drawingsChanged(); }
     else if (e.key === 'Escape' && (tool || draft || selectedId)) { selectedId = null; setToolInternal(null); }
@@ -2475,7 +2515,11 @@ function create(container, options) {
         emitLegend();
       }
       const live = V.follow;
-      if (live !== wasLive) { wasLive = live; if (liveBtn) liveBtn.hidden = live; emit('live', live); }
+      if (live !== wasLive) {
+        wasLive = live; if (liveBtn) liveBtn.hidden = live;
+        if (live && !V.auto) { V.auto = true; dirty = true; }        // following live again: the auto-fit takes over (1.14.0)
+        emit('live', live);
+      }
       if (failing) { failing = false; reported.clear(); emit('error', null); }   // a clean frame: recovered
     } catch (e) {
       // draw() has one save() (the plot clip); restore() with nothing saved does nothing, so one call balances it.
@@ -2683,7 +2727,7 @@ function create(container, options) {
     /** The x of bar i's centre, CSS px from the left of the chart (as last drawn; G1c, for tests and hosts). */
     barToX(i) { return xOf(i); },
     yToPrice(y) { return priceAt(y); },
-    goLive() { V.kin = null; V.follow = true; dirty = true; },
+    goLive() { V.kin = null; V.follow = true; V.auto = true; dirty = true; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
     isLive() { return V.follow; },
     bars() { return bars; },

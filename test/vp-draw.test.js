@@ -304,14 +304,15 @@ function stubChart() {
     },
     set(t, k, v) { t[k] = v; return true; },
   });
-  const element = () => ({
+  const made = [];
+  const element = () => made[made.push({
     handlers: {}, style: {}, dataset: {}, hidden: false, textContent: '', tabIndex: -1,
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
     appendChild(c) { return c; }, remove() {}, setAttribute() {}, hasAttribute() { return false; },
     getContext: () => ctx, focus() {}, setPointerCapture() {},
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 1078, height: 626, right: 1078, bottom: 626 }),
-  });
+  }) - 1];
   let frameFn = null;
   global.document = { createElement: element, getElementById: () => null, head: { appendChild() {} } };
   global.window = { devicePixelRatio: 1 };
@@ -326,7 +327,7 @@ function stubChart() {
   const chart = E.create(element(), { clock: () => bars[bars.length - 1].t + 30 });
   chart.setBars(bars);
   let ts = 1000;
-  return { E, chart, ops, bars, T0, frame() { ops.length = 0; const f = frameFn; frameFn = null; if (f) f(ts += 16); } };
+  return { E, chart, ops, bars, T0, made, frame() { ops.length = 0; const f = frameFn; frameFn = null; if (f) f(ts += 16); } };
 }
 
 test('chart: the profile draws only with the vp layer, off by default, at the right edge, behind the candles and in front of the grid', () => {
@@ -424,4 +425,62 @@ test('chart: the developing POC, VAH and VAL lines, each its own toggle, from th
   // with the profile layer off, no developing lines either
   chart.setLayers({ vp: false }); frame();
   assert.deepEqual(names(), []);
+});
+
+/* ---- the header room and Jump to live (1.14.0, Anthony live on 1.13.0) */
+test('chart: a price scale set by hand gives way to the auto-fit when a new trade nears the header, and on going back to live', () => {
+  const { chart, bars, made, frame } = stubChart();
+  const cv = made.find(m => m.handlers.wheel);
+  chart.setFitTop(60);
+  for (let i = 0; i < 40; i++) frame();
+  assert.equal(chart.priceScale().auto, true);
+  // stretch the price by hand over the axis: auto off, and nothing changes it while no trade comes
+  cv.handlers.wheel({ deltaX: 0, deltaY: -300, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  for (let i = 0; i < 20; i++) frame();
+  assert.equal(chart.priceScale().auto, false, 'set by hand: kept');
+  const ps = chart.priceScale(), last = bars[bars.length - 1];
+  // a trade inside the free area: still as set
+  const mid = (ps.lo + ps.hi) / 2;
+  chart.update(Object.assign({}, last, { c: mid, h: Math.max(last.h, mid), l: Math.min(last.l, mid) })); frame();
+  assert.equal(chart.priceScale().auto, chart.priceToY(Math.max(last.h, mid)) < 60 + 12, 'only when the bar nears the header');
+  // a trade that takes the high into the header's 12 px: the auto-fit takes over, eased
+  const up = ps.hi - (ps.hi - ps.lo) * (50 / chart.priceScale().plotHeight);
+  chart.update(Object.assign({}, last, { c: up, h: up })); frame();
+  assert.equal(chart.priceScale().auto, true, 'the auto-fit took over');
+  for (let i = 0; i < 60; i++) frame();
+  assert.ok(chart.priceToY(up) >= 60 - 0.5, 'and the high is below the header again: ' + chart.priceToY(up).toFixed(1));
+  // by hand again, then End: following live again brings the auto-fit back
+  cv.handlers.wheel({ deltaX: 0, deltaY: 200, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  assert.equal(chart.priceScale().auto, false);
+  chart.goLive(); frame();
+  assert.equal(chart.priceScale().auto, true, 'Jump to live: the auto-fit back');
+});
+
+test('chart: Jump to live is a small icon at the top of the price scale, only while not following, below any tags there', () => {
+  const { chart, bars, made, frame } = stubChart();
+  const btn = made.find(m => m.className === 'ce-live'), box = made.find(m => m.handlers.keydown);
+  assert.ok(btn, 'the icon exists');
+  assert.equal(btn.title, 'Jump to live (End)');
+  for (let i = 0; i < 30; i++) frame();
+  assert.equal(btn.hidden, true, 'following live: hidden');
+  for (let i = 0; i < 30; i++) box.handlers.keydown({ key: 'ArrowLeft', preventDefault() {}, stopPropagation() {} });
+  for (let i = 0; i < 60; i++) frame();
+  assert.equal(chart.isLive(), false);
+  assert.equal(btn.hidden, false, 'scrolled back: shown');
+  assert.deepEqual([btn.style.left, btn.style.top], [(1078 - 78 + 27) + 'px', '4px'], 'in the price scale column, at its top');
+  // the price scale set by hand, and two orders priced at its very top: their tags sit under the top edge (0 to 37 px);
+  // the icon goes below them, never over one
+  const cv = made.find(m => m.handlers.wheel);
+  cv.handlers.wheel({ deltaX: 0, deltaY: -100, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  const ps = chart.priceScale(), at = y => Math.round((ps.hi - (ps.hi - ps.lo) * y / ps.plotHeight) * 4) / 4;
+  chart.setOrders([{ id: 'O1', side: 'sell', kind: 'limit', price: at(4), qty: 1 }, { id: 'O2', side: 'sell', kind: 'limit', price: at(14), qty: 1 }]);
+  for (let i = 0; i < 10; i++) frame();
+  assert.equal(chart.priceScale().auto, false);
+  const y = parseFloat(btn.style.top);
+  assert.ok(y >= 37 + 3, 'moved down below the two order tags: ' + y);
+  chart.goLive(); frame();
+  assert.equal(btn.hidden, true, 'back to live: hidden');
+  assert.ok(bars.length > 0);
 });

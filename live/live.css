@@ -414,7 +414,6 @@
   .chart-live .lg2 { font-size: 11px; gap: 0 8px; }
   .chart-live .status .ro { margin-left: 0; }
   .chart-live .seg button { padding: 4px 7px; }
-  .chart-live .ce-live { right: 86px !important; bottom: 34px !important; }
 }
 /* A compact chart (ChartLive.mount compact: true, the workspace's panels). The legend: at most 2 lines, no source line,
    no LIVE pill (the host shows the connection), no bar time; the prices by importance (the close and the change first),
