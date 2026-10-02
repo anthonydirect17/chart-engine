@@ -738,7 +738,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (far != null) return far;
                 }
                 if (kind == "limit") o.LimitPriceChanged = price; else o.StopPriceChanged = price;
-                if (br != null) lock (Sync) SentPrice[o] = price;   // until NinjaTrader confirms it, a plan is checked against both prices
+                if (br != null) lock (Sync) SentPrice[o] = new Sent { Price = price };   // until NinjaTrader answers, a plan is checked against both prices
                 o.Account.Change(new[] { o });
             }
             ChartBridgeServer.Log("order moved: " + (o.Name ?? "") + " to " + CbJson.Num(price) + " on " + o.Account.Name);
@@ -756,10 +756,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // plan (the fill path uses what Anthony set) and raises an alarm that it may not survive a recompile. Legs
         // already working for earlier fill increments are not touched: they move with change, as B/E does.
         private static readonly object PlanLock = new object();   // a plan change and an entry move are checked one at a time
-        private static readonly Dictionary<Order, double> SentPrice = new Dictionary<Order, double>();   // entry -> price a change sent, until confirmed (Sync)
-        // S1: resting entries whose bracket waits for planned_brackets.txt to be read (Sync), and since when the scan has
-        // seen one with fills and no legs (an alarm after PlanReadAlarmMs).
-        private static readonly HashSet<Order> PlanDeferred = new HashSet<Order>();
+        // entry -> the price a change sent, until NinjaTrader has answered it (Sync). PendingSeen: an update in ChangePending or
+        // ChangeSubmitted has been seen since, so a later update outside those states is NinjaTrader's answer (P9: an older
+        // update still on its way when the change went out is not).
+        private class Sent { public double Price; public bool PendingSeen; }
+        private static readonly Dictionary<Order, Sent> SentPrice = new Dictionary<Order, Sent>();
+        // S1: resting entries whose bracket waits for planned_brackets.txt to be read (Sync), with who saw them first: true an
+        // order event (a live fill: placed as its event would have, the moment the file is read), false the 2 s scan (a fill
+        // from while ChartBridge was stopped: P8, left to the scan, which legs only what the listed position still holds).
+        // And since when the scan has seen one with fills and no legs (an alarm after PlanReadAlarmMs).
+        private static readonly Dictionary<Order, bool> PlanDeferred = new Dictionary<Order, bool>();
         private static readonly Dictionary<Order, double> PlanWaitSince = new Dictionary<Order, double>();
         public const double PlanReadAlarmMs = 3000;
 
@@ -794,7 +800,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!IsWorking(o.OrderState)) return "that order is no longer working";
                 double entryPx = o.OrderType == OrderType.Limit ? o.LimitPrice : o.StopPrice, oldSp, oldTp, sent;
                 bool moving;
-                lock (Sync) { oldSp = br.StopPx; oldTp = br.TargetPx; moving = SentPrice.TryGetValue(o, out sent); }
+                Sent sp0;
+                lock (Sync) { oldSp = br.StopPx; oldTp = br.TargetPx; moving = SentPrice.TryGetValue(o, out sp0); }
+                sent = moving ? sp0.Price : 0;
                 newSp = hasSp ? sp : oldSp; newTp = hasTp ? tp : oldTp;
                 string bad = PlanProblem(tick, buy, entryPx, newSp, newTp);
                 if (bad == null && moving && Math.Abs(sent - entryPx) > 1e-9)
@@ -960,14 +968,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             NoteFill(o);
             lock (Sync)
             {
-                double sent;
+                Sent sent;
                 if (SentPrice.TryGetValue(o, out sent))
                 {
                     double px = o.OrderType == OrderType.Limit ? o.LimitPrice : o.StopPrice;
-                    // Forgotten once NinjaTrader has answered: confirmed, any error or refusal, done, or an update outside a
-                    // pending change that still shows another price (the move did not happen).
+                    // Forgotten once NinjaTrader has answered: the price confirmed, any error or refusal, done, or a pending
+                    // state seen and then left at another price (the move did not happen). An update outside a pending
+                    // state before one was seen may be older than the change (P9): kept.
                     bool pending = o.OrderState == OrderState.ChangePending || o.OrderState == OrderState.ChangeSubmitted;
-                    if (IsDone(o.OrderState) || Math.Abs(px - sent) < 1e-9 || e.Error != ErrorCode.NoError || o.OrderState == OrderState.Rejected || !pending) SentPrice.Remove(o);
+                    if (pending) sent.PendingSeen = true;
+                    if (IsDone(o.OrderState) || Math.Abs(px - sent.Price) < 1e-9 || e.Error != ErrorCode.NoError || (sent.PendingSeen && !pending)) SentPrice.Remove(o);
                 }
             }
             string root = ChartBridgeServer.RootFor(o.Instrument);
@@ -1127,7 +1137,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (deferred)
                 {
                     bool first;
-                    lock (Sync) first = PlanDeferred.Add(entry);   // placed as soon as the file has been read (LoadPlans)
+                    lock (Sync) { first = !PlanDeferred.ContainsKey(entry); if (first) PlanDeferred[entry] = true; }   // an order event saw it first: placed as soon as the file has been read (LoadPlans)
                     if (first) ChartBridgeServer.Log("entry " + (entry.Name ?? "") + ": waiting for planned_brackets.txt to be read before its bracket is recovered");
                     return;
                 }
@@ -1525,7 +1535,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             known = BracketOfEntry.ContainsKey(o);
                             if (!known)
                             {
-                                PlanDeferred.Add(o);
+                                if (!PlanDeferred.ContainsKey(o)) PlanDeferred[o] = false;   // the scan saw it first
                                 double since;
                                 if (!PlanWaitSince.TryGetValue(o, out since)) PlanWaitSince[o] = now;
                                 else if (since >= 0 && now - since >= PlanReadAlarmMs) { alarm = true; PlanWaitSince[o] = -1; }   // -1: said once
@@ -1878,10 +1888,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string err = WritePlans();   // drop the old lines, add the new ones
                 if (err != null) Alarm("could not update planned_brackets.txt (" + err + "); planned prices set since the start may not survive a recompile or restart");
             }
-            // S1: fills that waited for the read (seen by an order event or by the 2 s scan) get their legs now, as their
-            // order events would have placed them: the full increment (the legs check trims legs beyond the position).
+            // S1: fills an order event saw while the file was being read get their legs now, as that event would have placed
+            // them. P8: fills the 2 s scan found first (from while ChartBridge was stopped; the position may have been closed
+            // by hand since) are left to the scan path, which legs only what the listed position still holds (on its next
+            // pass, within 2 s, once the gap has lasted SettleMs).
             List<Order> waited;
-            lock (Sync) { waited = PlanDeferred.ToList(); PlanDeferred.Clear(); PlanWaitSince.Clear(); }
+            lock (Sync) { waited = PlanDeferred.Where(kv => kv.Value).Select(kv => kv.Key).ToList(); PlanDeferred.Clear(); PlanWaitSince.Clear(); }
             foreach (Order o in waited)
             {
                 try { KeepBracket(o); }

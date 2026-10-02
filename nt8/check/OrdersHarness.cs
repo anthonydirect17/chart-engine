@@ -1429,6 +1429,51 @@ public static class OrdersHarness
               "N3 a plan before the file is read: applied, no false save alarm, the write waits for the read");
         ChartBridgeOrders.LoadPlansNow();
         Check(PlanFileText().Contains(Tag(f4) + " 24975 0 "), "N3 written right after the read: " + PlanFileText());
+        Review3Checks();
+    }
+
+    // ------------------------------------------------------------ 0.3.7 final review: P8 and P9
+    static void Review3Checks()
+    {
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SimRw1, SimRw2, SimRw3, SimRw4, SimRw5");
+        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "5");
+        // P8: an entry that filled while ChartBridge was stopped, found by the start scan: legs only for what the listed
+        // position holds, whether the scan or the file read comes first
+        string[] tags = { "0ddba301", "0ddba302", "0ddba303", "0ddba304" };
+        for (int k = 0; k < 4; k++)
+        {
+            bool scanFirst = k < 2, flat = k % 2 == 0;
+            Account a = NewAccount("SimRw" + (k + 1));
+            Order e = Manual(a, mnq, OrderAction.Buy, OrderType.Limit, 1, 24990, 0, "", "CB#" + tags[k] + " plan s24980 t25010");
+            e.Filled = 1; e.AverageFillPrice = 24990; e.OrderState = OrderState.Filled;   // filled while ChartBridge was stopped
+            SetPos(a, mnq, flat ? 0 : 1);                                                  // flat: closed by hand since
+            File.AppendAllText(PlanFilePath(), tags[k] + " 24980 25010 " + (long)ChartBridgeTime.NowUtcMs() + "\n");
+            ChartBridgeOrders.Clear(); ChartBridgeOrders.NoteLast("MNQ", 25000);         // ChartBridge starts; the file not read yet
+            double t = 41000000 + k * 100000;
+            if (scanFirst) { ChartBridgeOrders.CheckLegs(t); ChartBridgeOrders.LoadPlansNow(); }
+            else { ChartBridgeOrders.LoadPlansNow(); ChartBridgeOrders.CheckLegs(t); }
+            bool none = !a.Calls.Any(x => x.StartsWith("submit"));
+            ChartBridgeOrders.CheckLegs(t + 2000); ChartBridgeOrders.CheckLegs(t + 6500); ChartBridgeOrders.CheckLegs(t + 9000);
+            string what = "P8 " + (scanFirst ? "start scan before the read" : "read before the start scan") + ", position " + (flat ? "flat" : "long 1");
+            if (flat) Check(none && !a.Calls.Any(x => x.StartsWith("submit")), what + ": no legs on a flat account: " + string.Join(" | ", a.Calls));
+            else Check(none && a.Calls.Count == 2 && a.Calls[0].EndsWith("S24980 oco:cb-" + tags[k] + "-1") && a.Calls[1].EndsWith("L25010 S0 oco:cb-" + tags[k] + "-1"),
+                       what + ": legs for the contract the position holds, at the saved prices, by the scan: " + string.Join(" | ", a.Calls));
+        }
+
+        // P9: an update still on its way when the change went out (not in a pending state) does not drop the sent price
+        Account p9 = NewAccount("SimRw5");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Ord("SimRw5", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990,\"stopPrice\":24980,\"targetPrice\":25010"));
+        Order e9 = Newest(p9);
+        Update(p9, e9);
+        Msg("change", "{\"type\":\"change\",\"id\":\"" + IdOf(e9) + "\",\"price\":24985}");
+        Update(p9, e9);   // a Working update from before the change, still at 24990
+        Msg("plan", PlanMsg(IdOf(e9), "\"stopPrice\":24987.5"));
+        Check(Rejected("being moved to 24985"), "P9 an older update outside a pending state keeps the sent price (both prices still checked): " + LastSent());
+        e9.OrderState = OrderState.ChangePending; Update(p9, e9);
+        e9.OrderState = OrderState.Working; e9.LimitPrice = 24985; Update(p9, e9);   // confirmed
+        Msg("plan", PlanMsg(IdOf(e9), "\"stopPrice\":24982.5"));
+        Check(LastOrderMsg(e9).Contains("\"stop\":24982.5"), "P9 and once NinjaTrader confirms, only the new price counts");
     }
 
     // ------------------------------------------------------------ who may connect (ChartBridge.cs, ChartBridgeAccess)

@@ -1020,8 +1020,10 @@ sees them; a market entry keeps ticks from its fill.
   remove the stop first"); with `maxBracketTicks` set, so is a move that takes it further than that from them.
 - **Changing the plan** (`plan`, below) before the fill: add, move or remove the stop and the target, checked as
   at placement against the entry's current price, and also against the price a `change` has sent that NinjaTrader
-  has not confirmed yet (both must pass; the sent price is forgotten once NinjaTrader confirms it, on any change error
-  or refusal, when the entry is done, and on any update outside a pending change that still shows another price). Adding a stop or target to an entry that had none is a new
+  has not confirmed yet (both must pass; the sent price is forgotten once an update shows it, on any change error
+  or refusal, when the entry is done, and when a pending change state (ChangePending or ChangeSubmitted) has been seen
+  and then left at another price; an update outside those states before one is seen may be older than the change,
+  so it is kept). Adding a stop or target to an entry that had none is a new
   bracket: refused on an order that would reduce the position, as at placement. After the entry has filled in
   part, a `plan` applies to the fill increments still to come only (those ChartBridge has not yet placed legs
   for); legs already working are not touched (move them with `change` on the leg, as B/E does). If contracts
@@ -1049,9 +1051,11 @@ sees them; a market entry keeps ticks from its fill.
   a pool thread, started before ChartBridge watches the accounts; written after a placement and after a `plan`
   on the page's connection thread, outside every lock; and a line is removed (on a pool thread) once its entry
   is done and every fill has legs. NinjaTrader's thread only reads memory. Until the file has been read (the
-  first moments after a start), a resting entry's bracket is not recovered: a fill's legs wait, and are placed
-  at the saved prices the moment the file has been read (the full increment, as its order event would have; the
-  legs check trims legs beyond the position); if it is still not read about 3 s after the 2 second check first sees
+  first moments after a start), a resting entry's bracket is not recovered: a fill's legs wait. A fill an order
+  event reported meanwhile gets its legs at the saved prices the moment the file has been read (the full
+  increment, as its event would have). A fill the 2 second check found first (one from while ChartBridge was
+  stopped, whose position may have been closed by hand since) is left to that check, which legs only what the
+  listed position still holds (so never legs on a flat account), a few seconds after the read; if it is still not read about 3 s after the 2 second check first sees
   such a fill, every signed-in page gets a `status` `error` naming the entry with NO LEGS. `plan` and `change` on such
   an entry are refused meanwhile ("ChartBridge is still reading planned_brackets.txt"); nothing is guessed. A `plan`
   on an entry placed since the start, sent before the read, applies; its write waits for the read (no false "could

@@ -123,12 +123,16 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(legs, /bool byFill = hasStop && br\.Priced && !br\.ValueEstimated && \(br\.EntryIsBuy \? sp >= incPrice : sp <= incPrice\);/);   // 0.3.7: or a fill at or through the planned stop
   const keep = fnBody('KeepBracket');
   assert.match(keep, /if \(filled <= br\.Covered\) \{ GapSince\.Remove\(entry\); return; \}/);
-  assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)\s*\{[^}]*PlanDeferred\.Add\(entry\)[^}]*return;\s*\}\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
+  assert.match(keep, /Bracket rec = Recover\(entry, out pairs, out deferred\);\s*if \(deferred\)\s*\{\s*bool first;\s*lock \(Sync\) \{ first = !PlanDeferred\.ContainsKey\(entry\); if \(first\) PlanDeferred\[entry\] = true; \}[^\n]*\s*if \(first\)[^\n]*\s*return;\s*\}\s*lock \(Sync\)/);   // Recover reads account orders outside Sync; waits for the plan file
   // from an order event the legs are placed in full, never sized from a position read at fill time;
   // only the scan path (a gap that lasted SettleMs) reads the settled position
   assert.match(keep, /if \(fromScan\) \{ KeepBracketFromScan\(entry, br, now\); return; \}/);
   assert.match(keep, /PlaceLegs\(br, filled, inc, incPrice, where\);/);   // the event path places the full increment
   assert.ok(!/EffectivePosition/.test(keep), 'KeepBracket must not size legs from the fill-time ledger');
+  // 0.3.7 final review P8: the read-finish pass places legs through the order-event path only for entries an order event
+  // deferred; entries the scan found first are left to the scan path (which reads the listed position)
+  assert.match(ocode, /waited = PlanDeferred\.Where\(kv => kv\.Value\)\.Select\(kv => kv\.Key\)\.ToList\(\);/);
+  assert.match(fnBody('ScanEntries'), /if \(!PlanDeferred\.ContainsKey\(o\)\) PlanDeferred\[o\] = false;/);
   const scan = fnBody('KeepBracketFromScan');
   assert.match(scan, /if \(now - g\[1\] < SettleMs\) return;/);
   assert.match(scan, /int advance = steady \? inc : qty;/);   // never settles "no legs needed" on an unsteady connection

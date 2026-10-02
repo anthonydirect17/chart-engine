@@ -51,13 +51,15 @@ recompile keeps its tick bracket (below).
   `test/nt8-source.test.js`. `test/orders-smoke.mjs` starts the fake bridge with `--max-ticks-away=200` for its
   refusal check.
 
-- **Release fixes (re-review).** A fill on a resting entry that came before `planned_brackets.txt` was read gets its
-  legs the moment the file has been read, and if the file is still not read about 3 s after the 2 second check first
-  sees such a fill, the pages get an alarm naming the entry with no legs. The price a move sent is forgotten on any
-  change error or refusal and on any update outside a pending change. A `plan` sent before the file is read is not
-  called "could not be saved": the write waits for the read. The `maxTicksAway`/`maxBracketTicks` warning goes only
-  to a page that signed in. A fill on a planned entry while the file is being read: legs for the full increment (as
-  its order event), the legs check trims any beyond the position.
+- **Release fixes (re-review and final review).** A fill an order event reported on a resting entry before
+  `planned_brackets.txt` was read gets its legs the moment the file has been read (the full increment, as its event
+  would have). One the 2 second check found first (it filled while ChartBridge was stopped) is left to that check,
+  which legs only what the listed position still holds, so never a flat account (final review P8). If the file is
+  still not read about 3 s after the 2 second check first sees such a fill, the pages get an alarm naming the entry
+  with no legs. The price a move sent is forgotten on any change error or refusal, on an update at that price, when
+  the entry is done, and when a pending change state was seen and then left; an older update outside a pending state
+  does not drop it (final review P9). A `plan` sent before the file is read is not called "could not be saved": the
+  write waits for the read. The `maxTicksAway`/`maxBracketTicks` warning goes only to a page that signed in.
 
 ### Data side
 - **Prior settlement.** The settlement of the session before the current one (sessions 18:00 to 17:00 ET), from
