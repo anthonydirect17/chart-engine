@@ -195,7 +195,7 @@ public static class SidesHarness
         // 0.3.7: the by-date tick load and its Bid and Ask history (quoteHours) are gone, and their load cases with them; the
         // join's rules stay as pure cases above. These loads run on minute charts, and the 600,000-trade one on the served window.
         T0 = RecentBase(DateTime.UtcNow);
-        try { LoadMinute(); LoadOutbox(); LoadReset(); LoadMemory(); }
+        try { LoadMinute(); LoadOutbox(); LoadReset(); LoadMemory(); LoadTape(); }
         finally { Reset(); T0 = MidSession; }
     }
 
@@ -207,6 +207,7 @@ public static class SidesHarness
         AnyHour();
         Pure();
         Live();
+        TapePure();
         Session();
         Lanes();
     }
@@ -805,6 +806,129 @@ public static class SidesHarness
         Check(dg.Contains("\"pages\":[") && dg.Contains("{\"id\":77,\"root\":\"MNQ\",\"ready\":true,\"queued\":") && dg.Contains("\"orderLaneQueued\":") && dg.Contains("\"oldestDataMs\":"),
             "diag: each page's queue depth, order-lane depth and oldest waiting market data age (" + dg.Substring(dg.IndexOf("\"pages\""), Math.Min(160, dg.Length - dg.IndexOf("\"pages\""))) + ")");
         Reset();
+    }
+
+    // ------------------------------------------------------------ 0.3.8: the Time and Sales category (q)
+    static int Cat(double p, double bid, double ask) { return ChartBridgeSides.Category(p, bid, ask); }
+    static string TagQ(LiveSideTagger t, double p, double s) { int m, q; int x = t.Tag(p, At(s), 0, 0, out m, out q); return x + "/" + m + "/" + (q == ChartBridgeSides.NoQ ? "none" : q.ToString()); }
+
+    static void TapePure()
+    {
+        double nan = double.NaN; int U = ChartBridgeSides.NoQ;
+        Check(Cat(100.5, 100, 100.25) == 2 && Cat(100.25, 100, 100.25) == 1 && Cat(100.25, 100, 100.5) == 0 && Cat(100, 100, 100.25) == -1 && Cat(99.75, 100, 100.25) == -2,
+            "q: above the ask 2, at the ask 1, between 0, at the bid -1, below the bid -2");
+        Check(Cat(100, nan, 100.25) == U && Cat(100, 100, nan) == U && Cat(100, 0, 100.25) == U && Cat(100, -1, 100.25) == U && Cat(100, 100.25, 100.25) == U && Cat(100, 100.5, 100.25) == U,
+            "q: no usable quote (a side missing, zero or below, locked, crossed): unknown, never guessed (the side's rule for sm 2)");
+        Check(Cat(0.1 + 0.2, 0.25, 0.3) == 1 && Cat(0.3, 0.1 + 0.2, 0.55) == -1, "q: float noise (0.1 + 0.2 is 0.3) is the same price");
+        bool trip = true;
+        for (int q = -2; q <= 2; q++) trip &= ChartBridgeSides.QOf(ChartBridgeSides.QCode(q)) == q && ChartBridgeSides.QCode(q) != 0;
+        Check(trip && ChartBridgeSides.QCode(U) == 0 && ChartBridgeSides.QOf(0) == U && default(SeamTick).QCode == 0,
+            "q: stored as a byte, 0 unknown (the default of a trade made without one), each category round trips");
+        Check(ChartBridgeSides.QJson(2) == ",\"q\":2" && ChartBridgeSides.QJson(-2) == ",\"q\":-2" && ChartBridgeSides.QJson(0) == ",\"q\":0" && ChartBridgeSides.QJson(U) == ""
+              && object.ReferenceEquals(ChartBridgeSides.QJson(1), ChartBridgeSides.QJson(1)),
+            "q: the live field is one of five strings made once (no string per trade); unknown is no field");
+
+        // The live tagger: the same quote as the side (strictly before the trade, not stale, not after a reset).
+        LiveSideTagger t = new LiveSideTagger();
+        Check(TagQ(t, 100, 1.0) == "0/0/none", "q, live: before any quote: unknown");
+        Q2(t, 1.5, 100, 100.25);
+        Check(TagQ(t, 100.5, 2.0) == "1/2/2" && TagQ(t, 100.25, 2.1) == "1/2/1" && TagQ(t, 100, 2.2) == "-1/2/-1" && TagQ(t, 99.5, 2.3) == "-1/2/-2",
+            "q, live: above the ask, at it, at the bid and below it, with the side by the quote");
+        Q2(t, 2.4, 100, 100.5);
+        Check(TagQ(t, 100.25, 2.5) == "1/3/0", "q, live: between the quote: 0, the side by the tick rule (up from 99.5: a buy)");
+        // S3's tie: the trade's own quote update (same time, delivered first) is not used for q either.
+        t = new LiveSideTagger();
+        Q2(t, 2.5, 100, 100.25);
+        Q2(t, 3.0, 100.25, 100.5);
+        Check(TagQ(t, 100.25, 3.0) == "1/2/1", "q, live: the trade's own quote update delivered first is not used (at the ask of 100 / 100.25: 1, not -1 at the new bid)");
+        Check(TagQ(t, 100.5, 70) == "1/3/none", "q, live: a quote over 60 s old is stale: unknown (the side by the tick rule)");
+        Q2(t, 71, 101, 101.25);
+        t.ClearQuote();
+        Check(TagQ(t, 101.25, 71.5) == "1/3/none", "q, live: after a reset the old quote is not used: unknown");
+        t = new LiveSideTagger();
+        t.NoteQuote(true, 100.25, At(1)); t.NoteQuote(false, 100.25, At(1));
+        Check(TagQ(t, 100.25, 2) == "0/0/none", "q, live: a locked quote: unknown");
+        Check(t.DiagJson().Contains("\"q\":{\"aboveAsk\":0,\"atAsk\":0,\"between\":0,\"atBid\":0,\"belowBid\":0,\"unknown\":1}"), "q, live: /diag counts each category (" + t.DiagJson() + ")");
+
+        // History: the served window keeps the q of the trades ChartBridge saw live; NinjaTrader's tick answer has none.
+        RootBook book = new RootBook("MNQ", 0.25);
+        DateTime b0 = At(10);
+        DateTime listen = ChartBridgeTime.ToUtc(b0).AddHours(-30);
+        lock (book.Sync)
+        {
+            book.OnTrade(b0, 100, 1, 0, listen, listen, 0, DateTime.MinValue, false);
+            book.Cache = new TradeLog();
+            book.Cache.Add(b0.AddSeconds(1), 100.25, 2);   // as from NinjaTrader's answer
+            book.WindowLive = new List<SeamTick>();
+            book.OnTrade(b0.AddSeconds(2), 100.5, 3, 0, listen, listen, 0, DateTime.MinValue, false, ChartBridgeSides.QCode(2));
+            book.OnTrade(b0.AddSeconds(3), 100, 4, 0, listen, listen, 0, DateTime.MinValue, false, ChartBridgeSides.QCode(-1));
+            book.OnTrade(b0.AddSeconds(4), 100.25, 5, 0, listen, listen, 0, DateTime.MinValue, false, ChartBridgeSides.QCode(0));
+            book.OnTrade(b0.AddSeconds(5), 100.25, 6, 0, listen, listen, 0, DateTime.MinValue, false);
+        }
+        RawBars rb = book.Cache.Snapshot().ToBars();
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        ChartBridgeTime.EtCache etc = new ChartBridgeTime.EtCache();
+        for (int i = 0; i < rb.Count; i++) { if (i > 0) sb.Append(' '); ChartBridgeServer.AppendTrade(sb, rb, i, etc); }
+        string[] rows = sb.ToString().Split(' ');
+        Check(rows.Length == 5 && rows[0].EndsWith(",100.25,2]") && rows[0].Split(',').Length == 3 && rows[1].EndsWith(",100.5,3,null,null,2]") && rows[2].EndsWith(",100,4,null,null,-1]")
+              && rows[3].EndsWith(",100.25,5,null,null,0]") && rows[4].EndsWith(",100.25,6]") && rows[4].Split(',').Length == 3,
+            "q, history: a served-window trade seen live with a quote is [t, p, v, null, null, q]; one from NinjaTrader's answer or with no quote stays [t, p, v] (" + sb + ")");
+        Check(book.WindowLive.Count == 4 && book.WindowLive[0].QCode == ChartBridgeSides.QCode(2) && book.WindowLive[3].QCode == 0,
+            "q, history: the live trades held for a window's seam keep their q (released into the window with it)");
+        RawBars sl = rb.Slice(1, 3);
+        Check(sl.QCode != null && sl.Count == 2 && ChartBridgeSides.QOf(sl.QCode[0]) == 2 && ChartBridgeSides.QOf(sl.QCode[1]) == -1, "q, history: a cut of the window keeps them");
+        RawBars plain = new RawBars { Count = 1, Time = new[] { b0 }, Close = new[] { 100.0 }, Volume = new long[] { 1 } };
+        sb.Length = 0; ChartBridgeServer.AppendTrade(sb, plain, 0, etc);
+        Check(sb.ToString().Split(',').Length == 3, "q, history: trades with no stored quote (a NinjaTrader answer, a table) are [t, p, v], as in 0.3.7: " + sb);
+    }
+
+    // Through OnMarketData: the live tick's q, and what it costs (the flood: trades with a quote update between each).
+    static void LoadTape()
+    {
+        Reset();
+        lock (sent) sent.Clear();
+        int m0 = MadeCount();
+        Priv("Subscribe", client, "MNQ", 5, 0);
+        Made(m0)[0].Answer(Minutes(new[] { 60.0, 1, 1, 1, 1, 1 }), ErrorCode.NoError);
+        BarsRequest lt = Made(m0).Skip(1).FirstOrDefault();
+        if (lt != null) lt.Answer(Rows(new[] { 1.0, 25000, 1 }), ErrorCode.NoError);
+        WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0);
+        lock (sent) sent.Clear();
+        Trade(19.0, 24990, 1);   // after the earlier loads' quotes went stale (60 s): no usable quote
+        Quote(20.0, 25000, 25000.25);
+        Trade(20.1, 25000.5, 1); Trade(20.2, 25000.25, 1); Trade(20.3, 25000, 1); Trade(20.4, 24999.75, 1);
+        Quote(20.5, 25000, 25000.5);
+        Trade(20.6, 25000.25, 1);
+        List<string> ticks = Sent().Where(x => x.StartsWith("{\"type\":\"tick\"")).ToList();
+        string[] want = { "}", ",\"sm\":2,\"q\":2}", ",\"sm\":2,\"q\":1}", ",\"sm\":2,\"q\":-1}", ",\"sm\":2,\"q\":-2}", ",\"sm\":3,\"q\":0}" };
+        bool ok = ticks.Count == want.Length;
+        for (int i = 0; ok && i < want.Length; i++) ok = ticks[i].EndsWith(want[i]) && ticks[i].Contains("\"p\":") && (i > 0 || !ticks[i].Contains("\"q\""));
+        Check(ok, "q, live tick: the last field, from the side tagger's quote; no field without a usable quote (" + string.Join(" ", ticks.Select(x => x.Substring(x.IndexOf("\"p\":"))).ToArray()) + ")");
+
+        // The flood: 200,000 trades through OnMarketData, a Bid and an Ask update before each, one page ready.
+        Action<string> tapWas = client.Tap;
+        client.Tap = x => { };
+        try
+        {
+            const int n = 100000;
+            double best = 1e9;
+            for (int rep = 0; rep < 3; rep++)
+            {
+                System.Diagnostics.Stopwatch sw = new System.Diagnostics.Stopwatch();
+                for (int i = 0; i < n; i++)
+                {
+                    double at = 30 + rep * 40 + i * 0.0001, mid = 25000 + (i % 40) * 0.25;
+                    Md(MarketDataType.Bid, at, mid - 0.25, 3, 0, 0); Md(MarketDataType.Ask, at, mid, 3, 0, 0);
+                    sw.Start();
+                    Md(MarketDataType.Last, at + 0.00005, mid + (i % 5 - 2) * 0.25, 1, 0, 0);
+                    sw.Stop();
+                }
+                best = Math.Min(best, sw.Elapsed.TotalMilliseconds * 1000 / n);
+            }
+            Console.WriteLine("     (flood: " + n.ToString("N0") + " trades through OnMarketData, quotes between them: " + best.ToString("0.00") + " us a trade, best of 3, Mono, reflection call included)");
+            Check(best < 200, "q, flood: OnMarketData at " + best.ToString("0.00") + " us a trade with q (see the report for before and after)");
+        }
+        finally { client.Tap = tapWas; Reset(); }
     }
 
     static void LoadMinute()

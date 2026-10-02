@@ -198,10 +198,10 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 |---|---|---|
 | `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
-| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places), `done` (bool) | after `history`, the current session's trades, chunked |
+| `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
 | `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
-| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side) | every trade, live |
+| `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
@@ -389,6 +389,36 @@ more distinct later stamps, delivered before that trade, push out the quote from
 quote (the tick rule, or side 0), and `quoteAfterTrade` counts it. The tick rule uses the previous live trade of that
 instrument. Quotes are followed from the moment ChartBridge starts, so the first trades after a start can go by the
 tick rule. The held trades of a load are tagged when they arrive, like any live trade.
+
+## Time and Sales category (0.3.8)
+
+Each trade can carry where it printed against the prevailing quote, as NinjaTrader's Time and Sales colours it:
+
+| `q` | the trade printed |
+|---|---|
+| `2` | above the ask |
+| `1` | at the ask |
+| `0` | between the bid and the ask |
+| `-1` | at the bid |
+| `-2` | below the bid |
+| absent or `null` | unknown: no usable quote |
+
+It is read from the very quote the side uses (Trade side, `sm` 2): the last bid and ask stamped strictly before the
+trade on NinjaTrader's times, both above zero, bid below ask (a locked or crossed quote is not used), no update for
+over 60 seconds is stale, and none after a reset. Prices are compared on the same 0.000001 grid. `q` and `s` are
+separate: a trade between the quote is `q` 0 with its side from the tick rule (`sm` 3). No NinjaTrader request is
+added for it: the live Bid and Ask updates ChartBridge already follows are the only source.
+
+**Live.** A `tick` ends `..., "s": 1, "sm": 2, "q": 1}`; with no usable quote there is no `q` field at all.
+
+**History.** A trade in a `ticks` list is `[t, p, v]` when its category is unknown and `[t, p, v, null, null, q]`
+when it is known. Only trades ChartBridge saw live, with a usable quote, and keeps in the served window (see Served
+window and session table) have it: the trades of NinjaTrader's own tick answer, the session table and the files have
+no stored quote, so they stay `[t, p, v]`, unknown, never guessed. The side places stay `null` as in 0.3.7, so a page
+that reads `s` and `sm` from places 4 and 5 sees no side, exactly as for `[t, p, v]`.
+
+**Older pages** ignore it: chart 1.12.0 reads places 1 to 5 of a trade (`null` there is "no side") and only the
+fields it knows of a `tick`. `/diag` counts the live trades by category (`sides.<root>.live.q`).
 
 **Resets and bad prices.** NinjaTrader's help describes `IsReset` as "a UI reset is needed after a manual disconnect",
 meant for its market data columns. A market data event with `IsReset` is never a trade here, whatever its type and

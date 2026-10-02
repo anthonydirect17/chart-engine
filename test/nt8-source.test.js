@@ -480,7 +480,7 @@ test('ChartBridgePin.cs is C# 5 too', () => {
 // ---- 0.3.3: the seam between the backfill and the live trades (behaviour: nt8/check/SeamHarness.cs under Mono)
 test('0.3.3: held live trades are matched against the backfill on NinjaTrader times before ready', () => {
   // held with NinjaTrader's time for the trade, the backfill's basis (never the PC clock)
-  assert.match(bodyOf(code, 'private static void OnMarketData('), /c\.Pending\.Add\(new SeamTick \{ Time = e\.Time, Price = e\.Price, Volume = e\.Volume, Json = json, Side = side, Method = method \}\)/);
+  assert.match(bodyOf(code, 'private static void OnMarketData('), /c\.Pending\.Add\(new SeamTick \{ Time = e\.Time, Price = e\.Price, Volume = e\.Volume, Json = json, Side = side, Method = method, QCode = ChartBridgeSides\.QCode\(cat\) \}\)/);   // 0.3.8: and its q
   // 0.3.7: the by-date tick request (0.3.3 to 0.3.4.1) is gone; tick charts get the served window (0.3.5)
   assert.ok(!/RequestTickHistory|ByDateTickLoads/.test(code), 'the by-date tick load is removed');
   // ready and the held trades under the Pending lock, only for the page's latest subscribe, only those Dedupe releases
@@ -517,11 +517,11 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(quote, /NoteQuote\(type == MarketDataType\.Bid, e\.Price, e\.Time\);[\s\S]*if \(type != MarketDataType\.Last\) return;/);
   assert.ok(!/Send\(|Pending/.test(quote), 'a quote update sends or holds nothing');
   // the live tick keeps 0.3.3's fields in order and adds s and sm at the end
-  assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ "\}"/);
+  assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ ChartBridgeSides\.QJson\(cat\) \+ "\}"/);   // 0.3.8: then q, when known
   // backfill trades: t, p, v first, then s and sm
   // (0.3.5: written by AppendTrade with no string per number; WindowHarness.cs checks the text is 0.3.4's)
   assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et\);/);
-  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed)
+  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*int q = bars\.QCode != null \? ChartBridgeSides\.QOf\(bars\.QCode\[i\]\) : ChartBridgeSides\.NoQ;\s*if \(q != ChartBridgeSides\.NoQ\) \{ b\.Append\(",null,null,"\); CbJson\.AppendLong\(b, q\); \}\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed); 0.3.8: [t, p, v, null, null, q] when q is known
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
   assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
@@ -709,4 +709,15 @@ test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only throug
   const proto = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'PROTOCOL.md'), 'utf8');
   for (const t of ['settlement', 'htf', 'htfBar', 'weekProfile']) assert.match(proto, new RegExp('\\| `' + t + '` \\|'), t + ' in PROTOCOL.md');
   assert.ok(!/[\u2013\u2014]/.test(proto), 'no em or en dashes in PROTOCOL.md');
+});
+
+test('0.3.8 q: the Time and Sales category comes from the side tagger\'s quote, with no request and no string made per trade', () => {
+  const tag = code.slice(code.indexOf('out int method, out int cat)'), code.indexOf('public string DiagJson()', code.indexOf('out int method, out int cat)')));
+  assert.match(tag, /int s = ChartBridgeSides\.Classify\(price, q \? b : double\.NaN, q \? a : double\.NaN[^\n]*\n\s*cat = q \? ChartBridgeSides\.Category\(price, b, a\) : ChartBridgeSides\.NoQ;/,
+    'q is read from the very quote the side was classified by (b, a), unknown without one');
+  assert.match(code, /\+ ChartBridgeSides\.QJson\(cat\) \+ "\}";/, 'the live tick ends with the q field from QJson');
+  assert.match(code, /private static readonly string\[\] QFields = /, 'the five q fields are made once');
+  assert.ok(!/cat\.ToString\(|QJson\([^)]*\)\.ToString|"\\"q\\":" \+/.test(code), 'no q string made per trade');
+  assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode\)/, 'the held live trades keep their q in the served window');
+  assert.match(code, /for \(int i = start; i < raw\.Count; i\+\+\) cache\.Add\(raw\.Time\[i\], raw\.Close\[i\], raw\.Volume\[i\]\);/, 'NinjaTrader\'s answer has no stored quote: unknown');
 });
