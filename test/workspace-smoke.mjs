@@ -477,10 +477,13 @@ try {
     const hidden = sel => { const e = el.querySelector(sel); return !e || getComputedStyle(e).display === 'none'; };
     const inside = sel => { const e = el.querySelector(sel); const q = e.getBoundingClientRect(); return q.height > 0 && q.bottom <= r.bottom + 0.5; };
     const tops = new Set([...el.querySelectorAll('.lg1 > *, .lg2 > *, .lg3 > *')].filter(e => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().top < r.bottom - 1).map(e => Math.round(e.getBoundingClientRect().top)));
-    return { src: hidden('[id$="lgSrc"]'), pill: hidden('[id$="connPill"]'), h: r.height, rows: tops.size, close: inside('.lg2 > :nth-child(5)') && inside('[id$="lgChg"]') && inside('[id$="lgName"]'), text: el.innerText.replace(/\s+/g, ' ').slice(0, 80) };
+    const short = el.closest('.ws-panel').querySelector('.chart-live.compact').classList.contains('short'), w = Math.round(r.width);
+    return { short, w, src: hidden('[id$="lgSrc"]'), pill: hidden('[id$="connPill"]'), h: r.height, rows: tops.size, close: inside('.lg2 > :nth-child(5)') && (short && w < 400 || inside('[id$="lgChg"]')) && inside('[id$="lgName"]'), text: el.innerText.replace(/\s+/g, ' ').slice(0, 80) };
   }, esP.id);
   check(lg.src && lg.pill, 'the panel legend has no source and version line and no LIVE pill (the top bar says LIVE · ChartBridge)');
-  check(lg.rows <= 2 && lg.h <= 40 && lg.close, 'ES 1 min at 1366x768: the legend fits in 2 lines (' + lg.rows + ' rows, ' + Math.round(lg.h) + ' px: ' + lg.text + ')');
+  // 1.14.0: a panel under 700 x 400 px has the short header, one line (the name and the last price; the change too when
+  // the panel has the room), the rest while the crosshair is over it
+  check(lg.short ? lg.rows === 1 && lg.h <= 22 && lg.close : lg.rows <= 2 && lg.h <= 40 && lg.close, 'ES 1 min at 1366x768: the legend fits in ' + (lg.short ? 'one line (the short header, ' + lg.w + ' px wide' : '2 lines (') + ', ' + lg.rows + ' rows, ' + Math.round(lg.h) + ' px: ' + lg.text + ')');
   await control('status?level=warn&text=' + encodeURIComponent('Test note for the chart'));
   await page.waitForTimeout(400);
   const nt = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`), st = c.querySelector(':scope > .status'), m = st.querySelector('.msg'), r = st.getBoundingClientRect(), b = c.getBoundingClientRect();

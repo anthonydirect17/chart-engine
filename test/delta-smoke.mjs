@@ -207,7 +207,7 @@ try {
   check(s.layer === true && s.pane.on && s.pane.top > s.pane.plotHeight && s.pane.height > 100, 'on by default on the main pane: a pane under the chart, ' + s.pane.height + ' px from y ' + s.pane.top + ' (the chart above ends at ' + s.pane.plotHeight + ')');
   const box = await p.locator('#chart canvas').boundingBox(), area = box.height - 26;
   check(Math.abs(s.pane.height / area - 0.2) < 0.01, 'about 20% of the chart area: ' + (s.pane.height / area * 100).toFixed(1) + '%');
-  check(s.count === '6/6' && s.chips === 'volume+,vwap+,levels+,ib+,fills+', 'in the Indicators count, with no chip (review N5: the strip keeps the 1.6.0 five, room for a sixth): ' + s.count + ' ' + s.chips);
+  check(s.count === '5/5' && s.chips === 'volume+,vwap+,levels+,fills+', 'in the Indicators count, with no chip (review N5; the IB in Levels since 1.14.0): ' + s.count + ' ' + s.chips);
   check(px.pane.up + px.pane.down > 200 && px.pane.up > 0 && px.pane.down > 0 && px.plot.up + px.plot.down > 1000, 'candles drawn in the pane in both candle colors: ' + JSON.stringify(px));
   check(sameSums(s), 'the delta equals every trade the page received, per session (buys, sells, unknown, trades, last close): ' + JSON.stringify(s.delta.sessions.map(x => [x.buy, x.sell, x.unknown, x.n, x.lastClose])));
   check(s.delta.sessions.every(x => !x.partial && x.firstOpen === 0), 'each session from 18:00 ET, opening at 0');
@@ -311,7 +311,7 @@ try {
 
   /* the chip (pinned first: none by default, review N5), and Hide all / Restore */
   await menu(p); await p.click('#indBody [data-act="pin"][data-id="delta"]'); await p.keyboard.press('Escape');
-  check((await state(p)).chips === 'volume+,vwap+,levels+,ib+,delta+,fills+', 'pinned from the menu: its chip, the sixth');
+  check((await state(p)).chips === 'volume+,vwap+,levels+,delta+,fills+', 'pinned from the menu: its chip, the fifth');
   const coresShown = (await state(p)).cores;
   await p.click('#indChips .ind-chip[data-id="delta"]'); await p.waitForTimeout(300);
   s = await state(p);
@@ -325,10 +325,10 @@ try {
     'the chip shows it again at once: the same delta, kept while hidden (no new one: ' + coresShown + ' then ' + s.cores + '), still equal to every trade received, the same height (review S5)');
   await menu(p); await p.click('#indHideAll');
   s = await state(p);
-  check(!s.layer && !s.pane.on && s.count === '0/6', 'Hide all hides the pane too: ' + s.count);
+  check(!s.layer && !s.pane.on && s.count === '0/5', 'Hide all hides the pane too: ' + s.count);
   await p.click('#indHideAll'); await p.keyboard.press('Escape'); await p.waitForTimeout(400);
   s = await state(p);
-  check(s.layer && s.pane.on && s.count === '6/6', 'Restore brings it back');
+  check(s.layer && s.pane.on && s.count === '5/5', 'Restore brings it back');
   // search finds it; the x takes it off, the + adds it back with its chip
   await menu(p); await p.fill('#indQ', 'order flow');
   check(JSON.stringify(await p.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) === '["delta"]', 'search "order flow" finds Cumulative delta');
@@ -336,10 +336,10 @@ try {
   check(JSON.stringify(await p.$$eval('#indBody .ind-item', els => els.map(e => e.dataset.id))) === '["delta"]', 'and "cvd"');
   await p.fill('#indQ', '');
   await p.click('#indBody [data-act="remove"][data-id="delta"]');
-  check(!(await state(p)).pane.on && (await state(p)).count === '5/5', 'the x takes it off the chart');
+  check(!(await state(p)).pane.on && (await state(p)).count === '4/4', 'the x takes it off the chart');
   await p.click('#indBody .ind-cat[data-id="volume"]'); await p.click('#indBody [data-f="add:delta"]'); await p.keyboard.press('Escape');
   s = await state(p);
-  check(s.pane.on && s.chips.includes('delta+') && s.count === '6/6', '+ in the Volume group adds it back, with its chip');
+  check(s.pane.on && s.chips.includes('delta+') && s.count === '5/5', '+ in the Volume group adds it back, with its chip');
   await ctx.close(); br.kill();
 
   /* ---------------- ChartBridge 0.3.3 (no sides): nothing drawn, a note */

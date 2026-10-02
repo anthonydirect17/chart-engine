@@ -90,7 +90,7 @@ from using 1.12.0 live on HOME:
   bubble (the topmost under the pointer, 3 px of slop) the chart's top legend line says "Bubble Buy 142 @ 31,120.25
   08:44:05.3", in the workspace's panels and on `/single.html`. The hit test runs on mouse moves only, on the bubbles as
   last drawn; the per-frame cost is unchanged. Engine: `on('bubble', { t, p, v, side, floor } | null)`, `bubbleHover()`,
-  `bubbles()`.
+  `bubbles()` (each bubble as last drawn, its size as drawn).
 - **The high no longer runs into the legend** (the 5 min and 1 hour panels): the price scale keeps the legend's height
   and 4 px free at its top (8% when that is more; at most 45% of the plot), told again whenever the legend's height
   changes and eased with the 120 ms re-fit, never a snap; with zoom to brackets and the VWAP rule as above. The time axis
@@ -146,7 +146,9 @@ from using 1.12.0 live on HOME:
   which it keeps per version: nothing is walked per frame or per tick. Engine: `setProfileLines({ poc, vah, val })`,
   `getProfileLines()`.
 - **D. Chips**: up to 10 pinned (was 6); a strip that does not fit puts the rest behind **+N**, which opens a small list
-  of them, on both pages at 1366, 1920 and 2560 px. The +N button is not an `.ind-chip`.
+  of them, on both pages at 1366, 1920 and 2560 px; a host's own toolbar (`ChartLive.mount`) does the same once its
+  one-letter chips do not fit either, and keeps room for every chip there can be (7 today). The +N button is not an
+  `.ind-chip`.
 - **E. VWAP hours** in the VWAP gear, per chart: **Full session (from 18:00 ET)**, the default and as before, or **RTH
   only (from 09:30 ET)**, from the 1-minute bars' typical prices, none outside 09:30 to 16:00 ET. Engine:
   `setVwapSource(fn)`, `util.rthVwap`, `util.vwapAt`.
@@ -186,8 +188,10 @@ from using 1.12.0 live on HOME:
   `smoke:hotkeys` unchanged (Settings and the small menu stay on screen when the window is resized while open).
 - Batch 2 in the older smokes: `smoke:live` (5 indicators on at first run, the IB in the Levels gear, the cap rule at 3),
   `smoke:ib` (IBH and IBL toggles in the Levels gear), `smoke:presets` (the IB colors in the Levels gear, the profile's
-  row colors), `smoke:settings` (a 1.3 save: Levels on with only the IB lines), `smoke:workspace` and `smoke:embed` (no
-  IB chip).
+  row colors), `smoke:settings` (a 1.3 save: Levels on with only the IB lines), `smoke:delta` (the counts without the IB),
+  `smoke:vp` (the hours switch read apart from the new toggles; the developing POC off while the POC bar's own pixels are
+  measured, since its line runs through the bar), `smoke:workspace` (no IB chip; a small panel's legend is the short
+  header) and `smoke:embed` (no IB chip; seven chips, the narrow pane's rest behind +N).
 - `test/trade-sides.test.js` (ChartBridge 0.3.8's): the hub now keeps a trade's `q` (it said chart 1.12.0 read none);
   the chart, the bar builder and the order code still read no `q`.
 
