@@ -23,6 +23,9 @@
   <!-- "Update ready: reload when flat" (the update notice, loaded last) shows here -->
   <span class="ws-upd" id="wsUpdate" data-update-host></span>
   <span class="ws-fill"></span>
+  <!-- NO STOP (1.13.0): over the top bar's left part, up to KEYS (F2 re-review: it takes no room, so the grid never
+       resizes); never modal, so KEYS, Flatten all and the ticket's Close work while it is open -->
+  <div class="ws-alert nostop-ask ws-ns" id="wsNoStop" role="alertdialog" aria-modal="false" aria-labelledby="wsNoStopTitle" aria-describedby="wsNoStopText" hidden><b id="wsNoStopTitle">No stop: send anyway?</b><span id="wsNoStopText"></span><button type="button" class="ws-btn" id="wsNoStopCancel">Cancel</button><button type="button" class="ws-btn nostop-send" id="wsNoStopSend">Send</button></div>
   <!-- KEYS ON: a key pressed now would fire a hotkey (this window has the focus, no box, menu or dialog has it) -->
   <span class="ws-keys" id="wsKeys" role="status" title="">KEYS OFF</span>
   <!-- The window's Flatten all (1.12.0, Anthony): every instrument with a position or a working order on the ticket's

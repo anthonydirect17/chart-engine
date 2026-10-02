@@ -406,11 +406,13 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
 **The order bar** (above the chart, only with ChartBridge 0.3 or later):
 
 - **Armed** switch. Off after every page load, and it turns itself off when the account or instrument
-  changes, the connection drops or ChartBridge turns trading off. While it is on, the bar and the chart are
-  outlined in amber, the legend shows ARMED with the account and the tab title starts with ARMED and names the
+  changes, the connection drops or ChartBridge turns trading off. While it is on, the switch is deep red and the bar
+  is outlined in it, and the chart has a purple outline with a soft glow as in the workspace (1.13.0, Anthony; amber
+  before), the legend shows ARMED with the account and the tab title starts with ARMED and names the
   instrument and the account ("ARMED · MNQ · EVAL-1", 1.6.1). **Nothing trades while it
   is off** (except Flatten, which works with Armed off, 1.11.0), and nothing asks for confirmation while it is on:
-  one click sends the order.
+  one click sends the order. The one exception (1.13.0, Anthony): the first order with no stop after each page load
+  (see NO STOP below).
 - **Account** (only `tradeAccounts`), **Qty** (a select, 1 to 9; the choices over that instrument's cap are off and
   the cap shows beside it, "max 5"; the last qty picked is remembered per instrument, 1.10.0). The chart marks this account's fills
   (1.6.0). When trading comes on the bar is on the account this tab was using (1.6.1): after a reconnect or a PIN
@@ -431,10 +433,20 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   the boxes: **Custom**, **1:1**, **1:1.5**, **1:2** (the target is the stop times the ratio, rounded, and follows the
   stop while the ratio is picked; typing the target makes it Custom), your saved presets, **Save current...** (a
   name, default like "12/24t"; up to 12) and **Delete** for the saved preset picked. A **t / pt** toggle shows and
-  types the values in ticks or points (points round to the nearest tick); they are kept in ticks. The boxes still
-  take at most 200 ticks (the page's own limit; ChartBridge 0.3.7 has none unless `config.txt` sets `maxBracketTicks`).
-  With ChartBridge 0.3.8 a limit or stop entry's bracket stays in TICKS from each actual fill and travels with the
-  entry when it is moved, like a NinjaTrader ATM (see below; 0.3.7's planned prices are gone).
+  types the values in ticks or points (points round to the nearest tick); they are kept in ticks. With ChartBridge
+  0.3.7 or newer the boxes take what ChartBridge takes (`maxBracketTicks` in `config.txt`, no limit without it; 1.13.0);
+  with an older ChartBridge at most 200 ticks, as before. A limit or stop entry's stop and target are ticks from its
+  fill and travel with it (ChartBridge 0.3.8, see below).
+- **NO STOP** (1.13.0, Anthony): while the stop box is 0 a red NO STOP tag shows beside the bracket boxes. The first
+  order with no stop after each page load (Buy MKT, Sell MKT, their hotkeys, a Shift+click or Ctrl+click on the chart)
+  asks "No stop: send anyway?" in a strip over the top of the chart, with **Send** and **Cancel** (Cancel has the focus, so
+  Enter does not send; Escape is Cancel). Cancel sends nothing; Send sends it, and nothing asks again until the page is
+  loaded again. An order that reduces the position never asks, nor do Close, Flatten, Flatten all, B/E or a cancel; a
+  reversal (Sell 3 while long 1) asks, since it opens a position (and, as before, goes with no bracket). The question
+  never blocks anything: Flatten, Close and Flatten all work while it is open and close it, its order not sent; Armed
+  going off or another instrument or account closes it too, and a Send is only for what was asked. In the workspace
+  the question shows over the top bar of the window you clicked or pressed the key in, and a Close or Flatten in any
+  window closes it.
 - **B/E** (1.10.0, next to Flatten, needs Armed): moves the stop of the open position to break-even, the average
   price rounded a tick toward safety (long up, short down). On only with a position on this account and instrument
   and a ChartBridge stop working. It sends one move per ChartBridge stop leg, and only when the last price is past
@@ -449,6 +461,13 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   names it until the last one is sent ("Cancelling on EVAL-1 MNQ: 12 left", in amber while another account or
   instrument is shown). Nothing is locked meanwhile. A Flatten ChartBridge refuses for the rate is sent once more. If the connection drops first, a note above the chart names
   the account, the instrument and how many were not sent, until dismissed or those orders are gone (1.6.1).
+- **Planned stop and target** (1.13.0, ChartBridge 0.3.8): a resting limit or stop entry shows its planned stop and
+  target as lighter, finely dashed lines on every chart of its instrument, labelled "SL plan -12t" and "TP plan +24t"
+  (ticks from the fill). They follow the entry while you drag it and redraw from the price ChartBridge confirms. While
+  Armed, drag a planned line to change its distance (whole ticks, at least 1; a stop dragged to or past the entry,
+  or a target, is refused on the page and nothing is sent), click its x to remove it, and click **+SL** or **+TP** on
+  the entry's label to add it back at the bracket boxes' distance. With an older ChartBridge there are no planned
+  lines and the page works as 1.12.0 did.
 - Working orders show as lines with a label and a price tag (green buy, red sell; stops dashed, limits and
   targets solid). While Armed, drag a label (or its price tag) to move the order, press Escape during the
   drag (or let go outside the chart's plot) to put it back, and click the x to cancel it (a bracket leg takes its pair with it). The position
@@ -497,10 +516,10 @@ or past where its stop or target would be is never refused. A market entry works
 exits at market (with an alarm) only when a trade in the last 2 seconds went through the stop level. The ticks survive
 a recompile or restart (the entry's order name, `CB#tag atm s8 t16`, and `planned_brackets.txt` in ChartBridge's
 folder). A `plan` message adds, changes or removes them before the fill, in ticks (`stopTicks`, `targetTicks`); the
-page that sends it is a later build (`nt8/PROTOCOL.md`). An entry still resting from 0.3.7 is converted once to ticks
+page sends it from chart 1.13.0 (the planned lines, above; `nt8/PROTOCOL.md`). An entry still resting from 0.3.7 is converted once to ticks
 from its current price, with a warning to the page.
 6. Only the instruments ChartBridge serves.
-7. At most 10 order actions per second per page.
+7. At most 10 order actions per second per page (a `plan` counts as one, 1.13.0).
 
 The page is tested against a fake bridge that follows the same rules (`test/fake-orders.mjs`, the
 reference for ChartBridge's behaviour) with `npm test` and `npm run smoke:orders`.
@@ -573,7 +592,10 @@ window of trades with measured sides). `setDelta(delta | null)` hands one to the
 Orders (1.3.0): `setOrders(list)` · `setPosition({ qty, avgPrice } | null, { pointValue })` ·
 `setOrderEditing(bool)` · `setOrderPreview(fn)` · `orderHandles()` · `priceToY(price)` · `yToPrice(y)` ·
 `on('orderMove', { id, price })` · `on('orderCancel', { id })` · `on('orderPlace', { price })`. The chart only
-asks; the page decides what to send. Order lines are display only until `setOrderEditing(true)`.
+asks; the page decides what to send. Order lines are display only until `setOrderEditing(true)`. 1.13.0: an item
+with `plan: { parent, offset, role }` is a planned line drawn `offset` ticks from its parent order (following it while
+the parent is dragged; its `orderMove` also has `from`, the parent price it was drawn from), and `adds: ['stop', 'target']` on an order draws "+SL" / "+TP" cells that fire
+`on('orderPlanAdd', { id, which })`.
 
 `on('legend')` fires with `{ bar, prev, index, forming, hovering }` whenever the bar under the
 crosshair (or the forming bar) changes, so a page can draw its own OHLC legend.

@@ -1,5 +1,98 @@
 # Changelog
 
+## 1.13.0 (2026-10-02): planned stop and target lines, NO STOP, Armed in deep red
+
+Page only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The planned lines need
+ChartBridge 0.3.8; with an older one there are none and the page works as 1.12.0 did. Nothing under `nt8/` changes,
+nor `test/fake-orders.mjs` or `test/fake-bridge.mjs`. The engine gets planned lines and "+SL" / "+TP" cells.
+
+### Planned stop and target on a resting entry (ChartBridge 0.3.8, Anthony's ATM rule)
+- **Planned lines.** A working limit or stop entry whose `order` message carries `planned` shows its stop and target on
+  every chart of its instrument (the workspace, every window, and `/single.html`), Armed or not: drawn like its legs
+  but clearly planned (lighter, finely dashed), labelled "SL plan -12t" / "TP plan +24t", ticks from the fill. While
+  the entry is dragged they move with it; after the drop they redraw from the price ChartBridge confirms.
+- **Dragging a planned line** (Armed, with the leg drag's gates: connected, the account shown, not in a Cancel all)
+  sends `plan` with the new distance, snapped to whole ticks, at least 1. The distance is the one the chart showed:
+  measured from the entry price the chart draws, which is the moved price while a drag of the entry still waits for
+  ChartBridge's answer (the engine's `orderMove` for a planned line carries it as `from`). A stop dragged to or past
+  the entry (or a target) is refused on the page with a note, nothing sent, and the line goes back. Its x sends `null`
+  (removed).
+- **"+SL" / "+TP"** on the entry's label (while Armed, only for one that is missing) adds it at the bracket boxes'
+  distance; with that box at 0 a note says to set it. No context menu.
+- In the workspace a drag, x or "+SL" / "+TP" in a window without the ticket goes to the ticket's window, as other
+  chart actions do (1.12.0), and is checked and sent there.
+- `plan` counts as an order action (ChartBridge's 10 a second).
+
+### Bracket limits (ChartBridge 0.3.7)
+- **No 200-tick cap** on the bracket boxes and presets with ChartBridge 0.3.7 or newer: they take what ChartBridge
+  takes (`maxBracketTicks`, no limit when `config.txt` does not set one). An older ChartBridge keeps the 200 cap.
+- **A mistyped `maxTicksAway` or `maxBracketTicks`** (which ChartBridge reads as NO limit) is shown on `/single.html` as
+  a warning that stays until dismissed, as the workspace already did. Any other ChartBridge `warn` shows there too.
+
+### NO STOP (Anthony)
+- A red **NO STOP** tag beside the bracket boxes while the stop is 0, on the ticket and `/single.html`.
+- **The first order with no stop after each page load asks** "No stop: send anyway?" in the page (not the browser's
+  dialog), with Send and Cancel; Cancel has the focus everywhere, so Enter never sends it (Escape is Cancel). It covers
+  Buy MKT, Sell MKT, their hotkeys and chart clicks. After Send nothing asks again until the page is loaded again. An
+  order that reduces the position never asks (it takes no bracket); Close, Flatten, Flatten all, B/E and cancels are
+  never asked.
+- **The question never blocks Close or Flatten.** It is a strip that takes no room and is never modal: over the top
+  of the chart on `/single.html`, over the left part of the top bar (up to KEYS) in the workspace. Nothing resizes or
+  scrolls when it shows, and it covers no order control. The Flatten button, the ticket's Close, the top bar's Flatten
+  all and the Close and Flatten all keys work while it is open: they act at once and close it, its order not sent. A
+  Close, Flatten or Flatten all in any window closes the question in every window for that instrument (every
+  instrument for Flatten all).
+- **An answer is for what was asked.** Armed going off, another instrument or account, or the ticket moving or being
+  released closes the question; a Send is checked against the instrument, the account and the arming it was asked in
+  and otherwise sends nothing, with a note. The ticket's window refuses an answer from another window given before
+  its last Close or Flatten of that instrument (a late message), and is not told "Send" by it.
+- **A reversal is asked as an entry** (long 1, Sell 3 opens short 2): with the stop at 0 it asks. The bracket rule is
+  as in 1.12.0: an order that reduces or reverses the position goes with no bracket, so the opening part of a reversal
+  has no stop whatever the bracket boxes say.
+- **In the workspace the question shows in the window Anthony clicked or pressed the key in.** The ticket's window
+  tells the others its stop and whether it was answered; a window forwarding an order with no stop asks first and
+  forwards it with the answer and the instrument it asked about; the ticket's window refuses it ("Not sent: the order
+  ticket is on NQ now, not MNQ.") if the ticket moved on meanwhile, and is not told "Send" by it. A Buy or Sell key
+  forwarded names its instrument the same way. The ticket's window never asks for another window. One Send in any window counts for
+  the ticket's window until it is loaded again (a ticket moved to a window not yet asked asks there once more).
+
+### Armed in deep red (Anthony: "we need more of that in the layout")
+- The Armed switch, the ticket's outline while Armed, `/single.html`'s order bar outline and the ARMED badge use the
+  house crimson (`--crimson` `#9F1239` with the logo's light ink, the outline `--crimson-word`). No new colors. The
+  charts stay purple with the soft glow while Armed, in the workspace and now on `/single.html` too (Anthony: only the
+  order bar is deep red; the workspace accent `#7B5CFF`). Contrast: the ink on crimson 6.7:1, the
+  outline 4.5:1 on the bar (3:1 needed).
+
+### The position readout (Anthony), on the ticket and `/single.html` (shared code)
+- One line: a small **LONG 4** / **SHORT 2** tag in the side's color, the average price, and the open P&L, dollars
+  first and largest, then points. Flat: just "Flat".
+- One quiet protection line, "Stop 4/4 · Target 4/4"; a gap in plain words, "NO STOP on 1", in the loss red of the
+  NO STOP tag (more than the position stays in the warning color).
+- The last fill in the dim text color, one line. The ticket's notes keep their own one-line slot and fade; a "Filled"
+  note no longer repeats the last fill. Labels in the sans face, prices in tabular figures; nothing changes width as
+  the numbers move.
+
+### Tests
+- `npm run smoke:plan` (new): the planned lines, an entry drag carrying them, a planned-line drag (`plan` with the
+  ticks), x and "+TP", a wrong-side drag refused, a disarmed drag sending nothing, an older ChartBridge (the page
+  strips `planned` from its messages: the fake always sends it), the 200 cap kept for 0.3.6 and lifted for 0.3.8, the
+  config warning staying, NO STOP and its one question on both pages (Flatten and Close never asked, the question in
+  the clicking window), deep red Armed, purple workspace borders, and screenshots at 1920x1080.
+- `npm run smoke:nostop` (new, the F2 review's probes): with the question open, the Close and Flatten all keys, the
+  Flatten button, the ticket's Close and the top bar's Flatten all send at once on both pages and in a forwarding
+  window; the question covers no control and nothing resizes or scrolls (the ticket at 1366x768, 1920x1080 and
+  2560x1440); Cancel has the focus (Enter sends nothing); a reversal is asked; Armed off, another instrument and Armed
+  again, or a Close in the other window drops the question; an answer that reaches the ticket's window after a Close
+  (the drop missed) is refused.
+- `smoke:plan` also drags a planned stop while the entry's move waits for its answer (the change held back in the
+  page) and checks the ticks sent are the chart's.
+- `test/plan.test.js` (new): the tick math and the drag rules (with `from`), the 200 cap by version, the protection
+  line, reversals.
+- Expectations changed: `smoke:orders`, `smoke:hotkeys`, `smoke:workspace`, `smoke:pin`, `smoke:live-first` and
+  `smoke:presets` answer Send to the one NO STOP question (they place orders with no stop); `smoke:orders` reads the
+  new protection line ("NO STOP on 1" in the loss red); `smoke:plan` no longer expects a key to do nothing while the
+  question is open.
+
 ## 1.12.1 (2026-10-02): Signals: absorption bars, divergence arrows, large-order bubbles
 
 Page and engine only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); works with ChartBridge 0.3.2 and

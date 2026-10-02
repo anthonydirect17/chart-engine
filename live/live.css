@@ -9,7 +9,7 @@
   --bg: #080B10; --s2: #0F151D; --s3: #141C26; --line: #18212C; --line-strong: #2A3645;
   --text: #E6EDF5; --head: #F2F6FA; --text2: #9AA8B8; --text3: #8392A5;
   --accent: #6D28D9; --accent-text: #B69CFF; --accent-tint: #1A1230; --accent-border: #3B2A6B; --accent-soft: #D8CCFF;
-  --crimson: #9F1239; --crimson-word: #E0445E;
+  --crimson: #9F1239; --crimson-word: #E0445E; --armed-ring: #7B5CFF;
   --info: #7FB2FF; --warn: #E0B45A; --loss: #FF7A7A; --profit: #3DDC97;
   --vwap-sw: #B69CFF; --up-text: #4B9CD3; --down-text: #925EE3; --ib-sw: #F5BDE8; --delta-sw: #4B9CD3;
   --sig-bull: #38DCE8; --sig-bear: #F3D84A;   /* the chart signals' swatches (G1c): CHART_STYLE --sig-bull, --sig-bear */
@@ -232,9 +232,11 @@
 .chart-live .arm { display: inline-flex; align-items: center; gap: 8px; font: 600 12px var(--sans); color: var(--text2); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 12px 3px 4px; min-height: 30px; cursor: pointer; }
 .chart-live .arm .knob { width: 30px; height: 18px; border-radius: 999px; background: var(--s3); border: 1px solid var(--line-strong); position: relative; flex: none; }
 .chart-live .arm .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text3); transition: left .12s; }
-.chart-live .arm[aria-checked="true"] { color: var(--bg); background: var(--warn); border-color: var(--warn); }
-.chart-live .arm[aria-checked="true"] .knob { background: var(--bg); border-color: var(--bg); }
-.chart-live .arm[aria-checked="true"] .knob::after { left: 14px; background: var(--warn); }
+/* Armed in deep red (1.13.0, Anthony: "make them a deep red, we need more of that in the layout"): the house crimson
+   with the logo's light ink on it, the outline in the crimson word color (kept readable on every ground) */
+.chart-live .arm[aria-checked="true"] { color: #FFE4EA; background: var(--crimson); border-color: var(--crimson-word); }
+.chart-live .arm[aria-checked="true"] .knob { background: #FFE4EA; border-color: #FFE4EA; }
+.chart-live .arm[aria-checked="true"] .knob::after { left: 14px; background: var(--crimson); }
 .chart-live .obtn { font: 600 12px var(--sans); border-radius: 8px; padding: 4px 12px; min-height: 30px; cursor: pointer; border: 1px solid; background: transparent; white-space: nowrap; }
 .chart-live .obtn.buy { color: var(--buy, #3DDC97); border-color: var(--buy-edge, rgba(61, 220, 151, 0.55)); background: var(--buy-tint, rgba(61, 220, 151, 0.08)); }
 .chart-live .obtn.sell { color: var(--sell, #FF7A7A); border-color: var(--sell-edge, rgba(255, 122, 122, 0.55)); background: var(--sell-tint, rgba(255, 122, 122, 0.08)); }
@@ -256,9 +258,19 @@
 .chart-live .oinfo { font: 500 12px var(--mono); color: var(--text2); font-variant-numeric: tabular-nums; }
 .chart-live .oinfo .long, .chart-live .oinfo .profit { color: var(--profit); }
 .chart-live .oinfo .short, .chart-live .oinfo .loss { color: var(--loss); }
-.chart-live .olegs { color: var(--text3); }
-.chart-live .olegs.uncovered { color: var(--loss); }
-.chart-live .olegs.over { color: var(--warn); }
+.chart-live .olegs { color: var(--text3); font: 500 11px var(--sans); font-variant-numeric: tabular-nums; }
+.chart-live .olegs.uncovered { color: var(--loss); }   /* a gap ("NO STOP on 1"): the loss red of the NO STOP tag (F2 review) */
+.chart-live .olegs.over { color: var(--warn); }        /* more than the position (1.13.0) */
+/* The position (1.13.0, Anthony: a calm block in the house style): a small side tag, the average price, the P&L the most
+   prominent value; labels in the sans face, numbers tabular */
+.chart-live .oinfo.pz { display: inline-flex; align-items: baseline; gap: 8px; font: 500 12px var(--mono); color: var(--text2); white-space: nowrap; }
+.chart-live .oinfo.pz.flat { font: 500 12px var(--sans); color: var(--text3); }
+.chart-live .pz-side { align-self: center; font: 600 10px var(--cond); letter-spacing: .08em; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; }
+.chart-live .pz-at { color: var(--text2); }
+.chart-live .pz-pnl { display: inline-flex; align-items: baseline; gap: 6px; margin-left: auto; }
+.chart-live .pz-pnl b { font: 600 14px var(--mono); }
+.chart-live .pz-pnl .pz-pt { font-size: 11px; opacity: .8; }
+.chart-live .pz-pnl:not(.profit):not(.loss) { color: var(--text2); }
 .chart-live .ostate { flex-basis: 100%; min-height: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; }   /* its own row, so the chart never jumps */
 .chart-live .ooff { font-size: 12px; color: var(--warn); }
 /* After trading comes on (a load, a PIN entry, a reconnect): which account orders go to, for a moment (1.6.1). The
@@ -278,10 +290,21 @@
 .chart-live .acct-sel.acct-flash.warn { --acct-ring: var(--warn); }
 @keyframes acct-flash { 0%, 100% { box-shadow: 0 0 0 2px var(--acct-ring); } 50% { box-shadow: 0 0 0 5px var(--acct-ring); } }
 @media (prefers-reduced-motion: reduce) { .chart-live .acct-sel.acct-flash { animation: none; } }
-.chart-live .obar.armed { border-color: var(--warn); background: var(--warn-tint, rgba(224, 180, 90, 0.07)); box-shadow: 0 0 0 1px var(--warn) inset; }
+.chart-live .obar.armed { border-color: var(--crimson-word); background: color-mix(in srgb, var(--crimson) 14%, var(--s2)); box-shadow: 0 0 0 1px var(--crimson-word) inset; }
 .chart-live .armed-note { font: 600 11px var(--cond); letter-spacing: .1em; text-transform: uppercase; color: var(--warn); }
-.chart-live.is-armed .stage { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
-.chart-live .pill.armed { color: var(--bg); background: var(--warn); border-color: var(--warn); }
+/* the chart while Armed (F2 review, Anthony): purple with the soft static glow, as the workspace's charts (its accent
+   #7B5CFF); only the order bar is deep red */
+.chart-live.is-armed .stage { border-color: var(--armed-ring); box-shadow: 0 0 0 1px var(--armed-ring), 0 0 8px 1px color-mix(in srgb, var(--armed-ring) 45%, transparent); }
+.chart-live .pill.armed { color: #FFE4EA; background: var(--crimson); border-color: var(--crimson-word); }
+/* NO STOP (1.13.0, Anthony): the stop box is 0; and the one question before the first order with no stop */
+.chart-live .nostop { display: inline-flex; align-items: center; font: 700 10px var(--cond); letter-spacing: .1em; color: var(--loss); border: 1px solid var(--loss); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+/* the NO STOP question (F2 review): a strip over the top of the chart, in the ChartBridge alert's shape, never a modal
+   overlay and never in the page's flow (F2 re-review: the chart must not resize); the order bar, its Flatten and the
+   hotkeys stay usable */
+.chart-live .stage > .nostop-ask { position: absolute; z-index: 6; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; background: color-mix(in srgb, var(--loss) 14%, var(--s2)); box-shadow: 0 8px 24px rgba(0, 0, 0, .45); }
+.chart-live .nostop-ask[hidden] { display: none; }
+.chart-live .nostop-btns { display: flex; justify-content: flex-end; gap: 8px; flex: none; }
+.chart-live .nostop-send { color: var(--loss); border-color: var(--loss); font-weight: 600; }
 .chart-live .alert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--loss); border-radius: 12px; background: rgba(255, 122, 122, 0.12); color: var(--head); font-weight: 500; }
 .chart-live .alert-title { font: 700 11px var(--cond); letter-spacing: .12em; text-transform: uppercase; color: var(--loss); }
 .chart-live .alert-text { flex: 1 1 200px; white-space: pre-line; }
@@ -314,6 +337,7 @@
 @media (max-width: 720px) {
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
   .chart-live .obtn { padding: 4px 10px; }
+  .chart-live .bfield { flex-wrap: wrap; row-gap: 6px; }   /* 1.13.0: NO STOP goes under the boxes rather than past the edge */
   /* a phone (1.10.0): the Armed switch keeps the width of its armed text, so arming never rewraps the bar or moves the chart */
   .chart-live .arm-text { display: inline-grid; }
   .chart-live .arm-text > span { grid-area: 1 / 1; }

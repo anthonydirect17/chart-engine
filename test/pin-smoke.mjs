@@ -72,6 +72,7 @@ const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePa
 try {
   bridge = await startBridge();
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 2 });
+  await ctx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await ctx.addInitScript(spies);
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const page = await ctx.newPage();
@@ -177,6 +178,7 @@ try {
 
   /* ---------------- 5. a phone-sized page with touch: the new PIN, the old one refused */
   const phoneCtx = await browser.newContext({ viewport: { width: 400, height: 820 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
+  await phoneCtx.addInitScript(() => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); });   // 1.13.0: answers the one NO STOP question with Send
   await phoneCtx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const phone = await phoneCtx.newPage();
   phone.on('pageerror', e => fail('phone pageerror: ' + e.message));

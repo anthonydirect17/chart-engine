@@ -34,10 +34,74 @@ function checkQty(qty, max, root) {
   return null;
 }
 
-/** Bracket ticks from storage or inputs: whole numbers 0 to 200 (0 means none). */
-function cleanBracket(v) {
-  const one = x => { const n = Math.round(+x); return isFinite(n) ? Math.min(MAX_BRACKET_TICKS, Math.max(0, n)) : 0; };
+/** Bracket ticks from storage or inputs: whole numbers 0 to `max` (200 unless given; 0 means none). */
+function cleanBracket(v, max) {
+  const cap = max > 0 ? max : MAX_BRACKET_TICKS;
+  const one = x => { const n = Math.round(+x); return isFinite(n) ? Math.min(cap, Math.max(0, n)) : 0; };
   return { stop: one(v && v.stop), target: one(v && v.target) };
+}
+
+/*
+ * The bracket's cap (1.13.0): ChartBridge before 0.3.7 takes at most 200 ticks; 0.3.7 and newer have no limit unless
+ * config.txt sets maxBracketTicks (its `trading` message names it). NO_CAP keeps a typed number sane, nothing more.
+ */
+const NO_CAP = 100000;
+/** [major, minor, patch] of a version text ("0.3.8", "fake-0.3.7"), or null. */
+function versionOf(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Whether version text v is at least `want` ("0.3.7"); false when v names no version. */
+function versionAtLeast(v, want) {
+  const a = versionOf(v), b = versionOf(want);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
+}
+function bracketCap(version, maxBracketTicks) {
+  if (!versionAtLeast(version, '0.3.7')) return MAX_BRACKET_TICKS;
+  return Number.isInteger(maxBracketTicks) && maxBracketTicks > 0 ? maxBracketTicks : NO_CAP;
+}
+
+/*
+ * Planned stop and target (ChartBridge 0.3.8, Anthony's ATM rule 2026-10-01): a working limit or stop entry whose order
+ * message carries `planned: { stopTicks, targetTicks }` gets a stop and a target as distances in ticks from its fill.
+ * The chart shows them at the entry's price minus / plus the ticks (a sell entry the other way) and they travel with
+ * the entry. Their ids are the entry's with ":sl" or ":tp".
+ */
+const PLAN_ID = /^(.+):(sl|tp)$/;
+/** { entry, which: 'stop' | 'target' } of a planned line's id, or null for any other id. */
+function planIdOf(id) { const m = PLAN_ID.exec(String(id)); return m ? { entry: m[1], which: m[2] === 'sl' ? 'stop' : 'target' } : null; }
+const hasPlan = o => !!o && OT_RESTING.includes(o.kind) && o.role === 'entry' && !!o.planned && typeof o.planned === 'object';
+const OT_RESTING = ['limit', 'stop'];
+/**
+ * The chart items for one working entry's planned lines: [{ id, side, kind, price, qty, filled, role, plan }] (the
+ * engine's `plan` shape), plus `adds` (what can be added: 'stop' and/or 'target') for the entry itself. Empty for an
+ * order without `planned` (an older ChartBridge, a market entry, a leg, an order placed elsewhere).
+ */
+function plannedLines(o, tick) {
+  if (!hasPlan(o) || !isWorking(o) || !(tick > 0) || typeof o.price !== 'number') return { lines: [], adds: [] };
+  const dir = o.side === 'sell' ? -1 : 1, closing = o.side === 'sell' ? 'buy' : 'sell', left = Math.max(0, (+o.qty || 0) - (+o.filled || 0));
+  const lines = [], adds = [];
+  for (const [which, key, sign, sfx] of [['stop', 'stopTicks', -1, 'sl'], ['target', 'targetTicks', 1, 'tp']]) {
+    const t = o.planned[key];
+    if (!(Number.isInteger(t) && t >= 1)) { adds.push(which); continue; }
+    const offset = sign * dir * t;
+    lines.push({ id: o.id + ':' + sfx, side: closing, kind: which === 'stop' ? 'stop' : 'limit', price: Math.round((o.price + offset * tick) / tick) * tick, qty: left, filled: 0, role: null,
+      plan: { parent: o.id, offset, role: which } });
+  }
+  return { lines, adds };
+}
+/**
+ * A planned line dragged to `price` (1.13.0): the new distance from the entry's price in whole ticks (at least 1), or
+ * the reason it is refused (a stop at or past the entry on the profit side, a target at or past it on the loss side).
+ * `from`: the entry price the chart drew the line from (the F2 review): while a move of the entry waits for its answer
+ * the chart draws the line from the moved price, so the distance sent is the one Anthony saw. Without it, o.price.
+ */
+function planDrag(o, which, price, tick, from) {
+  if (!o || !(tick > 0) || !isFinite(price) || typeof o.price !== 'number') return { error: 'Not sent: that entry is no longer working.' };
+  const dir = o.side === 'sell' ? -1 : 1;
+  const base = typeof from === 'number' && isFinite(from) && from > 0 ? Math.round(from / tick) * tick : o.price;
+  const d = Math.round((price - base) / tick) * dir;         // ticks toward profit (+) or loss (-) for this entry
+  if (which === 'stop') return d <= -1 ? { ticks: -d } : { error: 'Not sent: a stop goes on the loss side of the entry (' + (dir > 0 ? 'below' : 'above') + ' it). Drag it back past the entry.' };
+  return d >= 1 ? { ticks: d } : { error: 'Not sent: a target goes on the profit side of the entry (' + (dir > 0 ? 'above' : 'below') + ' it). Drag it back past the entry.' };
 }
 
 /** Default trade account: the one already chosen if still allowed, else Sim101, else the first allowed. */
@@ -113,6 +177,15 @@ function orderEvent(o, prev, fmt) {
 
 /** A bracket goes only on an order that opens or adds: never on one against the current position. */
 function bracketAllowed(side, positionQty) { return !positionQty || (positionQty > 0) === (side === 'buy'); }
+/**
+ * Whether an order opens a position (F2 review, for the NO STOP question): flat, adding, or a reversal (a sell of 3
+ * while long 1 opens short 2). A reversal still takes no bracket (bracketAllowed, the 1.12.0 rule), so its opening part
+ * has no stop whatever the bracket says.
+ */
+function opensPosition(side, positionQty, qty) {
+  if (bracketAllowed(side, positionQty)) return true;
+  return (+qty || 0) > Math.abs(+positionQty || 0);
+}
 
 /**
  * How far the working orders protect an open position: a multi-lot entry that fills in pieces gets one stop and
@@ -153,6 +226,18 @@ function legSummary(orders, account, root, posQty) {
   };
 }
 
+/**
+ * The protection line of the position readout (1.13.0, Anthony: calm, one line): "Stop 4/4 · Target 4/4". A gap reads
+ * "NO STOP on 1" in its place; cover over the position says so. { text, warn } from a legSummary (null when flat).
+ */
+function protectionLine(l) {
+  if (!l) return { text: '', warn: false };
+  const parts = [l.stopsShort ? 'NO STOP on ' + (l.position - l.stops) : 'Stop ' + l.stops + '/' + l.position, 'Target ' + l.targets + '/' + l.position];
+  if (l.stopsOver || l.targetsOver) parts.push('over the position');
+  if (l.notCounted) parts.push(l.notCounted + ' other not counted');
+  return { text: parts.join(' · '), warn: !!l.level };
+}
+
 /*
  * Bracket presets (1.10.0, Anthony). A ratio sets target = round(stop x ratio) and stays linked to the stop while it is
  * picked. Saved presets are { name, stop, target } in ticks: at most 12, names 1 to 24 characters, unique (any case).
@@ -162,9 +247,9 @@ const BRACKET_PRESET_MAX = 12, BRACKET_PRESET_NAME_MAX = 24;
 /** The multiplier of a ratio id ('1:1.5' gives 1.5), or null for anything else. */
 function ratioOf(id) { const r = BRACKET_RATIOS.find(x => x.id === id); return r ? r.k : null; }
 /** The bracket a ratio gives for a stop: the target is round(stop x ratio), both cleaned (and capped) by cleanBracket. */
-function ratioBracket(stop, ratio) {
-  const s = cleanBracket({ stop, target: 0 }).stop;
-  return cleanBracket({ stop: s, target: Math.round(s * ratio) });
+function ratioBracket(stop, ratio, max) {
+  const s = cleanBracket({ stop, target: 0 }, max).stop;
+  return cleanBracket({ stop: s, target: Math.round(s * ratio) }, max);
 }
 /** A preset name as kept: trimmed, inner spaces as one, at most 24 characters; '' when nothing is left. */
 function bracketPresetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, BRACKET_PRESET_NAME_MAX).trim() : ''; }
@@ -172,7 +257,7 @@ function bracketPresetName(v) { return typeof v === 'string' ? v.replace(/\s+/g,
 function defaultPresetName(stop, target) { return stop + '/' + target + 't'; }
 /** Saved presets as read: bad shapes, names and non-numbers dropped, a name used twice (any case) kept once, at most
     12, ticks cleaned by cleanBracket. Never throws. */
-function cleanBracketPresets(v) {
+function cleanBracketPresets(v, max) {
   const out = [], names = new Set();
   if (!Array.isArray(v)) return out;
   for (const p of v) {
@@ -182,7 +267,7 @@ function cleanBracketPresets(v) {
     if (!name || names.has(name.toLowerCase())) continue;
     if (typeof p.stop !== 'number' || typeof p.target !== 'number' || !isFinite(p.stop) || !isFinite(p.target)) continue;
     names.add(name.toLowerCase());
-    out.push(Object.assign({ name }, cleanBracket(p)));
+    out.push(Object.assign({ name }, cleanBracket(p, max)));
   }
   return out;
 }
@@ -399,5 +484,5 @@ function hotkeyAction(keys, combo) {
 }
 
 return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
-  MAX_BRACKET_TICKS, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
+  MAX_BRACKET_TICKS, NO_CAP, versionOf, versionAtLeast, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

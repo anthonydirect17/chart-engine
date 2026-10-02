@@ -36,6 +36,9 @@ export async function run({ browser, check, fail, shot, root, port }) {
       function Spy(url, p) { const sock = p === undefined ? new Real(url) : new Real(url, p); const rec = { sent: [], sock }; const send = sock.send.bind(sock); sock.send = d => { rec.sent.push(d); return send(d); }; S.sockets.push(rec); return sock; }
       Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
       window.WebSocket = Spy;
+      // 1.13.0: the first order with no stop after a load asks "No stop: send anyway?" (Anthony); answered Send here
+      // (test/plan-smoke.mjs and test/nostop-smoke.mjs check the question itself)
+      setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30);
       // every note the top bar shows (a later one can replace it before a check reads it)
       window.__notes = [];
       const iv = setInterval(() => { const el = document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__notes.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
@@ -260,11 +263,11 @@ export async function run({ browser, check, fail, shot, root, port }) {
       let refused = '';
       for (let i = 0; i < 4 && !refused; i++) {
         await wait(450);
-        await clickChart(B, mesB.id, X - 45 - i);
+        await clickChart(B, mesB.id, X - 40.25 - i * 0.25);   // just under the market, on screen
         await wait(700);
         refused = (await B.evaluate(() => window.__notes.find(t => /^Refused by ChartBridge/.test(t)))) || '';
       }
-      check(/^Refused by ChartBridge: .*MES/.test(refused), 'ChartBridge\'s refusal of an order sent for B\'s click shows in B: "' + refused + '"');
+      check(/^Refused by ChartBridge: .*MES/.test(refused), 'ChartBridge\'s refusal of an order sent for B\'s click shows in B: "' + refused + '"' + (refused ? '' : ' notes ' + JSON.stringify(await B.evaluate(() => window.__notes.slice(-8))) + ' MES ' + JSON.stringify((await state('MES')).orders.map(o => o.kind + o.price))));
       await A.click('[data-tk-id="armBtn"]');
       await A.click('#wsFlat'); await flatAll();
       await A.selectOption('[data-tk-id="root"]', 'MNQ');

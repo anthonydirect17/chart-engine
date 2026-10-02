@@ -437,6 +437,8 @@ const accountPick = () => { try { const v = JSON.parse(store.getItem('live-accou
 /* notes: the ticket's own line in the ticket's window, else the top bar's */
 function tnote(text, level) {
   if (capture) capture.push(text);
+  // the ticket shows its last fill on its own line: a "Filled ..." note would only repeat it (1.13.0, Anthony)
+  if (holds() && TK.el && !level && /^(Part filled|Filled) /.test(text || '')) return;
   if (holds() && TK.el) {
     const el = tk('note');
     el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
@@ -466,7 +468,21 @@ const core = TC.create({
   lost: () => {}, syncAccounts: () => { if (TK.bar) TK.bar.syncTradeAccounts(); },
   batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
   armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
+  /* NO STOP (1.13.0): asked in this window (the one Anthony is looking at); a click forwarded from another window was
+     asked there before it came (its noStopOk), so here it is only refused */
+  confirmNoStop: (root, go) => {
+    if (forwarding) return false;
+    askNoStop('The ' + root + ' order has no stop (the bracket stop is 0). Later orders with no stop go without asking until this window is loaded again.', go,
+      () => tnote('Not sent: no stop. Set the bracket stop, or send again and choose Send.', 'warn'), { root });
+    return true;
+  },
+  dropNoStop: () => dropNoStop(),
+  flattened: r => flattenedHere(r),
 });
+let forwarding = false;                               // acting on another window's forward (it asked its own questions)
+let noStopQ = null;                                   // the NO STOP question open in this window (askNoStop, below)
+const flatAt = { all: 0 };                            // the last Close or Flatten per instrument, Flatten all, any window
+const noteFlat = (r, at) => { if (r) flatAt[r] = Math.max(flatAt[r] || 0, at); else flatAt.all = Math.max(flatAt.all, at); };
 
 /* ---------------- this window's order connection: no subscribe, only sign-in and order messages */
 function tconnect() {
@@ -492,7 +508,8 @@ function tmessage(m) {
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
-    case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.text) note('ChartBridge: ' + m.text, m.level === 'warn'); return;
+    // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
+    case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text) alertLoud(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
   }
   // an order this window sent for a click in another window: ChartBridge's refusal (or NinjaTrader's rejection) goes
   // back to that window's note too
@@ -505,11 +522,14 @@ function tmessage(m) {
 }
 /* ChartBridge's error about orders stays until dismissed (the newest three), as on the single chart page */
 const alerts = [];
-function alertLoud(text) {
+let alertErr = false;
+function alertLoud(text, warn) {
   alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
+  if (!warn) alertErr = true;
   $('wsAlertText').textContent = alerts.join('\n'); $('wsAlert').hidden = false;
+  $('wsAlert').classList.toggle('warn', !alertErr);                // red once an error is in it
 }
-$('wsAlertClose').addEventListener('click', () => { alerts.length = 0; $('wsAlert').hidden = true; });
+$('wsAlertClose').addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; });
 function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n.show; $('wsUnsentText').textContent = n.text; }
 $('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
 
@@ -517,7 +537,7 @@ $('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
 function chartTrade(v) {
   const r = v.panel.root, TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct;
   const pos = on ? TR.positions.get(acct + '|' + r) : null;
-  return { root: r, account: acct, live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.working(acct, r) : [],
+  return { root: r, account: acct, live: on && ticketArmed() && r === ticketRoot(), orders: on ? core.chartOrders(acct, r) : [],
     position: pos && pos.qty ? pos : null, pointValue: (instruments[r] || {}).pointValue || 0, qty: ticketQty() };
 }
 function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }
@@ -553,6 +573,20 @@ function chartAction(action) {
 }
 function forward(action) {
   if (!link) { note(TL.NO_CHANNEL, true, 8000); renderCharts(); return; }
+  /* NO STOP: the ticket's window has a stop of 0 and has not been told "Send" yet; an order that opens or adds is asked
+     about here, where Anthony clicked, and goes with his answer (the ticket's window never asks for another window) */
+  const hd = holder(), side = action.kind === 'place' ? action.side : action.kind === 'buy' || action.kind === 'sell' ? action.kind : '';
+  if (side && hd && hd.armed && hd.stop === 0 && !hd.noStopOk && !action.noStopOk) {
+    const pos = core.TR.positions.get((hd.account || '') + '|' + (hd.root || ''));
+    if (OT.opensPosition(side, pos && pos.qty, hd.qty)) {
+      /* the answer goes with the instrument and account it was asked about and the time it was asked: the ticket's
+         window refuses it for another, or after a Close or Flatten of that instrument since (F2 review, re-review) */
+      const asked = { root: hd.root, account: hd.account, askedAt: Date.now() };
+      askNoStop('The ' + hd.root + ' order has no stop (the order ticket\'s bracket stop is 0). Later orders with no stop go without asking.',
+        () => forward(Object.assign({}, action, { noStopOk: true }, asked)), () => { note('Not sent: no stop.', true); renderCharts(); }, Object.assign({ fwd: true }, asked));
+      return;
+    }
+  }
   link.forward(action).then(r => {
     if (!r.answered || !r.sent) note(r.note || 'Nothing was sent.', true, 8000);
     else note(r.note, false, 6000);
@@ -565,12 +599,21 @@ function actHere(a) {
   const before = sentCount, cid0 = core.lastCid(), notes = [];
   const was = capture; capture = notes;
   try {
-    const R = ticketRoot();
-    if (a.root && a.root !== R && (a.kind === 'place' || a.kind === 'move' || a.kind === 'cancel')) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
-    else if ((a.kind === 'move' || a.kind === 'cancel') && core.TR.orders.has(a.id) && core.TR.orders.get(a.id).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
+    const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
+    const otherRoot = !!a.root && a.root !== R && ['place', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
+    // asked in the window it came from, and Anthony said Send: only for the instrument and account he was asked about,
+    // and not when a Close or Flatten of it went out after he was asked (F2 review, re-review)
+    const otherAcct = a.noStopOk === true && !!a.account && a.account !== core.TR.account;
+    const stale = a.noStopOk === true && !(a.askedAt > Math.max(flatAt.all, flatAt[R] || 0));
+    if (a.noStopOk === true && !otherRoot && !otherAcct && !stale) core.allowNoStop();
+    if (otherRoot) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
+    else if (otherAcct) tnote('Not sent: the order ticket is on ' + core.TR.account + ' now, not ' + a.account + '.', 'warn');
+    else if (stale) tnote('Not sent: a Close or Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
+    else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
-    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) core.moveOrder(a.id, +a.price);
-    else if (a.kind === 'cancel' && typeof a.id === 'string') core.cancelOrder(a.id);
+    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
+    else if (a.kind === 'cancel' && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
+    else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which);
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
     else if (a.kind === 'be') core.breakEven();
@@ -580,8 +623,9 @@ function actHere(a) {
 }
 const tradeHost = {
   place: (side, price, root, kind) => chartAction({ kind: 'place', side, price, root, orderKind: kind }),
-  move: (id, price, root) => chartAction({ kind: 'move', id, price, root }),
+  move: (id, price, root, from) => chartAction({ kind: 'move', id, price, root, from }),
   cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
+  planAdd: (id, which, root) => chartAction({ kind: 'planAdd', id, which, root }),
 };
 
 /* ---------------- the one ticket across windows */
@@ -592,7 +636,9 @@ const link = linkChannel ? TL.create({
   onState: () => linkChanged(),
   onRelease: () => { if (core.TR.armed) core.setArmed(false); },   // moved to another window: Armed off before the lock goes
   onForward: (a, from) => {
-    const r = actHere(a);
+    forwarding = true;
+    let r;
+    try { r = actHere(a); } finally { forwarding = false; }
     if (r.cid) { fwdCids.set(r.cid, { from, at: Date.now() }); for (const [c, x] of fwdCids) if (Date.now() - x.at > 60000) fwdCids.delete(c); }
     renderOrders(); return r;
   },
@@ -610,6 +656,8 @@ function linkChanged() {
   // another window's ticket: this window's orders go to its instrument and account (Close, Flatten all, the charts),
   // and keep doing so once no window has it (the last ticket's instrument, live-ticket-v1; the default account)
   const hd = holder();
+  // a question asked here for the ticket's window goes when the ticket is not as it was asked (F2 re-review)
+  if (noStopQ && noStopQ.fwd && (h || !hd || !hd.armed || hd.root !== noStopQ.root || hd.account !== noStopQ.account)) dropNoStop();
   if (!h && hd && W.ROOTS.includes(hd.root)) TK.root = hd.root;
   if (!h && hd && hd.account && hd.account !== core.TR.account && core.TR.accounts.includes(hd.account)) core.pickAccount(hd.account);
   if (!h && !hd) noTicketAccount();
@@ -627,7 +675,8 @@ function noTicketAccount() {
 const closeTarget = () => ticketAccount() + ' ' + ticketRoot();
 function publish() {
   if (!holds()) return;
-  const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty() };
+  const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty(),
+    stop: OT.cleanBracket(core.brackets[TK.root], core.cap()).stop, noStopOk: !core.noStopAsked() };   // NO STOP: other windows ask before they forward
   const k = JSON.stringify(st);
   if (k === TK.published) return;
   TK.published = k;
@@ -693,9 +742,10 @@ function mountTicket(v) {
     <div class="tk-row"><span class="glabel">Qty</span><select class="acct-sel oqty" data-tk-id="oQty" aria-label="Order quantity">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select><span class="ounit" data-tk-id="oQtyCap"></span>
       <select class="acct-sel bpre" data-tk-id="bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
       <span class="bsave" data-tk-id="bSaveBox" hidden><input class="oin bname" data-tk-id="bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" data-tk-id="bSaveOk">Save</button><button type="button" class="btn" data-tk-id="bSaveNo" aria-label="Do not save">x</button></span></div>
-    <div class="tk-row"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-tk-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
+    <div class="tk-row tk-bk"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-tk-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
       <input class="oin" data-tk-id="bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
-      <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span></div>
+      <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
+      <span class="nostop" data-tk-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
     <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
     <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button></div>
     <div class="tk-state ostate">
@@ -735,6 +785,8 @@ function mountTicket(v) {
     if (e.detail === 0) { tnote('Order buttons work by click only, not by keyboard.', 'warn'); return; }
     core.flattenHere(b.dataset.close);
   });
+  // the stop the other windows go by for NO STOP: told to them as it is typed
+  for (const k of ['bStop', 'bTarget', 'bPreset']) for (const t of ['input', 'change']) map[k].addEventListener(t, () => setTimeout(publish, 0));
   TK.bar.syncTradeAccounts();
   ticketArmedUi(core.TR.armed);
   startTicketPrice();
@@ -758,8 +810,8 @@ function renderTicketExtras() {
   const TR = core.TR, acct = TR.account, r = TK.root;
   const fill = TR.enabled && acct ? [...tfills.values()].filter(f => f.account === acct && f.root === r).sort((a, b) => a.t - b.t).pop() : null;
   const fe = tk('fill');
-  const ft = fill ? 'Last fill ' + String(fill.side).toUpperCase() + ' ' + fill.qty + ' @ ' + fmtPx(+fill.p, r) + ' ' + U.fmtHM(fill.t) : '';
-  if (fe.textContent !== ft) { fe.textContent = ft; fe.className = 'oinfo tk-fill' + (fill ? ' ' + (fill.side === 'buy' ? 'long' : 'short') : ''); }
+  const ft = fill ? 'Last fill ' + (fill.side === 'buy' ? 'BUY ' : 'SELL ') + fill.qty + ' at ' + fmtPx(+fill.p, r) + ' · ' + U.fmtHM(fill.t) : '';
+  if (fe.textContent !== ft) { fe.textContent = ft; fe.title = ft; }
   const rows = [];
   if (TR.enabled && acct) for (const x of W.ROOTS) {
     if (x === r) continue;
@@ -801,7 +853,8 @@ setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
 const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
-const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else forward({ kind }); };
+/* a Buy or Sell key forwarded names the instrument this window knows the ticket is on (F2 review) */
+const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   keys: () => HK, root: document.body, busy,
   actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
@@ -1339,6 +1392,43 @@ function askName(title, value, done) {
   });
   const i = $('wsName'); i.focus(); i.select();
 }
+/* The NO STOP question (1.13.0; F2 review): a strip under the top bar in the page's flow, never modal, so the ticket's
+   Close, the top bar's Flatten all and the hotkeys work while it is open (they close it: dropNoStop, its order not
+   sent). Cancel has the focus, so Enter never sends an order with no stop; Escape is Cancel. One question at a time:
+   a newer one replaces it (the older order is not sent). */
+/* it sits over the top bar from the left up to KEYS, so KEYS, Flatten all and the right side stay usable */
+function placeNoStop() { const top = document.querySelector('.ws-top').getBoundingClientRect(), k = $('wsKeys').getBoundingClientRect(); $('wsNoStop').style.setProperty('--ns-right', Math.max(8, Math.round(top.right - k.left + 8)) + 'px'); }
+window.addEventListener('resize', () => { if (noStopQ) placeNoStop(); });
+function askNoStop(text, onSend, onCancel, bound) {
+  noStopQ = Object.assign({ onSend, onCancel }, bound || {});
+  $('wsNoStopText').textContent = text; $('wsNoStop').title = 'No stop: send anyway? ' + text;
+  placeNoStop();
+  $('wsNoStop').hidden = false;
+  $('wsNoStopCancel').focus();
+}
+/* A Close or Flatten (r) or Flatten all (null) in any window: every window drops its question for it, and the ticket's
+   window refuses an answer given before it (F2 re-review). Flatten itself never waits on this. */
+const flatChan = TL.browserChannel('chartbridge-noflat-v1');
+function flattenedHere(r) {
+  const at = Date.now();
+  noteFlat(r, at);
+  try { if (flatChan) flatChan.post({ t: 'flat', root: r || null, at }); } catch (e) { /* closed */ }
+}
+if (flatChan) flatChan.onmessage = m => {
+  if (!m || m.t !== 'flat' || !isFinite(m.at)) return;
+  noteFlat(m.root || null, +m.at);
+  if (noStopQ && (!m.root || !noStopQ.root || m.root === noStopQ.root)) dropNoStop();
+};
+function closeNoStopQ(how) {
+  const q = noStopQ; noStopQ = null;
+  if (document.activeElement && $('wsNoStop').contains(document.activeElement)) document.activeElement.blur();
+  $('wsNoStop').hidden = true;
+  if (q && how === 'send') q.onSend(); else if (q && how === 'cancel' && q.onCancel) q.onCancel();
+}
+function dropNoStop() { if (noStopQ || !$('wsNoStop').hidden) closeNoStopQ('drop'); }
+$('wsNoStopSend').addEventListener('click', () => closeNoStopQ('send'));
+$('wsNoStopCancel').addEventListener('click', () => closeNoStopQ('cancel'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('wsNoStop').hidden) { e.preventDefault(); closeNoStopQ('cancel'); } });
 function confirmBox(text, label, done, cancel) {
   const d = $('wsDialog');
   d.innerHTML = `<form class="ws-dlg" method="dialog"><p>${esc(text)}</p><div class="ws-dlg-btns"><button type="button" class="ws-btn" data-act="cancel">Cancel</button>` +
