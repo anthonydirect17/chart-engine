@@ -391,6 +391,7 @@
 .chart-live .set-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
 .chart-live .set-name { font-size: 13px; color: var(--text); }
 .chart-live .set-row .seg button { padding: 4px 10px; }
+.chart-live .set-row .set-num { width: 64px; flex: none; }
 .chart-live .set-row.set-pin { padding: 2px 8px 0; border-top: 1px solid var(--line); margin-top: 4px; }
 .chart-live .set-ver { margin: 2px 8px 2px; font: 400 11px var(--mono); color: var(--text3); }
 /* the page's small menu (1.14.0): the drawing tools and Reset view */

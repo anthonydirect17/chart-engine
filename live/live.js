@@ -46,6 +46,7 @@
  *   live-tape-floors-v1 { <root>: { rth, eth } } the large-print floors (the workspace's Time and Sales floors, 1.12.0), also
  *                       the bubbles' and the absorption bars' large trade (G1c); only those set by hand
  *   live-legend-v1      { <paneId>: false } a chart's header text switched off (1.14.0, Anthony); on unless set off
+ *   live-scale-lock-v1  { <paneId>: true } a chart's price scale locked (1.14.0, review D2); unlocked unless set
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
  *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
@@ -66,6 +67,9 @@ const RANGE_MODES = ['nt', 'traded'];
 const GRIDS = ['off', 'on'];
 const ROOMS = [0, 40, 80, 160];
 const DEFAULT_ROOM = 80;
+/* the ATR readout's period (Anthony's answer, review D2): editable in Settings, 14 by default, whole bars 2 to 100 */
+const ATR_MIN = 2, ATR_MAX = 100, DEFAULT_ATR = 14;
+const cleanAtr = v => (Number.isInteger(v) && v >= ATR_MIN && v <= ATR_MAX ? v : DEFAULT_ATR);
 const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };
 const RANGE_MIN = 1, RANGE_MAX = 400;
 /*
@@ -194,7 +198,7 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', legend: 'live-legend-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', legend: 'live-legend-v1', scaleLock: 'live-scale-lock-v1' };
 /*
  * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
  * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
@@ -543,6 +547,7 @@ function create(storage) {
         rangeMode: RANGE_MODES.includes(s.rangeMode) ? s.rangeMode : 'nt',
         grid: GRIDS.includes(s.grid) ? s.grid : 'off',
         room: ROOMS.includes(s.room) ? s.room : DEFAULT_ROOM,
+        atr: cleanAtr(s.atr),
       };
     },
     setSetting(field, value) { return patch(KEYS.settings, field, value); },
@@ -658,6 +663,14 @@ function create(storage) {
     },
     /** Whether a chart pane shows its header text (1.14.0): on unless switched off. */
     legendShown(paneId) { return !(paneOk(paneId) && obj(KEYS.legend)[paneId] === false); },
+    /** Whether a chart pane's price scale is locked (1.14.0, review D2): off unless switched on. */
+    scaleLocked(paneId) { return paneOk(paneId) && obj(KEYS.scaleLock)[paneId] === true; },
+    setScaleLocked(paneId, on) {
+      if (!paneOk(paneId)) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.scaleLock));
+      if (on) all[paneId] = true; else delete all[paneId];
+      return raw.set(KEYS.scaleLock, all);
+    },
     setLegendShown(paneId, on) {
       if (!paneOk(paneId)) return false;
       const all = Object.assign(Object.create(null), obj(KEYS.legend));
@@ -819,7 +832,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM,
+api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -954,6 +967,7 @@ function markup(p, o) {
           <div class="set-row"><label class="set-name" for="${p}rangeMode">Range style</label>${rangeModeSel}</div>
           <div class="set-row"><span class="set-name" id="${p}gridSegLabel">Grid lines</span>${seg('gridSeg', 'Grid lines', [['off', 'Off'], ['on', 'On']])}</div>
           <div class="set-row"><span class="set-name" id="${p}roomSegLabel" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>${seg('roomSeg', 'Room right', [['0', 'None'], ['40', '40 px'], ['80', '80 px'], ['160', '160 px']])}</div>
+          <div class="set-row"><label class="set-name" for="${p}atrIn" title="The ATR readout in the legend: NinjaTrader's ATR of this many closed bars">ATR period</label><input class="ind-hex set-num" id="${p}atrIn" type="number" min="2" max="100" step="1" inputmode="numeric" data-f="atr" aria-label="ATR period, bars"></div>
         </div>
         <div class="ind-cap" id="${p}hkCap">Hotkeys</div>
         <div class="hk-list" id="${p}hkList" role="group" aria-labelledby="${p}hkCap">${OT.HOTKEY_ACTIONS.map(a => `
@@ -2616,7 +2630,6 @@ function start(container, opt, PAGE) {
      left up and down), the ATR of the chart's own closed bars (ATR_PERIOD, NinjaTrader's ATR) and the last price's change
      from the prior settlement (ChartBridge 0.3.7: hello and "settlement"; blank when ChartBridge gives none, never
      estimated). Once a second, on the second, and when the view or ChartBridge's settlement changes; never on the tick path. */
-  const ATR_PERIOD = 14;
   const settlements = {};                                // root -> { p, date } from ChartBridge
   function readSettlements(list) { for (const i of list || []) if (i && typeof i.root === 'string') settlements[i.root] = { p: typeof i.settlement === 'number' ? i.settlement : null, date: i.settlementDate || '' }; }
   function readouts() {
@@ -2628,7 +2641,7 @@ function start(container, opt, PAGE) {
       else bar = 'Bar ' + U.barRemain(b.t, TF[S.tf].sec, etNow());
     }
     put($('lgBar'), 'textContent', bar); put($('lgBar'), 'hidden', !bar);
-    const a = b ? chart.atr(ATR_PERIOD) : null, at = a === null ? '' : 'ATR(' + ATR_PERIOD + ') ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp);
+    const a = b ? chart.atr(S.atr) : null, at = a === null ? '' : 'ATR(' + S.atr + ') ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp);
     put($('lgAtr'), 'textContent', at); put($('lgAtr'), 'hidden', !at);
     const st = settlements[D.root], pct = b && st ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');
     const txt = pct === null ? '' : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '% vs settle';
@@ -2676,6 +2689,10 @@ function start(container, opt, PAGE) {
   }
   function setLegendShown(on) { lgOn = !!on; prefs.setLegendShown(PANE, lgOn); applyLegendShown(); }
   $('lgTog').addEventListener('click', () => setLegendShown(!lgOn));
+  /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
+  chart.setScaleLock(prefs.scaleLocked(PANE));
+  chart.on('scaleLock', v => prefs.setScaleLocked(PANE, v));
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE)); });
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.legend) { const v = prefs.legendShown(PANE); if (v !== lgOn) { lgOn = v; applyLegendShown(); } } });
   function shortHeader() {
     if (!COMPACT) return;
@@ -2923,6 +2940,7 @@ function start(container, opt, PAGE) {
     for (const b of $('glideSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.glide));
     if ($('gridSeg')) for (const b of $('gridSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.grid));
     if ($('roomSeg')) for (const b of $('roomSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === S.room));
+    if ($('atrIn') && document.activeElement !== $('atrIn')) $('atrIn').value = S.atr;
     syncIndicators();
     $('rangeBox').hidden = S.tf !== 'range';
     if (document.activeElement !== $('rangeTicks')) $('rangeTicks').value = ranges[S.root];
@@ -2989,6 +3007,17 @@ function start(container, opt, PAGE) {
     const b = e.target.closest('button'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
     S.grid = b.dataset.v; chart.setGrid(S.grid === 'on'); saveSetting('grid'); syncButtons();
   });
+  /* the ATR period: applied and saved as typed when it is a whole number 2 to 100; leaving the box shows the one in use */
+  if ($('atrIn')) {
+    $('atrIn').addEventListener('input', e => {
+      const n = Number(e.target.value);
+      if (String(e.target.value).trim() === '' || LP.cleanAtr(n) !== n) { e.target.setAttribute('aria-invalid', 'true'); return; }
+      e.target.removeAttribute('aria-invalid');
+      if (n !== S.atr) { S.atr = n; saveSetting('atr'); readouts(); }
+    });
+    $('atrIn').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); e.target.value = S.atr; });
+    $('atrIn').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+  }
   if ($('roomSeg')) $('roomSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b || !LP.ROOMS.includes(+b.dataset.v)) return;
     S.room = +b.dataset.v; chart.setRoom(S.room); saveSetting('room'); syncButtons();
@@ -3765,6 +3794,7 @@ function start(container, opt, PAGE) {
     if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
     if (s.grid !== S.grid) { S.grid = s.grid; chart.setGrid(S.grid === 'on'); }
     if (s.room !== S.room) { S.room = s.room; chart.setRoom(S.room); }
+    if (s.atr !== S.atr) { S.atr = s.atr; readouts(); }
     syncButtons();
     sigRefresh();                                          // the signals' settings and the large-print floors (G1c)
   }

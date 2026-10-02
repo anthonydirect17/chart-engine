@@ -373,14 +373,18 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   chips, VO VW LV FL, 30 px tall; up to ten pinned, those that do not fit behind a **+N** chip that opens a small
   list of them), a **⋯** `.btn` opening a small menu (Trend line, Price line,
   Clear drawings, Reset view; 500 13px, the accent tint on hover and while a tool is on), Colors, Settings. Settings
-  gain a "CHART" section above the hotkeys: Glide, Range style, Grid lines (Off / On), Room right (None, 40, 80, 160 px),
-  each a 32 px row of its name (13px) and the toolbar's control; then Change PIN and the versions (400 11px mono, the
+  gain a "CHART" section above the hotkeys: Glide, Range style, Grid lines (Off / On), Room right (None, 40, 80, 160 px), ATR period (a 64 px number box, 2 to 100, 14 by default; review D2),
+  each a 32 px row of its name (13px) and the toolbar's control, and ATR period (a 64 px number box, 2 to 100, review D2);
+  then Change PIN and the versions (400 11px mono, the
   quiet grey). A host's chart with its own toolbar keeps the 1.13.0 toolbar.
 - Drag to pan and throw. Wheel or pinch zooms at the pointer; a sideways trackpad swipe pans.
 - While following the live edge, zoom keeps the live edge in place. Panning away shows "Jump to live": since 1.14.0 a
   small icon (24 x 22 px, radius 6, `#B69CFF` on `#1A1230` with a `#3B2A6B` border, a play-to-end glyph, tooltip "Jump
   to live (End)") at the top of the price scale, moved down only to stay clear of the tags there; the axis prices under
   it are not drawn. End or the icon returns.
+- **Price scale lock (1.14.0, review D2):** a 24 x 20 px padlock centred in the corner under the price axis (beside the
+  time axis; nothing else is drawn there): unlocked, an open padlock in the quiet grey `#7F8C9C`, the text color and a
+  `#2A3645` border on hover; locked, a closed padlock in `#B69CFF` on `#1A1230` with a `#3B2A6B` border. Saved per chart.
 - Drag the price axis to stretch price (auto-fit off; chart drag then pans price too). 1.14.0: while following live, a
   new trade that takes the forming bar within 12 px of the header or the bottom brings the auto-fit back (eased), and
   so does going back to live. Double-click

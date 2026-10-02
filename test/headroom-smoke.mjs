@@ -7,7 +7,9 @@
 //   - with the price scale squashed by hand (a drag on the price axis) the auto-fit takes over once the price nears
 //     the header, and following live again (End, the icon) brings the auto-fit back;
 //   - Jump to live: a small icon at the top of the price scale with the tooltip "Jump to live (End)", only while not
-//     following live, clear of the price and order tags, taking no layout room; a click or End goes back to live.
+//     following live, clear of the price and order tags, taking no layout room; a click or End goes back to live;
+//   - the price scale lock (review D2): in the corner under the price axis, saved per chart; locked, a zoom set by hand
+//     is kept as price moves, End fits it again.
 //   npm run smoke:headroom        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -158,6 +160,8 @@ try {
   await wp.click(`.ws-panel[data-id="${big.id}"] .ce-live`); await wp.waitForTimeout(500);
   bx = (await look(wp, 'ws')).find(x => x.id === big.id);
   check(bx.live && !bx.icon && bx.auto, 'a click: following live again, the icon gone, the auto-fit on');
+  const locks = await wp.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => { const l = p.querySelector('.ce-lock'), b = p.querySelector('.chart-box').getBoundingClientRect(); if (!l) return false; const r = l.getBoundingClientRect(); return r.left >= b.right - 78 && r.bottom <= b.bottom && r.top >= b.bottom - 26; }));
+  check(locks.length > 0 && locks.every(Boolean), 'every workspace chart has the lock in its corner under the price axis');
   await ctx.close();
 
   /* ================================================================ /single.html: the same trend, then End */
@@ -189,6 +193,29 @@ try {
   await sp.focus('#chart'); await sp.keyboard.press('End'); await sp.waitForTimeout(500);
   [x] = await look(sp, 'single');
   check(x.live && !x.icon, 'End: following live again, the icon gone');
+  // the price scale lock (Anthony, review D2): in the corner under the price axis, saved per chart
+  const lockAt = await sp.evaluate(() => { const l = document.querySelector('#chart .ce-lock'), b = document.getElementById('chart').getBoundingClientRect(), r = l.getBoundingClientRect();
+    return { inCorner: r.left >= b.right - 78 && r.right <= b.right && r.top >= b.bottom - 26 && r.bottom <= b.bottom, pressed: l.getAttribute('aria-pressed'), title: l.title }; });
+  check(lockAt.inCorner && lockAt.pressed === 'false', 'a lock in the corner under the price axis (no tag ever goes there), unlocked by default: ' + JSON.stringify(lockAt));
+  await sp.click('#chart .ce-lock');
+  check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-scale-lock-v1') || '{}').main)) === true, 'a click locks it, saved for this chart');
+  await sp.mouse.move(cb.x + cb.width - 30, cb.y + cb.height * 0.4); await sp.mouse.down();
+  await sp.mouse.move(cb.x + cb.width - 30, cb.y + cb.height * 0.4 - 130, { steps: 8 }); await sp.mouse.up();
+  await sp.mouse.move(cb.x + 40, cb.y + cb.height + 20); await sp.waitForTimeout(300);
+  const lastNow = (await look(sp, 'single'))[0].last;
+  await trend(lastNow, async () => {}, 30, 8);
+  [x] = await look(sp, 'single');
+  check(!x.auto, 'locked: the zoom set by hand is kept through +30 points (price may leave the view: last at ' + Math.round(x.yLast) + ' px)');
+  await sp.focus('#chart'); await sp.keyboard.press('End'); await sp.waitForTimeout(500);
+  [x] = await look(sp, 'single');
+  check(x.auto && await sp.getAttribute('#chart .ce-lock', 'aria-pressed') === 'true', 'End fits it again; the lock stays on');
+  await shot(sp, 'headroom-single-lock.png');
+  await sp.reload(); await sp.waitForFunction(() => document.getElementById('connPill') || document.querySelector('.cb-pin-key'));
+  if (await sp.$('.cb-pin-key')) await enterPin(sp, TEST_PIN);
+  await sp.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
+  check(await sp.getAttribute('#chart .ce-lock', 'aria-pressed') === 'true', 'locked after a reload');
+  await sp.click('#chart .ce-lock');
+  check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-scale-lock-v1') || '{}').main)) === undefined && (await look(sp, 'single'))[0].auto, 'unlocked: saved, the auto-fit on');
   await ctx2.close();
 } finally {
   await browser.close();

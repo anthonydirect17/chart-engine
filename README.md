@@ -592,7 +592,8 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `setRoom(px)` · `room()` (`{ px, bars, gap }`) · `priceScale()` (`{ lo, hi, target, auto, plotHeight }`) · `vwapMarker()` ·
 `lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's) · `setFitTop(px)` (room kept at the top of the
 price scale) · `getFitTop()` · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()` ·
-`setProfileLines({ poc, vah, val })` · `getProfileLines()` (the developing profile lines) · `setVwapSource(fn)` (a page's own VWAP per bar) · `redraw()`
+`setProfileLines({ poc, vah, val })` · `getProfileLines()` (the developing profile lines) · `setVwapSource(fn)` (a page's own VWAP per bar) · `redraw()` ·
+`setScaleLock(on)` · `scaleLock()` · `on('scaleLock', fn)` (the price scale lock; option `lockButton`)
 
 Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
 trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only
@@ -636,7 +637,7 @@ those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-ho
 `profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
 formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`); 1.14.0: `roomBars(px, spacing,
 bars)`, `fitRange(lo, hi, extraPrices, plotHeight, tick, volume)`, `fmtRemain(seconds)`, `barRemain(t, barSeconds, now)`,
-`atr(bars, period, count)`, `pctFrom(price, base)`, `bubbleRadius(size, floor)`, `rthVwap(bars, opts)`, `vwapAt(series, time)`
+`atr(bars, period, count)`, `pctFrom(price, base)`, `bubbleRadius(size, floor)`, `rthVwap(bars, opts)`, `rthVwapUpdate(series, bars, opts)`, `vwapAt(series, time)`
 and `PD_POC_DASH`.
 
 ## Colors

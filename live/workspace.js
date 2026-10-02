@@ -1366,6 +1366,7 @@ function renderGeneral() {
   for (const b of $('wsGlide').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.glide));
   for (const b of $('wsGridLines').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.grid));
   for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === s.room));
+  if (document.activeElement !== $('wsAtr')) $('wsAtr').value = s.atr;
   $('wsRangeMode').value = s.rangeMode;
 }
 /* 1.14.0: grid lines (off by default) and the room right of price, for every chart and the single chart page */
@@ -1374,6 +1375,16 @@ $('wsGridLines').addEventListener('click', e => {
   prefs.setSetting('grid', b.dataset.v); renderGeneral();
   for (const v of chartViews()) v.pane.refreshSettings();
 });
+/* the ATR period (review D2, Anthony): every chart's ATR readout; saved as typed when a whole number 2 to 100 */
+$('wsAtr').addEventListener('input', e => {
+  const n = Number(e.target.value);
+  if (String(e.target.value).trim() === '' || LP.cleanAtr(n) !== n) { e.target.setAttribute('aria-invalid', 'true'); return; }
+  e.target.removeAttribute('aria-invalid');
+  prefs.setSetting('atr', n);
+  for (const v of chartViews()) v.pane.refreshSettings();
+});
+$('wsAtr').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); e.target.value = prefs.settings().atr; });
+$('wsAtr').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
 $('wsRoom').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b || !LP.ROOMS.includes(+b.dataset.v)) return;
   prefs.setSetting('room', +b.dataset.v); renderGeneral();

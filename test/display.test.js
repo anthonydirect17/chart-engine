@@ -453,3 +453,25 @@ test('RTH VWAP kept up to date bar by bar equals the whole computation, and star
   assert.deepEqual(S2.t, w2.t);
   assert.ok(S2.vw.every((v, j) => Math.abs(v - w2.vw[j]) < 1e-9));
 });
+
+test('ATR period: 14 by default, a whole number 2 to 100 kept, saved with the settings (Anthony, review D2)', () => {
+  const st = memStorage(), p = LP.create(st);
+  assert.equal(p.settings().atr, 14);
+  assert.equal(LP.DEFAULT_ATR, 14);
+  for (const bad of [1, 101, 2.5, '20', null, -3]) assert.equal(LP.cleanAtr(bad), 14, String(bad));
+  for (const ok of [2, 20, 100]) assert.equal(LP.cleanAtr(ok), ok);
+  p.setSetting('atr', 21);
+  assert.equal(LP.create(st).settings().atr, 21, 'kept across a reload');
+  st.setItem('live-settings-v2', JSON.stringify(Object.assign(JSON.parse(st.getItem('live-settings-v2')), { atr: 400 })));
+  assert.equal(LP.create(st).settings().atr, 14, 'a saved value out of range: the default');
+});
+
+test('price scale lock: saved per chart, off by default (review D2)', () => {
+  const st = memStorage(), p = LP.create(st);
+  assert.equal(p.scaleLocked('main'), false);
+  assert.equal(p.setScaleLocked('pane-2', true), true);
+  assert.deepEqual([LP.create(st).scaleLocked('pane-2'), LP.create(st).scaleLocked('main')], [true, false]);
+  p.setScaleLocked('pane-2', false);
+  assert.equal(LP.create(st).scaleLocked('pane-2'), false);
+  assert.equal(p.setScaleLocked('', true), false);
+});

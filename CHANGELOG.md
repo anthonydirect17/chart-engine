@@ -186,6 +186,40 @@ from using 1.12.0 live on HOME:
   It never scrolls: fixed under the chip, flipped up or left near an edge, whole at 1366, 1920 and 2560 px. Both pages,
   the 2-letter chips, a host's own toolbar, and the chips behind "+N" (dropped from "+N").
 
+### Review D2 fixes and Anthony's answers
+- **Chip popovers never block the order bar or the ticket**: on `/single.html` the popover opens below the order bar
+  (as the Indicators menu), in the workspace never over the ticket's panel. **Close and Flatten all always act** while any
+  menu, popover or panel is open (their keys and buttons), also from a popover's box when the combo types nothing there
+  (Ctrl, Alt or an F-key); Buy, Sell and B/E keys stay blocked there with the note, as before.
+- **An order drag holds the price scale still**: no take-over, no auto-fit easing, no zoom-to-brackets re-fit while an
+  order's line is dragged; the line stays under the pointer and the price sent is the price drawn; it eases on after the
+  drop.
+- **Ticket link**: every cross-window stamp and age check on `Date.now()` (the same in every window, also after a clock
+  fix); `move()` counts its own waits for its 1.5 s deadline. `/single.html`'s last-seen price guard on
+  `performance.now()`, as the workspace's.
+- **The workspace's NO STOP strip** is one line at every width: the text shortens ("The MNQ order has no stop.", "MNQ:
+  no stop.") before it would be cut; the whole text is in its tooltip; Cancel and Send always in view.
+- **RTH-only VWAP** kept up to date bar by bar (`util.rthVwapUpdate`: the closed bars once, the forming bar again), not
+  recomputed over every 1-minute bar each second.
+- `--tape-big-lift` token for a big trade's lift (was a literal white).
+- The 1h panel's overlapping day labels ("Tue 29", "Thu 1") come from code unchanged since main (the session-start labels
+  are not spaced); not this branch's, left as is.
+- The fake bridge's `weekProfile` serves a fixed set (the 5 weekday sessions before today), so its test passes at any
+  hour (it failed 14:15Z to 15:45Z on every branch).
+- **Profile contrast (Anthony)**: the value area capped at 1.13.0's (see A); rows outside it stay brighter.
+- **Price scale lock (Anthony)**: a small padlock in the corner under the price axis (no layout room, no tag ever goes
+  there), on both pages and every panel, saved per chart (`live-scale-lock-v1`), unlocked by default. Locked, a price zoom
+  set by hand is kept as price moves (no take-over near the edge, none on scrolling back to the live edge; price may
+  leave the view) until it is unlocked, End or Jump to live. Engine: option `lockButton`, `setScaleLock(on)`,
+  `scaleLock()`, `on('scaleLock')`.
+- **ATR period (Anthony)**: editable in Settings on both pages (a whole number 2 to 100, 14 by default), saved with the
+  settings (`live-settings-v2` `atr`), every chart's readout follows.
+- Tests: `smoke:dragfreeze` (new, the reviewer's probe: four events during a drag), `smoke:chippop` (every chip's popover
+  at three sizes: Flatten, B/E, Cancel all, Buy, Sell, Armed and the ticket's buttons reachable; the Close and Flatten
+  all keys act, also from a popover's box), `smoke:hotkeys` (Flatten all acts while Settings is open, Buy does not),
+  `smoke:noscroll` (the NO STOP text not cut), `smoke:headroom` (the lock), `smoke:display` (the ATR period); unit tests
+  for the ticket link's clock and deadline, the incremental VWAP, the lock, the ATR setting.
+
 ### Tests
 - `test/display.test.js` (new): the room, the scale with orders and planned lines, the countdown, the ATR, the change
   from the settlement, the settings, the tape categories and colors, the floors, the feed carrying `q` and the

@@ -821,6 +821,11 @@ const CSS = `
 .ce-live[hidden]{display:none}
 .ce-live svg{width:12px;height:12px;display:block}
 .ce-live:hover{color:#fff;border-color:#B69CFF}
+.ce-lock{position:absolute;bottom:3px;z-index:3;width:24px;height:20px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#7F8C9C;background:transparent;border:1px solid transparent;border-radius:5px;cursor:pointer}
+.ce-lock svg{width:12px;height:12px;display:block}
+.ce-lock:hover{color:#E6EDF5;border-color:#2A3645}
+.ce-lock[aria-pressed="true"]{color:#B69CFF;background:#1A1230;border-color:#3B2A6B}
+.ce-lock:focus-visible{outline:2px solid #B69CFF;outline-offset:1px}
 .ce-live:focus-visible{outline:2px solid #B69CFF;outline-offset:2px}
 .ce-theme{position:relative;display:inline-block}
 .ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#E6EDF5);background:var(--ce-s2,#0F151D);border:1px solid var(--ce-line,#2A3645);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
@@ -999,6 +1004,7 @@ function create(container, options) {
     motion: Object.assign({ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }, opt.motion || {}),
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
+    lockButton: opt.lockButton !== undefined ? opt.lockButton !== false : opt.liveButton !== false,
     unit: opt.unit !== undefined ? opt.unit : 'pt',
     pointValue: opt.pointValue || 0,
   };
@@ -1020,6 +1026,25 @@ function create(container, options) {
     liveBtn.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 2.25 7.25 6 2 9.75z" fill="currentColor"/><rect x="8.25" y="2.25" width="1.75" height="7.5" rx=".5" fill="currentColor"/></svg>';
     liveBtn.hidden = true; container.appendChild(liveBtn);
   }
+  /* 1.14.0 (Anthony, review D2): the price scale lock, in the corner under the price axis (no layout room, never over a
+     tag): locked, a price zoom set by hand is kept (the auto-fit does not take over near the edge, nor on scrolling back
+     to the live edge) until it is unlocked, End or Jump to live */
+  let lockBtn = null, scaleLocked = false;
+  if (o.lockButton) {
+    lockBtn = document.createElement('button'); lockBtn.type = 'button'; lockBtn.className = 'ce-lock';
+    lockBtn.style.right = Math.round((o.axisWidth - 24) / 2) + 'px';
+    container.appendChild(lockBtn);
+  }
+  function syncLock() {
+    if (!lockBtn) return;
+    lockBtn.setAttribute('aria-pressed', String(scaleLocked));
+    const t = scaleLocked ? 'Price scale locked: a zoom set by hand is kept (click to unlock; End or Jump to live also fit it again)' : 'Lock the price scale: keep a zoom set by hand as price moves';
+    lockBtn.title = t; lockBtn.setAttribute('aria-label', scaleLocked ? 'Price scale locked' : 'Lock the price scale');
+    lockBtn.innerHTML = scaleLocked
+      ? '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.25" width="8" height="5.75" rx="1" fill="currentColor"/><path d="M3.75 5.5V3.75a2.25 2.25 0 0 1 4.5 0V5.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>'
+      : '<svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.25" width="8" height="5.75" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3.75 5.5V3.75a2.25 2.25 0 0 1 4.4-.7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>';
+  }
+  syncLock();
   /* The divider between the plot and the delta pane (1.7.0): drag it, or focus it and use the arrow keys. */
   const divEl = document.createElement('div');
   divEl.className = 'ce-divider'; divEl.hidden = true; divEl.tabIndex = 0;
@@ -1065,7 +1090,7 @@ function create(container, options) {
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [], scaleLock: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1345,7 +1370,7 @@ function create(container, options) {
       const b = bars[n], key = bars.length + '|' + b.h + '|' + b.l + '|' + b.c;
       if (key !== V.edgeKey) {                                   // a new trade (never a change made by hand)
         V.edgeKey = key;
-        if (!V.auto && V.follow && V.init && !drag && !od && !pinch) {
+        if (!V.auto && !scaleLocked && V.follow && V.init && !drag && !od && !pinch) {
           const yh = yOf(Math.max(b.h, disp.h)), yl = yOf(Math.min(b.l, disp.l));
           if (yh < (o.fitTop || 0) + 12 || yl > plotH - 12) V.auto = true;
         }
@@ -2515,6 +2540,7 @@ function create(container, options) {
   const onKeyUp = e => { if (e.key === 'Shift' && shiftHeld) { shiftHeld = false; dirty = true; } };
   container.addEventListener('keyup', onKeyUp);
   if (liveBtn) liveBtn.addEventListener('click', () => api.goLive());
+  if (lockBtn) lockBtn.addEventListener('click', () => { api.setScaleLock(!scaleLocked); emit('scaleLock', scaleLocked); });
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
   if (ro) ro.observe(container);
   resize();
@@ -2546,7 +2572,7 @@ function create(container, options) {
       const live = V.follow;
       if (live !== wasLive) {
         wasLive = live; if (liveBtn) liveBtn.hidden = live;
-        if (live && !V.auto) { V.auto = true; dirty = true; }        // following live again: the auto-fit takes over (1.14.0)
+        if (live && !V.auto && !scaleLocked) { V.auto = true; dirty = true; }   // following live again: the auto-fit takes over (1.14.0), unless locked
         emit('live', live);
       }
       if (failing) { failing = false; reported.clear(); emit('error', null); }   // a clean frame: recovered
@@ -2757,6 +2783,10 @@ function create(container, options) {
     barToX(i) { return xOf(i); },
     yToPrice(y) { return priceAt(y); },
     goLive() { V.kin = null; V.follow = true; V.auto = true; dirty = true; },
+    /** The price scale lock (1.14.0): locked, a zoom set by hand is kept (no auto-fit near the edge or on scrolling back to
+        live) until unlocked (the auto-fit then takes over), End or goLive(). on('scaleLock', locked) after a click on it. */
+    setScaleLock(on) { const v = !!on; if (v === scaleLocked) return; scaleLocked = v; if (!v) V.auto = true; syncLock(); dirty = true; },
+    scaleLock() { return scaleLocked; },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
     isLive() { return V.follow; },
     bars() { return bars; },
@@ -2770,7 +2800,7 @@ function create(container, options) {
       cancelAnimationFrame(raf); if (ro) ro.disconnect();
       container.removeEventListener('keydown', onKey);
       container.removeEventListener('keyup', onKeyUp);
-      cv.remove(); if (liveBtn) liveBtn.remove(); divEl.remove();
+      cv.remove(); if (liveBtn) liveBtn.remove(); if (lockBtn) lockBtn.remove(); divEl.remove();
       container.classList.remove('ce-host');
     },
   };

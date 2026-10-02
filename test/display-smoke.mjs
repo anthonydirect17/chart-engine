@@ -175,6 +175,13 @@ try {
   const ro = await C(() => ({ bar: document.getElementById('lgBar').textContent, atr: document.getElementById('lgAtr').textContent, set: document.getElementById('lgSet').textContent, setHidden: document.getElementById('lgSet').hidden }));
   check(/^Bar \d+:\d\d$/.test(ro.bar), 'the bar countdown on 1 minute bars: "' + ro.bar + '"');
   check(/^ATR\(14\) [\d,]+\.\d\d$/.test(ro.atr), 'ATR(14) of the closed bars: "' + ro.atr + '"');
+  // the ATR period in Settings (Anthony, review D2): 20, as typed; saved; back to 14
+  await page.click('#setBtn'); await page.fill('#atrIn', '20'); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  check(/^ATR\(20\) /.test(await page.textContent('#lgAtr')) && (await C(() => JSON.parse(localStorage.getItem('live-settings-v2')).atr)) === 20, 'Settings: ATR period 20, at once and saved: "' + await page.textContent('#lgAtr') + '"');
+  await page.click('#setBtn'); await page.fill('#atrIn', '1'); await page.keyboard.press('Enter');
+  check(await page.inputValue('#atrIn') === '20', 'a period out of range is not taken (the box shows the one in use)');
+  await page.fill('#atrIn', '14'); await page.keyboard.press('Enter'); await page.keyboard.press('Escape');
   const hello = await control(PORT, 'state', { root: 'MNQ' }).catch(() => null);
   const expect = await C(() => { const b = window.liveChart.lastBar(); return b ? b.c : null; });
   check(/^[+-]\d+\.\d\d% vs settle$/.test(ro.set) && !ro.setHidden, 'the change from the prior settlement: "' + ro.set + '" (last ' + expect + ')');
@@ -287,6 +294,10 @@ try {
   check((await W(ids => ids.map(id => window.workspace.chart(id).getGrid()), charts)).every(g => g === true), 'Settings: Grid lines On reaches every chart');
   await wp.click('#wsGridLines [data-v="off"]');
   const wver = await W(() => ({ badge: document.getElementById('wsConn').title, set: document.getElementById('wsVersion').textContent }));
+  await wp.fill('#wsAtr', '21'); await wp.keyboard.press('Enter'); await wp.waitForTimeout(1300);
+  const wAtr = await W(() => [...document.querySelectorAll('[id$="lgAtr"]')].map(e => e.textContent).filter(Boolean));
+  check(wAtr.length > 0 && wAtr.every(t => /^ATR\(21\) /.test(t)), 'workspace Settings: ATR period 21 on every chart: ' + JSON.stringify(wAtr));
+  await wp.fill('#wsAtr', '14'); await wp.keyboard.press('Enter');
   check(/^chart \d+\.\d+\.\d+ · ChartBridge \S+$/.test(wver.badge) && wver.badge.startsWith('chart ' + CE.VERSION + ' · ') && wver.set.startsWith(wver.badge), 'workspace versions: the LIVE badge\'s tooltip and Settings: "' + wver.badge + '"');
   await wp.keyboard.press('Escape');
 

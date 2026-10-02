@@ -485,3 +485,29 @@ test('chart: Jump to live is a small icon at the top of the price scale, only wh
   assert.equal(btn.hidden, true, 'back to live: hidden');
   assert.ok(bars.length > 0);
 });
+
+test('chart: the price scale lock keeps a zoom set by hand near the edge and on scrolling back; End or unlocking fits it again (review D2)', () => {
+  const { chart, bars, made, frame } = stubChart();
+  const cv = made.find(m => m.handlers.wheel), lock = made.find(m => m.className === 'ce-lock'), box = made.find(m => m.handlers.keydown);
+  assert.ok(lock, 'a lock button');
+  chart.setFitTop(60);
+  for (let i = 0; i < 30; i++) frame();
+  const got = []; chart.on('scaleLock', v => got.push(v));
+  lock.handlers.click();
+  assert.deepEqual([chart.scaleLock(), got], [true, [true]], 'a click locks it and says so');
+  cv.handlers.wheel({ deltaX: 0, deltaY: -300, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  const ps = chart.priceScale(), last = bars[bars.length - 1];
+  const up = ps.hi - (ps.hi - ps.lo) * (50 / ps.plotHeight);
+  chart.update(Object.assign({}, last, { c: up, h: up })); frame();
+  assert.equal(chart.priceScale().auto, false, 'locked: no take-over near the header');
+  for (let i = 0; i < 30; i++) box.handlers.keydown({ key: 'ArrowLeft', preventDefault() {}, stopPropagation() {} });
+  for (let i = 0; i < 40; i++) frame();
+  chart.goLive(); for (let i = 0; i < 5; i++) frame();
+  assert.equal(chart.priceScale().auto, true, 'Jump to live fits it again');
+  assert.equal(chart.scaleLock(), true, 'and the lock stays on');
+  cv.handlers.wheel({ deltaX: 0, deltaY: -300, deltaMode: 0, clientX: 1040, clientY: 300, preventDefault() {}, shiftKey: false, ctrlKey: false });
+  frame();
+  chart.setScaleLock(false); frame();
+  assert.deepEqual([chart.scaleLock(), chart.priceScale().auto], [false, true], 'unlocked: the auto-fit takes over');
+});

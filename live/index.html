@@ -79,6 +79,8 @@
       <span class="ws-seg" id="wsGridLines" role="group" aria-labelledby="wsGridLinesLbl"><button type="button" data-v="off">Off</button><button type="button" data-v="on">On</button></span></div>
     <div class="ws-field"><span class="ws-flabel" id="wsRoomLbl" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>
       <span class="ws-seg" id="wsRoom" role="group" aria-labelledby="wsRoomLbl"><button type="button" data-v="0">None</button><button type="button" data-v="40">40 px</button><button type="button" data-v="80">80 px</button><button type="button" data-v="160">160 px</button></span></div>
+    <div class="ws-field"><label class="ws-flabel" for="wsAtr" title="The ATR readout in every chart's legend: NinjaTrader's ATR of this many closed bars">ATR period</label>
+      <input class="ws-num" id="wsAtr" type="number" min="2" max="100" step="1" inputmode="numeric" aria-label="ATR period, bars"></div>
   </section>
   <section class="ws-sec">
     <h2 id="wsHkCap">Hotkeys <span>the same keys as the single chart page</span></h2>
