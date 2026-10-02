@@ -67,17 +67,36 @@ only a host's chart turns on). Every item is the workspace's.
     - **Account**: a summary strip for the ticket's account (open P&L, today's realized from the fills, the day, trades
       today), then **Positions** (every instrument: qty, average, open P&L in points and dollars, and a Close that is the
       ticket's "Also open" Close, TradeCore `flattenHere(root)`, Armed or not, from the window it is clicked in),
-      **Orders** (entries, legs, planned lines: instrument, side and type, qty, price, and an x that is the chart's x: the
-      ticket's window checks it with TradeCore's cancel, needs Armed; another window forwards it), **Fills** (today's, newest
+      **Orders** (entries, legs, planned lines: instrument, side and type, qty, price, and an x that cancels an order of ANY
+      instrument (Anthony): TradeCore's own cancel with its checks (Armed, the ticket's account, a working order) in the
+      ticket's window, forwarded there from any other as the chart's x is; charts keep the ticket-instrument rule), **Fills** (today's, newest
       first, each flat-to-flat trade's P&L on the fill that went flat, "open" for one still open, "n/a" for one begun before
-      today, never guessed; `WorkspaceCore.roundTrips`). A disabled "Accounts" tab is the seam for the copier after the cruise
-      (not built). Nothing new is asked of ChartBridge.
+      today, never guessed; `WorkspaceCore.roundTrips`). The seam for an "Accounts" tab (the copier, after the cruise) is in
+      the code only (Anthony: hidden until the copier exists). Nothing new is asked of ChartBridge.
     - **Quote board**: NQ, MNQ, ES, MES: last, change and % from the prior settlement (0.3.7; blank without), the session's
       high and low; read only, on the window's one feed per instrument.
     Both fit under the ticket at 1366, 1920 and 2560 px with nothing cut: narrow panels stack pairs of columns, a 2 x 1
     board shows the last, change and % (the rest in the row's tooltip); only the Account panel's rows scroll.
     **Anthony's ruling for 1.15.0** (charts and orders first): a trade only notes a price; the figures are written at most 4
-    times a second, in one animation frame, only the cells that changed.
+    times a second, in one animation frame, only the cells that changed. The rows are built only when their set changes (an
+    instrument, an order, a fill): a price never replaces a button (the orders review: a Close replaced between press and
+    release lost 27 of 60 clicks).
+
+### The 1.15.0 reviews
+- **A moved press is never an order click**: after a drawing tool's first click, a Shift drag pans and sends nothing (it
+  placed an order at the release point).
+- **No blank on a reload of the line**: a panel switched to 1 hour or 15 minutes loads the instrument's deeper history; the
+  other charts of it keep their bars, levels, profile, delta and order lines until the new history is in, then swap in one
+  frame; a 4h, 1D or 1W chart keeps its bars while it asks `htf` again (a refusal then keeps them, "as last loaded").
+- The feed sends `htf` as exactly `{ type, root, tf, id }` (`ChartFeed.htfOf`).
+- A compact label that slides under a still mouse shows in full on the next frame.
+- The disarmed note in a window without the ticket gives the ticket window's reason ("reconnected" or "dropped").
+- A late `htfBar` with a closed bar's final values updates that bar.
+- Anthony: no percent beside the bar's change in the workspace's headers (the single chart page as 1.14.0); "Realized" reads
+  "Real." on a narrow Account panel.
+- Text written only when it changes: the legend's fields (each, not every frame) and the tape's cells.
+- The top bar's local delay shows its p95 beside the median; a host's chart (and the workspace's order connection, tapes and
+  quotes) tries again at once after a drop, then backs off as before (the single chart page as 1.14.0).
 
 ### Also
 - Day labels on a host's 4h and 1h charts no longer print over each other (engine option `spacedDays`: a label closer than
@@ -87,12 +106,19 @@ only a host's chart turns on). Every item is the workspace's.
 - `npm run perf:workspace -- --variant=panels`: the default layout with the Account panel and the Quote board.
 
 ### Tests
-- `test/h1.test.js` (new, 21): room presets, days per timeframe, the 4h, 1D and 1W times (against the fake's own formula
+- `test/h1.test.js` (new): room presets, days per timeframe, the 4h, 1D and 1W times (against the fake's own formula
   over two months), `cornerPlace`, short labels, round trips (reversals, scaling, a part closed, a trade from before today),
   fills of the trading day, the quote math, the panels in a layout, the feed passing `htf`; the engine on a stand-in canvas:
   the Zone (click-click, drag, Escape, edges and corners, saved), a Shift click with each tool armed placing the order on a
   host's chart and drawing on the page (frozen), the press while editing is off told once per press, compact labels (the
   same hit areas, the full one on hover), the corner readout clear of a label and its short form.
+- `npm run smoke:h1orders` (new, 13 checks, the orders review's probes): 60 of 60 human-speed presses on the Account panel's
+  Close and on an x while prices move; a Shift drag after a Trend line's or Zone's first click sends and draws nothing; the x
+  on an NQ order with the ticket on MNQ (disarmed: nothing; Armed: cancelled; from a window without the ticket: forwarded
+  and cancelled); a panel switched to 1 hour leaves the armed 5 min chart's bars and order lines and the 4 hour chart's bars
+  on screen in every frame; no percent in the headers; the reconnect reason in a window without the ticket.
+- `test/h1.test.js` adds the review's three (24 in all): the Shift drag after a first click, a label sliding under a still
+  mouse, `htfOf`; the first two fail on 98343d5.
 - `npm run smoke:h1` (new, 65 checks): 4h, 1D and 1W against the fake (times, live, the 1D note, 4h VWAP from the minutes, a
   refusal and the ask 60 s later), ChartBridge 0.3.6 (the choices and the chart say so, nothing asked, no settlement), the
   30 day hour load and its time, the ring (centred, the browser's middle default prevented, one chart, the focus back, KEYS

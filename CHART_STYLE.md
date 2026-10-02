@@ -551,7 +551,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   a summary strip of four (Open, Realized, Day in 600 14px mono in the buy green or sell red, Trades), tabs (600 11px,
   the selected one with a 2 px accent underline and a count badge), the rows (12px mono, a hairline `#121922` between, the
   only scroll), a quiet foot. Positions with a Close (the sell red border), Orders with an x, Fills with each flat-to-flat
-  trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today). On a narrow panel (under 360 px)
+  trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today); its x cancels an order of any
+  instrument (Armed). On a narrow panel (under 360 px)
   the summary goes two by two and each pair of columns stacks in one cell, so nothing is cut at 1366 px.
 - **Quote board (1.15.0):** NQ, MNQ, ES, MES: last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
