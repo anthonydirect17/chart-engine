@@ -272,3 +272,88 @@ test('divergence: bullish on swing lows; no delta (before the page opened) is no
   assert.deepEqual(dv.arrows.map(a => [a.dir, a.solid]), [[1, true]], 'the same result from a fresh array');
   assert.notEqual(dv.version, v);
 });
+
+/* ---------------------------------------------------------------- settings (LivePrefs) */
+function mem(init) {
+  const m = new Map(Object.entries(init || {}).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
+  return { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); }, dump: k => JSON.parse(m.get(k)) };
+}
+test('settings: absorption per instrument and chart type, the file\'s defaults for each, inside the file\'s ranges', () => {
+  const s = mem(), a = LP.create(s), b = LP.create(s);
+  assert.equal(LP.chartType('range', 40), 'range:40');
+  assert.equal(LP.chartType('m1', 40), 'm1');
+  const def = { LookbackPeriod: 20, VolumeMultiplier: 1.8, RejectionZone: 0.35, AggregationWindowMs: 500 };
+  for (const [r, t] of [['MNQ', 'range:40'], ['MNQ', 'm1'], ['NQ', 's15'], ['ES', 'range:8']]) assert.deepEqual(a.absorptionSettings(r, t), def, r + ' ' + t);
+  assert.equal(a.setAbsorptionSetting('MNQ', 'range:40', 'LookbackPeriod', 30), true);
+  assert.equal(b.setAbsorptionSetting('MNQ', 'm1', 'VolumeMultiplier', '2.2'), true, 'another tab, another chart type: both kept');
+  assert.equal(a.setAbsorptionSetting('NQ', 'range:40', 'RejectionZone', 0.3), true);
+  const c = LP.create(s);
+  assert.deepEqual(c.absorptionSettings('MNQ', 'range:40'), Object.assign({}, def, { LookbackPeriod: 30 }));
+  assert.deepEqual(c.absorptionSettings('MNQ', 'm1'), Object.assign({}, def, { VolumeMultiplier: 2.2 }));
+  assert.deepEqual(c.absorptionSettings('NQ', 'range:40'), Object.assign({}, def, { RejectionZone: 0.3 }));
+  assert.deepEqual(c.absorptionSettings('MNQ', 'range:20'), def, 'Range 20 is another chart type');
+  // the file's [Range]s, whole numbers where it has an int, nothing else written
+  for (const [k, v] of [['LookbackPeriod', 4], ['LookbackPeriod', 201], ['LookbackPeriod', 20.5], ['VolumeMultiplier', 0.9], ['VolumeMultiplier', 10.1], ['RejectionZone', 0.09],
+    ['RejectionZone', 0.51], ['AggregationWindowMs', 49], ['AggregationWindowMs', 5001], ['TickTolerance', 1], ['toString', 1], ['LookbackPeriod', ''], ['LookbackPeriod', 'x']]) {
+    assert.equal(a.setAbsorptionSetting('MNQ', 'range:40', k, v), false, k + ' ' + v);
+  }
+  assert.equal(a.setAbsorptionSetting('XX', 'range:40', 'LookbackPeriod', 30), false, 'an unknown instrument');
+  assert.equal(a.setAbsorptionSetting('MNQ', '__proto__', 'LookbackPeriod', 30), false, 'an unknown chart type');
+  assert.deepEqual(s.dump('live-signals-v1').abs, { MNQ: { 'range:40': { LookbackPeriod: 30 }, m1: { VolumeMultiplier: 2.2 } }, NQ: { 'range:40': { RejectionZone: 0.3 } } });
+  // junk in storage reads as the defaults
+  assert.deepEqual(LP.create(mem({ 'live-signals-v1': { abs: { MNQ: { 'range:40': { LookbackPeriod: 'x', VolumeMultiplier: 99, RejectionZone: 0.2 } } } } })).absorptionSettings('MNQ', 'range:40'),
+    Object.assign({}, def, { RejectionZone: 0.2 }));
+});
+
+test('settings: the divergence\'s, the bubbles\' Auto per instrument, the large-print floors (the workspace\'s key)', () => {
+  const s = mem({ 'live-tape-floors-v1': { NQ: { rth: 75 } } }), p = LP.create(s);
+  assert.deepEqual(p.divergenceSettings(), { SwingLookback: 5, MinBarsBetweenSwings: 3, MinDivergencePct: 0.10 });
+  assert.equal(p.setDivergenceSetting('SwingLookback', 7), true);
+  assert.equal(p.setDivergenceSetting('SwingLookback', 16), false, 'Range(2, 15)');
+  assert.equal(p.setDivergenceSetting('MinBarsBetweenSwings', 1), false, 'Range(2, 30)');
+  assert.equal(p.setDivergenceSetting('MinDivergencePct', 0.6), false, 'Range(0.01, 0.50)');
+  assert.equal(p.setDivergenceSetting('UseL2', true), false, 'UseL2 is unused in the file and left out');
+  assert.deepEqual(LP.create(s).divergenceSettings(), { SwingLookback: 7, MinBarsBetweenSwings: 3, MinDivergencePct: 0.10 });
+  assert.equal(p.bubbleAuto('MNQ'), false);
+  assert.equal(p.setBubbleAuto('MNQ', true), true);
+  assert.deepEqual([LP.create(s).bubbleAuto('MNQ'), LP.create(s).bubbleAuto('NQ')], [true, false]);
+  p.setBubbleAuto('MNQ', false);
+  assert.equal(LP.create(s).bubbleAuto('MNQ'), false);
+  // the floors: the workspace's Time and Sales key, defaults where not set by hand
+  assert.deepEqual(p.largeFloors(), { MNQ: { rth: 100, eth: 50 }, NQ: { rth: 75, eth: 25 }, MES: { rth: 100, eth: 50 }, ES: { rth: 100, eth: 50 } });
+  assert.equal(p.setLargeFloor('MNQ', 'eth', '40'), true);
+  for (const v of [0, 100001, 2.5, '', 'x']) assert.equal(p.setLargeFloor('MNQ', 'rth', v), false, String(v));
+  assert.equal(p.setLargeFloor('MNQ', 'day', 10), false);
+  assert.deepEqual(s.dump('live-tape-floors-v1'), { NQ: { rth: 75 }, MNQ: { eth: 40 } }, 'one field written, the shape the workspace reads');
+});
+
+test('menu: the absorption bars never get a chip and never count toward the strip; the bubbles do', () => {
+  const P = LP.Pane;
+  let st = LP.defaultPane('main');
+  assert.equal(P.pinned(st), 5);
+  st = P.add(st, 'absorption');
+  assert.deepEqual(st.ind.absorption, { on: true, shown: true, pin: false }, 'added without a chip');
+  assert.equal(P.pinned(st), 5, 'not counted');
+  assert.equal(P.pin(st, 'absorption', true), st, 'pinning it is refused');
+  st = P.add(st, 'bubbles');
+  assert.deepEqual(st.ind.bubbles, { on: true, shown: true, pin: true }, 'the bubbles take the sixth chip');
+  assert.equal(P.pinFull(st), true);
+  // a saved pin is dropped on read
+  const s = mem({ 'live-indicators-v2': { main: { ind: { absorption: { on: true, shown: true, pin: true } } } } });
+  assert.equal(LP.create(s).pane('main').ind.absorption.pin, false);
+  assert.equal(LP.INDICATORS.find(d => d.id === 'bubbles').code, 'BB');
+  assert.equal(LP.INDICATORS.filter(d => d.code === 'BB').length, 1, 'BB clashes with no other chip');
+});
+
+test('colors: the four signal colors in the absorption gear; an indicator preset saved before them keeps working', () => {
+  const defs = Object.fromEntries(LP.INDICATOR_COLORS.filter(c => c.id === 'absorption').map(c => [c.key, c.def]));
+  assert.deepEqual(defs, { sigBull: '#38DCE8', sigBullLine: '#9CF1F7', sigBear: '#F3D84A', sigBearLine: '#FFEC8F' });
+  assert.notEqual(defs.sigBull, '#00FFFF'); assert.notEqual(defs.sigBear, '#FFFF00');
+  const old = { vwap: '#B69CFF', prior: '#9AA8B8', overnight: '#7FB2FF', value: '#E0B45A', close: '#8392A5', ibHigh: '#F7C6EC', ibLow: '#E58BD2', vpPoc: '#E0B45A' };
+  const list = LP.cleanPresets({ chart: [], indicator: [{ id: 'p1', name: 'White chart', colors: old }] }).indicator;
+  assert.equal(list.length, 1, 'kept');
+  assert.equal(list[0].colors.sigBull, '#38DCE8', 'with the default signal colors');
+  const p = LP.create(mem());
+  assert.equal(p.setIndicatorColors({ sigBear: '#ffdd55' }), true);
+  assert.equal(p.indicatorColors().sigBear, '#FFDD55');
+});

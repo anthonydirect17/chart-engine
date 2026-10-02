@@ -21,7 +21,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CE = require('../src/chart-engine.js'), U = CE.util;
 const SHOTS = path.resolve(process.env.SHOTS || path.join(root, 'test', 'out'));
 fs.mkdirSync(SHOTS, { recursive: true });
-let port = +(process.env.SIGNALS_SMOKE_PORT || 8861);
+let port = +(process.env.SIGNALS_SMOKE_PORT || 8885);
 const errors = [];
 let checks = 0;
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
