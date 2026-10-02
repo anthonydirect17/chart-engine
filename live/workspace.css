@@ -306,3 +306,93 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 #wsSettings { width: 800px; }
 .ws-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .ws-col + .ws-col { border-left: 1px solid var(--ws-line); }
+
+/* ---------------- 1.15.0: 4h, 1D and 1W in a chart's bars picker (dimmed with ChartBridge before 0.3.7, which they need) */
+.vw-row .vw-old { color: var(--ws-muted); border-style: dashed; }
+.vw-need { align-self: center; color: var(--ws-warn); font-size: 11px; margin-left: 4px; }
+.ws-menu-note { margin: 4px 10px 6px; color: var(--ws-muted); font-size: 11px; white-space: nowrap; }
+
+/* ---------------- the drawing ring (1.15.0): four 32 px tools around the pointer, the menus' ground and border */
+.ws-ring { position: fixed; z-index: 55; width: 116px; height: 116px; overflow: hidden; pointer-events: none; }
+.ws-ring button { position: absolute; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; pointer-events: auto; cursor: pointer;
+  border: 1px solid var(--ws-tint-line); border-radius: 50%; background: var(--ws-pop); color: var(--ws-text2); box-shadow: 0 6px 18px rgba(0, 0, 0, .55); }
+.ws-ring button svg { width: 18px; height: 18px; }
+.ws-ring button:hover, .ws-ring button:focus-visible, .ws-ring button[aria-pressed="true"] { background: var(--ws-tint); color: var(--ws-soft); border-color: var(--ws-accent); outline: none; }
+.ws-ring .ring-top { left: 42px; top: 2px; } .ws-ring .ring-bottom { left: 42px; bottom: 2px; }
+.ws-ring .ring-left { left: 2px; top: 42px; } .ws-ring .ring-right { right: 2px; top: 42px; }
+.ws-ring .ring-dot { position: absolute; left: 55px; top: 55px; width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); }
+
+/* ---------------- shared by the Account panel and the Quote board (1.15.0): rows as small grids. Wide, one line a row; on a
+   narrow panel (.gr-narrow, workspace.js fitPanel) each pair (.pr) stacks in one cell, so nothing is cut at 1366 px */
+.gr { font: 12px var(--ws-mono); font-variant-numeric: tabular-nums; color: var(--ws-text); }
+.gr-row { display: grid; align-items: center; column-gap: 8px; padding: 3px 8px; border-top: 1px solid var(--ws-row); min-width: 0; }
+.gr-row > *, .gr .pr > * { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gr-h { border-top: 0; font: 500 10px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); padding-top: 4px; padding-bottom: 3px; position: sticky; top: 0; z-index: 1; background: var(--ws-panel); }
+.gr .pr { display: contents; }
+.gr .r, .gr .pr.r > * { text-align: right; }
+.gr .b { font-family: var(--ws-sans); font-weight: 600; }
+.gr .up { color: var(--ws-buy); } .gr .dn { color: var(--ws-sell); } .gr .mut { color: var(--ws-muted); }
+.gr-pos .gr-row { grid-template-columns: 34px 28px minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.1fr) 50px; }
+.gr-ord .gr-row { grid-template-columns: 34px 24px minmax(0, 1.4fr) minmax(0, 1fr) 26px; }
+.gr-fil .gr-row { grid-template-columns: 60px 34px 38px minmax(0, 1fr) minmax(0, 1fr); }
+.gr-qb .gr-row { grid-template-columns: 34px repeat(5, minmax(0, 1fr)); }
+.ws-panel.gr-narrow .gr .pr { display: flex; flex-direction: column; min-width: 0; }
+.ws-panel.gr-narrow .gr-row { column-gap: 6px; padding: 2px 6px; }
+.ws-panel.gr-narrow .gr .pr > :last-child { font-size: 11px; }
+.ws-panel.gr-narrow .gr .pr.r2 > :last-child { text-align: right; }
+.ws-panel.gr-narrow .gr-pos .gr-row { grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) 44px; }
+.ws-panel.gr-narrow .gr-ord .gr-row { grid-template-columns: 36px minmax(0, 1fr) 26px; }
+.ws-panel.gr-narrow .gr-fil .gr-row { grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr); }
+.ws-panel.gr-narrow .gr-qb .gr-row { grid-template-columns: 32px repeat(3, minmax(0, 1fr)); }
+/* a 2 x 1 board: the last and the percent (the change, high and low in the row's tooltip) */
+.ws-panel.gr-tight .gr-qb .gr-row { grid-template-columns: 32px minmax(0, 1.3fr) minmax(0, 1fr); padding-top: 1px; padding-bottom: 1px; }
+.ws-panel.gr-tight .gr-qb .pr { display: contents; }
+.ws-panel.gr-tight .gr-qb .pr > :first-child, .ws-panel.gr-tight .gr-qb .pr:last-child { display: none; }
+.ws-panel.gr-tight .qb-foot { display: none; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------------- the Account panel (1.15.0): the summary strip, the tabs, the rows (their own scroll, as Time and Sales) */
+.ws-acct { color: var(--ws-text2); font: 500 11px var(--ws-mono); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ac { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ac-sum { flex: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--ws-line); }
+.ac-sum > div { padding: 5px 8px; border-right: 1px solid var(--ws-line); min-width: 0; }
+.ac-sum > div:last-child { border-right: 0; }
+.ac-sum span { display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); }
+.ac-sum b { display: block; font: 600 14px var(--ws-mono); font-variant-numeric: tabular-nums; color: var(--ws-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-sum b.up { color: var(--ws-buy); } .ac-sum b.dn { color: var(--ws-sell); }
+.ac-tabs { flex: none; display: flex; gap: 2px; padding: 2px 6px 0; border-bottom: 1px solid var(--ws-line); overflow: hidden; }
+.ac-tab { font: 600 11px var(--ws-sans); padding: 6px 8px 7px; color: var(--ws-muted); border: 0; background: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.ac-tab[aria-selected="true"] { color: var(--ws-text); border-bottom-color: var(--ws-accent); }
+.ac-tab:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: -2px; }
+.ac-tab.seam { opacity: .45; cursor: default; font-weight: 500; }
+.ac-ct { font: 500 10px var(--ws-mono); background: var(--ws-row); border: 1px solid var(--ws-line2); border-radius: 8px; padding: 1px 5px; margin-left: 5px; color: var(--ws-muted); }
+.ac-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.ac-empty { margin: 10px; color: var(--ws-muted); }
+.ws-panel.gr-short .ac-foot { display: none; }
+.ws-panel.gr-short .ac-sum > div { padding: 2px 8px; }
+.ac-foot { flex: none; margin: 0; padding: 4px 8px; border-top: 1px solid var(--ws-line); color: var(--ws-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-btn { font: 600 10.5px var(--ws-sans); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 2px 8px; background: var(--ws-field); color: var(--ws-text); cursor: pointer; }
+.ac-btn.ac-close { border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); color: var(--ws-sell); }
+.ac-x { font: 600 12px var(--ws-sans); color: var(--ws-muted); border: 1px solid var(--ws-line2); border-radius: 4px; width: 24px; height: 20px; padding: 0; background: none; cursor: pointer; }
+.ac-btn:hover, .ac-x:hover { color: var(--ws-text); background: var(--ws-row); }
+:is(.ac-btn, .ac-x):focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+
+/* ---------------- the Quote board (1.15.0) */
+.qb-wrap { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.qb-foot { margin: 0; padding: 4px 8px; color: var(--ws-muted); font-size: 11px; }
+/* a narrow Account panel (a 2-column panel at 1366 px): the summary two by two, each figure beside its name; the tabs
+   tighter, the Accounts seam and the foot left out (each button says what it needs in its tooltip) */
+.ws-panel.gr-narrow .ac-sum { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ws-panel.gr-narrow .ac-sum > div { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 2px 8px; }
+.ws-panel.gr-narrow .ac-sum > div:nth-child(2) { border-right: 0; }
+.ws-panel.gr-narrow .ac-sum > div:nth-child(-n+2) { border-bottom: 1px solid var(--ws-line); }
+.ws-panel.gr-narrow .ac-sum b { font-size: 12px; }
+.ws-panel.gr-narrow .ac-tab { padding: 5px 5px 6px; font-size: 11px; }
+.ws-panel.gr-narrow .ac-ct { margin-left: 3px; padding: 0 4px; }
+.ws-panel.gr-narrow .ac-tab.seam, .ws-panel.gr-narrow .ac-foot { display: none; }
+.ws-panel.gr-narrow .gr { font-size: 10.5px; }
+.ws-panel.gr-narrow .gr .pr > :last-child { font-size: 10px; }
+.ws-panel.gr-narrow .gr-pos .gr-row { grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr) 40px; }
+.ws-panel.gr-narrow .ac-btn { padding: 2px 5px; font-size: 10px; }
+.ws-panel.gr-narrow .ac-sum span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .02em; }
+.ws-panel.gr-narrow .ac-sum b { flex: none; }

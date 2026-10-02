@@ -39,7 +39,7 @@ test('cleanPanel: bad shapes dropped, only known fields kept', () => {
   assert.deepStrictEqual(W.cleanPanel(tape('t', 1, 1, 2, 2)), { id: 't', type: 'tape', root: 'NQ', x: 1, y: 1, w: 2, h: 2 });
   assert.deepStrictEqual(W.cleanPanel({ id: 'k', type: 'ticket', root: 'ES', tf: 'm1', x: 10, y: 0, w: 2, h: 2 }), { id: 'k', type: 'ticket', x: 10, y: 0, w: 2, h: 2 }, 'the ticket keeps no instrument (it gets its own in E2b)');
   for (const bad of [null, 1, 'x', [], {}, chart('', 0, 0, 2, 1), chart('a b', 0, 0, 2, 1), chart('a', 0, 0, 2, 1, { type: 'clock' }),
-    chart('a', 0, 0, 2, 1, { root: 'CL' }), chart('a', 0, 0, 2, 1, { tf: 'd1' }), chart('a', 0.5, 0, 2, 1), chart('a', -1, 0, 2, 1), chart('a', 0, 0, 0, 1), chart('a', 0, 0, '2', 1)]) {
+    chart('a', 0, 0, 2, 1, { root: 'CL' }), chart('a', 0, 0, 2, 1, { tf: 'h2' }), chart('a', 0.5, 0, 2, 1), chart('a', -1, 0, 2, 1), chart('a', 0, 0, 0, 1), chart('a', 0, 0, '2', 1)]) {
     assert.strictEqual(W.cleanPanel(bad), null, JSON.stringify(bad));
   }
   assert.strictEqual(W.cleanPanel(chart('a', 0, 0, 2, 1, { range: 401 })).range, undefined);

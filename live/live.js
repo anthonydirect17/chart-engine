@@ -60,13 +60,23 @@
 'use strict';
 
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
-const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range'];
+/* 1.15.0: h4, d1 and w1 are NinjaTrader's own 4h, 1D and 1W bars (ChartBridge 0.3.7 htf), in the workspace */
+const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
+/* 1.15.0 (Anthony's ruling 2026-10-02): the 1-minute history a chart loads, in days: 1 hour 30, 15 minute 10, the rest
+   5 (ChartBridge caps it at 60). In the workspace the one feed of an instrument asks the most any of its panels needs. */
+const HISTORY_DAYS = { h1: 30, m15: 10 };
+const DEFAULT_DAYS = 5;
+const daysFor = tf => (Object.prototype.hasOwnProperty.call(HISTORY_DAYS, tf) ? HISTORY_DAYS[tf] : DEFAULT_DAYS);
 const GLIDES = ['smooth', 'fast', 'off'];
 const RANGE_MODES = ['nt', 'traded'];
 /* 1.14.0 (Anthony): grid lines off by default; the room right of the last bar in CSS px (the same on screen at every zoom) */
 const GRIDS = ['off', 'on'];
-const ROOMS = [0, 40, 80, 160];
+const ROOMS = [0, 40, 80, 120, 160];
 const DEFAULT_ROOM = 80;
+/* 1.15.0 (Anthony's review of 1.14.0): the workspace's choices are 80, 120 and 160 px, 120 until one is picked; a value
+   saved before is kept (the single chart page keeps its own 1.14.0 choices and its 80 px default) */
+const ROOMS_WS = [80, 120, 160];
+const DEFAULT_ROOM_WS = 120;
 /* the ATR readout's period (Anthony's answer, review D2): editable in Settings, 14 by default, whole bars 2 to 100 */
 const ATR_MIN = 2, ATR_MAX = 100, DEFAULT_ATR = 14;
 const cleanAtr = v => (Number.isInteger(v) && v >= ATR_MIN && v <= ATR_MAX ? v : DEFAULT_ATR);
@@ -551,6 +561,8 @@ function create(storage) {
       };
     },
     setSetting(field, value) { return patch(KEYS.settings, field, value); },
+    /** Whether a room right of price was picked (1.15.0): the workspace's 120 px default applies only when none was. */
+    roomSaved() { return ROOMS.includes(obj(KEYS.settings).room); },
     /** Range bar size in ticks for a root: the saved one, else the default. */
     range(root) { const n = parseRange(obj(KEYS.range)[root]); return n !== null ? n : (DEFAULT_RANGE[root] || 20); },
     setRange(root, ticks) { const n = parseRange(ticks); if (n === null || !ROOTS.includes(root)) return false; return patch(KEYS.range, root, n); },
@@ -832,7 +844,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -858,6 +870,9 @@ const TF = {
   m1: { mode: 'time', sec: 60, label: '1m' }, m5: { mode: 'time', sec: 300, label: '5m' },
   m15: { mode: 'time', sec: 900, label: '15m' }, h1: { mode: 'time', sec: 3600, label: '1h' },
   range: { mode: 'range', sec: 30, label: 'Range' },
+  // 1.15.0: NinjaTrader's own bars from ChartBridge 0.3.7 (htf / htfBar), not built here
+  h4: { mode: 'htf', htf: '4h', sec: 4 * 3600, label: '4h' }, d1: { mode: 'htf', htf: '1D', sec: 86400, label: '1D' },
+  w1: { mode: 'htf', htf: '1W', sec: 7 * 86400, label: '1W' },
 };
 const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 20, fit: 60, follow: 60 }, off: { candle: 0, fit: 0, follow: 0 } };
 const SCRIPT = document.currentScript;
@@ -1185,6 +1200,9 @@ function start(container, opt, PAGE) {
   const prefs = LP.create(prefixedStorage((() => { try { return window.localStorage; } catch (e) { return null; } })(), PREFIX));
   let IS = prefs.pane(PANE);                            // this pane's indicators (LivePrefs.Pane): on the chart, shown, pinned
   const S = Object.assign(prefs.settings(), { layers: LP.Pane.drawn(IS), options: { vp: prefs.indicatorOptions(PANE, 'vp'), delta: prefs.indicatorOptions(PANE, 'delta'), vwap: prefs.indicatorOptions(PANE, 'vwap'), levels: prefs.indicatorOptions(PANE, 'levels') } });   // layers: what is drawn
+  /* 1.15.0: a host's charts (the workspace) take the room right of 120 px until one is picked; the page keeps 1.14.0's */
+  const roomOf = s => (PAGE || prefs.roomSaved() ? s.room : LP.DEFAULT_ROOM_WS);
+  S.room = roomOf(S);
   const ranges = {};
   for (const r of ROOTS) ranges[r] = prefs.range(r);
   if (VIEW) {                                            // the host's own view: nothing of it is saved here
@@ -1211,14 +1229,31 @@ function start(container, opt, PAGE) {
 
   let IC = prefs.indicatorColors();                    // the indicators' colors (1.9.0), set in their gears
   const AXIS_W = 78;                                   // the price axis width (the engine's default), so the page knows where the plot ends
+  /* 1.15.0 (Anthony's ruling 3): what the 4h, 1D and 1W charts draw. The delta pane, the bubbles and the absorption bars
+     work on the page's own intraday bars: none on these. VWAP, the session levels and the volume profile are intraday:
+     shown on 4h (from the 1-minute bars, as on every view), not on 1D and 1W (a note says so). The indicators stay on
+     the chart (switching back to 5 min shows them). */
+  const HTF_OFF = { delta: false, absorption: false, bubbles: false, divergence: false };
+  const DAILY_OFF = Object.assign({ vwap: false, levels: false, ib: false, vp: false }, HTF_OFF);
+  const layerMask = () => { const tf = TF[S.tf]; return tf.mode !== 'htf' ? null : tf.htf === '4h' ? HTF_OFF : DAILY_OFF; };
+  const masked = k => { const m = layerMask(); return !!m && m[k] === false; };
+  const maskLayers = partial => { const m = layerMask(), out = Object.assign({}, partial); if (m) for (const k of Object.keys(out)) if (m[k] === false) out[k] = false; return out; };
+  /* the trading page's 1.14.0 drawing (frozen); a host's charts (the workspace, 1.15.0): compact order labels with the
+     full one on hover, and Shift and Ctrl clicks that place orders whatever drawing tool is armed */
+  const HOSTED = !TRADING && !!(opt.trade && typeof opt.trade.place === 'function');
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.levels, vp: S.layers.vp, delta: S.layers.delta, trades: false,
-      absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' },
+    layers: maskLayers({ volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.levels, vp: S.layers.vp, delta: S.layers.delta, trades: false,
+      absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' }),
     grid: S.grid === 'on', room: S.room,                 // 1.14.0: grid lines (off by default) and the room right of price
+    compactLabels: HOSTED, toolOrders: HOSTED,
     motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
   });
+  { const raw = chart.setLayers; chart.setLayers = partial => raw(maskLayers(partial)); }   // every change goes through the mask
+  /* the layers as the indicators say, through the mask (a change of bars) */
+  const remask = () => chart.setLayers({ volume: !!S.layers.volume, vwap: !!S.layers.vwap, levels: !!S.layers.levels, ib: !!S.layers.levels, vp: !!S.layers.vp, delta: !!S.layers.delta,
+    absorption: !!S.layers.absorption, bubbles: !!S.layers.bubbles, divergence: !!S.layers.delta && S.options.delta.div === 'on' });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
 
   if (PAGE) window.liveChart = chart;  // for tests and the console; order actions still go through the checks below
@@ -1231,6 +1266,9 @@ function start(container, opt, PAGE) {
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null };   // served window and session table (1.8.0): see "Served window" below
+  /* 1.15.0: this chart's 4h, 1D or 1W bars from ChartBridge (htfSync below): asked for which root and timeframe, and how it went */
+  const H = { root: null, tf: '', id: 0, state: 'idle', bars: [], error: '', retry: 0, wait: 0, tries: 0, at: 0, retryAt: 0 };
+  let htfSeq = 0;
   /* The chart signals' objects (G1c, see sigReplay below): what the chart draws, made again with the bars. */
   // version: a counter the page bumps on any change of what is drawn (the chart redraws when it moves)
   const SIG = { absorption: null, bubbles: null, divergence: null, cd: null, version: 0, job: null, rangeFrom: undefined };
@@ -1316,7 +1354,9 @@ function start(container, opt, PAGE) {
     let rangeFrom;                                        // where the range bars start, handed to the delta (review 2 N2)
     chart.setBarSeconds(tf.sec);
     D.sync = null; rangeNote();                          // a range view's proven point (buildWindow)
-    if (tf.mode === 'time' && tf.sec >= 60) {
+    remask(); htfSync();                                 // 1.15.0: what this timeframe draws; its htf bars asked for (or dropped)
+    if (tf.mode === 'htf') { D.cur = null; htfShow(); }   // NinjaTrader's own 4h, 1D, 1W bars (ChartBridge 0.3.7)
+    else if (tf.mode === 'time' && tf.sec >= 60) {
       D.cur = null;
       const bars = tf.sec === 60 ? D.m1.bars : U.aggregate(D.m1.bars, tf.sec);
       chart.setBars(bars, { barSeconds: tf.sec });
@@ -1389,7 +1429,7 @@ function start(container, opt, PAGE) {
   }
   function rangeNote() {
     const el = $('rangeNote'); if (!el) return;
-    let text = D.ready && D.sync && D.sync.bar < 0
+    let text = TF[S.tf].mode === 'htf' ? htfNote() : D.ready && D.sync && D.sync.bar < 0
       ? 'Range bars start where they are proven to match NinjaTrader\'s: after a swing of more than the range each way, or at the next 18:00 ET session.' : '';
     // review 3 S-C: the VWAP of a served-window view never goes silently: after a feed drop it is kept (the table's sums and
     // the page's trades) and says what it misses; with no table from 18:00 it is not drawn and says why
@@ -1467,7 +1507,7 @@ function start(container, opt, PAGE) {
   }
   /* The level lines switched on in the Levels gear (1.14.0: each line on its own; the IB's two are Levels' too). */
   const levelsOn = list => list.filter(L => !L.key || S.options.levels[L.key] !== 'off');
-  const ibShown = () => !!S.layers.levels && (S.options.levels.ibh !== 'off' || S.options.levels.ibl !== 'off');
+  const ibShown = () => !!S.layers.levels && !masked('levels') && (S.options.levels.ibh !== 'off' || S.options.levels.ibl !== 'off');
   /* New indicator colors (a gear, an indicator preset, Default colors): the chart's VWAP and profile colors, the level
      and IB lines as they are, and the swatches. Nothing is computed again from the bars. */
   function applyIndicatorColors() {
@@ -1515,7 +1555,7 @@ function start(container, opt, PAGE) {
    */
   function vpBuild() {
     D.vp = null; D.vpTable = null;
-    if (S.layers.vp && D.ready) {
+    if (S.layers.vp && D.ready && !masked('vp')) {
       const opts = { tick: D.tick, sessionStart: SESSION, rth: S.options.vp.session === 'rth', keep: true };
       let vp = CE.VolumeProfile.fromStore(D.ticks, opts);   // the last session with trades, kept until the next one's first
       // 1.8.0: ChartBridge's session table (or, with nothing of its session counted yet, the last session's: an RTH profile
@@ -1768,7 +1808,7 @@ function start(container, opt, PAGE) {
   const rangeBuilder = () => new BarBuilder({ mode: 'range', rangeTicks: ranges[D.root], rangeMode: S.rangeMode, tick: D.tick, sessionStart: SESSION });
   /* The delta is kept while it is on the chart, shown or hidden (review S5: showing it again is then at once; a trade
      costs O(1)); not when it is off the chart or this ChartBridge sends no sides. */
-  const deltaWanted = () => IS.ind.delta.on && D.ready && bridgeSides() !== false;
+  const deltaWanted = () => IS.ind.delta.on && D.ready && bridgeSides() !== false && !masked('delta');
   /* Feeds a range bar builder and the delta core together: each trade goes to the delta with the bar it made. */
   const pairFeed = (builder, cd) => ({ addQuiet(t, p, v, s, sm) { builder.addQuiet(t, p, v); const b = builder.bars; cd.add(t, v, s, b[b.length - 1].t, sm); } });
   /*
@@ -1932,7 +1972,7 @@ function start(container, opt, PAGE) {
    */
   const sigType = () => LP.chartType(S.tf, ranges[S.root]);
   const sigFloorAt = root => { const f = sigFloors[root]; return f ? t => CE.largeFloorAt(f, t) : () => Infinity; };
-  const sigWanted = () => ({ abs: !!IS.ind.absorption.on, bub: !!IS.ind.bubbles.on, div: !!IS.ind.delta.on && S.options.delta.div === 'on' });
+  const sigWanted = () => ({ abs: !!IS.ind.absorption.on && !masked('absorption'), bub: !!IS.ind.bubbles.on && !masked('bubbles'), div: !!IS.ind.delta.on && S.options.delta.div === 'on' && !masked('delta') });
   const SIG_GEARS = ['absorption', 'bubbles', 'delta'];
   const newAbsorption = () => new CE.Absorption({ settings: prefs.absorptionSettings(D.root, sigType()), floorAt: sigFloorAt(D.root), tick: D.tick });
   const newBubbles = () => new CE.LargePrints({ floorAt: sigFloorAt(D.root), auto: prefs.bubbleAuto(D.root), tick: D.tick, sessionStart: SESSION });
@@ -2119,7 +2159,8 @@ function start(container, opt, PAGE) {
     const r1 = D.m1.add(t, p, v);
     const tf = TF[S.tf];
     let barT;                                          // the start of the chart bar this trade made (for the delta pane)
-    if (tf.mode === 'time' && tf.sec >= 60) { chart.update(tf.sec === 60 ? r1.bar : U.foldLast(D.m1.bars, tf.sec)); barT = Math.floor(r1.bar.t / tf.sec) * tf.sec; }
+    if (tf.mode === 'htf') htfTick(t, p);             // 1.15.0: the forming bar's close, high and low between htfBar messages
+    else if (tf.mode === 'time' && tf.sec >= 60) { chart.update(tf.sec === 60 ? r1.bar : U.foldLast(D.m1.bars, tf.sec)); barT = Math.floor(r1.bar.t / tf.sec) * tf.sec; }
     else if (D.cur) {
       const n0 = D.cur.bars.length, r = D.cur.add(t, p, v), ch = r.changed;
       if (D.sync && D.sync.bar < 0) { if (D.sync.rs.step(t, p)) { D.sync.bar = n0; showRange(); } }   // the first proven range bar
@@ -2236,7 +2277,7 @@ function start(container, opt, PAGE) {
   /* ChartBridge 0.3.5 lists "liveFirst" and "profile" in hello's `features`. Only then does the page send its subscribe id,
      ask for the served window on seconds and range views, and ask for the session table ("profile"); ChartBridge 0.3.4 and
      older, and The Desk's relay (which passes no `features`), get the subscribe of 1.6.0. */
-  let LIVE_FIRST = false, PROFILE = false, subSeq = 0;
+  let LIVE_FIRST = false, PROFILE = false, HTF_OK = false, subSeq = 0;
   const shownUrl = u => u ? String(u).split('?')[0] : 'ChartBridge';
 
   function connect() {
@@ -2270,7 +2311,7 @@ function start(container, opt, PAGE) {
     reconnectTimer = setTimeout(connect, wait);
   }
   /* Read only: nothing but subscribe and ping ever leaves this chart, whatever calls send. */
-  const READ_ONLY_TYPES = ['subscribe', 'ping'];
+  const READ_ONLY_TYPES = ['subscribe', 'ping', 'htf'];   // htf (0.3.7): a request for NinjaTrader's 4h, 1D or 1W bars, never an order
   function send(obj) {
     if (!TRADING && !READ_ONLY_TYPES.includes(obj && obj.type)) return;
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));   // order actions go through TradeCore, which counts them
@@ -2283,12 +2324,15 @@ function start(container, opt, PAGE) {
     setConn('loading');
     D.tickHours = ticksWanted();
     D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
-    const msg = { type: 'subscribe', root, days: 5, tickHours: D.tickHours };
+    // 1.15.0: deeper history for the 1 hour (30 days) and 15 minute (10 days) charts; the single chart page keeps 5
+    D.days = PAGE ? LP.DEFAULT_DAYS : LP.daysFor(S.tf);
+    const msg = { type: 'subscribe', root, days: D.days, tickHours: D.tickHours };
     D.sub = LIVE_FIRST || PROFILE ? ++subSeq : 0;
     if (D.sub) msg.sub = D.sub;
     if (LIVE_FIRST && D.tickHours > 0) { msg.liveFirst = true; D.window = true; }
     if (PROFILE) msg.profile = true;
     send(msg);
+    H.root = null; htfSync();                           // 1.15.0: a new load (or connection) asks for its htf bars again
   }
   /* A message of an older subscribe of this page (ChartBridge 0.3.5 echoes the page's id; one already on its way when the
      page subscribed again can still arrive). Only checked when the page sent an id. */
@@ -2297,9 +2341,119 @@ function start(container, opt, PAGE) {
      chart takes it as it is, as if it had asked for it (the tick hours, the served window, where the ticks begin). */
   function adoptLoad(l) {
     if (!l || typeof l !== 'object') return;
+    if (+l.days > 0) D.days = +l.days;                  // 1.15.0: the shared load can hold more days than this chart asked
     D.tickHours = +l.tickHours > 0 ? +l.tickHours : 0;
     D.window = !!l.window && D.tickHours > 0;
     D.tickFrom = typeof l.tickFrom === 'number' && isFinite(l.tickFrom) ? l.tickFrom / 1000 + etOffset : Infinity;
+  }
+
+  /*
+   * 4h, 1D and 1W bars (1.15.0, Anthony's ruling 2; nt8/PROTOCOL.md "Higher-timeframe bars", ChartBridge 0.3.7): NinjaTrader's
+   * own bars (about 300), asked once per load with `htf`, the forming one kept up to date by `htfBar` (at most once a second).
+   * Between them a live trade moves the forming bar's close, high and low when it falls inside that bar (exact, and one
+   * compare per trade); its volume and a new bar wait for htfBar. With ChartBridge older than 0.3.7 the chart says it needs
+   * 0.3.7. A refusal or a timeout says why (ChartBridge's own words: NinjaTrader did not answer within 15 s, and when it can
+   * be asked again) and is asked again 60 s later; the page itself gives up waiting after 130 s (ChartBridge takes a request
+   * still queued back after 120 s). Every chart of the instrument in a window shares the one connection: an answer for the
+   * root and timeframe is taken while this chart waits for one, whatever its id.
+   */
+  const htfTf = () => (TF[S.tf].mode === 'htf' ? TF[S.tf].htf : '');
+  const fmtClockEt = t => { const w = Math.floor(U.tod(t)), z = n => (n < 10 ? '0' : '') + n; return z(Math.floor(w / 3600)) + ':' + z(Math.floor(w / 60) % 60) + ':' + z(w % 60); };
+  function htfClear() { clearTimeout(H.retry); clearTimeout(H.wait); H.retry = H.wait = 0; }
+  /* ask when this chart shows htf bars and has none asked for its instrument and timeframe on this connection */
+  function htfSync() {
+    const tf = htfTf();
+    if (!tf) { if (H.root !== null) { htfClear(); H.root = null; H.tf = ''; H.state = 'idle'; H.bars = []; } return; }
+    if (!helloSeen || (H.root === D.root && H.tf === tf)) return;
+    htfClear();
+    H.root = D.root; H.tf = tf; H.bars = []; H.error = ''; H.tries = 0;
+    htfAsk();
+  }
+  function htfAsk() {
+    htfClear();
+    if (destroyed || !htfTf() || H.root !== D.root) return;
+    if (!HTF_OK) { H.state = 'old'; htfShow(); return; }
+    H.id = ++htfSeq; H.state = 'asked'; H.tries++; H.at = Date.now();
+    send({ type: 'htf', root: H.root, tf: H.tf, id: H.id });
+    H.wait = setTimeout(() => {
+      if (H.state !== 'asked') return;
+      htfFailed('ChartBridge did not answer in 130 s.');
+    }, 130000);
+    htfShow();
+  }
+  function htfFailed(why) {
+    H.state = 'error'; H.error = why;
+    clearTimeout(H.retry);
+    const again = Date.now() + 60000;
+    H.retryAt = again;
+    H.retry = setTimeout(() => { if (H.state === 'error' && htfTf() === H.tf && H.root === D.root) htfAsk(); }, 60000);
+    htfShow();
+  }
+  function onHtf(m) {
+    if (!htfTf() || m.root !== H.root || m.tf !== H.tf || !(H.state === 'asked' || +m.id === H.id)) return;
+    clearTimeout(H.wait); H.wait = 0;
+    const list = Array.isArray(m.bars) ? m.bars : [];
+    if (m.error || !list.length) { htfFailed(String(m.error || 'NinjaTrader sent no ' + H.tf + ' bars.')); return; }
+    H.bars = list.filter(b => Array.isArray(b) && b.length >= 5 && [0, 1, 2, 3, 4].every(k => isFinite(b[k])))
+      .map(b => ({ t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4], v: +b[5] || 0 })).sort((a, b) => a.t - b.t);
+    H.state = 'ok'; H.error = '';
+    if (m.name && D.root === m.root) { D.name = m.name; $('lgName').textContent = m.name; }
+    htfShow();
+  }
+  function onHtfBar(m) {
+    if (H.state !== 'ok' || m.root !== H.root || m.tf !== H.tf || !Array.isArray(m.bars) || htfTf() !== H.tf) return;
+    for (const b of m.bars) {
+      if (!Array.isArray(b) || b.length < 5) continue;
+      const bar = { t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4], v: +b[5] || 0 }, n = H.bars.length, lastB = H.bars[n - 1];
+      if (lastB && bar.t === lastB.t) H.bars[n - 1] = bar;
+      else if (!lastB || bar.t > lastB.t) H.bars.push(bar);
+      else continue;
+      chart.update(bar);
+    }
+  }
+  /* a live trade inside the forming bar: its close, high and low, exactly (the volume waits for htfBar) */
+  function htfTick(t, p) {
+    if (H.state !== 'ok') return;
+    const b = H.bars[H.bars.length - 1];
+    if (!b || U.htfStart(t, H.tf) !== b.t) return;
+    b.c = p; if (p > b.h) b.h = p; if (p < b.l) b.l = p;
+    chart.update(b);
+  }
+  /* what the chart shows for its htf view: the bars, or nothing and why */
+  function htfShow() {
+    const tf = TF[S.tf];
+    if (tf.mode !== 'htf' || destroyed) return;
+    if (H.state === 'ok' && H.root === D.root) {
+      chart.setBars(H.bars, { barSeconds: tf.sec });
+      chart.setCountdown(() => { const b = H.bars[H.bars.length - 1]; return b ? U.fmtRemain(U.htfEnd(b.t, H.tf) - etNow()) : ''; });
+      if (helloSeen && $('noticeTitle').dataset.htf) { $('notice').hidden = true; delete $('noticeTitle').dataset.htf; }
+    } else {
+      chart.setBars([], { barSeconds: tf.sec }); chart.setCountdown(null);
+      if (H.state === 'old') { showNotice(tf.label + ' bars need ChartBridge 0.3.7 or newer', 'This PC runs ChartBridge ' + (bridgeVersion || 'older than 0.3.7') + '. The 1 minute to 1 hour bars work as before.'); $('noticeTitle').dataset.htf = '1'; }
+    }
+    rangeNote(); syncNote(); vwapApply(); readouts();
+  }
+  /* the chart's note line for an htf view: waiting, the reason it has none, and the intraday indicators not drawn */
+  function htfNote() {
+    const tf = TF[S.tf];
+    let text = H.state === 'asked' ? 'Asking ChartBridge for NinjaTrader\'s ' + tf.label + ' bars...'
+      : H.state === 'error' ? tf.label + ' bars: ' + H.error.replace(/\.?$/, '.') + (/again/i.test(H.error) ? '' : ' Asked again at ' + fmtClockEt(H.retryAt / 1000 + etOffset) + ' ET.')
+      : H.state === 'old' ? tf.label + ' bars need ChartBridge 0.3.7 or newer.' : '';
+    if (!text && tf.htf !== '4h') {
+      const off = [S.layers.vwap ? 'VWAP' : '', S.layers.levels ? 'levels' : '', S.layers.vp ? 'volume profile' : ''].filter(Boolean);
+      if (off.length) text = off.join(', ').replace(/, ([^,]*)$/, ' and $1') + ' are intraday: not drawn on ' + tf.label + ' bars.';
+    }
+    return text;
+  }
+  /* 4h VWAP: the session's, from the 1-minute bars, as of each bar's end (the 4h bars start with the 18:00 session) */
+  function m1VwapAt(end) {
+    const bs = D.m1 ? D.m1.bars : null;
+    if (!bs || !bs.length) return null;
+    let lo = 0, hi = bs.length - 1, k = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (bs[mid].t < end) { k = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (k < 0 || U.tradeDay(bs[k].t, SESSION) !== U.tradeDay(end - 1, SESSION)) return null;
+    const v = bs[k].vw;
+    return v === undefined || v === null ? null : v;
   }
 
   function handle(m) {
@@ -2308,6 +2462,7 @@ function start(container, opt, PAGE) {
         helloSeen = true;
         LIVE_FIRST = Array.isArray(m.features) && m.features.includes('liveFirst');
         PROFILE = Array.isArray(m.features) && m.features.includes('profile');
+        HTF_OK = Array.isArray(m.features) && m.features.includes('htf');   // 0.3.7: 4h, 1D and 1W bars
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         readSettlements(m.instruments); readouts();
@@ -2346,6 +2501,8 @@ function start(container, opt, PAGE) {
         onProfile(m);
         break;
       case 'tick': onTick(m); break;
+      case 'htf': onHtf(m); break;                         // 1.15.0: NinjaTrader's 4h, 1D or 1W bars (ChartBridge 0.3.7)
+      case 'htfBar': onHtfBar(m); break;
       case 'settlement': if (typeof m.root === 'string') { settlements[m.root] = { p: typeof m.p === 'number' ? m.p : null, date: m.date || '' }; readouts(); } break;   // 0.3.7: the prior settlement changed
       case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
       case 'exec': addFill(m); applyMarkers(); break;
@@ -2455,7 +2612,7 @@ function start(container, opt, PAGE) {
     host.addEventListener('pointerdown', e => {
       if (e.target !== cv || e.pointerType === 'touch') return;
       if (!((e.button === 0 && e.ctrlKey) || (e.button === 2 && e.shiftKey))) return;
-      if (!armedHere() || chart.getTool()) return;
+      if (!armedHere() || (chart.getTool() && !HOST)) return;   // 1.15.0: a host's armed tool waits for a plain click
       const pt = plotAt(e);
       if (!pt || onOrder(pt)) return;
       e.stopPropagation();                                         // the chart never sees it: no pan, no drawing picked
@@ -2545,6 +2702,15 @@ function start(container, opt, PAGE) {
     chart.setOrders(mine ? HT.orders : []);
     chart.setPosition(mine && HT.position && HT.position.qty ? HT.position : null, { pointValue: HT.pointValue });
   }
+  /* 1.15.0 (Anthony: after a recompile Armed had gone off with the reconnect; a press on his stop did nothing and said
+     nothing, and he thought he had lost control): a press on an order's label or tag while this chart is not live for
+     orders says why, once per press (the host words it: Armed off, and why it went off). Notes only: nothing is sent. */
+  chart.on('orderPressOff', () => {
+    if (!HOST || hostLive || HT.root !== D.root || destroyed) return;
+    let text = '';
+    try { text = typeof HOST.pressOff === 'function' ? String(HOST.pressOff(D.root) || '') : ''; } catch (e) { text = ''; }
+    flash(text || 'Armed is off: arm to move or cancel orders.', 'warn');
+  });
   /** For the host: { root, live, account, orders, position, pointValue, qty }; null clears. */
   function setTrade(t) {
     if (!HOST || destroyed) return;
@@ -2620,7 +2786,7 @@ function start(container, opt, PAGE) {
     chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(dp) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
     chgEl.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
     $('lgV').textContent = U.fmtVolume(b.v);
-    $('lgVwWrap').hidden = !S.layers.vwap;
+    $('lgVwWrap').hidden = !S.layers.vwap || masked('vwap');
     const vwv = vwapFor(b, e.index);                    // 1.14.0: the session's, or RTH only (the VWAP gear)
     $('lgVw').textContent = vwv !== undefined && vwv !== null ? fmt(U.roundTo(vwv, D.tick)) : '-';   // null: not known yet (served window), or outside RTH
   });
@@ -2638,12 +2804,18 @@ function start(container, opt, PAGE) {
     let bar = '';
     if (b) {
       if (S.tf === 'range') { const r = D.cur && D.cur.rangeLeft(); bar = r ? 'Bar ▲' + r.up + ' ▼' + r.down + 't' : ''; }
+      else if (TF[S.tf].mode === 'htf') bar = H.state === 'ok' ? 'Bar ' + U.fmtRemain(U.htfEnd(b.t, H.tf) - etNow()) : '';   // 1.15.0
       else bar = 'Bar ' + U.barRemain(b.t, TF[S.tf].sec, etNow());
     }
-    put($('lgBar'), 'textContent', bar); put($('lgBar'), 'hidden', !bar);
     const a = b ? chart.atr(S.atr) : null, at = a === null ? '' : 'ATR(' + S.atr + ') ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp);
-    put($('lgAtr'), 'textContent', at); put($('lgAtr'), 'hidden', !at);
-    const st = settlements[D.root], pct = b && st ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');
+    /* 1.15.0 (Anthony's review of 1.14.0): on a host's chart the bar countdown and the ATR live in one place, a quiet
+       readout in the chart's corner (shown on small panels and with the header text off too), and the change from the
+       settlement is the Quote board's; the single chart page keeps its 1.14.0 legend */
+    const inLegend = PAGE;
+    if (!inLegend) chart.setCorner([bar, at].filter(Boolean).join(' · '));
+    put($('lgBar'), 'textContent', inLegend ? bar : ''); put($('lgBar'), 'hidden', !inLegend || !bar);
+    put($('lgAtr'), 'textContent', inLegend ? at : ''); put($('lgAtr'), 'hidden', !inLegend || !at);
+    const st = settlements[D.root], pct = b && st && inLegend ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');
     const txt = pct === null ? '' : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '% vs settle';
     put(el, 'textContent', txt); put(el, 'hidden', !txt);
     put(el, 'className', 'lg-ro' + (pct > 0 ? ' up' : pct < 0 ? ' down' : ''));
@@ -2657,17 +2829,22 @@ function start(container, opt, PAGE) {
   let vwapSeries = null, vwapVer = 0;
   function barEnd(b, i) {
     const bs = chart.bars(), now = etNow();
+    if (TF[S.tf].mode === 'htf') return Math.min(U.htfEnd(b.t, TF[S.tf].htf), now);   // 1.15.0
     if (S.tf === 'range') return i >= 0 && i < bs.length - 1 ? bs[i + 1].t : now;
     return Math.min(b.t + TF[S.tf].sec, now);
   }
   function vwapFor(b, i) {
-    if (S.options.vwap.session !== 'rth') return b.vw;
+    if (S.options.vwap.session !== 'rth') return TF[S.tf].mode === 'htf' ? m1VwapAt(barEnd(b, i) + 1e-3) : b.vw;   // 1.15.0: 4h from the 1-minute bars
     return vwapSeries ? U.vwapAt(vwapSeries, barEnd(b, i)) : null;
   }
   function vwapApply() {
     if (S.options.vwap.session === 'rth' && D.m1 && D.m1.bars.length) {
       vwapSeries = U.rthVwapUpdate(vwapSeries, D.m1.bars, { sessionStart: SESSION }); vwapVer++;   // the closed bars once, the forming bar again (review D2)
       chart.setVwapSource((t, i) => { const bs = chart.bars(); return bs[i] ? U.vwapAt(vwapSeries, barEnd(bs[i], i)) : null; });
+    } else if (TF[S.tf].mode === 'htf') {
+      // 1.15.0: NinjaTrader's 4h bars carry no VWAP: the session's from the 1-minute bars, as of each bar's end
+      vwapSeries = null; vwapVer++;
+      chart.setVwapSource((t, i) => { const bs = chart.bars(); return bs[i] ? m1VwapAt(barEnd(bs[i], i) + 1e-3) : null; });
     } else { vwapSeries = null; chart.setVwapSource(null); }
   }
   every(() => { if (S.options.vwap.session === 'rth' && S.layers.vwap) vwapApply(); }, 1000);
@@ -3783,7 +3960,7 @@ function start(container, opt, PAGE) {
     if (rootNew) {
       if (TR.armed) { T.setArmed(false); flash('Armed turned off: the instrument changed.', 'warn'); }
       subscribe(S.root);
-    } else if (tfNew && ticksMissing()) subscribe(S.root);
+    } else if (tfNew && (ticksMissing() || (!PAGE && LP.daysFor(tf) > (D.days || 0)))) subscribe(S.root);   // 1.15.0: or more days
     else if (tfNew || (rangeNew && S.tf === 'range')) rebuild();
     viewChanged();
   }
@@ -3793,7 +3970,7 @@ function start(container, opt, PAGE) {
     if (s.glide !== S.glide) { S.glide = s.glide; chart.setMotion(GLIDE[S.glide]); }
     if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
     if (s.grid !== S.grid) { S.grid = s.grid; chart.setGrid(S.grid === 'on'); }
-    if (s.room !== S.room) { S.room = s.room; chart.setRoom(S.room); }
+    if (roomOf(s) !== S.room) { S.room = roomOf(s); chart.setRoom(S.room); }
     if (s.atr !== S.atr) { S.atr = s.atr; readouts(); }
     syncButtons();
     sigRefresh();                                          // the signals' settings and the large-print floors (G1c)
