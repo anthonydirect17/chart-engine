@@ -160,7 +160,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - Right offset: 8 empty bars past the last bar (the engine's default). The live pages (1.14.0, Anthony: price was
   jammed against the scale): **room right** of 80 px, the same on screen at every zoom (8 bars shrank to a few px zoomed
   out); None, 40, 80 or 160 px in Settings; Jump to live and End keep it. Default bar spacing 7 px; zoom range 0.6 to 48 px.
-- **The price scale** fits the candles in view, eased with the 120 ms re-fit. 1.14.0: it also takes in every working
+- **The price scale** fits the candles in view, eased with the 120 ms re-fit. 1.14.0 (Anthony, from WORK: on the smaller
+  panels the high ran under the legend): the top keeps the legend's height and 4 px free (8% when that is more, 45% of
+  the plot at most). 1.14.0: it also takes in every working
   order, the position's stop and target legs and the planned stop and target lines ("zoom to brackets", Anthony: on HOME
   the stop sat off the chart), and no longer the VWAP (one far from price squashed the candles).
 - Legend top-left over the chart, on `rgba(8,11,16,0.78)`, radius 8: symbol, timeframe, status pill;
@@ -278,14 +280,16 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     label. Settings per instrument and chart type (Range 40, 1 minute, ...; the file's defaults for each: LookbackPeriod 20,
     VolumeMultiplier 1.8, RejectionZone 0.35, AggregationWindowMs 500), inside the file's ranges.
   - **Large-order bubbles** (Volume group, chip BB / B): same side prints within 100 ms of the first added up, from the
-    floor, a circle centred on the trade price (volume weighted, on the tick) and its bar. The area grows with the square
-    root of the size, so the radius with its fourth root: 6 px at the floor, 12 px at 16 times it, 24 px at most (256
-    times); zoomed in past the default 7 px spacing every radius grows with the square root of the spacing, at most 1.6
+    floor, a circle centred on the trade price (volume weighted, on the tick) and its bar. 1.14.0 (Anthony, from WORK:
+    "bubble size must show the order size"): the area follows the size against the floor, radius = 4.8 px x sqrt(size /
+    floor): 4.8 px at the floor, 6.8 at twice it, 9.6 at four times, 15.2 at ten times, 27 px at most (about 32 times);
+    before, the fourth root put every print near the floor at the same small size. Zoomed in past the default 7 px spacing every radius grows with the square root of the spacing, at most 1.6
     times. Filled in the side's candle color as it reads on the ground (`upText` buys, `downText` sells) at 32%, a crisp
     1.25 px ring in the same color at 92% with a 1 px hairline of the ground just outside it, so it stays clear on a candle
     of its own color. Drawn over the candles but see-through (a range bar's body spans nearly the whole bar, so behind it a
-    bubble would be hidden), the larger first. From four times the floor the size beside it in 10 px mono, as the fill
-    quantities. Floors RTH (09:30 to 16:15 ET) / overnight: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, the same
+    bubble would be hidden), the larger first. 1.14.0: no numbers on the chart; with the mouse over one (the topmost under
+    the pointer, 3 px of slop, tested on mouse moves only) the legend's top line says "Bubble Buy 142 @ 31,120.25
+    08:44:05.3" in 500 12px mono, in the side's text color. Floors RTH (09:30 to 16:15 ET) / overnight: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, the same
     numbers as the workspace's Time and Sales (one key, `live-tape-floors-v1`), editable in the gear and in the
     workspace's Settings; Auto (per instrument) uses the session's top 1% of group sizes once 200 groups have traded.
   - **Divergence arrows** (Anthony's DeltaDivergenceSignal v1.0, the delta pane's gear: Show divergences, off by

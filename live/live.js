@@ -993,7 +993,7 @@ ${obar}
   </div>` : ''}
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
-      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
+      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-bub" id="${p}lgBub" hidden></span><span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgDelta" hidden><span id="${p}lgDl">Delta</span> <span class="dv" id="${p}lgDv">-</span><span class="dunk" id="${p}lgDu" hidden></span></span><span id="${p}lgFill"></span></div>
     </div>
@@ -2550,6 +2550,23 @@ function start(container, opt, PAGE) {
     put(el, 'className', 'lg-ro' + (pct > 0 ? ' up' : pct < 0 ? ' down' : ''));
   }
   later(() => { readouts(); every(readouts, 1000); }, 1000 - Date.now() % 1000 + 5);   // on the second, as the price tag's countdown
+
+  /* The bubble under the mouse (1.14.0, Anthony from WORK: no numbers on the chart, the size on hover), in the legend's
+     top line: "Bubble Buy 142 @ 31,120.25 08:44:05.3". The chart hit-tests on mouse moves only. */
+  const two = n => (n < 10 ? '0' : '') + n;
+  const fmtTenths = t => { const sec = U.tod(t), w = Math.floor(sec); return two(Math.floor(w / 3600)) + ':' + two(Math.floor(w / 60) % 60) + ':' + two(w % 60) + '.' + Math.floor((sec - w) * 10 + 1e-6); };
+  chart.on('bubble', b => {
+    const el = $('lgBub');
+    if (!b) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = 'Bubble ' + (b.side > 0 ? 'Buy ' : 'Sell ') + U.fmtVolume(Math.round(b.v)) + ' @ ' + U.fmtPrice(U.roundTo(b.p, D.tick), precisionOf()) + ' ' + fmtTenths(b.t);
+    el.className = 'lg-bub ' + (b.side > 0 ? 'up' : 'down');
+    el.hidden = false;
+  });
+  /* The price scale keeps the legend's height free at its top (1.14.0, Anthony: on the smaller panels the high ran under
+     the legend's lines), eased in with the 120 ms re-fit; told again whenever the legend's height changes. */
+  const fitTop = () => { const lg = $('legend'); if (lg && !destroyed) chart.setFitTop(lg.offsetTop + lg.offsetHeight + 4); };
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fitTop); ro.observe($('legend')); cleanups.push(() => ro.disconnect()); }
+  fitTop();
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
   const DRAW_ERR = 'Chart drawing error: ';
   chart.on('error', e => {

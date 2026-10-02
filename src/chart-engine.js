@@ -860,12 +860,14 @@ function roomBars(roomPx, spacing, bars) {
 }
 /** The price scale the auto-fit eases to: the candles' low and high (mn, mx), widened to take in every price of
     `extra` (working orders, bracket legs, planned stop and target lines: they stay on screen), at least 8 ticks, with
-    8% free at the top and 8% at the bottom (20% with the volume bars under the candles). null when there is nothing. */
-function fitRange(mn, mx, extra, plotH, tick, volume) {
+    8% free at the top and 8% at the bottom (20% with the volume bars under the candles). `topPx` (1.14.0, Anthony: the
+    high ran into the legend on the smaller panels): at least this many px free at the top (the legend's height and a
+    few px; at most 45% of the plot). null when there is nothing. */
+function fitRange(mn, mx, extra, plotH, tick, volume, topPx) {
   if (extra) for (let i = 0; i < extra.length; i++) { const p = extra[i]; if (isFinite(p) && p !== null) { if (p > mx) mx = p; if (p < mn) mn = p; } }
   if (!(mx >= mn) || !(plotH > 0)) return null;
   const minRange = (tick || Math.abs(mx) * 1e-4 || 1) * 8;
-  const range = Math.max(mx - mn, minRange), mt = 0.08, mb = volume ? 0.2 : 0.08;
+  const range = Math.max(mx - mn, minRange), mt = Math.min(0.45, Math.max(0.08, (topPx > 0 ? topPx : 0) / plotH)), mb = volume ? 0.2 : 0.08;
   const ppp = plotH * (1 - mt - mb) / range;
   return { hi: mx + plotH * mt / ppp, lo: mn - plotH * mb / ppp };
 }
@@ -896,6 +898,14 @@ function atr(bars, period, count) {
   }
   return a;
 }
+/** A large-order bubble's radius in CSS px (1.14.0, Anthony from WORK: "bubble size must show the order size"): the area
+    follows the size against the floor, so radius = 4.8 px x sqrt(size / floor): 4.8 px at the floor, 6.8 at twice it,
+    9.6 at four times, 15.2 at ten times, 27 px at most (about 32 times the floor). */
+const BUBBLE_R_MIN = 4.8, BUBBLE_R_MAX = 27;
+function bubbleRadius(size, floor) {
+  const f = floor > 0 ? floor : 1, k = size > 0 ? size / f : 1;
+  return Math.min(BUBBLE_R_MAX, BUBBLE_R_MIN * Math.sqrt(Math.max(1, k)));
+}
 /** The percent change of `price` from `base` (the prior settlement), or null when either is missing (never estimated). */
 function pctFrom(price, base) {
   return typeof price === 'number' && typeof base === 'number' && isFinite(price) && isFinite(base) && base > 0 ? (price - base) / base * 100 : null;
@@ -912,6 +922,7 @@ function create(container, options) {
     room: opt.room !== undefined && opt.room !== null && isFinite(opt.room) ? Math.max(0, +opt.room) : null,   // 1.14.0: room right in CSS px
     grid: opt.grid !== false,                                                                           // 1.14.0: grid lines (the live page: off by default)
     fitOrders: opt.fitOrders !== false,                                                                 // 1.14.0: the auto-fit keeps orders on screen
+    fitTop: opt.fitTop > 0 ? +opt.fitTop : 0,                                                          // 1.14.0: px kept free at the top (the page's legend)
     barSpacing: opt.barSpacing || 7,
     minSpacing: opt.minSpacing || 0.6,
     maxSpacing: opt.maxSpacing || 48,
@@ -984,7 +995,7 @@ function create(container, options) {
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], error: [], paneResize: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1172,7 +1183,7 @@ function create(container, options) {
     // 1.14.0 (Anthony, "zoom to brackets"): working orders, the position's stop and target and the planned stop and
     // target lines are always on screen, eased in with the axis re-fit like any other change of the range
     if (o.fitOrders && orders.length) for (let k = 0; k < orders.length; k++) { const p = fitPrice(orders[k]); if (p > mx) mx = p; if (p < mn) mn = p; }
-    return fitRange(mn, mx, null, plotH, o.tick, o.layers.volume);
+    return fitRange(mn, mx, null, plotH, o.tick, o.layers.volume, o.fitTop);
   }
   /* An order's price for the auto-fit: as confirmed, or as asked for while a move waits for its answer; a planned line
      from its entry's. Never the price under a drag in progress, so the scale holds still under the pointer. */
@@ -1416,13 +1427,15 @@ function create(container, options) {
    * it reads on this ground (bull for buys, bear for sells) at BUBBLE_FILL, with a crisp ring in the same color at
    * BUBBLE_RING. Drawn over the candles but see-through, so the candle it sits on always shows (a range bar's body spans
    * nearly the whole bar, so a bubble behind it would be hidden); the larger ones first, so a smaller one on a larger one
-   * shows. The size beside the circle in 10 px mono (as the fill quantities) from four times the floor up. Zoomed in past
+   * shows. 1.14.0 (Anthony, from WORK): the radius is bubbleRadius (the area follows the size, from 4.8 px at the floor to
+   * 27 px), and no size is written on the chart: the bubble under the mouse is told to the page (on('bubble')), which
+   * shows it in the legend. Zoomed in past
    * the default spacing, every radius grows with the square root of the spacing, at most BUBBLE_ZOOM times, so a bubble
    * keeps its weight against wider candles.
    */
-  const BUBBLE_R0 = 6, BUBBLE_RMAX = 24, BUBBLE_FILL = 0.32, BUBBLE_RING = 0.92, BUBBLE_ZOOM = 1.6;
+  const BUBBLE_FILL = 0.32, BUBBLE_RING = 0.92, BUBBLE_ZOOM = 1.6;
   const bubbleZoom = () => clamp(Math.sqrt(V.spacing / o.barSpacing), 1, BUBBLE_ZOOM);
-  const bubbleR = b => clamp(BUBBLE_R0 * Math.pow(Math.max(1, b.v / (b.f > 0 ? b.f : 1)), 0.25), BUBBLE_R0, BUBBLE_RMAX) * bubbleZoom();
+  const bubbleR = b => bubbleRadius(b.v, b.f) * bubbleZoom();     // 1.14.0: the area follows the size (bubbleRadius)
   /* The bubbles of this frame (for their labels after the candles), in pooled objects: no allocation per frame. Their
      colors are made once per theme. */
   const bubbleShown = [], bubblePool = [];
@@ -1432,7 +1445,7 @@ function create(container, options) {
     if (bubbleT !== T) {
       bubbleT = T;
       bubbleCol = { upFill: rgba(T.upText, BUBBLE_FILL), upRing: rgba(T.upText, BUBBLE_RING), dnFill: rgba(T.downText, BUBBLE_FILL), dnRing: rgba(T.downText, BUBBLE_RING),
-        edge: rgba(T.bg, 0.75), halo: rgba(T.bg, 0.85), font: '500 10px ' + T.fontMono };
+        edge: rgba(T.bg, 0.75) };
     }
     return bubbleCol;
   }
@@ -1463,18 +1476,23 @@ function create(container, options) {
       ctx.strokeStyle = up ? C.upRing : C.dnRing; ctx.lineWidth = lw; ctx.stroke();
     }
   }
-  function drawBubbleLabels() {
-    if (!bubbleN || V.spacing < 4) return;
-    const C = bubbleColors();
-    ctx.font = C.font; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round'; ctx.setLineDash([]);
-    for (let k = 0; k < bubbleN; k++) {
-      const s = bubbleShown[k];
-      if (s.b.v < 4 * s.b.f) continue;                    // from four times the floor (a radius of 8.5 px or more)
-      const text = fmtPrice(Math.round(s.b.v), 0), x = s.x + s.r + 3;
-      ctx.strokeStyle = C.halo; ctx.lineWidth = 3; ctx.strokeText(text, x, s.y);
-      ctx.fillStyle = s.b.side > 0 ? T.upText : T.downText; ctx.fillText(text, x, s.y);
+  /* The bubble under the pointer (1.14.0): the topmost one drawn in the last frame (the smaller ones are drawn last) within
+     BUBBLE_SLOP px of its ring. Run on pointer moves only, never per frame. */
+  const BUBBLE_SLOP = 3;
+  let bubbleHover = null;
+  function bubbleAtPoint(p) {
+    if (!p || p.x > plotW || p.y > plotH) return null;
+    for (let k = bubbleN - 1; k >= 0; k--) {
+      const s = bubbleShown[k], dx = p.x - s.x, dy = p.y - s.y, r = s.r + BUBBLE_SLOP;
+      if (dx * dx + dy * dy <= r * r) return s.b;
     }
+    return null;
+  }
+  function hoverBubble(p) {
+    const b = bubbleAtPoint(p);
+    if (b === bubbleHover) return;
+    bubbleHover = b;
+    emit('bubble', b ? { t: b.t, p: b.p, v: b.v, side: b.side, floor: b.f } : null);
   }
   /*
    * Absorption bars (Anthony's AbsorptionTradeCombo): a painted bar is the whole candle in the signal color with a crisp
@@ -1807,7 +1825,6 @@ function create(container, options) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     drawBubbles(from, to);                                          // large-order bubbles (G1c): see-through, over the candles
-    drawBubbleLabels();
 
     // trades
     if (o.layers.trades && trades.length && n >= 0) {
@@ -2240,6 +2257,7 @@ function create(container, options) {
         V.spacing = Math.exp(V.logS); clampRight();
       }
     }
+    if (!drag && e.pointerType === 'mouse') hoverBubble(p);      // 1.14.0: the bubble under the mouse, for the legend
     setCursor(zoneOf(p), p);
     dirty = true;
   }
@@ -2295,7 +2313,7 @@ function create(container, options) {
     if (e.pointerType !== 'mouse') hover = null;
     setCursor('plot'); dirty = true;
   }
-  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; dirty = true; } }
+  function onLeave(e) { if (!drag && !od && e.pointerType === 'mouse') { hover = null; hoverBubble(null); dirty = true; } }
   function onDbl(e) {
     const z = zoneOf(local(e));
     if (z === 'price') V.auto = true;
@@ -2516,6 +2534,12 @@ function create(container, options) {
       if (V.follow && V.right === had) V.right = followRight();   // following: the new room at once, with no glide
       clampRight(); dirty = true;
     },
+    /** px kept free at the top of the price scale (1.14.0: the page's legend sits there), eased in with the re-fit. */
+    setFitTop(px) { const v = px > 0 && isFinite(px) ? +px : 0; if (v !== o.fitTop) { o.fitTop = v; dirty = true; } },
+    /** The bubble under the mouse as the page was last told it ({ t, p, v, side, floor } or null). */
+    bubbleHover() { return bubbleHover ? { t: bubbleHover.t, p: bubbleHover.p, v: bubbleHover.v, side: bubbleHover.side } : null; },
+    /** The bubbles as drawn in the last frame, for tests: [{ x, y, r, v, side }]. */
+    bubbles() { const out = []; for (let k = 0; k < bubbleN; k++) { const q = bubbleShown[k]; out.push({ x: q.x, y: q.y, r: q.r, v: q.b.v, side: q.b.side, t: q.b.t, p: q.b.p }); } return out; },
     /** The room right of the last bar now: { px (as set, or null), bars (at this zoom), gap (CSS px from the last bar's
         center to the price axis, as drawn now) }. */
     room() { const n = last(); return { px: o.room, bars: roomNow(), gap: n >= 0 ? plotW - xOf(n) : null }; },
@@ -3459,7 +3483,7 @@ return {
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
-    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom,
+    roomBars, fitRange, fmtRemain, barRemain, atr, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX,
   },
   VolumeProfile, CumulativeDelta,
   // chart signals (G1c)

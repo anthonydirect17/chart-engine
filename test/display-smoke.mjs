@@ -216,6 +216,39 @@ try {
   check(arm.border === 'rgb(123, 92, 255)' && /rgb\(123, 92, 255\)/.test(arm.glow) && arm.obar === 'rgb(224, 68, 94)', 'Armed: the chart purple with the glow, the order bar deep red: ' + JSON.stringify(arm));
   await page.click('#armBtn');
 
+  // Anthony from WORK: the bubble's size shows the order size (area by size / floor), no numbers on the chart, the size
+  // in the legend on hover
+  await C(() => { localStorage.setItem('live-tape-floors-v1', JSON.stringify({ NQ: { rth: 2, eth: 2 } })); });
+  await page.reload(); await page.waitForFunction(() => document.getElementById('connPill') || document.querySelector('.cb-pin-key'));
+  if (await page.$('.cb-pin-key')) await enterPin(page, TEST_PIN);
+  await singleLive(page);
+  await page.click('#symSeg [data-v="NQ"]'); await singleLive(page);
+  await page.click('#indBtn'); await page.fill('#indQ', 'bubbles'); await page.press('#indQ', 'Enter'); await page.keyboard.press('Escape');
+  await until(() => C(() => window.liveChart.bubbles().length >= 4), 'bubbles on the NQ chart', 20000);
+  const bub = await C(() => ({ list: window.liveChart.bubbles(), zoom: Math.min(1.6, Math.max(1, Math.sqrt(window.liveChart.stats ? 1 : 1))) }));
+  const radiusOk = bub.list.every(q => Math.abs(q.r - CE.util.bubbleRadius(q.v, 2)) < 0.01 || q.r > CE.util.bubbleRadius(q.v, 2));
+  const sizes = bub.list.map(q => q.v + ':' + q.r.toFixed(1));
+  check(radiusOk && bub.list.some(q => q.v >= 4) && bub.list.every(q => q.v < 4 || q.r >= CE.util.bubbleRadius(4, 2) - 0.01), 'bubble radius by size / floor (4.8 px x sqrt): ' + sizes.slice(0, 8).join(' '));
+  const pick = bub.list.reduce((a, q) => (q.r > a.r ? q : a), bub.list[0]);
+  const cb = await page.locator('#chart canvas').boundingBox();
+  await page.mouse.move(cb.x + pick.x, cb.y + pick.y);
+  await page.waitForTimeout(150);
+  const lgb = await C(() => ({ text: document.getElementById('lgBub').textContent, hidden: document.getElementById('lgBub').hidden, hov: window.liveChart.bubbleHover() }));
+  check(!lgb.hidden && /^Bubble (Buy|Sell) [\d,.K]+ @ [\d,]+\.\d\d \d\d:\d\d:\d\d\.\d$/.test(lgb.text) && lgb.hov, 'hover: the bubble in the legend\'s top line: "' + lgb.text + '"');
+  await shot(page, 'display-bubble-hover.png');
+  await page.mouse.move(cb.x + 40, cb.y + cb.height - 60);
+  await page.waitForTimeout(150);
+  check(await C(() => document.getElementById('lgBub').hidden), 'away from it: gone');
+  await C(() => localStorage.removeItem('live-tape-floors-v1'));
+  await page.click('#symSeg [data-v="MNQ"]'); await singleLive(page);
+
+  // the high never under the legend: the scale keeps the legend's height free at its top
+  const top = await C(() => { const c = window.liveChart, lg = document.getElementById('legend'), box = document.getElementById('chart').getBoundingClientRect();
+    const r = lg.getBoundingClientRect(), w = box.width - 78; let hi = -Infinity; const bs = c.bars();
+    for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; }
+    return { legendBottom: r.bottom - box.top, highY: c.priceToY(hi) }; });
+  check(top.highY >= top.legendBottom, 'single: the highest candle in view sits below the legend (' + Math.round(top.highY) + ' px, the legend ends at ' + Math.round(top.legendBottom) + ')');
+
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
     await page.setViewportSize({ width: w, height: h }); await page.waitForTimeout(700);
     const one = await C(() => { const rs = [...document.querySelector('header.bar').children].filter(c => c.getClientRects().length).map(c => c.getBoundingClientRect()); return Math.max(...rs.map(r => r.top)) < Math.min(...rs.map(r => r.bottom)); });
@@ -307,6 +340,15 @@ try {
   const a4 = await pOf(big1);
   check(a4.x === before.x + 1 && a4.y === before.y + 1 && a4.w === before.w - 1 && a4.h === before.h - 1, 'the top left corner: both edges at once ' + JSON.stringify(a4));
   await edge(big1, 'nw', -cell.cw, -cell.ch * 0.6);
+  // Anthony from WORK (50.png): the high ran under the legend on the smaller panels; every chart keeps it clear
+  await wp.setViewportSize({ width: 1920, height: 1080 }); await wp.waitForTimeout(800);
+  const clear = await W(() => window.workspace.panels().filter(p => p.type === 'chart').map(p => {
+    const c = window.workspace.chart(p.id), el = document.querySelector(`.ws-panel[data-id="${p.id}"]`), lg = el.querySelector('.legend'), box = el.querySelector('.chart-box').getBoundingClientRect();
+    const w = box.width - 78, bs = c.bars(); let hi = -Infinity;
+    for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; }
+    return { tf: p.tf, legendBottom: Math.round(lg.getBoundingClientRect().bottom - box.top), highY: Math.round(c.priceToY(hi)) };
+  }));
+  check(clear.every(x => x.highY >= x.legendBottom), 'workspace: on every chart the high sits below the legend: ' + JSON.stringify(clear));
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
     await wp.setViewportSize({ width: w, height: h }); await wp.waitForTimeout(800);
     await shot(wp, `display-ws-${w}.png`);

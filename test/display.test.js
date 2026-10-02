@@ -267,3 +267,32 @@ test('panels resize from any edge or corner: whole cells, the opposite edges sta
   assert.ok(!W.fits(W.snapResizeEdge(p, 'w', -212, 0, m), [other], 'a'), 'growing over a neighbour is refused');
   assert.ok(W.fits(W.snapResizeEdge(p, 'w', -106, 0, m), [other], 'a'), 'up to it is fine');
 });
+
+test('bubble size shows the order size: the area follows size / floor (Anthony, from WORK)', () => {
+  const r = k => U.bubbleRadius(k * 50, 50);
+  assert.ok(Math.abs(r(1) - 4.8) < 1e-9, 'the floor: 4.8 px');
+  assert.ok(Math.abs(r(2) - 4.8 * Math.SQRT2) < 1e-9 && r(2) / r(1) > 1.4, 'twice the floor: clearly bigger (6.8 px)');
+  assert.ok(Math.abs(r(4) - 9.6) < 1e-9, 'four times: twice the radius (9.6 px)');
+  assert.ok(Math.abs(r(10) - 4.8 * Math.sqrt(10)) < 1e-9 && r(10) > 15, 'ten times: stands out (15.2 px)');
+  assert.ok(Math.abs((r(10) / r(1)) ** 2 - 10) < 1e-9, 'the area grows with the size');
+  assert.ok(r(30) > 26 && r(30) < 27, 'about 30 times: near the cap (26.3 px)');
+  assert.strictEqual(r(40), 27, 'over the cap: 27 px');
+  assert.strictEqual(r(1000), 27);
+  assert.strictEqual(U.bubbleRadius(10, 50), 4.8, 'under the floor (a group that started at it): never smaller');
+  assert.strictEqual(U.bubbleRadius(100, 0), U.BUBBLE_R_MAX, 'no floor: as a floor of 1');
+});
+
+test('the price scale keeps the legend free at the top (the high never under the legend)', () => {
+  const H = 300, tick = 0.25;
+  const bare = U.fitRange(100, 110, null, H, tick, false);
+  const legend = U.fitRange(100, 110, null, H, tick, false, 60);   // a 2-line legend and its margin: 60 px
+  const yOf = (f, p) => (f.hi - p) / (f.hi - f.lo) * H;
+  assert.ok(Math.abs(yOf(bare, 110) - H * 0.08) < 1e-9, 'without: 8% (24 px) above the high');
+  assert.ok(Math.abs(yOf(legend, 110) - 60) < 1e-9, 'with: the high 60 px down, below the legend');
+  assert.ok(Math.abs(yOf(legend, 100) - (H - H * 0.08)) < 1e-9, 'the bottom margin unchanged');
+  assert.deepStrictEqual(U.fitRange(100, 110, null, H, tick, false, 10), bare, 'a smaller room than 8%: 8%');
+  const huge = U.fitRange(100, 110, null, H, tick, false, 1000);
+  assert.ok(Math.abs(yOf(huge, 110) - H * 0.45) < 1e-9, 'never more than 45% of the plot');
+  const both = U.fitRange(100, 110, [90], H, tick, false, 60);
+  assert.ok(Math.abs(yOf(both, 110) - 60) < 1e-9 && yOf(both, 90) < H, 'with orders (zoom to brackets) too');
+});

@@ -81,6 +81,21 @@ from using 1.12.0 live on HOME:
 - The order bar, hotkeys and order behaviour are exactly 1.13.0's. A host's chart with its own toolbar (`ChartLive.mount`,
   The Desk) keeps its toolbar as it was.
 
+### From Anthony at WORK (on 1.12.1)
+- **Bubble size shows the order size.** The area follows the size against the floor: radius = 4.8 px x sqrt(size /
+  floor), 4.8 px at the floor, 6.8 px at twice it, 9.6 at four times, 15.2 at ten times, 27 px at most (about 32 times).
+  Before, the radius grew with the fourth root, so prints near the floor all looked the same small size. Fill, ring and
+  alpha unchanged. `util.bubbleRadius`.
+- **No numbers on the chart; the size on hover.** The size beside the larger bubbles is gone. With the mouse over a
+  bubble (the topmost under the pointer, 3 px of slop) the chart's top legend line says "Bubble Buy 142 @ 31,120.25
+  08:44:05.3", in the workspace's panels and on `/single.html`. The hit test runs on mouse moves only, on the bubbles as
+  last drawn; the per-frame cost is unchanged. Engine: `on('bubble', { t, p, v, side, floor } | null)`, `bubbleHover()`,
+  `bubbles()`.
+- **The high no longer runs into the legend** (the 5 min and 1 hour panels): the price scale keeps the legend's height
+  and 4 px free at its top (8% when that is more; at most 45% of the plot), told again whenever the legend's height
+  changes and eased with the 120 ms re-fit, never a snap; with zoom to brackets and the VWAP rule as above. The time axis
+  is below the plot, so nothing changes at the bottom. Engine: option `fitTop`, `setFitTop(px)`; `util.fitRange` takes it.
+
 ### The NO STOP question's place (the coordinator, layout only)
 - On `/single.html` it opens just under the legend, so the LIVE and ARMED pills stay in view; in the workspace it starts
   after the connection status (which stays in view) and ends before KEYS. Its rules are 1.13.0's: it takes no layout
@@ -109,11 +124,13 @@ from using 1.12.0 live on HOME:
 ### Tests
 - `test/display.test.js` (new): the room, the scale with orders and planned lines, the countdown, the ATR, the change
   from the settlement, the settings, the tape categories and colors, the floors, the feed carrying `q` and the
-  settlement, the page clock, the edge resize.
+  settlement, the page clock, the edge resize, the bubble radius (1x, 2x, 4x, 10x, over the cap), the legend's
+  room at the top.
 - `npm run smoke:display` (new): grid off by default and on from Settings, the room at any zoom and after End, zoom to
   brackets eased, planned lines and the VWAP in the engine, the readouts (Range too; a new and a missing settlement),
   the versions, the single chart page's layout and Armed outline, the tape by category (gear, Default colors, big
   trades, a tape that joins later) and by side with an older ChartBridge, edge and corner resize with an overlap refused,
+  bubbles sized by the order and told in the legend on hover, the high below the legend on every chart,
   screenshots of both pages at 1366x768, 1920x1080 and 2560x1440 and close crops of the tape and the Colors panel.
 - `npm run smoke:noscroll` (new), above.
 - Selectors that follow the new layout: `smoke:live` (Range style and Glide in Settings, the drawing tools in the small

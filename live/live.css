@@ -216,6 +216,11 @@
 .chart-live .legend .lg-ro { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--lg-text2); white-space: nowrap; }
 .chart-live .legend .lg-ro.up { color: var(--up-text); }
 .chart-live .legend .lg-ro.down { color: var(--down-text); }
+/* the bubble under the mouse (1.14.0): its side's text color, numbers in mono */
+.chart-live .legend .lg-bub { font: 500 12px var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chart-live .legend .lg-bub.up { color: var(--up-text); }
+.chart-live .legend .lg-bub.down { color: var(--down-text); }
+.chart-live.compact .legend [id$="lgBub"] { order: 2; font-size: 11px; }
 .chart-live .lg2 .down { color: var(--down-text); }
 .chart-live .lg3 .vw { color: var(--vwap-sw); }
 .chart-live .lg3 .vpc { color: var(--vp-poc); }

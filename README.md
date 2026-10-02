@@ -43,7 +43,8 @@ between, at the bid, below it; editable in the tape's gear; by side with an olde
 floors) bold and brighter; grid lines off by default (Settings); 80 px of room right of the last bar at any zoom
 (Settings); working orders, bracket legs and planned stop and target lines always on the price scale; the VWAP no longer
 sizes the chart (off the scale it gets an edge marker); the legend shows the time left in the bar (Range: ticks left),
-ATR(14) and the change from the prior settlement (ChartBridge 0.3.7; blank with none). The single chart page has the
+ATR(14) and the change from the prior settlement (ChartBridge 0.3.7; blank with none). Bubbles are sized by the order
+(area by size over the floor) and say their size in the legend on hover; the price scale keeps the legend clear. The single chart page has the
 workspace's cleanup (one toolbar line, 2-letter chips, the drawing tools and Reset view in a small menu, Glide, Range
 style, grid, room and the PIN in Settings). "chart x.y.z · ChartBridge a.b.c" is in the LIVE badge's tooltip and in
 Settings. The page's clock follows Windows clock fixes (re-anchored to the PC's clock every 5 s, as ChartBridge does).
@@ -586,7 +587,8 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `setBarSeconds(sec)` · `goLive()` · `reset()` · `isLive()` · `bars()` · `stats()` · `resize()` ·
 `destroy()` · `on('legend', fn)` · `on('live', fn)` · `on('error', fn)` · 1.14.0: `setGrid(on)` · `getGrid()` ·
 `setRoom(px)` · `room()` (`{ px, bars, gap }`) · `priceScale()` (`{ lo, hi, target, auto, plotHeight }`) · `vwapMarker()` ·
-`lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's)
+`lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's) · `setFitTop(px)` (room kept at the top of the
+price scale) · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()`
 
 Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
 trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only
@@ -630,7 +632,7 @@ those into styled lines; `initialBalance(data, opts)` (1.5.3) gives today's 1-ho
 `profileRects(columns, view, emit)` lays out a volume profile's bars (1.6.0); plus
 formatting and color helpers (`readableOn`, `legible`, `onGround`, `mix`, `buildTheme`); 1.14.0: `roomBars(px, spacing,
 bars)`, `fitRange(lo, hi, extraPrices, plotHeight, tick, volume)`, `fmtRemain(seconds)`, `barRemain(t, barSeconds, now)`,
-`atr(bars, period, count)` and `pctFrom(price, base)`.
+`atr(bars, period, count)`, `pctFrom(price, base)` and `bubbleRadius(size, floor)`.
 
 ## Colors
 
