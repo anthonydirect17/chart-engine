@@ -2411,6 +2411,12 @@ function create(container, options) {
       axisTag(hover.y, fmtPrice(roundTo(price, o.tick), o.precision), T.tagFill, T.tagText, T.tagBorder, null);
     }
     if (paneOn()) { hoverIdx = hi; drawPane(from, to, labels, paneX, paneY); }
+    // 1.15.0 (review): a compact label that moves under a still mouse shows in full on the next frame
+    if (o.compactLabels && !drag && !od) {
+      const ph = posHit, lh = hover ? hitOrder(hover, true) : null;
+      const id = lh ? lh.id : hover && ph && hover.x >= ph.x && hover.x <= ph.x + ph.w && hover.y >= ph.y && hover.y <= ph.y + ph.h ? 'position' : null;
+      if (id !== labelHover) { labelHover = id; dirty = true; }
+    }
     if (hi !== null) {
       const text = o.barSeconds < DAY ? fmtFull(bars[hi].t) : fmtDate(bars[hi].t);
       ctx.font = '500 11px ' + T.fontMono; const tw = ctx.measureText(text).width + 14;
@@ -2537,12 +2543,15 @@ function create(container, options) {
       V.right = pinch.i + (plotW - Math.min(mx, plotW)) / V.spacing; clampRight(); dirty = true; return;
     }
     if (e.shiftKey !== shiftHeld) { shiftHeld = !!e.shiftKey; dirty = true; }
+    // 1.15.0 (orders review): a press that moves past the click slop is a drag whatever a drawing tool is doing, and a
+    // moved press never counts as an order click
+    if (drag && !drag.moved && Math.abs(p.x - drag.x0) + Math.abs(p.y - drag.y0) > 2) drag.moved = true;
     if (od) {
       od.price = roundTo(od.price0 + (priceAt(p.y) - priceAt(od.y0)), o.tick);
       if (Math.abs(p.y - od.y0) > 2) od.moved = true;
       hover = p; setCursor('plot', p); dirty = true; return;
     }
-    if (draft && (dd || e.pointerType === 'mouse')) {
+    if (draft && !drag && (dd || e.pointerType === 'mouse')) {   // a press of its own (a Shift drag on a host's chart) pans
       const pb = priceAt(clamp(p.y, 0, plotH));
       draft.b = { t: timeOfIdx(indexAt(Math.min(p.x, plotW))), p: draft.type === 'zone' ? roundTo(pb, o.tick) : pb };
       hover = p; dirty = true; return;

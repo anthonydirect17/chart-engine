@@ -520,15 +520,20 @@ function syncStats() {
     const r = per.get(s.root) || { feed: null, local: null };
     if (s.feed !== null && (r.feed === null || s.feed > r.feed)) r.feed = s.feed;
     if (s.local !== null && (r.local === null || s.local > r.local)) r.local = s.local;
+    if (s.localP95 !== null && s.localP95 !== undefined && (r.l95 === null || r.l95 === undefined || s.localP95 > r.l95)) r.l95 = s.localP95;
     per.set(s.root, r);
   }
-  let feed = null, local = null, worst = '';
+  let feed = null, local = null, l95 = null, worst = '';
   for (const [root, r] of per) {
     if (r.feed !== null && (feed === null || r.feed > feed)) { feed = r.feed; worst = root; }
     if (r.local !== null && (local === null || r.local > local)) local = r.local;
+    if (r.l95 !== null && r.l95 !== undefined && (l95 === null || r.l95 > l95)) l95 = r.l95;
   }
-  $('wsFeed').textContent = fmtDelay(feed) + (feed !== null && per.size > 1 ? ' ' + worst : '');
-  $('wsLocal').textContent = fmtDelay(local);
+  const ft = fmtDelay(feed) + (feed !== null && per.size > 1 ? ' ' + worst : '');
+  if ($('wsFeed').textContent !== ft) $('wsFeed').textContent = ft;
+  // 1.15.0 (review): the local delay's p95 beside its median
+  const lt = fmtDelay(local) + (local !== null && l95 !== null ? ' (p95 ' + fmtDelay(l95) + ')' : '');
+  if ($('wsLocal').textContent !== lt) $('wsLocal').textContent = lt;
   $('wsFps').textContent = !chartViews().length ? '-' : busy ? Math.round(fps) + ' fps' : 'idle';
   $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown:\n' +
     ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
@@ -651,7 +656,9 @@ function tconnect() {
     sock.onerror = () => { /* onclose follows */ };
   }, tretry);
 }
-function tretry() { tTries++; tTimer = setTimeout(tconnect, Math.min(5000, 500 * tTries)); }
+/* 1.15.0 (review): the first try after a drop at once (not twice within 5 s), then the backoff as before */
+let tFast = 0;
+function tretry() { tTries++; const now = Date.now(), fast = tTries === 1 && now - tFast > 5000; if (fast) tFast = now; tTimer = setTimeout(tconnect, fast ? 0 : Math.min(5000, 500 * tTries)); }
 function tmessage(m) {
   switch (m.type) {
     case 'hello':
@@ -768,7 +775,7 @@ function actHere(a) {
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
     else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
-    else if (a.kind === 'cancel' && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
+    else if ((a.kind === 'cancel' || a.kind === 'cancelAny') && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
     else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which);
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
@@ -781,13 +788,16 @@ function actHere(a) {
    restarted after a recompile, or the line went down) says so, until it is armed again; the ticket's window tells the
    others (its published state's offWhy). */
 let armOffWhy = '';
+/* in the ticket's window: why its Armed is off, as the others are told it ('reconnected', 'dropped' or '') */
+const offWhyNow = () => (core.TR.armed || armOffWhy !== 'drop' ? '' : tws && tws.readyState === 1 && core.TR.enabled ? 'reconnected' : 'dropped');
 function pressOffText(root) {
   const R = ticketRoot(), h = holds(), hd = h ? null : holder();
   if (!h && !hd) return 'No window has the order ticket: add it to move or cancel orders.';
   if (root !== R) return 'The order ticket is on ' + R + ': switch it to ' + root + ' to move or cancel these orders.';
   if (ticketArmed()) return '';
-  const why = h ? armOffWhy : hd && hd.offWhy === 'drop' ? 'drop' : '';
-  if (why === 'drop') return tws && tws.readyState === 1 ? 'Armed went off: ChartBridge reconnected. Arm to move or cancel orders.' : 'Armed went off: the connection to ChartBridge dropped.';
+  const why = h ? offWhyNow() : hd && typeof hd.offWhy === 'string' ? hd.offWhy : '';   // the ticket's window's reason (review)
+  if (why === 'reconnected') return 'Armed went off: ChartBridge reconnected. Arm to move or cancel orders.';
+  if (why === 'dropped') return 'Armed went off: the connection to ChartBridge dropped.';
   return 'Armed is off: arm to move or cancel orders.';
 }
 const tradeHost = {
@@ -847,7 +857,7 @@ function publish() {
   if (!holds()) return;
   const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty(),
     stop: OT.cleanBracket(core.brackets[TK.root], core.cap()).stop, noStopOk: !core.noStopAsked(),   // NO STOP: other windows ask before they forward
-    offWhy: core.TR.armed ? '' : armOffWhy };                                                         // 1.15.0: why Armed went off, for their notes
+    offWhy: offWhyNow() };                                                                           // 1.15.0: why Armed went off, for their notes
   const k = JSON.stringify(st);
   if (k === TK.published) return;
   TK.published = k;
@@ -1257,7 +1267,11 @@ function mountTape(v) {
     const j = (head - i + TAPE_MAX) % TAPE_MAX;
     const k = W.tapeClass(Q[j], S[j]), cls = 'tp-row' + (k ? ' ' + k : '') + (B[j] ? ' big' : '');
     if (row.cls !== cls) { row.el.className = cls; row.cls = cls; }
-    row.t.textContent = W.fmtClock(T[j]); row.p.textContent = W.fmtPrice(P[j], dec); row.v.textContent = String(V[j]);
+    // 1.15.0 (review): a cell's text written only when it changed
+    const tt = W.fmtClock(T[j]), pt = W.fmtPrice(P[j], dec), vt = String(V[j]);
+    if (row.t.textContent !== tt) row.t.textContent = tt;
+    if (row.p.textContent !== pt) row.p.textContent = pt;
+    if (row.v.textContent !== vt) row.v.textContent = vt;
     if (row.el.hidden) row.el.hidden = false;
   }
   function drawTape() {
@@ -1307,7 +1321,8 @@ function mountTape(v) {
     };
     sock.onclose = () => { if (sock !== ws) return; ws = null; ready = false; setState('offline'); later(); };
   }
-  function later() { if (destroyed) return; tries++; reconnect = setTimeout(connect, Math.min(5000, 500 * tries)); }
+  let fastAt = 0;
+  function later() { if (destroyed) return; tries++; const now = Date.now(), fast = tries === 1 && now - fastAt > 5000; if (fast) fastAt = now; reconnect = setTimeout(connect, fast ? 0 : Math.min(5000, 500 * tries)); }
 
   sel.addEventListener('change', () => {
     if (!W.ROOTS.includes(sel.value) || sel.value === root) return;
@@ -1377,6 +1392,7 @@ function quoteOpen(q) {
   sock.onmessage = ev => {
     const m = ev.message;
     if (!m || q.sock !== sock) return;
+    if (m.type === 'ready') q.tries = 0;
     if (m.type === 'hello') {
       const i = (m.instruments || []).find(x => x && x.root === q.root);
       if (i) { q.settle = typeof i.settlement === 'number' ? i.settlement : null; q.settleDate = i.settlementDate || ''; }
@@ -1393,7 +1409,7 @@ function quoteOpen(q) {
       q.settle = typeof m.p === 'number' ? m.p : null; q.settleDate = m.date || ''; quoteChanged();
     }
   };
-  sock.onclose = () => { if (q.sock !== sock) return; q.sock = null; if (q.users > 0) q.timer = setTimeout(() => { if (q.users > 0 && !q.sock) quoteOpen(q); }, Math.min(5000, 500 * ++q.tries)); };
+  sock.onclose = () => { if (q.sock !== sock) return; q.sock = null; if (q.users > 0) { const n = ++q.tries; q.timer = setTimeout(() => { if (q.users > 0 && !q.sock) quoteOpen(q); }, n === 1 ? 0 : Math.min(5000, 500 * n)); } };
 }
 const quoteOf = r => QT.get(r) || null;
 
@@ -1465,9 +1481,9 @@ function orderTypeName(o) {
 function mountAccount(v) {
   v.body.innerHTML = `<div class="ac">
     <div class="ac-sum" role="group" aria-label="Today on the ticket's account">
-      <div title="Open P&amp;L of the positions now"><span>Open</span><b data-a="open"></b></div><div title="Realized today, from the fills (before commissions)"><span>Realized</span><b data-a="real"></b></div>
+      <div title="Open P&amp;L of the positions now"><span>Open</span><b data-a="open"></b></div><div title="Realized today, from the fills (before commissions)"><span><span class="lb-full">Realized</span><span class="lb-short">Real.</span></span><b data-a="real"></b></div>
       <div title="Realized and open together"><span>Day</span><b data-a="day"></b></div><div title="Trades today, flat to flat"><span>Trades</span><b data-a="trades"></b></div></div>
-    <div class="ac-tabs" role="tablist" aria-label="Account">${ACCOUNT_TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}">${t.name}<span class="ac-ct" data-ct="${t.id}"></span></button>`).join('')}<button type="button" role="tab" class="ac-tab seam" aria-disabled="true" tabindex="-1" title="Accounts: the copier's view (each account's position, P&amp;L and copy on or off), after the cruise">Accounts</button></div>
+    <div class="ac-tabs" role="tablist" aria-label="Account">${ACCOUNT_TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}">${t.name}<span class="ac-ct" data-ct="${t.id}"></span></button>`).join('')}</div>
     <div class="ac-list" data-list role="tabpanel"></div>
     <p class="ac-foot" data-a="foot" title="Close works with Armed off. × needs Armed, as on the chart.">Close works with Armed off. × needs Armed, as on the chart.</p>
   </div>`;
@@ -1486,7 +1502,9 @@ function mountAccount(v) {
     b.blur();
     if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
     if (b.dataset.close) core.flattenHere(b.dataset.close);                          // the ticket's "Also open" Close
-    else chartAction({ kind: 'cancel', id: b.dataset.cancel, root: b.dataset.root });   // the chart's x, with its checks
+    /* Anthony (1.15.0): the x cancels an order of ANY instrument: TradeCore's own cancel (needs Armed, the order on the
+       ticket's account and still working), in the ticket's window or forwarded to it as the chart's x is */
+    else chartAction({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root });
   });
   const put = (k, el, text, cls) => { const key = text + '|' + cls; if (A.keys[k] === key) return; A.keys[k] = key; el.textContent = text; el.className = cls || ''; };
   A.render = () => {
@@ -1521,33 +1539,47 @@ function mountAccount(v) {
     const orders = on ? W.ROOTS.flatMap(r => core.chartOrders(acct, r).map(o => (o.root ? o : Object.assign({}, o, { root: r })))) : [];   // a planned line has no root of its own
     const counts = { pos: posRows.length, ord: orders.length, fil: today.length };
     for (const t of ACCOUNT_TABS) put('ct-' + t.id, q(`[data-ct="${t.id}"]`), String(counts[t.id]), 'ac-ct');
-    v.el.querySelector('.ws-acct').textContent = acct || 'No account';
+    put('acct', v.el.querySelector('.ws-acct'), acct || 'No account', 'ws-acct');
     /* the list of the tab shown */
-    let html;
-    /* rows as small grids (as the Quote board): on a narrow panel each pair (.pr) stacks in one cell */
-    const row = cells => `<div class="gr-row" role="row">${cells}</div>`, head = cells => `<div class="gr-row gr-h" role="row">${cells}</div>`;
-    const c = (text, cls) => `<span class="${cls || ''}" role="cell">${text}</span>`, pr = (a, b, cls) => `<span class="pr${cls ? ' ' + cls : ''}">${a}${b}</span>`;
+    /* rows as small grids (as the Quote board): on a narrow panel each pair (.pr) stacks in one cell.
+       1.15.0 (orders review: a Close replaced between press and release lost the click): the rows are built only when the
+       set of rows changes (instruments, order ids, fills); a price or P&L change writes only the text of its cell, so a
+       button is never replaced under the mouse. */
+    const vals = [];
+    const row = (k, cells) => `<div class="gr-row" role="row" data-k="${esc(k)}">${cells}</div>`, head = cells => `<div class="gr-row gr-h" role="row">${cells}</div>`;
+    const c = (text, cls, tip) => `<span role="cell" data-c="${vals.push({ text, cls: cls || '', tip: tip || '' }) - 1}"></span>`;   // a cell whose text changes
+    const pr = (a, b, cls) => `<span class="pr${cls ? ' ' + cls : ''}">${a}${b}</span>`;
+    const st = (html, cls) => `<span class="${cls || ''}" role="cell">${html}</span>`;           // a fixed cell (a button)
     const h = (text, cls) => `<span class="${cls || ''}" role="columnheader">${text}</span>`;
+    let html;
     if (!on) html = `<p class="ac-empty">${esc(core.TR.reason || 'Not connected to ChartBridge yet.')}</p>`;
     else if (A.tab === 'pos') html = !posRows.length ? '<p class="ac-empty">Flat on every instrument.</p>' : '<div class="gr gr-pos" role="table" aria-label="Positions">' +
       head(pr(h('Inst'), h('Qty', 'r')) + h('Avg', 'r') + pr(h('Open pt', 'r'), h('Open $', 'r'), 'r') + h('<span class="visually-hidden">Close</span>')) +
-      posRows.map(({ r, p, pn }) => row(pr(c(r, 'b'), c((p.qty > 0 ? '+' : '-') + Math.abs(p.qty), 'r ' + (p.qty > 0 ? 'up' : 'dn'))) + c(U.fmtPrice(p.avgPrice, precisionOf(r)), 'r') +
+      posRows.map(({ r, p, pn }) => row(r, pr(c(r, 'b'), c((p.qty > 0 ? '+' : '-') + Math.abs(p.qty), 'r ' + (p.qty > 0 ? 'up' : 'dn'))) + c(U.fmtPrice(p.avgPrice, precisionOf(r)), 'r') +
         pr(c(pn ? W.fmtSignedNum(pn.points, precisionOf(r)) : '', 'r ' + (pn ? pc(pn.points) : '')), c(pn && pn.dollars !== null ? W.fmtUsd(pn.dollars) : '', 'r ' + (pn ? pc(pn.dollars) : '')), 'r') +
-        c(`<button type="button" class="ac-btn ac-close" data-close="${r}" title="Close ${r}: cancel its orders and close its position at market on ${esc(acct)}. Works with Armed off.">Close</button>`, 'r'))).join('') + '</div>';
+        st(`<button type="button" class="ac-btn ac-close" data-close="${r}" title="Close ${r}: cancel its orders and close its position at market on ${esc(acct)}. Works with Armed off.">Close</button>`, 'r'))).join('') + '</div>';
     else if (A.tab === 'ord') html = !orders.length ? '<p class="ac-empty">No working orders.</p>' : '<div class="gr gr-ord" role="table" aria-label="Working orders">' +
       head(pr(h('Inst'), h('Qty', 'r')) + pr(h('Order'), h('Price', 'r'), 'r2') + h('<span class="visually-hidden">Cancel</span>')) +
-      orders.map(o => row(pr(c(esc(o.root || ''), 'b'), c(String(Math.max(0, (+o.qty || 0) - (+o.filled || 0))), 'r')) +
-        pr(c(esc(orderTypeName(o)), o.side === 'sell' ? 'dn' : 'up'), c(typeof o.price === 'number' ? U.fmtPrice(o.price, precisionOf(o.root)) : '', 'r'), 'r2') +
-        c(`<button type="button" class="ac-x" data-cancel="${esc(o.id)}" data-root="${esc(o.root || '')}" aria-label="Cancel ${esc(orderTypeName(o))} ${esc(o.root || '')}" title="Cancel it, as the chart's x: needs Armed, on the order ticket's instrument">×</button>`, 'r'))).join('') + '</div>';
+      orders.map(o => row(o.id, pr(c(o.root || '', 'b'), c(String(Math.max(0, (+o.qty || 0) - (+o.filled || 0))), 'r')) +
+        pr(c(orderTypeName(o), o.side === 'sell' ? 'dn' : 'up'), c(typeof o.price === 'number' ? U.fmtPrice(o.price, precisionOf(o.root)) : '', 'r'), 'r2') +
+        st(`<button type="button" class="ac-x" data-cancel="${esc(o.id)}" data-root="${esc(o.root || '')}" aria-label="Cancel this ${esc(o.root || '')} order" title="Cancel it (needs Armed, as the chart's x), on any instrument">×</button>`, 'r'))).join('') + '</div>';
     else html = !today.length ? '<p class="ac-empty">No fills today.</p>' : '<div class="gr gr-fil" role="table" aria-label="Today\'s fills">' +
       head(pr(h('Time'), h('Inst')) + pr(h('Side', 'r'), h('Price', 'r'), 'r') + h('Trade', 'r')) +
       today.slice().sort((a, b) => b.t - a.t).map(f => {
         const x = rt.byFill.get(f.id), trade = !x ? '' : x.open ? 'open' : x.pnl === null ? 'n/a' : W.fmtUsd(x.pnl), cls = !x || x.open || x.pnl === null ? 'mut' : pc(x.pnl);
-        const tip = x && x.pnl === null && !x.open ? ' title="This trade began before today: its first fills are not in today\'s list"' : '';
-        return row(pr(c(W.fmtClock(f.t), 'mut'), c(esc(f.root), 'b')) + pr(c((f.side === 'buy' ? 'B ' : 'S ') + f.qty, 'r ' + (f.side === 'buy' ? 'up' : 'dn')), c(U.fmtPrice(f.p, precisionOf(f.root)), 'r'), 'r') +
-          `<span class="r ${cls}" role="cell"${tip}>${trade}</span>`);
+        const tip = x && x.pnl === null && !x.open ? 'This trade began before today: its first fills are not in today\'s list' : '';
+        return row(f.account + '|' + f.id, pr(c(W.fmtClock(f.t), 'mut'), c(f.root, 'b')) + pr(c((f.side === 'buy' ? 'B ' : 'S ') + f.qty, 'r ' + (f.side === 'buy' ? 'up' : 'dn')), c(U.fmtPrice(f.p, precisionOf(f.root)), 'r'), 'r') +
+          c(trade, 'r ' + cls, tip));
       }).join('') + '</div>';
-    if (A.keys.list !== html) { A.keys.list = html; const el = q('[data-list]'), top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; }
+    const el = q('[data-list]');
+    if (A.keys.list !== html) { A.keys.list = html; const top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; A.cells = [...el.querySelectorAll('[data-c]')]; A.rebuilt = (A.rebuilt || 0) + 1; }
+    const cells = A.cells || [];
+    for (let i = 0; i < vals.length && i < cells.length; i++) {
+      const e = cells[i], x = vals[i];
+      if (e.textContent !== x.text) e.textContent = x.text;
+      if (e.className !== x.cls) e.className = x.cls;
+      if ((e.title || '') !== x.tip) e.title = x.tip;
+    }
   };
   A.render();
   quoteSubs.add(A.render);

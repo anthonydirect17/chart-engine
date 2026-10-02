@@ -415,3 +415,40 @@ test('corner readout: drawn at the plot\'s bottom right, clear of an order label
   S.frame();
   assert.equal(S.chart.corner(), null);
 });
+
+/* ---------------- the 1.15.0 reviews */
+test('review: a Shift drag after a trend line\'s or zone\'s first click pans and places nothing; a Shift click still places', () => {
+  for (const t of ['trend', 'zone']) {
+    const S = stub({ toolOrders: true });
+    const placed = []; S.chart.on('orderPlace', e => placed.push(e));
+    S.chart.setOrderEditing(true);
+    S.chart.setTool(t);
+    S.click(300, 200);                                       // the first corner or point
+    const r0 = S.chart.room ? S.chart.priceScale() : null; void r0;
+    S.down(400, 300, { shiftKey: true }); S.move(420, 300, { shiftKey: true }); S.move(460, 310, { shiftKey: true }); S.up(460, 310, { shiftKey: true });
+    assert.equal(placed.length, 0, t + ': a Shift drag sends nothing');
+    assert.equal(S.chart.getDrawings().length, 0, t + ': and draws nothing');
+    S.click(420, 260, { shiftKey: true });
+    assert.equal(placed.length, 1, t + ': a Shift click (no move) is still an order click');
+    S.key('Escape');
+  }
+});
+
+test('review: a compact label that slides under a still mouse shows in full on the next frame', () => {
+  const S = stub({ compactLabels: true });
+  S.chart.setOrders([{ id: 'o1', side: 'sell', kind: 'limit', price: 101.5, qty: 1, role: 'target' }]);
+  S.frame();
+  const h = S.chart.orderHandles()[0];
+  S.move(h.box.x + h.box.w - 4, h.box.y - 40);              // the mouse still, above the label
+  assert.equal(S.chart.labelHover(), null);
+  S.chart.setOrders([{ id: 'o1', side: 'sell', kind: 'limit', price: S.chart.yToPrice(h.box.y - 40 + 9), qty: 1, role: 'target' }]);
+  S.frame(); S.frame();
+  assert.equal(S.chart.labelHover(), 'o1', 'the label came under the mouse: shown in full');
+});
+
+test('review: the feed sends htf as exactly { type, root, tf, id }', () => {
+  assert.deepEqual(F.htfOf({ type: 'htf', root: 'MNQ', tf: '4h', id: 3, extra: 1, sub: 2 }), { type: 'htf', root: 'MNQ', tf: '4h', id: 3 });
+  assert.deepEqual(F.htfOf({ type: 'htf', root: 'NQ', tf: '1W' }), { type: 'htf', root: 'NQ', tf: '1W' }, 'no id: none sent');
+  assert.deepEqual(F.htfOf({ type: 'htf', root: 'NQ', tf: '1D', id: 1.5 }), { type: 'htf', root: 'NQ', tf: '1D' }, 'a fraction is no id');
+  for (const bad of [null, {}, { root: 'MNQ', tf: '2h' }, { root: 7, tf: '4h' }]) assert.equal(F.htfOf(bad), null);
+});

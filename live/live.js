@@ -1267,7 +1267,7 @@ function start(container, opt, PAGE) {
     backfill: 0, deltaCov: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null };   // served window and session table (1.8.0): see "Served window" below
   /* 1.15.0: this chart's 4h, 1D or 1W bars from ChartBridge (htfSync below): asked for which root and timeframe, and how it went */
-  const H = { root: null, tf: '', id: 0, state: 'idle', bars: [], error: '', retry: 0, wait: 0, tries: 0, at: 0, retryAt: 0 };
+  const H = { root: null, tf: '', id: 0, state: 'idle', bars: [], error: '', retry: 0, wait: 0, tries: 0, at: 0, retryAt: 0, pending: false, stale: '' };
   let htfSeq = 0;
   /* The chart signals' objects (G1c, see sigReplay below): what the chart draws, made again with the bars. */
   // version: a counter the page bumps on any change of what is drawn (the chart redraws when it moves)
@@ -1326,19 +1326,24 @@ function start(container, opt, PAGE) {
   let ticksSeen = 0;
   const delays = { feed: [], local: [] };
 
-  function resetData(root) {
+  /* `keep` (1.15.0, review): a new load of the instrument shown (the shared line loading deeper history, a reconnect): the
+     bars, levels, profile, delta and order lines stay drawn until the new history is in, then rebuild swaps them in one
+     frame; nothing blanks */
+  function resetData(root, keep) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; ibNote(null);
-    D.vp = null; D.liveFrom = null; chart.setProfile(null); vpNote(); vpLegend();
+    D.vp = null; D.liveFrom = null; if (!keep) chart.setProfile(null); vpNote(); vpLegend();
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
-    deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
+    deltaJob = null; D.delta = null; D.sides = null; if (!keep) chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
     if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
-    chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
-    chart.setBars([], { barSeconds: TF[S.tf].sec });
-    chart.setLevels([]);
+    if (!keep) {
+      chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
+      chart.setBars([], { barSeconds: TF[S.tf].sec });
+      chart.setLevels([]);
+    }
     chart.setDrawings(store.get(drawingsKey(root), []));
     applyMarkers();
     renderTrading();
@@ -2179,6 +2184,7 @@ function start(container, opt, PAGE) {
   const TRIM_CAP = 2500000, TRIM_HARD = 8000000;       // trades; 8 million is some 190 MB, far above a busy session
   function pushDelay(arr, v) { if (isFinite(v)) { arr.push(v); if (arr.length > 300) arr.shift(); } }
   function median(arr) { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
+  function pct95(arr) { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))]; }
 
   /* ---------------- fills */
   function addFill(f) {
@@ -2273,7 +2279,7 @@ function start(container, opt, PAGE) {
   /* ---------------- connection */
   /* The URL is asked for again on every connect when wsUrl is a function (a relay needs a new single-use ticket each
      time). A query string is never shown on screen. */
-  let ws = null, wsTries = 0, everConnected = false, reconnectTimer = 0, connectSeq = 0, lastUrl = '';
+  let ws = null, wsTries = 0, everConnected = false, reconnectTimer = 0, connectSeq = 0, lastUrl = '', lastFastRetry = 0;
   /* ChartBridge 0.3.5 lists "liveFirst" and "profile" in hello's `features`. Only then does the page send its subscribe id,
      ask for the served window on seconds and range views, and ask for the session table ("profile"); ChartBridge 0.3.4 and
      older, and The Desk's relay (which passes no `features`), get the subscribe of 1.6.0. */
@@ -2305,7 +2311,10 @@ function start(container, opt, PAGE) {
   function scheduleReconnect() {
     if (destroyed) return;
     wsTries++;
-    const wait = Math.min(5000, 500 * wsTries);
+    // 1.15.0 (review): a host's chart tries again at once after a drop (not twice within 5 s), then backs off as before
+    const now0 = Date.now(), fast = !PAGE && wsTries === 1 && now0 - lastFastRetry > 5000;
+    if (fast) lastFastRetry = now0;
+    const wait = fast ? 0 : Math.min(5000, 500 * wsTries);
     if (!everConnected || wsTries > 2) showNotice(everConnected ? 'Lost ChartBridge' : 'Waiting for ChartBridge',
       'Trying ' + shownUrl(lastUrl) + ' again. Check that NinjaTrader is running and ChartBridge compiled (messages appear in New > NinjaScript Output).');
     reconnectTimer = setTimeout(connect, wait);
@@ -2318,9 +2327,10 @@ function start(container, opt, PAGE) {
   }
   function subscribe(root) {
     loadSeq++;
+    const keep = !PAGE && root === D.root && chart.bars().length > 0;   // 1.15.0: a host's chart keeps its bars on a reload
     if (root !== K.root) countReset(root);             // a new instrument: a new count; the same one keeps its count (round 5)
     else if (K.started) { countKeepBase(); K.gap = true; }   // and notes the seconds it misses (round 6)
-    resetData(root);
+    resetData(root, keep);
     setConn('loading');
     D.tickHours = ticksWanted();
     D.tickFrom = D.tickHours > 0 ? etNow() - D.tickHours * 3600 : Infinity;
@@ -2332,7 +2342,7 @@ function start(container, opt, PAGE) {
     if (LIVE_FIRST && D.tickHours > 0) { msg.liveFirst = true; D.window = true; }
     if (PROFILE) msg.profile = true;
     send(msg);
-    H.root = null; htfSync();                           // 1.15.0: a new load (or connection) asks for its htf bars again
+    htfSync(true);                                      // 1.15.0: a new load (or connection) asks for its htf bars again, the ones shown kept
   }
   /* A message of an older subscribe of this page (ChartBridge 0.3.5 echoes the page's id; one already on its way when the
      page subscribed again can still arrive). Only checked when the page sent an id. */
@@ -2361,42 +2371,47 @@ function start(container, opt, PAGE) {
   const fmtClockEt = t => { const w = Math.floor(U.tod(t)), z = n => (n < 10 ? '0' : '') + n; return z(Math.floor(w / 3600)) + ':' + z(Math.floor(w / 60) % 60) + ':' + z(w % 60); };
   function htfClear() { clearTimeout(H.retry); clearTimeout(H.wait); H.retry = H.wait = 0; }
   /* ask when this chart shows htf bars and has none asked for its instrument and timeframe on this connection */
-  function htfSync() {
+  function htfSync(force) {
     const tf = htfTf();
     if (!tf) { if (H.root !== null) { htfClear(); H.root = null; H.tf = ''; H.state = 'idle'; H.bars = []; } return; }
-    if (!helloSeen || (H.root === D.root && H.tf === tf)) return;
+    if (!helloSeen) return;
+    if (H.root === D.root && H.tf === tf) { if (force) htfAsk(true); return; }   // asked again on this connection, the bars kept
     htfClear();
     H.root = D.root; H.tf = tf; H.bars = []; H.error = ''; H.tries = 0;
     htfAsk();
   }
-  function htfAsk() {
+  /* `again`: bars are shown (a reload of the line, a reconnect): they stay until the answer replaces them */
+  function htfAsk(again) {
     htfClear();
     if (destroyed || !htfTf() || H.root !== D.root) return;
-    if (!HTF_OK) { H.state = 'old'; htfShow(); return; }
-    H.id = ++htfSeq; H.state = 'asked'; H.tries++; H.at = Date.now();
+    if (!HTF_OK) { H.state = 'old'; H.pending = false; htfShow(); return; }
+    const keep = !!again && H.state === 'ok' && H.bars.length > 0;
+    H.id = ++htfSeq; H.tries++; H.at = Date.now(); H.pending = keep;
+    if (!keep) H.state = 'asked';
     send({ type: 'htf', root: H.root, tf: H.tf, id: H.id });
     H.wait = setTimeout(() => {
-      if (H.state !== 'asked') return;
+      if (H.state !== 'asked' && !H.pending) return;
       htfFailed('ChartBridge did not answer in 130 s.');
     }, 130000);
-    htfShow();
+    if (!keep) htfShow();
   }
   function htfFailed(why) {
-    H.state = 'error'; H.error = why;
     clearTimeout(H.retry);
     const again = Date.now() + 60000;
     H.retryAt = again;
-    H.retry = setTimeout(() => { if (H.state === 'error' && htfTf() === H.tf && H.root === D.root) htfAsk(); }, 60000);
-    htfShow();
+    if (H.pending && H.state === 'ok') { H.pending = false; H.stale = why; }   // the bars shown stay, said to be as last loaded
+    else { H.state = 'error'; H.error = why; }
+    H.retry = setTimeout(() => { if (htfTf() === H.tf && H.root === D.root && (H.state === 'error' || H.stale)) htfAsk(H.state === 'ok'); }, 60000);
+    if (H.state === 'error') htfShow(); else { rangeNote(); syncNote(); }
   }
   function onHtf(m) {
-    if (!htfTf() || m.root !== H.root || m.tf !== H.tf || !(H.state === 'asked' || +m.id === H.id)) return;
+    if (!htfTf() || m.root !== H.root || m.tf !== H.tf || !(H.state === 'asked' || H.pending || +m.id === H.id)) return;
     clearTimeout(H.wait); H.wait = 0;
     const list = Array.isArray(m.bars) ? m.bars : [];
     if (m.error || !list.length) { htfFailed(String(m.error || 'NinjaTrader sent no ' + H.tf + ' bars.')); return; }
     H.bars = list.filter(b => Array.isArray(b) && b.length >= 5 && [0, 1, 2, 3, 4].every(k => isFinite(b[k])))
       .map(b => ({ t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4], v: +b[5] || 0 })).sort((a, b) => a.t - b.t);
-    H.state = 'ok'; H.error = '';
+    H.state = 'ok'; H.error = ''; H.pending = false; H.stale = '';
     if (m.name && D.root === m.root) { D.name = m.name; $('lgName').textContent = m.name; }
     htfShow();
   }
@@ -2407,7 +2422,12 @@ function start(container, opt, PAGE) {
       const bar = { t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4], v: +b[5] || 0 }, n = H.bars.length, lastB = H.bars[n - 1];
       if (lastB && bar.t === lastB.t) H.bars[n - 1] = bar;
       else if (!lastB || bar.t > lastB.t) H.bars.push(bar);
-      else continue;
+      else {                                           // a closed bar's final values after its next bar began here (review)
+        const k = H.bars.findIndex(x => x.t === bar.t), cb = chart.bars(), j = cb.findIndex(x => x.t === bar.t);
+        if (k >= 0) H.bars[k] = bar;
+        if (j >= 0) { Object.assign(cb[j], { o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v }); chart.redraw(); }
+        continue;
+      }
       chart.update(bar);
     }
   }
@@ -2436,7 +2456,8 @@ function start(container, opt, PAGE) {
   /* the chart's note line for an htf view: waiting, the reason it has none, and the intraday indicators not drawn */
   function htfNote() {
     const tf = TF[S.tf];
-    let text = H.state === 'asked' ? 'Asking ChartBridge for NinjaTrader\'s ' + tf.label + ' bars...'
+    let text = H.state === 'ok' && H.stale ? tf.label + ' bars as last loaded: ' + H.stale.replace(/\.?$/, '.') + ' Asked again at ' + fmtClockEt(H.retryAt / 1000 + etOffset) + ' ET.'
+      : H.state === 'asked' ? 'Asking ChartBridge for NinjaTrader\'s ' + tf.label + ' bars...'
       : H.state === 'error' ? tf.label + ' bars: ' + H.error.replace(/\.?$/, '.') + (/again/i.test(H.error) ? '' : ' Asked again at ' + fmtClockEt(H.retryAt / 1000 + etOffset) + ' ET.')
       : H.state === 'old' ? tf.label + ' bars need ChartBridge 0.3.7 or newer.' : '';
     if (!text && tf.htf !== '4h') {
@@ -2779,16 +2800,19 @@ function start(container, opt, PAGE) {
     legendKey = key;
     const dp = precisionOf(), fmt = p => U.fmtPrice(p, dp);
     const chg = prev ? b.c - prev.c : 0, pct = prev ? chg / prev.c * 100 : 0;
-    $('lgTf').textContent = S.tf === 'range' ? 'Range ' + (ranges[D.root] || '') + 't' + (S.rangeMode === 'traded' ? ' traded' : '') : TF[S.tf].label;
-    $('lgTime').textContent = U.fmtFull(b.t) + (forming ? ' · forming' : '');
-    $('lgO').textContent = fmt(b.o); $('lgH').textContent = fmt(b.h); $('lgL').textContent = fmt(b.l); $('lgC').textContent = fmt(b.c);
+    // 1.15.0 (review): each field written only when its text changed (a style pass and garbage less per frame)
+    const T2 = (id, v) => put($(id), 'textContent', v);
+    T2('lgTf', S.tf === 'range' ? 'Range ' + (ranges[D.root] || '') + 't' + (S.rangeMode === 'traded' ? ' traded' : '') : TF[S.tf].label);
+    T2('lgTime', U.fmtFull(b.t) + (forming ? ' · forming' : ''));
+    T2('lgO', fmt(b.o)); T2('lgH', fmt(b.h)); T2('lgL', fmt(b.l)); T2('lgC', fmt(b.c));
     const chgEl = $('lgChg');
-    chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(dp) + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
-    chgEl.className = chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim';
-    $('lgV').textContent = U.fmtVolume(b.v);
-    $('lgVwWrap').hidden = !S.layers.vwap || masked('vwap');
+    // 1.15.0 (Anthony): a host's chart shows the bar's change without its percent; the single chart page as 1.14.0
+    put(chgEl, 'textContent', (chg >= 0 ? '+' : '') + chg.toFixed(dp) + (PAGE ? ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' : ''));
+    put(chgEl, 'className', chg > 0 ? 'up' : chg < 0 ? 'down' : 'dim');
+    T2('lgV', U.fmtVolume(b.v));
+    put($('lgVwWrap'), 'hidden', !S.layers.vwap || masked('vwap'));
     const vwv = vwapFor(b, e.index);                    // 1.14.0: the session's, or RTH only (the VWAP gear)
-    $('lgVw').textContent = vwv !== undefined && vwv !== null ? fmt(U.roundTo(vwv, D.tick)) : '-';   // null: not known yet (served window), or outside RTH
+    T2('lgVw', vwv !== undefined && vwv !== null ? fmt(U.roundTo(vwv, D.tick)) : '-');   // null: not known yet (served window), or outside RTH
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
 
@@ -3908,7 +3932,9 @@ function start(container, opt, PAGE) {
   every(() => {
     const f = median(delays.feed), l = median(delays.local);
     $('dFeed').textContent = f === null ? '-' : Math.round(f) + ' ms' + (f < 0 ? ' (PC clock behind)' : '');
-    $('dLocal').textContent = l === null ? '-' : (l < 1 ? '<1' : Math.round(l)) + ' ms';
+    // 1.15.0 (review): a host's status line adds the local delay's p95 (the single chart page keeps its 1.14.0 line)
+    const l95 = PAGE ? null : pct95(delays.local), ms = v => (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms';
+    $('dLocal').textContent = l === null ? '-' : ms(l) + (l95 === null ? '' : ' (p95 ' + ms(l95) + ')');
     const s = chart.stats();
     $('fps').textContent = s.idle ? 'idle' : s.fps + ' fps · ' + s.drawMs.toFixed(1) + ' ms/frame';
     $('ticksSeen').textContent = ticksSeen.toLocaleString() + ' live ticks';
@@ -3999,7 +4025,7 @@ function start(container, opt, PAGE) {
     /** The header text toggle (1.14.0), for a host to place beside Indicators; legendShown() / setLegendShown(on). */
     legendToggle: $('lgTog'), legendShown: () => lgOn, setLegendShown,
     /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
-    stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), chart: chart.stats() }) };
+    stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), localP95: pct95(delays.local), chart: chart.stats() }) };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX, hotkeyHandler, HOTKEY_IN_BOX };

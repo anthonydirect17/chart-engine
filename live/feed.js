@@ -43,6 +43,14 @@ const LOAD_TYPES = ['history', 'ticks', 'ready', 'profile'];
 const NO_TICKS = { tickHours: 0, window: false, tickFrom: null };   // what a panel that asked for no ticks is told (and the load's days, 1.15.0)
 const SENDS = ['subscribe', 'ping', 'htf'];         // 1.15.0: htf (ChartBridge 0.3.7) asks for 4h, 1D or 1W bars: read only
 
+/** An htf request (1.15.0) rebuilt as exactly { type, root, tf, id } (id left out when there is none), or null when it is
+    not one ChartBridge would take (it refuses any other key or shape). */
+function htfOf(m) {
+  if (!m || typeof m.root !== 'string' || !['4h', '1D', '1W'].includes(m.tf)) return null;
+  const out = { type: 'htf', root: m.root, tf: m.tf };
+  if (Number.isInteger(m.id) && m.id >= 0 && m.id < 1e15) out.id = m.id;
+  return out;
+}
 /** What a subscribe asks for, with ChartBridge's defaults for anything left out (days 5, tickHours 8). */
 function needOf(m) {
   const days = Number.isFinite(+m.days) && m.days !== null && m.days !== '' ? Math.max(0, +m.days) : 5;
@@ -309,6 +317,8 @@ function create(options) {
         let m = data;
         if (typeof data === 'string') { try { m = JSON.parse(data); } catch (e) { return; } }
         if (!m || !SENDS.includes(m.type)) return;                              // read only: nothing else leaves a panel
+        if (m.type === 'htf') m = htfOf(m);                                        // only its own keys (ChartBridge refuses any other)
+        if (!m) return;
         if (m.type === 'ping' || m.type === 'htf') { const L = V.line; if (L && L.ws && L.state === 'open') { try { L.ws.send(JSON.stringify(m)); } catch (e) { /* closing */ } } return; }
         subscribe(V, m);
       },
@@ -384,5 +394,5 @@ function create(options) {
   };
 }
 
-return { create, needOf, merge, covers, LIVE_MAX, SLICE };
+return { create, needOf, merge, covers, htfOf, LIVE_MAX, SLICE };
 });

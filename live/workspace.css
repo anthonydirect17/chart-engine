@@ -402,3 +402,7 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-panel.gr-narrow .ac-btn { padding: 2px 5px; font-size: 10px; }
 .ws-panel.gr-narrow .ac-sum span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .02em; }
 .ws-panel.gr-narrow .ac-sum b { flex: none; }
+/* "Realized" fits a narrow strip as "Real." (review) */
+.ac-sum .lb-short { display: none; }
+.ws-panel.gr-narrow .ac-sum .lb-full { display: none; }
+.ws-panel.gr-narrow .ac-sum .lb-short { display: inline; }
