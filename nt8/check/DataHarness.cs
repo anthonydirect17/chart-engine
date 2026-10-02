@@ -203,6 +203,8 @@ public static class DataHarness
         Check(PR(2026, 4, 3, 12, 0) == "2026-04-01" && PR(2026, 4, 5, 18, 0) == "2026-04-02" && PR(2026, 4, 6, 11, 0) == "2026-04-02",
             "prior: Good Friday 2026 (no session): Thursday's settlement is the prior from Sunday 18:00 through Monday");
 
+        // a first start at different times (each resets the books and settlements.txt)
+        StartChecks();
         // through the server: the snapshot at subscription, a value stamped inside a later session
         ChartBridgeServer.ResetBooks(DateTime.MinValue);
         ResetSettlements(true);
@@ -217,7 +219,6 @@ public static class DataHarness
             "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is dated a Saturday (no session: no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
         Check(Hello().Contains("\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\"]"), "hello: features list settlement, htf and weekProfile");
         Check(Logged("NQ settlement 25010 (NinjaTrader's, snapshot) is dated 2026-09-26, a day with no Globex session"), "settlement: the undated one is said in the Output window");
-        StartChecks();
         List<string> a = new List<string>(), b = new List<string>();
         ChartBridgeClient pa = Page(5101, a), pb = Page(5102, b);
         try
