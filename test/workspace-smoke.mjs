@@ -114,7 +114,7 @@ try {
   check(tkInfo.held && !tkInfo.armed && /Buy MKT/.test(ui.ticketText) && ui.ticketCtl > 10 && ui.ticketName === 'Order ticket', 'the window opened with no other ticket around: it took the ticket, Armed off (Anthony)');
   check(/Trading off/.test(ui.ticketText), 'trading is off on this ChartBridge: the ticket says so (' + ui.ticketText.replace(/\s+/g, ' ').slice(-90) + ')');
   check(!ui.obar, 'no order bar inside any chart (the order ticket is its own panel)');
-  check(ui.dailyTf === '1 hour' && /ChartBridge 0\.3\.7/.test(ui.dailyTitle), 'the long chart is labelled 1 hour, not Daily (ChartBridge 0.3.7 brings daily bars)');
+  check(ui.dailyTf === '1 hour' && /30 days/.test(ui.dailyTitle), 'the long chart is labelled 1 hour, built from 30 days of history (1.15.0; 4h, 1D and 1W are their own choices)');
   check(ui.names.includes('MNQ 12-26') && ui.names.includes('Time and Sales'), 'headers show the contract (' + ui.names.join(', ') + ')');
   check(ui.flattenSlot && /^\d\d:\d\d:\d\d$/.test(ui.clock) && ui.topH === 40, 'top bar 40 px, New York clock ' + ui.clock + ', Flatten all and KEYS in it');
   const paneIds = await page.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="chart"] [data-pane]')].map(e => e.dataset.pane));
@@ -163,10 +163,7 @@ try {
   check(im.open && im.w >= 300 && im.right <= im.vw, 'the header\'s Indicators button opens the chart\'s menu, inside the window (' + Math.round(im.w) + ' px)');
   await page.keyboard.press('Escape');
   await page.click(`.ws-panel[data-id="${nq.id}"] [data-act="more"]`);
-  check(await page.evaluate(() => !document.getElementById('wsMore').hidden && [...document.querySelectorAll('#wsMore button')].map(b => b.textContent).join('|') === 'Trend line|Price line|Clear drawings|Reset view'), 'the small menu: Trend line, Price line, Clear drawings, Reset view');
-  await page.click('#wsMore [data-tool="trend"]');
-  await page.click(`.ws-panel[data-id="${nq.id}"] [data-act="more"]`);
-  check(await page.getAttribute('#wsMore [data-tool="trend"]', 'aria-pressed') === 'true', 'Trend line is on for that chart');
+  check(await page.evaluate(() => !document.getElementById('wsMore').hidden && [...document.querySelectorAll('#wsMore button')].map(b => b.textContent).join('|') === 'Reset view'), 'the small menu: Reset view (1.15.0: the drawing tools are the ring\'s, smoke:h1)');
   await page.click('#wsMore [data-do="reset"]');
   await shot(page, 'workspace-1920x1080.png');
 
@@ -187,7 +184,8 @@ try {
   check(await page.evaluate(i => { const p = document.querySelector(`.ws-panel[data-id="${i}"]`); return p.querySelector('.ws-name').textContent.startsWith('ES') && p.querySelector('.ws-tf').textContent === '15 min'; }, nq.id), 'the header follows');
   k = await sockets(page);
   check(k.filter(x => x.open).length === 2 && k.filter(x => x.open && x.subs[0] === 'ES').length === 1, 'NQ has no panel left: its connection closed; ES still one connection (' + k.filter(x => x.open).length + ' open)');
-  check(subsOf('ES') === 1, 'the ES chart joined the ES connection without a second subscribe');
+  // 1.15.0: a 15 minute chart loads 10 days (the ES 1 minute load holds 5): one new subscribe on the same ES connection
+  check(subsOf('ES') === 2, 'the ES chart joined the ES connection; on 15 min it asks for 10 days, one more subscribe there (' + subsOf('ES') + ')');
   await page.click(`.ws-panel[data-id="${nq.id}"] .ws-view`);
   await page.click('#wsView [data-tf="range"]');
   await page.fill('#wsView [data-f="range"]', '12');

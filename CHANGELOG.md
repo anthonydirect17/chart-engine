@@ -103,7 +103,7 @@ only a host's chart turns on). Every item is the workspace's.
   1920x1080 and 2560x1440 and crops of the labels, the Account panel, the Quote board, the corner and the ring.
 - `smoke:noscroll`: Anthony's Main layout with the Account panel (each tab) and two Quote boards at three sizes, no figure
   cut, the ring at the middle and both corners of a chart, the bars picker with 4h, 1D and 1W.
-- Expectations changed: `test/display.test.js` (120 px is a kept room value), `test/workspace.test.js` (`d1` is a chart's
+- Expectations changed: `test/display.test.js` (120 px is a kept room value), `smoke:display` (the workspace's ATR read from the corner readout), `smoke:workspace` (the small menu is Reset view; the 1 hour title; an ES chart switched to 15 min makes one more subscribe for its 10 days), `test/workspace.test.js` (`d1` is a chart's
   bars now).
 
 ## 1.14.0 (2026-10-02): the display round

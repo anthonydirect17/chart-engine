@@ -295,8 +295,9 @@ try {
   await wp.click('#wsGridLines [data-v="off"]');
   const wver = await W(() => ({ badge: document.getElementById('wsConn').title, set: document.getElementById('wsVersion').textContent }));
   await wp.fill('#wsAtr', '21'); await wp.keyboard.press('Enter'); await wp.waitForTimeout(1300);
-  const wAtr = await W(() => [...document.querySelectorAll('[id$="lgAtr"]')].map(e => e.textContent).filter(Boolean));
-  check(wAtr.length > 0 && wAtr.every(t => /^ATR\(21\) /.test(t)), 'workspace Settings: ATR period 21 on every chart: ' + JSON.stringify(wAtr));
+  // 1.15.0: the workspace's ATR is in each chart's corner readout (smoke:h1), no longer in the header text
+  const wAtr = await W(ids => ids.map(id => (window.workspace.chart(id).corner() || {}).text || ''), charts);
+  check(wAtr.length > 0 && wAtr.every(t => /ATR\(21\) /.test(t) || /ATR [\d,.]+$/.test(t)), 'workspace Settings: ATR period 21 on every chart\'s corner readout: ' + JSON.stringify(wAtr));
   await wp.fill('#wsAtr', '14'); await wp.keyboard.press('Enter');
   check(/^chart \d+\.\d+\.\d+ · ChartBridge \S+$/.test(wver.badge) && wver.badge.startsWith('chart ' + CE.VERSION + ' · ') && wver.set.startsWith(wver.badge), 'workspace versions: the LIVE badge\'s tooltip and Settings: "' + wver.badge + '"');
   await wp.keyboard.press('Escape');
