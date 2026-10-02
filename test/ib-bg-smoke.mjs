@@ -313,7 +313,8 @@ try {
     // a light ground takes the toolbar, menus and status line light too, text at the floors
     const chrome = await a.evaluate(() => {
       const cs = el => getComputedStyle(el);
-      const btn = document.getElementById('resetBtn'), tf = document.querySelector('#tfSeg [aria-pressed="true"]'), stat = document.querySelector('.status');
+      // 1.14.0: Reset view moved into the small menu; Settings is the toolbar's own .btn
+      const btn = document.getElementById('setBtn'), tf = document.querySelector('#tfSeg [aria-pressed="true"]'), stat = document.querySelector('.status');
       return { root: cs(document.querySelector('.chart-live')).backgroundColor, btnBg: cs(btn).backgroundColor, btnFg: cs(btn).color, tfFg: cs(tf).color, tfBg: cs(tf).backgroundColor,
         status: cs(stat).color, colorsBtn: cs(document.querySelector('.ce-theme-btn')).backgroundColor, colorsFg: cs(document.querySelector('.ce-theme-btn')).color, scheme: cs(document.querySelector('.chart-live')).colorScheme };
     });
