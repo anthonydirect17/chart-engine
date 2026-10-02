@@ -41,8 +41,12 @@ async function until(fn, what, ms) {
     await new Promise(r => setTimeout(r, 100));
   }
 }
+/* 1.13.0: the first order with no stop after each load asks "No stop: send anyway?" (Anthony); this smoke answers Send
+   (test/nostop-smoke.mjs checks the question itself) */
+const answerNoStop = () => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); };
 async function open(browser, port, width, height) {
   const page = await browser.newPage({ viewport: { width, height: height || 860 }, deviceScaleFactor: 2 });
+  await page.addInitScript(answerNoStop);
   page.on('pageerror', e => fail(width + 'px pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) fail('console: ' + m.text()); });
   await page.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
@@ -534,6 +538,7 @@ try {
     await control(P5, 'price', { root: 'MNQ', p: L5 });
     const state5 = () => control(P5, 'state', { root: 'MNQ' });
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 1 });
+    await ctx.addInitScript(answerNoStop);
     await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
     // every message a page sends, and the account of every order ChartBridge reports to it
     await ctx.addInitScript(() => {

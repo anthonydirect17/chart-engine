@@ -704,7 +704,7 @@ function markup(p, o) {
       <button type="button" class="obtn buy" id="${p}buyMkt">Buy MKT</button>
       <button type="button" class="obtn sell" id="${p}sellMkt">Sell MKT</button>
     </span>
-    <span class="ofield"><span class="glabel">Bracket</span>
+    <span class="ofield bfield"><span class="glabel">Bracket</span>
       <select class="acct-sel bpre" id="${p}bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
       <span class="bsave" id="${p}bSaveBox" hidden><input class="oin bname" id="${p}bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" id="${p}bSaveOk">Save</button><button type="button" class="btn" id="${p}bSaveNo" aria-label="Do not save">x</button></span>
       <input class="oin" id="${p}bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">

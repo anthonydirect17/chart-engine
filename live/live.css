@@ -315,6 +315,7 @@
 @media (max-width: 720px) {
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
   .chart-live .obtn { padding: 4px 10px; }
+  .chart-live .bfield { flex-wrap: wrap; row-gap: 6px; }   /* 1.13.0: NO STOP goes under the boxes rather than past the edge */
   /* a phone (1.10.0): the Armed switch keeps the width of its armed text, so arming never rewraps the bar or moves the chart */
   .chart-live .arm-text { display: inline-grid; }
   .chart-live .arm-text > span { grid-area: 1 / 1; }

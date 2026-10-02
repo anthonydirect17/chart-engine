@@ -41,6 +41,9 @@ const spies = () => {
   const send = WebSocket.prototype.send;
   WebSocket.prototype.send = function (d) { try { window.__sent.push(Object.defineProperty(JSON.parse(d), '__at', { value: performance.now() })); } catch (e) { /* not JSON */ } return send.call(this, d); };
 };
+/* 1.13.0: the first order with no stop after each load asks "No stop: send anyway?" (Anthony); this smoke answers Send
+   (test/nostop-smoke.mjs checks the question itself) */
+const answerNoStop = () => { setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30); };
 const ORDER_TYPES = ['order', 'change', 'cancel', 'flatten'];
 const KEYS = { buy: 'Alt+KeyB', sell: 'Alt+KeyS', be: 'Alt+KeyK', close: 'Alt+KeyC', flattenAll: 'Shift+F9' };
 const SHOWN = { buy: 'Alt+B', sell: 'Alt+S', be: 'Alt+K', close: 'Alt+C', flattenAll: 'Shift+F9' };
@@ -54,6 +57,7 @@ try {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 860 }, deviceScaleFactor: 1 });
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   await ctx.addInitScript(spies);
+  await ctx.addInitScript(answerNoStop);
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource|WebSocket connection/.test(m.text())) fail('console: ' + m.text()); });
