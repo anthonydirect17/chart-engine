@@ -156,7 +156,7 @@ try {
   const one = await page.evaluate(() => ({ footers: [...document.querySelectorAll('.ws-body > .chart-live > .status')].map(f => getComputedStyle(f).display), feed: document.getElementById('wsFeed').textContent,
     local: document.getElementById('wsLocal').textContent, fps: document.getElementById('wsFps').textContent, tip: document.getElementById('wsStat').title }));
   check(one.footers.length === 4 && one.footers.every(d => d === 'none'), 'no status line under the charts');
-  check(/ms( [A-Z]+)?$/.test(one.feed) && /ms$/.test(one.local) && /^(\d+ fps|idle)$/.test(one.fps) && /MNQ: feed/.test(one.tip) && /ES: feed/.test(one.tip), 'one status line in the top bar: feed ' + one.feed + ', local ' + one.local + ', ' + one.fps);
+  check(/ms( [A-Z]+)?$/.test(one.feed) && /ms( \(p95 [<\d]+ ms\))?$/.test(one.local) && /^(\d+ fps|idle)$/.test(one.fps) && /MNQ: feed/.test(one.tip) && /ES: feed/.test(one.tip), 'one status line in the top bar: feed ' + one.feed + ', local ' + one.local + ', ' + one.fps);
   const ib = `.ws-panel[data-id="${nq.id}"] .ws-head .ind-btn`;
   await page.click(ib);
   const im = await page.evaluate(id => { const p = document.querySelector(`.ws-panel[data-id="${id}"] .ind-panel`); const r = p.getBoundingClientRect(); return { open: !p.hidden, w: r.width, right: r.right, vw: innerWidth }; }, nq.id);
