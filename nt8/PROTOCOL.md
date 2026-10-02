@@ -699,7 +699,13 @@ serve is answered with an `error` and no bars.
   session day's settlement time, it is that day's. So 16:15 Monday, 20:43 Monday evening and 10:00 Tuesday are all Monday's;
   a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session) is Thursday's. This dates the
   snapshot NinjaTrader gives at subscription, which carries the time it was read (HOME, 2026-10-01: a first start at
-  20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). A day with no Globex session, or a value
+  20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). **The buffer** (Anthony): from the
+  settlement time to the session's close (16:00 to 17:00 ET; 12:00 to 13:00 or 13:15 on a holiday or early close)
+  NinjaTrader can still hold the day before's value, so a value stamped then is used only when it differs from the day
+  before's stored value (it changed: it is the new one); otherwise it is not used (one Output line says why) and
+  ChartBridge waits for a value that differs or one stamped from the close on. With no stored value for the day before
+  there is nothing to compare, so it waits too, except that a value that came before `settlements.txt` was read is
+  judged again once it is read. A day with no Globex session, or a value
   that cannot be placed, is not used (one Output line says so; `/diag` shows it with `day` null), and with no other dated
   value the prior is null rather than a wrong one.
 - **Today's settlement after the afternoon close** (in from about 16:15 ET) is kept and shown in `/diag`, but the prior

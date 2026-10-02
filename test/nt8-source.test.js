@@ -683,7 +683,7 @@ test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a qu
 test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only through the gate, the weekly profile never asks', () => {
   const note = bodyOf(code, 'public static void NoteSettlement(string root, string contract,');
   assert.match(note, /!\(price > 0\)\) return;/, 'only a real price');
-  assert.match(note, /DateTime\? day = SettlementDay\(ntTime\);/, 'every value dated from NinjaTrader\'s time on it');
+  assert.match(note, /DateTime\? day = SettlementDay\(ntTime, NowNt\(\), out provisional\);/, 'every value dated from NinjaTrader\'s time on it (0.3.8: and whether it is in the 16:00 to 17:00 buffer)');
   assert.match(bodyOf(code, 'private static void PriorSettlement('), /ChartBridgeCme\.PreviousSession\(ChartBridgeCme\.CurrentSession\(/);
   assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlementsSoon\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);   // read off NinjaTrader's thread
   // review B2: answers built outside HtfLock, one waiter per page, the 15 s limit

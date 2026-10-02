@@ -38,9 +38,12 @@ compile in NinjaTrader (F5). Entries still resting at the recompile are handled 
   every 2 seconds each working resting entry with a bracket is checked to have its line.
 
 ### Settlement dating (Anthony)
-- A value stamped after a session's settlement time (16:00 ET, 12:00 ET on an early close) and before the next
-  session's settlement time is that session's. The snapshot NinjaTrader gives at a first start in the evening (HOME,
-  20:43 ET on 2026-10-01) is now that day's settlement; a morning start dates it the day before, a weekend one Friday.
+- A value stamped from a session's close (17:00 ET) until the next session's settlement time is that session's. The
+  snapshot NinjaTrader gives at a first start in the evening (HOME, 20:43 ET on 2026-10-01) is now that day's
+  settlement; a morning start dates it the day before, a weekend one Friday.
+- Between the settlement time and the close (16:00 to 17:00 ET) NinjaTrader can still hold the day before's value: a
+  value stamped then is used only when it differs from the day before's stored value, otherwise ChartBridge waits
+  (with no stored value to compare, it waits too).
 
 ### Time and Sales category (`q`)
 - Every live `tick` carries `q`: 2 above the ask, 1 at the ask, 0 between, -1 at the bid, -2 below the bid, from the

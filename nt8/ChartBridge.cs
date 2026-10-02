@@ -474,6 +474,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // session running at New York time et (the last one begun; in a break, a weekend or a holiday, the one before it), and
         // the session day before a given one.
         public static TimeSpan EarliestSettlement(DateTime d) { return NyseHolidays(d.Year).Contains(d.Date) || NyseEarlyCloses(d.Year).Contains(d.Date) ? TimeSpan.FromHours(12) : TimeSpan.FromHours(16); }
+        // 0.3.8: the session's close, New York time of day: 17:00, or the halt on an NYSE holiday (13:00) or early close (13:15).
+        public static TimeSpan SessionClose(DateTime d) { return NyseHolidays(d.Year).Contains(d.Date) ? TimeSpan.FromHours(13) : NyseEarlyCloses(d.Year).Contains(d.Date) ? new TimeSpan(13, 15, 0) : TimeSpan.FromHours(17); }
         public static DateTime NextSessionOpen(DateTime d) { DateTime n = d.Date.AddDays(1); for (int i = 0; i < 30 && !SessionDay(n); i++) n = n.AddDays(1); return n.AddHours(-6); }
         public static DateTime CurrentSession(DateTime et) { DateTime d = TradingDay(et); for (int i = 0; i < 30 && !SessionDay(d); i++) d = d.AddDays(-1); return d; }
         public static DateTime PreviousSession(DateTime d) { DateTime p = d.Date.AddDays(-1); for (int i = 0; i < 30 && !SessionDay(p); i++) p = p.AddDays(-1); return p; }
@@ -3651,6 +3653,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, SettleRoot> Settlements = new Dictionary<string, SettleRoot>();
         private static readonly object SettleFileLock = new object(), SettleTickLock = new object();
         private static volatile bool settleLoaded = true;   // false from Start until settlements.txt is read (nothing is written before)
+        // 0.3.8: values stamped 16:00 to 17:00 ET that came before settlements.txt was read, with no day before's value to
+        // compare yet: judged again once it is read ({root, contract, price, ntTime, from}; Settlements lock).
+        private static readonly List<object[]> SettlePending = new List<object[]>();
         private static volatile bool settleReadFailed;      // the file could not be read: never rewritten from memory this run (it may hold what memory lacks)
         private static readonly List<string> SettleOtherRoots = new List<string>();   // lines for roots not configured now, written back as they were (Settlements lock)
         private static int settleSaveQueued;
@@ -3660,15 +3665,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Day(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
 
         // The trading day a settlement stamped at NinjaTrader time ntTime belongs to, or null when the time cannot say. A
-        // date-only stamp (00:00) is that date. Otherwise (0.3.8, Anthony 2026-10-01): the latest day with a Globex session
+        // date-only stamp (00:00) is that date. Otherwise (0.3.8, Anthony): the latest day with a Globex session
         // whose settlement could be out by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early),
         // as long as the next session's settlement time has not come yet: NinjaTrader keeps the last settlement and stamps
         // it when it is read, so on HOME 10-01's settlement came stamped 20:43 ET that evening (inside the next session),
         // and it is 10-01's. A value stamped after the next session's settlement time could be either day's: null, not used.
-        public static DateTime? SettlementDay(DateTime ntTime) { return SettlementDay(ntTime, NowNt()); }
+        // 0.3.8 buffer (Anthony): between the settlement time and the session's close (16:00 to 17:00 ET) NinjaTrader can
+        // still hold the day before's value, so such a stamp is provisional: NoteSettlement uses it only when it differs from
+        // the day before's stored value. From the close (17:00 ET) on it is the day's.
+        public static DateTime? SettlementDay(DateTime ntTime) { bool prov; return SettlementDay(ntTime, NowNt(), out prov); }
+        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt) { bool prov; return SettlementDay(ntTime, nowNt, out prov); }
         // nowNt: a date-only stamp for a day counts only once that day's settlement time has passed (review B2 N1).
-        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt)
+        public static DateTime? SettlementDay(DateTime ntTime, DateTime nowNt, out bool provisional)
         {
+            provisional = false;
             if (ntTime.TimeOfDay == TimeSpan.Zero)
             {
                 DateTime d0 = ntTime.Date;
@@ -3682,7 +3692,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (!ChartBridgeCme.SessionDay(d) || d.Add(ChartBridgeCme.EarliestSettlement(d)) > et) continue;
                 for (DateTime n = d.AddDays(1); n < d.AddDays(15); n = n.AddDays(1))
-                    if (ChartBridgeCme.SessionDay(n)) return et < n.Add(ChartBridgeCme.EarliestSettlement(n)) ? d : (DateTime?)null;
+                    if (ChartBridgeCme.SessionDay(n))
+                    {
+                        if (et >= n.Add(ChartBridgeCme.EarliestSettlement(n))) return null;
+                        provisional = et < d.Add(ChartBridgeCme.SessionClose(d));
+                        return d;
+                    }
                 return null;
             }
             return null;
@@ -3715,14 +3730,36 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (root == null || double.IsNaN(price) || double.IsInfinity(price) || !(price > 0)) return;
             if (contract == null) { Instrument inst = InstrumentFor(root); contract = inst != null ? inst.FullName : null; }
-            DateTime? day = SettlementDay(ntTime);
+            bool provisional;
+            DateTime? day = SettlementDay(ntTime, NowNt(), out provisional);
             bool stored = false, undated = false;
+            string waitWhy = null;
             lock (Settlements)
             {
                 SettleRoot s;
                 if (!Settlements.TryGetValue(root, out s)) { s = new SettleRoot(); Settlements[root] = s; }
                 if (s.Contract != contract) { s.Contract = contract; s.ByDate.Clear(); }   // another contract (a roll): its own values only
                 bool again = SameP(s.RawP, price) && s.RawNt == ntTime;
+                if (day.HasValue && provisional)
+                {
+                    // 16:00 to 17:00 ET: only a value that differs from the day before's stored one is the new settlement
+                    DateTime before = ChartBridgeCme.PreviousSession(day.Value);
+                    double old;
+                    bool known = s.ByDate.TryGetValue(before, out old);
+                    if (!known && !settleLoaded)
+                    {
+                        SettlePending.Add(new object[] { root, contract, price, ntTime, from });   // judged once settlements.txt is read
+                        return;
+                    }
+                    if (!known || SameP(old, price))
+                    {
+                        if (!again) waitWhy = "is stamped " + EtText(ntTime) + " ET, before the " + Day(day.Value) + " session's close at " +
+                            day.Value.Add(ChartBridgeCme.SessionClose(day.Value)).ToString("HH:mm", CultureInfo.InvariantCulture) + " ET, and " +
+                            (known ? "equals " + Day(before) + "'s settlement" : "no settlement for " + Day(before) + " is known to compare it with") +
+                            ", so it may still be the day before's: not used; waiting for a value that differs, or one stamped after the close";
+                        day = null;
+                    }
+                }
                 s.RawP = price; s.RawNt = ntTime; s.RawFrom = from; s.RawDay = day; s.RawAtUtcMs = ChartBridgeTime.NowUtcMs();
                 if (day.HasValue)
                 {
@@ -3740,7 +3777,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 SaveSettlementsSoon();
                 Log(root + " settlement " + CbJson.Num(price) + " for the session of " + Day(day.Value) + " (NinjaTrader's, " + from + ", stamped " + EtText(ntTime) + " ET)");
             }
-            if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + UndatedWhy(ntTime));
+            if (waitWhy != null) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + waitWhy);
+            else if (undated) Log(root + " settlement " + CbJson.Num(price) + " (NinjaTrader's, " + from + ") " + UndatedWhy(ntTime));
             SettlementTick();
         }
         // Pages get the prior when it changes: a new value for its day, or the next session's start (every second, HtfPushMs).
@@ -3830,7 +3868,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // At Start, off NinjaTrader's thread (N3): the values kept before, for the contracts served now only (a line for another
         // contract, the one before a roll, is ignored: S1). Then the pages get the prior if it changed, and the file is written
         // once with whatever came in meanwhile.
-        private static void LoadSettlementsSoon() { settleLoaded = false; settleReadFailed = false; lock (Settlements) SettleOtherRoots.Clear(); Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleReadFailed = true; settleLoaded = true; } }); }
+        private static void LoadSettlementsSoon() { settleLoaded = false; settleReadFailed = false; lock (Settlements) { SettleOtherRoots.Clear(); SettlePending.Clear(); } Task.Run(() => { try { LoadSettlements(); } catch (Exception ex) { Log("settlements.txt error: " + ex.Message); settleReadFailed = true; SettleLoadDone(); } }); }
+        // settlements.txt is read (or failed): from now on values are judged at once; the ones held meanwhile are judged now.
+        private static void SettleLoadDone()
+        {
+            List<object[]> held;
+            lock (Settlements) { settleLoaded = true; held = new List<object[]>(SettlePending); SettlePending.Clear(); }
+            foreach (object[] h in held) NoteSettlement((string)h[0], (string)h[1], (double)h[2], (DateTime)h[3], (string)h[4]);
+        }
         private static void LoadSettlements()
         {
             string[] lines = new string[0];
@@ -3856,7 +3901,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (!s.ByDate.ContainsKey(d)) s.ByDate[d] = p;
                 }
             if (ignored > 0) Log("settlements.txt: " + ignored + " line(s) not for a contract served now (or unreadable) ignored");
-            settleLoaded = true;
+            SettleLoadDone();
             SaveSettlements();
             SettlementTick();
         }
