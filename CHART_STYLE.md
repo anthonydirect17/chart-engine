@@ -44,10 +44,17 @@ pickers, saved per browser); the indicators' colors in their gears (1.9.0). Defa
 | Value area high/low | `#E0B45A` |
 | Initial Balance high (1.5.3) | `#F7C6EC` bright orchid (Anthony: the high brighter than the low; 1.59:1 from the low) |
 | Initial Balance low (1.5.3) | `#E58BD2` orchid, the base (the one level hue nothing else on the chart uses) |
+| Absorption and divergence, bullish (2026-10-01) | `#00FFFF` cyan. Painted bar or arrow only. Not shifted for the ground. |
+| Absorption and divergence, bearish (2026-10-01) | `#FFFF00` yellow. Same. |
+| Large-order bubbles (2026-10-01) | The bull and bear candle colors at 35% opacity. No new color. |
 
 Presets: Carolina / purple (default), Mint / coral (`#4FD1A5` / `#F0717A`, the Chart lab v0 look),
 House green / red (`#3DDC97` / `#FF7A7A`). Text drawn in a candle color is lightened until it reads
 at 4.5:1 on the ground; the last-price tag picks dark or white text for its fill.
+
+Absorption bars, divergence arrows and large-order bubbles are off until turned on. With them off the
+candles, volume and the rest of the chart draw as before. The cyan and yellow are drawn as named, not
+moved to read on the ground. Bubbles use the candle colors.
 
 **Background (1.5.3, Anthony's request).** The Colors panel has a Background section: presets Dark `#080B10`
 (the default, the look above), Black `#000000`, Blue-grey `#1B2433` and Light `#F5F7FA`, and a picker for any

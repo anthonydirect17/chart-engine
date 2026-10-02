@@ -438,7 +438,7 @@ function subscribeTape(c, m, r) {
   }, WINDOW_MS);
 }
 
-const last = {}, held = {}, lastSide = {};
+const last = {}, held = {}, lastSide = {}, quiet = {};
 for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
 if (LIVE_FIRST) for (const r of Object.keys(INSTR)) { const k = tapes[r]; if (k.n) { last[r] = k.p[k.n - 1]; lastSide[r] = k.s[k.n - 1]; } }
 function trade(r, p) {
@@ -457,9 +457,24 @@ function trade(r, p) {
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   desk.tick(r, p);                        // the matching engine sees every trade
 }
+/* An exact print for tests: volume, side and time as given. Not a random trade, and not blocked by quiet or the close. */
+function printExact(r, p, v, s, tRaw) {
+  if (!INSTR[r] || !isFinite(p) || !(v > 0)) return;
+  const now = Date.now();
+  let t = tRaw != null && tRaw !== '' && isFinite(+tRaw) ? +tRaw : +(etNow() + TICK_SHIFT).toFixed(3);
+  const msg = { type: 'tick', root: r, t, u: now, rx: now, p, v };
+  if (SIDES) { msg.s = s; msg.sm = s === 1 || s === -1 ? 2 : 0; }
+  if (LIVE_FIRST && tapes[r]) {
+    const k = tapes[r];
+    if (k.n && msg.t < k.t[k.n - 1]) msg.t = +(k.t[k.n - 1] + 0.001).toFixed(3);
+    k.push(msg.t, p, v, s, msg.sm || 0);
+  }
+  last[r] = p;
+  for (const c of clients) if (c.ready && c.root === r) send(c, msg);
+}
 if (!LIVE_RATE) setInterval(() => {
   if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
-  for (const r of Object.keys(INSTR)) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
+  for (const r of Object.keys(INSTR)) if (!quiet[r]) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
 }, 120);
 else {
   // --live-rate: a busy market. Every 10 ms a Poisson number of trades; mostly 0 or 1 tick apart, and a fast jump of
@@ -471,7 +486,7 @@ else {
   setInterval(() => {
     const burst = ((Date.now() - t0) % 10000) < 1500 ? 3 : 1;
     for (const r of Object.keys(INSTR)) {
-      if (held[r] || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
+      if (quiet[r] || held[r] || ![...clients].some(c => (c.ready || LIVE_FIRST) && c.root === r)) continue;   // live first: the market trades on during a load
       const n = poisson(LIVE_RATE * burst / 100);
       for (let k = 0; k < n; k++) {
         const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
@@ -510,6 +525,8 @@ const server = http.createServer((req, res) => {
   if (p.startsWith('/test/') && TEST_CONTROLS && req.method === 'POST') {
     const q = new URL(req.url, 'http://x').searchParams, r = q.get('root') || 'MNQ';
     if (p === '/test/price') { held[r] = true; trade(r, rq(+q.get('p'), INSTR[r].tick)); }
+    else if (p === '/test/quiet') quiet[r] = q.get('on') !== '0';
+    else if (p === '/test/print' && INSTR[r]) printExact(r, rq(+q.get('p'), INSTR[r].tick), Math.max(1, Math.round(+q.get('v') || 1)), q.get('s') === '-1' ? -1 : q.get('s') === '0' ? 0 : 1, q.get('t'));
     else if (p === '/test/hold') held[r] = q.get('on') !== '0';
     else if (p === '/test/state') {
       res.writeHead(200, { 'Content-Type': 'application/json' });

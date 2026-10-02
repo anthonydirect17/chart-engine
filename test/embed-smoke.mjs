@@ -267,7 +267,7 @@ try {
       while (await page.$('#paneB .ind-body [data-f^="add:"]')) await page.click('#paneB .ind-body [data-f^="add:"]');   // each add redraws the list
     }
     await page.keyboard.press('Escape');
-    check(await page.textContent('#paneB .ind-count') === '7/7' && await page.$$eval('#paneB .ind-chip', c => c.length) === 6 && !(await page.$('#paneB .ind-chip[data-id="fills"]')), 'pane B: all seven added (the volume profile and the delta pane too), the first six with a chip: the strip is full, Fills without one');
+    check(await page.textContent('#paneB .ind-count') === '8/8' && await page.$$eval('#paneB .ind-chip', c => c.length) === 6 && !(await page.$('#paneB .ind-chip[data-id="fills"]')), 'pane B: all eight added (the volume profile, the delta pane and large-order bubbles too), the first six with a chip: the strip is full, Fills without one');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = '3 1 0'; });
     await page.waitForTimeout(300);
     const nb = await page.evaluate(() => { const s = document.querySelector('#paneB .ind-chips'), cs = [...s.querySelectorAll('.ind-chip')];
@@ -284,7 +284,7 @@ try {
     await page.keyboard.press('Escape');
     // back to pane B's earlier set: Volume and VWAP only, not pinned
     await page.click('#paneB .ind-btn');
-    for (const id of ['levels', 'ib', 'vp', 'delta', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
+    for (const id of ['levels', 'ib', 'vp', 'delta', 'bubbles', 'fills']) await page.click(`#paneB .ind-body [data-act="remove"][data-id="${id}"]`);
     await page.keyboard.press('Escape');
     await page.evaluate(() => { document.getElementById('paneA').style.flex = ''; });
     check(await page.textContent('#paneB .ind-count') === '2/2', 'pane B back to Volume and VWAP');

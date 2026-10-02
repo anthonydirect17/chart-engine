@@ -858,7 +858,7 @@ function create(container, options) {
     axisWidth: opt.axisWidth || 78,
     timeAxisHeight: opt.timeAxisHeight || 26,
     session: Object.assign({ start: 18 * 3600, rthStart: 34200, rthEnd: 57600 }, opt.session || {}),
-    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true, vp: false, delta: false }, opt.layers || {}),
+    layers: Object.assign({ volume: true, vwap: true, levels: true, trades: true, ib: true, vp: false, delta: false, absorb: false, bubbles: false }, opt.layers || {}),
     motion: Object.assign({ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }, opt.motion || {}),
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
@@ -900,6 +900,9 @@ function create(container, options) {
      chart's height it asks for, a note drawn instead of anything else (the page's "Delta needs ChartBridge 0.3.4 on
      this PC"), and its own eased value scale. */
   let delta = null;
+  /* Absorption bodies, large-order bubbles and CVD divergence arrows (off unless the page hands marks in). */
+  let absorption = null, bubbleBook = null, divMarks = [];
+  let signalHits = { absorb: [], bubbles: [], arrows: [] };
   const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', missed: 0, title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
@@ -1383,6 +1386,7 @@ function create(container, options) {
         ctx.fillStyle = T.up; ctx.fill(up); ctx.fillStyle = T.down; ctx.fill(dn);
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (divMarks.length) drawDivergenceArrows(from, to, yD);
     }
     // the crosshair: the bar's line through the pane, and the value line where the pointer is
     if (cx !== null) {
@@ -1444,8 +1448,83 @@ function create(container, options) {
     if (hy !== null) tag(hy, fmtSigned(Math.round(pane.hi - (hy - top) / h * range), 0), T.tagFill, T.tagText, T.tagBorder);
   }
 
+  /* Divergence arrows in the CVD pane: a small triangle under a bullish mark and over a bearish one. Hollow is the
+     early mark (the swing is not confirmed yet); solid is the confirmed one. Cyan bullish, yellow bearish.
+     The gap is a fixed 8 CSS pixels. It is not the study's MarkerOffset, which is price ticks on the price panel. */
+  function drawDivergenceArrows(from, to, yD) {
+    const s = 6, gap = 8;
+    for (let m = 0; m < divMarks.length; m++) {
+      const mk = divMarks[m], i = idxAtTime(mk.t);
+      if (i < from || i > to) continue;
+      const d = delta.at(bars[i].t);
+      if (!d) continue;
+      const x = xOf(i);
+      let yAnchor, tip;
+      if (pane.mode === 'bar') {
+        const v = d.c - d.o, top = Math.max(0, v), bot = Math.min(0, v);
+        yAnchor = mk.kind === 'bull' ? yD(bot) + gap : yD(top) - gap;
+      } else yAnchor = mk.kind === 'bull' ? yD(d.l) + gap : yD(d.h) - gap;
+      ctx.beginPath();
+      if (mk.kind === 'bull') {
+        tip = yAnchor - s;
+        ctx.moveTo(x, tip); ctx.lineTo(x - s * 0.7, yAnchor + s * 0.45); ctx.lineTo(x + s * 0.7, yAnchor + s * 0.45);
+      } else {
+        tip = yAnchor + s;
+        ctx.moveTo(x, tip); ctx.lineTo(x - s * 0.7, yAnchor - s * 0.45); ctx.lineTo(x + s * 0.7, yAnchor - s * 0.45);
+      }
+      ctx.closePath();
+      const col = mk.kind === 'bull' ? SIGNAL_BULL : SIGNAL_BEAR;
+      if (mk.hollow) { ctx.strokeStyle = col; ctx.lineWidth = 1.25; ctx.stroke(); }
+      else { ctx.fillStyle = col; ctx.fill(); }
+      signalHits.arrows.push({ t: mk.t, kind: mk.kind, hollow: !!mk.hollow, x, y: tip });
+    }
+  }
+
+  /* Absorption bodies and outlines, then large-order bubbles. Called only while one of those layers is on, after the
+     candles, in CSS pixels. Candle and volume drawing above is unchanged. */
+  function drawSignalOverlay(from, to, n, bodyW) {
+    if (to < from || n < 0) return;
+    const bw = bodyW / dpr;
+    if (o.layers.absorb && absorption) {
+      const list = absorption.bodies;
+      const drawOne = (mk, liveOutline) => {
+        const i = idxAtTime(mk.t);
+        if (i < from || i > to) return;
+        const b = bars[i], live = i === n;
+        const c = live ? disp.c : b.c;
+        const xc = Math.round(xOf(i) * dpr) / dpr;
+        const y1 = Math.round(yOf(Math.max(b.o, c)) * dpr) / dpr;
+        const y2 = Math.round(yOf(Math.min(b.o, c)) * dpr) / dpr;
+        const top = Math.min(y1, y2), h = Math.max(bw > 0 ? 1 / dpr : 1, Math.abs(y2 - y1));
+        const col = mk.kind === 'bull' ? SIGNAL_BULL : SIGNAL_BEAR;
+        if (liveOutline) { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.strokeRect(xc - bw / 2, top, bw, h); }
+        else { ctx.fillStyle = col; ctx.fillRect(xc - bw / 2, top, bw, h); }
+        signalHits.absorb.push({ t: mk.t, kind: mk.kind, paint: liveOutline ? 'outline' : 'body', x: xc, y: top + h / 2 });
+      };
+      for (let k = 0; k < list.length; k++) if (list[k].paint !== 'outline') drawOne(list[k], false);
+      if (absorption.outline) drawOne(absorption.outline, true);
+    }
+    if (o.layers.bubbles && bubbleBook) {
+      const drawB = mk => {
+        if (!isFinite(mk.price) || !(mk.size > 0)) return;
+        const x = xOf(idxOfTime(mk.t)), y = yOf(mk.price), r = bubbleRadius(mk.size);
+        if (!(r > 0)) return;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = rgba(mk.side === 'sell' ? T.down : T.up, BUBBLE_ALPHA);
+        ctx.fill();
+        signalHits.bubbles.push({ t: mk.t, price: mk.price, size: mk.size, side: mk.side, x, y, r });
+      };
+      const marks = bubbleBook.marks;
+      for (let k = 0; k < marks.length; k++) drawB(marks[k]);
+      const op = bubbleBook.open;
+      if (op && op.vol >= op.floor) drawB({ t: op.t, price: op.price, size: op.vol, side: op.side === 1 ? 'buy' : 'sell' });
+    }
+  }
+
   function draw(now) {
     const n = last();
+    const signalOn = !!(o.layers.absorb || o.layers.bubbles || divMarks.length);
+    if (signalOn) signalHits = { absorb: [], bubbles: [], arrows: [] };
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = T.bg; ctx.fillRect(0, 0, W, H);
     const from = Math.max(0, Math.floor(indexAt(-V.spacing))), to = Math.min(n, Math.ceil(indexAt(plotW + V.spacing)));
@@ -1550,6 +1629,9 @@ function create(container, options) {
       ctx.fillStyle = T.up; ctx.fill(up); ctx.fillStyle = T.down; ctx.fill(dn);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+
+    // absorption bodies and outlines, then large-order bubbles: drawn after the candles, nothing above reordered
+    if (o.layers.absorb || o.layers.bubbles) drawSignalOverlay(from, to, n, bodyW);
 
     // trades
     if (o.layers.trades && trades.length && n >= 0) {
@@ -2173,6 +2255,20 @@ function create(container, options) {
      * 'delta' layer is on (1.7.0). The chart redraws when delta.version changes, so the caller only adds trades to it.
      */
     setDelta(cd) { delta = cd && typeof cd.lowerBound === 'function' ? cd : null; pane.init = false; pane.ver = -1; pane.cid++; pane.tkey = ''; pane.cc = null; dirty = true; },
+    /** Absorption model (ChartEngine.Absorption) or null. Drawn while the absorb layer is on. */
+    setAbsorption(model) { absorption = model && Array.isArray(model.bodies) ? model : null; dirty = true; },
+    /** Large-order bubbles (ChartEngine.LargeBubbles) or null. Drawn while the bubbles layer is on. */
+    setBubbles(model) { bubbleBook = model && Array.isArray(model.marks) ? model : null; dirty = true; },
+    /** Divergence arrows in the CVD pane: [{ t, kind: 'bull'|'bear', hollow }]. */
+    setDivergence(list) { divMarks = (list || []).filter(m => m && isFinite(m.t)); dirty = true; },
+    /** Where absorption, bubbles and divergence arrows were last drawn (CSS px). */
+    signalMarks() {
+      return {
+        absorb: signalHits.absorb.map(x => Object.assign({}, x)),
+        bubbles: signalHits.bubbles.map(x => Object.assign({}, x)),
+        arrows: signalHits.arrows.map(x => Object.assign({}, x)),
+      };
+    },
     getDelta() { return delta; },
     /**
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
@@ -2800,9 +2896,314 @@ class CumulativeDelta {
   sessionOf(bar) { return bar ? this.sessions[bar.s] || null : null; }
 }
 
+/* ---------------------------------------------------------------- signals: absorption, divergence, large-order bubbles */
+/* Cyan and yellow are the signal colors Anthony named (2026-10-01). They are not run through onGround. */
+const SIGNAL_BULL = '#00FFFF', SIGNAL_BEAR = '#FFFF00';
+const ABSORB_SPEC = { lookback: 20, volumeMult: 1.8, rejection: 0.35, windowMs: 500, tickTolerance: 0 };
+const DIV_SPEC = { swing: 5, minBars: 3, minPct: 0.10 };
+const BUBBLE_WINDOW_MS = 100, BUBBLE_ALPHA = 0.35;
+/* Large-print floors, the same numbers and the same RTH window as the tape (09:30 inclusive, 16:15 exclusive). */
+const SIGNAL_ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
+const RTH_FLOOR_START = 9 * 3600 + 30 * 60, RTH_FLOOR_END = 16 * 3600 + 15 * 60;
+const DEFAULT_FLOORS = { NQ: { rth: 50, eth: 25 }, ES: { rth: 100, eth: 50 }, MNQ: { rth: 100, eth: 50 }, MES: { rth: 100, eth: 50 } };
+const FLOOR_MAX = 100000;
+function cleanFloorNum(v) {
+  const n = typeof v === 'string' && String(v).trim() !== '' ? Number(v) : v;
+  return Number.isInteger(n) && n >= 1 && n <= FLOOR_MAX ? n : null;
+}
+/** Floors for every root: a saved whole number, else the default. Same shape the tape keeps. */
+function cleanLargeFloors(v) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  const out = {};
+  for (const r of SIGNAL_ROOTS) {
+    const s = v && Object.prototype.hasOwnProperty.call(v, r) ? v[r] : null;
+    const d = DEFAULT_FLOORS[r];
+    const rth = s && Object.prototype.hasOwnProperty.call(s, 'rth') ? cleanFloorNum(s.rth) : null;
+    const eth = s && Object.prototype.hasOwnProperty.call(s, 'eth') ? cleanFloorNum(s.eth) : null;
+    out[r] = { rth: rth === null ? d.rth : rth, eth: eth === null ? d.eth : eth };
+  }
+  return out;
+}
+/** The large-print floor for a root at trade time t. `floors` is optional; missing roots use the defaults. */
+function largeFloor(root, t, floors) {
+  const sec = ((Math.floor(t) % DAY) + DAY) % DAY;
+  const rth = sec >= RTH_FLOOR_START && sec < RTH_FLOOR_END;
+  const table = floors && Object.prototype.hasOwnProperty.call(floors, root) ? floors[root] : DEFAULT_FLOORS[root];
+  if (!table) return Infinity;
+  return rth ? table.rth : table.eth;
+}
+/** Bubble radius in CSS px. Area grows with the square root of size: a 50-lot is 5 px across the radius. */
+function bubbleRadius(size) {
+  const s = size > 0 && isFinite(size) ? size : 0;
+  return 5 * Math.pow(s / 50, 0.25);
+}
+
+/**
+ * Absorption on one bar: a large trade, a volume spike, and a rejection close, all three (Anthony, 2026-10-01).
+ * Ported from the AbsorptionTradeCombo study. The page feeds trades with add() (O(1)). It closes a bar by calling
+ * the onBar hook the page sets, or close() itself. Unknown sides add nothing. A bar that started before coveredFrom
+ * (the page opened) is never painted. The average may use bars from before that.
+ *
+ * A large trade is one print at or over the floor, or same-side prints at the same price (tickTolerance 0) inside
+ * windowMs, summed. The whole window stays one event on that bar (it is not cut up on a later tick, and it does not
+ * move onto the next bar). The latest large print on the bar sets the direction. The size kept is the largest one.
+ * Tracking for a bar starts empty on its first tick. The floor is largeFloor at the first print of that event.
+ */
+class Absorption {
+  constructor(opt) {
+    const o = opt || {};
+    this.lookback = o.lookback >= 1 ? Math.round(o.lookback) : ABSORB_SPEC.lookback;
+    this.mult = o.volumeMult > 0 ? o.volumeMult : ABSORB_SPEC.volumeMult;
+    this.zone = o.rejection > 0 && o.rejection < 0.5 ? o.rejection : ABSORB_SPEC.rejection;
+    this.window = (o.windowMs > 0 ? o.windowMs : ABSORB_SPEC.windowMs) / 1000;
+    this.tol = o.tickTolerance >= 0 ? o.tickTolerance : 0;
+    this.coveredFrom = typeof o.coveredFrom === 'number' && !isNaN(o.coveredFrom) ? o.coveredFrom : -Infinity;
+    this._floorAt = typeof o.floorAt === 'function' ? o.floorAt : () => Infinity;
+    this.onBar = null;
+    this.reset();
+  }
+  reset() {
+    this._agg = null;
+    this._barT = null;
+    this._large = new Map();
+    this._ring = [];
+    this._sum = 0;
+    this._nClosed = 0;
+    this._done = new Set();
+    this.bodies = [];
+    this.outline = null;
+  }
+  /** Latest large print sets the direction. The size kept is the largest qualifying size on that bar. */
+  _noteLarge(barT, side, size) {
+    const dir = side === 1 ? 'buy' : 'sell';
+    const cur = this._large.get(barT);
+    this._large.set(barT, { dir, size: Math.max(size, cur ? cur.size : 0) });
+  }
+  /** The bar's large print, or null: { dir: 'buy'|'sell', size }. */
+  largeTrade(barT) { const x = this._large.get(barT); return x ? { dir: x.dir, size: x.size } : null; }
+  _flushAgg() {
+    const a = this._agg;
+    this._agg = null;
+    if (a && a.vol >= a.floor) this._noteLarge(a.barT, a.side, a.vol);
+  }
+  /**
+   * One trade. side is 1 buy, -1 sell, 0 or missing for unknown (ignored). barT is the price bar's start.
+   * When barT moves on, the open cluster stays on the bar it started, then onBar(previous) runs so the page
+   * can close() that bar. The new bar's large-print tracking starts empty.
+   */
+  add(t, price, v, side, barT) {
+    if (typeof t !== 'number' || !isFinite(t) || typeof v !== 'number' || !(v > 0)) return;
+    const sided = side === 1 || side === -1;
+    const barChanged = this._barT !== null && barT !== this._barT;
+    if (barChanged && this._agg && this._agg.barT !== barT) this._flushAgg();
+    if (barChanged && typeof this.onBar === 'function') this.onBar(this._barT);
+    this._barT = barT;
+    const agg = this._agg;
+    const accept = !!(sided && agg && agg.barT === barT && agg.side === side && Math.abs(price - agg.price) <= this.tol && (t - agg.t0) <= this.window);
+    if (agg && !accept) this._flushAgg();
+    if (accept) {
+      agg.vol += v;
+      if (agg.vol >= agg.floor) this._noteLarge(barT, side, agg.vol);
+    }
+    if (!sided) return;
+    const floor = this._floorAt(t);
+    const fl = typeof floor === 'number' && isFinite(floor) ? floor : Infinity;
+    if (!accept && v >= fl) this._noteLarge(barT, side, v);
+    if (!accept) this._agg = { side, price, t0: t, vol: v, barT, floor: fl };
+  }
+  _pushVol(v) {
+    this._ring.push(v);
+    this._sum += v;
+    this._nClosed++;
+    if (this._ring.length > this.lookback) this._sum -= this._ring.shift();
+  }
+  _eval(bar, forming) {
+    if (!bar || !(bar.t >= this.coveredFrom)) return null;
+    if (this._nClosed < this.lookback + 1 || this._ring.length < this.lookback) return null;
+    const avg = this._sum / this.lookback;
+    if (!((bar.v || 0) >= this.mult * avg)) return null;
+    const rec = this._large.get(bar.t);
+    const dir = rec && rec.dir;
+    if (!dir) return null;
+    const range = bar.h - bar.l;
+    if (!(range > 0)) return null;
+    const ratio = (bar.c - bar.l) / range;
+    let kind = null;
+    if (dir === 'buy' && ratio >= 1 - this.zone) kind = 'bull';
+    else if (dir === 'sell' && ratio <= this.zone) kind = 'bear';
+    if (!kind) return null;
+    return { t: bar.t, kind, paint: forming ? 'outline' : 'body' };
+  }
+  /** Close one bar ({ t, o, h, l, c, v }). A qualifying open cluster still on this bar counts, then the body is kept. */
+  close(bar) {
+    if (!bar || this._done.has(bar.t)) return null;
+    this._done.add(bar.t);
+    if (this._agg && this._agg.barT === bar.t && this._agg.vol >= this._agg.floor) {
+      this._noteLarge(bar.t, this._agg.side, this._agg.vol);
+      this._agg = null;
+    }
+    const mark = this._eval(bar, false);
+    this._pushVol(bar.v || 0);
+    if (this.outline && this.outline.t === bar.t) this.outline = null;
+    if (mark) this.bodies.push(mark);
+    return mark;
+  }
+  /** The forming bar: an outline while all three hold, or null. Does not change the volume average. */
+  see(bar) { this.outline = this._eval(bar, true); return this.outline; }
+}
+
+/**
+ * Divergence arrows from DeltaDivergenceSignal v1.0, evaluated on closed bars.
+ * `bars` are price bars { t, h, l }. `deltaAt(t)` is the cumulative delta close of that bar, or null.
+ * `opt.from` is the page-open time: swing points before it are not used, but bars before it still count as
+ * neighbors. `opt.to` (exclusive) stops early, so a caller can ask for the hollow mark before it confirms.
+ * Returns [{ t, kind: 'bull'|'bear', hollow }]. A hollow mark is dropped when a later bar takes the extreme,
+ * or when the confirmation window ends and the bar is not a swing. A confirmed divergence is solid.
+ * A pass is priceDiff >= MinDivergencePct * 0.01, or deltaDiff >= MinDivergencePct. deltaDiff is the delta
+ * change divided by max(abs(earlier swing delta), 1). The delta side is not multiplied by 0.01.
+ */
+function divergenceMarks(bars, deltaAt, opt) {
+  const o = opt || {};
+  const L = o.swing >= 1 ? Math.round(o.swing) : DIV_SPEC.swing;
+  const minBars = o.minBars >= 1 ? Math.round(o.minBars) : DIV_SPEC.minBars;
+  const minPct = typeof o.minPct === 'number' && isFinite(o.minPct) ? o.minPct : DIV_SPEC.minPct;
+  const priceThr = minPct * 0.01;
+  const fromT = typeof o.from === 'number' && isFinite(o.from) ? o.from : -Infinity;
+  const end = o.to == null ? bars.length : Math.max(0, Math.min(bars.length, o.to));
+  const at = typeof deltaAt === 'function' ? deltaAt : () => null;
+  const marks = [];
+  let lastH = null, lastL = null, holH = null, holL = null;
+  let fromI = 0;
+  while (fromI < end && bars[fromI].t < fromT) fromI++;
+  const dOf = i => { const d = at(bars[i].t); return typeof d === 'number' && isFinite(d) ? d : null; };
+  const swingHigh = c => {
+    const p = bars[c].h;
+    for (let k = 1; k <= L; k++) if (!(p > bars[c - k].h && p > bars[c + k].h)) return false;
+    return true;
+  };
+  const swingLow = c => {
+    const p = bars[c].l;
+    for (let k = 1; k <= L; k++) if (!(p < bars[c - k].l && p < bars[c + k].l)) return false;
+    return true;
+  };
+  const bearish = (i, prev) => {
+    if (!(bars[i].h > prev.price)) return false;
+    const d = dOf(i);
+    if (d === null || !(d < prev.delta)) return false;
+    const priceDiff = prev.price ? (bars[i].h - prev.price) / prev.price : 0;
+    const deltaDiff = (prev.delta - d) / Math.max(Math.abs(prev.delta), 1);
+    return priceDiff >= priceThr || deltaDiff >= minPct;
+  };
+  const bullish = (i, prev) => {
+    if (!(bars[i].l < prev.price)) return false;
+    const d = dOf(i);
+    if (d === null || !(d > prev.delta)) return false;
+    const priceDiff = prev.price ? (prev.price - bars[i].l) / prev.price : 0;
+    const deltaDiff = (d - prev.delta) / Math.max(Math.abs(prev.delta), 1);
+    return priceDiff >= priceThr || deltaDiff >= minPct;
+  };
+  for (let i = 0; i < end; i++) {
+    if (holH && bars[i].h > bars[holH.i].h) holH = null;
+    if (holL && bars[i].l < bars[holL.i].l) holL = null;
+    if (i >= 2 * L + 1) {
+      const c = i - L;
+      if (c >= L + 1 && c >= fromI) {
+        const d = dOf(c);
+        if (swingHigh(c)) {
+          if (holH && holH.i === c) holH = null;
+          if (lastH && c - lastH.i >= minBars && bearish(c, lastH)) marks.push({ t: bars[c].t, kind: 'bear', hollow: false });
+          if (d !== null) lastH = { i: c, price: bars[c].h, delta: d };
+        } else if (holH && holH.i === c) holH = null;
+        if (swingLow(c)) {
+          if (holL && holL.i === c) holL = null;
+          if (lastL && c - lastL.i >= minBars && bullish(c, lastL)) marks.push({ t: bars[c].t, kind: 'bull', hollow: false });
+          if (d !== null) lastL = { i: c, price: bars[c].l, delta: d };
+        } else if (holL && holL.i === c) holL = null;
+      }
+    }
+    if (i >= fromI) {
+      if (lastH && i - lastH.i >= minBars && bearish(i, lastH)) holH = { i };
+      if (lastL && i - lastL.i >= minBars && bullish(i, lastL)) holL = { i };
+    }
+  }
+  if (holH) marks.push({ t: bars[holH.i].t, kind: 'bear', hollow: true });
+  if (holL) marks.push({ t: bars[holL.i].t, kind: 'bull', hollow: true });
+  return marks;
+}
+
+/**
+ * Large-order bubbles. Same-side prints within 100 ms are one circle, at a volume-weighted price and at the
+ * time of the largest print. Area grows with bubbleRadius. Auto mode (bubbles only) uses the session's top 1%
+ * after 20 sided trades, recomputed by recompute() at bar close; until then the numeric floor stands. A bubble
+ * that qualified stays if the floor later rises.
+ */
+class LargeBubbles {
+  constructor(opt) {
+    const o = opt || {};
+    this.window = (o.windowMs > 0 ? o.windowMs : BUBBLE_WINDOW_MS) / 1000;
+    this.coveredFrom = typeof o.coveredFrom === 'number' && !isNaN(o.coveredFrom) ? o.coveredFrom : -Infinity;
+    this._floorAt = typeof o.floorAt === 'function' ? o.floorAt : () => Infinity;
+    this.auto = !!o.auto;
+    this.marks = [];
+    this.open = null;
+    this._hist = new Map();
+    this._n = 0;
+    this._day = null;
+    this.autoFloor = null;
+  }
+  _floorNow(t) {
+    if (this.auto && this._n >= 20 && this.autoFloor !== null) return this.autoFloor;
+    const n = this._floorAt(t);
+    return typeof n === 'number' && isFinite(n) ? n : Infinity;
+  }
+  _flush() {
+    const o = this.open;
+    this.open = null;
+    if (o && o.vol >= o.floor) this.marks.push({ t: o.t, price: o.price, size: o.vol, side: o.side === 1 ? 'buy' : 'sell' });
+  }
+  /** Close an open cluster (the window ran out, or the bar closed and the caller wants it settled). */
+  flush() { this._flush(); }
+  add(t, price, v, side) {
+    if (typeof t !== 'number' || !(t >= this.coveredFrom) || typeof v !== 'number' || !(v > 0) || !isFinite(price)) return;
+    const day = tradeDay(t, 18 * 3600);
+    if (this._day !== null && day !== this._day) {
+      this._flush();
+      this._hist = new Map(); this._n = 0; this.autoFloor = null;
+    }
+    this._day = day;
+    if (side !== 1 && side !== -1) return;
+    if (this.auto) { this._hist.set(v, (this._hist.get(v) || 0) + 1); this._n++; }
+    const open = this.open;
+    if (open && (open.side !== side || t - open.t0 > this.window)) this._flush();
+    if (!this.open) this.open = { side, t0: t, t, price, vol: v, max: v, floor: this._floorNow(t) };
+    else {
+      const o = this.open;
+      o.price = (o.price * o.vol + price * v) / (o.vol + v);
+      o.vol += v;
+      if (v >= o.max) { o.max = v; o.t = t; }
+    }
+  }
+  /** Top 1% of this session's sided trade sizes, after 20 trades. Call at bar close, not per tick. */
+  recompute() {
+    if (!this.auto || this._n < 20) { this.autoFloor = null; return; }
+    const keep = Math.max(1, Math.ceil(this._n * 0.01));
+    const idx = this._n - keep;
+    const sizes = [...this._hist.keys()].sort((a, b) => a - b);
+    let seen = 0;
+    for (const s of sizes) {
+      const c = this._hist.get(s);
+      if (seen + c > idx) { this.autoFloor = s; return; }
+      seen += c;
+    }
+    this.autoFloor = sizes.length ? sizes[sizes.length - 1] : null;
+  }
+}
+
 return {
   VERSION, create, mountThemePanel, DEFAULT_THEME, PRESETS, BACKGROUNDS, LEVEL_COLORS, FLOOR, PAIR, IB_FORMING_DASH, VP_WIDTH, VP_POC_MIN,
   PANE_RATIO, PANE_RATIO_MIN, PANE_RATIO_MAX, PANE_MIN, PRICE_MIN, PANE_GAP,
+  SIGNAL_BULL, SIGNAL_BEAR, ABSORB_SPEC, DIV_SPEC, DEFAULT_FLOORS, BUBBLE_ALPHA,
+  largeFloor, cleanLargeFloors, bubbleRadius, divergenceMarks, Absorption, LargeBubbles,
   util: {
     DAY, tod, tradeDay, zoneSeconds, fmtHM, fmtExact, fmtDay, fmtDate, fmtFull, fmtPrice, fmtVolume, roundTo, niceStep,
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,

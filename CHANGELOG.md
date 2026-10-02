@@ -4,6 +4,7 @@
 
 Page only; no version bump (the release is cut after E2b). Nothing in ChartBridge changes; `nt8/install-files.json`
 (page files) and the updater's write order change. Every workspace chart is still read only.
+- **Absorption bars, delta divergence arrows and large-order bubbles** (Anthony, 2026-10-01). All three start off, so a chart with them off draws as before. Absorption paints the bar cyan (`#00FFFF`) when bullish and yellow (`#FFFF00`) when bearish, or an outline while the bar is still forming. Divergence arrows sit in the cumulative delta pane only. Bubbles are circles at large trades, in the candle colors at low opacity, using the same large-print floors as the tape. None of this sends, changes or blocks an order.
 - **The workspace is ChartBridge's main page**: `http://localhost:8765/` (`live/index.html`) opens it (the default
   layout, `?layout=` as before). The single chart page moved unchanged to `/single.html` (`live/single.html`): its order
   bar, hotkeys and everything else as in 1.11.0. The "Update ready: reload when flat" notice shows in the workspace's top

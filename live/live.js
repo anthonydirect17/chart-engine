@@ -77,14 +77,20 @@ const INDICATORS = [
   { id: 'delta', name: 'Cumulative delta', code: 'CD', short: 'DELTA', letter: 'D', cat: 'volume', sw: 'var(--delta-sw)',
     alias: 'delta cd cvd cumulative order flow',
     opt: 'Market buys minus market sells from 18:00 ET, in a pane below the chart; each trade\'s side comes from ChartBridge 0.3.4. Drag the line above the pane (or focus it and use the arrow keys) to resize it.' },
+  { id: 'bubbles', name: 'Large-order bubbles', code: 'LB', short: 'BUBBLES', letter: 'B', cat: 'volume', sw: 'var(--up-text)',
+    alias: 'bubbles large prints large orders',
+    opt: 'Circles at large trades, from when this page opened. Same-side prints within 100 ms are one circle. Size grows with the square root of the size, in the candle colors.' },
   { id: 'fills', name: 'Fills', code: 'FL', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
+  { id: 'absorb', name: 'Absorption bars', code: 'AB', short: 'ABSORB', letter: 'A', cat: 'signals', sw: '#00FFFF', chip: false,
+    alias: 'absorption absorber bars',
+    opt: 'A bar with a large trade, a volume spike and a rejection close, from when this page opened. Cyan is bullish, yellow is bearish. No chip.' },
 ];
 /* code: the 2-letter chip in a host's slim header (the workspace, E2a; Anthony approved VO VW LV IB VP CD FL). */
 /* Listed in the menu, tagged "coming" and not selectable until they exist (none since the volume profile, 1.6.0, and
    the cumulative delta, 1.7.0). */
 const COMING = [];
-const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }];
+const CATEGORIES = [{ id: 'price', name: 'Price' }, { id: 'volume', name: 'Volume' }, { id: 'trades', name: 'Trades' }, { id: 'signals', name: 'Signals' }];
 const IND_IDS = INDICATORS.map(x => x.id);
 const RECENT_MAX = 5;
 /* The chip strip holds at most 6 pinned indicators (Anthony, 2026-09-29). Read through the exported object, so a
@@ -93,9 +99,9 @@ let api = null;
 const pinMax = () => (api ? api.PIN_MAX : 6);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorb: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony). Absorption bars and large-order bubbles start off.
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false, delta: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, ib: false, vp: false, delta: false, bubbles: false, absorb: false };
 /* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1). */
 const V1_LISTED = ['volume', 'vwap', 'levels', 'fills', 'ib'];
 /*
@@ -148,7 +154,7 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signal-settings-v1', floors: 'live-tape-floors-v1' };
 const BRACKET_SELS = ['custom', '1:1', '1:1.5', '1:2'];
 /** A bracket preset pick as kept: Custom, a ratio, or 'p:' and a saved preset's name (1 to 24 characters); else Custom. */
 function cleanBracketSel(v) {
@@ -162,6 +168,41 @@ function parseRange(v) {
   if (typeof v === 'string') { v = v.trim(); if (!/^\d+$/.test(v)) return null; }
   const n = +v;
   return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null;
+}
+/**
+ * Absorption and bubble settings are per instrument and per chart type. Range size is part of the key, so a 40 range
+ * chart is not a 20 range chart. Time charts are `${root}|${tf}` (NQ|m1). Range charts are `${root}|range:${ticks}`.
+ */
+function signalChartKey(root, tf, range) {
+  if (!ROOTS.includes(root) || !TFS.includes(tf)) return null;
+  if (tf === 'range') {
+    const n = parseRange(range);
+    return n === null ? null : root + '|range:' + n;
+  }
+  return root + '|' + tf;
+}
+function cleanAbsorbSpec(v) {
+  const d = ENGINE.ABSORB_SPEC;
+  const num = (x, lo, hi, def, whole) => {
+    const z = typeof x === 'number' ? x : typeof x === 'string' && String(x).trim() !== '' ? Number(x) : NaN;
+    if (!isFinite(z)) return def;
+    const q = whole ? Math.round(z) : z;
+    return q >= lo && q <= hi ? q : def;
+  };
+  const src = v && typeof v === 'object' ? v : {};
+  return {
+    lookback: num(src.lookback, 1, 500, d.lookback, true),
+    volumeMult: num(src.volumeMult, 1, 100, d.volumeMult, false),
+    rejection: num(src.rejection, 0.05, 0.49, d.rejection, false),
+    windowMs: num(src.windowMs, 1, 10000, d.windowMs, true),
+  };
+}
+function cleanDivSpec(v) {
+  const d = ENGINE.DIV_SPEC;
+  const src = v && typeof v === 'object' ? v : {};
+  const whole = (x, lo, hi, def) => { const n = Math.round(+x); return Number.isInteger(n) && n >= lo && n <= hi ? n : def; };
+  const pct = typeof src.minPct === 'number' && isFinite(src.minPct) && src.minPct >= 0 && src.minPct <= 100 ? src.minPct : d.minPct;
+  return { on: src.on === true, swing: whole(src.swing, 1, 50, d.swing), minBars: whole(src.minBars, 1, 200, d.minBars), minPct: pct };
 }
 /** For a committed entry (Enter or leaving the box): clamp into 1 to 400; null when it is not a number at all. */
 function clampRange(v) {
@@ -223,6 +264,7 @@ function cleanPane(v, paneId) {
   }
   out.recent = cleanIdList(v.recent, RECENT_MAX);
   out.restore = isList(v.restore) ? cleanIdList(v.restore) : null;
+  for (const id of IND_IDS) if (noChip(id)) out.ind[id].pin = false;
   /* 1.7.0 (Anthony): a main pane saved before the delta pane existed has no delta key, so it gets the delta pane on,
      with no chip (review N5). Saved after Hide all (nothing shown, a Restore mix kept), it comes back as it was: the
      delta pane hidden with the rest, and Restore brings back the old mix with the delta pane (review N6). An explicit
@@ -261,12 +303,15 @@ function copyPane(st) {
   return { ind, recent: st.recent.slice(), restore: st.restore ? st.restore.slice() : null };
 }
 const touch = (st, id) => { st.recent = [id].concat(st.recent.filter(x => x !== id)).slice(0, RECENT_MAX); };
-const pinnedCount = st => IND_IDS.filter(id => st.ind[id].on && st.ind[id].pin).length;
+/* Absorption bars never take a chip (chip: false on the indicator). */
+const noChip = id => { const d = INDICATORS.find(x => x.id === id); return !!(d && d.chip === false); };
+const pinnedCount = st => IND_IDS.filter(id => !noChip(id) && st.ind[id].on && st.ind[id].pin).length;
 /* On the chart and shown (in a copy): one that was off gets a chip while the strip has room. */
 function putOn(n, id) {
   const x = n.ind[id];
-  if (!x.on) { x.pin = pinnedCount(n) < pinMax(); x.on = true; }
+  if (!x.on) { x.pin = !noChip(id) && pinnedCount(n) < pinMax(); x.on = true; }
   x.shown = true;
+  if (noChip(id)) x.pin = false;
 }
 const Pane = {
   /** Chips on the strip now (pinned and on the chart), and whether it is full. */
@@ -344,7 +389,7 @@ const Pane = {
   },
   /** Pin or unpin; pinning one that is on the chart while the strip is full is refused (the same state comes back). */
   pin(st, id, pinned) {
-    if (!IND_IDS.includes(id)) return st;
+    if (!IND_IDS.includes(id) || noChip(id)) return st;
     const v = pinned === undefined ? !st.ind[id].pin : !!pinned;
     if (v && !st.ind[id].pin && st.ind[id].on && pinnedCount(st) >= pinMax()) return st;
     const n = copyPane(st);
@@ -489,6 +534,60 @@ function create(storage) {
       if (!Object.keys(set).length) return false;
       return raw.set(KEYS.indicatorColors, Object.assign(savedIndColors(), set));
     },
+    /** Large-print floors (live-tape-floors-v1, shared with the tape): saved whole numbers, else the defaults. */
+    tapeFloors() { return ENGINE.cleanLargeFloors(raw.get(KEYS.floors)); },
+    /** Set one floor ('rth' or 'eth') of one root. Only that field is written, same as the tape's own save. */
+    setTapeFloor(root, which, value) {
+      const n = typeof value === 'string' && String(value).trim() !== '' ? Number(value) : value;
+      if (!ROOTS.includes(root) || (which !== 'rth' && which !== 'eth') || !Number.isInteger(n) || n < 1 || n > 100000) return false;
+      const saved = obj(KEYS.floors), out = {};
+      for (const r of ROOTS) if (own(saved, r) && saved[r] && typeof saved[r] === 'object' && !Array.isArray(saved[r])) out[r] = Object.assign({}, saved[r]);
+      out[root] = Object.assign({}, out[root] || {}, { [which]: n });
+      return raw.set(KEYS.floors, out);
+    },
+    /** Absorption settings for one instrument and chart type. Missing or bad values are the defaults. */
+    absorbSpec(root, tf, range) {
+      const key = signalChartKey(root, tf, range);
+      const all = obj(KEYS.signals), bag = own(all, 'absorb') ? all.absorb : null;
+      return cleanAbsorbSpec(key && bag && own(bag, key) ? bag[key] : null);
+    },
+    /** Write one absorption field for that chart. `partial` is { lookback, volumeMult, rejection, windowMs }, any of them. */
+    setAbsorbSpec(root, tf, range, partial) {
+      const key = signalChartKey(root, tf, range);
+      if (!key || !partial || typeof partial !== 'object') return false;
+      const all = obj(KEYS.signals);
+      const bag = own(all, 'absorb') && all.absorb && typeof all.absorb === 'object' && !Array.isArray(all.absorb) ? Object.assign({}, all.absorb) : {};
+      bag[key] = cleanAbsorbSpec(Object.assign(cleanAbsorbSpec(bag[key]), partial));
+      all.absorb = bag;
+      return raw.set(KEYS.signals, all);
+    },
+    /** Bubble Auto mode for one root (the session's top 1%). Off unless saved on. */
+    bubbleAuto(root) {
+      if (!ROOTS.includes(root)) return false;
+      const all = obj(KEYS.signals), bag = own(all, 'auto') ? all.auto : null;
+      return !!(bag && own(bag, root) && bag[root] === true);
+    },
+    setBubbleAuto(root, on) {
+      if (!ROOTS.includes(root)) return false;
+      const all = obj(KEYS.signals);
+      const bag = own(all, 'auto') && all.auto && typeof all.auto === 'object' && !Array.isArray(all.auto) ? Object.assign({}, all.auto) : {};
+      bag[root] = !!on;
+      all.auto = bag;
+      return raw.set(KEYS.signals, all);
+    },
+    /** Divergence settings for one pane. Off, with the study defaults, until saved. */
+    divergence(paneId) {
+      const all = obj(KEYS.signals), bag = own(all, 'div') ? all.div : null;
+      return cleanDivSpec(paneOk(paneId) && bag && own(bag, paneId) ? bag[paneId] : null);
+    },
+    setDivergence(paneId, partial) {
+      if (!paneOk(paneId) || !partial || typeof partial !== 'object') return false;
+      const all = obj(KEYS.signals);
+      const bag = own(all, 'div') && all.div && typeof all.div === 'object' && !Array.isArray(all.div) ? Object.assign({}, all.div) : {};
+      bag[paneId] = cleanDivSpec(Object.assign(cleanDivSpec(bag[paneId]), partial));
+      all.div = bag;
+      return raw.set(KEYS.signals, all);
+    },
     bracket(root) { return obj(KEYS.bracket)[root]; },
     /** The qty picked last for a root (1.10.0): a whole number 1 to 9, else 1. */
     qty(root) { const v = obj(KEYS.qty)[root]; return Number.isInteger(v) && v >= 1 && v <= 9 ? v : 1; },
@@ -612,7 +711,7 @@ function debounce(fn, ms) {
 }
 
 api = { create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
-  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX, signalChartKey, cleanAbsorbSpec, cleanDivSpec };
 return api;
 });
 
@@ -942,7 +1041,7 @@ function start(container, opt, PAGE) {
   const chart = CE.create($('chart'), {
     barSeconds: 60, precision: 2, tick: 0.25, axisWidth: AXIS_W,
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
-    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false },
+    layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, absorb: !!S.layers.absorb, bubbles: !!S.layers.bubbles, trades: false },
     motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc },
   });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
@@ -1009,6 +1108,94 @@ function start(container, opt, PAGE) {
   let ticksSeen = 0;
   const delays = { feed: [], local: [] };
 
+  /* Absorption, large-order bubbles and CVD divergence. Off unless one of them is on: the tick path is then one
+     check. While on, each trade is O(1). A replay of the store since the page opened runs in slices, like the delta. */
+  let sigOn = false, sigJob = null, sigReplaying = false;
+  const sig = { absorb: null, bubbles: null, bi: 0, barT: null };
+  const sigWanted = () => !!(S.layers.absorb || S.layers.bubbles || (S.layers.delta && prefs.divergence(PANE).on));
+  function barByStart(t) {
+    const bs = chart.bars();
+    let lo = 0, hi = bs.length - 1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (bs[m].t === t) return bs[m];
+      if (bs[m].t < t) lo = m + 1; else hi = m - 1;
+    }
+    return null;
+  }
+  function barTOf(t) {
+    const bs = chart.bars();
+    if (!bs.length) return t;
+    let i = sig.bi;
+    if (i < 0 || i >= bs.length) i = 0;
+    while (i < bs.length - 1 && bs[i + 1].t <= t) i++;
+    while (i > 0 && bs[i].t > t) i--;
+    sig.bi = i;
+    return bs[i].t;
+  }
+  function sigDiv() {
+    if (!S.layers.delta || !prefs.divergence(PANE).on || !D.delta) { chart.setDivergence([]); return; }
+    const bs = chart.bars();
+    const closed = bs.length > 1 ? bs.slice(0, -1) : [];
+    const spec = prefs.divergence(PANE);
+    chart.setDivergence(CE.divergenceMarks(closed, tt => { const d = D.delta.at(tt); return d ? d.c : null; }, {
+      swing: spec.swing, minBars: spec.minBars, minPct: spec.minPct, from: D.liveFrom == null ? Infinity : D.liveFrom,
+    }));
+  }
+  function sigStop() {
+    sigJob = null; sigReplaying = false; sig.barT = null;
+    sig.absorb = null; sig.bubbles = null;
+    chart.setAbsorption(null); chart.setBubbles(null); chart.setDivergence([]);
+  }
+  function sigTick(t, p, v, side, barT) {
+    const changed = sig.barT !== null && barT !== sig.barT;
+    if (sig.bubbles) sig.bubbles.add(t, p, v, side);
+    if (sig.absorb) sig.absorb.add(t, p, v, side, barT);
+    else if (changed && !sigReplaying) { if (sig.bubbles) sig.bubbles.recompute(); sigDiv(); }
+    sig.barT = barT;
+    if (sig.absorb && !sigReplaying) {
+      const bs = chart.bars(), cur = bs.length ? bs[bs.length - 1] : null;
+      if (cur && cur.t === barT) sig.absorb.see(cur);
+    }
+  }
+  function sigStart() {
+    sigJob = null; sigReplaying = false;
+    sigOn = sigWanted();
+    if (!sigOn || !D.ready) { if (!sigOn) sigStop(); return; }
+    const fromT = D.liveFrom == null ? Infinity : D.liveFrom;
+    const floors = prefs.tapeFloors();
+    const floorAt = t => CE.largeFloor(S.root, t, floors);
+    const spec = prefs.absorbSpec(S.root, S.tf, ranges[S.root]);
+    const abs = S.layers.absorb ? new CE.Absorption(Object.assign({ coveredFrom: fromT, floorAt: floorAt }, spec)) : null;
+    const bub = S.layers.bubbles ? new CE.LargeBubbles({ coveredFrom: fromT, floorAt: floorAt, auto: prefs.bubbleAuto(S.root), windowMs: 100 }) : null;
+    sig.absorb = abs; sig.bubbles = bub; sig.bi = 0; sig.barT = null;
+    if (abs) abs.onBar = barT => {
+      const b = barByStart(barT);
+      if (b) abs.close(b);
+      if (!sigReplaying) { if (bub) bub.recompute(); sigDiv(); }
+    };
+    chart.setAbsorption(abs); chart.setBubbles(bub);
+    if (!abs && !bub) { sigDiv(); return; }
+    const st = D.ticks;
+    const job = sigJob = { i: st.indexAt(fromT) };
+    sigReplaying = true;
+    const step = () => {
+      if (destroyed || job !== sigJob) return;
+      const t0 = performance.now();
+      while (job.i < st.length && performance.now() - t0 < 8) {
+        const end = Math.min(st.length, job.i + 20000);
+        for (; job.i < end; job.i++) sigTick(st.time(job.i), st.price(job.i), st.volume(job.i), st.side(job.i), barTOf(st.time(job.i)));
+      }
+      if (job.i < st.length) { later(step, 0); return; }
+      sigJob = null; sigReplaying = false;
+      if (bub) bub.recompute();
+      const bs = chart.bars(), cur = bs.length ? bs[bs.length - 1] : null;
+      if (abs && cur) abs.see(cur);
+      sigDiv();
+    };
+    step();
+  }
+
   function resetData(root) {
     D.root = root; D.name = root; D.ready = false; D.hist = []; D.ticks = new BB.TickStore(); D.m1 = null; D.cur = null; D.day = null; D.trimmed = false;
     D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; ibNote(null);
@@ -1016,6 +1203,7 @@ function start(container, opt, PAGE) {
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
+    sigStop();
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -1056,6 +1244,7 @@ function start(container, opt, PAGE) {
       if (!D.ticks.length) setStatus('No tick history came back from NinjaTrader, so ' + tf.label + ' bars start with the next live tick.', 'warn');
     }
     deltaStart({ rangeFrom: tf.mode === 'range' ? rangeFrom : undefined });   // the delta pane, from the same store, in slices (review S5)
+    sigStart();
     updateLevels();
     applyMarkers();
     legendKey = '';
@@ -1568,7 +1757,7 @@ function start(container, opt, PAGE) {
   }
   /* Off the chart: no delta at all. */
   function deltaStop() { deltaJob = null; deltaSet(null); }
-  function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); }
+  function deltaSet(cd) { D.delta = cd; chart.setDelta(cd); deltaView(); deltaLegend(true); if (sigOn) sigDiv(); }
   const deltaBuilding = () => deltaJob !== null;
   /* The pane's note (only for a ChartBridge that sends no sides, and then nothing else is drawn in it), and why a
      session may count from later than 18:00, for its title. */
@@ -1708,6 +1897,7 @@ function start(container, opt, PAGE) {
       barT = r.bar.t;
     }
     if (D.delta && !deltaFed) D.delta.add(t, v, m.s, barT, m.sm);   // one trade, one bar: never a rebuild per trade
+    if (sigOn && !sigJob && barT !== undefined) sigTick(t, p, v, m.s, barT);   // O(1) while a signal is on; off is one check
     const now = nowMs();
     pushDelay(delays.feed, m.rx - m.u);
     pushDelay(delays.local, now - m.rx);
@@ -2932,6 +3122,7 @@ function start(container, opt, PAGE) {
     if (deltaWanted() && !D.delta && !deltaBuilding()) deltaStart();
     else if (!IS.ind.delta.on && (D.delta || deltaBuilding())) deltaStop();
     else { deltaView(); deltaLegend(true); }
+    sigStart();
     legendKey = '';
     syncIndicators();
   }
@@ -2950,9 +3141,9 @@ function start(container, opt, PAGE) {
       : on ? `<button type="button" class="ind-switch" data-act="toggle" data-id="${d.id}" data-f="sw:${d.id}" aria-pressed="${shown}" aria-label="${shown ? 'Hide' : 'Show'} ${name}" title="${shown ? 'Hide' : 'Show'}; its settings are kept"><span class="knob" aria-hidden="true"></span></button>`
       : `<button type="button" class="ind-add" data-act="toggle" data-id="${d.id}" data-f="add:${d.id}" aria-label="Add ${name} to this chart" title="Add to this chart">${SVG.plus}</button>`;
     /* the pin only on rows on this chart (Anthony); the gear wherever there is something to read */
+    const pinBtn = on && d.chip !== false ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '';
     const tools = coming ? '<span class="ind-ic-sp" aria-hidden="true"></span>'
-      : (on ? `<button type="button" class="ind-ic ind-pin" data-act="pin" data-id="${d.id}" data-f="pin:${d.id}" aria-pressed="${pinned}" aria-label="${pinned ? 'Unpin ' + name + ' from' : 'Pin ' + name + ' to'} the chip strip" title="${pinned ? 'Unpin from' : 'Pin to'} the chip strip">${SVG.pin}</button>` : '') +
-        `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
+      : pinBtn + `<button type="button" class="ind-ic" data-act="gear" data-id="${d.id}" data-f="gear:${d.id}" aria-expanded="${open}"${open ? ` aria-controls="${setId}"` : ''} aria-label="${name} settings" title="Settings">${SVG.gear}</button>`;
     const x = on ? `<button type="button" class="ind-ic" data-act="remove" data-id="${d.id}" data-f="x:${d.id}" aria-label="Take ${name} off this chart" title="Take off this chart">${SVG.x}</button>` : '';
     const set = open && !coming ? `<div class="ind-set" id="${setId}" data-id="${d.id}"><div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>${optionsHtml(d.id)}${colorsHtml(d.id)}</div>` : '';
     return `<div class="ind-item${coming ? ' is-coming' : ''}${shown ? ' is-shown' : ''}" data-id="${d.id}"><div class="ind-row">${lead}` +
@@ -2962,13 +3153,50 @@ function start(container, opt, PAGE) {
   /* An indicator's real options in its gear panel (LivePrefs INDICATOR_OPTIONS): today the volume profile's hours. */
   const OPTION_TEXT = { vp: { session: { label: 'Hours', values: { full: ['Session', 'Every trade from 18:00 ET'], rth: ['RTH', '9:30 to 16:00 ET (13:00 on NYSE early closes)'] } } },
     delta: { show: { label: 'Show', values: { cum: ['Cumulative', 'Candles of buys minus sells, from 0 at 18:00 ET'], bar: ['Bar delta', 'Each bar\'s own buys minus sells, above or below zero'] } } } };
+  function numRow(sig, key, label, value, step) {
+    const id = p + 'sig-' + sig + '-' + key;
+    return `<label class="ind-num" for="${id}"><span>${esc(label)}</span><input type="number" id="${id}" data-sig="${sig}" data-k="${key}" value="${value}" step="${step}" inputmode="decimal"></label>`;
+  }
+  function floorRows() {
+    const f = prefs.tapeFloors()[S.root] || { rth: '', eth: '' };
+    return numRow('floor', 'rth', 'RTH floor', f.rth, '1') + numRow('floor', 'eth', 'Overnight floor', f.eth, '1');
+  }
+  /* Number settings for absorption, bubbles and divergence. Enum options stay in INDICATOR_OPTIONS. */
+  function signalHtml(id) {
+    if (id === 'absorb') {
+      const s = prefs.absorbSpec(S.root, S.tf, ranges[S.root]);
+      return '<div class="ind-sig">' + numRow('absorb', 'lookback', 'Lookback bars', s.lookback, '1') +
+        numRow('absorb', 'volumeMult', 'Volume multiple', s.volumeMult, '0.1') +
+        numRow('absorb', 'rejection', 'Rejection zone', s.rejection, '0.01') +
+        numRow('absorb', 'windowMs', 'Window ms', s.windowMs, '1') +
+        floorRows() +
+        '<span class="ind-set-note">Per instrument and chart type. The floors are the large-print floors, shared with the tape. Bullish at or over 1 minus the zone, bearish at or under it.</span></div>';
+    }
+    if (id === 'bubbles') {
+      const auto = prefs.bubbleAuto(S.root);
+      return '<div class="ind-sig">' + floorRows() +
+        `<button type="button" data-act="auto" data-id="bubbles" data-f="auto:bubbles" aria-pressed="${auto}">${auto ? 'Auto on' : 'Auto off'}</button>` +
+        '<span class="ind-set-note">Auto uses this session\'s top 1% after 20 trades. Until then the floor above stands. Off uses the floor only.</span></div>';
+    }
+    if (id === 'delta') {
+      const d = prefs.divergence(PANE);
+      return '<div class="ind-sig">' +
+        `<button type="button" data-act="div" data-id="delta" data-f="div:delta" aria-pressed="${d.on}">${d.on ? 'Show divergences' : 'Divergences off'}</button>` +
+        numRow('div', 'swing', 'Swing bars each side', d.swing, '1') +
+        numRow('div', 'minBars', 'Min bars between', d.minBars, '1') +
+        numRow('div', 'minPct', 'Min divergence', d.minPct, '0.01') +
+        '<span class="ind-set-note">Arrows in this pane only. A hollow arrow is early; it fills in when the swing confirms.</span></div>';
+    }
+    return '';
+  }
   function optionsHtml(id) {
-    if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return '';
+    const extra = signalHtml(id);
+    if (!Object.prototype.hasOwnProperty.call(LP.INDICATOR_OPTIONS, id)) return extra;
     return Object.keys(LP.INDICATOR_OPTIONS[id]).map(k => {
       const t = OPTION_TEXT[id][k], cur = S.options[id][k], lblId = p + 'indOpt-' + id + '-' + k;
       const btns = LP.INDICATOR_OPTIONS[id][k].map(v => `<button type="button" data-act="opt" data-id="${id}" data-k="${k}" data-v="${v}" data-f="opt:${id}:${k}:${v}" aria-pressed="${v === cur}" title="${esc(t.values[v][1])}">${esc(t.values[v][0])}</button>`).join('');
       return `<div class="ind-set-opt"><span class="glabel" id="${lblId}">${esc(t.label)}</span><span class="seg sans ind-opt" role="group" aria-labelledby="${lblId}">${btns}</span><span class="ind-set-note">${esc(t.values[cur][1])}</span></div>`;
-    }).join('');
+    }).join('') + extra;
   }
   /* An indicator's colors in its gear panel (1.9.0): a picker and a hex box each, and Default colors. Every chart on
      this page and its storage prefix shares them, as the Colors panel's; an indicator preset saves them all. */
@@ -3098,9 +3326,16 @@ function start(container, opt, PAGE) {
   function indAction(act, id) {
     M.note = '';
     if (act === 'toggle') {
-      const adding = !IS.ind[id].on, full = LP.Pane.pinFull(IS);
-      if (adding && full) M.note = LP.INDICATORS.find(d => d.id === id).name + ' added without a chip. ' + STRIP_FULL();
+      const def = LP.INDICATORS.find(d => d.id === id), adding = !IS.ind[id].on, full = LP.Pane.pinFull(IS);
+      if (adding && full && def && def.chip !== false) M.note = def.name + ' added without a chip. ' + STRIP_FULL();
       changeIndicators(LP.Pane.toggleOp(IS, id));
+    } else if (act === 'auto') {
+      prefs.setBubbleAuto(S.root, !prefs.bubbleAuto(S.root));
+      sigStart(); renderMenu();
+    } else if (act === 'div') {
+      const d = prefs.divergence(PANE);
+      prefs.setDivergence(PANE, { on: !d.on });
+      sigStart(); renderMenu();
     } else if (act === 'remove') { if (M.gear === id) M.gear = null; changeIndicators(st => LP.Pane.remove(st, id)); }
     else if (act === 'pin') {
       const v = !IS.ind[id].pin;
@@ -3181,7 +3416,15 @@ function start(container, opt, PAGE) {
     });
     panel.addEventListener('change', e => {
       const t = e.target, k = t.dataset.hk;
-      if (k && panel.contains(t)) { t.removeAttribute('aria-invalid'); t.value = IC[k]; }   // leaving the box puts the color in use back
+      if (k && panel.contains(t)) { t.removeAttribute('aria-invalid'); t.value = IC[k]; return; }   // leaving the box puts the color in use back
+      if (!t.dataset.sig || !panel.contains(t)) return;
+      const key = t.dataset.k, raw = t.value.trim(), num = raw === '' ? NaN : Number(raw);
+      let ok = false;
+      if (t.dataset.sig === 'absorb') ok = prefs.setAbsorbSpec(S.root, S.tf, ranges[S.root], { [key]: num });
+      else if (t.dataset.sig === 'floor') ok = prefs.setTapeFloor(S.root, key, num);
+      else if (t.dataset.sig === 'div') ok = prefs.setDivergence(PANE, { [key]: num });
+      if (!ok) t.setAttribute('aria-invalid', 'true');
+      else { t.removeAttribute('aria-invalid'); sigStart(); renderMenu(); }
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
