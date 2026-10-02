@@ -108,8 +108,17 @@
 .chart-live .ind-num-u { font: 500 11px var(--mono); color: var(--text3); }
 .chart-live .ind-num-in { font-variant-numeric: tabular-nums; }
 .chart-live .ind-colors-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
-/* the Colors panel scrolls when it is taller than the window: on this page it holds the preset groups (1.9.0) */
-.chart-live .ce-theme-panel { max-height: calc(100vh - 96px); overflow-y: auto; overscroll-behavior: contain; }
+/* The Colors panel (1.14.0, Anthony: "no scrolling, ever"): two columns, the colors on the left and the preset groups
+   (1.9.0) on the right, so it fits a 1366x768 screen whole, with nothing to scroll; one column on a phone */
+.chart-live .ce-theme-panel:not([hidden]) { display: block; width: 560px; max-width: calc(100vw - 16px); columns: 2; column-gap: 20px; }
+.chart-live .ce-theme-panel > * { break-inside: avoid; margin-bottom: 10px; }
+.chart-live .ce-theme-panel > :last-child { margin-bottom: 0; }
+.chart-live .ce-theme-panel > .ce-slot { break-before: column; }
+.chart-live .ce-theme-panel > .ce-reset { display: block; }
+@media (max-width: 600px) {
+  .chart-live .ce-theme-panel:not([hidden]) { columns: 1; max-height: calc(100vh - 96px); overflow-y: auto; }
+  .chart-live .ce-theme-panel > .ce-slot { break-before: auto; }
+}
 /* color presets in the Colors panel (1.9.0): the panel's own colors (--ce-*) */
 .chart-live .pr-group { display: grid; gap: 6px; }
 .chart-live .pr-list { display: grid; gap: 4px; }
@@ -157,6 +166,11 @@
 .chart-live .ind-chip[aria-pressed="true"] { background: var(--s3); color: var(--text); border-style: solid; }
 .chart-live .ind-chip .sw { width: 12px; height: 3px; border-radius: 2px; background: var(--sw); }
 .chart-live .ind-chip-l { display: none; }
+/* the page's strip (1.14.0, as the workspace's headers): 2-letter chips; room kept for six, so pinning never moves the
+   toolbar, and nothing scrolls or is cut */
+.chart-live .ind-chips.codes { gap: 4px; min-width: calc(6 * 46px + 5 * 4px); overflow: visible; }
+.chart-live .ind-chips.codes .ind-chip { padding: 0 9px; gap: 6px; }
+.chart-live .ind-chips.codes .ind-chip .sw { width: 9px; }
 .chart-live .ind-chips.is-narrow { gap: 4px; }
 .chart-live .ind-chips.is-narrow .ind-chip { width: 30px; padding: 0; flex-direction: column; justify-content: center; gap: 3px; font-size: 10px; letter-spacing: 0; }
 .chart-live .ind-chips.is-narrow .ind-chip .sw { height: 2px; order: 2; }   /* the letter over its line */
@@ -193,6 +207,10 @@
 .chart-live .lg2, .chart-live .lg3 { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--lg-dim); display: flex; flex-wrap: wrap; gap: 2px 10px; }
 .chart-live .lg2 span span, .chart-live .lg3 span span { color: var(--lg-head); }
 .chart-live .lg2 .up { color: var(--up-text); }
+/* readouts (1.14.0): the time left in the bar, the ATR, the change from the prior settlement; quiet, numbers in mono */
+.chart-live .legend .lg-ro { font: 400 12px var(--mono); font-variant-numeric: tabular-nums; color: var(--lg-text2); white-space: nowrap; }
+.chart-live .legend .lg-ro.up { color: var(--up-text); }
+.chart-live .legend .lg-ro.down { color: var(--down-text); }
 .chart-live .lg2 .down { color: var(--down-text); }
 .chart-live .lg3 .vw { color: var(--vwap-sw); }
 .chart-live .lg3 .vpc { color: var(--vp-poc); }
@@ -331,6 +349,26 @@
 .chart-live .hk-note.warn { color: var(--warn); }
 .chart-live .hk-note.error { color: var(--loss); }
 .chart-live .hk-foot { margin: 6px 8px 4px; font-size: 11px; line-height: 1.45; color: var(--text2); }
+/* 1.14.0: the page's Settings also hold the chart's general controls (Glide, Range style, grid lines, room right), the
+   PIN and the versions; a row each: its name, then the control in the toolbar's own style */
+.chart-live .set-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 8px; }
+.chart-live .set-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
+.chart-live .set-name { font-size: 13px; color: var(--text); }
+.chart-live .set-row .seg button { padding: 4px 10px; }
+.chart-live .set-row.set-pin { padding: 2px 8px 0; border-top: 1px solid var(--line); margin-top: 4px; }
+.chart-live .set-ver { margin: 2px 8px 2px; font: 400 11px var(--mono); color: var(--text3); }
+/* the page's small menu (1.14.0): the drawing tools and Reset view */
+.chart-live .more-wrap { position: relative; display: inline-block; flex: none; }
+.chart-live .more-btn { min-width: 34px; padding-inline: 8px; font-size: 16px; line-height: 1; }
+.chart-live .more-btn[aria-expanded="true"] { background: var(--s3); border-color: var(--accent-border); }
+.chart-live .more-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; display: flex; flex-direction: column; min-width: 170px; padding: 4px; box-sizing: border-box; background: var(--panel, #0B1016); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--ce-shadow, 0 12px 32px rgba(0,0,0,.45)); }
+.chart-live .more-menu.set-left { right: auto; left: 0; }
+.chart-live .more-menu[hidden] { display: none; }
+.chart-live .more-menu button { text-align: left; border: 0; background: transparent; color: var(--text); font: 500 13px var(--sans); padding: 7px 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+.chart-live .more-menu button:hover, .chart-live .more-menu button:focus-visible { background: var(--accent-tint); color: var(--accent-soft); outline: none; }
+.chart-live .more-menu button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-soft); }
+/* the LIVE pill carries the versions in its tooltip (the legend lets the pointer through to the chart; the pill takes it) */
+.chart-live .legend [id$="connPill"] { pointer-events: auto; cursor: default; }
 
 @media (max-width: 720px) {
   .chart-live .obar { gap: 6px 8px; padding: 6px 8px; }
@@ -357,13 +395,14 @@
 .chart-live.compact .legend .lg1 b { font: 600 11px/17px var(--sans); order: 1; }
 .chart-live.compact .legend .tfbadge { order: 2; }
 .chart-live.compact .legend .lg2 > :nth-child(5) { order: 3; }
-.chart-live.compact .legend [id$="lgChg"] { order: 4; }
+.chart-live.compact .legend :is([id$="lgChg"], [id$="lgSet"]) { order: 4; }
 .chart-live.compact .legend [id$="lgVwWrap"] { order: 5; }
 .chart-live.compact .legend [id$="lgDelta"] { order: 6; }
 .chart-live.compact .legend .lg2 > :nth-child(2) { order: 7; }
 .chart-live.compact .legend .lg2 > :nth-child(3) { order: 8; }
 .chart-live.compact .legend .lg2 > :nth-child(4) { order: 9; }
-.chart-live.compact .legend .lg2 > :nth-child(7) { order: 10; }
+.chart-live.compact .legend .lg2 > :nth-child(8) { order: 10; }
+.chart-live.compact .legend :is([id$="lgBar"], [id$="lgAtr"]) { order: 13; font-size: 11px; }
 .chart-live.compact .legend [id$="lgFill"] { order: 11; }
 .chart-live.compact .legend [id$="lgVp"] { order: 12; }
 .chart-live.compact .legend :is([id$="lgSrc"], [id$="connPill"], [id$="lgTime"]) { display: none; }

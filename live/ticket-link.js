@@ -21,7 +21,8 @@
  * A forward the holder gets later than ACT_MS after it was made is not acted on (answered "too late"); the asking window
  * waits ANSWER_MS for an answer, then says nothing was sent. So a late answer cannot have sent anything, except on a
  * PC so busy that the answer itself takes longer than the gap between the two (it is then shown as it comes: onLate).
- * The stamps are the browser's own clock (performance.timeOrigin + performance.now(), the same for every window); a
+ * The stamps are the page's clock (live.js's pageClock: performance.now() on a base that follows the PC's clock, the same
+ * for every window); a
  * forward stamped more than CLOCK_SLACK_MS in the future is refused too (the clocks cannot be trusted then).
  *
  * No DOM; it also loads in Node for test/ticket-link.test.js (pass `channel`, `locks` and `now`).
@@ -43,7 +44,9 @@ const NO_TICKET = 'No window has the order ticket: nothing was sent. Add the tic
 const NO_CHANNEL = 'This browser cannot reach the order ticket\'s window (no BroadcastChannel): nothing was sent.';
 const BAD_CLOCK = 'The order ticket\'s window could not tell when this was made: nothing was sent.';
 const CLOCK_SLACK_MS = 50;
-const browserNow = () => (typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now());
+/* the page's clock (live.js, LivePrefs.pageClock, 1.14.0): it follows Windows clock fixes, as the local delay does */
+const browserNow = () => (typeof self !== 'undefined' && self.ChartLivePageClock ? self.ChartLivePageClock.now()
+  : typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin + performance.now() : Date.now());
 
 function create(o) {
   const wid = o.wid || ('w' + Math.random().toString(36).slice(2, 10));
@@ -188,5 +191,5 @@ function browserChannel(name) {
   return ch;
 }
 
-return { create, browserChannel, LOCK, CHANNEL, ANSWER_MS, ACT_MS, MOVE_MS, CLOCK_SLACK_MS, NO_ANSWER, TOO_LATE, NO_TICKET, NO_CHANNEL, BAD_CLOCK };
+return { create, browserChannel, browserNow, LOCK, CHANNEL, ANSWER_MS, ACT_MS, MOVE_MS, CLOCK_SLACK_MS, NO_ANSWER, TOO_LATE, NO_TICKET, NO_CHANNEL, BAD_CLOCK };
 });

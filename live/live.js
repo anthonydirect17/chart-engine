@@ -17,7 +17,8 @@
  * tab wrote its whole in-memory copy back, which put NQ's range back to 20 when another tab saved).
  *
  * Keys (versioned):
- *   live-settings-v2    { root, tf, glide, rangeMode }
+ *   live-settings-v2    { root, tf, glide, rangeMode, grid, room } (grid 'off' | 'on' and room, the px right of the last
+ *                       bar (0, 40, 80, 160), 1.14.0)
  *   live-range-v2       { NQ: 40, ... } range bar size in ticks, per instrument root; only roots set by hand
  *   live-indicators-v2  { <paneId>: { ind: { <id>: { on, shown, pin } }, recent: [ids], restore: [ids] | null } }
  *                       the Indicators menu per chart pane (1.6.0): on = on this chart, shown = drawn (hidden keeps it on
@@ -60,6 +61,10 @@ const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
 const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range'];
 const GLIDES = ['smooth', 'fast', 'off'];
 const RANGE_MODES = ['nt', 'traded'];
+/* 1.14.0 (Anthony): grid lines off by default; the room right of the last bar in CSS px (the same on screen at every zoom) */
+const GRIDS = ['off', 'on'];
+const ROOMS = [0, 40, 80, 160];
+const DEFAULT_ROOM = 80;
 const DEFAULT_RANGE = { MNQ: 20, NQ: 20, MES: 8, ES: 8 };
 const RANGE_MIN = 1, RANGE_MAX = 400;
 /*
@@ -477,6 +482,8 @@ function create(storage) {
         tf: TFS.includes(s.tf) ? s.tf : 'm1',
         glide: GLIDES.includes(s.glide) ? s.glide : 'smooth',
         rangeMode: RANGE_MODES.includes(s.rangeMode) ? s.rangeMode : 'nt',
+        grid: GRIDS.includes(s.grid) ? s.grid : 'off',
+        room: ROOMS.includes(s.room) ? s.room : DEFAULT_ROOM,
       };
     },
     setSetting(field, value) { return patch(KEYS.settings, field, value); },
@@ -704,6 +711,37 @@ function localPresetStore(storage) {
   };
 }
 
+/*
+ * The page's clock (1.14.0, Anthony's item 9): the browser's monotonic clock (performance.now()) on a wall-clock base. The
+ * base starts at performance.timeOrigin (the page load), and check() moves it to the PC's clock (Date.now()) whenever the
+ * two differ by more than 50 ms, as ChartBridge re-anchors its own every 5 s: after Windows time sync steps the PC clock
+ * the page follows within 5 s instead of showing a false "local -99 ms (PC clock behind)" until it reloads. now() stays
+ * one addition (the live tick path's cost is unchanged), and every user of it (the local delay, the ticket link's
+ * stamps) reads the same clock. Options: perfNow, wallNow (functions), origin (the first base), slackMs (50), everyMs (5000).
+ */
+const CLOCK_SLACK_MS = 50, CLOCK_EVERY_MS = 5000;
+function pageClock(o) {
+  const opt = o || {};
+  const perf = opt.perfNow, wall = opt.wallNow;
+  const slack = isFinite(opt.slackMs) ? +opt.slackMs : CLOCK_SLACK_MS, every = isFinite(opt.everyMs) ? +opt.everyMs : CLOCK_EVERY_MS;
+  let base = typeof opt.origin === 'number' && isFinite(opt.origin) && opt.origin > 0 ? opt.origin : wall() - perf();
+  let timer = null, steps = 0;
+  const now = () => base + perf();
+  /** Re-anchor when the page's clock and the PC's differ by more than slackMs: returns the step taken in ms (0: none). */
+  function check() {
+    const d = wall() - now();
+    if (!(Math.abs(d) > slack)) return 0;
+    base += d; steps++;
+    return d;
+  }
+  return {
+    now, check, everyMs: every, slackMs: slack,
+    get steps() { return steps; },
+    start(setIntervalFn) { if (timer === null) timer = (setIntervalFn || setInterval)(check, every); return this; },
+    stop(clearIntervalFn) { if (timer !== null) (clearIntervalFn || clearInterval)(timer); timer = null; },
+  };
+}
+
 /** Runs fn after `ms` of quiet; flush() runs a waiting call now (on commit, or when the page is closing). */
 function debounce(fn, ms) {
   let timer = null, args = null;
@@ -714,7 +752,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES,
+api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 6, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -743,6 +781,8 @@ const TF = {
 };
 const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 20, fit: 60, follow: 60 }, off: { candle: 0, fit: 0, follow: 0 } };
 const SCRIPT = document.currentScript;
+/* One clock for the whole page (every chart, the workspace, the ticket link's stamps): it follows Windows clock fixes. */
+const PAGE_CLOCK = window.ChartLivePageClock || (window.ChartLivePageClock = LP.pageClock({ perfNow: () => performance.now(), wallNow: () => Date.now(), origin: performance.timeOrigin }).start());
 const EMBED_PREFIX = 'embed:';            // storage prefix when a host passes none (live/EMBED.md)
 let mountCount = 0;
 /* The "/" key opens the Indicators menu of the chart under the mouse (1.6.0): each mounted chart notes when the pointer
@@ -829,11 +869,24 @@ function markup(p, o) {
 `;
   const armPill = o.trading ? `<span class="pill armed" id="${p}armPill" hidden>ARMED</span>` : '';
   /* Settings (1.11.0): the trading hotkeys. Only on the trading page; a mounted chart has none. */
+  /* 1.14.0 (Anthony: the single chart page gets the workspace's cleanup): the general controls (Glide, Range style, grid
+     lines, the room right of price, ChartBridge's PIN) live in Settings, with the versions; the drawing tools and Reset
+     view in a small menu, as in a workspace chart's header. A host's chart (no trading) keeps its toolbar as it was. */
+  const seg = (id, label, list) => `<div class="seg sans" id="${p}${id}" role="group" aria-labelledby="${p}${id}Label">${list.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('')}</div>`;
+  const rangeModeSel = `<select class="acct-sel range-mode" id="${p}rangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
+          <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select>`;
   const settings = !o.trading ? '' : `
     <div class="set-wrap" id="${p}setWrap">
-      <button type="button" class="btn set-btn" id="${p}setBtn" aria-expanded="false" aria-controls="${p}setPanel" aria-haspopup="dialog" title="Settings: trading hotkeys">Settings <span class="ind-caret" aria-hidden="true"></span></button>
+      <button type="button" class="btn set-btn" id="${p}setBtn" aria-expanded="false" aria-controls="${p}setPanel" aria-haspopup="dialog" title="Settings: the chart, trading hotkeys, PIN">Settings <span class="ind-caret" aria-hidden="true"></span></button>
       <div class="set-panel" id="${p}setPanel" role="dialog" aria-label="Settings" hidden>
         <div class="ind-head"><span class="ind-title">Settings</span></div>
+        <div class="ind-cap" id="${p}chartCap">Chart</div>
+        <div class="set-rows" role="group" aria-labelledby="${p}chartCap">
+          <div class="set-row"><span class="set-name" id="${p}glideSegLabel">Glide</span>${seg('glideSeg', 'Glide', [['smooth', 'Smooth'], ['fast', 'Fast'], ['off', 'Off']])}</div>
+          <div class="set-row"><label class="set-name" for="${p}rangeMode">Range style</label>${rangeModeSel}</div>
+          <div class="set-row"><span class="set-name" id="${p}gridSegLabel">Grid lines</span>${seg('gridSeg', 'Grid lines', [['off', 'Off'], ['on', 'On']])}</div>
+          <div class="set-row"><span class="set-name" id="${p}roomSegLabel" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>${seg('roomSeg', 'Room right', [['0', 'None'], ['40', '40 px'], ['80', '80 px'], ['160', '160 px']])}</div>
+        </div>
         <div class="ind-cap" id="${p}hkCap">Hotkeys</div>
         <div class="hk-list" id="${p}hkList" role="group" aria-labelledby="${p}hkCap">${OT.HOTKEY_ACTIONS.map(a => `
           <div class="hk-row" data-hk="${a.id}">
@@ -843,7 +896,20 @@ function markup(p, o) {
             <span class="hk-note" id="${p}hkNote-${a.id}" role="status"></span>
           </div>`).join('')}
         </div>
-        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off, like the Flatten button. Never while typing in a box or with a menu open. Saved in this browser.</p>
+        <p class="hk-foot">Click a box, then press the keys. Each does what its button does: Buy MKT and Sell MKT with the Qty and bracket shown, B/E, and Close (the Flatten button) on this account and instrument; Flatten all flattens every instrument with a position or a working order on this account. Buy, Sell and B/E need Armed; Close and Flatten all work with Armed off, like the Flatten button. Never while typing in a box or with a menu open. Saved in this browser.</p>${o.pin ? `
+        <div class="set-row set-pin" id="${p}pinRow" hidden><span class="set-name">ChartBridge PIN</span><button type="button" class="btn" id="${p}pinBtn" title="Change this PC's ChartBridge PIN">Change PIN</button></div>` : ''}
+        <p class="set-ver" id="${p}setVer"></p>
+      </div>
+    </div>`;
+  /* the drawing tools and Reset view (the page): a small menu, as in a workspace chart's header */
+  const more = !o.trading ? '' : `
+    <div class="more-wrap" id="${p}moreWrap">
+      <button type="button" class="btn more-btn" id="${p}moreBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="${p}moreMenu" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>
+      <div class="more-menu" id="${p}moreMenu" role="menu" aria-label="Drawing tools and view" hidden>
+        <button type="button" role="menuitem" id="${p}toolTrend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
+        <button type="button" role="menuitem" id="${p}toolHline" aria-pressed="false" title="Horizontal line: click a price">Price line</button>
+        <button type="button" role="menuitem" id="${p}clearDraw" title="Remove all drawings on this instrument">Clear drawings</button>
+        <button type="button" role="menuitem" id="${p}resetBtn">Reset view</button>
       </div>
     </div>`;
   return `
@@ -871,10 +937,9 @@ function markup(p, o) {
         <button type="button" data-v="h1">1h</button>
         <button type="button" data-v="range">Range</button>
       </div>
-      <span class="range-box" id="${p}rangeBox" hidden><label class="range-box" for="${p}rangeTicks"><input id="${p}rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="${p}rangeUnit">ticks</span></label>
+      <span class="range-box" id="${p}rangeBox" hidden><label class="range-box" for="${p}rangeTicks"><input id="${p}rangeTicks" type="number" min="1" max="400" step="1" inputmode="numeric"><span id="${p}rangeUnit">ticks</span></label>${o.trading ? '' : `
         <label class="glabel" for="${p}rangeMode">Range style</label>
-        <select class="acct-sel range-mode" id="${p}rangeMode" title="NinjaTrader: every bar is exactly the range, like NinjaTrader's Range bars (a jump is filled with bars at prices that may not have traded). Traded prices only: a jump opens the next bar at the traded price, so a bar can end short of the range.">
-          <option value="nt">NinjaTrader</option><option value="traded">Traded prices only</option></select></span>
+        ${rangeModeSel}`}</span>
     </div>
 
     <div class="group ind-group">
@@ -893,9 +958,9 @@ function markup(p, o) {
           <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
         </div>
       </div>
-      <div class="ind-chips" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
+      <div class="ind-chips${o.trading ? ' codes' : ''}" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
     </div>
-
+${o.trading ? more : `
     <div class="group" role="group" aria-label="Drawing tools">
       <button type="button" class="btn" id="${p}toolTrend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
       <button type="button" class="btn" id="${p}toolHline" aria-pressed="false" title="Horizontal line: click a price">Price line</button>
@@ -903,18 +968,17 @@ function markup(p, o) {
     </div>
 
     <div class="group">
-      <span class="glabel" id="${p}glideLabel">Glide</span>
-      <div class="seg sans" id="${p}glideSeg" role="group" aria-labelledby="${p}glideLabel">
+      <span class="glabel" id="${p}glideSegLabel">Glide</span>
+      <div class="seg sans" id="${p}glideSeg" role="group" aria-labelledby="${p}glideSegLabel">
         <button type="button" data-v="smooth">Smooth</button>
         <button type="button" data-v="fast">Fast</button>
         <button type="button" data-v="off">Off</button>
       </div>
-    </div>
+    </div>`}
 
     <span id="${p}colorsHost"></span>
-${settings}
-    <button type="button" class="btn" id="${p}resetBtn">Reset view</button>${o.pin ? `
-    <button type="button" class="btn" id="${p}pinBtn" title="Change this PC's ChartBridge PIN" hidden>PIN</button>` : ''}
+${settings}${o.trading ? '' : `
+    <button type="button" class="btn" id="${p}resetBtn">Reset view</button>`}
   </header>
 ${obar}
   <div class="alert" id="${p}alertBar" role="alert" hidden>
@@ -929,8 +993,8 @@ ${obar}
   <main class="stage">
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
     <div class="legend" id="${p}legend">
-      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}</div>
-      <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span>Vol <span id="${p}lgV">-</span></span></div>
+      <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
+      <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgDelta" hidden><span id="${p}lgDl">Delta</span> <span class="dv" id="${p}lgDv">-</span><span class="dunk" id="${p}lgDu" hidden></span></span><span id="${p}lgFill"></span></div>
     </div>
     <div class="notice" id="${p}notice" hidden>
@@ -1052,7 +1116,7 @@ function start(container, opt, PAGE) {
   let etOffset = U.zoneSeconds(Date.now() / 1000) - Date.now() / 1000;
   every(() => { etOffset = U.zoneSeconds(Date.now() / 1000) - Date.now() / 1000; }, 60000);
   const etNow = () => Date.now() / 1000 + etOffset;
-  const nowMs = () => (performance.timeOrigin || Date.now() - performance.now()) + performance.now();
+  const nowMs = PAGE_CLOCK.now;                        // 1.14.0: follows the PC's clock (LivePrefs.pageClock)
 
   let IC = prefs.indicatorColors();                    // the indicators' colors (1.9.0), set in their gears
   const AXIS_W = 78;                                   // the price axis width (the engine's default), so the page knows where the plot ends
@@ -1061,6 +1125,7 @@ function start(container, opt, PAGE) {
     session: { start: SESSION, rthStart: 34200, rthEnd: 57600 },
     layers: { volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.ib, vp: S.layers.vp, delta: S.layers.delta, trades: false,
       absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' },
+    grid: S.grid === 'on', room: S.room,                 // 1.14.0: grid lines (off by default) and the room right of price
     motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
   });
   chart.setDeltaView({ mode: S.options.delta.show, ratio: prefs.paneHeight(PANE, 'delta') });   // the delta pane (1.7.0), per pane
@@ -1183,6 +1248,7 @@ function start(container, opt, PAGE) {
     updateLevels();
     applyMarkers();
     legendKey = '';
+    readouts();
   }
 
   /*
@@ -2011,6 +2077,8 @@ function start(container, opt, PAGE) {
   }
   accountPeers.add({ prefix: PREFIX, follow: followAccount });
   cleanups.push(() => { for (const peer of accountPeers) if (peer.follow === followAccount) accountPeers.delete(peer); });
+  // 1.14.0: Glide, Range style, grid lines and the room right of price changed in another tab or the workspace
+  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.settings) refreshSettings(); });
   listen(window, 'storage', e => {
     if (e.key !== PREFIX + 'live-account-v1') return;
     try { followAccount(JSON.parse(e.newValue)); } catch (err) { /* not ours */ }
@@ -2124,8 +2192,10 @@ function start(container, opt, PAGE) {
         PROFILE = Array.isArray(m.features) && m.features.includes('profile');
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
+        readSettlements(m.instruments); readouts();
         $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
         bridgeVersion = typeof m.version === 'string' ? m.version : '';
+        syncVersion();
         syncAccounts(m.accounts || []);
         subscribe(S.root);
         if (T) T.hello(m);                                 // protocol v2 (m.trading): sign in; ChartBridge 0.2 has no trading field
@@ -2158,6 +2228,7 @@ function start(container, opt, PAGE) {
         onProfile(m);
         break;
       case 'tick': onTick(m); break;
+      case 'settlement': if (typeof m.root === 'string') { settlements[m.root] = { p: typeof m.p === 'number' ? m.p : null, date: m.date || '' }; readouts(); } break;   // 0.3.7: the prior settlement changed
       case 'execs': for (const f of m.list || []) addFill(f); syncAccounts(); applyMarkers(); break;
       case 'exec': addFill(m); applyMarkers(); break;
       /* 1.13.0: a warning (for example a mistyped maxTicksAway in config.txt, which means NO limit) stays on screen
@@ -2375,7 +2446,15 @@ function start(container, opt, PAGE) {
     const map = { connecting: ['CONNECTING', ''], loading: ['LOADING', ''], live: ['LIVE', 'live'], offline: ['OFFLINE', 'bad'] };
     const [text, cls] = map[state] || map.connecting;
     pill.textContent = text; pill.className = 'pill' + (cls ? ' ' + cls : '');
+    syncVersion();
     if (onStatus) { try { onStatus({ state: map[state] ? state : 'connecting', paneId: PANE, root: D.root || S.root, attempt: wsTries }); } catch (e) { setTimeout(() => { throw e; }); } }
+  }
+  /* 1.14.0 (Anthony): the versions, quietly: the LIVE pill's tooltip and the foot of Settings */
+  const versionText = () => 'chart ' + CE.VERSION + ' · ChartBridge ' + (bridgeVersion || '-');
+  function syncVersion() {
+    const t = versionText();
+    put($('connPill'), 'title', t);
+    if ($('setVer')) put($('setVer'), 'textContent', t);
   }
   function setStatus(text, level) { clearTimeout(flashTimer); const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); syncNote(); }
   /* compact (a host's small panel): the status line shows only while it carries a note (live.css .has-note) */
@@ -2422,6 +2501,31 @@ function start(container, opt, PAGE) {
     $('lgVw').textContent = b.vw !== undefined && b.vw !== null ? fmt(U.roundTo(b.vw, D.tick)) : '-';   // null: not known yet (served window)
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
+
+  /* ---------------- readouts (1.14.0, Anthony's item 5), in the legend: the time left in the bar (Range bars: the ticks
+     left up and down), the ATR of the chart's own closed bars (ATR_PERIOD, NinjaTrader's ATR) and the last price's change
+     from the prior settlement (ChartBridge 0.3.7: hello and "settlement"; blank when ChartBridge gives none, never
+     estimated). Once a second, on the second, and when the view or ChartBridge's settlement changes; never on the tick path. */
+  const ATR_PERIOD = 14;
+  const settlements = {};                                // root -> { p, date } from ChartBridge
+  function readSettlements(list) { for (const i of list || []) if (i && typeof i.root === 'string') settlements[i.root] = { p: typeof i.settlement === 'number' ? i.settlement : null, date: i.settlementDate || '' }; }
+  function readouts() {
+    if (destroyed) return;
+    const b = D.ready ? chart.lastBar() : null, dp = precisionOf();
+    let bar = '';
+    if (b) {
+      if (S.tf === 'range') { const r = D.cur && D.cur.rangeLeft(); bar = r ? 'Bar ▲' + r.up + ' ▼' + r.down + 't' : ''; }
+      else bar = 'Bar ' + U.barRemain(b.t, TF[S.tf].sec, etNow());
+    }
+    put($('lgBar'), 'textContent', bar); put($('lgBar'), 'hidden', !bar);
+    const a = b ? chart.atr(ATR_PERIOD) : null, at = a === null ? '' : 'ATR(' + ATR_PERIOD + ') ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp);
+    put($('lgAtr'), 'textContent', at); put($('lgAtr'), 'hidden', !at);
+    const st = settlements[D.root], pct = b && st ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');
+    const txt = pct === null ? '' : (pct >= 0 ? '+' : '') + pct.toFixed(2) + '% vs settle';
+    put(el, 'textContent', txt); put(el, 'hidden', !txt);
+    put(el, 'className', 'lg-ro' + (pct > 0 ? ' up' : pct < 0 ? ' down' : ''));
+  }
+  later(() => { readouts(); every(readouts, 1000); }, 1000 - Date.now() % 1000 + 5);   // on the second, as the price tag's countdown
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
   const DRAW_ERR = 'Chart drawing error: ';
   chart.on('error', e => {
@@ -2641,6 +2745,8 @@ function start(container, opt, PAGE) {
     for (const b of $('symSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.root));
     for (const b of $('tfSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.tf));
     for (const b of $('glideSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.glide));
+    if ($('gridSeg')) for (const b of $('gridSeg').children) b.setAttribute('aria-pressed', String(b.dataset.v === S.grid));
+    if ($('roomSeg')) for (const b of $('roomSeg').children) b.setAttribute('aria-pressed', String(+b.dataset.v === S.room));
     syncIndicators();
     $('rangeBox').hidden = S.tf !== 'range';
     if (document.activeElement !== $('rangeTicks')) $('rangeTicks').value = ranges[S.root];
@@ -2701,6 +2807,15 @@ function start(container, opt, PAGE) {
   $('glideSeg').addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     S.glide = b.dataset.v; chart.setMotion(GLIDE[S.glide]); saveSetting('glide'); syncButtons();
+  });
+  /* grid lines and the room right of price (1.14.0, the page's Settings; the workspace's Settings for its charts) */
+  if ($('gridSeg')) $('gridSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
+    S.grid = b.dataset.v; chart.setGrid(S.grid === 'on'); saveSetting('grid'); syncButtons();
+  });
+  if ($('roomSeg')) $('roomSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b || !LP.ROOMS.includes(+b.dataset.v)) return;
+    S.room = +b.dataset.v; chart.setRoom(S.room); saveSetting('room'); syncButtons();
   });
 
   /*
@@ -2912,7 +3027,7 @@ function start(container, opt, PAGE) {
       const shown = IS.ind[d.id].shown;
       return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
         `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span>` +
-        (SLIM ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
+        (SLIM || TRADING ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
     }).join('') + (SLIM ? '<button type="button" class="ind-chip ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>' : '');
     fitChips();
   }
@@ -2950,6 +3065,7 @@ function start(container, opt, PAGE) {
      fits without adding a toolbar line; otherwise each is one letter. */
   function fitChips() {
     if (SLIM) { fitSlimChips(); return; }
+    if (TRADING) return;                                   // the page (1.14.0): 2-letter chips in a strip that keeps room for six
     const strip = $('indChips'), bar = strip.closest('.bar');
     const room = Math.min(LP.PIN_MAX * 30 + (LP.PIN_MAX - 1) * 4, Math.max(0, bar.clientWidth - $('indWrap').offsetWidth - 8));
     strip.style.setProperty('--chip-room', room + 'px');
@@ -3110,11 +3226,22 @@ function start(container, opt, PAGE) {
     }
   }
   $('acctPick').addEventListener('change', e => pickViewAccount(e.target.value));
-  $('toolTrend').addEventListener('click', () => chart.setTool(chart.getTool() === 'trend' ? null : 'trend'));
-  $('toolHline').addEventListener('click', () => chart.setTool(chart.getTool() === 'hline' ? null : 'hline'));
-  $('clearDraw').addEventListener('click', () => chart.clearDrawings());
-  $('resetBtn').addEventListener('click', () => chart.reset());
-  if (PIN) { $('pinBtn').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => PIN.openChange()); }
+  $('toolTrend').addEventListener('click', () => { chart.setTool(chart.getTool() === 'trend' ? null : 'trend'); openMore(false); });
+  $('toolHline').addEventListener('click', () => { chart.setTool(chart.getTool() === 'hline' ? null : 'hline'); openMore(false); });
+  $('clearDraw').addEventListener('click', () => { chart.clearDrawings(); openMore(false); });
+  $('resetBtn').addEventListener('click', () => { chart.reset(); openMore(false); });
+  if (PIN && $('pinBtn')) { $('pinRow').hidden = !PIN.active(); $('pinBtn').addEventListener('click', () => { if ($('setPanel')) $('setPanel').hidden = true; PIN.openChange(); }); }
+  /* the page's small menu (1.14.0): the drawing tools and Reset view; Escape or a click outside closes it */
+  function openMore(v) {
+    const menu = $('moreMenu'); if (!menu) return;
+    menu.hidden = !v; $('moreBtn').setAttribute('aria-expanded', String(v));
+    if (v) { menu.classList.remove('set-left'); if (menu.getBoundingClientRect().left < 8) menu.classList.add('set-left'); }
+  }
+  if ($('moreBtn')) {
+    $('moreBtn').addEventListener('click', () => openMore($('moreMenu').hidden));
+    listen(document, 'pointerdown', e => { if (!$('moreMenu').hidden && !$('moreWrap').contains(e.target)) openMore(false); });
+    listen(document, 'keydown', e => { if (e.key === 'Escape' && !$('moreMenu').hidden && !e.defaultPrevented) { e.preventDefault(); openMore(false); $('moreBtn').focus(); } });
+  }
   syncButtons();
   syncAccounts();
 
@@ -3190,7 +3317,7 @@ function start(container, opt, PAGE) {
     listen(window, 'storage', e => { if (e.key === PREFIX + HKKEY) { readHotkeys(); renderHotkeys(); } });
     listen(document, 'keydown', hotkeyHandler({
       keys: () => HK, root: rootEl,
-      busy: () => destroyed || !setPanel.hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
+      busy: () => destroyed || !setPanel.hidden || !$('moreMenu').hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
       actions: { buy: () => T.sendOrder('buy', 'market', null), sell: () => T.sendOrder('sell', 'market', null), be: T.breakEven, close: () => T.flattenHere(), flattenAll: T.flattenAll },
       ignored: () => flash(HOTKEY_IN_BOX, 'warn'),
     }));
@@ -3303,6 +3430,8 @@ function start(container, opt, PAGE) {
     const s = prefs.settings();
     if (s.glide !== S.glide) { S.glide = s.glide; chart.setMotion(GLIDE[S.glide]); }
     if (s.rangeMode !== S.rangeMode) { S.rangeMode = s.rangeMode; if (S.tf === 'range') rebuild(); }
+    if (s.grid !== S.grid) { S.grid = s.grid; chart.setGrid(S.grid === 'on'); }
+    if (s.room !== S.room) { S.room = s.room; chart.setRoom(S.room); }
     syncButtons();
     sigRefresh();                                          // the signals' settings and the large-print floors (G1c)
   }

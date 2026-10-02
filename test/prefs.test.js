@@ -12,7 +12,7 @@ function mem(init) {
 
 test('defaults with empty storage: what the page showed before', () => {
   const p = LP.create(mem());
-  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
+  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt', grid: 'off', room: 80 });
   assert.equal(p.range('NQ'), 20);
   assert.equal(p.range('ES'), 8);
   assert.deepEqual(p.indicators('main'), { volume: true, vwap: true, levels: true, fills: true, ib: true, vp: false, delta: true, bubbles: false, absorption: false });   // the delta pane (1.7.0): on; the signals (G1c) off
@@ -28,7 +28,7 @@ test('range size is per root, and one write never undoes another tab', () => {
   assert.equal(fresh.range('MNQ'), 16);
   assert.equal(fresh.range('ES'), 8);
   tabA.setSetting('tf', 'range'); tabB.setSetting('glide', 'fast');
-  assert.deepEqual(LP.create(s).settings(), { root: 'MNQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
+  assert.deepEqual(LP.create(s).settings(), { root: 'MNQ', tf: 'range', glide: 'fast', rangeMode: 'nt', grid: 'off', room: 80 });
 });
 
 test('range size validation: whole ticks 1 to 400', () => {
@@ -51,7 +51,7 @@ test('1.3 keys are read once and carry over', () => {
     'live-range-v1': { MNQ: 20, NQ: 40, MES: 8, ES: 'junk' },
   });
   const p = LP.create(s);
-  assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt' });
+  assert.deepEqual(p.settings(), { root: 'NQ', tf: 'range', glide: 'fast', rangeMode: 'nt', grid: 'off', room: 80 });
   assert.equal(p.range('NQ'), 40);
   assert.equal(p.range('ES'), 8);
   assert.deepEqual(p.indicators('main'), { volume: true, vwap: false, levels: true, fills: false, ib: true, vp: false, delta: true, bubbles: false, absorption: false });   // IB (1.5.3) and the delta pane (1.7.0): the main pane defaults
@@ -410,7 +410,7 @@ test('the volume profile carried over from live-indicators-v1: off from a 1.5.3 
 test('storage that throws or holds junk never breaks the page', () => {
   const throwing = { getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('QuotaExceeded'); } };
   const p = LP.create(throwing);
-  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt' });
+  assert.deepEqual(p.settings(), { root: 'MNQ', tf: 'm1', glide: 'smooth', rangeMode: 'nt', grid: 'off', room: 80 });
   assert.equal(p.setRange('NQ', 40), false);
   assert.equal(p.range('NQ'), 20);
   const none = LP.create(null);
