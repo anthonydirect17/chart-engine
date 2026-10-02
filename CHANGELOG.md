@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased (G1c, 2026-10-02): chart signals: absorption bars, divergence arrows, large-order bubbles
+## 1.12.1 (2026-10-02): Signals: absorption bars, divergence arrows, large-order bubbles
 
-Page only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); no version bump (the coordinator folds it
-into a release), no ChartBridge change, no new page file. Anthony's two NinjaScript indicators ported from the files he
+Page and engine only (the engine, `live/live.js`, `live/live.css`, `live/workspace.js`); works with ChartBridge 0.3.2 and
+newer, no recompile (the signals need the trade sides of 0.3.4 and newer), no new page file. Run `nt8\install.ps1` again
+after pulling (the PC updater installs it by itself; the open pages say "Update ready: reload when flat"). Anthony's two NinjaScript indicators ported from the files he
 sent (`FROM_WORK_2026-10-01_LargeAbsorber.cs`, class AbsorptionTradeCombo, and `FROM_WORK_2026-10-01_DeltaD.cs`, class
 DeltaDivergenceSignal v1.0), with his rulings of 2026-10-01. Every signal counts from the page's opening only, from the
 trades ChartBridge sides (an unknown side is left out). The motion, the live tick path, the bar builder, the candle and
@@ -13,7 +14,9 @@ volume drawing order and the order code are unchanged; a trade costs O(1) more a
   spike and a rejection close on one bar, the large trade's side matching. Painted at the close only, the whole candle in
   a toned cyan (bullish) or warm yellow (bearish) with a crisp 1 px outline in a brighter shade; an outline only while the
   bar forms with the three holding (it goes when they stop; NinjaTrader paints mid-bar and never un-paints). No line, no
-  label. LookbackPeriod 20, VolumeMultiplier 1.8, RejectionZone 0.35 and AggregationWindowMs 500 per instrument and
+  label. **A deliberate difference from Anthony's NinjaTrader script** (his ruling 2026-10-02): a large print on a bar's
+  first tick counts for that bar. In the script OnBarUpdate resets the bar's tracking on its first tick, which can drop a
+  large print that came on that very tick; here the bar's tracking is reset first and then the print is taken. LookbackPeriod 20, VolumeMultiplier 1.8, RejectionZone 0.35 and AggregationWindowMs 500 per instrument and
   chart type, in its gear (`live-signals-v1`); TickTolerance 0 as the file. The large trade's floor is the large-print
   floor.
 - **Divergence arrows** in the delta pane only (its gear: Show divergences, off by default, per pane; SwingLookback 5,
@@ -35,6 +38,11 @@ volume drawing order and the order code are unchanged; a trade costs O(1) more a
 - Tests: `test/signals.test.js` (the rules on hand-built bars and trades); `npm run smoke:signals` replays a scripted tape
   (`test/signals-scene.mjs`, the fake bridge's `--scene=signals`, sample data) on MNQ Range 40 in regular hours on the
   single chart page and in the workspace, with pixel checks of the toned colors and screenshots.
+- A rebuild (another bar type or size, a setting changed, a reconnect) replays the page's own live trades in slices; on
+  range bars each trade goes to the bar it made by its order in the store (as the delta pane, `RangeReplay`), so the
+  rebuilt chart paints exactly the bars live trading painted. The chart's frame allocates nothing for the signals.
+- `live/COMPAT.json`: page 1.12.1, minChartBridge 0.3.2 (unchanged).
+
 ## ChartBridge 0.3.8 (2026-10-02): stop and target in ticks from the fill (the ATM rule), Time and Sales category
 
 ChartBridge (nt8/) and the PC updater only; the page and the engine are unchanged (chart 1.12.0 works against it as it

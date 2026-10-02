@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.12.0
+ * chart-engine 1.12.1
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.12.0';
+const VERSION = '1.12.1';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -1332,41 +1332,57 @@ function create(container, options) {
   const BUBBLE_R0 = 6, BUBBLE_RMAX = 24, BUBBLE_FILL = 0.32, BUBBLE_RING = 0.92, BUBBLE_ZOOM = 1.6;
   const bubbleZoom = () => clamp(Math.sqrt(V.spacing / o.barSpacing), 1, BUBBLE_ZOOM);
   const bubbleR = b => clamp(BUBBLE_R0 * Math.pow(Math.max(1, b.v / (b.f > 0 ? b.f : 1)), 0.25), BUBBLE_R0, BUBBLE_RMAX) * bubbleZoom();
-  let bubbleShown = [];                 // the bubbles of this frame, for their labels after the candles
+  /* The bubbles of this frame (for their labels after the candles), in pooled objects: no allocation per frame. Their
+     colors are made once per theme. */
+  const bubbleShown = [], bubblePool = [];
+  let bubbleN = 0, bubbleT = null, bubbleCol = null;
+  const byRadius = (a, b) => b.r - a.r;
+  function bubbleColors() {
+    if (bubbleT !== T) {
+      bubbleT = T;
+      bubbleCol = { upFill: rgba(T.upText, BUBBLE_FILL), upRing: rgba(T.upText, BUBBLE_RING), dnFill: rgba(T.downText, BUBBLE_FILL), dnRing: rgba(T.downText, BUBBLE_RING),
+        edge: rgba(T.bg, 0.75), halo: rgba(T.bg, 0.85), font: '500 10px ' + T.fontMono };
+    }
+    return bubbleCol;
+  }
   function drawBubbles(from, to) {
-    if (bubbleShown.length) bubbleShown = [];
+    bubbleN = 0; bubbleShown.length = 0;
     const list = signals && o.layers.bubbles && signals.bubbles ? signals.bubbles.list : null;
     if (!list || !list.length || to < from) return;
     const n = last(), t0 = bars[from].t, t1 = to < n ? bars[to + 1].t : Infinity;
     for (let k = firstAt(list, t0); k < list.length && list[k].t < t1; k++) {
       const b = list[k], i = idxAtTime(b.t), y = yOf(b.p), r = bubbleR(b);
       if (y < -r || y > plotH + r) continue;
-      bubbleShown.push({ b, x: xOf(i), y, r });
+      const s = bubblePool[bubbleN] || (bubblePool[bubbleN] = { b: null, x: 0, y: 0, r: 0 });
+      s.b = b; s.x = xOf(i); s.y = y; s.r = r;
+      bubbleShown.push(s); bubbleN++;
     }
-    if (!bubbleShown.length) return;
-    bubbleShown.sort((a, b) => b.r - a.r);
+    if (!bubbleN) return;
+    bubbleShown.sort(byRadius);
     // the ring 1.25 px (whole device pixels), with a hairline of the ground just outside it, so a bubble stays crisp on
     // a candle of its own color as on the bare ground
-    const lw = Math.max(1, Math.round(dpr * 1.25)) / dpr, edge = rgba(T.bg, 0.75);
-    for (const s of bubbleShown) {
-      const col = s.b.side > 0 ? T.upText : T.downText;
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fillStyle = rgba(col, BUBBLE_FILL); ctx.fill();
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r + 0.5 / dpr, 0, Math.PI * 2);
-      ctx.strokeStyle = edge; ctx.lineWidth = 1 / dpr; ctx.stroke();
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r - lw / 2, 0, Math.PI * 2);
-      ctx.strokeStyle = rgba(col, BUBBLE_RING); ctx.lineWidth = lw; ctx.stroke();
+    const lw = Math.max(1, Math.round(dpr * 1.25)) / dpr, C = bubbleColors(), TAU = Math.PI * 2;
+    for (let k = 0; k < bubbleN; k++) {
+      const s = bubbleShown[k], up = s.b.side > 0;
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU);
+      ctx.fillStyle = up ? C.upFill : C.dnFill; ctx.fill();
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r + 0.5 / dpr, 0, TAU);
+      ctx.strokeStyle = C.edge; ctx.lineWidth = 1 / dpr; ctx.stroke();
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r - lw / 2, 0, TAU);
+      ctx.strokeStyle = up ? C.upRing : C.dnRing; ctx.lineWidth = lw; ctx.stroke();
     }
   }
   function drawBubbleLabels() {
-    if (!bubbleShown.length || V.spacing < 4) return;
-    ctx.font = '500 10px ' + T.fontMono; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    if (!bubbleN || V.spacing < 4) return;
+    const C = bubbleColors();
+    ctx.font = C.font; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round'; ctx.setLineDash([]);
-    for (const s of bubbleShown) {
+    for (let k = 0; k < bubbleN; k++) {
+      const s = bubbleShown[k];
       if (s.b.v < 4 * s.b.f) continue;                    // from four times the floor (a radius of 8.5 px or more)
-      const col = s.b.side > 0 ? T.upText : T.downText, text = fmtPrice(Math.round(s.b.v), 0), x = s.x + s.r + 3;
-      ctx.strokeStyle = rgba(T.bg, 0.85); ctx.lineWidth = 3; ctx.strokeText(text, x, s.y);
-      ctx.fillStyle = col; ctx.fillText(text, x, s.y);
+      const text = fmtPrice(Math.round(s.b.v), 0), x = s.x + s.r + 3;
+      ctx.strokeStyle = C.halo; ctx.lineWidth = 3; ctx.strokeText(text, x, s.y);
+      ctx.fillStyle = s.b.side > 0 ? T.upText : T.downText; ctx.fillText(text, x, s.y);
     }
   }
   /*
@@ -1374,31 +1390,34 @@ function create(container, options) {
    * 1 device pixel outline in its brighter shade around the body; while a bar forms with the three holding, an outline
    * only, one pixel clear of its body. In device pixels, as the candles.
    */
+  /* one candle's device-pixel geometry, into a kept object (no closure or object per frame) */
+  const absG = { xc: 0, yh: 0, yl: 0, top: 0, bh: 0 };
+  function absGeom(i, b, live) {
+    const c = live ? disp.c : b.c, h = live ? Math.max(disp.h, b.o, c) : b.h, l = live ? Math.min(disp.l, b.o, c) : b.l;
+    const yo = Math.round(yOf(b.o) * dpr), yc = Math.round(yOf(c) * dpr);
+    absG.xc = Math.round(xOf(i) * dpr); absG.yh = Math.round(yOf(h) * dpr); absG.yl = Math.round(yOf(l) * dpr);
+    absG.top = Math.min(yo, yc); absG.bh = Math.max(1, Math.abs(yc - yo));
+    return absG;
+  }
   function drawAbsorption(from, to, bodyW, wickW) {
     const A = signals && o.layers.absorption ? signals.absorption : null, n = last();
     if (!A || to < from || n < 0) return;
-    const Y = p => Math.round(yOf(p) * dpr), lw = Math.max(1, Math.round(dpr));
-    const geom = (i, b, live) => {
-      const c = live ? disp.c : b.c, h = live ? Math.max(disp.h, b.o, c) : b.h, l = live ? Math.min(disp.l, b.o, c) : b.l;
-      const xc = Math.round(xOf(i) * dpr), yo = Y(b.o), yc = Y(c);
-      return { xc, yh: Y(h), yl: Y(l), top: Math.min(yo, yc), bh: Math.max(1, Math.abs(yc - yo)) };
-    };
-    const list = A.painted;
+    const lw = Math.max(1, Math.round(dpr)), list = A.painted;
     for (let k = firstAt(list, bars[from].t); k < list.length && list[k].t <= bars[to].t; k++) {
       const p = list[k], i = idxAtTime(p.t);
       if (bars[i].t !== p.t) continue;
-      const g = geom(i, bars[i], i === n), fill = p.dir > 0 ? T.sigBull : T.sigBear, line = p.dir > 0 ? T.sigBullLine : T.sigBearLine;
-      ctx.fillStyle = fill;
+      const g = absGeom(i, bars[i], i === n);
+      ctx.fillStyle = p.dir > 0 ? T.sigBull : T.sigBear;
       ctx.fillRect(g.xc - (wickW >> 1), g.yh, wickW, Math.max(1, g.yl - g.yh));
       if (bodyW > wickW) {
         const x0 = g.xc - (bodyW >> 1);
         ctx.fillRect(x0, g.top, bodyW, g.bh);
-        if (bodyW > 2 * lw && g.bh > 2 * lw) { ctx.strokeStyle = line; ctx.lineWidth = lw; ctx.strokeRect(x0 + lw / 2, g.top + lw / 2, bodyW - lw, g.bh - lw); }
+        if (bodyW > 2 * lw && g.bh > 2 * lw) { ctx.strokeStyle = p.dir > 0 ? T.sigBullLine : T.sigBearLine; ctx.lineWidth = lw; ctx.strokeRect(x0 + lw / 2, g.top + lw / 2, bodyW - lw, g.bh - lw); }
       }
     }
     const f = to === n ? A.forming(bars) : 0;
     if (f) {
-      const g = geom(n, bars[n], true), w = Math.max(bodyW, wickW), x0 = g.xc - (w >> 1) - lw - lw / 2;
+      const g = absGeom(n, bars[n], true), w = Math.max(bodyW, wickW), x0 = g.xc - (w >> 1) - lw - lw / 2;
       const top = bodyW > wickW ? g.top : g.yh, h = bodyW > wickW ? g.bh : Math.max(1, g.yl - g.yh);
       ctx.strokeStyle = f > 0 ? T.sigBullLine : T.sigBearLine; ctx.lineWidth = lw;
       ctx.strokeRect(x0, top - lw - lw / 2, w + 3 * lw, h + 3 * lw);
@@ -3161,7 +3180,8 @@ class LargePrints {
       if (!g.item) {
         g.item = { t: g.t, p: price, v: g.v, side: s, f: g.f };
         this.list.push(g.item);
-        if (this.list.length > this.max) this.list.splice(0, this.list.length - this.max);
+        // past the cap, the oldest tenth goes at once (not one splice per new bubble)
+        if (this.list.length > this.max) this.list.splice(0, this.list.length - this.max + Math.ceil(this.max / 10));
       } else { g.item.v = g.v; g.item.p = price; }
       this._ver++;
     }

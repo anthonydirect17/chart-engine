@@ -1070,8 +1070,9 @@ function start(container, opt, PAGE) {
     backfill: 0, deltaCov: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null };   // served window and session table (1.8.0): see "Served window" below
   /* The chart signals' objects (G1c, see sigReplay below): what the chart draws, made again with the bars. */
-  const SIG = { absorption: null, bubbles: null, divergence: null, cd: null, ver: 0, job: null,
-    get version() { return this.ver + (this.absorption ? this.absorption.version : 0) * 3 + (this.bubbles ? this.bubbles.version : 0) * 7 + (this.divergence ? this.divergence.version : 0) * 11; } };
+  // version: a counter the page bumps on any change of what is drawn (the chart redraws when it moves)
+  const SIG = { absorption: null, bubbles: null, divergence: null, cd: null, version: 0, job: null, rangeFrom: undefined };
+  const sigSum = () => (SIG.absorption ? SIG.absorption.version : 0) + (SIG.bubbles ? SIG.bubbles.version : 0) + (SIG.divergence ? SIG.divergence.version : 0);
   let sigFloors = prefs.largeFloors();
   let bridgeVersion = '';                                      // ChartBridge's version from hello (the delta pane's first hint)
   /* Seconds and range bars are built from ticks; minute and hour bars only need 1-minute history (fast load).
@@ -1132,7 +1133,7 @@ function start(container, opt, PAGE) {
     D.window = false; D.table = null; D.sync = null; rangeNote();
     D.backfill = 0; D.deltaCov = null;
     deltaJob = null; D.delta = null; D.sides = null; chart.setDelta(null); deltaView(); deltaLegend(true);   // a build of the old load stops
-    if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.ver++; }   // made again with the bars
+    if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
     if (inst) { D.name = inst.name; D.tick = inst.tick || 0.25; }
     chart.setPriceFormat({ precision: precisionOf(), tick: D.tick });
@@ -1173,7 +1174,7 @@ function start(container, opt, PAGE) {
       if (!D.ticks.length) setStatus('No tick history came back from NinjaTrader, so ' + tf.label + ' bars start with the next live tick.', 'warn');
     }
     deltaStart({ rangeFrom: tf.mode === 'range' ? rangeFrom : undefined });   // the delta pane, from the same store, in slices (review S5)
-    sigRebuild();                                        // the chart signals on the new bars (G1c)
+    sigRebuild(tf.mode === 'range' ? rangeFrom : undefined);   // the chart signals on the new bars (G1c), range bars from where the chart's start
     updateLevels();
     applyMarkers();
     legendKey = '';
@@ -1584,7 +1585,7 @@ function start(container, opt, PAGE) {
     }
     if (K.lastT === null || t > K.lastT) K.lastT = t;
     K.trades.push(t, m.p, m.v || 0, m.s, m.sm);
-    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; dropped = true; }
+    if (K.trades.length > 2500000) { K.trades.dropFirst(500000); K.base = null; K.floor = K.trades.time(0) + 1e-6; dropped = true; sigCountTrimmed(500000); }
     return dropped;
   }
   const countMissed = () => K.started && K.root === D.root ? K.missed : 0;
@@ -1774,51 +1775,70 @@ function start(container, opt, PAGE) {
     const doAbs = what.abs || !!(was && was.abs && was.abs === SIG.absorption), doBub = what.bub || !!(was && was.bub && was.bub === SIG.bubbles);
     if (doAbs) SIG.absorption = want.abs && D.root ? newAbsorption() : null;
     if (doBub) SIG.bubbles = want.bub && D.root ? newBubbles() : null;
-    SIG.ver++;
+    SIG.version++;
     const abs = doAbs ? SIG.absorption : null, bub = doBub ? SIG.bubbles : null;
     if (!abs && !bub) return;
     if (!(K.started && K.root === D.root && D.ready)) return;
-    const job = SIG.job = { abs, bub, st: K.trades, i: 0 };
-    const sink = { addQuiet(t, p, v, s) {
-      const bars = chart.bars();
-      if (job.abs) { const i = CE.barIndexAt(bars, t); if (i >= 0) job.abs.add(t, p, v, s, bars[i].t, bars); }
+    // range bars: each counted trade in the bar it made, by its order in the store, as the delta pane does (BB.RangeReplay),
+    // so a rebuild paints the bars that live trading painted; time bars bucket by time
+    const range = TF[S.tf].mode === 'range' && SIG.rangeFrom !== undefined;
+    const seg = { st: K.trades, i: 0, end: null }, from = D.tickFrom;
+    const job = SIG.job = { abs, bub, seg, replay: null };
+    const take = (t, p, v, s, barT) => {
+      if (job.abs && barT !== undefined) job.abs.add(t, p, v, s, barT, chart.bars());
       if (job.bub) job.bub.add(t, p, v, s);
-    } };
+    };
+    const sink = { addQuiet(t, p, v, s) { const bars = chart.bars(), i = CE.barIndexAt(bars, t); take(t, p, v, s, i >= 0 ? bars[i].t : undefined); } };
+    if (range) job.replay = new BB.RangeReplay(D.ticks, SIG.rangeFrom, [seg], rangeBuilder(), (t, v, s2, barT) => take(t, seg.st.price(seg.i), v, s2, barT));
     const slice = () => {
       if (destroyed || SIG.job !== job) return;
-      if (job.st !== K.trades) { sigReplay({ abs: !!job.abs, bub: !!job.bub }); return; }   // the count dropped its trades (18:00 ET): again
+      // the count dropped its trades (18:00 ET), or the store was trimmed under a range replay: again
+      if (seg.st !== K.trades || (job.replay && D.tickFrom !== from)) { sigReplay({ abs: !!job.abs, bub: !!job.bub }); return; }
       const t0 = performance.now();
-      do job.i = job.st.feedSides(sink, job.i, null, job.i + DELTA_SLICE_TRADES);
-      while (job.i < job.st.length && performance.now() - t0 < DELTA_SLICE_MS);
-      if (job.i < job.st.length) { later(slice, 0); return; }
-      SIG.job = null; SIG.ver++;                           // through: live trades from here on
+      if (job.replay) {
+        let done;
+        do done = job.replay.step(DELTA_SLICE_TRADES);
+        while (!done && performance.now() - t0 < DELTA_SLICE_MS);
+        SIG.version++;
+        if (!done) { later(slice, 0); return; }
+      } else {
+        do seg.i = seg.st.feedSides(sink, seg.i, null, seg.i + DELTA_SLICE_TRADES);
+        while (seg.i < seg.st.length && performance.now() - t0 < DELTA_SLICE_MS);
+        SIG.version++;
+        if (seg.i < seg.st.length) { later(slice, 0); return; }
+      }
+      SIG.job = null; SIG.version++;                       // through: live trades from here on
     };
     slice();
   }
+  /* The count dropped its oldest n trades (countAdd): a replay reading it keeps its place. */
+  function sigCountTrimmed(n) { const j = SIG.job; if (j && j.seg.st === K.trades) j.seg.i = Math.max(0, j.seg.i - n); }
   /* The divergence: made again when its settings, the bars or the delta core change; then one step per bar close. */
   const divWanted = () => S.options.delta.div === 'on' && IS.ind.delta.on;
   function sigDivergence(force) {
     const want = divWanted() && !!D.delta;
-    if (!want) { if (SIG.divergence) { SIG.divergence = null; SIG.cd = null; SIG.ver++; } return; }
-    if (force || !SIG.divergence || SIG.cd !== D.delta) { SIG.divergence = new CE.DeltaDivergence({ settings: prefs.divergenceSettings() }); SIG.cd = D.delta; SIG.ver++; }
+    if (!want) { if (SIG.divergence) { SIG.divergence = null; SIG.cd = null; SIG.version++; } return; }
+    if (force || !SIG.divergence || SIG.cd !== D.delta) { SIG.divergence = new CE.DeltaDivergence({ settings: prefs.divergenceSettings() }); SIG.cd = D.delta; SIG.version++; }
     const bars = chart.bars(), dv = SIG.divergence;
     if (bars === dv.bars && dv.next >= bars.length - 1) return;   // no bar closed since: nothing to do
-    const cd = D.delta, cb = cd.bars;
+    const cd = D.delta, cb = cd.bars, v0 = dv.version;
     dv.update(bars, i => {                                 // the delta at the close of bar i, carried over a bar with no trade
       const t = bars[i].t, k = cd.lowerBound(t);
       if (k < cb.length && cb[k].t === t) return cb[k].c;
       const j = k - 1;
       return j >= 0 && U.tradeDay(cb[j].t, SESSION) === U.tradeDay(t, SESSION) ? cb[j].c : null;
     });
+    if (dv.version !== v0) SIG.version++;
   }
   /* On new bars (a load, another bar type or size): the absorption bars again; the bubbles only after a new load (they
      are kept by time, whatever the bars); the divergence from the bars. */
-  function sigRebuild() { sigReplay({ abs: true, bub: !SIG.bubbles }); sigDivergence(true); }
+  function sigRebuild(rangeFrom) { SIG.rangeFrom = rangeFrom; sigReplay({ abs: true, bub: !SIG.bubbles }); sigDivergence(true); }
   /* One live trade, after the chart and the delta core took it (onTick). */
   function sigTrade(t, p, v, s, barT) {
-    const job = SIG.job;
+    const job = SIG.job, v0 = sigSum();
     if (SIG.absorption && !(job && job.abs === SIG.absorption)) SIG.absorption.add(t, p, v, s, barT, chart.bars());
     if (SIG.bubbles && !(job && job.bub === SIG.bubbles)) SIG.bubbles.add(t, p, v, s);
+    if (sigSum() !== v0) SIG.version++;                    // the versions only grow: any change moves the sum
     if (SIG.divergence || divWanted()) sigDivergence(false);
   }
   /* The signals' layers on the chart: the absorption bars and bubbles as drawn, the arrows with the delta pane. */
