@@ -176,6 +176,22 @@ function snapMove(p, dx, dy, m) {
 function snapResize(p, dw, dh, m) {
   return { x: p.x, y: p.y, w: clamp(p.w + Math.round(dw / (m.cw + m.gap)), MIN_W, m.cols - p.x), h: clamp(p.h + Math.round(dh / (m.ch + m.gap)), MIN_H, m.rows - p.y) };
 }
+/* The resize handles (1.14.0, Anthony: "from any edge or corner"): the edges each handle moves. */
+const EDGES = { n: 'n', s: 's', e: 'e', w: 'w', ne: 'ne', nw: 'nw', se: 'se', sw: 'sw' };
+/**
+ * A panel resized from an edge or corner (`edge`: 'n', 's', 'e', 'w' or two of them, 'ne', 'nw', 'se', 'sw') by (dx, dy)
+ * pixels, snapped to whole cells: the edges handled move, the opposite ones stay put; at least 2 x 1, inside the grid.
+ */
+function snapResizeEdge(p, edge, dx, dy, m) {
+  const e = typeof edge === 'string' ? edge : '';
+  const kx = Math.round(dx / (m.cw + m.gap)), ky = Math.round(dy / (m.ch + m.gap));
+  let x0 = p.x, x1 = p.x + p.w, y0 = p.y, y1 = p.y + p.h;
+  if (e.includes('e')) x1 = clamp(x1 + kx, x0 + MIN_W, m.cols);
+  if (e.includes('w')) x0 = clamp(x0 + kx, 0, x1 - MIN_W);
+  if (e.includes('s')) y1 = clamp(y1 + ky, y0 + MIN_H, m.rows);
+  if (e.includes('n')) y0 = clamp(y0 + ky, 0, y1 - MIN_H);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
 
 /* ---------------- Time and Sales: large prints */
 /** Seconds into the New York day of a bar-time stamp (exchange wall clock stored as if UTC). */
@@ -316,7 +332,7 @@ function setFloor(storage, root, which, value) {
 }
 
 return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
-  layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize,
+  layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
@@ -960,8 +976,9 @@ function addView(p) {
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
   } else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
+  // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
   el.innerHTML = `<header class="ws-head"><span class="ws-grip" aria-hidden="true">⋮⋮</span>${mid}${close}</header>` +
-    '<div class="ws-body"></div><div class="ws-size" aria-hidden="true" title="Resize"></div>';
+    '<div class="ws-body"></div>' + Object.keys(W.EDGES).map(k => `<div class="ws-edge ws-edge-${k}${k === 'se' ? ' ws-size' : ''}" data-edge="${k}" aria-hidden="true" title="Resize"></div>`).join('');
   place(el, p);
   grid.appendChild(el);
   if (sizes) sizes.observe(el);
@@ -972,7 +989,7 @@ function addView(p) {
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
-  el.querySelector('.ws-size').addEventListener('pointerdown', e => startDrag(e, v, 'size'));
+  for (const h of el.querySelectorAll('.ws-edge')) h.addEventListener('pointerdown', e => startDrag(e, v, 'size', h.dataset.edge));
   v.head.addEventListener('click', e => {
     const b = e.target.closest('[data-act]'); if (!b || !v.head.contains(b) || b.closest('.ws-lv')) return;
     if (b.dataset.act === 'close') closePanel(p.id);
@@ -1051,7 +1068,7 @@ function addPanel(type) {
 
 /* ---------------- drag and resize: the ghost shows the snapped cells; a place that overlaps is refused */
 let dragging = null;
-function startDrag(e, v, mode) {
+function startDrag(e, v, mode, edge) {
   if (e.button !== 0 || dragging) return;
   e.preventDefault();
   closePops();
@@ -1063,9 +1080,10 @@ function startDrag(e, v, mode) {
   place(ghost, r); ghost.hidden = false; ghost.className = 'ws-ghost';
   v.el.classList.add(mode === 'move' ? 'dragging' : 'sizing');
   document.body.classList.add('ws-busy');
+  if (mode === 'size') document.body.dataset.edge = edge || 'se';      // the resize cursor stays while dragging
   const move = ev => {
     const dx = ev.clientX - sx, dy = ev.clientY - sy;
-    r = mode === 'move' ? W.snapMove(p, dx, dy, m) : W.snapResize(p, dx, dy, m);
+    r = mode === 'move' ? W.snapMove(p, dx, dy, m) : W.snapResizeEdge(p, edge || 'se', dx, dy, m);
     ok = W.fits(r, panels, p.id);
     place(ghost, r);
     ghost.className = 'ws-ghost' + (ok ? '' : ' blocked');
@@ -1073,7 +1091,7 @@ function startDrag(e, v, mode) {
   };
   const end = ev => {
     target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end);
-    v.el.style.transform = ''; v.el.classList.remove('dragging', 'sizing'); document.body.classList.remove('ws-busy');
+    v.el.style.transform = ''; v.el.classList.remove('dragging', 'sizing'); document.body.classList.remove('ws-busy'); delete document.body.dataset.edge;
     ghost.hidden = true; dragging = null;
     if (ev.type === 'pointercancel') return;
     const changed = r.x !== p.x || r.y !== p.y || r.w !== p.w || r.h !== p.h;
@@ -1201,10 +1219,14 @@ function openPop(el, anchor, onClose, align) {
   if (anchor) {
     anchor.setAttribute('aria-expanded', 'true'); raise(anchor, true);
     const a = anchor.getBoundingClientRect(), w = el.offsetWidth;
-    el.style.top = Math.round(a.bottom + 6) + 'px';
+    /* 1.14.0 (no scrolling, ever): under its button when it fits, else moved up until it does; only one taller than the
+       window scrolls */
+    el.style.maxHeight = '';
+    const h = el.offsetHeight, room = window.innerHeight - 8, top = Math.max(8, Math.min(a.bottom + 6, room - h));
+    el.style.top = Math.round(top) + 'px';
+    if (top + h > room) el.style.maxHeight = Math.floor(room - top) + 'px';
     const x = align === 'left' ? a.left : a.right - w;
     el.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, x))) + 'px';
-    el.style.maxHeight = Math.max(160, Math.floor(window.innerHeight - a.bottom - 14)) + 'px';
   }
   pop = { el, anchor, onClose };
 }

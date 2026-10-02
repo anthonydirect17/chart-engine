@@ -2497,8 +2497,9 @@ function create(container, options) {
       if (V.follow && V.right === had) V.right = followRight();   // following: the new room at once, with no glide
       clampRight(); dirty = true;
     },
-    /** The room right of the last bar now: { px (as set, or null), bars (at this zoom) }. */
-    room() { return { px: o.room, bars: roomNow() }; },
+    /** The room right of the last bar now: { px (as set, or null), bars (at this zoom), gap (CSS px from the last bar's
+        center to the price axis, as drawn now) }. */
+    room() { const n = last(); return { px: o.room, bars: roomNow(), gap: n >= 0 ? plotW - xOf(n) : null }; },
     /** The price scale's target and where it is now (1.14.0, for tests): { lo, hi, target: { lo, hi } | null, auto }. */
     priceScale() { const t = V.auto ? autoTarget() : null; return { lo: V.lo, hi: V.hi, target: t, auto: V.auto, plotHeight: plotH }; },
     /** The newest bar as drawn now (a copy), or null with no bars (1.14.0, for the page's readouts). */

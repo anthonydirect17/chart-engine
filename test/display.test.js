@@ -244,3 +244,26 @@ test('the ticket link\'s stamps read the page\'s clock when there is one', () =>
     assert.ok(Math.abs(TL.browserNow() - Date.now()) < 1000, 'no page clock (Node): the browser\'s own');
   } finally { if (saved === undefined) delete global.self; else global.self = saved; }
 });
+
+test('panels resize from any edge or corner: whole cells, the opposite edges stay put, at least 2 x 1, inside the grid', () => {
+  const m = W.metrics(12 * 100 + 11 * 6 + 12, 6 * 100 + 5 * 6 + 12);   // 100 px cells, 6 px gaps
+  const p = { x: 4, y: 2, w: 4, h: 2 };
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'se', 106, 106, m), { x: 4, y: 2, w: 5, h: 3 }, 'the corner it always had');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'se', 106, 106, m), W.snapResize(p, 106, 106, m), 'the same as before 1.14.0');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'w', -212, 50, m), { x: 2, y: 2, w: 6, h: 2 }, 'left edge out: x and w, the right edge kept; dy ignored');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'w', 1000, 0, m), { x: 6, y: 2, w: 2, h: 2 }, 'left edge in: never under 2 wide');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'n', 0, -106, m), { x: 4, y: 1, w: 4, h: 3 }, 'top edge up');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'n', 0, -1000, m), { x: 4, y: 0, w: 4, h: 4 }, 'never past the top');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'n', 0, 1000, m), { x: 4, y: 3, w: 4, h: 1 }, 'at least 1 tall');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'e', 1000, 0, m), { x: 4, y: 2, w: 8, h: 2 }, 'to the grid edge');
+  assert.deepStrictEqual(W.snapResizeEdge(p, 's', 0, 1000, m), { x: 4, y: 2, w: 4, h: 4 });
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'nw', -106, -106, m), { x: 3, y: 1, w: 5, h: 3 });
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'ne', 106, -106, m), { x: 4, y: 1, w: 5, h: 3 });
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'sw', -106, 106, m), { x: 3, y: 2, w: 5, h: 3 });
+  assert.deepStrictEqual(W.snapResizeEdge(p, 'w', -40, 0, m), p, 'under half a cell: no change (snapped)');
+  assert.deepStrictEqual(W.snapResizeEdge(p, '', 500, 500, m), p, 'no edge: nothing moves');
+  // overlap is still refused by fits()
+  const other = { id: 'b', x: 0, y: 2, w: 3, h: 2 };
+  assert.ok(!W.fits(W.snapResizeEdge(p, 'w', -212, 0, m), [other], 'a'), 'growing over a neighbour is refused');
+  assert.ok(W.fits(W.snapResizeEdge(p, 'w', -106, 0, m), [other], 'a'), 'up to it is fine');
+});

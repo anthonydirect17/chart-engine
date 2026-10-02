@@ -954,6 +954,7 @@ function markup(p, o) {
           </div>
           <div class="visually-hidden" id="${p}indLive" role="status" aria-live="polite"></div>
           <div class="ind-body" id="${p}indBody"></div>
+          <div class="ind-side" id="${p}indSide" hidden></div>
           <div class="ind-sep"></div>
           <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
         </div>
@@ -2984,7 +2985,8 @@ function start(container, opt, PAGE) {
     hide.textContent = label;
     hide.disabled = label === 'Hide all (0)';
     hide.title = label === 'Restore' ? 'Show again the ones Hide all hid' : 'Hide every indicator on this chart, settings kept. The open trade, working orders and stop and target lines always stay.';
-    const focusKey = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.f : null;
+    const side = $('indSide');
+    const focusKey = document.activeElement && (body.contains(document.activeElement) || side.contains(document.activeElement)) ? document.activeElement.dataset.f : null;
     let html = M.note ? `<div class="ind-note">${esc(M.note)}</div>` : '';
     const q = M.q.trim();
     if (q) {
@@ -3010,13 +3012,22 @@ function start(container, opt, PAGE) {
       html += '<div class="ind-coming">Coming: time and sales</div>';
     }
     body.innerHTML = html;
+    /* 1.14.0 (no scrolling, ever): the open gear's settings sit in a column beside the list, not under its row, so the
+       menu grows sideways and fits the screen with nothing to scroll */
+    const set = body.querySelector('.ind-set');
+    side.replaceChildren();
+    if (set) { const d = defOf(set.dataset.id), t = document.createElement('div'); t.className = 'ind-side-t'; t.textContent = d ? d.name : ''; side.append(t, set); }
+    side.hidden = !set;
+    $('indPanel').classList.toggle('has-gear', !!set);
     /* one live region, changed only when its text changes, so a screen reader hears the result count and notes once */
     const said = M.note || (q ? (() => { const n = LP.searchIndicators(q).length; return n ? n + (n === 1 ? ' match' : ' matches') : 'No match'; })() : '');
     if ($('indLive').textContent !== said) $('indLive').textContent = said;
+    if (!$('indPanel').hidden && placeMenu) placeMenu();       // its size changed: placed again so it stays on screen
     if (focusKey) {                                                 // keep the keyboard where it was
       const alt = { 'sw:': 'add:', 'add:': 'sw:', 'x:': 'add:', 'rec:': 'rec:' };
-      let el = body.querySelector(`[data-f="${focusKey}"]`);
-      if (!el) for (const k of Object.keys(alt)) if (focusKey.startsWith(k)) el = body.querySelector(`[data-f="${alt[k] + focusKey.slice(k.length)}"]`);
+      const inMenu = sel => body.querySelector(sel) || side.querySelector(sel);
+      let el = inMenu(`[data-f="${focusKey}"]`);
+      if (!el) for (const k of Object.keys(alt)) if (focusKey.startsWith(k)) el = inMenu(`[data-f="${alt[k] + focusKey.slice(k.length)}"]`);
       (el || $('indQ')).focus();
     }
   }
@@ -3102,29 +3113,40 @@ function start(container, opt, PAGE) {
     }
     else if (act === 'cat') { M.cat = M.cat === id ? null : id; renderMenu(); }
   }
-  let openMenu;
+  let openMenu, placeMenu = null;
   {
     const wrap = $('indWrap'), btn = $('indBtn'), panel = $('indPanel'), q = $('indQ');
     /* The panel stays inside the chart's own element (a pane can be narrow, and a host may clip it). */
     /* It opens below the order bar when there is one, so the Armed switch, the account and the position readout stay
        in view (review N5); its list scrolls inside when the space is short. */
     const place = () => {
-      if (SLIM) {                                                // in the host's header: the window is the room it has
-        const b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
-        panel.style.top = Math.round(b.bottom - w.top + 6) + 'px';
+      /* 1.14.0 (no scrolling, ever): on the page and in the workspace the menu is placed where it fits whole: below the
+         order bar when it fits there (the Armed switch, the account and the position readout stay in view, review N5),
+         else below the button, else as high as it must; moved left to stay on screen. Only a menu taller than the window
+         scrolls its list. */
+      if (SLIM || TRADING) {
+        const b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect(), ob = $('obar');
+        const below = !SLIM && ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom, room = window.innerHeight - 8;
         panel.style.maxWidth = Math.max(220, Math.floor(window.innerWidth - 16)) + 'px';
-        panel.style.maxHeight = Math.max(200, Math.floor(window.innerHeight - b.bottom - 14)) + 'px';
+        panel.style.maxHeight = '';
+        const h = panel.offsetHeight;
+        let top = below + 6;
+        if (top + h > room) top = b.bottom + 6;
+        if (top + h > room) top = Math.max(8, room - h);
+        panel.style.top = Math.round(top - w.top) + 'px';
+        if (top + h > room) panel.style.maxHeight = Math.floor(room - top) + 'px';
         panel.style.left = '0px';
         const over = panel.getBoundingClientRect().right - (window.innerWidth - 8);
         if (over > 0) panel.style.left = -Math.ceil(Math.min(over, w.left - 8)) + 'px';
         return;
       }
       const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();
-      const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;
+      const ob = $('obar'), below = ob && !ob.hidden ? ob.getBoundingClientRect().bottom : b.bottom;   // a host's chart with its toolbar: inside the chart, as before
       panel.style.top = Math.round(below - w.top + 6) + 'px';
       panel.style.maxWidth = Math.max(220, Math.floor(r.right - b.left - 8)) + 'px';
       panel.style.maxHeight = Math.max(200, Math.floor(Math.min(r.bottom, window.innerHeight) - below - 14)) + 'px';
     };
+    placeMenu = place;
     openMenu = (v, from) => {
       if (v === !panel.hidden) { if (v) q.focus(); return; }
       panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));

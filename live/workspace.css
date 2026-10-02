@@ -102,9 +102,33 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .ws-panel.narrower .ws-head .ind-btn { font-size: 0; gap: 4px; }
 .ws-panel.narrower .ws-head .ind-btn::before { content: "Ind"; font-size: 12px; }
 .ws-x[aria-expanded="true"], .ws-ic[aria-expanded="true"] { color: var(--ws-text); background: var(--ws-field); }
-.ws-size { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; z-index: 4; touch-action: none;
-  background: linear-gradient(135deg, transparent 0 55%, var(--ws-grip) 55% 62%, transparent 62% 72%, var(--ws-grip) 72% 79%, transparent 79%); }
-.ws-size:hover { background: linear-gradient(135deg, transparent 0 55%, var(--ws-accent) 55% 62%, transparent 62% 72%, var(--ws-accent) 72% 79%, transparent 79%); }
+/* resize from any edge or corner (1.14.0, Anthony): 7 px bands on the edges (3 px of them in the gap between panels),
+   14 px squares at the corners. Quiet: nothing shows until the pointer is on one, then a 2 px accent line on that edge
+   (an L at a corner); the bottom right corner keeps its grip lines. Moving stays on the header. */
+.ws-edge { position: absolute; z-index: 4; touch-action: none; }
+.ws-edge-n, .ws-edge-s { left: 10px; right: 10px; height: 7px; cursor: ns-resize; }
+.ws-edge-n { top: -3px; } .ws-edge-s { bottom: -3px; }
+.ws-edge-e, .ws-edge-w { top: 10px; bottom: 10px; width: 7px; cursor: ew-resize; }
+.ws-edge-e { right: -3px; } .ws-edge-w { left: -3px; }
+.ws-edge-ne, .ws-edge-nw, .ws-edge-se, .ws-edge-sw { width: 14px; height: 14px; z-index: 5; }
+.ws-edge-ne { top: -3px; right: -3px; cursor: nesw-resize; } .ws-edge-sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+.ws-edge-nw { top: -3px; left: -3px; cursor: nwse-resize; } .ws-edge-se { bottom: -3px; right: -3px; cursor: nwse-resize; }
+/* the line on the panel's own border (3 px into the band), in the accent, while the pointer is on the handle */
+.ws-edge { --ln: linear-gradient(var(--ws-accent), var(--ws-accent)); background-repeat: no-repeat; }
+.ws-edge-n:hover, .ws-panel.sizing .ws-edge-n:active { background-image: var(--ln); background-position: 0 2px; background-size: 100% 2px; }
+.ws-edge-s:hover, .ws-panel.sizing .ws-edge-s:active { background-image: var(--ln); background-position: 0 3px; background-size: 100% 2px; }
+.ws-edge-e:hover, .ws-panel.sizing .ws-edge-e:active { background-image: var(--ln); background-position: 3px 0; background-size: 2px 100%; }
+.ws-edge-w:hover, .ws-panel.sizing .ws-edge-w:active { background-image: var(--ln); background-position: 2px 0; background-size: 2px 100%; }
+.ws-edge-nw:hover { background-image: var(--ln), var(--ln); background-position: 2px 2px, 2px 2px; background-size: 12px 2px, 2px 12px; }
+.ws-edge-ne:hover { background-image: var(--ln), var(--ln); background-position: 0 2px, 10px 2px; background-size: 12px 2px, 2px 12px; }
+.ws-edge-sw:hover { background-image: var(--ln), var(--ln); background-position: 2px 10px, 2px 0; background-size: 12px 2px, 2px 12px; }
+/* the bottom right corner: its grip lines as before (accent on hover) */
+.ws-edge-se { background-image: linear-gradient(135deg, transparent 0 55%, var(--ws-grip) 55% 62%, transparent 62% 72%, var(--ws-grip) 72% 79%, transparent 79%); background-position: 0 0; background-size: 11px 11px; }
+.ws-edge-se:hover { background-image: linear-gradient(135deg, transparent 0 55%, var(--ws-accent) 55% 62%, transparent 62% 72%, var(--ws-accent) 72% 79%, transparent 79%); }
+body.ws-busy[data-edge="n"], body.ws-busy[data-edge="s"], body.ws-busy[data-edge="n"] *, body.ws-busy[data-edge="s"] * { cursor: ns-resize !important; }
+body.ws-busy[data-edge="e"], body.ws-busy[data-edge="w"], body.ws-busy[data-edge="e"] *, body.ws-busy[data-edge="w"] * { cursor: ew-resize !important; }
+body.ws-busy[data-edge="ne"], body.ws-busy[data-edge="sw"], body.ws-busy[data-edge="ne"] *, body.ws-busy[data-edge="sw"] * { cursor: nesw-resize !important; }
+body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-edge="nw"] *, body.ws-busy[data-edge="se"] * { cursor: nwse-resize !important; }
 
 /* the mounted chart fills its panel; a short panel keeps a small plot instead of the page's 360 px; its status line is
    one line (what does not fit is cut, the chart keeps its height) */

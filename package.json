@@ -29,6 +29,8 @@
     "smoke:plan": "node test/plan-smoke.mjs",
     "smoke:nostop": "node test/nostop-smoke.mjs",
     "smoke:signals": "node test/signals-smoke.mjs",
+    "smoke:noscroll": "node test/noscroll-smoke.mjs",
+    "smoke:display": "node test/display-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",
