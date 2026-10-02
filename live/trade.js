@@ -949,20 +949,27 @@ function wire($, core, ui) {
     const key = [r, TR.account, pos ? pos.qty + '@' + pos.avgPrice : '', last, dp, ui.pointValue(r), TR.orders.size, [...TR.orders.values()].map(o => o.id + o.state + o.qty + o.filled + o.price).join(), [...TR.positions].map(([k, v]) => k + v.qty).join()].join('|');
     if (key === posKey) return;
     posKey = key;
+    /* The position (1.13.0, Anthony: a calm block in the house style): a LONG 4 / SHORT 2 tag in its side's color, the
+       average price, and the open P&L, the dollars first and the most prominent; "Flat" when flat. Labels in the sans
+       face, prices in tabular mono; the P&L keeps its place on the right, so nothing moves as the numbers change. */
     if (pos && pos.qty) {
       const pnl = U.openPnl(pos.qty, pos.avgPrice, last, ui.pointValue(r));
       const cls = pnl.points > 0 ? 'profit' : pnl.points < 0 ? 'loss' : '';
-      el.innerHTML = '';
-      const side = document.createElement('span'); side.className = pos.qty > 0 ? 'long' : 'short'; side.textContent = (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty);
-      const res = document.createElement('span'); res.className = cls; res.textContent = U.fmtSigned(pnl.points, dp) + ' pt' + (pnl.dollars !== null ? ' ' + U.fmtMoney(pnl.dollars) : '');
-      el.append(side, ' @ ' + U.fmtPrice(pos.avgPrice, dp) + ' ', res);
-    } else el.textContent = 'Flat';
-    /* stop and target coverage, from the working orders already here (a filled-in-pieces entry has one pair per fill) */
-    const legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, r, pos.qty) : null;
-    legsEl.textContent = legs ? legs.text : '';
+      const mk = (tag, c, t) => { const x = document.createElement(tag); x.className = c; x.textContent = t; return x; };
+      const pl = mk('span', 'pz-pnl ' + cls, '');
+      if (pnl.dollars !== null) pl.append(mk('b', '', U.fmtMoney(pnl.dollars)), mk('span', 'pz-pt', U.fmtSigned(pnl.points, dp) + ' pt'));
+      else pl.append(mk('b', '', U.fmtSigned(pnl.points, dp) + ' pt'));
+      el.replaceChildren(mk('span', 'pz-side ' + (pos.qty > 0 ? 'long' : 'short'), (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty)),
+        mk('span', 'pz-at', ' at ' + U.fmtPrice(pos.avgPrice, dp)), pl);
+      el.className = 'oinfo pz';
+    } else { el.textContent = 'Flat'; el.className = 'oinfo pz flat'; }
+    /* stop and target cover, one quiet line (a filled-in-pieces entry has one pair per fill): "Stop 4/4 · Target 4/4",
+       a gap in the warning color ("NO STOP on 1") */
+    const legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, r, pos.qty) : null, pline = OT.protectionLine(legs);
+    legsEl.textContent = pline.text;
     legsEl.classList.toggle('uncovered', !!legs && legs.level === 'error');
     legsEl.classList.toggle('over', !!legs && legs.level === 'warn');
-    legsEl.title = legs ? legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working' +
+    legsEl.title = legs ? legs.text + ' (' + legs.stopLegs + ' stop and ' + legs.targetLegs + ' target order' + (legs.stopLegs + legs.targetLegs === 1 ? '' : 's') + ' working)' +
       (legs.stopsShort ? '. Stops cover less than the position.' : legs.level === 'warn' ? '. More than the position: if it all fills, the position reverses.' : '') : '';
     /* Other accounts on this instrument, by name (review S3): a live trade on another account is never only a count.
        In the warning color while one has a position; on one line (cut short, the whole text in its tooltip). */

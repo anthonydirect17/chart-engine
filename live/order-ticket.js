@@ -214,6 +214,18 @@ function legSummary(orders, account, root, posQty) {
   };
 }
 
+/**
+ * The protection line of the position readout (1.13.0, Anthony: calm, one line): "Stop 4/4 · Target 4/4". A gap reads
+ * "NO STOP on 1" in its place; cover over the position says so. { text, warn } from a legSummary (null when flat).
+ */
+function protectionLine(l) {
+  if (!l) return { text: '', warn: false };
+  const parts = [l.stopsShort ? 'NO STOP on ' + (l.position - l.stops) : 'Stop ' + l.stops + '/' + l.position, 'Target ' + l.targets + '/' + l.position];
+  if (l.stopsOver || l.targetsOver) parts.push('over the position');
+  if (l.notCounted) parts.push(l.notCounted + ' other not counted');
+  return { text: parts.join(' · '), warn: !!l.level };
+}
+
 /*
  * Bracket presets (1.10.0, Anthony). A ratio sets target = round(stop x ratio) and stays linked to the stop while it is
  * picked. Saved presets are { name, stop, target } in ticks: at most 12, names 1 to 24 characters, unique (any case).
@@ -460,5 +472,5 @@ function hotkeyAction(keys, combo) {
 }
 
 return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
-  MAX_BRACKET_TICKS, NO_CAP, versionOf, versionAtLeast, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, repeatGuard };
+  MAX_BRACKET_TICKS, NO_CAP, versionOf, versionAtLeast, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

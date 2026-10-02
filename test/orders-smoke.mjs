@@ -256,7 +256,7 @@ try {
   await control(PORT, 'price', { root: 'MNQ', p: lim3.price });                // touches fill 1 at a time
   s = await until(async () => { const x = await state(); return x.orders.filter(o => o.role === 'stop').length === 2 ? x : null; }, 'two stop legs, one per fill');
   await control(PORT, 'price', { root: 'MNQ', p: lim3.price + 1 });           // off the limit, inside the bracket
-  const legsText = await until(async () => { const t = await page.textContent('#oLegs'); return t === 'stops cover 2 of 2, targets cover 2 of 2' ? t : null; }, 'leg summary 2 of 2');
+  const legsText = await until(async () => { const t = await page.textContent('#oLegs'); return t === 'Stop 2/2 · Target 2/2' ? t : null; }, 'leg summary 2 of 2');
   check(!!legsText, 'leg summary: ' + await page.textContent('#oLegs'));
   check(!(await page.getAttribute('#oLegs', 'class') || '').includes('uncovered'), 'covered: not in the error color');
   await page.waitForTimeout(300);
@@ -265,7 +265,7 @@ try {
   await page.selectOption('#oQty', '1');
   await page.click('#sellMkt');
   await until(async () => (await page.textContent('#oPos')).startsWith('LONG 1'), 'long 1 after selling 1');
-  const overText = await until(async () => { const t = await page.textContent('#oLegs'); return /^stops cover 2 of 1, targets cover 2 of 1 · .*over the position/.test(t) ? t : null; }, 'leg summary over the position');
+  const overText = await until(async () => { const t = await page.textContent('#oLegs'); return t === 'Stop 2/1 · Target 2/1 · over the position' ? t : null; }, 'leg summary over the position');
   check(!!overText, 'over the position: ' + await page.textContent('#oLegs'));
   check((await page.getAttribute('#oLegs', 'class') || '').includes('over'), 'over: warning class');
   check(await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color) === 'rgb(224, 180, 90)', 'over: warning color');
@@ -274,17 +274,17 @@ try {
   await page.fill('#bStop', '0'); await page.press('#bStop', 'Tab');
   await page.fill('#bTarget', '0'); await page.press('#bTarget', 'Tab');
   await page.click('#buyMkt');
-  await until(async () => (await page.textContent('#oLegs')) === 'stops cover 2 of 2, targets cover 2 of 2', 'long 2 again, two pairs');
+  await until(async () => (await page.textContent('#oLegs')) === 'Stop 2/2 · Target 2/2', 'long 2 again, two pairs');
   s = await state();
   const stopLegs = s.orders.filter(o => o.role === 'stop');
   box = await cbox();
   h = await page.evaluate(id => window.liveChart.orderHandles().find(x => x.id === id), stopLegs[0].id);
   await page.mouse.click(box.x + h.xbox.x + h.xbox.w / 2, box.y + h.xbox.y + h.xbox.h / 2);   // cancels that pair
-  await until(async () => (await page.textContent('#oLegs')) === 'stops cover 1 of 2, targets cover 1 of 2', 'leg summary after one pair cancelled');
+  await until(async () => (await page.textContent('#oLegs')) === 'NO STOP on 1 · Target 1/2', 'leg summary after one pair cancelled');
   const cls = await page.getAttribute('#oLegs', 'class') || '';
-  check(cls.includes('uncovered'), 'stops short: error class, got "' + cls + '"');
+  check(cls.includes('uncovered'), 'stops short: the uncovered class, got "' + cls + '"');
   const col = await page.evaluate(() => getComputedStyle(document.getElementById('oLegs')).color);
-  check(col === 'rgb(255, 122, 122)', 'stops short: error color, got ' + col);
+  check(col === 'rgb(224, 180, 90)', 'stops short: the warning color (1.13.0, Anthony: a gap is in the warning color), got ' + col);
   await shot(page, 'orders-1440-legs-short.png');
   await page.fill('#bStop', '40'); await page.press('#bStop', 'Tab');
   await page.fill('#bTarget', '80'); await page.press('#bTarget', 'Tab');

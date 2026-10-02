@@ -437,6 +437,8 @@ const accountPick = () => { try { const v = JSON.parse(store.getItem('live-accou
 /* notes: the ticket's own line in the ticket's window, else the top bar's */
 function tnote(text, level) {
   if (capture) capture.push(text);
+  // the ticket shows its last fill on its own line: a "Filled ..." note would only repeat it (1.13.0, Anthony)
+  if (holds() && TK.el && !level && /^(Part filled|Filled) /.test(text || '')) return;
   if (holds() && TK.el) {
     const el = tk('note');
     el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
@@ -723,7 +725,7 @@ function mountTicket(v) {
     <div class="tk-row"><span class="glabel">Qty</span><select class="acct-sel oqty" data-tk-id="oQty" aria-label="Order quantity">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select><span class="ounit" data-tk-id="oQtyCap"></span>
       <select class="acct-sel bpre" data-tk-id="bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
       <span class="bsave" data-tk-id="bSaveBox" hidden><input class="oin bname" data-tk-id="bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" data-tk-id="bSaveOk">Save</button><button type="button" class="btn" data-tk-id="bSaveNo" aria-label="Do not save">x</button></span></div>
-    <div class="tk-row"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-tk-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
+    <div class="tk-row tk-bk"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-tk-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
       <input class="oin" data-tk-id="bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
       <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
       <span class="nostop" data-tk-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
@@ -791,8 +793,8 @@ function renderTicketExtras() {
   const TR = core.TR, acct = TR.account, r = TK.root;
   const fill = TR.enabled && acct ? [...tfills.values()].filter(f => f.account === acct && f.root === r).sort((a, b) => a.t - b.t).pop() : null;
   const fe = tk('fill');
-  const ft = fill ? 'Last fill ' + String(fill.side).toUpperCase() + ' ' + fill.qty + ' @ ' + fmtPx(+fill.p, r) + ' ' + U.fmtHM(fill.t) : '';
-  if (fe.textContent !== ft) { fe.textContent = ft; fe.className = 'oinfo tk-fill' + (fill ? ' ' + (fill.side === 'buy' ? 'long' : 'short') : ''); }
+  const ft = fill ? 'Last fill ' + (fill.side === 'buy' ? 'BUY ' : 'SELL ') + fill.qty + ' at ' + fmtPx(+fill.p, r) + ' · ' + U.fmtHM(fill.t) : '';
+  if (fe.textContent !== ft) { fe.textContent = ft; fe.title = ft; }
   const rows = [];
   if (TR.enabled && acct) for (const x of W.ROOTS) {
     if (x === r) continue;

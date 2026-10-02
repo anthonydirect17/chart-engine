@@ -249,9 +249,18 @@
 .chart-live .oinfo { font: 500 12px var(--mono); color: var(--text2); font-variant-numeric: tabular-nums; }
 .chart-live .oinfo .long, .chart-live .oinfo .profit { color: var(--profit); }
 .chart-live .oinfo .short, .chart-live .oinfo .loss { color: var(--loss); }
-.chart-live .olegs { color: var(--text3); }
-.chart-live .olegs.uncovered { color: var(--loss); }
-.chart-live .olegs.over { color: var(--warn); }
+.chart-live .olegs { color: var(--text3); font: 500 11px var(--sans); font-variant-numeric: tabular-nums; }
+.chart-live .olegs.uncovered, .chart-live .olegs.over { color: var(--warn); }   /* a gap ("NO STOP on 1") or more than the position (1.13.0) */
+/* The position (1.13.0, Anthony: a calm block in the house style): a small side tag, the average price, the P&L the most
+   prominent value; labels in the sans face, numbers tabular */
+.chart-live .oinfo.pz { display: inline-flex; align-items: baseline; gap: 8px; font: 500 12px var(--mono); color: var(--text2); white-space: nowrap; }
+.chart-live .oinfo.pz.flat { font: 500 12px var(--sans); color: var(--text3); }
+.chart-live .pz-side { align-self: center; font: 600 10px var(--cond); letter-spacing: .08em; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; }
+.chart-live .pz-at { color: var(--text2); }
+.chart-live .pz-pnl { display: inline-flex; align-items: baseline; gap: 6px; margin-left: auto; }
+.chart-live .pz-pnl b { font: 600 14px var(--mono); }
+.chart-live .pz-pnl .pz-pt { font-size: 11px; opacity: .8; }
+.chart-live .pz-pnl:not(.profit):not(.loss) { color: var(--text2); }
 .chart-live .ostate { flex-basis: 100%; min-height: 18px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 16px; }   /* its own row, so the chart never jumps */
 .chart-live .ooff { font-size: 12px; color: var(--warn); }
 /* After trading comes on (a load, a PIN entry, a reconnect): which account orders go to, for a moment (1.6.1). The

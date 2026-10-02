@@ -154,13 +154,22 @@ body.ws-busy, body.ws-busy * { cursor: grabbing !important; user-select: none; }
 .chart-live .tk-bar .bsave .oin.bname { flex: 1 1 auto; width: 0; }
 .chart-live .tk-state { display: flex; flex-direction: column; align-items: stretch; gap: 2px; min-height: 0; }
 .chart-live .tk-state > * { overflow-wrap: anywhere; }
-.chart-live .tk-fill.long { color: var(--profit); }
-.chart-live .tk-fill.short { color: var(--loss); }
+/* the position in the ticket's narrow column: the side tag and the average price, the P&L under them, large, at the left
+   edge (so it never moves as the numbers change) */
+.chart-live .tk-state .oinfo.pz { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 8px; row-gap: 2px; }
+.chart-live .tk-state .oinfo.pz .pz-pnl { grid-column: 1 / -1; margin-left: 0; }
+.chart-live .tk-state .oinfo.pz .pz-pnl b { font-size: 16px; }
+/* NO STOP takes the Bracket label's place in the ticket (the boxes keep their room) */
+.chart-live .tk-bk:has(> .nostop:not([hidden])) > .glabel { display: none; }
+.chart-live .tk-bk > .nostop { order: -1; }
+.chart-live .tk-fill { font: 500 11px var(--sans); color: var(--text3); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chart-live .tk-also { display: flex; flex-direction: column; gap: 2px; }
 .chart-live .tk-also:empty { display: none; }
 .chart-live .tk-also-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; font: 500 12px var(--mono); color: var(--warn); }
 .chart-live .tk-also-row .btn { min-height: 22px; padding: 1px 8px; }
-.chart-live .tk-note { font-size: 11px; color: var(--text2); overflow-wrap: anywhere; }
+.chart-live .tk-note { font-size: 11px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* one line; the whole note in its tooltip */
+.chart-live .tk-bk .oin { padding: 3px 4px; font-size: 11px; min-width: 34px; }
+.chart-live .tk-bk .seg.bunit button { padding: 2px 5px; }
 .chart-live .tk-note:empty { display: none; }
 .chart-live .tk-note.warn { color: var(--warn); }
 .chart-live .tk-note.error { color: var(--loss); }

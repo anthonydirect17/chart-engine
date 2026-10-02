@@ -77,8 +77,11 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.match(CORE, /\$\('buyMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('buy', 'market', null\)\)\);/);
   assert.match(CORE, /\$\('sellMkt'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.sendOrder\('sell', 'market', null\)\)\);/);
   assert.match(CORE, /\$\('beBtn'\)\.addEventListener\('click', pointerOnly\(core\.breakEven\)\);/);
-  assert.match(PAGE, /chart\.on\('orderMove', e => T\.moveOrder\(e\.id, e\.price\)\);/);
-  assert.match(PAGE, /chart\.on\('orderCancel', e => T\.cancelOrder\(e\.id\)\);/);
+  assert.match(PAGE, /chart\.on\('orderMove', e => \(OT\.planIdOf\(e\.id\) \? T\.planMove\(e\.id, e\.price\) : T\.moveOrder\(e\.id, e\.price\)\)\);/);
+  assert.match(PAGE, /chart\.on\('orderCancel', e => \(OT\.planIdOf\(e\.id\) \? T\.planRemove\(e\.id\) : T\.cancelOrder\(e\.id\)\)\);/);
+  // 1.13.0: a planned line's drag, x and "+SL" / "+TP" go through ready() too (the gates of a leg's drag)
+  assert.match(CORE, /function planTarget\(entryId\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return null; \}\n\s+if \(notShown\(entryId\)\) return null;/);
+  for (const f of ['planMove', 'planRemove', 'planAdd']) assert.match(CORE.slice(CORE.indexOf('function ' + f + '(')), /^\s+const o = planTarget\(/m, f);
   assert.match(CORE, /function moveOrder\(id, price\) \{\n\s+if \(!ready\(\)\) \{ env\.changed\(\); return; \}\n\s+if \(notShown\(id\)\) return;/);
   assert.match(CORE, /function cancelOrder\(id\) \{\n\s+if \(!ready\(\)\) return;\n\s+if \(notShown\(id\)\) return;/);
   assert.match(CORE, /const notShown = id => \{ const o = TR\.orders\.get\(id\); if \(o && o\.account === TR\.account\) return false;/);
