@@ -7,9 +7,11 @@ talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on 
 ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
 Since 0.3.4 every trade, live and in the backfill, carries its side (buy or sell) and how it was found; see
 "Trade side" below.
-Since 0.3.7 a limit or stop entry's stop and target are planned PRICES (new `plan` message, `planned` on its `order`
-messages, no 200-tick limits unless `config.txt` sets them); see "Planned stop and target on a resting entry (0.3.7)"
-below. Since 0.3.7 ChartBridge also sends NinjaTrader's prior settlement, NinjaTrader's own 4h, 1D and 1W bars on
+Since 0.3.8 a resting (limit or stop) entry's planned stop and target are DISTANCES IN TICKS from its actual fill,
+travelling with the entry when it is moved, like a NinjaTrader ATM (Anthony, 2026-10-01; this replaces 0.3.7's planned
+prices): a `plan` message sets them, and `planned` on its `order` messages reports them; no 200-tick limits unless
+`config.txt` sets them (0.3.7); see "Planned stop and target on a resting entry (0.3.8)" below. Since 0.3.7 ChartBridge
+also sends NinjaTrader's prior settlement, NinjaTrader's own 4h, 1D and 1W bars on
 request, and the last 5 sessions' volume at price on request; see "Settlement, higher-timeframe bars and the weekly
 profile (0.3.7)" below. A page that does not know these messages ignores them (the live page's message switch has no
 default case, so an unknown type does nothing).
@@ -915,8 +917,8 @@ the broker and the prop firm see NinjaTrader orders.
 7. **Rate limit.** At most 10 order actions per second per connection; more are refused.
 8. **Strict messages.** Only the keys in the table below; anything else (a misspelt `bracket`, a key with
    a space or a dash) is refused, never ignored. `qty` and bracket ticks must be plain JSON whole numbers
-   (no quotes, no decimals, no exponent, no leading zero, at most 9 digits); `price`, `stopPrice` and
-   `targetPrice` a plain decimal (`stopPrice` and `targetPrice` may also be `null` in `plan`, 0.3.7). A
+   (no quotes, no decimals, no exponent, no leading zero, at most 9 digits), and so must `plan`'s
+   `stopTicks` and `targetTicks` (0.3.8; or `null`); `price` a plain decimal. A
    message with any backslash escape is refused. No key may appear twice. No list
    and no nested object except `bracket`, which must be an object (`"bracket": null` is refused).
    A WebSocket message over 64 KB closes the connection.
@@ -928,14 +930,14 @@ A refusal never reaches NinjaTrader; it comes back as `reject` with a plain reas
 A bracket is `{ "stop": ticks, "target": ticks }`, each a whole number of 0 or more (0 means none;
 both 0 means no bracket; at most `maxBracketTicks` when `config.txt` sets it; before 0.3.7 at most
 200). It may only go on an order that opens or adds to a position; on an order that would reduce the
-position (by both position readings) it is refused. On a market entry the ticks are from each fill. On
-a limit or stop entry (0.3.7) the bracket is turned into PRICES once, at placement, from the entry's
-own price, and those planned prices are what its legs use: see "Planned stop and target on a resting
-entry (0.3.7)" below.
+position (by both position readings) it is refused. The ticks are always from each fill's actual price
+(0.3.8, Anthony's ATM rule; 0.3.7 anchored a limit or stop entry's bracket to prices, which 0.3.8 drops). On a
+resting (limit or stop) entry they can be changed before the fill: see "Planned stop and target on a resting
+entry (0.3.8)" below.
 
 - **Placed per fill.** Each time the entry fills (all at once, or in parts), that increment gets its
-  own stop and target for exactly that many contracts (a market entry: priced from that increment's
-  fill price; a limit or stop entry: at its planned prices), as an OCO pair (`oco` = `cb-<tag>-<filled so far>`). Legs are **GTC**. With only a stop or only a target,
+  own stop and target for exactly that many contracts, priced from that increment's fill price (the
+  entry's planned ticks as they are when the fill is handled), as an OCO pair (`oco` = `cb-<tag>-<filled so far>`). Legs are **GTC**. With only a stop or only a target,
   the lone leg has no OCO id. Legs from an order event are always placed in full, without reading the
   position at fill time (event order differs between connections, so that reading can be stale, and a
   withheld stop is the worst outcome). If a fill turns out to have closed an opposite position (for
@@ -946,8 +948,9 @@ entry (0.3.7)" below.
   ChartBridge sends a market exit for that increment instead of a stop through the market (which a
   broker rejects, and a rejected leg can take its OCO partner with it), and raises a `status` `error`.
   A rejected market exit raises a `status` `error` too ("the position may have NO STOP").
-- **Named for recovery.** The entry's order name carries the bracket (`CB#1a2b3c4d s8 t16` for a market
-  entry, any number of digits; `CB#1a2b3c4d plan s24980.25 t25010.5` for a limit or stop entry, 0.3.7), and each
+- **Named for recovery.** The entry's order name carries the bracket as placed (`CB#1a2b3c4d s8 t16` for a
+  market entry, any number of digits; `CB#1a2b3c4d atm s8 t16` for a limit or stop entry, 0.3.8; 0.3.6 named
+  every entry `s8 t16`, 0.3.7 named a resting one `plan s24980.25 t25010.5` with prices), and each
   leg's name carries its fill increment: `CB#1a2b3c4d stop f2 q2 p24990.25` (the pair for the fill that
   brought the entry to 2 filled, 2 contracts, filled at 24990.25); a market exit is
   `CB#1a2b3c4d exit f2 q2 p24990.25`. After a recompile or restart of ChartBridge the bracket is rebuilt
@@ -996,96 +999,95 @@ entry (0.3.7)" below.
 
 Stop-limit orders are shown but can only be moved in NinjaTrader.
 
-### Planned stop and target on a resting entry (0.3.7)
+### Planned stop and target on a resting entry (0.3.8)
 
-Decided by Anthony on 2026-10-01. A limit or stop entry's stop and target are **prices**, where Anthony
-sees them; a market entry keeps ticks from its fill.
+Decided by Anthony on 2026-10-01 at HOME, after trying 0.3.7 ("it should not be the planned target, it should be the
+current target"): like a NinjaTrader ATM, a resting (limit or stop) entry's stop and target are **distances in ticks
+from its actual fill**, and they **travel with the entry** when it is moved. This replaces 0.3.7's planned prices
+(`stopPrice`/`targetPrice` on `order`, a price `plan`, the wrong-side and move-past refusals), which no page used.
+A market entry is unchanged: ticks from its fill.
 
-- **At placement.** The `order` message takes either `bracket` (ticks, as the page has always sent: for a
-  limit or stop entry turned into prices once, here, from the entry's own price) or `stopPrice` and/or
-  `targetPrice` (prices; leave one out for none). Both together, or `stopPrice`/`targetPrice` on a market
-  order, are refused. A planned stop must be below a buy entry's price (above a sell's) and a target above
-  it (below a sell's), never at it, on the tick grid, above 0, and within `maxBracketTicks` of the entry price
-  when `config.txt` sets it. A bracket that would put a leg at or below zero is refused (never read as none).
-- **At the fill.** Every fill increment's legs go at the planned prices, at any fill price (better on a
-  gap, worse on slippage), not at a distance from the fill. If the planned stop has already traded at the
-  fill (a trade from the last 2 seconds at or through it, or the fill itself at or through it), the market
-  exit applies, with its `status` `error`. After a recompile, when contracts handled with no legs came before
-  the fill, the increment's price is an estimate (they have no name to read their prices from), so then only a
-  trade from the last 2 seconds decides, never the estimated price. If the planned target has already been reached (a gap or slippage
-  past it), the OCO pair is placed as usual: the target is a limit through the market, which fills at once
-  at the target or better and takes its stop with it; a `status` `warn` says so.
-- **Moving the entry** (`change` on it) leaves the planned prices where they are. A move to or past its own
-  planned stop or target is refused ("the entry cannot move to or past its own planned stop 24980; move or
-  remove the stop first"); with `maxBracketTicks` set, so is a move that takes it further than that from them.
-- **Changing the plan** (`plan`, below) before the fill: add, move or remove the stop and the target, checked as
-  at placement against the entry's current price, and also against the price a `change` has sent that NinjaTrader
-  has not confirmed yet (both must pass; the sent price is forgotten once an update shows it, on any change error
-  or refusal, when the entry is done, and when a pending change state (ChangePending or ChangeSubmitted) has been seen
-  and then left at another price; an update outside those states before one is seen may be older than the change,
-  so it is kept). Adding a stop or target to an entry that had none is a new
-  bracket: refused on an order that would reduce the position, as at placement. After the entry has filled in
-  part, a `plan` applies to the fill increments still to come only (those ChartBridge has not yet placed legs
-  for); legs already working are not touched (move them with `change` on the leg, as B/E does). If contracts
-  of the entry already filled with no stop and the plan adds one, a `status` `error` says those contracts have no
-  stop. One exception gives more protection: after a recompile, contracts that were handled with no legs after
-  the last pair ChartBridge can read from the order names are not known, so the next fill gets legs for them
-  too (the legs check trims legs beyond the position).
-- **A plan racing a fill.** The new prices are set in memory at once, together with a check that every fill
+- **At placement.** `order` takes `bracket: {"stop": ticks, "target": ticks}` as always (0 = none), and nothing else
+  for it (`stopPrice` and `targetPrice` are gone: unknown keys, refused).
+- **Moving the entry** (`change` on it) moves nothing else and is never refused for its bracket: the distances go with
+  it. Anthony's workflow: place the limit lower than he means to, drag it to its spot (stop and target follow), and drag
+  the planned stop and target lines where he wants them (each drag sends a `plan` with the new distance).
+- **At the fill.** Every fill increment's legs go at that increment's fill price minus the stop ticks and plus the
+  target ticks (a sell the other way), with the planned ticks as they are when the fill is handled. On a gap or
+  slippage the legs are from the actual fill, so the stop is always on the right side of it; the market exit is
+  only for a trade from the last 2 seconds at or through the stop level (see Brackets). After a recompile an
+  increment's fill price can be an estimate (contracts handled with no legs before it have no name to read their
+  prices from); the legs are then placed from it with a `status` `warn` saying so.
+- **Changing the plan** (`plan`, below) before or between fills: set, change or remove the stop or target distance.
+  A distance is a whole number of 1 or more (at most `maxBracketTicks` when `config.txt` sets it); `null` removes it.
+  Adding a stop or target to an entry that had none is a new bracket: refused on an order that would reduce the
+  position (by both readings), as at placement. After a part fill, a `plan` applies to the fill increments still to
+  come only; legs already working are not touched (move them with `change` on the leg, as B/E does). If contracts of
+  the entry already filled with no stop and the plan adds one, a `status` `error` says those contracts have no stop.
+  After a recompile, contracts that were handled with no legs after the last pair ChartBridge can read from the order
+  names are not known, so the next fill gets legs for them too (more protection; the legs check trims legs beyond
+  the position). A fully filled, cancelled or rejected entry, a market entry, a leg, and an order placed elsewhere
+  are refused.
+- **A plan racing a fill.** The new distances are set in memory at once, together with a check that every fill
   NinjaTrader has reported for the entry has been handled (under the lock the fill path holds while it takes an
-  increment and reads the prices for its legs), before anything is written to a file. A fill handled after that
-  gets the new prices. If NinjaTrader has reported a fill ChartBridge has not handled yet, the plan is refused:
-  "1 contract(s) filled before this plan arrived; they get the planned stop 24980 / target 25010 as it was;
-  nothing changed: send the plan again for the contracts still to fill"; when the entry had no planned stop,
-  a `status` `error` says those contracts get NO STOP. A fully filled, cancelled or rejected
-  entry has no plan to change. A market entry, a leg, an order placed elsewhere, and an entry placed before
-  0.3.7 (its bracket is ticks; cancel it and place it again) are refused.
-- **Told to the page.** Every `order` message for a limit or stop entry ChartBridge placed carries
-  `"planned": {"stop": price or null, "target": price or null}` (null = none). Pages before 0.3.7 ignore the
-  key (chart 1.11.0 keeps each `order` message as an object and reads only the keys it names). After a
-  `plan` the entry's `order` message is sent again with the new prices; a refusal is a `reject`.
-- **Survives a recompile or a restart.** An order's name cannot be changed after it is sent, so the planned
-  prices also live in `planned_brackets.txt` in ChartBridge's folder, one line per entry,
-  `<tag> <stop> <target> <saved UTC ms>` (0 = none), written whole to a temp file and swapped in. The records
-  live in memory under a small lock never held during file I/O; the file is a copy. It is read once at start on
-  a pool thread, started before ChartBridge watches the accounts; written after a placement and after a `plan`
-  on the page's connection thread, outside every lock; and a line is removed (on a pool thread) once its entry
-  is done and every fill has legs. NinjaTrader's thread only reads memory. Until the file has been read (the
-  first moments after a start), a resting entry's bracket is not recovered: a fill's legs wait. A fill an order
-  event reported meanwhile gets its legs at the saved prices the moment the file has been read (the full
-  increment, as its event would have). A fill the 2 second check found first (one from while ChartBridge was
-  stopped, whose position may have been closed by hand since) is left to that check, which legs only what the
-  listed position still holds (so never legs on a flat account), a few seconds after the read; if it is still not read about 3 s after the 2 second check first sees
-  such a fill, every signed-in page gets a `status` `error` naming the entry with NO LEGS. `plan` and `change` on such
-  an entry are refused meanwhile ("ChartBridge is still reading planned_brackets.txt"); nothing is guessed. A `plan`
-  on an entry placed since the start, sent before the read, applies; its write waits for the read (no false "could
-  not be saved"). A `plan` whose save fails
-  still applies (the fills use what Anthony set) and raises a `status` `error` that the prices may not survive a
-  recompile. Lines older than 7 days are dropped when the file is read (entries are Day orders).
-- **Missing record.** If a recovered limit or stop entry still working (or with fills that have no legs) has no
-  line in `planned_brackets.txt`, ChartBridge never guesses: it uses the prices in the entry's name (the prices
-  it was placed with) and raises a `status` `error` at recovery and again at the fill, naming those prices and
-  saying they may be out of date (and "There is NO planned stop" when the name has none). A `plan` sent then
-  saves a new record and ends the alarm. If that leaves the stop on the wrong side of a fill, the market exit
-  path applies.
+  increment and reads the distances for its legs), before anything is written to a file. A fill handled after that
+  gets the new distances. If NinjaTrader has reported a fill ChartBridge has not handled yet, the plan is refused:
+  "1 contract(s) filled before this plan arrived; they get the planned stop 8 / target 16 ticks as it was; nothing
+  changed: send the plan again for the contracts still to fill"; when the entry had no planned stop, a `status`
+  `error` says those contracts get NO STOP.
+- **Told to the page.** Every `order` message for a working limit or stop entry ChartBridge placed carries
+  `"planned": {"stopTicks": 8 or null, "targetTicks": 16 or null}` (null = none). Pages that do not know the key
+  ignore it. After a `plan` the entry's `order` message is sent again; a refusal is a `reject`.
+- **Survives a recompile or a restart.** An order's name cannot be changed after it is sent, so the name carries the
+  ticks it was placed with (`atm s8 t16`) and the edits live in `planned_brackets.txt` in ChartBridge's folder, one
+  line per entry, `<tag> ticks <stopTicks> <targetTicks> <saved UTC ms>` (0 = none), written whole to a temp file and
+  swapped in. The records live in memory under a small lock never held during file I/O; the file is a copy. It is
+  read once at start on a pool thread, started before ChartBridge watches the accounts (a read that fails, as when
+  an antivirus holds the file, is tried again for a few seconds; if it still fails the file is never rewritten that
+  run and the pages get a `status` `error`); written after a placement and after a `plan` on the page's connection
+  thread, outside every lock, tried again a few times when it fails, and again every 2 seconds until it succeeds, with
+  a `status` `error` while it does not; a line is removed (on a pool thread) once its entry is done and every fill has
+  legs. Every 2 seconds ChartBridge also checks that each working resting entry with a bracket has its line, and
+  writes it if not. NinjaTrader's thread only reads memory. Until the file has been read (the first moments after a
+  start), a resting entry's bracket is not recovered: a fill's legs wait. A fill an order event reported meanwhile gets
+  its legs the moment the file has been read (the full increment, as its event would have). A fill the 2 second check
+  found first (one from while ChartBridge was stopped, whose position may have been closed by hand since) is left to
+  that check, which legs only what the listed position still holds (never a flat account); if the file is still not
+  read about 3 s after the check first sees such a fill, every signed-in page gets a `status` `error` naming the entry
+  with NO LEGS. `plan` and `change` on such an entry are refused meanwhile ("ChartBridge is still reading
+  planned_brackets.txt"); nothing is guessed. A `plan` whose save fails still applies (the fills use what Anthony set)
+  and raises a `status` `error` that it may not survive a recompile. Lines older than 7 days are dropped when the file
+  is read (entries are Day orders).
+- **Missing record.** If a recovered 0.3.8 resting entry (`atm`) still working (or with fills that have no legs) has no
+  line in `planned_brackets.txt`, ChartBridge never guesses: it uses the ticks in the entry's name (as placed) and
+  raises a `status` `error` at recovery and again at the fill, naming them and saying they may be out of date (and
+  "There is NO planned stop" when the name has none). A `plan` sent then saves a new record and ends the alarm.
+- **Entries placed before 0.3.8 and still resting after the upgrade.** A 0.3.6 entry (`s8 t16`) is already ticks from
+  the fill: it is recovered as it is, and a `plan` on it is accepted (its line is then written). A 0.3.7 entry
+  (`plan s<price> t<price>`, its planned prices from its 0.3.7 line in `planned_brackets.txt`, else from its name) is
+  converted once, at recovery, to the distances it shows now: stop and target ticks from the entry's current price
+  (rounded to the tick; a price on the wrong side of the entry, or none, is no stop or no target). The converted
+  ticks are written as its line, and the pages get a `status` `warn` naming them. From then on it is an ATM entry.
+  0.3.7 price lines for entries ChartBridge has not seen yet are kept in the file until their entry is converted or
+  they are 7 days old.
 
 | type | fields (no others are accepted) | notes |
 |---|---|---|
-| `plan` | `cid` (optional), `id` (the entry's ChartBridge id), `stopPrice` and/or `targetPrice` (a plain price to set or move it, `null` to remove it; a key left out is unchanged; at least one) | counted in the 10 actions a second; the same trading, sign-in, account and contract gates as `change`; never reaches NinjaTrader |
+| `plan` | `cid` (optional), `id` (the entry's ChartBridge id), `stopTicks` and/or `targetTicks` (a whole number of 1 or more to set the distance, `null` to remove it; a key left out is unchanged; at least one) | counted in the 10 actions a second; the same trading, sign-in, account and contract gates as `change`; never reaches NinjaTrader |
 
 A `bracket` object is accepted on `order` only: on `plan`, `change` or `cancel` it is refused ("unknown key
 "bracket""). On `flatten` it is ignored, as before 0.3.7, so Flatten is never refused for anything new.
 
-Examples: `{"type":"order","cid":"c7","account":"Sim101","root":"MNQ","side":"buy","kind":"limit","qty":2,"price":24990,"stopPrice":24980,"targetPrice":25010}`,
-`{"type":"plan","cid":"c8","id":"o5","stopPrice":24975.5}` (drag the stop),
-`{"type":"plan","cid":"c9","id":"o5","targetPrice":null}` (remove the target). The `order` message for that entry:
-`{"type":"order","id":"o5",...,"role":"entry","oco":null,"planned":{"stop":24975.5,"target":null}}`.
+Examples: `{"type":"order","cid":"c7","account":"Sim101","root":"MNQ","side":"buy","kind":"limit","qty":2,"price":24990,"bracket":{"stop":8,"target":16}}`,
+`{"type":"plan","cid":"c8","id":"o5","stopTicks":12}` (drag the planned stop line to 12 ticks from the entry),
+`{"type":"plan","cid":"c9","id":"o5","targetTicks":null}` (remove the target). The `order` message for that entry:
+`{"type":"order","id":"o5",...,"role":"entry","oco":null,"planned":{"stopTicks":12,"targetTicks":null}}`.
 
 **Optional distance limits** (`config.txt`; absent means no limit; a value that is not a whole number of 1 or
 more is ignored, so there is no limit, with a line in the Output window and a `status` `warn` to every signed-in
 page at config load and to each page as it signs in successfully (never to one whose sign-in failed), Anthony 2026-10-01; for the page build: show it): `maxTicksAway = 400` (a limit or stop price, placed or moved,
-at most 400 ticks from the last price) and `maxBracketTicks = 300` (bracket ticks at most 300; a planned stop
-or target at most 300 ticks from its entry's price). When set, the `trading` message names them
+at most 400 ticks from the last price) and `maxBracketTicks = 300` (bracket ticks, and a `plan`'s `stopTicks` and
+`targetTicks`, at most 300). When set, the `trading` message names them
 (`"maxTicksAway": 400`, `"maxBracketTicks": 300`).
 
 ### Signing in
@@ -1103,8 +1105,8 @@ or target at most 300 ticks from its entry's price). When set, the `trading` mes
 | type | fields (no others are accepted) | notes |
 |---|---|---|
 | `auth` | `token` | once per connection, after `hello`. Answer: `trading` (below). |
-| `order` | `cid` (page id, string, optional), `account`, `root`, `side` (`buy`/`sell`), `kind` (`market`/`limit`/`stop`), `qty`, `price` (limit/stop only; a market order with a price is refused), `bracket` (optional, see Brackets), `stopPrice` and `targetPrice` (0.3.7, optional, limit/stop only, not with `bracket`) | |
-| `plan` | `cid` (optional), `id`, `stopPrice`, `targetPrice` | 0.3.7: set, move or remove a resting entry's planned stop and target (see above) |
+| `order` | `cid` (page id, string, optional), `account`, `root`, `side` (`buy`/`sell`), `kind` (`market`/`limit`/`stop`), `qty`, `price` (limit/stop only; a market order with a price is refused), `bracket` (optional, see Brackets) | |
+| `plan` | `cid` (optional), `id`, `stopTicks`, `targetTicks` | 0.3.8: set, change or remove a resting entry's planned stop and target distances (see above) |
 | `change` | `cid` (optional), `id` (ChartBridge order id, `o1`, `o2`, ...), `price` | move a working limit or stop, or a bracket leg (drag on the chart) |
 | `cancel` | `cid` (optional), `id` | cancel one working order (cancelling one leg of an OCO pair cancels its partner) |
 | `flatten` | `cid` (optional), `account`, `root` | cancel every working order for that account and instrument, then close the position at market |
@@ -1117,7 +1119,7 @@ String values must be plain (no backslash escapes, at most 200 characters).
 |---|---|---|
 | `trading` | `enabled` (bool), `reason` (when not enabled), `accounts` (allowed names), `maxQty` (`{root: n}`, including the default under `"*"`), `maxTicksAway` and `maxBracketTicks` (0.3.7, only when `config.txt` sets them) | answer to `auth`; also in `hello` with `enabled` false until `auth` succeeds |
 | `orders` | `list`: `[order]` | after `auth`, every working order on the allowed accounts |
-| `order` | `id` (ChartBridge's id, stable while the order lives), `cid` (when placed from this page), `account`, `root`, `name`, `side`, `kind` (`market`, `limit`, `stop`, `stopLimit`, `other`), `qty`, `filled`, `price` (limit or stop price, or null), `avgFill` (or null), `state` (`working`, `partFilled`, `filled`, `cancelled`, `cancelling`, `rejected`), `role` (`entry`, `stop`, `target`, or `other` for orders placed elsewhere), `oco` (or null), `text` (NinjaTrader's error when rejected or failed), `planned` (0.3.7: on a limit or stop entry ChartBridge placed, `{"stop": price or null, "target": price or null}`) | every order change, live; and again after a `plan` |
+| `order` | `id` (ChartBridge's id, stable while the order lives), `cid` (when placed from this page), `account`, `root`, `name`, `side`, `kind` (`market`, `limit`, `stop`, `stopLimit`, `other`), `qty`, `filled`, `price` (limit or stop price, or null), `avgFill` (or null), `state` (`working`, `partFilled`, `filled`, `cancelled`, `cancelling`, `rejected`), `role` (`entry`, `stop`, `target`, or `other` for orders placed elsewhere), `oco` (or null), `text` (NinjaTrader's error when rejected or failed), `planned` (0.3.8: on a working limit or stop entry ChartBridge placed, `{"stopTicks": n or null, "targetTicks": n or null}`) | every order change, live; and again after a `plan` |
 | `position` | `account`, `root`, `qty` (signed: long positive, short negative), `avgPrice` (or null when flat) | after `auth` and on every change |
 | `reject` | `cid` or `id` (whichever the message had), `reason` | a refusal by ChartBridge's gates |
 | `status` | `level` `error` (a bracket leg rejected or a bracket error: check the stop now) or `warn` (the legs check cancelled or shrank legs), `text` | bracket problems, to signed-in pages |

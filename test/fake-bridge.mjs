@@ -398,7 +398,7 @@ function onMessage(c, text) {
   if (m.type === 'subscribe') subscribe(c, m);
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
-  else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7
+  else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
 const settlement = {}, settlementDate = {};       // the prior session's settlement and its trading date (sample: its last close)
