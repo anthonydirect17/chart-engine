@@ -271,7 +271,7 @@ try {
   check(sl.src && sl.pill && sl.time && sl.grid === 'grid' && sl.status, 'the single chart page keeps its full legend (source line, LIVE, bar time) and its status line');
   check(sv.glide === 'fast' && sv.mode === 'traded', 'with the Glide and Range style set in the workspace');
   // and back: Glide set on the single chart page reaches the workspace's charts
-  await sp.click('#glideSeg [data-v="off"]');
+  await sp.click('#setBtn'); await sp.click('#glideSeg [data-v="off"]'); await sp.keyboard.press('Escape');   // 1.14.0: Glide in the page's Settings
   await page.waitForTimeout(300);
   await page.click('#wsSet');
   check(await page.evaluate(() => document.querySelector('#wsGlide [aria-pressed="true"]').dataset.v) === 'off', 'Glide set on the single chart page shows in the workspace\'s Settings');
@@ -293,15 +293,18 @@ try {
     const list = document.querySelector('.tp-list');
     const col = r => getComputedStyle(r.querySelector('.tp-p')).color;
     return { n: rs.length, fit: Math.ceil(list.clientHeight / 18), times: rs.map(r => r.querySelector('.tp-t').textContent),
-      buy: rs.filter(r => r.classList.contains('buy')).map(col)[0], sell: rs.filter(r => r.classList.contains('sell')).map(col)[0],
-      big: rs.filter(r => r.classList.contains('big')).length, bigBg: (rs.find(r => r.classList.contains('big')) || rs[0]).style && getComputedStyle(rs.find(r => r.classList.contains('big')) || rs[0]).backgroundColor,
+      // 1.14.0: with ChartBridge 0.3.8's q each row has its category's color (its own test: smoke:display); without, its side
+      q: rs.filter(r => /\bq(m?\d)\b/.test(r.className)).length,
+      buy: rs.filter(r => r.classList.contains('buy') && !r.classList.contains('big')).map(col)[0], sell: rs.filter(r => r.classList.contains('sell') && !r.classList.contains('big')).map(col)[0],
+      big: rs.filter(r => r.classList.contains('big')).length, bigBold: rs.filter(r => r.classList.contains('big')).every(r => +getComputedStyle(r).fontWeight >= 700),
+      bigBg: rs.filter(r => r.classList.contains('big')).every(r => !/rgba\(0, 0, 0, 0\)|transparent/.test(getComputedStyle(r).backgroundColor)),
       small: rs.filter(r => !r.classList.contains('big')).every(r => +r.querySelector('.tp-v').textContent < 4),
       bigOk: rs.filter(r => r.classList.contains('big')).every(r => +r.querySelector('.tp-v').textContent >= 4), dom: list.children.length };
   });
   check(tp.n > 10 && tp.dom === tp.fit, 'only the rows that fit are in the page (' + tp.dom + ' rows for ' + tp.fit + ' visible)');
   check(tp.times.every((t, i) => i === 0 || t <= tp.times[i - 1]), 'times run newest first');
-  check(tp.buy === 'rgb(61, 220, 151)' && tp.sell === 'rgb(255, 92, 122)', 'buys green, sells red');
-  check(tp.big > 0 && tp.bigOk && tp.small && tp.bigBg === 'rgb(42, 31, 77)', 'large prints (size 4 or more here) highlighted purple, ' + tp.big + ' on screen');
+  check(tp.q === tp.n || (tp.buy === 'rgb(61, 220, 151)' && tp.sell === 'rgb(255, 92, 122)'), tp.q === tp.n ? 'every row by its Time and Sales category (ChartBridge 0.3.8)' : 'buys green, sells red');
+  check(tp.big > 0 && tp.bigOk && tp.small && tp.bigBg && tp.bigBold, 'large prints (size 4 or more here) bold on a tint of their color, ' + tp.big + ' on screen');
   const keptN = await page.evaluate(() => window.workspace.views().find(v => v.type === 'tape').count);
   check(keptN <= 500, 'at most 500 trades kept (' + keptN + ')');
   await shot(page, 'workspace-tape.png');

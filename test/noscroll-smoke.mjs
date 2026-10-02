@@ -44,6 +44,11 @@ function scan(sel) {
     if ((clipsX || isBox) && el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0) bad.push(name(el) + ' wide ' + el.scrollWidth + '>' + el.clientWidth);
     if (clipsY && el.scrollHeight > el.clientHeight + 1 && el.clientHeight > 0 && !isBox) bad.push(name(el) + ' tall ' + el.scrollHeight + '>' + el.clientHeight);
   }
+  for (const el of all) {                                                  // a card of its own (an indicator's gear) on screen too
+    if (el === rootEl || !visible(el) || !['absolute', 'fixed'].includes(getComputedStyle(el).position) || el.closest('.visually-hidden')) continue;
+    const q = el.getBoundingClientRect();
+    if (q.width > 1 && (q.left < -0.5 || q.top < -0.5 || q.right > innerWidth + 0.5 || q.bottom > innerHeight + 0.5)) bad.push(name(el) + ' off screen ' + JSON.stringify([Math.round(q.left), Math.round(q.top), Math.round(q.right), Math.round(q.bottom)]));
+  }
   const r = rootEl.getBoundingClientRect();
   if (r.left < -0.5 || r.top < -0.5 || r.right > innerWidth + 0.5 || r.bottom > innerHeight + 0.5) bad.push(name(rootEl) + ' off screen ' + JSON.stringify([Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]));
   const d = document.documentElement;

@@ -1,5 +1,120 @@
 # Changelog
 
+## 1.14.0 (2026-10-02): the display round
+
+Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The Time and
+Sales categories need ChartBridge 0.3.8 (`q`) and the change from the prior settlement 0.3.7 (`settlement`); with an
+older one the tape colors by side and that readout stays blank. Nothing under `nt8/` changes, nor the order code
+(`live/trade.js`, `live/order-ticket.js`, order drawing), the motion (the time constants, the live tick path,
+`live/bar-builder.js`) or the signals' drawing. `ChartLive.mount` takes no new options. Anthony's list of 2026-10-01,
+from using 1.12.0 live on HOME:
+
+### 1. No scrolling, ever
+- **Colors** in two columns (the colors on the left, the preset groups on the right, 560 px): it fits a 1366x768 screen
+  whole. In the workspace's top bar it no longer scrolls sideways or cuts the Black swatch and the hex boxes (the top
+  bar's `nowrap` reached into it; its popovers wrap their text now).
+- **Settings** in the workspace in two columns (the charts and hotkeys; large prints, the PIN, the layout and the
+  versions), 800 px; it fits at 1366x768.
+- **The Indicators menu**: an open gear's settings sit in a column beside the list (the menu grows sideways, not down),
+  and the menu is placed where it fits whole: below the order bar when it fits there (the Armed switch, the account
+  and the position stay in view, as before), else below its button, else as high as it must. Only a menu taller than
+  the window scrolls its list (none at 1366x768 with the defaults).
+- **The workspace's popovers** (a chart's instrument and bars and its small menu, Add panel, the Time and Sales gear,
+  Settings) open under their button when they fit, else moved up until they do, never with a scrollbar.
+- `npm run smoke:noscroll` (new) opens every panel, menu, popover and dialog at 1366x768, 1920x1080 and 2560x1440, in the
+  workspace and on `/single.html`, and fails on anything that would scroll or is cut (Time and Sales rows are the only
+  intended scroll; text cut on purpose with an ellipsis and its tooltip is not counted), or off the screen.
+
+### 2. Panels resize from any edge or corner
+- A handle on every edge (7 px, 3 px of it in the gap between panels) and corner (14 px), snapped to whole cells as
+  before; overlap still refused ("That place overlaps another panel: put back"). Quiet: nothing shows until the pointer
+  is on one, then a 2 px accent line on that edge (an L at a corner), and its resize cursor stays while dragging; the
+  bottom right corner keeps its grip lines. Moving stays on the header. `WorkspaceCore.snapResizeEdge`.
+
+### 3. Time and Sales, NinjaTrader style (ChartBridge 0.3.8)
+- Each trade's category from `q`: above the ask, at the ask, between, at the bid, below the bid, each with its own color
+  (tokens `--tape-above` `#9CF5CB`, `--tape-ask` `#3DDC97`, `--tape-mid` `#9AA8B8`, `--tape-bid` `#FF5C7A`,
+  `--tape-below` `#FFA3B4`: the house buy green and the tape's sell red at the quote, the brighter pair outside it, the
+  quiet grey between). Editable in the tape's gear (a picker and a hex box each, Default colors), saved in this browser
+  (`live-tape-colors-v1`) for every tape. A trade with no `q` (ChartBridge before 0.3.8, or no usable quote) colors by
+  its side as before.
+- **Big trades** (the large-print floor: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, RTH / overnight): bold, the
+  price and size brighter, on a tint of their color with a bar at the left edge. The floors are the bubbles' one
+  setting (`live-tape-floors-v1`, read through `LivePrefs.largeFloors` and looked up by `ChartEngine.largeFloorAt`, the
+  signals' own rule); the bubbles' Auto applies to the bubbles only (Anthony).
+- `live/feed.js` keeps each trade's `q` with it (LiveLog), so a tape that joins later, or a replay, colors the trades it
+  starts with the same; a backfill row keeps it in the 6th place as ChartBridge sends it.
+
+### 4. Grid lines
+- An option in Settings (Grid lines Off / On), **off by default**, for every chart and the single chart page
+  (`live-settings-v2` `grid`). Off leaves the session dividers, the RTH shading and the delta pane's zero line.
+  Engine: option `grid` (default on), `setGrid(on)`, `getGrid()`.
+
+### 5. Chart display
+- **Room right of price**: 80 px of empty space right of the last bar by default, the same on screen at every zoom (it
+  was 8 bars, a few px zoomed out); None, 40, 80 or 160 px in Settings (`room`). Jump to live and End keep it; zooming
+  while following keeps the live edge in place. Engine: option `room` (CSS px; none keeps `rightOffset` bars),
+  `setRoom(px)`, `room()`.
+- **Zoom to brackets**: the auto-fit price scale takes in every working order, the position's stop and target legs and
+  the planned stop and target lines (1.13.0), so they are always on screen. It eases in with the existing 120 ms axis
+  re-fit, never a snap; an order being dragged keeps the scale still under the pointer (it counts at its confirmed or
+  asked price). Engine: option `fitOrders` (default on), `priceScale()`.
+- **The VWAP no longer sizes the chart**: a VWAP far from price draws off the scale, and a marker at the plot's top or
+  bottom right edge says where it is (a small triangle and "VWAP 25,512.25" in its color on the legend ground).
+  Engine: `vwapMarker()`.
+- **Readouts** in the legend (once a second, on the second; never on the tick path): **Bar 0:23**, the time left in the
+  bar (Range bars: **Bar ▲3 ▼5t**, the ticks left up and down), and **ATR(14) 12.50**, NinjaTrader's ATR (period 14, the
+  first 14 true ranges averaged then Wilder's smoothing) of the chart's own closed bars, on the legend's first line;
+  **+0.42% vs settle**, the last price's change from the prior settlement (ChartBridge 0.3.7: hello's `settlement`
+  and the `settlement` message; blank, never estimated, when there is none), beside the bar's change. In the
+  workspace's compact legend the change from the settlement follows the bar's change, the bar time and ATR come last
+  (shown when the panel has room). Engine: `lastBar()`, `atr(period)`; `util.fmtRemain`, `barRemain`, `atr`, `pctFrom`,
+  `roomBars`, `fitRange`.
+
+### 6. `/single.html` gets the workspace's cleanup
+- One toolbar line (at 1366, 1920 and 2560 px): the instruments, Bars and the range size, Indicators and its chips (the
+  workspace's 2-letter chips: VO VW LV IB FL, room kept for six), a small **⋯** menu (Trend line, Price line, Clear
+  drawings, Reset view), Colors, Settings.
+- **Settings** hold the general controls: Glide, Range style, Grid lines, Room right, then the hotkeys, Change PIN and
+  the versions.
+- While Armed the chart is outlined in the workspace accent purple with the soft glow; the order bar stays deep red.
+- The order bar, hotkeys and order behaviour are exactly 1.13.0's. A host's chart with its own toolbar (`ChartLive.mount`,
+  The Desk) keeps its toolbar as it was.
+
+### 7. Versions
+- "chart 1.14.0 · ChartBridge 0.3.8" in the LIVE badge's tooltip (the workspace's top bar, the single chart page's LIVE
+  pill) and in Settings (both pages).
+
+### 8. The `smoke:orders` flake
+- "a drag on order NT208 while it waits in a Cancel all" failed now and then. Root cause: the probe took the first order
+  still queued, whose cancel goes out at the very next slot of the pace (1.1 s after the click), while the wait for the
+  chart to settle takes 0.5 to over 1 s; when the cancel went first, ChartBridge removed the order before the drag,
+  which then pressed on an empty chart (no note, the check failed). The probe now drags the order cancelled last (3.3 s
+  after the click) and checks it is still queued right before the press. Nothing skipped; the page is unchanged.
+
+### 9. The page's clock follows Windows clock fixes
+- `nowMs` was `performance.timeOrigin + performance.now()`, fixed at page load, while ChartBridge re-anchors to the PC
+  clock every 5 s: after Windows time sync stepped the clock the page showed a false "local -99 ms (PC clock behind)"
+  until it reloaded (HOME). The page's clock (`LivePrefs.pageClock`, one per page) now compares itself with
+  `Date.now()` every 5 s and re-anchors when off by more than 50 ms, as ChartBridge does. `now()` is still one addition
+  (the tick path's cost is unchanged), and every user reads it: the local delay and the order ticket link's stamps
+  (`TicketLink.browserNow`).
+
+### Tests
+- `test/display.test.js` (new): the room, the scale with orders and planned lines, the countdown, the ATR, the change
+  from the settlement, the settings, the tape categories and colors, the floors, the feed carrying `q` and the
+  settlement, the page clock, the edge resize.
+- `npm run smoke:display` (new): grid off by default and on from Settings, the room at any zoom and after End, zoom to
+  brackets eased, planned lines and the VWAP in the engine, the readouts (Range too; a new and a missing settlement),
+  the versions, the single chart page's layout and Armed outline, the tape by category (gear, Default colors, big
+  trades, a tape that joins later) and by side with an older ChartBridge, edge and corner resize with an overlap refused,
+  screenshots of both pages at 1366x768, 1920x1080 and 2560x1440 and close crops of the tape and the Colors panel.
+- `npm run smoke:noscroll` (new), above.
+- Selectors that follow the new layout: `smoke:live` (Range style and Glide in Settings, the drawing tools in the small
+  menu, 2-letter chips on a phone), `smoke:pin` (Change PIN in Settings), `smoke:workspace` (the single chart page's
+  Glide in Settings; the tape's colors by category or side). `smoke:orders`: the drag probe above. `smoke:hotkeys`
+  unchanged.
+
 ## 1.13.0 (2026-10-02): planned stop and target lines, NO STOP, Armed in deep red
 
 Page only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The planned lines need

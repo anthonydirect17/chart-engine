@@ -945,7 +945,7 @@ function markup(p, o) {
     <div class="group ind-group">
       <div class="ind" id="${p}indWrap" data-pane="${esc(o.paneId)}">
         <button type="button" class="btn ind-btn" id="${p}indBtn" aria-expanded="false" aria-controls="${p}indPanel" aria-haspopup="dialog" title="Indicators on this chart (/ with the mouse over the chart)">Indicators <span class="ind-count" id="${p}indCount"></span><span class="ind-caret" aria-hidden="true"></span></button>
-        <div class="ind-panel" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
+        <div class="ind-panel${o.sideGears ? ' side-gears' : ''}" id="${p}indPanel" role="dialog" aria-label="Indicators on this chart" hidden>
           <div class="ind-head"><span class="ind-title">Indicators</span><span class="ind-sum" id="${p}indSum"></span></div>
           <div class="ind-search">
             <label class="visually-hidden" for="${p}indQ">Search indicators</label>
@@ -954,7 +954,6 @@ function markup(p, o) {
           </div>
           <div class="visually-hidden" id="${p}indLive" role="status" aria-live="polite"></div>
           <div class="ind-body" id="${p}indBody"></div>
-          <div class="ind-side" id="${p}indSide" hidden></div>
           <div class="ind-sep"></div>
           <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
         </div>
@@ -1079,7 +1078,7 @@ function start(container, opt, PAGE) {
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
   rootEl.className = 'chart-live' + (SLIM ? ' slim' : '') + (COMPACT ? ' compact' : '');
-  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN });
+  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN, sideGears: TRADING || SLIM });
   container.appendChild(rootEl);
   const els = {};
   for (const el of rootEl.querySelectorAll('[id]')) if (el.id.startsWith(p)) els[el.id.slice(p.length)] = el;
@@ -2985,8 +2984,7 @@ function start(container, opt, PAGE) {
     hide.textContent = label;
     hide.disabled = label === 'Hide all (0)';
     hide.title = label === 'Restore' ? 'Show again the ones Hide all hid' : 'Hide every indicator on this chart, settings kept. The open trade, working orders and stop and target lines always stay.';
-    const side = $('indSide');
-    const focusKey = document.activeElement && (body.contains(document.activeElement) || side.contains(document.activeElement)) ? document.activeElement.dataset.f : null;
+    const focusKey = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.f : null;
     let html = M.note ? `<div class="ind-note">${esc(M.note)}</div>` : '';
     const q = M.q.trim();
     if (q) {
@@ -3012,22 +3010,17 @@ function start(container, opt, PAGE) {
       html += '<div class="ind-coming">Coming: time and sales</div>';
     }
     body.innerHTML = html;
-    /* 1.14.0 (no scrolling, ever): the open gear's settings sit in a column beside the list, not under its row, so the
-       menu grows sideways and fits the screen with nothing to scroll */
-    const set = body.querySelector('.ind-set');
-    side.replaceChildren();
-    if (set) { const d = defOf(set.dataset.id), t = document.createElement('div'); t.className = 'ind-side-t'; t.textContent = d ? d.name : ''; side.append(t, set); }
-    side.hidden = !set;
-    $('indPanel').classList.toggle('has-gear', !!set);
+    /* 1.14.0 (no scrolling, ever): on the page and in the workspace the open gear's settings show in a card beside the
+       menu (live.css .side-gears), not under its row, so the menu keeps its height and fits the screen */
+    $('indPanel').classList.toggle('has-gear', !!body.querySelector('.ind-set'));
     /* one live region, changed only when its text changes, so a screen reader hears the result count and notes once */
     const said = M.note || (q ? (() => { const n = LP.searchIndicators(q).length; return n ? n + (n === 1 ? ' match' : ' matches') : 'No match'; })() : '');
     if ($('indLive').textContent !== said) $('indLive').textContent = said;
     if (!$('indPanel').hidden && placeMenu) placeMenu();       // its size changed: placed again so it stays on screen
     if (focusKey) {                                                 // keep the keyboard where it was
       const alt = { 'sw:': 'add:', 'add:': 'sw:', 'x:': 'add:', 'rec:': 'rec:' };
-      const inMenu = sel => body.querySelector(sel) || side.querySelector(sel);
-      let el = inMenu(`[data-f="${focusKey}"]`);
-      if (!el) for (const k of Object.keys(alt)) if (focusKey.startsWith(k)) el = inMenu(`[data-f="${alt[k] + focusKey.slice(k.length)}"]`);
+      let el = body.querySelector(`[data-f="${focusKey}"]`);
+      if (!el) for (const k of Object.keys(alt)) if (focusKey.startsWith(k)) el = body.querySelector(`[data-f="${alt[k] + focusKey.slice(k.length)}"]`);
       (el || $('indQ')).focus();
     }
   }
@@ -3136,8 +3129,16 @@ function start(container, opt, PAGE) {
         panel.style.top = Math.round(top - w.top) + 'px';
         if (top + h > room) panel.style.maxHeight = Math.floor(room - top) + 'px';
         panel.style.left = '0px';
-        const over = panel.getBoundingClientRect().right - (window.innerWidth - 8);
+        const card = panel.querySelector('.ind-set'), extra = card && panel.classList.contains('has-gear') ? card.offsetWidth + 8 : 0;   // the gear's card beside it
+        const over = panel.getBoundingClientRect().right + extra - (window.innerWidth - 8);
         if (over > 0) panel.style.left = -Math.ceil(Math.min(over, w.left - 8)) + 'px';
+        panel.classList.remove('gear-left');
+        if (extra) {                                             // the card on the left when the right has no room; up as needed
+          card.style.top = '';
+          if (card.getBoundingClientRect().right > window.innerWidth - 8) panel.classList.add('gear-left');
+          const cb = card.getBoundingClientRect().bottom - (window.innerHeight - 8);
+          if (cb > 0) card.style.top = Math.round(-1 - cb) + 'px';
+        }
         return;
       }
       const r = rootEl.getBoundingClientRect(), b = btn.getBoundingClientRect(), w = wrap.getBoundingClientRect();

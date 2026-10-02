@@ -82,14 +82,15 @@ try {
   if (lateMain !== /less tick history than asked/.test(await page.textContent('#statusMsg'))) fail('partial history note wrong with the full backfill: ' + lateMain + ' "' + await page.textContent('#statusMsg') + '"');
   console.log('full history: first range bar mid-session ' + lateMain);
   await page.screenshot({ path: path.join(out, 'live-range.png') });
-  await page.selectOption('#rangeMode', 'traded'); await page.waitForTimeout(400);
+  // 1.14.0: Range style is in Settings (the single chart page's cleanup), as in the workspace
+  await page.click('#setBtn'); await page.selectOption('#rangeMode', 'traded'); await page.keyboard.press('Escape'); await page.waitForTimeout(400);
   if (!/Range 12t traded/.test(await page.textContent('#lgTf'))) fail('traded mode label: ' + await page.textContent('#lgTf'));
   await page.screenshot({ path: path.join(out, 'live-range-traded.png') });
   await page.reload();
   await page.waitForFunction(() => document.getElementById('connPill')?.textContent === 'LIVE', null, { timeout: 15000 });
   await page.waitForTimeout(400);
   if (await page.inputValue('#rangeMode') !== 'traded' || await page.inputValue('#rangeTicks') !== '12') fail('range mode or size not remembered: ' + await page.inputValue('#rangeMode') + ' ' + await page.inputValue('#rangeTicks'));
-  await page.selectOption('#rangeMode', 'nt'); await page.waitForTimeout(300);
+  await page.click('#setBtn'); await page.selectOption('#rangeMode', 'nt'); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
 
   // Indicators menu (1.6.0, Anthony's "E2"): search, switch, pin, chips, Hide all and Restore, remove and add, "/" key
   const L = () => page.evaluate(() => window.liveChart.getLayers());
@@ -224,9 +225,9 @@ try {
 
   await page.click('#tfSeg >> text="1m"'); await page.waitForTimeout(400);
   const box = await page.locator('#chart canvas').boundingBox();
-  await page.click('#toolHline');
+  await page.click('#moreBtn'); await page.click('#toolHline');                 // 1.14.0: the drawing tools in the small menu
   await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.3);
-  await page.click('#toolTrend');
+  await page.click('#moreBtn'); await page.click('#toolTrend');
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6);
   await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.4, { steps: 8 }); await page.mouse.up();
   await page.waitForTimeout(300);
@@ -245,7 +246,9 @@ try {
   if (!/ES 12-26/.test(esName)) fail('ES name: ' + esName);
   const status = (await page.textContent('.status')).replace(/\s+/g, ' ');
   if (!/feed \d+ ms/.test(status)) fail('delay readout missing: ' + status);
+  await page.click('#setBtn');                                                    // 1.14.0: Glide is in Settings
   for (const g of ['Fast', 'Off', 'Smooth']) await page.click(`#glideSeg >> text="${g}"`);
+  await page.keyboard.press('Escape');
   await page.screenshot({ path: path.join(out, 'live-es.png') });
   console.log('status:', status.slice(0, 160));
 
@@ -279,7 +282,8 @@ try {
   await phone.screenshot({ path: path.join(out, 'live-phone.png') });
   const phoneChips = await phone.evaluate(() => { const s = document.getElementById('indChips'), cs = [...s.querySelectorAll('.ind-chip')];
     return { narrow: s.classList.contains('is-narrow'), tops: [...new Set(cs.map(c => Math.round(c.getBoundingClientRect().top)))].length, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1, n: cs.length }; });
-  if (!phoneChips.narrow || phoneChips.tops !== 1 || phoneChips.text !== 'VWLIF' || !phoneChips.fits || phoneChips.n !== 5) fail('phone: chips should be one letter each, on one line: ' + JSON.stringify(phoneChips));
+  // 1.14.0: the page's chips are the workspace's 2-letter ones, on one line on a phone too
+  if (phoneChips.tops !== 1 || phoneChips.text !== 'VOVWLVIBFL' || !phoneChips.fits || phoneChips.n !== 5) fail('phone: chips should be two letters each, on one line: ' + JSON.stringify(phoneChips));
   await phone.click('#indChips .ind-chip[data-id="levels"]');
   if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: letter chip did not hide Levels');
   await phone.screenshot({ path: path.join(out, 'live-phone-chips.png') });

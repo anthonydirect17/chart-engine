@@ -106,7 +106,9 @@ try {
   const fileText = fs.readFileSync(PIN_FILE, 'utf8');
   check(/^v1 pbkdf2-sha256 50000 [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64}$/m.test(fileText) && !fileText.replace(/[0-9a-f]{32,}/g, '').includes(FIRST), 'the pin file holds a salted hash, never the PIN');
   check(!/v1\.[0-9a-f]{32}\.[0-9a-f]{64}/.test(await storedAnywhere(page)), 'the unlock is not in localStorage, sessionStorage, a cookie or the URL');
-  check(await page.isVisible('#pinBtn'), 'the PIN button shows in the toolbar');
+  await page.click('#setBtn');                                            // 1.14.0: Change PIN is in Settings
+  check(await page.isVisible('#pinBtn'), 'Change PIN shows in Settings');
+  await page.keyboard.press('Escape');
   await shot(page, 'pin-unlocked-1440.png');
 
   /* ---------------- 2. reload: the PIN again (memory only); wrong PINs never block the right one */
@@ -154,13 +156,13 @@ try {
   await shot(page, 'pin-after-restart.png');
 
   /* ---------------- 4. change the PIN: the current one first; the page stays live */
-  await page.click('#pinBtn');
+  await page.click('#setBtn'); await page.click('#pinBtn');
   await until(async () => await title(page) === 'Current PIN', 'change dialog');
   check(await pill(page) === 'LIVE', 'change: the chart keeps streaming behind the dialog');
   await shot(page, 'pin-change.png');
   await page.keyboard.press('Escape');
   check(!(await page.$('.cb-pin')), 'change: Escape cancels');
-  await page.click('#pinBtn');
+  await page.click('#setBtn'); await page.click('#pinBtn');
   await until(async () => await title(page) === 'Current PIN', 'change dialog again');
   await typePin(page, '0000');
   check(/current PIN is wrong/.test(await msg(page)) && await title(page) === 'Current PIN', 'change: a wrong current PIN is refused');
