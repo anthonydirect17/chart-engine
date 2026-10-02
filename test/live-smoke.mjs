@@ -148,10 +148,11 @@ try {
   if (JSON.stringify(await chips()) !== JSON.stringify(['volume-', 'vwap+', 'levels-', 'fills+'])) fail('chips after two hidden: ' + JSON.stringify(await chips()));
   const chipLook = await page.evaluate(() => [...document.querySelectorAll('#indChips .ind-chip')].map(b => getComputedStyle(b).borderTopStyle + ' ' + getComputedStyle(b.querySelector('.sw')).backgroundColor));
   if (!/^dashed/.test(chipLook[0]) || !/^solid/.test(chipLook[1]) || chipLook[0].split(' ').slice(1).join(' ') === chipLook[1].split(' ').slice(1).join(' ')) fail('hidden and shown chips must differ by more than color: ' + JSON.stringify(chipLook));
-  // a chip: one click shows or hides
-  await page.click('#indChips .ind-chip[data-id="vwap"]'); await page.waitForTimeout(300);
+  // a chip opens its settings (1.14.0); the switch at their top shows or hides
+  const chipSw = async (pg, id) => { await pg.click(`#indChips .ind-chip[data-id="${id}"]`); await pg.click('body .chip-pop [data-act="popsw"]'); await pg.keyboard.press('Escape'); };
+  await chipSw(page, 'vwap'); await page.waitForTimeout(300);
   if ((await L()).vwap !== false || !(await page.isHidden('#lgVwWrap'))) fail('VWAP chip did not hide VWAP (and its legend)');
-  await page.click('#indChips .ind-chip[data-id="volume"]');
+  await chipSw(page, 'volume');
   if ((await L()).volume !== true) fail('Volume chip did not show Volume');
   // Hide all, then Restore brings back the same mix (not everything)
   await page.click('#indBtn');
@@ -285,10 +286,12 @@ try {
     return { narrow: s.classList.contains('is-narrow'), tops: [...new Set(cs.map(c => Math.round(c.getBoundingClientRect().top)))].length, text: cs.map(c => c.innerText.trim()).join(''), fits: s.scrollWidth <= s.clientWidth + 1, n: cs.length }; });
   // 1.14.0: the page's chips are the workspace's 2-letter ones, on one line on a phone too
   if (phoneChips.tops !== 1 || phoneChips.text !== 'VOVWLVFL' || !phoneChips.fits || phoneChips.n !== 4) fail('phone: chips should be two letters each, on one line: ' + JSON.stringify(phoneChips));
-  await phone.click('#indChips .ind-chip[data-id="levels"]');
-  if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: letter chip did not hide Levels');
+  await phone.click('#indChips .ind-chip[data-id="levels"]'); await phone.click('body .chip-pop [data-act="popsw"]');
+  if (await phone.evaluate(() => window.liveChart.getLayers().levels) !== false) fail('phone: the chip\'s switch did not hide Levels');
+  const pp = await phone.locator('body .chip-pop').boundingBox();
+  if (!pp || pp.x < 0 || pp.x + pp.width > 400) fail('phone: the chip popover off screen ' + JSON.stringify(pp));
   await phone.screenshot({ path: path.join(out, 'live-phone-chips.png') });
-  await phone.click('#indChips .ind-chip[data-id="levels"]');
+  await phone.click('body .chip-pop [data-act="popsw"]'); await phone.keyboard.press('Escape');
   await phone.click('#indBtn');
   const pb = await phone.locator('#indPanel').boundingBox();
   if (!pb || pb.x < 0 || pb.x + pb.width > 400) fail('phone: indicator menu off screen ' + JSON.stringify(pb));

@@ -314,12 +314,12 @@ try {
   await menu(p); await p.click('#indBody [data-act="pin"][data-id="delta"]'); await p.keyboard.press('Escape');
   check((await state(p)).chips === 'volume+,vwap+,levels+,delta+,fills+', 'pinned from the menu: its chip, the fifth');
   const coresShown = (await state(p)).cores;
-  await p.click('#indChips .ind-chip[data-id="delta"]'); await p.waitForTimeout(300);
+  await p.click('#indChips .ind-chip[data-id="delta"]'); await p.click('body .chip-pop [data-act="popsw"]'); await p.keyboard.press('Escape'); await p.waitForTimeout(300);   // 1.14.0: the chip's popover switch
   s = await state(p);
   check(!s.layer && !s.pane.on && s.pane.plotHeight === area && s.chips.includes('delta-') && s.legend === null, 'the chip hides it: no pane, the chart takes the height back, the chip dashed');
   check((await saved(p, 'live-indicators-v2')).main.ind.delta.shown === false, 'hidden and saved, still on the chart');
   await p.waitForTimeout(1500);                                                  // live trades meanwhile: the hidden delta keeps them
-  const shownAt = await p.evaluate(() => { document.querySelector('#indChips .ind-chip[data-id="delta"]').click(); return !!window.liveChart.getDelta() && window.liveChart.getLayers().delta; });
+  const shownAt = await p.evaluate(() => { document.querySelector('#indChips .ind-chip[data-id="delta"]').click(); document.querySelector('.chip-pop [data-act="popsw"]').click(); return !!window.liveChart.getDelta() && window.liveChart.getLayers().delta; });
   await p.waitForTimeout(400);
   s = await state(p);
   check(shownAt && s.cores === coresShown && s.layer && s.pane.on && sameSums(s) && Math.abs(s.pane.ratio - set.pane.ratio) < 0.001,

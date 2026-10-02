@@ -923,7 +923,7 @@ setInterval(() => { if (holds() && TK.bar) TK.bar.renderPositionInfo(); }, 500);
 /* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
-const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
+const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .chip-pop:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
 /* a Buy or Sell key forwarded names the instrument this window knows the ticket is on (F2 review) */
 const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({

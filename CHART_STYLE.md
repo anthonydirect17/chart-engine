@@ -425,8 +425,14 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     fits whole (below the order bar, else below its button, else as high as it must), and an open gear's settings sit in
     a 300 px column beside the list (its title the indicator's name, 600 13px), so it grows sideways; only a menu taller
     than the window scrolls its list.
-  - **Chip strip** next to the button: pinned indicators only, at most 6 (Anthony): an added indicator gets a chip
-    while there is room; pinning onto a full strip is refused with a note in the menu. One click shows or hides. A chip
+  - **Chip strip** next to the button: pinned indicators only, at most 10 since 1.14.0 (6 before; Anthony): an added
+    indicator gets a chip while there is room; pinning onto a full strip is refused with a note in the menu. Since
+    1.14.0 (Anthony) a click opens the indicator's settings in a popover dropped 6 px below the chip (flipped up or left
+    near an edge, fixed, never scrolling): the gear's card as in the menu (300 px, padding 12, radius 12, the menu's
+    ground, border and shadow) with a header line of the on/off switch, the name (600 13px) and On / Off (500 11px mono,
+    quiet). Off hides the indicator and keeps the chip (dashed); unpinning stays in the menu. A click outside, Escape or
+    the chip again closes it and the focus leaves it, so the hotkeys work at once (the workspace's KEYS reads OFF while
+    it is open). A chip behind "+N" opens it from "+N". A chip
     is 30 px tall, mono 600 11px: shown = `#141C26` with a solid `#2A3645` border and its color line; hidden = no fill,
     a dashed border, grey text and a grey line. The strip always keeps room for six one-letter chips, and shows the
     names only when that adds no toolbar line; otherwise each chip is one letter (V W L I D F) over its line. So it never

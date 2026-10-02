@@ -152,10 +152,11 @@ try {
     check(after.pos && after.pos.qty === 2 && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Hide all keeps the open position, both legs and its entry fill, and drops the past fills: ' + JSON.stringify(after));
     await shot(page, 'orders-1440-hide-all-open-position.png');
     await page.click('#indBtn'); await page.click('#indHideAll'); await page.keyboard.press('Escape');   // Restore
-    await page.click('#indChips .ind-chip[data-id="fills"]');                                           // the Fills chip alone
+    const fillsSw = async () => { await page.click('#indChips .ind-chip[data-id="fills"]'); await page.click('body .chip-pop [data-act="popsw"]'); await page.keyboard.press('Escape'); };   // 1.14.0: the chip's popover switch
+    await fillsSw();                                                                                      // the Fills chip alone
     after = await live();
     check(after.pos && after.orders === 2 && JSON.stringify(after.marks) === '["buy2"]', 'Fills hidden: the entry fill, position and legs stay: ' + JSON.stringify(after));
-    await page.click('#indChips .ind-chip[data-id="fills"]');
+    await fillsSw();
     check((await live()).marks.length === 3, 'Fills shown again');
   }
 

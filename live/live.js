@@ -159,7 +159,7 @@ const INDICATOR_COLORS = [
   { key: 'vwap', id: 'vwap', name: 'Line', def: ENGINE.DEFAULT_THEME.vwap },
   { key: 'prior', id: 'levels', name: 'Prior day high and low', def: ENGINE.LEVEL_COLORS.prior },
   { key: 'overnight', id: 'levels', name: 'Overnight high and low', def: ENGINE.LEVEL_COLORS.overnight },
-  { key: 'value', id: 'levels', name: 'PD VAH, PD VAL and PD POC', def: ENGINE.LEVEL_COLORS.value },
+  { key: 'value', id: 'levels', name: 'PD VAH, VAL and POC', def: ENGINE.LEVEL_COLORS.value },
   { key: 'close', id: 'levels', name: 'Prior close', def: ENGINE.LEVEL_COLORS.close },
   { key: 'ibHigh', id: 'levels', name: 'IB high', def: ENGINE.LEVEL_COLORS.ibHigh },
   { key: 'ibLow', id: 'levels', name: 'IB low', def: ENGINE.LEVEL_COLORS.ibLow },
@@ -1021,7 +1021,7 @@ function markup(p, o) {
           <div class="ind-foot"><button type="button" class="btn" id="${p}indHideAll" data-f="hideall"></button></div>
         </div>
       </div>
-      <div class="ind-chips${o.trading ? ' codes' : ''}" id="${p}indChips" role="group" aria-label="Pinned indicators: click to show or hide"></div>
+      <div class="ind-chips${o.trading ? ' codes' : ''}" id="${p}indChips" role="group" aria-label="Pinned indicators: click one for its settings and switch"></div>
       <button type="button" class="btn lg-tog" id="${p}lgTog" aria-pressed="true" title="Header text on this chart: on (click to turn it off)" aria-label="Header text on this chart">Aa</button>
     </div>
 ${o.trading ? more : `
@@ -1154,6 +1154,10 @@ function start(container, opt, PAGE) {
   let destroyed = false;
   const cleanups = [];                                   // document and window listeners, intervals
   const listen = (target, type, fn) => { target.addEventListener(type, fn); cleanups.push(() => target.removeEventListener(type, fn)); };
+  /* the chip settings popover (1.14.0; see openPop), made up front: the chips are drawn before the menu's code runs */
+  const chipPop = document.createElement('div');
+  chipPop.className = 'ind-set chip-pop'; chipPop.id = p + 'chipPop'; chipPop.setAttribute('role', 'dialog'); chipPop.hidden = true;
+  let popId = null;
   const every = (fn, ms) => { const id = setInterval(fn, ms); cleanups.push(() => clearInterval(id)); };
   const timers = new Set();                              // one-off timers (cancel all pacing)
   const later = (fn, ms) => { const id = setTimeout(() => { timers.delete(id); fn(); }, ms); timers.add(id); };
@@ -3211,11 +3215,13 @@ function start(container, opt, PAGE) {
     strip.classList.toggle('is-empty', !pinned.length);
     strip.innerHTML = pinned.map(d => {
       const shown = IS.ind[d.id].shown;
-      return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown, click to hide' : 'hidden, click to show'}">` +
+      return `<button type="button" class="ind-chip" data-id="${d.id}" aria-pressed="${shown}" aria-haspopup="dialog" aria-expanded="${popId === d.id}" aria-label="${esc(d.name)}" title="${esc(d.name)}: ${shown ? 'shown' : 'hidden'}; click for its settings and switch">` +
         `<span class="sw" style="--sw: ${shown ? d.sw : 'var(--line-strong)'}" aria-hidden="true"></span>` +
         (SLIM || TRADING ? `<span class="ind-chip-c" aria-hidden="true">${esc(d.code)}</span>` : `<span class="ind-chip-t" aria-hidden="true">${esc(d.short)}</span><span class="ind-chip-l" aria-hidden="true">${esc(d.letter)}</span>`) + '</button>';
     }).join('') + '<button type="button" class="ind-chip-more" aria-haspopup="true" aria-expanded="false" hidden></button><div class="ind-chip-list" role="group" aria-label="More pinned indicators" hidden></div>';
+    strip.appendChild(chipPop);                              // the chip's settings (1.14.0), kept across redraws
     fitChips();
+    if (popId) renderPop();
   }
   /* In a host's slim header (toolbar: false) the strip has the room the header leaves: 2-letter chips, and those that do
      not fit go behind a "+N" chip that opens a small list of them (the same chips). The header never wraps or scrolls.
@@ -3241,6 +3247,56 @@ function start(container, opt, PAGE) {
       more.title = [...list.children].map(c => c.getAttribute('aria-label')).join(', ');
     }
     showChipList(chipListOpen && !more.hidden);
+  }
+  /* A chip opens its indicator's settings (1.14.0, Anthony: "many times a day"): the gear's card, in a popover dropped
+     from the chip, with an on/off switch at the top. Off hides the indicator and keeps the chip, so the same popover
+     turns it back on; unpinning stays in the menu. Closed by a click outside, Escape or the chip again; the focus then
+     leaves it (handBack), so the hotkeys work at once. Placed fixed (a header clips its overflow), under the chip, or
+     flipped up or left near an edge; it never scrolls. */
+  const handBack = el => { if (BAR && BAR.handBack) BAR.handBack(el); else if (el && document.activeElement === el) el.blur(); };
+  function popHtml(id) {
+    const d = defOf(id), st = IS.ind[id], shown = st.on && st.shown, name = esc(d.name);
+    return `<div class="chip-pop-head"><button type="button" class="ind-switch" data-act="popsw" data-id="${id}" data-f="popsw:${id}" aria-pressed="${shown}" aria-label="${shown ? 'Hide' : 'Show'} ${name}" title="${shown ? 'Hide' : 'Show'}; the chip and the settings are kept"><span class="knob" aria-hidden="true"></span></button>` +
+      `<span class="chip-pop-name">${name}</span><span class="chip-pop-state">${shown ? 'On' : 'Off'}</span></div>` +
+      `<div class="ind-set-line"><span class="ind-set-sw" style="--sw: ${d.sw}" aria-hidden="true"></span><span class="ind-set-t">${esc(d.opt)}</span></div>` +
+      optionsHtml(id) + signalsHtml(id) + colorsHtml(id);
+  }
+  function chipOf(id) {
+    const strip = $('indChips'), c = strip.querySelector(`:scope > .ind-chip[data-id="${id}"]`);
+    if (c) return c;
+    const more = strip.querySelector('.ind-chip-more');
+    return more && !more.hidden ? more : null;               // behind "+N": dropped from it
+  }
+  function placePop() {
+    const a = chipOf(popId); if (!a) return;
+    const r = a.getBoundingClientRect(), w = chipPop.offsetWidth, h = chipPop.offsetHeight, W = window.innerWidth, H = window.innerHeight;
+    let top = r.bottom + 6, left = r.left;
+    if (top + h > H - 8) top = r.top - 6 - h >= 8 ? r.top - 6 - h : Math.max(8, H - 8 - h);   // flipped up near the bottom
+    if (left + w > W - 8) left = r.right - w >= 8 ? r.right - w : Math.max(8, W - 8 - w);       // flipped left near the right
+    chipPop.style.top = Math.round(top) + 'px'; chipPop.style.left = Math.round(left) + 'px';
+  }
+  function renderPop() {
+    const st = popId && IS.ind[popId];
+    if (!st || !st.on || !st.pin) { closePop(false); return; }   // taken off the chart or unpinned: nothing to show
+    const focusKey = document.activeElement && chipPop.contains(document.activeElement) ? document.activeElement.dataset.f : null;
+    chipPop.innerHTML = popHtml(popId);
+    placePop();
+    if (focusKey) { const el = chipPop.querySelector(`[data-f="${focusKey}"]`); if (el) el.focus(); }
+  }
+  function openPop(id) {
+    if (popId === id) { closePop(true); return; }
+    if (!$('indPanel').hidden && openMenu) openMenu(false);
+    showChipList(false);
+    popId = id; chipPop.hidden = false;
+    chipPop.setAttribute('aria-label', defOf(id).name + ' settings');
+    for (const c of $('indChips').querySelectorAll('.ind-chip[data-id]')) c.setAttribute('aria-expanded', String(c.dataset.id === id));
+    renderPop();
+  }
+  function closePop(back) {
+    if (!popId) return;
+    popId = null; chipPop.hidden = true; chipPop.innerHTML = '';
+    for (const c of $('indChips').querySelectorAll('.ind-chip[data-id]')) c.setAttribute('aria-expanded', 'false');
+    if (back) handBack(document.activeElement);              // the focus goes back to the page: hotkeys work at once
   }
   function showChipList(v) {
     const strip = $('indChips'), more = strip.querySelector('.ind-chip-more'), list = strip.querySelector('.ind-chip-list');
@@ -3343,6 +3399,7 @@ function start(container, opt, PAGE) {
       if (v === !panel.hidden) { if (v) q.focus(); return; }
       panel.hidden = !v; btn.setAttribute('aria-expanded', String(v));
       if (v) {
+        closePop(false);
         M.returnTo = from && from !== document.body && !wrap.contains(from) ? from : btn;
         M.cat = null; M.q = ''; q.value = ''; M.note = '';            // groups folded and a clean search on every open (Anthony)
         place(); renderMenu(); q.focus(); q.select();
@@ -3389,11 +3446,51 @@ function start(container, opt, PAGE) {
     });
     $('indHideAll').addEventListener('click', () => { M.note = ''; changeIndicators(LP.Pane.hideAllOp(IS)); });
     $('indChips').addEventListener('click', e => {
-      if (e.target.closest('.ind-chip-more')) { showChipList(!chipListOpen); return; }
-      const b = e.target.closest('button[data-id]'); if (!b) return;
-      const id = b.dataset.id, v = !IS.ind[id].shown;          // decided once, from what this chart shows
-      changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // a chip is not a recent use
+      if (chipPop.contains(e.target)) return;                       // the popover's own clicks (below)
+      if (e.target.closest('.ind-chip-more')) { if (popId) closePop(false); showChipList(!chipListOpen); return; }
+      const b = e.target.closest('button.ind-chip[data-id]'); if (!b) return;
+      openPop(b.dataset.id);                                     // 1.14.0: its settings and switch, not a toggle
+      handBack(b);
     });
+    /* the popover: the gear's own controls, and its switch */
+    chipPop.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]');
+      if (!b || !chipPop.contains(b)) return;
+      const id = b.dataset.id, act = b.dataset.act;
+      if (act === 'popsw') {
+        const v = !(IS.ind[id].on && IS.ind[id].shown);
+        changeIndicators(v ? st => LP.Pane.add(st, id, false) : st => LP.Pane.setShown(st, id, false));   // the chip stays
+        renderPop(); return;
+      }
+      if (act === 'opt') { setIndicatorOption(id, b.dataset.k, b.dataset.v); renderPop(); return; }
+      if (act === 'sigauto') { prefs.setBubbleAuto(S.root, b.dataset.v === 'on'); sigChanged(false); renderPop(); return; }
+      if (act === 'coldef') { const set = {}; for (const c of LP.INDICATOR_COLORS) if (c.id === id) set[c.key] = c.def; setIndicatorColors(set); renderPop(); }
+    });
+    chipPop.addEventListener('input', e => {
+      const t = e.target;
+      if (t.dataset.sig) { sigInput(t); return; }
+      const k = t.dataset.ck || t.dataset.hk; if (!k) return;
+      const v = t.dataset.ck ? t.value.toUpperCase() : hexOf(t.value);
+      if (!v) { t.setAttribute('aria-invalid', 'true'); return; }
+      t.removeAttribute('aria-invalid');
+      setIndicatorColors({ [k]: v });
+      const other = chipPop.querySelector(t.dataset.ck ? `input[data-hk="${k}"]` : `input[data-ck="${k}"]`);
+      if (other) other.value = t.dataset.ck ? v : v.toLowerCase();
+    });
+    chipPop.addEventListener('change', e => {
+      const t = e.target;
+      if (t.dataset.sig) { sigShown(t); return; }
+      if (t.dataset.hk) { t.removeAttribute('aria-invalid'); t.value = IC[t.dataset.hk]; }
+      if (t.tagName === 'INPUT' && t.type === 'color') handBack(t);
+    });
+    listen(document, 'pointerdown', e => {
+      if (!popId || chipPop.contains(e.target)) return;
+      const c = e.target.closest && e.target.closest('.ind-chip, .ind-chip-more');
+      if (c && $('indChips').contains(c)) return;                  // a chip: its own click decides
+      closePop(true);
+    });
+    listen(document, 'keydown', e => { if (popId && e.key === 'Escape') { e.preventDefault(); closePop(true); } });
+    listen(window, 'resize', () => { if (popId) placePop(); });
     listen(document, 'pointerdown', e => { if (!panel.hidden && !wrap.contains(e.target)) close(false); });
     listen(document, 'pointerdown', e => { if (chipListOpen && !$('indChips').contains(e.target)) showChipList(false); });
     listen(document, 'keydown', e => { if (chipListOpen && e.key === 'Escape') { e.preventDefault(); showChipList(false); const m = $('indChips').querySelector('.ind-chip-more'); if (m) m.focus(); } });
@@ -3539,7 +3636,7 @@ function start(container, opt, PAGE) {
     listen(window, 'storage', e => { if (e.key === PREFIX + HKKEY) { readHotkeys(); renderHotkeys(); } });
     listen(document, 'keydown', hotkeyHandler({
       keys: () => HK, root: rootEl,
-      busy: () => destroyed || !setPanel.hidden || !$('moreMenu').hidden || !$('indPanel').hidden || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
+      busy: () => destroyed || !setPanel.hidden || !$('moreMenu').hidden || !$('indPanel').hidden || !!popId || themePanel.isOpen() || !!document.querySelector('.cb-pin'),   // the NO STOP question is not modal
       actions: { buy: () => T.sendOrder('buy', 'market', null), sell: () => T.sendOrder('sell', 'market', null), be: T.breakEven, close: () => T.flattenHere(), flattenAll: T.flattenAll },
       ignored: () => flash(HOTKEY_IN_BOX, 'warn'),
     }));

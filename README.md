@@ -59,7 +59,7 @@ On the page, the **Indicators** menu (1.6.0) adds, shows, hides and removes Volu
 **Initial balance** (today's 1-hour IB, 1.5.3; part of Levels since 1.14.0, each level line its own switch), the **Volume profile** and the **Cumulative delta** pane (1.7.0: market
 buys minus market sells below the chart, counted from when the page opens or the trades' sides were measured, and from
 0 again at 18:00 ET; the sides from ChartBridge 0.3.4) per chart pane, with a search box ("/" opens it), a Recent line, Hide
-all and Restore, and a pin for each on the chip strip beside the button (one click shows or hides; at most 10 since 1.14.0, the rest behind +N when they do not fit). **Chart
+all and Restore, and a pin for each on the chip strip beside the button (1.14.0: a click opens the indicator's settings with an on/off switch at the top; at most 10, the rest behind +N when they do not fit). **Chart
 signals** (1.12.1, Anthony's NinjaScript indicators, counted from the page's opening from the trades' sides): **Absorption
 bars** (Signals group, no chip; a large trade, a volume spike and a rejection close on one bar paint it cyan or yellow at
 the close, an outline while it forms; settings per instrument and bar type in its gear), **Large-order bubbles** (Volume

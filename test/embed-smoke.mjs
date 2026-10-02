@@ -275,7 +275,7 @@ try {
         more: more && !more.hidden ? more.textContent : '', listed: s.querySelectorAll('.ind-chip-list .ind-chip').length }; });
     const na = await page.evaluate(() => document.querySelector('#paneA .ind-chips').classList.contains('is-narrow'));
     check(nb.narrow && nb.lines === 1 && 'VWLPDBF'.startsWith(nb.text) && nb.text.length + nb.listed === 7 && (nb.listed ? nb.more === '+' + nb.listed : true) && nb.fits, 'narrow pane (' + nb.w + ' px): one-letter chips on one line, the rest behind +N (1.14.0) (the wide pane: ' + (na ? 'letters' : 'names') + '): ' + JSON.stringify(nb));
-    await page.click('#paneB .ind-chip[data-id="levels"]');
+    await page.click('#paneB .ind-chip[data-id="levels"]'); await page.click('#paneB .chip-pop [data-act="popsw"]'); await page.keyboard.press('Escape');   // 1.14.0: the chip's popover switch
     check(await page.evaluate(() => window.__b.chart.getLayers().levels === false && window.__a.chart.getLayers().levels === true), 'a letter chip hides Levels on its own pane only');
     await shot(page, 'embed-narrow-pane-chips.png');
     await page.click('#paneB .ind-btn');

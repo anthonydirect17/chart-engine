@@ -176,6 +176,15 @@ from using 1.12.0 live on HOME:
   On by default, saved per chart (`live-legend-v1`). `ChartLive.mount` returns `legendToggle`, `legendShown()` and
   `setLegendShown(on)`; the engine `getFitTop()`.
 
+### From Anthony: a chip opens its settings
+- **A chip click opens that indicator's settings** in a popover dropped from the chip, instead of switching it off: the
+  gear's own card (Hours, toggles, numbers, colors and Default colors, exactly as in the menu), with an **on/off switch**
+  at the top. Off hides the indicator and keeps the chip, so the same popover turns it back on; unpinning stays in the
+  menu. A click outside, Escape or the chip again closes it, and the focus leaves it (as the order bar's `handBack`), so
+  the hotkeys work at once; the workspace's KEYS reads OFF while it is open (the single chart page's hotkeys wait too).
+  It never scrolls: fixed under the chip, flipped up or left near an edge, whole at 1366, 1920 and 2560 px. Both pages,
+  the 2-letter chips, a host's own toolbar, and the chips behind "+N" (dropped from "+N").
+
 ### Tests
 - `test/display.test.js` (new): the room, the scale with orders and planned lines, the countdown, the ATR, the change
   from the settlement, the settings, the tape categories and colors, the floors, the feed carrying `q` and the
@@ -214,6 +223,11 @@ from using 1.12.0 live on HOME:
   `smoke:vp` (the hours switch read apart from the new toggles; the developing POC off while the POC bar's own pixels are
   measured, since its line runs through the bar), `smoke:workspace` (no IB chip; a small panel's legend is the short
   header) and `smoke:embed` (no IB chip; seven chips, the narrow pane's rest behind +N).
+- `npm run smoke:chippop` (new): on both pages at 1366x768, 1920x1080 and 2560x1440 (and a 1000 px window for the flip): a
+  chip opens its settings under it, whole on screen and not scrolling; an edit applies and is saved; the switch hides the
+  indicator and keeps the chip, and shows it again; Escape, the chip again and a click outside close it with the focus
+  back on the page; KEYS OFF while open and ON after; a chip behind "+N". The smokes that clicked a chip to hide or show
+  now use its popover's switch: `smoke:live`, `smoke:orders`, `smoke:delta`, `smoke:embed`, `smoke:workspace`.
 - `test/trade-sides.test.js` (ChartBridge 0.3.8's): the hub now keeps a trade's `q` (it said chart 1.12.0 read none);
   the chart, the bar builder and the order code still read no `q`.
 

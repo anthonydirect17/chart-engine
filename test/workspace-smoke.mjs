@@ -147,10 +147,11 @@ try {
   const chips = await page.evaluate(id => [...document.querySelectorAll(`.ws-panel[data-id="${id}"] .ws-head .ind-chip[data-id]`)].map(c => c.textContent), main.id);
   check(chips.join(' ') === 'VO VW LV FL', 'the main chart\'s pinned indicators as 2-letter chips in its header (' + chips.join(' ') + ')');
   const vw = `.ws-panel[data-id="${main.id}"] .ws-head .ind-chip[data-id="vwap"]`;
-  await page.click(vw);
+  const vwSw = async () => { await page.click(vw); await page.click(`.ws-panel[data-id="${main.id}"] .chip-pop [data-act="popsw"]`); await page.keyboard.press('Escape'); };   // 1.14.0: the chip's popover switch
+  await vwSw();
   const vwSaved = await page.evaluate(id => { const v = JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')[id]; return v ? v.ind.vwap.shown : 'none: ' + Object.keys(JSON.parse(localStorage.getItem('live-indicators-v2') || '{}')).join(','); }, main.id);
-  check(await page.getAttribute(vw, 'aria-pressed') === 'false' && vwSaved === false, 'a chip click hides that indicator, as the toolbar\'s chips do (' + vwSaved + ')');
-  await page.click(vw);
+  check(await page.getAttribute(vw, 'aria-pressed') === 'false' && vwSaved === false, 'the chip\'s popover switch hides that indicator, as the toolbar\'s chips do (' + vwSaved + ')');
+  await vwSw();
   check(await page.getAttribute(vw, 'aria-pressed') === 'true', 'and shows it again');
   const one = await page.evaluate(() => ({ footers: [...document.querySelectorAll('.ws-body > .chart-live > .status')].map(f => getComputedStyle(f).display), feed: document.getElementById('wsFeed').textContent,
     local: document.getElementById('wsLocal').textContent, fps: document.getElementById('wsFps').textContent, tip: document.getElementById('wsStat').title }));
@@ -496,7 +497,7 @@ try {
   const nc = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`); return { on: c.classList.contains('has-note'), shown: getComputedStyle(c.querySelector(':scope > .status')).display !== 'none' }; }, esP.id);
   check(!nc.on && !nc.shown, 'and clears: no line and no space when there is no note');
   const first = await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip`).dataset.id, nq3.id);
-  await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-list .ind-chip[data-id="${first}"]`);
+  await page.click(`.ws-panel[data-id="${nq3.id}"] .ind-chip-list .ind-chip[data-id="${first}"]`); await page.click(`.ws-panel[data-id="${nq3.id}"] .chip-pop [data-act="popsw"]`);   // 1.14.0: its popover's switch
   check(await page.evaluate(([id, f]) => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list .ind-chip[data-id="${f}"]`); return !!c && c.getAttribute('aria-pressed') === 'false'; }, [nq3.id, first]), 'a chip in the list works like the others, and the list stays open');
   await page.keyboard.press('Escape');
   check(await page.evaluate(id => document.querySelector(`.ws-panel[data-id="${id}"] .ind-chip-list`).hidden, nq3.id), 'Esc closes the list');
