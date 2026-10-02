@@ -344,10 +344,14 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-panel.gr-narrow .gr-ord .gr-row { grid-template-columns: 36px minmax(0, 1fr) 26px; }
 .ws-panel.gr-narrow .gr-fil .gr-row { grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr); }
 .ws-panel.gr-narrow .gr-qb .gr-row { grid-template-columns: 32px repeat(3, minmax(0, 1fr)); }
-/* a 2 x 1 board: the last and the percent (the change, high and low in the row's tooltip) */
-.ws-panel.gr-tight .gr-qb .gr-row { grid-template-columns: 32px minmax(0, 1.3fr) minmax(0, 1fr); padding-top: 1px; padding-bottom: 1px; }
+/* a 2 x 1 board: one line, the last, the change and the percent (the high and low in the row's tooltip); at 1366 px only
+   the last and the percent (the change too in the tooltip) */
+.ws-panel.gr-tight .gr-qb .gr-row { grid-template-columns: 32px minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); padding-top: 1px; padding-bottom: 1px; }
 .ws-panel.gr-tight .gr-qb .pr { display: contents; }
-.ws-panel.gr-tight .gr-qb .pr > :first-child, .ws-panel.gr-tight .gr-qb .pr:last-child { display: none; }
+.ws-panel.gr-tight .gr-qb .pr:last-child { display: none; }
+.ws-panel.gr-tight .gr-qb .pr > * { font-size: inherit; }
+.ws-panel.gr-tiny .gr-qb .gr-row { grid-template-columns: 32px minmax(0, 1.3fr) minmax(0, 1fr); }
+.ws-panel.gr-tiny .gr-qb .pr > :first-child { display: none; }
 .ws-panel.gr-tight .qb-foot { display: none; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 

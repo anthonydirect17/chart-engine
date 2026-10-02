@@ -34,6 +34,7 @@
     "smoke:chippop": "node test/chippop-smoke.mjs",
     "smoke:dragfreeze": "node test/dragfreeze-smoke.mjs",
     "smoke:display": "node test/display-smoke.mjs",
+    "smoke:h1": "node test/h1-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",

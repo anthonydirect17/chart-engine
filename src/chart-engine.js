@@ -1063,6 +1063,7 @@ function create(container, options) {
     pointValue: opt.pointValue || 0,
     compactLabels: opt.compactLabels === true,                                                        // 1.15.0: short order labels, the full one on hover
     toolOrders: opt.toolOrders === true,                                                              // 1.15.0: Shift and Ctrl clicks place orders while a tool is armed
+    spacedDays: opt.spacedDays === true,                                                              // 1.15.0: day labels never drawn over each other (4h, 1h)
   };
   injectStyle();
   const REDUCED = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1578,7 +1579,14 @@ function create(container, options) {
     const labels = [], bs = o.barSeconds;
     if (to < from) return labels;
     if (bs < DAY) {
-      for (let i = Math.max(from, 1); i <= to; i++) if (isSessionStart(i)) labels.push({ i, x: xOf(i), text: fmtDay(bars[i].t + DAY - (o.session.start || DAY)), strong: true });
+      let shownX = -Infinity;
+      for (let i = Math.max(from, 1); i <= to; i++) {
+        if (!isSessionStart(i)) continue;
+        // 1.15.0 (spacedDays, a host's charts): a day label closer than 70 px to the last one shown keeps its divider, not its text
+        const x = xOf(i), quiet = o.spacedDays && x - shownX < 70;
+        if (!quiet) shownX = x;
+        labels.push({ i, x, text: fmtDay(bars[i].t + DAY - (o.session.start || DAY)), strong: true, quiet });
+      }
       // Seconds per bar actually on screen (range and tick bars are irregular; gaps count too).
       const eff = to > from ? Math.max(1e-6, (bars[to].t - bars[from].t) / (to - from)) : bs;
       const cands = [15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 14400, 21600, 43200];
@@ -2366,7 +2374,7 @@ function create(container, options) {
     }
     ctx.textAlign = 'center';
     for (const l of labels) {
-      if (l.x < 20 || l.x > plotW - 20) continue;
+      if (l.x < 20 || l.x > plotW - 20 || l.quiet) continue;
       ctx.fillStyle = l.strong ? T.axisTextStrong : T.axisText;
       ctx.font = (l.strong ? '600 11px ' : '400 11px ') + T.fontMono;
       ctx.fillText(l.text, l.x, timeY + TIME_H / 2 + 1);

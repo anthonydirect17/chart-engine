@@ -1432,7 +1432,7 @@ function mountQuotes(v) {
   v.quotes = { render };
   /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
      with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
-  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30 }));
+  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
   v.destroy = () => { unfit(); quoteSubs.delete(render); for (const f of offs) f(); };
 }
 /* The Account panel's and the Quote board's classes from their size (`classes(width, height)` -> { class: on }), from a
@@ -1692,9 +1692,10 @@ grid.addEventListener('pointerdown', e => {
 }, true);
 for (const t of ['mousedown', 'auxclick']) grid.addEventListener(t, e => { if (e.button === 1 && chartOf(e.target) && e.target.closest('.chart-box')) { e.preventDefault(); e.stopPropagation(); } }, true);
 document.addEventListener('pointerdown', e => { if (ring && !$('wsRing').contains(e.target)) closeRing(); }, true);
+/* Escape closes the ring first (before a chart's own keys see it), then takes back an armed tool on any chart */
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && ring) { e.preventDefault(); e.stopPropagation(); closeRing(); } }, true);
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || e.defaultPrevented) return;
-  if (ring) { e.preventDefault(); closeRing(); return; }
   const armed = chartViews().filter(v => v.pane.chart.getTool());
   if (armed.length && !pop) { e.preventDefault(); for (const v of armed) v.pane.chart.setTool(null); note('Drawing tool off.', false, 3000); }
 });

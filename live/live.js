@@ -1247,7 +1247,7 @@ function start(container, opt, PAGE) {
     layers: maskLayers({ volume: S.layers.volume, vwap: S.layers.vwap, levels: S.layers.levels, ib: S.layers.levels, vp: S.layers.vp, delta: S.layers.delta, trades: false,
       absorption: S.layers.absorption, bubbles: S.layers.bubbles, divergence: S.layers.delta && S.options.delta.div === 'on' }),
     grid: S.grid === 'on', room: S.room,                 // 1.14.0: grid lines (off by default) and the room right of price
-    compactLabels: HOSTED, toolOrders: HOSTED,
+    compactLabels: HOSTED, toolOrders: HOSTED, spacedDays: HOSTED,
     motion: GLIDE[S.glide], clock: etNow, theme: { vwap: IC.vwap, vpPoc: IC.vpPoc, vpRow: IC.vpRow, vpValue: IC.vpValue, sigBull: IC.sigBull, sigBullLine: IC.sigBullLine, sigBear: IC.sigBear, sigBearLine: IC.sigBearLine },
   });
   { const raw = chart.setLayers; chart.setLayers = partial => raw(maskLayers(partial)); }   // every change goes through the mask
@@ -2110,7 +2110,7 @@ function start(container, opt, PAGE) {
     rebuild();
     vpBuild();
     setConn('live');
-    $('notice').hidden = true;
+    if (!(TF[S.tf].mode === 'htf' && H.state === 'old')) $('notice').hidden = true;   // 1.15.0: "4h bars need ChartBridge 0.3.7" stays
   }
 
   function onTick(m) {
