@@ -4,7 +4,7 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 
 ## How to run it (Anthony, at HOME)
 
-1. Get the repo: `git clone https://github.com/anthonydirect17/chart-engine` (or `git pull` in your copy), then `cd chart-engine`.
+1. Get the repo into its own folder (not the clone the PC updater runs from): `git clone -b markup-studio https://github.com/anthonydirect17/chart-engine.git E:\SchwabDesk_bulk\markup-studio`, then `cd E:\SchwabDesk_bulk\markup-studio` (later: `git pull` there).
 2. Check it reads your data: `py -3 tools\markup_studio.py --check` (prints the days found, one day's ticks and times, its first
    candidate), then run it: `py -3 tools\markup_studio.py` (it reads `E:\SchwabDesk_bulk\tickreplay` and `E:\SchwabDesk_bulk\ticks_packed`).
 3. Your browser opens http://localhost:8790/live/markup.html (open it yourself if not).
@@ -13,6 +13,11 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 6. To stop it: Ctrl+C in the window where you ran it. If it says the port is in use, it is already running (or stop the other one).
 
 ## Using it
+
+- Training is on RTH sweeps only (09:31 to 16:00). Levels: PDH/PDL (prior day's RTH) and ONH/ONL (18:00 to 09:29:59),
+  the last two only when the day's data really starts the evening before. The blind queue offers quote days only (real
+  volume and buy/sell); `--include-last-only` adds the others.
+
 
 - **Blind** (the default): Next candidate opens a sweep at its cut (the close of the 1-minute candle holding the reclaim). Only
   the time of day shows, never the date. You can start while the scan is still running ("scanning: N of M days"). The cut is
@@ -34,7 +39,7 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 ## Flags
 
 `--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
-`--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
+`--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
 `tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort).
 
 ## How it works

@@ -244,15 +244,33 @@ FIRST_RTH_S = RTH_OPEN + 60
 
 def day_levels(day: Day, prev_hilo):
     """[(type, price)]: PDH/PDL from the prior kept day's RTH high and low (prev_hilo, from rth_hilo; None when there is
-    no prior kept day), ONH/ONL from 18:00 the evening before to 09:29:59."""
+    no prior kept day), ONH/ONL from 18:00 the evening before to 09:29:59,
+    only when the day has overnight ticks (has_overnight)."""
     out = []
     if prev_hilo:
         out += [('PDH', float(prev_hilo[0])), ('PDL', float(prev_hilo[1]))]
-    s = tod_s(day.wall)
-    m = (s >= SESSION_START) | (s < RTH_OPEN)
-    if m.any():
+    if USE_OVERNIGHT_LEVELS and has_overnight(day):
+        s = tod_s(day.wall)
+        m = (s >= SESSION_START) | (s < RTH_OPEN)
         out += [('ONH', float(day.px[m].max())), ('ONL', float(day.px[m].min()))]
     return out
+
+
+# Anthony 2026-10-03: train on RTH sweeps only (candidates fire 09:31 to 16:00), but KEEP ONH/ONL as levels when the
+# day really has overnight ticks (has_overnight); a day packed without them gets no ONH/ONL.
+USE_OVERNIGHT_LEVELS = True
+
+
+OVERNIGHT_GRACE_S = 15 * 60   # the session's first tick must come by 18:15 the evening before
+
+
+def has_overnight(day: Day) -> bool:
+    """True when the day's ticks start in the evening session (by 18:15 the evening before). Some packed days start in
+    the morning (no overnight ticks); their 'overnight' high and low would only be the pre-open minutes, so no ONH/ONL."""
+    if not len(day):
+        return False
+    s0 = int(tod_s(day.wall[:1])[0])
+    return SESSION_START <= s0 <= SESSION_START + OVERNIGHT_GRACE_S
 
 
 MAX_GAP_MS = 5 * MIN     # a gap longer than this inside RTH (a halt): no candidates from there on
@@ -333,7 +351,7 @@ def find_candidates(day: Day, prev_hilo, tick=TICK):
             rw = int(day.wall[r])
             cut_wall = (rw // MIN + 1) * MIN
             cid = f'C{day.date.replace("-", "")}{ltype}{fmt_tod(day.wall[i]).replace(":", "")}'
-            out.append({'id': cid, 'date': day.date, 'dir': 'short' if up else 'long', 'level_type': ltype,
+            out.append({'id': cid, 'date': day.date, 'quotes': bool(day.has_quotes), 'dir': 'short' if up else 'long', 'level_type': ltype,
                         'level_price': level, 'cross_utc_ms': int(day.utc[i]), 'reclaim_utc_ms': int(day.utc[r]),
                         'reclaim_wall_ms': rw, 'cut_utc_ms': int(day.utc[r]) + (cut_wall - rw)})
             last = int(day.utc[i])

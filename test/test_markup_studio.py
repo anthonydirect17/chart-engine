@@ -284,7 +284,8 @@ class Candidates(unittest.TestCase):
                for c in cs]
         self.assertEqual(got, [('PDH', 'short', '10:00:00', '10:01:00'), ('PDH', 'short', '10:40:00', '10:41:00'),
                                ('PDL', 'long', '11:00:00', '11:01:00')])
-        self.assertEqual(core.day_levels(self.day(), (100.0, 90.0)), [('PDH', 100.0), ('PDL', 90.0), ('ONH', 85.0), ('ONL', 80.0)])
+        # this hand-built day starts at 09:00 (no overnight ticks), so no ONH/ONL
+        self.assertEqual(core.day_levels(self.day(), (100.0, 90.0)), [('PDH', 100.0), ('PDL', 90.0)])
         for c in cs:
             self.assertFalse({'outcome', 'pnl', 'mfe', 'mae'} & set(c))
 
@@ -708,3 +709,24 @@ class Review1(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Review2(unittest.TestCase):
+    """Anthony 2026-10-03 at HOME: ONH/ONL only on days with overnight ticks; quote days only in the blind queue by default."""
+
+    def test_overnight_levels_off_and_overnight_detection(self):
+        evening = tape([(W(9, 0) - 15 * 3600 * 1000, 80.0, 1, ''), (W(9, 30), 95.0, 1, '')])      # first tick 18:00 the evening before
+        morning = tape([(W(9, 0), 80.0, 1, ''), (W(9, 30), 95.0, 1, '')])
+        self.assertTrue(core.has_overnight(evening))
+        self.assertFalse(core.has_overnight(morning))
+        self.assertEqual(core.day_levels(evening, (100.0, 90.0)), [('PDH', 100.0), ('PDL', 90.0), ('ONH', 80.0), ('ONL', 80.0)])
+        self.assertEqual([lt for lt, _ in core.day_levels(morning, (100.0, 90.0))], ['PDH', 'PDL'])
+
+    def test_blind_queue_skips_last_only_days_by_default(self):
+        c_q = {'id': 'A', 'date': '2025-10-14', 'quotes': True}
+        c_l = {'id': 'B', 'date': '2025-10-15', 'quotes': False}
+        for flag, want in ((False, [False, True]), (True, [False, False])):
+            s = ms.Studio.__new__(ms.Studio)
+            s.include_last_only, s.graded_ids, s.seen_ids = flag, set(), set()
+            self.assertEqual([s._skip(c_q), s._skip(c_l)], want)
+

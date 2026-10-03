@@ -16,6 +16,7 @@ Flags (defaults are the HOME PC's folders):
                                                 eventstudy_r1 prints, when present)
   --rule=tools/markup_rule_v0.json              the rule draft's thresholds
   --port=8790   --symbol=NQ   --no-browser
+  --include-last-only                           blind queue also offers last-only days (volume is all 1 there; off by default)
   --check[=YYYY-MM-DD]                          load one in-sample day through the loader, print what the Studio sees, exit
   --source=npz                                  tests: <data>/<SYMBOL>_<YYYY-MM-DD>.npz with wall_ms, price, volume[, bid, ask]
 Holdout: any date from 2026-04-01 on is refused everywhere (listing, loading, candidates, free mode).
@@ -48,7 +49,7 @@ import markup_core as core  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION = 'markup-studio-1'
-CACHE_VERSION = 2
+CACHE_VERSION = 3          # 3: ONH/ONL only with overnight ticks; candidates carry their quote type
 SETUPS = ('SWEEP', 'RETEST', 'NONE', 'WAIT')
 SPEEDS = (1, 5, 20, 60)
 MARK_ROLES = ('Level', 'Failed candle', 'Reclaim candle', 'Entry', 'Stop', 'Target')
@@ -159,8 +160,9 @@ class Refused(Exception):
 
 
 class Studio:
-    def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ'):
+    def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False):
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, symbol
+        self.include_last_only = include_last_only     # blind queue: quote days only unless --include-last-only
         self.seen_report = []
         self.seen = core.read_seen([p for p in seen_paths if p and os.path.isfile(p)], self.seen_report)
         self.lock = threading.RLock()
@@ -262,6 +264,8 @@ class Studio:
             log(f'could not write {path}: {e}')
 
     def _skip(self, c):
+        if not self.include_last_only and not c.get('quotes', True):
+            return True                                   # blind grading reads volume: quote days only by default
         return c['id'] in self.graded_ids or c['id'] in self.seen_ids or not core.in_sample(c['date'])
 
     def queue(self):
@@ -939,6 +943,7 @@ def check(source, symbol, day=None, out=print):
     out(f'first tick: {fmt_ms(d.wall[0], True)} = {fmt_ms(d.utc[0], False)}')
     out(f'last tick:  {fmt_ms(d.wall[-1], True)} = {fmt_ms(d.utc[-1], False)}')
     out('quotes: ' + ('bid and ask (sides from the quote)' if d.has_quotes else 'last only (sides by the tick rule; volume all 1 on last-only days)'))
+    out('overnight: ' + ('yes, from 18:00 the evening before (ONH/ONL used)' if core.has_overnight(d) else 'NO overnight ticks on this day (ONH/ONL not used)'))
     for j in range(k, max(-1, k - 10), -1):          # the first candidate, walking back up to 10 days from the chosen one
         cur = d if j == k else source.load(days[j])
         if not core.has_morning(cur):
@@ -985,7 +990,8 @@ def main(argv=None):
             sys.exit(f'CHECK FAILED: {e}')
     seen = opt['seen'].split(',') if opt.get('seen') else default_seen()
     try:
-        studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol)
+        studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol,
+                        include_last_only='include-last-only' in opt)
     except OSError as e:
         sys.exit(f'cannot use the marks folder {marks}: {e}\nGive another with --marks=PATH.')
     try:
