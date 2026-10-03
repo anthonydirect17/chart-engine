@@ -5,7 +5,8 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 ## How to run it (Anthony, at HOME)
 
 1. Get the repo: `git clone https://github.com/anthonydirect17/chart-engine` (or `git pull` in your copy), then `cd chart-engine`.
-2. Run: `py -3 tools\markup_studio.py` (it reads `E:\SchwabDesk_bulk\tickreplay` and `E:\SchwabDesk_bulk\ticks_packed`).
+2. Check it reads your data: `py -3 tools\markup_studio.py --check` (prints the days found, one day's ticks and times, its first
+   candidate), then run it: `py -3 tools\markup_studio.py` (it reads `E:\SchwabDesk_bulk\tickreplay` and `E:\SchwabDesk_bulk\ticks_packed`).
 3. Your browser opens http://localhost:8790/live/markup.html (open it yourself if not).
 4. You should see "Finding candidates: N of M days" top right; when it says "Excluded N already-seen", press **Next candidate**.
 5. Your grades go to `E:\SchwabDesk_bulk\marks` (one JSON per grade, `marks_log.jsonl`, and `marks_export.csv` from **Export CSV**).
@@ -30,7 +31,7 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 
 ## Flags
 
-`--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` `--rule=FILE` `--no-browser`
+`--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
 `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
 `tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort).
 
@@ -50,9 +51,14 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 - The page sets its `Date.now()` to the replay clock (the charts read "now" for the session, VWAP and range-bar loads) and,
   in blind mode, strips dates, weekdays and month names from every text drawn on the charts' canvases and from the page's
   text and tooltips (the engine has no option to hide dates; the frozen chart files are unchanged).
+- Data: tickreplay's `loader.load_session(symbol, date, data_root=...)` (corrections applied; `Session.ticks`: `ts_ms`,
+  `last`, `bid`, `ask`, `vol`, `has_quotes`). Days: `sessions_index.csv` in the tickreplay folder, the research's in-sample
+  list (NQ, before 2026-04-01, without `holiday_close`, `missing_day` or `truncated`; a day whose first RTH tick is after
+  noon is dropped when scanned).
 - Candidates (Python, ticks up to each reclaim only): PDH/PDL the prior kept day's RTH high and low, ONH/ONL 18:00 to
   09:29:59; RTH from 09:31:00; through by 4 or more ticks, back by 1 or more tick on the original side within 120 s of the
-  first cross; 30 minutes refractory per level per day; shuffled with seed 4; cached in `candidates_v1.json`.
+  first cross; 30 minutes refractory per level per day; none after a gap of over 5 minutes inside RTH (a halt); shuffled
+  with seed 4; cached in `candidates_v1.json`.
 - Times: tickreplay gives New York wall-clock ms; the server converts with zoneinfo (US rules when Windows has no time zone
   database). Holdout: every date from 2026-04-01 on is refused (listing, loading, candidates, free mode).
 - Tests: `npm run test:markup` (Python unit tests), `npm run smoke:markup` (Chromium; `PYTHON=py` on Windows).

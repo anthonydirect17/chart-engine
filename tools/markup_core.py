@@ -253,6 +253,27 @@ def day_levels(day: Day, prev_hilo):
     return out
 
 
+MAX_GAP_MS = 5 * MIN     # a gap longer than this inside RTH (a halt): no candidates from there on
+
+
+def has_morning(day: Day) -> bool:
+    """The research's rule: a day whose first RTH tick is after noon (or with none) is not kept."""
+    s = tod_s(day.wall)
+    rth = np.flatnonzero((s >= RTH_OPEN) & (s < RTH_CLOSE))
+    return bool(rth.size) and int(s[rth[0]]) < 12 * 3600
+
+
+def rth_halt_wall(day: Day):
+    """Wall ms of the last tick before the first gap of more than MAX_GAP_MS inside RTH (None without one)."""
+    s = tod_s(day.wall)
+    rth = np.flatnonzero((s >= RTH_OPEN) & (s < RTH_CLOSE))
+    if rth.size < 2:
+        return None
+    w = day.wall[rth]
+    big = np.flatnonzero(np.diff(w) > MAX_GAP_MS)
+    return int(w[big[0]]) if big.size else None
+
+
 def rth_hilo(day: Day):
     s = tod_s(day.wall)
     m = (s >= RTH_OPEN) & (s < RTH_CLOSE)
@@ -289,6 +310,7 @@ def find_candidates(day: Day, prev_hilo, tick=TICK):
     if not len(day):
         return out
     s = tod_s(day.wall)
+    halt = rth_halt_wall(day)
     for ltype, level in day_levels(day, prev_hilo):
         side = _sides(day.px, level)
         cross = np.flatnonzero((side[1:] != side[:-1]) & (side[:-1] != 0)) + 1
@@ -297,6 +319,8 @@ def find_candidates(day: Day, prev_hilo, tick=TICK):
             i = int(i)
             if not (FIRST_RTH_S <= s[i] < RTH_CLOSE):
                 continue
+            if halt is not None and day.wall[i] > halt:
+                break
             if last is not None and day.utc[i] < last + REFRACTORY_MS:
                 continue
             hit = find_sweep(day, level, i, tick)

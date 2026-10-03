@@ -7,7 +7,6 @@ import json
 import os
 import sys
 import tempfile
-import textwrap
 import unittest
 
 import numpy as np
@@ -79,68 +78,184 @@ def datetime_of(hour_index):
     return datetime(1970, 1, 1) + timedelta(hours=hour_index)
 
 
+FAKE_LOADER = '''"""A stand-in for tickreplay's loader.py (1f9e04b) with the same names and shapes (TICKREPLAY_API.md), made for the
+Markup Studio tests. It reads made-up sample days packed as <data_root>/<SYMBOL>/<SYMBOL>_<MMYY>_<YYYY-MM-DD>.npz."""
+import glob
+import os
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+
+import numpy as np
+
+PACKED = Path(r"E:\\\\SchwabDesk_bulk\\\\ticks_packed")
+TICK = 0.25
+CALLS = []
+
+
+@dataclass
+class Ticks:
+    ts_ms: np.ndarray
+    last: np.ndarray
+    bid: np.ndarray
+    ask: np.ndarray
+    vol: np.ndarray
+    symbol: str
+    contract: str
+    file_date: object
+    has_quotes: bool
+    add_ms: int = 0
+
+
+@dataclass
+class Session:
+    ticks: Ticks
+    session_date: date
+    early_close: bool
+    gap_before: bool
+    corrected_clock: bool
+    n_dropped_window: int
+    n_dropped_badprint: int
+    n_edge_dups: int
+    edge_gap_ms: object
+    volume: int
+    alt_contract: str
+    alt_volume: int
+    also_contract: str = ""
+    badprint_volume: int = 0
+    badprints: tuple = ()
+
+
+def load_session(symbol, session_date, data_root=None):
+    d = session_date if isinstance(session_date, date) else datetime.strptime(str(session_date), "%Y-%m-%d").date()
+    if d.weekday() >= 5:
+        raise ValueError("no session on a Saturday or Sunday")
+    CALLS.append((symbol, d.isoformat(), str(data_root)))
+    files = glob.glob(os.path.join(str(data_root or PACKED), symbol, f"{symbol}_*_{d.isoformat()}.npz"))
+    if not files:
+        e = np.zeros(0)
+        return Session(Ticks(e.astype(np.int64), e, e, e, e.astype(np.int64), symbol, "", None, False), d, False, False, False, 0, 0, 0, None, 0, "", 0)
+    z = np.load(files[0])
+    q = bool(np.isfinite(z["bid"]).any())
+    t = Ticks(z["ts_ms"].astype(np.int64), z["last"], z["bid"], z["ask"], z["vol"], symbol, os.path.basename(files[0]).split("_")[1], d, q)
+    return Session(t, d, False, False, False, 0, 0, 0, None, int(z["vol"].sum()), "", 0)
+'''
+
+INDEX_COLS = ['symbol', 'session_date', 'contract', 'has_quotes', 'last_only', 'mixed_quotes', 'early_close', 'holiday_close',
+              'missing_day', 'truncated', 'gap_before', 'corrected_clock', 'n_dropped_window', 'n_dropped_badprint', 'badprint_volume',
+              'n_ticks', 'first_ts', 'last_ts', 'volume', 'n_edge_dups', 'edge_gap_ms', 'alt_contract', 'alt_volume', 'also_contract']
+
+
+def fake_tickreplay(root, data_dir):
+    """A tickreplay folder (loader.py, sessions_index.csv) and a packed data_root made from the npz fixture days."""
+    tr, packed = os.path.join(root, 'tickreplay'), os.path.join(root, 'ticks_packed')
+    os.makedirs(tr)
+    os.makedirs(os.path.join(packed, 'NQ'))
+    with open(os.path.join(tr, 'loader.py'), 'w') as f:
+        f.write(FAKE_LOADER)
+    rows = []
+    for n in sorted(os.listdir(data_dir)):
+        if not n.endswith('.npz'):
+            continue
+        d = n[3:13]
+        z = np.load(os.path.join(data_dir, n))
+        q = 'bid' in z.files
+        nan = np.full(z['price'].size, np.nan)
+        np.savez(os.path.join(packed, 'NQ', f'NQ_0326_{d}.npz'), ts_ms=z['wall_ms'], last=z['price'],
+                 bid=z['bid'] if q else nan, ask=z['ask'] if q else nan, vol=z['volume'] if q else np.ones(z['price'].size, dtype=np.int64))
+        rows.append(dict.fromkeys(INDEX_COLS, 'no') | {'symbol': 'NQ', 'session_date': d, 'contract': 'NQ 03-26', 'has_quotes': 'yes' if q else 'no',
+                                                       'last_only': 'no' if q else 'yes', 'n_ticks': str(z['price'].size)})
+    # rows the in-sample filter must drop: another symbol, a holiday close, a missing day, a truncated day, the holdout
+    for d, k in [('2026-03-02', 'holiday_close'), ('2026-03-03', 'missing_day'), ('2026-03-04', 'truncated')]:
+        rows.append(dict.fromkeys(INDEX_COLS, 'no') | {'symbol': 'NQ', 'session_date': d, k: 'yes'})
+    rows.append(dict.fromkeys(INDEX_COLS, 'no') | {'symbol': 'ES', 'session_date': '2026-03-05'})
+    with open(os.path.join(tr, 'sessions_index.csv'), 'w', newline='') as f:
+        w = csv.DictWriter(f, fieldnames=INDEX_COLS)
+        w.writeheader()
+        w.writerows(rows)
+    return tr, packed
+
+
 class LoaderAdapter(unittest.TestCase):
+    """TickReplaySource against a stand-in with tickreplay's exact API (loader.py, Session, Ticks, sessions_index.csv)."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        pkg = os.path.join(self.tmp.name, 'tickreplay')
-        os.makedirs(pkg)
-        with open(os.path.join(pkg, '__init__.py'), 'w') as f:
-            f.write(textwrap.dedent('''
-                import numpy as np
-                CALLS = []
-                def load_session(symbol, session_date, data_root=None):
-                    CALLS.append((symbol, str(session_date), data_root))
-                    base = 1773136800000   # 2026-03-10 10:00 wall ms
-                    return {"ts": np.array([base + 2000, base, base + 1000]), "price": np.array([20000.5, 20000.0, 20000.25]),
-                            "volume": np.array([3, 1, 2]), "bid": np.array([20000.25, 19999.75, 20000.0]),
-                            "ask": np.array([20000.5, 20000.0, 20000.25])}
-                def list_sessions(symbol, data_root=None):
-                    return ["2026-03-09", "2026-03-10", "2026-04-01", "2026-05-05"]
-            '''))
-        for k in [k for k in sys.modules if k == 'tickreplay' or k.startswith('tickreplay.')]:
-            del sys.modules[k]
-        self.src = ms.TickReplaySource(pkg, '/data/root', 'NQ')
+        data = os.path.join(self.tmp.name, 'npz')
+        markup_fixture.write(data)
+        self.tr, self.packed = fake_tickreplay(self.tmp.name, data)
+        self.src = ms.TickReplaySource(self.tr, self.packed, 'NQ')
 
     def tearDown(self):
-        sys.path[:] = [p for p in sys.path if p != self.tmp.name]
-        for k in [k for k in sys.modules if k == 'tickreplay' or k.startswith('tickreplay.')]:
-            del sys.modules[k]
+        sys.path[:] = [p for p in sys.path if p != os.path.abspath(self.tr)]
+        sys.modules.pop('loader', None)
         self.tmp.cleanup()
 
-    def test_load_session_sorted_converted(self):
-        day = self.src.load('2026-03-10')
-        self.assertEqual(self.src.mod.CALLS, [('NQ', '2026-03-10', '/data/root')])
-        self.assertEqual(day.wall.tolist(), [1773136800000, 1773136801000, 1773136802000])
-        self.assertEqual(day.px.tolist(), [20000.0, 20000.25, 20000.5])
-        self.assertEqual((day.utc - day.wall).tolist(), [4 * 3600 * 1000] * 3)
-        self.assertTrue(day.has_quotes)
-        self.assertEqual(day.side.tolist(), [1, 1, 1])
-        self.assertEqual(day.sm.tolist(), [2, 2, 2])
-
-    def test_days_drop_the_holdout(self):
+    def test_days_from_the_index_in_sample(self):
         self.assertEqual(self.src.days(), ['2026-03-09', '2026-03-10'])
+
+    def test_load_session(self):
+        day = self.src.load('2026-03-10')
+        self.assertEqual(self.src.mod.CALLS, [('NQ', '2026-03-10', self.packed)])
+        self.assertTrue(day.has_quotes)
+        self.assertEqual(day.utc[0] - day.wall[0], 4 * 3600 * 1000)          # EDT after 2026-03-08
+        self.assertEqual(core.fmt_tod(day.wall[0]), '18:00:00')
+        self.assertTrue(set(day.sm.tolist()) <= {0, 2, 3})
+        last_only = self.src.load('2026-03-09')
+        self.assertFalse(last_only.has_quotes)
+        self.assertIsNone(last_only.bid)
+        self.assertEqual(set(last_only.sm.tolist()) - {0}, {3})
 
     def test_holdout_refused_before_the_loader_runs(self):
         with self.assertRaises(core.HoldoutError):
-            self.src.load('2026-04-01')
+            self.src.load('2026-04-02')
         self.assertEqual(self.src.mod.CALLS, [])
 
-    def test_columns_from_a_structured_array(self):
-        a = np.zeros(2, dtype=[('time', 'datetime64[ms]'), ('last', 'f8'), ('size', 'i8')])
-        a['time'] = np.array(['2026-03-10T10:00:00', '2026-03-10T10:00:01'], dtype='datetime64[ms]')
-        a['last'] = [1.0, 2.0]
-        a['size'] = [1, 1]
-        cols = ms._columns(a)
-        self.assertEqual(ms._wall_ms(ms._pick(cols, ms.TIME_COLS, 'time')).tolist(), [1773136800000, 1773136801000])
-        with self.assertRaises(RuntimeError):
-            ms._pick({'x': np.zeros(1)}, ms.PRICE_COLS, 'price')
+    def test_clear_errors(self):
+        with self.assertRaises(ms.TickReplayError):
+            self.src.load('2026-03-11')                                      # no file: the loader's empty Session
+        with self.assertRaises(ValueError):
+            self.src.load('2026-03-08')                                      # a Sunday: the loader's ValueError
+        with self.assertRaises(ms.TickReplayError):
+            ms.TickReplaySource(self.tmp.name, self.packed, 'NQ')            # no loader.py there
+
+    def test_studio_scan_through_the_loader(self):
+        st = ms.Studio(self.src, os.path.join(self.tmp.name, 'marks'), os.path.join(HERE, '..', 'tools', 'markup_rule_v0.json'), [], 'NQ')
+        st.start_scan(background=False)
+        self.assertEqual([c['id'] for c in st.candidates], ['C20260310PDH100510'])
+
+    def test_check_command(self):
+        lines = []
+        self.assertEqual(ms.check(self.src, 'NQ', out=lines.append), 0)
+        text = '\\n'.join(lines)
+        self.assertIn('days found (in sample, before 2026-04-01): 2, 2026-03-09 to 2026-03-10', text)
+        self.assertIn('chosen day: 2026-03-10', text)
+        self.assertIn('first tick: 2026-03-09 18:00:00.000 New York = 2026-03-09 22:00:00.000 UTC', text)
+        self.assertIn('quotes: bid and ask', text)
+        self.assertIn('first candidate: C20260310PDH100510 PDH 20060.0 short', text)
+        with self.assertRaises(core.HoldoutError):
+            ms.check(self.src, 'NQ', '2026-04-02', out=lines.append)
 
 
 class Candidates(unittest.TestCase):
     """Hand-built: PDH 100, PDL 90; ON high 85, low 80."""
 
     def day(self):
-        rows = [(W(9, 0), 80.0, 1, ''), (W(9, 10), 85.0, 1, ''),
+        return tape(self.day_rows(), quotes=False)
+
+    def day_rows(self):
+        """The hand-built trades, with a trade at the last price every minute in RTH where there is none in the minute
+        before (no new crosses), so the tape has no gap of over 5 minutes."""
+        rows = self.trades()
+        out = []
+        for r in rows:
+            while out and out[-1][0] >= W(9, 30) and r[0] - out[-1][0] > 60000:
+                out.append((out[-1][0] + 60000, out[-1][1], 1, ''))
+            out.append(r)
+        return out
+
+    def trades(self):
+        return [(W(9, 0), 80.0, 1, ''), (W(9, 10), 85.0, 1, ''),
                 (W(9, 30), 95.0, 1, ''),
                 # in the first 60 s of RTH: through and back, but too early
                 (W(9, 30, 30), 100.25, 1, ''), (W(9, 30, 40), 101.25, 1, ''), (W(9, 30, 50), 99.5, 1, ''),
@@ -158,7 +273,6 @@ class Candidates(unittest.TestCase):
                 # a PDL sweep down and back -> long
                 (W(11, 0), 89.75, 1, ''), (W(11, 0, 5), 89.0, 1, ''), (W(11, 0, 10), 90.25, 1, ''),
                 (W(12, 0), 95.0, 1, '')]
-        return tape(rows, quotes=False)
 
     def test_hand_worked_answers(self):
         cs = core.find_candidates(self.day(), (100.0, 90.0))
@@ -176,6 +290,18 @@ class Candidates(unittest.TestCase):
         for c in core.find_candidates(day, (100.0, 90.0)):
             part = day.upto(ms.visible_count(day, c['cut_utc_ms']))
             self.assertIn(c, core.find_candidates(part, (100.0, 90.0)))
+
+    def test_no_candidates_after_a_halt(self):
+        """A gap of more than 5 minutes inside RTH (a halt): nothing from there on."""
+        rows = [r for r in self.day_rows() if r[0] < W(10, 30) or r[0] >= W(10, 37)]
+        cs = core.find_candidates(tape(rows, quotes=False), (100.0, 90.0))
+        self.assertEqual([core.fmt_tod(core.utc_to_wall(c['cross_utc_ms'])) for c in cs], ['10:00:00'])
+        rows = [r for r in self.day_rows() if r[0] < W(10, 30) or r[0] >= W(10, 34)]          # 4 minutes: no halt
+        self.assertEqual(len(core.find_candidates(tape(rows, quotes=False), (100.0, 90.0))), 3)
+
+    def test_no_morning(self):
+        self.assertTrue(core.has_morning(self.day()))
+        self.assertFalse(core.has_morning(tape([r for r in self.day_rows() if r[0] < W(9, 30) or r[0] >= W(12, 0, 1)], quotes=False)))
 
     def test_no_prior_day_no_pd_levels(self):
         self.assertEqual([c['level_type'] for c in core.find_candidates(self.day(), None)], [])

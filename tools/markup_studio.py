@@ -16,6 +16,7 @@ Flags (defaults are the HOME PC's folders):
                                                 eventstudy_r1 prints, when present)
   --rule=tools/markup_rule_v0.json              the rule draft's thresholds
   --port=8790   --symbol=NQ   --no-browser
+  --check[=YYYY-MM-DD]                          load one in-sample day through the loader, print what the Studio sees, exit
   --source=npz                                  tests: <data>/<SYMBOL>_<YYYY-MM-DD>.npz with wall_ms, price, volume[, bid, ask]
 Holdout: any date from 2026-04-01 on is refused everywhere (listing, loading, candidates, free mode).
 Python 3.10+, stdlib + numpy only.
@@ -23,6 +24,7 @@ Python 3.10+, stdlib + numpy only.
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import importlib
 import json
@@ -79,97 +81,73 @@ class NpzSource:
         return core.Day(d, z['wall_ms'], z['price'], z['volume'], bid, ask)
 
 
-TIME_COLS = ('ts_wall_ms', 'ts_ms', 'time_ms', 'timestamp_ms', 'ts', 'timestamp', 'time', 't')
-PRICE_COLS = ('price', 'last', 'last_price', 'px', 'p')
-VOL_COLS = ('volume', 'vol', 'size', 'qty', 'v')
+class TickReplayError(RuntimeError):
+    pass
 
 
-def _columns(obj):
-    """Columns of whatever load_session returns: a dict of arrays, a pandas DataFrame, a numpy structured array, or an
-    object with array attributes (or a tuple whose first item is one of those)."""
-    if isinstance(obj, tuple) and obj:
-        obj = obj[0]
-    if hasattr(obj, 'columns') and hasattr(obj, '__getitem__'):          # pandas
-        return {str(c).lower(): np.asarray(obj[c]) for c in obj.columns}
-    if isinstance(obj, np.ndarray) and obj.dtype.names:
-        return {n.lower(): obj[n] for n in obj.dtype.names}
-    if isinstance(obj, dict):
-        return {str(k).lower(): np.asarray(v) for k, v in obj.items() if hasattr(v, '__len__')}
-    return {k.lower(): np.asarray(v) for k, v in vars(obj).items() if isinstance(v, (np.ndarray, list))}
-
-
-def _pick(cols, names, what):
-    for n in names:
-        if n in cols:
-            return cols[n]
-    raise RuntimeError(f'tickreplay.load_session gave no {what} column (looked for {", ".join(names)}; found {", ".join(sorted(cols))}). '
-                       'Tell the coordinator: the adapter in tools/markup_studio.py needs the real column name.')
-
-
-def _wall_ms(a):
-    a = np.asarray(a)
-    if np.issubdtype(a.dtype, np.datetime64):
-        return a.astype('datetime64[ms]').astype(np.int64)
-    a = a.astype(np.float64)
-    if a.size and np.nanmax(a) < 1e11:          # seconds
-        a = a * 1000
-    return np.round(a).astype(np.int64)
+def _yes(v):
+    return str(v).strip().lower() in ('yes', 'true', '1')
 
 
 class TickReplaySource:
-    """The canonical loader on the HOME PC: tickreplay.load_session(symbol, session_date, data_root=...), corrections
-    applied, timestamps New York wall-clock ms."""
+    """The canonical loader on the HOME PC (tickreplay 1f9e04b): `loader.py` in the tickreplay folder,
+    loader.load_session(symbol, session_date, data_root=...) -> Session (corrections applied), Session.ticks: Ticks with
+    ts_ms (int64 New York wall-clock ms stored as if UTC), last, bid, ask (float64, all NaN on last-only days), vol,
+    has_quotes. Days come from <tickreplay>/sessions_index.csv with the research's in-sample filter: the symbol's rows dated
+    before 2026-04-01 (the holdout lock), without holiday_close, missing_day or truncated. Days with no morning (first
+    RTH tick after noon) are dropped when the scan loads them (Studio._scan)."""
+
+    INDEX_COLS = ('symbol', 'session_date', 'holiday_close', 'missing_day', 'truncated', 'has_quotes', 'n_ticks')
+    TICK_FIELDS = ('ts_ms', 'last', 'bid', 'ask', 'vol', 'has_quotes')
 
     def __init__(self, tickreplay_dir, data_root, symbol):
-        self.data_root, self.symbol = data_root, symbol
-        d = os.path.abspath(tickreplay_dir)
-        if os.path.isfile(os.path.join(d, '__init__.py')):
-            sys.path.insert(0, os.path.dirname(d))
-            name = os.path.basename(d)
-        else:
-            sys.path.insert(0, d)
-            name = 'tickreplay'
-        mod = importlib.import_module(name)
-        fn = getattr(mod, 'load_session', None)
-        if fn is None:
-            fn = getattr(importlib.import_module(name + '.loader'), 'load_session')
-        self.mod, self._load = mod, fn
+        self.dir, self.data_root, self.symbol = os.path.abspath(tickreplay_dir), data_root, symbol
+        if not os.path.isfile(os.path.join(self.dir, 'loader.py')):
+            raise TickReplayError(f'no loader.py in {self.dir} (give the tickreplay folder with --tickreplay=PATH)')
+        if self.dir not in sys.path:
+            sys.path.insert(0, self.dir)
+        sys.modules.pop('loader', None)
+        self.mod = importlib.import_module('loader')
+        if not callable(getattr(self.mod, 'load_session', None)):
+            raise TickReplayError(f'{self.dir}/loader.py has no load_session(symbol, session_date, data_root=...)')
+        self.index = os.path.join(self.dir, 'sessions_index.csv')
+
+    def rows(self):
+        try:
+            with open(self.index, newline='', encoding='utf-8-sig') as f:
+                rd = csv.DictReader(f)
+                missing = [c for c in self.INDEX_COLS if c not in (rd.fieldnames or [])]
+                if missing:
+                    raise TickReplayError(f'{self.index} has no column {", ".join(missing)}')
+                return list(rd)
+        except OSError as e:
+            raise TickReplayError(f'cannot read {self.index}: {e}') from e
 
     def days(self):
-        for attr in ('list_sessions', 'available_sessions', 'list_days', 'sessions'):
-            f = getattr(self.mod, attr, None)
-            if callable(f):
-                try:
-                    got = f(self.symbol, data_root=self.data_root)
-                    out = sorted({str(x)[:10] for x in got})
-                    return [x for x in out if re.fullmatch(r'\d{4}-\d{2}-\d{2}', x) and core.in_sample(x)]
-                except Exception:   # noqa: BLE001 - fall back to the folder scan
-                    pass
-        found = set()
-        for dirpath, dirnames, files in os.walk(self.data_root):
-            if dirpath[len(self.data_root):].count(os.sep) > 3:
-                dirnames[:] = []
+        out = set()
+        for r in self.rows():
+            d = str(r['session_date']).strip()[:10]
+            if r['symbol'].strip().upper() != self.symbol.upper() or not core.in_sample(d):
                 continue
-            for n in files + dirnames:
-                full = os.path.join(dirpath, n)
-                if self.symbol.lower() not in full.lower():
-                    continue
-                for m in re.finditer(r'(20\d{2})-?(\d{2})-?(\d{2})', n):
-                    found.add(f'{m.group(1)}-{m.group(2)}-{m.group(3)}')
-        return sorted(x for x in found if core.in_sample(x))
+            if _yes(r['holiday_close']) or _yes(r['missing_day']) or _yes(r['truncated']):
+                continue
+            out.add(d)
+        return sorted(out)
 
     def load(self, d):
-        d = core.check_date(d)
-        raw = self._load(self.symbol, d, data_root=self.data_root)
-        cols = _columns(raw)
-        wall = _wall_ms(_pick(cols, TIME_COLS, 'time'))
-        px = _pick(cols, PRICE_COLS, 'price').astype(np.float64)
-        vol = _pick(cols, VOL_COLS, 'volume').astype(np.int64)
-        bid = cols.get('bid', cols.get('bid_price'))
-        ask = cols.get('ask', cols.get('ask_price'))
-        order = np.argsort(wall, kind='stable')
-        f = lambda a: None if a is None else np.asarray(a, dtype=np.float64)[order]
-        return core.Day(d, wall[order], px[order], vol[order], f(bid), f(ask))
+        d = core.check_date(d)                       # the holdout lock, before the loader runs
+        s = self.mod.load_session(self.symbol, d, data_root=self.data_root)
+        t = getattr(s, 'ticks', None)
+        missing = [f for f in self.TICK_FIELDS if not hasattr(t, f)]
+        if t is None or missing:
+            raise TickReplayError('tickreplay Session.ticks has no ' + ', '.join(missing or ['ticks']) + '; the adapter in tools/markup_studio.py needs updating')
+        wall = np.asarray(t.ts_ms, dtype=np.int64)
+        if wall.size == 0:
+            raise TickReplayError(f'tickreplay has no ticks for {self.symbol} {d} in {self.data_root}')
+        q = bool(t.has_quotes)
+        bid = np.asarray(t.bid, dtype=np.float64) if q else None
+        ask = np.asarray(t.ask, dtype=np.float64) if q else None
+        return core.Day(d, wall, np.asarray(t.last, dtype=np.float64), np.asarray(t.vol, dtype=np.int64), bid, ask)
 
 
 # ------------------------------------------------------------------------------------------------ the studio
@@ -222,6 +200,11 @@ class Studio:
                     self.scan['days'] = k + 1
                     continue
                 day = self.source.load(d)
+                if not core.has_morning(day):          # not a kept day (the research's rule): no candidates, not a prior day
+                    done_days.add(d)
+                    rth[d] = prev
+                    self.scan['days'] = k + 1
+                    continue
                 items = [c for c in items if c['date'] != d] + core.find_candidates(day, prev)
                 hl = core.rth_hilo(day)
                 rth[d] = list(hl) if hl else None
@@ -788,6 +771,54 @@ def default_seen():
     return out
 
 
+def fmt_ms(ms, wall):
+    """A time as 'YYYY-MM-DD HH:MM:SS.mmm' (wall: New York clock ms stored as if UTC; else true UTC ms)."""
+    dt = datetime(1970, 1, 1) + timedelta(milliseconds=int(ms))
+    return dt.strftime('%Y-%m-%d %H:%M:%S.') + f'{int(ms) % 1000:03d}' + (' New York' if wall else ' UTC')
+
+
+def check(source, symbol, day=None, out=print):
+    """--check: load in-sample days through the loader and print what the Studio sees. Returns 0 when all went well."""
+    days = source.days()
+    out(f'days found (in sample, before {core.HOLDOUT.isoformat()}): {len(days)}' + (f', {days[0]} to {days[-1]}' if days else ''))
+    if not days:
+        out('NO DAYS: check --tickreplay (its sessions_index.csv) and --symbol')
+        return 1
+    if day:
+        core.check_date(day)
+        if day not in days:
+            out(f'{day} is not in the in-sample day list')
+            return 1
+    pick = day or days[-1]
+    k = days.index(pick)
+    d = source.load(pick)
+    out(f'chosen day: {pick} (session from 18:00 New York the evening before)')
+    out(f'ticks: {len(d):,}')
+    out(f'first tick: {fmt_ms(d.wall[0], True)} = {fmt_ms(d.utc[0], False)}')
+    out(f'last tick:  {fmt_ms(d.wall[-1], True)} = {fmt_ms(d.utc[-1], False)}')
+    out('quotes: ' + ('bid and ask (sides from the quote)' if d.has_quotes else 'last only (sides by the tick rule; volume all 1 on last-only days)'))
+    for j in range(k, max(-1, k - 10), -1):          # the first candidate, walking back up to 10 days from the chosen one
+        cur = d if j == k else source.load(days[j])
+        if not core.has_morning(cur):
+            out(f'{days[j]}: no morning (first RTH tick after noon), not a kept day')
+            continue
+        prev = None
+        for i in range(j - 1, max(-1, j - 6), -1):
+            p = source.load(days[i])
+            if core.has_morning(p):
+                prev = core.rth_hilo(p)
+                break
+        cs = core.find_candidates(cur, prev)
+        if cs:
+            c = cs[0]
+            out(f'first candidate: {c["id"]} {c["level_type"]} {c["level_price"]} {c["dir"]}, cross {fmt_ms(core.utc_to_wall(c["cross_utc_ms"]), True)}, '
+                f'cut {fmt_ms(core.utc_to_wall(c["cut_utc_ms"]), True)} ({len(cs)} on {days[j]})')
+            return 0
+        out(f'{days[j]}: no candidate')
+    out('no candidate in the last 10 days checked')
+    return 0
+
+
 def main(argv=None):
     args = argv if argv is not None else sys.argv[1:]
     opt = dict(a[2:].split('=', 1) if '=' in a else (a[2:], '1') for a in args if a.startswith('--'))
@@ -805,6 +836,11 @@ def main(argv=None):
             source = TickReplaySource(tr, data, symbol)
         except Exception as e:   # noqa: BLE001 - a plain message, not a traceback
             sys.exit(f'Markup Studio could not load tickreplay from {tr}: {e}\nGive its folder with --tickreplay=PATH and the data with --data=PATH.')
+    if 'check' in opt:
+        try:
+            sys.exit(check(source, symbol, None if opt['check'] == '1' else opt['check']))
+        except (TickReplayError, ValueError) as e:
+            sys.exit(f'CHECK FAILED: {e}')
     seen = opt['seen'].split(',') if opt.get('seen') else default_seen()
     studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol)
     studio.start_scan()
