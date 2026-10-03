@@ -3,10 +3,14 @@
     python3 -m unittest discover -s test -p "test_markup*.py"
 """
 import csv
+import http.client
 import json
 import os
+import shutil
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 import numpy as np
@@ -494,6 +498,212 @@ class StudioFlow(unittest.TestCase):
             self.st.jump('09:00')
         self.st.jump('10:30')
         self.assertEqual(self.st.state()['clock_tod'], '10:30:00')
+
+
+class Review1(unittest.TestCase):
+    """The review of eb2fc07: scan robustness, the blind escape hatch, the exclusive cut, opaque ids, state() cost, grading
+    from a partial scan, the already-seen warning, errors."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = os.path.join(self.tmp.name, 'data')
+        self.marks = os.path.join(self.tmp.name, 'marks')
+        self.info = markup_fixture.write(self.data)
+        self.rule = os.path.join(HERE, '..', 'tools', 'markup_rule_v0.json')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def studio(self, src=None, seen=()):
+        st = ms.Studio(src or ms.NpzSource(self.data, 'NQ'), self.marks, self.rule, list(seen), 'NQ')
+        st.start_scan(background=False)
+        return st
+
+    def test_a_bad_day_is_skipped_and_the_chain_goes_on(self):
+        class Flaky(ms.NpzSource):
+            def days(self):
+                return ['2026-03-06', '2026-03-09', '2026-03-10']   # 03-06 has no file: it fails to load
+        st = self.studio(Flaky(self.data, 'NQ'))
+        self.assertTrue(st.scan['done'])
+        self.assertEqual((st.scan['skipped'], st.scan['skipped_days']), (1, ['2026-03-06']))
+        self.assertEqual([c['id'] for c in st.candidates], ['C20260310PDH100510'])     # PDH from 03-09, the day that loaded
+        self.assertTrue(any('skipped' in w for w in st.warnings()))
+
+        class Broken(ms.NpzSource):
+            def load(self, d):
+                if d == '2026-03-09':
+                    raise OSError('disk error')
+                return super().load(d)
+        shutil.rmtree(self.marks)
+        st = self.studio(Broken(self.data, 'NQ'))
+        self.assertEqual(st.scan['skipped_days'], ['2026-03-09'])
+        self.assertEqual(st.candidates, [])                                            # no prior kept day: no PDH
+        # the next start loads 03-09 fine: 03-10 is scanned again with the new prior day (the cache records the chain)
+        st = self.studio()
+        self.assertEqual([c['id'] for c in st.candidates], ['C20260310PDH100510'])
+
+    def test_the_blind_escape_hatch_is_shut(self):
+        st = self.studio()
+        st.blind_next()
+        self.assertTrue(st.state()['blind_open'])
+        with self.assertRaises(ms.Refused):
+            st.free_load('2026-03-10', '16:00')
+        st.save({'setup': 'NONE'})
+        g = st.grades[-1]
+        with self.assertRaises(ms.Refused):
+            st.blind_next()                                                            # none left
+        st.free_load('2026-03-10', '10:00')                                            # allowed once graded
+        st.mode = 'blind'
+        st.graded = False                                                              # (another candidate open)
+        with self.assertRaises(ms.Refused):
+            st.open_grade(ms.ref_of(g['id']))
+
+    def test_exclusive_cut(self):
+        st = self.studio()
+        s = st.blind_next()
+        cut = s['clock_utc_ms']
+        utc = np.array(self.info['days']['2026-03-10']['utc'])
+        self.assertIn(cut, utc)                                                        # the fixture has a trade exactly at the cut
+        self.assertEqual(st.n_visible(), int((utc < cut).sum()))
+        self.assertTrue(st.vis().utc[-1] < cut)
+        st.step()
+        self.assertEqual(st.n_visible(), int((utc < cut + 60000).sum()))
+        self.assertEqual(ms.visible_count(st.day, cut, False), int((utc <= cut).sum()))  # free mode stays inclusive
+        day = st.day
+        a = core.machine_read(day, cut, 20060.0, exclusive=True)
+        b = core.machine_read(day.upto(int((utc < cut).sum())), cut, 20060.0)
+        self.assertEqual(a, b)
+
+    def test_opaque_ids_in_blind_mode(self):
+        st = self.studio()
+        s = st.blind_next()
+        self.assertNotIn('2026', json.dumps(s))
+        r = st.save({'setup': 'NONE'})
+        self.assertNotIn('2026', r['file'])
+        st.blind_next = None
+        self.assertEqual(st.agreement()['total'], 1)
+        dis = st.agreement()['disagreements']
+        text = json.dumps([st.agreement(), st.list_items()])
+        self.assertNotIn('2026', text)
+        self.assertNotIn('C20', text)
+        if dis:
+            self.assertTrue(dis[0]['ref'].startswith('G') and ':' in dis[0]['tod'])
+        st.free_load('2026-03-10', '10:00')
+        self.assertIn('C20260310PDH100510', json.dumps(st.list_items()))               # free mode: the real ids
+        g = core.list_grades(self.marks)[0]
+        self.assertEqual((g['id'], g['date']), ('C20260310PDH100510', '2026-03-10'))   # the file keeps them
+
+    def test_state_is_cheap(self):
+        st = self.studio()
+        items = [{'id': f'C{i:05d}', 'date': '2026-03-10', 'dir': 'long', 'level_type': 'PDH', 'level_price': 1.0,
+                  'cross_utc_ms': i, 'reclaim_utc_ms': i, 'reclaim_wall_ms': i, 'cut_utc_ms': i} for i in range(3000)]
+        st._publish(items)
+        st.grades = [{'id': f'C{i:05d}', 'setup': 'NONE'} for i in range(300)]
+        st.graded_ids = {g['id'] for g in st.grades}
+        st._queue = None
+        st.free_load('2026-03-10', '10:00')
+        st.state()
+        t0 = time.perf_counter()
+        for _ in range(200):
+            st.state()
+        ms_per = (time.perf_counter() - t0) / 200 * 1000
+        self.assertLess(ms_per, 5.0, f'state() took {ms_per:.2f} ms')
+        self.assertEqual(st.state()['queue']['remaining'], 2700)
+
+    def test_grading_from_a_partial_scan(self):
+        st = ms.Studio(ms.NpzSource(self.data, 'NQ'), self.marks, self.rule, [], 'NQ')
+        st._publish([{'id': 'C1', 'date': '2026-03-10', 'dir': 'short', 'level_type': 'PDH', 'level_price': 20060.0,
+                      'cross_utc_ms': 1773151510000, 'reclaim_utc_ms': 1773151550000, 'reclaim_wall_ms': 1773137150000, 'cut_utc_ms': 1773151560000}])
+        self.assertFalse(st.scan['done'])
+        self.assertEqual(st.blind_next()['clock_tod'], '10:06:00')
+
+    def test_already_seen_warning(self):
+        p = os.path.join(self.tmp.name, 'KEY.csv')
+        with open(p, 'w', newline='') as f:
+            f.write('chart,answer\nS01,yes\nS02,no\n')
+        st = self.studio(seen=[p])
+        self.assertIn('KEY.csv found but 0 rows matched: already-seen not excluded', st.warnings())
+        self.assertEqual(st.seen_report[0]['columns'], ['chart', 'answer'])
+
+    def test_save_never_leaves_an_empty_file(self):
+        real = os.fsync
+
+        def boom(fd):
+            raise OSError('disk full')
+        os.makedirs(self.marks, exist_ok=True)
+        try:
+            os.fsync = boom
+            with self.assertRaises(OSError):
+                core.save_grade(self.marks, {'id': 'C1'})
+        finally:
+            os.fsync = real
+        self.assertEqual([n for n in os.listdir(self.marks) if n.startswith('grade_')], [])
+        core.save_grade(self.marks, {'id': 'C1'})
+        self.assertEqual(os.path.getsize(os.path.join(self.marks, 'grade_C1.json')) > 2, True)
+
+    def test_locked_file_retried_then_a_clear_error(self):
+        calls = []
+        real = os.replace
+
+        def locked(a, b):
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError('in use')
+            return real(a, b)
+        dest = os.path.join(self.tmp.name, 'x.json')
+        try:
+            os.replace = locked
+            core.write_text(dest, 'ok')
+            with open(dest) as f:
+                self.assertEqual((len(calls), f.read()), (3, 'ok'))
+            calls.clear()
+            os.replace = lambda a, b: (_ for _ in ()).throw(PermissionError('in use'))
+            with self.assertRaisesRegex(OSError, 'locked'):
+                core.replace_retry(dest, dest + '2', wait=0)
+        finally:
+            os.replace = real
+
+    def test_http_errors(self):
+        st = self.studio()
+        srv = ms.Server(('127.0.0.1', 0), ms.make_handler(st, 0))
+        port = srv.server_address[1]
+        srv.RequestHandlerClass = ms.make_handler(st, port)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            def req(method, path, body=None, headers=None):
+                c = http.client.HTTPConnection('127.0.0.1', port, timeout=5)
+                c.putrequest(method, path, skip_host=True)
+                c.putheader('Host', f'localhost:{port}')
+                for k, v in (headers or {}).items():
+                    c.putheader(k, v)
+                if body is not None and 'Content-Length' not in (headers or {}):
+                    c.putheader('Content-Length', str(len(body)))
+                c.endheaders(body)
+                r = c.getresponse()
+                out = r.status, json.loads(r.read() or b'{}')
+                c.close()
+                return out
+            self.assertEqual(req('POST', '/api/step', b'{}', {'Content-Length': 'abc'})[0], 400)
+            self.assertEqual(req('POST', '/api/blind/next', b'{}')[0], 200)
+            code, j = req('POST', '/api/free/load', b'{"date":"2026-03-10"}')
+            self.assertEqual(code, 409)
+            self.assertIn('save its grade first', j['error'])
+            self.assertEqual(req('POST', '/markup/save', b'{"setup":"NONE"}')[0], 200)
+            for m in (b'"inf"', b'"nan"', b'1e999', b'-5', b'"x"'):
+                self.assertIn(req('POST', '/api/jump', b'{"minutes":' + m + b'}')[0], (400, 409))
+            self.assertEqual(req('POST', '/api/jump', b'{"time":"25:99"}')[0], 409)
+            self.assertEqual(req('POST', '/api/jump', b'{"minutes":30}')[0], 200)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    def test_port_in_use(self):
+        a = ms.Server(('127.0.0.1', 0), ms.make_handler(None, 0))
+        try:
+            with self.assertRaises(OSError):
+                ms.Server(('127.0.0.1', a.server_address[1]), ms.make_handler(None, 0))
+        finally:
+            a.server_close()
 
 
 if __name__ == '__main__':

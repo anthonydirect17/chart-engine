@@ -17,6 +17,8 @@ import json
 import os
 import random
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import numpy as np
@@ -370,18 +372,23 @@ def _wall_from(value, day: str):
     return None
 
 
-def read_seen(paths):
-    """Best effort: [(date, level_type, reclaim_ms)] from the blind-chart KEY.csv and event-study print CSVs."""
+def read_seen(paths, report=None):
+    """Best effort: [(date, level_type, reclaim_ms)] from the blind-chart KEY.csv and event-study print CSVs. `report`, a
+    list, gets one {path, rows, parsed, columns} per file read (parsed: rows with a date and a reclaim time)."""
     seen = []
     for p in paths:
         try:
             with open(p, newline='', encoding='utf-8-sig') as f:
-                rows = list(csv.DictReader(f))
-        except OSError:
+                rd = csv.DictReader(f)
+                rows = list(rd)
+                names = list(rd.fieldnames or [])
+        except (OSError, UnicodeDecodeError, csv.Error):
             continue
+        n0 = len(seen)
+        if report is not None:
+            report.append({'path': p, 'rows': len(rows), 'parsed': 0, 'columns': names})
         if not rows:
             continue
-        names = list(rows[0].keys())
         dc = _find_col(names, 'date', 'day')
         lc = _find_col(names, 'level_type', 'level')
         rc = _find_col(names, 'reclaim')
@@ -395,6 +402,8 @@ def read_seen(paths):
             t = _wall_from(r.get(rc, ''), d) if rc else None
             if d:
                 seen.append((d, lt, t))
+        if report is not None:
+            report[-1]['parsed'] = sum(1 for x in seen[n0:] if x[2] is not None)
     return seen
 
 
@@ -432,10 +441,11 @@ def last_cross(day: Day, level: float, tick=TICK):
     return int(cross[-1])
 
 
-def machine_read(day: Day, clock_utc: int, level: float, cross_utc: int | None = None, tick=TICK):
+def machine_read(day: Day, clock_utc: int, level: float, cross_utc: int | None = None, tick=TICK, exclusive=False):
     """Bot-mechanics numbers for one level at the clock. `day` must already be cut at the clock (the server does it);
-    the function also refuses any tick after clock_utc on its own. No outcome is computed."""
-    n = int(np.searchsorted(day.utc, clock_utc, 'right'))
+    the function also refuses any tick after clock_utc on its own (and, exclusive, one exactly at it, as blind mode
+    does). No outcome is computed."""
+    n = int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right'))
     day = day.upto(n)
     clock_wall = utc_to_wall(clock_utc)
     if cross_utc is None:
@@ -569,29 +579,74 @@ def safe_name(s):
     return re.sub(r'[^A-Za-z0-9_.-]', '_', str(s))[:80] or 'item'
 
 
-def save_grade(marks_dir, item: dict) -> str:
-    """One JSON per graded item: written to a temp file, then moved onto a name reserved with O_EXCL, so an existing
-    file is never overwritten (a second grade of an id gets _2, _3, ...). Also appends to marks_log.jsonl."""
-    os.makedirs(marks_dir, exist_ok=True)
-    base = 'grade_' + safe_name(item['id'])
-    data = json.dumps(item, indent=2, sort_keys=True)
-    for k in range(1, 10000):
-        dest = os.path.join(marks_dir, base + ('' if k == 1 else f'_{k}') + '.json')
+def replace_retry(src, dest, tries=3, wait=0.25):
+    """os.replace, tried again a few times: on Windows an antivirus or OneDrive can hold a file for a moment
+    (PermissionError). Then a clear error."""
+    for k in range(tries):
         try:
-            fd = os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            continue
-        os.close(fd)
-        tmp = dest + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            f.write(data)
+            os.replace(src, dest)
+            return
+        except PermissionError as e:
+            if k == tries - 1:
+                raise OSError(f'could not write {dest}: the file is locked (antivirus or OneDrive?): {e}') from e
+            time.sleep(wait)
+
+
+def write_text(dest, text):
+    """Write a whole file atomically: a temp file next to it, flushed, then moved onto the name."""
+    tmp = f'{dest}.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, dest)
-        with open(os.path.join(marks_dir, 'marks_log.jsonl'), 'a', encoding='utf-8') as f:
-            f.write(json.dumps(item, sort_keys=True) + '\n')
-        return dest
-    raise OSError('no free file name for ' + base)
+        replace_retry(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def _claim(tmp, dest):
+    """Put the finished temp file at dest only if dest does not exist yet: a hard link (fails when dest exists) or, where a
+    link cannot be made, a rename, which on Windows also fails when dest exists. Never an empty placeholder."""
+    try:
+        os.link(tmp, dest)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        if os.name != 'nt':
+            raise
+    try:
+        os.rename(tmp, dest)
+        return True
+    except FileExistsError:
+        return False
+
+
+def save_grade(marks_dir, item: dict) -> str:
+    """One JSON per graded item, never overwriting a file (a second grade of an id gets _2, _3, ...): the whole file is
+    written to a temp file first and then claimed under a free name (_claim). Also appends to marks_log.jsonl."""
+    os.makedirs(marks_dir, exist_ok=True)
+    base = 'grade_' + safe_name(item['id'])
+    tmp = os.path.join(marks_dir, f'.{base}.{os.getpid()}.{threading.get_ident()}.tmp')
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(json.dumps(item, indent=2, sort_keys=True))
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        for k in range(1, 10000):
+            dest = os.path.join(marks_dir, base + ('' if k == 1 else f'_{k}') + '.json')
+            if _claim(tmp, dest):
+                break
+        else:
+            raise OSError('no free file name for ' + base)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    with open(os.path.join(marks_dir, 'marks_log.jsonl'), 'a', encoding='utf-8') as f:
+        f.write(json.dumps(item, sort_keys=True) + '\n')
+    return dest
 
 
 def list_grades(marks_dir):
@@ -644,10 +699,7 @@ def export_csv(marks_dir) -> tuple[str, int]:
     w.writeheader()
     w.writerows(rows)
     dest = os.path.join(marks_dir, 'marks_export.csv')
-    tmp = dest + '.tmp'
-    with open(tmp, 'w', encoding='utf-8', newline='') as f:
-        f.write(buf.getvalue())
-    os.replace(tmp, dest)
+    write_text(dest, buf.getvalue())
     return dest, len(rows)
 
 

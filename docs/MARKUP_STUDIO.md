@@ -10,12 +10,14 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 3. Your browser opens http://localhost:8790/live/markup.html (open it yourself if not).
 4. You should see "Finding candidates: N of M days" top right; when it says "Excluded N already-seen", press **Next candidate**.
 5. Your grades go to `E:\SchwabDesk_bulk\marks` (one JSON per grade, `marks_log.jsonl`, and `marks_export.csv` from **Export CSV**).
-6. To stop it: Ctrl+C in the window where you ran it.
+6. To stop it: Ctrl+C in the window where you ran it. If it says the port is in use, it is already running (or stop the other one).
 
 ## Using it
 
 - **Blind** (the default): Next candidate opens a sweep at its cut (the close of the 1-minute candle holding the reclaim). Only
-  the time of day shows, never the date. The level is the dashed purple line. **Next candle** steps one minute (counted).
+  the time of day shows, never the date. You can start while the scan is still running ("scanning: N of M days"). The cut is
+  exclusive: a trade stamped exactly at the cut (the next candle's first) is not shown; Next candle moves the cut one minute.
+  The Free tab stays locked until the grade is saved. The level is the dashed purple line. **Next candle** steps one minute (counted).
   Grade: setup `1` SWEEP, `2` RETEST, `3` NONE, `4` WAIT; `L` long, `S` short; click reason chips and/or type; add marks (Level,
   Failed candle, Reclaim candle, Entry, Stop, Target: pick the button, click the chart) and spans (Volume I'm reading,
   Approach: pick the button, drag across the chart). `Esc` cancels a mark. **Save grade**. Only then do the machine read and
@@ -61,4 +63,8 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
   with seed 4; cached in `candidates_v1.json`.
 - Times: tickreplay gives New York wall-clock ms; the server converts with zoneinfo (US rules when Windows has no time zone
   database). Holdout: every date from 2026-04-01 on is refused (listing, loading, candidates, free mode).
-- Tests: `npm run test:markup` (Python unit tests), `npm run smoke:markup` (Chromium; `PYTHON=py` on Windows).
+- Tests: `npm run test:markup` (Python unit tests), `npm run smoke:markup` (Chromium; `PYTHON=py` on Windows). The npm
+  scripts `bridge:replay` and `test:markup` call `python3` (Linux, CI); on Windows run `py -3 tools\markup_studio.py` and
+  `py -3 -m unittest discover -s test -p "test_markup*.py"` instead.
+- A day that fails to load is logged in the window and skipped (the page counts it); a seen file with no usable rows shows a
+  warning in the page. Grade files are written whole to a temp file first, so there is never an empty one.

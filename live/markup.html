@@ -20,7 +20,7 @@
     <button type="button" role="tab" id="tabBlind" class="on" aria-selected="true">Blind</button>
     <button type="button" role="tab" id="tabFree" aria-selected="false">Free</button>
   </div>
-  <div class="ms-clock"><span id="msDate"></span><span id="msClock">--:--:--</span><span class="ms-et">ET</span><span id="msPlay"></span></div>
+  <div class="ms-clock"><span id="msDate" data-dates></span><span id="msClock">--:--:--</span><span class="ms-et">ET</span><span id="msPlay"></span></div>
   <div class="ms-status" id="msStatus"></div>
 </header>
 <main class="ms-main">
@@ -34,7 +34,7 @@
       <div class="ms-line" id="candInfo">No candidate open</div>
       <div class="ms-line dim" id="queueInfo"></div>
     </section>
-    <section class="ms-sec" id="secFree" hidden>
+    <section class="ms-sec" id="secFree" data-dates hidden>
       <div class="ms-row">
         <select id="freeDay" aria-label="Day"></select>
         <input id="freeTime" value="09:30" size="5" aria-label="Time (ET)">

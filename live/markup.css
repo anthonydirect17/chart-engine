@@ -25,6 +25,8 @@ kbd { font: 500 10px var(--ms-mono); color: var(--ms-text2); border: 1px solid v
 .ms-clock { font: 500 14px var(--ms-mono); display: flex; gap: 8px; align-items: baseline; }
 .ms-et { color: var(--ms-muted); font-size: 11px; }
 #msPlay { color: var(--ms-soft); font-size: 11px; }
+.ms-status.warn { color: var(--ms-warn); }
+.ms-tabs button:disabled { opacity: .4; cursor: not-allowed; }
 .ms-status { margin-left: auto; color: var(--ms-text2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .ms-main { flex: 1; min-height: 0; display: flex; }

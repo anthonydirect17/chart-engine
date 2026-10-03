@@ -3,7 +3,8 @@
 //   1. NO-FUTURE: every WebSocket frame and every HTTP response the page receives is recorded; nothing with a time after the
 //      replay clock may be in any of them, the ticks each chart got must be exactly the day's ticks up to the clock, and the
 //      history bars exactly the minutes built from them. "Next candle" then moves the clock to the next minute close and the
-//      newest time received is exactly that close.
+//      newest time received is the last trade before that close (blind cuts are exclusive: a trade stamped exactly at
+//      the cut stays out).
 //   2. Blind: no date (YYYY-MM-DD or a month name) in the DOM text, tooltips, document.title, the URL, or any text drawn on the
 //      charts' canvases (the crosshair's time tag included), before the grade is saved.
 //   3. Grade: hotkeys 1 and S, a chip, a reason, Entry and Stop marks clicked on the chart, Save: the JSON file on disk.
@@ -79,7 +80,8 @@ const chartsReady = page => until(() => page.evaluate(() => { const p = window._
 
 /* Check 1: nothing after the clock reached the page, and what did reach it is exactly the day up to the clock. */
 function noFuture(rec, clockUtc, sink, label) {
-  const n = FX.utc.filter(u => u <= clockUtc).length;
+  // blind mode cuts EXCLUSIVE: a trade stamped exactly at the clock (the next candle's first) is not the page's yet
+  const n = FX.utc.filter(u => u < clockUtc).length;
   const clockWallS = (clockUtc + (FX.wall[0] - FX.utc[0])) / 1000;       // one offset all day (no DST change in the fixture)
   const bad = [];
   let scanned = 0;
@@ -104,7 +106,8 @@ function noFuture(rec, clockUtc, sink, label) {
     const want = n;
     let same = got.length === want;
     for (let i = 0; same && i < want; i++) same = Math.abs(got[i][0] - FX.wall[i] / 1000) < 1e-6 && got[i][1] === FX.px[i] && got[i][2] === FX.vol[i];
-    check(same, `${label}: a chart got exactly the day's ${want} ticks up to the clock (got ${got.length})`, sink);
+    check(same, `${label}: the charts got exactly the day's ${want} ticks before the clock (got ${got.length})`, sink);
+    check(FX.utc.includes(clockUtc) && !got.some(r => Math.abs(r[0] - clockWallS) < 1e-6), `${label}: the fixture's trade stamped exactly at the clock did not reach the page`, sink);
     const hist = msgs.filter(m => m.type === 'history').flatMap(m => m.bars);
     const byMin = new Map();
     for (let i = 0; i < want; i++) {
@@ -137,9 +140,12 @@ async function noFutureRun(script, port, label, sink) {
   const s0 = await state(port);
   noFuture(rec, s0.clock_utc_ms, sink, label + ' at the cut');
   const inPage = await page.evaluate(() => ['range', 'm1'].map(k => { const b = window.__markup.panes[k].chart.bars(); return { maxT: Math.max(...b.map(x => x.t)), last: b[b.length - 1].c }; }));
-  const n0 = FX.utc.filter(u => u <= s0.clock_utc_ms).length;
-  for (const x of inPage) check(x.maxT <= FX.wall[n0 - 1] / 1000 && x.last === FX.px[n0 - 1], `${label}: the chart's newest bar is at or before the clock and closes at the clock's price`, sink);
-  // Next candle: the clock moves to the next minute close, and the newest time received is exactly that close
+  const n0 = FX.utc.filter(u => u < s0.clock_utc_ms).length;
+  for (const x of inPage) check(x.maxT <= FX.wall[n0 - 1] / 1000 && x.last === FX.px[n0 - 1], `${label}: each chart's newest bar is before the clock and closes at the last price before it`, sink);
+  const pre = rec.sockets.flatMap(x => x.frames).concat(rec.responses.filter(r => /\/(api|markup)\//.test(r.url)).map(r => r.body)).join('\n');
+  check(!/20260310|2026-03-10/.test(pre), `${label}: no frame or response names the date or a dated id before the grade`, sink);
+  // Next candle: the clock moves to the next minute close (exclusive again): the newest time received is the last trade
+  // before that close, and the trade stamped exactly at it stays out
   await page.click('#btnStep');
   await sleep(1500);
   const s1 = await state(port);
@@ -148,7 +154,7 @@ async function noFutureRun(script, port, label, sink) {
   let maxT = -Infinity;
   for (const s of rec.sockets) for (const f of s.frames) { const m = JSON.parse(f); if (m.type === 'tick') maxT = Math.max(maxT, m.t); if (m.type === 'ticks') for (const r of m.ticks) maxT = Math.max(maxT, r[0]); }
   const closeWall = (s1.clock_utc_ms + (FX.wall[0] - FX.utc[0])) / 1000;
-  check(maxT === closeWall, `${label}: the newest time the page received is exactly the next minute close (${maxT} vs ${closeWall})`, sink);
+  check(FX.wall.includes(closeWall * 1000) && maxT === closeWall - 5, `${label}: the newest time the page received is the last trade before the next minute close (${maxT} vs ${closeWall} - 5)`, sink);
   check(!rec.errors.length, `${label}: no page errors (${rec.errors.join('; ')})`, sink);
   return { page, rec, marks };
 }
@@ -179,6 +185,11 @@ try {
   const mr = await fetch(`http://127.0.0.1:${PORT}/api/machine`, { headers: { Host: 'localhost:' + PORT } });
   check(mr.status === 409, 'blind: the machine read is refused before the grade is saved');
   check(await page.locator('#secMachine').isHidden(), 'blind: the machine read panel is hidden before the grade is saved');
+  check(await page.locator('#tabFree').isDisabled(), 'blind: the Free tab is locked while the candidate is ungraded');
+  const esc = await fetch(`http://127.0.0.1:${PORT}/api/free/load`, { method: 'POST', headers: { Host: 'localhost:' + PORT, 'Content-Type': 'application/json' }, body: '{"date":"2026-03-10","time":"16:00"}' });
+  check(esc.status === 409, 'blind: free/load is refused while the candidate is ungraded');
+  const lst = await (await fetch(`http://127.0.0.1:${PORT}/markup/list`, { headers: { Host: 'localhost:' + PORT } })).text();
+  check(!/2026|C20/.test(lst), 'blind: /markup/list sends no dated ids');
   const play = await fetch(`http://127.0.0.1:${PORT}/api/play`, { method: 'POST', headers: { Host: 'localhost:' + PORT, 'Content-Type': 'application/json' }, body: '{"speed":5}' });
   check(play.status === 409, 'blind: play is refused before the grade is saved');
   check(await page.locator('#revealRow').isHidden(), 'blind: Reveal is not offered before the grade is saved');
@@ -249,10 +260,10 @@ try {
 
   console.log('5. mutation proof: one tick past the clock must fail check 1');
   const src = fs.readFileSync(path.join(root, 'tools', 'markup_studio.py'), 'utf8');
-  const line = "return int(np.searchsorted(day.utc, clock_utc, 'right'))";
+  const line = "return int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right'))";
   check(src.includes(line), 'the no-future choke point is where the mutation expects it');
   const mutant = path.join(root, 'tools', '_mutant_markup_studio.py');
-  fs.writeFileSync(mutant, src.replace(line, "return min(len(day.utc), int(np.searchsorted(day.utc, clock_utc, 'right')) + 1)  # MUTANT"));
+  fs.writeFileSync(mutant, src.replace(line, "return min(len(day.utc), int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right')) + 1)  # MUTANT"));
   try {
     const sink = [];
     const m = await noFutureRun(mutant, PORT + 1, 'mutant', sink);

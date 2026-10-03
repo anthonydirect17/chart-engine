@@ -38,6 +38,7 @@
   }
   function scrubNode(n) {
     if (!BLIND || !n) return;
+    if (n.nodeType === 1 && n.hasAttribute('data-dates')) return;     // the Free mode day picker and date (never shown with a blind candidate open)
     if (n.nodeType === 3) { const v = scrub(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; return; }
     if (n.nodeType !== 1 || n.tagName === 'SCRIPT' || n.tagName === 'STYLE') return;
     for (const a of ['title', 'aria-label', 'placeholder']) { const v = n.getAttribute(a); if (v) { const w = scrub(v); if (w !== v) n.setAttribute(a, w); } }
@@ -82,6 +83,8 @@
   function mount() {
     unmount();
     const wsUrl = () => 'ws://' + location.host + '/ws';
+    // each chart has its own connection: a shared feed (live/feed.js) gives a 1 minute chart no tick backfill, so its delta
+    // would count only from the load; the server encodes the load once and sends the same bytes to both
     const opts = (prefix, tf) => ({ wsUrl, paneId: 'main', storagePrefix: prefix, view: { root: 'NQ', tf, range: 40 }, compact: true, toolbar: false });
     A.panes.range = ChartLive.mount($('paneRange'), opts('markup-range:', 'range'));
     A.panes.m1 = ChartLive.mount($('pane1m'), opts('markup-1m:', 'm1'));
@@ -226,9 +229,16 @@
     $('msDate').textContent = free && s.date ? s.date : '';
     $('msPlay').textContent = s.playing ? s.speed + 'x' : '';
     const sc = s.scan || {};
-    $('msStatus').textContent = sc.error ? 'Scan failed: ' + sc.error : !sc.done ? 'Finding candidates: ' + (sc.days || 0) + ' of ' + (sc.total || '?') + ' days' :
-      'Excluded ' + (s.queue ? s.queue.excluded_seen : 0) + ' already-seen';
-    $('btnNext').disabled = !sc.done;
+    const warn = (s.warnings || []).join('; ');
+    $('msStatus').textContent = (sc.error ? 'Scan failed: ' + sc.error : !sc.done ? 'scanning: ' + (sc.days || 0) + ' of ' + (sc.total || '?') + ' days' :
+      'Excluded ' + (s.queue ? s.queue.excluded_seen : 0) + ' already-seen') + (warn ? '  |  ' + warn : '');
+    $('msStatus').classList.toggle('warn', !!warn);
+    $('btnNext').disabled = !(s.queue && s.queue.remaining > 0);
+    // blind dates stay hidden while the server holds a blind candidate, whatever tab is showing
+    BLIND = A.uiMode === 'blind' || s.mode === 'blind';
+    $('tabFree').disabled = !!s.blind_open;
+    $('tabFree').title = s.blind_open ? 'Save the grade first' : '';
+    if (s.blind_open && A.uiMode === 'free') setMode('blind');
     if (s.queue) $('queueInfo').textContent = 'remaining ' + s.queue.remaining + ', graded ' + s.queue.graded + ', excluded ' + s.queue.excluded_seen + ' already-seen';
     const blindLive = s.mode === 'blind' && s.loaded && !s.graded;
     $('candInfo').textContent = s.mode === 'blind' && s.candidate && s.level ? '#' + s.candidate.n + '  Level ' + s.level.type + ' ' + fmtP(s.level.price) : 'No candidate open';
@@ -251,13 +261,16 @@
     } catch (e) { say('saveMsg', e.message, true); return null; }
   }
   function setMode(m) {
+    if (m === 'free' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use Free mode.', true); return; }
     A.uiMode = m;
-    BLIND = m === 'blind';
-    $('tabBlind').classList.toggle('on', BLIND); $('tabFree').classList.toggle('on', !BLIND);
-    $('tabBlind').setAttribute('aria-selected', String(BLIND)); $('tabFree').setAttribute('aria-selected', String(!BLIND));
-    $('secBlind').hidden = !BLIND; $('secFree').hidden = BLIND;
-    $('secMachine').hidden = BLIND;
-    if (BLIND) { scrubNode(document.body); if (A.state && A.state.mode === 'free') { unmount(); resetForm(); } }
+    const ui = m === 'blind';
+    BLIND = ui || !A.state || A.state.mode === 'blind';           // the scrub stays on while a blind candidate is loaded
+    $('tabBlind').classList.toggle('on', ui); $('tabFree').classList.toggle('on', !ui);
+    $('tabBlind').setAttribute('aria-selected', String(ui)); $('tabFree').setAttribute('aria-selected', String(!ui));
+    $('secBlind').hidden = !ui; $('secFree').hidden = ui;
+    $('secMachine').hidden = ui;
+    if (BLIND) scrubNode(document.body);
+    if (ui) { if (A.state && A.state.mode === 'free') { unmount(); resetForm(); } }
     else loadDays();
   }
   async function loadDays() {
@@ -305,8 +318,12 @@
     const ul = $('disList'); ul.textContent = '';
     for (const d of a.disagreements.slice(-20).reverse()) {
       const li = document.createElement('li'), b = document.createElement('button');
-      b.type = 'button'; b.textContent = 'You ' + d.setup + ', draft ' + d.verdict + ' (open in free mode)';
-      b.addEventListener('click', async () => { setMode('free'); await act('/api/free/open', { id: d.id }, { remount: true, reset: true }); machine(); });
+      b.type = 'button'; b.textContent = (d.date ? d.date + ' ' : '') + (d.tod || '') + '  You ' + d.setup + ', draft ' + d.verdict + ' (open in free mode)';
+      b.addEventListener('click', async () => {
+        if (A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use Free mode.', true); return; }
+        const st = await act('/api/free/open', { ref: d.ref }, { remount: true, reset: true });
+        if (st) { setMode('free'); machine(); }
+      });
       li.appendChild(b); ul.appendChild(li);
     }
   }
@@ -318,7 +335,7 @@
     try {
       const r = await api('/markup/save', body);
       A.saved = true;
-      say('saveMsg', 'Saved ' + r.file.split(/[\\/]/).pop());
+      say('saveMsg', 'Saved ' + r.file);
       showDraft(r.draft, r.agrees_with_draft);
       showMachine(r.machine_read);
       showAgreement(r.agreement);
@@ -341,7 +358,9 @@
     buildTools();
     $('tabBlind').addEventListener('click', () => setMode('blind'));
     $('tabFree').addEventListener('click', () => setMode('free'));
-    $('btnNext').addEventListener('click', () => act('/api/blind/next', {}, { remount: true, reset: true }));
+    $('btnNext').addEventListener('click', async () => {
+      if (await act('/api/blind/next', {}, { remount: true, reset: true })) api('/api/agreement').then(showAgreement).catch(() => {});
+    });
     $('btnLoad').addEventListener('click', async () => { await act('/api/free/load', { date: $('freeDay').value, time: $('freeTime').value }, { remount: true, reset: true }); machine(); });
     $('btnStep').addEventListener('click', () => act('/api/step'));
     for (const b of document.querySelectorAll('[data-speed]')) b.addEventListener('click', () => act('/api/play', { speed: +b.dataset.speed }));
@@ -358,6 +377,7 @@
     document.addEventListener('keydown', onKey);
     api('/api/chips').then(r => { A.chips = r.chips; renderChips(); }).catch(() => {});
     api('/api/agreement').then(showAgreement).catch(() => {});
+    A.agreeTimer = setInterval(() => { if (A.state && A.state.mode === 'free') api('/api/agreement').then(showAgreement).catch(() => {}); }, 15000);
     setInterval(refresh, 250);
     A.machineTimer = setInterval(machine, 2000);
     refresh().then(() => { if (A.state && A.state.loaded && A.state.mode === 'free') { setMode('free'); mount(); } else if (A.state && A.state.loaded && A.state.mode === 'blind') mount(); });

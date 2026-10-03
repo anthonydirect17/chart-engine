@@ -28,6 +28,7 @@ import csv
 import hashlib
 import importlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -47,15 +48,17 @@ import markup_core as core  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION = 'markup-studio-1'
+CACHE_VERSION = 2
 SETUPS = ('SWEEP', 'RETEST', 'NONE', 'WAIT')
 SPEEDS = (1, 5, 20, 60)
 MARK_ROLES = ('Level', 'Failed candle', 'Reclaim candle', 'Entry', 'Stop', 'Target')
 SPAN_ROLES = ("Volume I'm reading", 'Approach')
 
 
-def visible_count(day, clock_utc):
-    """NO-FUTURE: the number of ticks at or before the clock. Every data path cuts the day here and nowhere else."""
-    return int(np.searchsorted(day.utc, clock_utc, 'right'))
+def visible_count(day, clock_utc, exclusive=False):
+    """NO-FUTURE: the number of ticks the page may have at this clock: at or before it, or (exclusive, blind mode) strictly
+    before it, so the next candle's first trade stamped exactly at the cut stays hidden. Every data path cuts here."""
+    return int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right'))
 
 
 # ------------------------------------------------------------------------------------------------ data sources
@@ -158,7 +161,8 @@ class Refused(Exception):
 class Studio:
     def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ'):
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, symbol
-        self.seen = core.read_seen([p for p in seen_paths if p and os.path.isfile(p)])
+        self.seen_report = []
+        self.seen = core.read_seen([p for p in seen_paths if p and os.path.isfile(p)], self.seen_report)
         self.lock = threading.RLock()
         self.clients = set()
         self.day = None
@@ -166,20 +170,41 @@ class Studio:
         self.clock = 0
         self.playing, self.speed, self.anchor = False, 0, (0.0, 0)
         self.steps, self.graded, self.cand, self.cand_no, self.level = 0, False, None, 0, None
-        self.scan = {'running': False, 'done': False, 'days': 0, 'total': 0, 'error': ''}
-        self.candidates, self.order, self.pos = [], [], -1
+        self.scan = {'running': False, 'done': False, 'days': 0, 'total': 0, 'skipped': 0, 'skipped_days': [], 'error': ''}
+        self.candidates, self.order, self.by_date, self.passed = [], [], {}, set()
+        self.seen_ids = set()
+        self.cache_lock, self.frames_key, self.frames, self.load_seq = threading.Lock(), None, [], 0
         os.makedirs(marks_dir, exist_ok=True)
+        self.grades = core.list_grades(marks_dir)            # read once; save() appends (state() never reads files)
+        self.graded_ids = {g.get('id') for g in self.grades}
+        self._queue = None
+        for r in self.seen_report:
+            if r['rows'] and not r['parsed']:
+                log(f'already-seen file {r["path"]}: {r["rows"]} rows but none had a date and a reclaim time; columns: {", ".join(r["columns"])}')
 
     # ---------------------------------------------------------------- candidates
     def start_scan(self, background=True):
-        t = threading.Thread(target=self._scan, daemon=True)
         self.scan['running'] = True
         if background:
-            t.start()
+            threading.Thread(target=self._scan, daemon=True).start()
         else:
             self._scan()
 
+    def _publish(self, items):
+        """Candidates so far (a partial scan can be graded from): shuffled with seed 4 within what is scanned."""
+        items = [c for c in items if core.in_sample(c['date'])]
+        seen = {c['id'] for c in items if core.is_seen(c, self.seen)}
+        order = core.shuffled(items, 4)
+        by_date = {}
+        for c in items:
+            by_date.setdefault(c['date'], []).append(c)
+        with self.lock:
+            self.candidates, self.order, self.by_date, self.seen_ids = items, order, by_date, seen
+            self._queue = None
+
     def _scan(self):
+        """Every in-sample day once, in date order, cached in candidates_v1.json. A day that fails to load is logged and
+        skipped (counted in the page) and the PDH/PDL chain goes on from the last day that loaded with RTH ticks."""
         path = os.path.join(self.marks, 'candidates_v1.json')
         try:
             cache = {}
@@ -188,86 +213,123 @@ class Studio:
                     cache = json.load(f)
             except (OSError, ValueError):
                 pass
-            done_days = set(cache.get('days_scanned', [])) if cache.get('version') == 1 and cache.get('symbol') == self.symbol else set()
-            items = [c for c in cache.get('items', []) if c['date'] in done_days] if done_days else []
-            rth = dict(cache.get('rth', {})) if done_days else {}
+            ok = cache.get('version') == CACHE_VERSION and cache.get('symbol') == self.symbol
+            done = dict(cache.get('days', {})) if ok else {}       # date -> {'prev': hilo used, 'hilo': hilo passed on}
+            items = [c for c in cache.get('items', []) if c['date'] in done] if ok else []
             days = self.source.days()
             self.scan['total'] = len(days)
             prev = None
+            dirty = 0
             for k, d in enumerate(days):
-                if d in done_days and d in rth:
-                    prev = rth[d]
-                    self.scan['days'] = k + 1
-                    continue
-                day = self.source.load(d)
-                if not core.has_morning(day):          # not a kept day (the research's rule): no candidates, not a prior day
-                    done_days.add(d)
-                    rth[d] = prev
-                    self.scan['days'] = k + 1
-                    continue
-                items = [c for c in items if c['date'] != d] + core.find_candidates(day, prev)
-                hl = core.rth_hilo(day)
-                rth[d] = list(hl) if hl else None
-                prev = rth[d]
-                done_days.add(d)
+                rec = done.get(d)
+                if rec is not None and rec.get('prev') == prev:
+                    prev = rec.get('hilo')
+                else:
+                    try:
+                        day = self.source.load(d)
+                        if core.has_morning(day):
+                            found = core.find_candidates(day, tuple(prev) if prev else None)
+                            hl = core.rth_hilo(day)
+                            hilo = list(hl) if hl else prev
+                        else:                                  # not a kept day (the research's rule)
+                            found, hilo = [], prev
+                    except Exception as e:   # noqa: BLE001 - one bad day never stops the scan
+                        log(f'scan: skipped {d}: {e}')
+                        self.scan['skipped'] += 1
+                        self.scan['skipped_days'].append(d)
+                        self.scan['days'] = k + 1
+                        continue
+                    items = [c for c in items if c['date'] != d] + found
+                    done[d] = {'prev': prev, 'hilo': hilo}
+                    prev = hilo
+                    dirty += 1
+                    if found:
+                        self._publish(items)
+                    if dirty % 10 == 0:
+                        self._write_cache(path, items, done)
                 self.scan['days'] = k + 1
-                if k % 10 == 9 or k == len(days) - 1:
-                    self._write_cache(path, items, done_days, rth)
-            items = [c for c in items if core.in_sample(c['date'])]
-            self._write_cache(path, items, done_days, rth)
-            with self.lock:
-                self.candidates = items
-                self.order = core.shuffled(items, 4)
-                self.scan.update(done=True, running=False)
+            self._publish(items)
+            self._write_cache(path, items, done)
+            self.scan.update(done=True, running=False)
         except Exception as e:   # noqa: BLE001 - shown on the page
+            log(f'scan failed: {e}')
             self.scan.update(running=False, error=str(e))
 
-    def _write_cache(self, path, items, days, rth):
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump({'version': 1, 'symbol': self.symbol, 'days_scanned': sorted(days), 'rth': rth, 'items': items}, f)
-        os.replace(tmp, path)
+    def _write_cache(self, path, items, days):
+        try:
+            core.write_text(path, json.dumps({'version': CACHE_VERSION, 'symbol': self.symbol, 'days': days, 'items': items}))
+        except OSError as e:
+            log(f'could not write {path}: {e}')
 
-    def graded_ids(self):
-        return {g.get('id') for g in core.list_grades(self.marks)}
+    def _skip(self, c):
+        return c['id'] in self.graded_ids or c['id'] in self.seen_ids or not core.in_sample(c['date'])
 
     def queue(self):
-        graded = self.graded_ids()
-        seen = [c for c in self.order if core.is_seen(c, self.seen)]
-        left = [c for c in self.order if c['id'] not in graded and not core.is_seen(c, self.seen)]
-        return {'total': len(self.order), 'excluded_seen': len(seen), 'graded': len([c for c in self.order if c['id'] in graded]),
-                'remaining': len(left)}
+        with self.lock:
+            if self._queue is None:
+                order = self.order
+                self._queue = {'total': len(order), 'excluded_seen': sum(1 for c in order if c['id'] in self.seen_ids),
+                               'graded': sum(1 for c in order if c['id'] in self.graded_ids),
+                               'remaining': sum(1 for c in order if not self._skip(c))}
+            return self._queue
+
+    def warnings(self):
+        out = []
+        for r in self.seen_report:
+            name = os.path.basename(r['path'])
+            if r['rows'] and not r['parsed']:
+                out.append(f'{name} found but 0 rows matched: already-seen not excluded')
+        if self.scan['done'] and self.seen and not self.seen_ids and not out:
+            out.append(f'{len(self.seen)} already-seen rows read but none matched a candidate: already-seen not excluded')
+        if self.scan['skipped']:
+            out.append(f'{self.scan["skipped"]} day(s) could not be loaded and were skipped (see the window it runs in)')
+        return out
 
     # ---------------------------------------------------------------- loading and the clock
+    @property
+    def exclusive(self):
+        return self.mode == 'blind'
+
+    def blind_open(self):
+        """An ungraded blind candidate is open: nothing may show its future or its date until the grade is saved."""
+        return self.mode == 'blind' and self.day is not None and not self.graded
+
     def _load(self, d, clock_utc, mode):
         day = self.source.load(d)            # refuses the holdout
         with self.lock:
             self._drop_clients()
             self.day, self.mode, self.clock = day, mode, int(clock_utc)
+            self.load_seq += 1
             self.playing, self.speed = False, 0
             self.steps, self.graded = 0, False
 
     def blind_next(self):
         with self.lock:
-            if not self.scan['done']:
-                raise Refused('the candidate scan is still running')
-            graded = self.graded_ids()
-            n = len(self.order)
-            for k in range(1, n + 1):
-                c = self.order[(self.pos + k) % n]
-                if c['id'] in graded or core.is_seen(c, self.seen) or not core.in_sample(c['date']):
-                    continue
-                self.pos = (self.pos + k) % n
-                self._load(c['date'], c['cut_utc_ms'], 'blind')
-                self.cand, self.level = c, {'type': c['level_type'], 'price': c['level_price']}
-                self.cand_no += 1
-                return self.state()
-            raise Refused('no candidates left to grade')
+            order = [c for c in self.order if not self._skip(c)]
+            if not order:
+                raise Refused('no candidates yet: the scan is still running' if not self.scan['done'] else 'no candidates left to grade')
+            fresh = [c for c in order if c['id'] not in self.passed]
+            if not fresh:                                     # every one was opened and passed over: start the round again
+                self.passed.clear()
+                fresh = order
+            c = fresh[0]
+            self.passed.add(c['id'])
+        self._load(c['date'], c['cut_utc_ms'], 'blind')
+        with self.lock:
+            self.cand, self.level = c, {'type': c['level_type'], 'price': c['level_price']}
+            self.cand_no += 1
+        return self.state()
+
+    def _free_allowed(self):
+        if self.blind_open():
+            raise Refused('a blind candidate is open: save its grade first, then use Free mode')
 
     def free_load(self, d, tod=None, clock_utc=None, level=None):
+        with self.lock:
+            self._free_allowed()
         d = core.check_date(d)
         if clock_utc is None:
-            hh, mm = (int(x) for x in (tod or '09:30').split(':')[:2])
+            hh, mm = parse_hhmm(tod or '09:30')
             base = d if hh < 18 else (core.parse_date(d) - timedelta(days=1)).isoformat()
             clock_utc = int(core.wall_to_utc([core.wall_of(base, hh, mm)])[0])
         self._load(d, clock_utc, 'free')
@@ -280,7 +342,7 @@ class Studio:
             raise Refused('no day loaded')
 
     def _blind_locked(self):
-        if self.mode == 'blind' and not self.graded:
+        if self.blind_open():
             raise Refused('in blind mode the clock only steps one candle at a time until the grade is saved')
 
     def step(self):
@@ -288,10 +350,10 @@ class Studio:
             self._need_day()
             self.playing = False
             self.clock = (self.clock // core.MIN + 1) * core.MIN
-            if self.mode == 'blind' and not self.graded:
+            if self.blind_open():
                 self.steps += 1
             self._release()
-            return self.state()
+        return self.state()
 
     def play(self, speed):
         with self.lock:
@@ -300,21 +362,24 @@ class Studio:
             if speed not in SPEEDS:
                 raise Refused('speed must be one of 1, 5, 20, 60')
             self.playing, self.speed, self.anchor = True, speed, (time.monotonic(), self.clock)
-            return self.state()
+        return self.state()
 
     def pause(self):
         with self.lock:
             self.playing = False
-            return self.state()
+        return self.state()
 
     def jump(self, tod=None, minutes=None):
         with self.lock:
             self._need_day()
             self._blind_locked()
             if minutes is not None:
-                to = self.clock + int(float(minutes) * core.MIN)
+                m = float(minutes)
+                if not math.isfinite(m) or m <= 0 or m > 24 * 60:
+                    raise Refused('minutes must be a number from 1 to 1440')
+                to = self.clock + int(m * core.MIN)
             else:
-                hh, mm = (int(x) for x in str(tod).split(':')[:2])
+                hh, mm = parse_hhmm(tod)
                 base = self.day.date if hh < 18 else (core.parse_date(self.day.date) - timedelta(days=1)).isoformat()
                 to = int(core.wall_to_utc([core.wall_of(base, hh, mm)])[0])
             if to <= self.clock:
@@ -322,7 +387,7 @@ class Studio:
             self.playing = False
             self.clock = to
             self._drop_clients()          # the page mounts its charts again and loads up to the new clock
-            return self.state()
+        return self.state()
 
     def tick_clock(self):
         """The player: called every few tens of ms."""
@@ -331,7 +396,7 @@ class Studio:
                 return
             t0, c0 = self.anchor
             to = c0 + int((time.monotonic() - t0) * 1000 * self.speed)
-            end = int(self.day.utc[-1]) if len(self.day) else self.clock
+            end = int(self.day.utc[-1]) + 1 if len(self.day) else self.clock
             if to >= end:
                 to, self.playing = max(end, self.clock), False
             if to > self.clock:
@@ -339,26 +404,32 @@ class Studio:
                 self._release()
 
     # ---------------------------------------------------------------- what the page may see
+    def n_visible(self):
+        return visible_count(self.day, self.clock, self.exclusive)
+
     def vis(self):
-        return self.day.upto(visible_count(self.day, self.clock))
+        return self.day.upto(self.n_visible())
 
     def state(self):
+        """Polled by the page every 250 ms: no file reads, no scans (the queue counts are cached)."""
+        q = self.queue() if self.order or self.scan['done'] else None
         with self.lock:
             s = {'mode': self.mode, 'loaded': self.day is not None, 'playing': self.playing, 'speed': self.speed,
-                 'scan': dict(self.scan), 'queue': self.queue() if self.scan['done'] else None, 'version': VERSION}
+                 'scan': {k: self.scan[k] for k in ('running', 'done', 'days', 'total', 'skipped', 'error')},
+                 'queue': q, 'warnings': self.warnings(), 'blind_open': self.blind_open(), 'version': VERSION}
             if self.day is not None:
                 s.update(clock_utc_ms=self.clock, clock_tod=core.fmt_tod(core.utc_to_wall(self.clock)), steps=self.steps,
                          graded=self.graded, level=self._level()[0])
                 if self.mode == 'free':
                     s['date'] = self.day.date
                 elif self.cand:
-                    s['candidate'] = {'n': self.cand_no}
+                    s['candidate'] = {'n': self.cand_no, 'ref': ref_of(self.cand['id'])}
             return s
 
     def machine(self, level=None):
         with self.lock:
             self._need_day()
-            if self.mode == 'blind' and not self.graded:
+            if self.blind_open():
                 raise Refused('the machine read stays hidden in blind mode until the grade is saved')
             cross = self.cand['cross_utc_ms'] if self.mode == 'blind' and self.cand else None
             lv = level
@@ -368,7 +439,7 @@ class Studio:
                 cross = cross if cross is not None else cross2
             if lv is None:
                 return {'ok': False, 'why': 'mark a Level (or open a candidate) to read it'}
-            return core.machine_read(self.vis(), self.clock, float(lv), cross)
+            return core.machine_read(self.vis(), self.clock, float(lv), cross, exclusive=self.exclusive)
 
     def _level(self):
         """The level in force and its cross: the open candidate's, the one set in free mode, or else (free mode) the day's
@@ -376,7 +447,7 @@ class Studio:
         if self.level:
             return self.level, (self.cand or {}).get('cross_utc_ms')
         if self.mode == 'free' and self.day is not None:
-            past = [c for c in self.candidates if c['date'] == self.day.date and c['cross_utc_ms'] <= self.clock]
+            past = [c for c in self.by_date.get(self.day.date, ()) if c['cross_utc_ms'] <= self.clock]
             if past:
                 c = max(past, key=lambda x: x['cross_utc_ms'])
                 return {'type': c['level_type'], 'price': c['level_price']}, c['cross_utc_ms']
@@ -396,11 +467,16 @@ class Studio:
                 raise Refused('direction must be LONG or SHORT')
             if setup in ('SWEEP', 'RETEST') and not direction:
                 raise Refused('pick a direction (L or S)')
-            reason = str(p.get('reason') or '').strip()
+            reason = str(p.get('reason') or '').strip()[:2000]
             chips = [str(c)[:80] for c in (p.get('chips') or [])][:40]
             if setup != 'NONE' and not reason and not chips:
                 raise Refused('give a reason: type it or click a chip')
-            to_utc = lambda t: int(core.wall_to_utc([round(float(t) * 1000)])[0])
+
+            def to_utc(t):
+                t = float(t)
+                if not math.isfinite(t):
+                    raise Refused('a mark has no time')
+                return int(core.wall_to_utc([round(t * 1000)])[0])
             marks = [{'role': m['role'], 'chart': m.get('chart'), 'bar_time_utc_ms': to_utc(m['t']), 'bar_tod': core.fmt_tod(round(float(m['t']) * 1000)),
                       'price': float(m['price'])} for m in (p.get('marks') or []) if m.get('role') in MARK_ROLES]
             spans = []
@@ -417,42 +493,59 @@ class Studio:
                 elif lm:
                     level = {'type': 'marked', 'price': lm[-1]['price']}
             cross = self.cand['cross_utc_ms'] if self.cand else auto_cross if level is not None and level == self._level()[0] else None
-            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross) if level else {'ok': False, 'why': 'no level'}
+            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, exclusive=self.exclusive) if level else {'ok': False, 'why': 'no level'}
             rule = core.load_rule(self.rule_path)
             draft = core.draft_verdict(mr, rule)
             clock_wall = core.utc_to_wall(self.clock)
-            if self.mode == 'blind':
-                gid = self.cand['id']
-            else:
-                gid = 'F' + self.day.date.replace('-', '') + '_' + core.fmt_tod(clock_wall).replace(':', '')
+            blind = self.mode == 'blind'
+            gid = self.cand['id'] if blind else 'F' + self.day.date.replace('-', '') + '_' + core.fmt_tod(clock_wall).replace(':', '')
             item = {'id': gid, 'mode': self.mode, 'date': self.day.date, 'symbol': self.symbol, 'setup': setup, 'direction': direction,
                     'reason': reason, 'chips': chips, 'marks': marks, 'spans': spans,
-                    'steps_after_cut': self.steps if self.mode == 'blind' else None,
+                    'steps_after_cut': self.steps if blind else None, 'cut_exclusive': blind,
                     'clock_utc_ms': self.clock, 'clock_tod': core.fmt_tod(clock_wall),
                     'level_type': (level or {}).get('type'), 'level_price': (level or {}).get('price'),
                     'candidate': self.cand, 'machine_read': mr, 'draft': draft, 'agrees_with_draft': core.agrees(setup, draft['verdict']),
                     'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
             path = core.save_grade(self.marks, item)
-            if self.mode == 'blind':
+            self.grades.append(item)
+            self.graded_ids.add(gid)
+            self._queue = None
+            if blind:
                 self.graded = True
-            return {'ok': True, 'file': path, 'machine_read': mr, 'draft': draft, 'agrees_with_draft': item['agrees_with_draft'],
-                    'agreement': self.agreement()}
+            return {'ok': True, 'file': os.path.basename(path) if not blind else 'grade ' + ref_of(gid), 'machine_read': mr, 'draft': draft,
+                    'agrees_with_draft': item['agrees_with_draft'], 'agreement': self.agreement()}
 
     def agreement(self):
-        """Anthony's SWEEP against the draft's TAKE, over every saved grade with a verdict. In blind mode before the grade
-        is saved the list carries no dates or times (only what was graded and what the draft said)."""
-        gs = [g for g in core.list_grades(self.marks) if (g.get('draft') or {}).get('verdict') in ('TAKE', 'PASS')]
+        """Anthony's SWEEP against the draft's TAKE, over every saved grade with a verdict. Each disagreement carries an
+        opaque ref and the time of day; the id and the date only in free mode (never while in blind mode)."""
+        with self.lock:
+            gs = [g for g in self.grades if (g.get('draft') or {}).get('verdict') in ('TAKE', 'PASS')]
+            blind = self.mode == 'blind'
         agree = sum(1 for g in gs if g.get('agrees_with_draft'))
-        dis = [{'id': g['id'], 'setup': g.get('setup'), 'verdict': g['draft']['verdict']} for g in gs if not g.get('agrees_with_draft')]
+        dis = []
+        for g in gs:
+            if g.get('agrees_with_draft'):
+                continue
+            d = {'ref': ref_of(g['id']), 'tod': g.get('clock_tod'), 'setup': g.get('setup'), 'verdict': g['draft']['verdict']}
+            if not blind:
+                d.update(id=g['id'], date=g.get('date'))
+            dis.append(d)
         return {'agree': agree, 'total': len(gs), 'disagreements': dis}
 
-    def open_grade(self, gid):
-        g = next((x for x in core.list_grades(self.marks) if x.get('id') == gid), None)
+    def list_items(self):
+        with self.lock:
+            blind = self.mode == 'blind'
+            return [{'ref': ref_of(g.get('id')), 'setup': g.get('setup')} if blind else {'id': g.get('id'), 'setup': g.get('setup')}
+                    for g in self.grades]
+
+    def open_grade(self, ref):
+        with self.lock:
+            self._free_allowed()
+            g = next((x for x in reversed(self.grades) if ref in (ref_of(x.get('id')), x.get('id'))), None)
         if g is None:
-            raise Refused('no grade with that id')
+            raise Refused('no grade with that reference')
         lv = {'type': g.get('level_type'), 'price': g.get('level_price')} if g.get('level_price') is not None else None
-        st = self.free_load(g['date'], clock_utc=g['clock_utc_ms'], level=lv)
-        return st
+        return self.free_load(g['date'], clock_utc=g['clock_utc_ms'], level=lv)
 
     def chips(self):
         try:
@@ -466,15 +559,11 @@ class Studio:
         text = re.sub(r'\s+', ' ', str(text)).strip()[:60]
         if not text:
             raise Refused('a chip needs some text')
-        path = os.path.join(self.marks, 'chips.json')
         with self.lock:
             extra = [x for x in self.chips() if x not in core.DEFAULT_CHIPS]
             if text not in extra and text not in core.DEFAULT_CHIPS:
                 extra.append(text)
-            tmp = path + '.tmp'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(extra, f, indent=1)
-            os.replace(tmp, path)
+            core.write_text(os.path.join(self.marks, 'chips.json'), json.dumps(extra, indent=1))
         return self.chips()
 
     # ---------------------------------------------------------------- the charts' WebSocket (read only)
@@ -486,40 +575,71 @@ class Studio:
     def ws_open(self, c):
         with self.lock:
             self.clients.add(c)
-            c.send({'type': 'hello', 'version': VERSION, 'now': self.clock, 'accounts': [],
-                    'instruments': [{'root': self.symbol, 'name': self.symbol + ' replay', 'tick': core.TICK, 'pointValue': 20}]})
-            c.send({'type': 'execs', 'list': []})
+            now = self.clock
+        c.send({'type': 'hello', 'version': VERSION, 'now': now, 'accounts': [],
+                'instruments': [{'root': self.symbol, 'name': self.symbol + ' replay', 'tick': core.TICK, 'pointValue': 20}]})
+        c.send({'type': 'execs', 'list': []})
 
     def ws_message(self, c, m):
         if not isinstance(m, dict) or m.get('type') != 'subscribe':
             return                                   # read only: everything else (orders included) is ignored
+        r = self.symbol
         with self.lock:
-            if self.day is None:
-                c.send({'type': 'status', 'level': 'info', 'text': 'No day loaded'})
+            if self.day is None or m.get('root') != r:
+                c.send({'type': 'status', 'level': 'info', 'text': 'No day loaded' if self.day is None else 'Markup Studio serves ' + r + ' only'})
                 return
-            if m.get('root') != self.symbol:
-                c.send({'type': 'status', 'level': 'info', 'text': 'Markup Studio serves ' + self.symbol + ' only'})
+            day, n, seq = self.day, self.n_visible(), self.load_seq
+            c.ready, c.sent = False, n
+        c.send_raw(self._load_frames(day, n, seq))         # the heavy part runs outside the lock (the page's polls go on)
+        with self.lock:
+            if self.day is not day or c.closed:
                 return
-            v = self.vis()
-            r = self.symbol
-            bars = core.minute_bars(v)
-            for i in range(0, max(1, len(bars)), 4000):
-                c.send({'type': 'history', 'root': r, 'name': r + ' replay', 'barSeconds': 60, 'bars': bars[i:i + 4000], 'done': i + 4000 >= len(bars)})
-            rows = tick_rows(v, 0, len(v))
-            for i in range(0, max(1, len(rows)), 20000):
-                c.send({'type': 'ticks', 'root': r, 'ticks': rows[i:i + 20000], 'done': i + 20000 >= len(rows)})
             c.send({'type': 'ready', 'root': r})
-            c.sent, c.ready = len(v), True
+            c.ready = True
+            self._release()                           # the trades the clock passed meanwhile
+
+    def _load_frames(self, day, n, seq):
+        """The load's history and ticks messages as WebSocket frames, encoded once per day and cut: both charts subscribe to
+        the same load, so the second gets the same bytes (a full day is some 30 MB of JSON)."""
+        key = (seq, n)
+        with self.cache_lock:
+            if self.frames_key == key:
+                return self.frames
+            r, v = self.symbol, day.upto(n)
+            bars = core.minute_bars(v)
+            out = [ws_frame(json.dumps({'type': 'history', 'root': r, 'name': r + ' replay', 'barSeconds': 60, 'bars': bars[i:i + 4000],
+                                        'done': i + 4000 >= len(bars)}, separators=(',', ':'))) for i in range(0, max(1, len(bars)), 4000)]
+            out += [ws_frame(json.dumps({'type': 'ticks', 'root': r, 'ticks': tick_rows(v, i, min(n, i + 20000)), 'done': i + 20000 >= n},
+                                        separators=(',', ':'))) for i in range(0, max(1, n), 20000)]
+            self.frames_key, self.frames = key, out
+            return out
 
     def _release(self):
         """Live ticks up to the clock to every chart that is loaded."""
         if self.day is None:
             return
-        n = visible_count(self.day, self.clock)
+        n = self.n_visible()
         for c in list(self.clients):
             if c.ready and c.sent < n:
                 c.send_many([tick_msg(self.day, i, self.symbol) for i in range(c.sent, n)])
                 c.sent = n
+
+
+def ref_of(gid):
+    """An opaque reference for a candidate or grade id (the ids carry the date)."""
+    return 'G' + hashlib.sha1(str(gid).encode()).hexdigest()[:10]
+
+
+def parse_hhmm(text):
+    m = re.fullmatch(r'\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*', str(text or ''))
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise Refused('give the time as HH:MM')
+    return int(m.group(1)), int(m.group(2))
+
+
+def log(text):
+    print(text, file=sys.stderr, flush=True)
+
 
 
 def tick_rows(day, a, b):
@@ -556,6 +676,10 @@ class WsClient:
 
     def send(self, obj):
         self._write(ws_frame(json.dumps(obj, separators=(',', ':'))))
+
+    def send_raw(self, frames):
+        for f in frames:
+            self._write(f)
 
     def send_many(self, objs):
         self._write(b''.join(ws_frame(json.dumps(o, separators=(',', ':'))) for o in objs))
@@ -664,22 +788,33 @@ def make_handler(studio, port):
                 if u.path == '/api/agreement':
                     return self._json(200, studio.agreement())
                 if u.path == '/markup/list':
-                    return self._json(200, {'items': [{'id': g.get('id'), 'setup': g.get('setup')} for g in core.list_grades(studio.marks)]})
+                    return self._json(200, {'items': studio.list_items()})
             except Refused as e:
                 return self._json(409, {'error': str(e)})
-            except (ValueError, KeyError) as e:
+            except (ValueError, KeyError, TypeError, OverflowError) as e:
                 return self._json(400, {'error': str(e)})
+            except OSError as e:
+                return self._json(500, {'error': str(e)})
             return self._static(u.path)
 
         def do_POST(self):
             why = self._gate()
             if why:
                 return self._json(403, {'error': why})
-            n = int(self.headers.get('Content-Length') or 0)
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                self.close_connection = True
+                return self._json(400, {'error': 'bad Content-Length'})
+            if n < 0 or n > 1_000_000:
+                self.close_connection = True
+                return self._json(413 if n > 0 else 400, {'error': 'bad Content-Length'})
             try:
                 p = json.loads(self.rfile.read(n) or b'{}') if n else {}
-            except ValueError:
+            except (ValueError, UnicodeDecodeError):
                 return self._json(400, {'error': 'not JSON'})
+            if not isinstance(p, dict):
+                return self._json(400, {'error': 'send a JSON object'})
             path = urlparse(self.path).path
             try:
                 if path == '/api/blind/next':
@@ -687,7 +822,7 @@ def make_handler(studio, port):
                 if path == '/api/free/load':
                     return self._json(200, studio.free_load(p.get('date'), p.get('time')))
                 if path == '/api/free/open':
-                    return self._json(200, studio.open_grade(p.get('id')))
+                    return self._json(200, studio.open_grade(p.get('ref') or p.get('id')))
                 if path == '/api/step':
                     return self._json(200, studio.step())
                 if path == '/api/play':
@@ -709,8 +844,10 @@ def make_handler(studio, port):
                 return self._json(403, {'error': str(e)})
             except Refused as e:
                 return self._json(409, {'error': str(e)})
-            except (ValueError, KeyError, TypeError) as e:
+            except (ValueError, KeyError, TypeError, OverflowError) as e:
                 return self._json(400, {'error': str(e)})
+            except OSError as e:
+                return self._json(500, {'error': str(e)})
             return self._json(404, {'error': 'no such endpoint'})
 
         def _static(self, path):
@@ -754,6 +891,11 @@ def make_handler(studio, port):
                 c.closed = True
 
     return H
+
+
+class Server(ThreadingHTTPServer):
+    # Windows lets a second program bind a port that has SO_REUSEADDR; there the Studio must see the port is taken
+    allow_reuse_address = os.name != 'nt'
 
 
 def player(studio, stop):
@@ -842,9 +984,15 @@ def main(argv=None):
         except (TickReplayError, ValueError) as e:
             sys.exit(f'CHECK FAILED: {e}')
     seen = opt['seen'].split(',') if opt.get('seen') else default_seen()
-    studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol)
+    try:
+        studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol)
+    except OSError as e:
+        sys.exit(f'cannot use the marks folder {marks}: {e}\nGive another with --marks=PATH.')
+    try:
+        server = Server(('127.0.0.1', port), make_handler(studio, port))
+    except OSError as e:
+        sys.exit(f'port {port} is in use (is the Studio already running?): {e}')
     studio.start_scan()
-    server = ThreadingHTTPServer(('127.0.0.1', port), make_handler(studio, port))
     server.daemon_threads = True
     stop = threading.Event()
     threading.Thread(target=player, args=(studio, stop), daemon=True).start()
