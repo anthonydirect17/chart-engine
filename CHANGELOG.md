@@ -1,5 +1,137 @@
 # Changelog
 
+## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
+
+Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The 4h, 1D and
+1W charts and the Quote board's change from the settlement need ChartBridge 0.3.7; with an older one the chart says so and
+the change stays blank. Nothing under `nt8/` changes, nor the order code (`live/trade.js`, `live/order-ticket.js`) or the
+motion (the time constants, the live tick path, `live/bar-builder.js`). **`/single.html` is frozen** (Anthony 2026-10-02):
+it loads, trades and flattens exactly as 1.14.0, with none of the items below (the engine's new behaviour is behind options
+only a host's chart turns on). Every item is the workspace's.
+
+### Anthony's rulings (2026-10-02)
+1. **Deeper history**: a 1 hour chart loads 30 days of 1-minute history (`subscribe` `days: 30`), a 15 minute chart 10, the
+   rest 5 (`LivePrefs.daysFor`). One feed serves every panel of an instrument: its subscribe asks the most any panel needs,
+   and a panel switched to 1 hour later loads the deeper history the way a switch to a tick view always has (the line's
+   one new load; the other panels of that instrument start again from it). Measured with the fake bridge (sample data,
+   reload to live): 5 minute chart, 5 days, 140 to 250 ms; 1 hour chart, 30 days, 210 to 340 ms.
+2. **4h, 1D and 1W**, NinjaTrader's own bars from ChartBridge 0.3.7's `htf` (about 300), on their own row of a chart's bars
+   picker. The forming bar follows `htfBar`, and between those each live trade inside it moves its close, high and low (exact,
+   one compare per trade; the volume waits for `htfBar`). Times as PROTOCOL says (4h from 18:00 ET in 4 hours, the last to
+   the 17:00 close; 1D the trading day; 1W its Monday; `util.htfStart`, `util.htfEnd`), the countdown to the bar's real close.
+   A refused or timed-out request shows ChartBridge's reason on the chart's note line and is asked again 60 s later; the
+   page stops waiting after 130 s (ChartBridge takes a queued request back after 120 s). With ChartBridge older than 0.3.7
+   the choices show, dashed, with "Needs ChartBridge 0.3.7 or newer", and a chart on one says "4h bars need ChartBridge 0.3.7
+   or newer" (nothing is asked). The feed passes `htf` on the instrument's line (still read only: no order message ever
+   leaves a chart).
+3. **Indicators on them**: no delta pane, bubbles or absorption bars (they work on the page's own intraday bars); on 4h the
+   VWAP (the session's, from the 1-minute bars, as of each bar's end) and the levels; on 1D and 1W no VWAP, levels or volume
+   profile, and the note line says "VWAP and levels are intraday: not drawn on 1D bars." The indicators stay on the chart, so
+   going back to 5 minute shows them.
+
+### Drawing tools (Anthony)
+4. **The middle-click ring** on any chart's plot: Trend line (top), Price line (right), Clear this chart (bottom), Zone
+   (left), centred on the pointer, moved in to stay inside the plot, fixed and never scrolling. A tool arms on THAT chart (one
+   armed tool at a time), draws one drawing and goes off; Escape takes back the ring, an armed tool or a drawing half made; a
+   click outside closes it; the focus goes back to the page, so KEYS is ON at once. The middle press over a chart is kept
+   from the browser (no Windows auto-scroll).
+5. **Orders untouched**: the middle button never places, moves or cancels an order. While a tool is armed a Shift or Ctrl
+   click is an order click exactly as with none (engine option `toolOrders`, a host's charts only; the page's Ctrl+click
+   and Shift+right click no longer wait for the tool to go there); only a plain click or drag draws.
+6. **Zone**: two corners (click-click or drag), prices on the tick; the drawing color at 10% with a crisp edge, above the
+   grid and behind the candles; dragged by an edge, a corner resized, selected and deleted like the other drawings, saved
+   with them.
+7. The ring replaces Trend line, Price line and Clear drawings in a chart's small menu, which keeps Reset view and says
+   "Drawing tools: middle-click the chart."
+
+### Anthony's review of 1.14.0
+8. **Room right**: 80, 120 or 160 px in Settings, 120 until one is picked; a value saved before (Anthony's 160) is kept
+   (`LivePrefs.ROOMS_WS`, `roomSaved()`).
+9. **Corner readout** on every chart: the bar countdown (Range: ticks left) and the ATR in one quiet readout at the plot's
+   bottom right, moved up past the order labels and the VWAP's marker, a short form on a narrow plot; shown on small panels
+   and with the header text off; gone from the header text. Engine: `setCorner(text, short)`, `corner()`, `util.cornerPlace`.
+10. The change from the settlement left the chart headers (the Quote board has it).
+12. **Say why a press does nothing**: with the chart not live for orders, a press on a working order, a leg or a planned
+    line says so on the chart's note line, once per press: "Armed is off: arm to move or cancel orders.", after a dropped
+    connection "Armed went off: ChartBridge reconnected. Arm to move or cancel orders.", on another instrument than the
+    ticket's "The order ticket is on MNQ: switch it to NQ to move or cancel these orders." The ticket's window tells the
+    others why Armed went off (its published state's `offWhy`). Notes only: nothing is sent, Flatten unaffected. Engine:
+    `on('orderPressOff', { id })`; `ChartLive.mount`'s `trade` takes an optional `pressOff(root)`.
+
+### Two-monitor setup (Anthony, images/67.webp)
+13. **Compact order labels** (engine option `compactLabels`, a host's charts): "TGT 1", "STP 1", "BUY LMT 1", planned "SL -12t" /
+    "TP +24t", the position "L1 +4.50 +$90", in 10px text in a 14 px box where the full label would end; the full label while
+    the mouse is over it. The hit areas, the stacking and the x are the full label's (`orderHandles()` unchanged); the same
+    colors. `util.orderLabelShort`, `util.positionShort`, `labelHover()`.
+14. **New panels** (Add panel):
+    - **Account**: a summary strip for the ticket's account (open P&L, today's realized from the fills, the day, trades
+      today), then **Positions** (every instrument: qty, average, open P&L in points and dollars, and a Close that is the
+      ticket's "Also open" Close, TradeCore `flattenHere(root)`, Armed or not, from the window it is clicked in),
+      **Orders** (entries, legs, planned lines: instrument, side and type, qty, price, and an x that cancels an order of ANY
+      instrument (Anthony): TradeCore's own cancel with its checks (Armed, the ticket's account, a working order) in the
+      ticket's window, forwarded there from any other as the chart's x is; charts keep the ticket-instrument rule), **Fills** (today's, newest
+      first, each flat-to-flat trade's P&L on the fill that went flat, "open" for one still open, "n/a" for one begun before
+      today, never guessed; `WorkspaceCore.roundTrips`). The seam for an "Accounts" tab (the copier, after the cruise) is in
+      the code only (Anthony: hidden until the copier exists). Nothing new is asked of ChartBridge.
+    - **Quote board**: NQ, MNQ, ES, MES: last, change and % from the prior settlement (0.3.7; blank without), the session's
+      high and low; read only, on the window's one feed per instrument.
+    Both fit under the ticket at 1366, 1920 and 2560 px with nothing cut: narrow panels stack pairs of columns, a 2 x 1
+    board shows the last, change and % (the rest in the row's tooltip); only the Account panel's rows scroll.
+    **Anthony's ruling for 1.15.0** (charts and orders first): a trade only notes a price; the figures are written at most 4
+    times a second, in one animation frame, only the cells that changed. The rows are built only when their set changes (an
+    instrument, an order, a fill): a price never replaces a button (the orders review: a Close replaced between press and
+    release lost 27 of 60 clicks).
+
+### The 1.15.0 reviews
+- **A moved press is never an order click**: after a drawing tool's first click, a Shift drag pans and sends nothing (it
+  placed an order at the release point).
+- **No blank on a reload of the line**: a panel switched to 1 hour or 15 minutes loads the instrument's deeper history; the
+  other charts of it keep their bars, levels, profile, delta and order lines until the new history is in, then swap in one
+  frame; a 4h, 1D or 1W chart keeps its bars while it asks `htf` again (a refusal then keeps them, "as last loaded").
+- The feed sends `htf` as exactly `{ type, root, tf, id }` (`ChartFeed.htfOf`).
+- A compact label that slides under a still mouse shows in full on the next frame.
+- The disarmed note in a window without the ticket gives the ticket window's reason ("reconnected" or "dropped").
+- A late `htfBar` with a closed bar's final values updates that bar.
+- Anthony: no percent beside the bar's change in the workspace's headers (the single chart page as 1.14.0); "Realized" reads
+  "Real." on a narrow Account panel.
+- Text written only when it changes: the legend's fields (each, not every frame) and the tape's cells.
+- The top bar's local delay shows its p95 beside the median; a host's chart (and the workspace's order connection, tapes and
+  quotes) tries again at once after a drop, then backs off as before (the single chart page as 1.14.0).
+
+### Also
+- Day labels on a host's 4h and 1h charts no longer print over each other (engine option `spacedDays`: a label closer than
+  70 px to the last one drawn keeps its divider, not its text; the 1.14.0 review's 1 hour overlap).
+- `test/fake-bridge.mjs`: `--deep-history` (62 days of sample minutes, a subscribe's `days` honoured), `POST /test/htf?fail=`
+  (htf refused with that reason), `/test/received` lists subscribes with their days and the flattens and cancels.
+- `npm run perf:workspace -- --variant=panels`: the default layout with the Account panel and the Quote board.
+
+### Tests
+- `test/h1.test.js` (new): room presets, days per timeframe, the 4h, 1D and 1W times (against the fake's own formula
+  over two months), `cornerPlace`, short labels, round trips (reversals, scaling, a part closed, a trade from before today),
+  fills of the trading day, the quote math, the panels in a layout, the feed passing `htf`; the engine on a stand-in canvas:
+  the Zone (click-click, drag, Escape, edges and corners, saved), a Shift click with each tool armed placing the order on a
+  host's chart and drawing on the page (frozen), the press while editing is off told once per press, compact labels (the
+  same hit areas, the full one on hover), the corner readout clear of a label and its short form.
+- `npm run smoke:h1orders` (new, 13 checks, the orders review's probes): 60 of 60 human-speed presses on the Account panel's
+  Close and on an x while prices move; a Shift drag after a Trend line's or Zone's first click sends and draws nothing; the x
+  on an NQ order with the ticket on MNQ (disarmed: nothing; Armed: cancelled; from a window without the ticket: forwarded
+  and cancelled); a panel switched to 1 hour leaves the armed 5 min chart's bars and order lines and the 4 hour chart's bars
+  on screen in every frame; no percent in the headers; the reconnect reason in a window without the ticket.
+- `test/h1.test.js` adds the review's three (24 in all): the Shift drag after a first click, a label sliding under a still
+  mouse, `htfOf`; the first two fail on 98343d5.
+- `npm run smoke:h1` (new, 65 checks): 4h, 1D and 1W against the fake (times, live, the 1D note, 4h VWAP from the minutes, a
+  refusal and the ask 60 s later), ChartBridge 0.3.6 (the choices and the chart say so, nothing asked, no settlement), the
+  30 day hour load and its time, the ring (centred, the browser's middle default prevented, one chart, the focus back, KEYS
+  ON, a Shift+click with a tool armed sending the order and drawing nothing, a Zone, Escape, a click outside, an edge),
+  the corner on every chart, a small one and with the header off, compact labels and hover, the Account panel (x disarmed:
+  nothing sent and why; x armed: cancelled; Close disarmed from a window without the ticket; Fills' P&L), the Quote board
+  against the fake's settlement, the disarmed note and the reconnect note; screenshots of two-monitor layouts at 1366x768,
+  1920x1080 and 2560x1440 and crops of the labels, the Account panel, the Quote board, the corner and the ring.
+- `smoke:noscroll`: Anthony's Main layout with the Account panel (each tab) and two Quote boards at three sizes, no figure
+  cut, the ring at the middle and both corners of a chart, the bars picker with 4h, 1D and 1W.
+- Expectations changed: `test/display.test.js` (120 px is a kept room value), `smoke:display` (the workspace's ATR read from the corner readout), `smoke:workspace` (the small menu is Reset view; the 1 hour title; an ES chart switched to 15 min makes one more subscribe for its 10 days), `test/workspace.test.js` (`d1` is a chart's
+  bars now).
+
 ## 1.14.0 (2026-10-02): the display round
 
 Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The Time and

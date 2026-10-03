@@ -52,6 +52,18 @@ workspace's cleanup (one toolbar line, 2-letter chips, the drawing tools and Res
 style, grid, room and the PIN in Settings). "chart x.y.z · ChartBridge a.b.c" is in the LIVE badge's tooltip and in
 Settings. The page's clock follows Windows clock fixes (re-anchored to the PC's clock every 5 s, as ChartBridge does).
 
+**1.15.0 (the workspace; `/single.html` stays as 1.14.0):** **4h, 1D and 1W** charts of NinjaTrader's own bars (ChartBridge
+0.3.7 `htf`, kept live by `htfBar` and the trades; with an older ChartBridge the choices say they need 0.3.7), VWAP and
+levels on 4h, none on 1D and 1W (a note says so); **1 hour charts load 30 days** of 1-minute history (15 minute 10);
+a **middle-click ring** on any chart's plot (Trend line, Price line, Clear this chart, and the new **Zone**, a shaded box
+between two prices and two times; Shift and Ctrl clicks still place orders while a tool is armed); a quiet **corner
+readout** on every chart (the bar countdown and the ATR), shown on small panels and with the header text off; Room right
+80, 120 or 160 px (120 by default); **compact order labels** ("TGT 1", "STP 1", "L1 +4.50 +$90", the full label on
+hover, the hit areas and the x as before); a note when a press on an order does nothing ("Armed is off: arm to move or
+cancel orders", or "Armed went off: ChartBridge reconnected"); and two new panels: the **Account panel** (today's open,
+realized and day P&L and trades, then Positions with Close, Orders with x, and Fills with each flat-to-flat trade's P&L)
+and the **Quote board** (NQ, MNQ, ES, MES: last, change and % from the prior settlement, the session's high and low).
+
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 

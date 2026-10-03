@@ -31,7 +31,10 @@
 const COLS = 12, ROWS = 6, MIN_W = 2, MIN_H = 1, MAX_PANELS = 12, MAX_LAYOUTS = 50, NAME_MAX = 40;
 /* The same lists as LivePrefs.ROOTS and LivePrefs.TFS in live.js (a test checks they match). */
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
-const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range'];
+const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
+/* 1.15.0: NinjaTrader's own 4h, 1D and 1W bars (ChartBridge 0.3.7 htf); with an older ChartBridge the choices show and say
+   what they need */
+const HTF_TFS = ['h4', 'd1', 'w1'];
 const RANGE_MIN = 1, RANGE_MAX = 400;
 const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1' };
 const DEFAULT_NAME = 'Main';
@@ -39,7 +42,7 @@ const DEFAULT_NAME = 'Main';
 const RTH_START = 9 * 3600 + 30 * 60, RTH_END = 16 * 3600 + 15 * 60;
 const DEFAULT_FLOORS = { NQ: { rth: 50, eth: 25 }, ES: { rth: 100, eth: 50 }, MNQ: { rth: 100, eth: 50 }, MES: { rth: 100, eth: 50 } };
 const FLOOR_MAX = 100000;
-const TF_LABEL = { s15: '15 sec', s30: '30 sec', m1: '1 min', m5: '5 min', m15: '15 min', h1: '1 hour', range: 'Range' };
+const TF_LABEL = { s15: '15 sec', s30: '30 sec', m1: '1 min', m5: '5 min', m15: '15 min', h1: '1 hour', range: 'Range', h4: '4 hour', d1: '1 day', w1: '1 week' };
 
 const own = (o, k) => !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -55,13 +58,14 @@ function layoutName(v) {
 /** A range size in ticks (a whole number 1 to 400), else null. */
 function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null; }
 
-const TYPES = ['chart', 'tape', 'ticket'];
+/* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes'];
 /** One panel, or null when its shape is bad. Position and size are whole cells; re-flow puts them inside the grid. */
 function cleanPanel(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
   if (!TYPES.includes(p.type)) return null;
   if (typeof p.id !== 'string' || !ID_RX.test(p.id)) return null;
-  if (p.type !== 'ticket' && !ROOTS.includes(p.root)) return null;
+  if ((p.type === 'chart' || p.type === 'tape') && !ROOTS.includes(p.root)) return null;
   const { x, y, w, h } = p;
   if (![x, y, w, h].every(Number.isInteger) || x < 0 || y < 0 || w < 1 || h < 1 || x > 99 || y > 99 || w > 99 || h > 99) return null;
   const out = { id: p.id, type: p.type };
@@ -254,6 +258,79 @@ function setTapeColor(storage, key, hex) {
 }
 function resetTapeColors(storage) { try { storage.setItem(KEYS.tapeColors, JSON.stringify({})); return true; } catch (e) { return false; } }
 
+/* ---------------- the Account panel (1.15.0): today's fills as flat-to-flat trades, from the fills ChartBridge sends */
+const SESSION = 18 * 3600;
+const tradeDayOf = t => Math.floor((t + 86400 - SESSION) / 86400);   // the engine's util.tradeDay with the 18:00 ET session
+/**
+ * Round trips from one account's fills: for each instrument, the fills in time order from flat to flat are one trade.
+ * `fills` [{ id, t, root, side: 'buy' | 'sell', qty, p }]; `pointValue(root)`; `start` { root: signed qty } the position
+ * each instrument had before the first of these fills (0 when left out; not flat: that first trade's P&L is unknown, null,
+ * since its earlier fills are not here). A fill that reverses the position closes the trade and opens the next with the
+ * rest. Realized P&L by average price, also for a trade still open (its closed part), dollars, before commissions.
+ * Returns { byFill: Map id -> { pnl, open } (on the fill that went flat: the trade's P&L or null; on the last fill of a
+ * trade still open: open true), trades (closed ones), realized (dollars, or null when a closed part is unknown),
+ * unknown (trades whose P&L is unknown) }.
+ */
+function roundTrips(fills, pointValue, start) {
+  const list = (Array.isArray(fills) ? fills : []).filter(f => f && (f.side === 'buy' || f.side === 'sell') && +f.qty > 0 && isFinite(f.p) && isFinite(f.t))
+    .slice().sort((a, b) => a.t - b.t || String(a.id).localeCompare(String(b.id)));
+  const st = {}, byFill = new Map();
+  let trades = 0, realized = 0, unknown = 0, realizedKnown = true;
+  for (const f of list) {
+    const r = f.root, pv = +pointValue(r) || 0;
+    if (!st[r]) { const q0 = start && +start[r] ? +start[r] : 0; st[r] = { pos: q0, avg: null, pnl: 0, known: q0 === 0, last: null }; }
+    const x = st[r], q = (f.side === 'buy' ? 1 : -1) * +f.qty, p = +f.p;
+    let rest = q;
+    if (x.pos !== 0 && Math.sign(rest) !== Math.sign(x.pos)) {           // closes all or part of the position
+      const close = Math.sign(rest) * Math.min(Math.abs(rest), Math.abs(x.pos));
+      if (x.avg !== null) x.pnl += (p - x.avg) * -close * pv; else x.known = false;
+      x.pos += close; rest -= close;
+      if (x.pos === 0) {                                                 // flat: the trade is done
+        trades++;
+        if (x.known) realized += x.pnl; else { unknown++; realizedKnown = false; }
+        byFill.set(f.id, { pnl: x.known ? x.pnl : null, open: false });
+        x.avg = null; x.pnl = 0; x.known = true;
+      }
+    }
+    if (rest !== 0) {                                                    // opens or adds: the average price
+      x.avg = x.pos === 0 || x.avg === null ? p : (x.avg * Math.abs(x.pos) + p * Math.abs(rest)) / (Math.abs(x.pos) + Math.abs(rest));
+      if (x.pos !== 0 && !x.known) x.avg = null;                        // added to a position from before: its price is not known
+      x.pos += rest;
+    }
+    x.last = f.id;
+  }
+  for (const r of Object.keys(st)) {
+    const x = st[r];
+    if (x.pos !== 0 && x.last !== null && !byFill.has(x.last)) byFill.set(x.last, { pnl: null, open: true });
+    if (x.pos !== 0) { if (x.known) realized += x.pnl; else if (x.pnl) realizedKnown = false; }   // the closed part of a trade still open
+  }
+  return { byFill, trades, realized: realizedKnown ? realized : null, unknown };
+}
+/** The fills of one trading day (from 18:00 ET the day before), at bar time `now` (New York wall clock as seconds). */
+function fillsToday(fills, account, now) {
+  const d = tradeDayOf(now);
+  return (Array.isArray(fills) ? fills : []).filter(f => f && f.account === account && isFinite(f.t) && tradeDayOf(+f.t) === d);
+}
+
+/* ---------------- the Quote board (1.15.0): last, change and percent from the prior settlement (ChartBridge 0.3.7; blank
+   without, never estimated), the session's high and low */
+/** { chg, pct } of `last` against the prior settlement, or nulls when either is missing. */
+function quoteChange(last, settle) {
+  const ok = typeof last === 'number' && typeof settle === 'number' && isFinite(last) && isFinite(settle) && settle > 0;
+  return ok ? { chg: last - settle, pct: (last - settle) / settle * 100 } : { chg: null, pct: null };
+}
+/** The session's high and low (from 18:00 ET) at bar time `now` from 1-minute bars [{ t, h, l }], or nulls. */
+function sessionRange(bars, now) {
+  const d = tradeDayOf(now);
+  let hi = null, lo = null;
+  for (const b of bars || []) { if (!b || tradeDayOf(b.t) !== d) continue; if (hi === null || b.h > hi) hi = b.h; if (lo === null || b.l < lo) lo = b.l; }
+  return { high: hi, low: lo };
+}
+/** A signed number with thousands separators: +293.25, -1,204.50 (decimals), '' for null. */
+function fmtSignedNum(v, dec) { return v === null || v === undefined || !isFinite(v) ? '' : (v > 0 ? '+' : v < 0 ? '-' : '') + fmtPrice(Math.abs(v), dec); }
+/** Dollars as the panels show them: +$412.50, -$22.00, $0.00; '' for null. */
+function fmtUsd(v) { return v === null || v === undefined || !isFinite(v) ? '' : (v > 0.004 ? '+' : v < -0.004 ? '-' : '') + '$' + fmtPrice(Math.abs(v), 2); }
+
 /* ---------------- formatting */
 const p2 = n => (n < 10 ? '0' : '') + n;
 /** HH:MM:SS of a bar-time stamp (New York time). */
@@ -334,7 +411,8 @@ function setFloor(storage, root, which, value) {
 return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
-  readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor,
+  readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
+  roundTrips, fillsToday, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -357,8 +435,14 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.C
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
 const PREFIX = '';                                 // the single chart page's prefix (none): its settings are this page's
 const TAPE_MAX = 500, TAPE_ROW = 18;
-const TF_SHORT = { s15: '15s', s30: '30s', m1: '1m', m5: '5m', m15: '15m', h1: '1h', range: 'Range' };
-const H1_NOTE = 'The longest bars ChartBridge sends today. Daily bars come with ChartBridge 0.3.7.';
+const TF_SHORT = { s15: '15s', s30: '30s', m1: '1m', m5: '5m', m15: '15m', h1: '1h', range: 'Range', h4: '4h', d1: '1D', w1: '1W' };
+/* 1.15.0: the 1 hour chart loads 30 days of 1-minute history (15 minute 10, the rest 5); 4h, 1D and 1W are NinjaTrader's
+   own bars from ChartBridge 0.3.7 */
+const H1_NOTE = 'Built from 30 days of 1-minute history.';
+const HTF_NOTE = 'NinjaTrader\'s own bars (about 300), from ChartBridge 0.3.7 or newer.';
+const HTF_OLD = 'Needs ChartBridge 0.3.7 or newer';
+/* ChartBridge's version from this window's hello: 4h, 1D and 1W need 0.3.7 (the choices show and say so before it) */
+const htfServed = () => !bridgeVer || bridgeFeatures.includes('htf');
 
 /* ---------------- storage, wrapped (private windows and blocked site data throw) */
 const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
@@ -413,7 +497,7 @@ function syncConn() {
   if (el.title !== t) el.title = t;
 }
 /* 1.14.0 (Anthony): the versions, quietly: the LIVE badge's tooltip and the foot of Settings */
-let bridgeVer = '';
+let bridgeVer = '', bridgeFeatures = [];
 const versionText = () => 'chart ' + (window.ChartEngine ? window.ChartEngine.VERSION : '') + ' · ChartBridge ' + (bridgeVer || '-');
 let noteTimer = 0;
 function note(text, warn, ms) {
@@ -436,15 +520,20 @@ function syncStats() {
     const r = per.get(s.root) || { feed: null, local: null };
     if (s.feed !== null && (r.feed === null || s.feed > r.feed)) r.feed = s.feed;
     if (s.local !== null && (r.local === null || s.local > r.local)) r.local = s.local;
+    if (s.localP95 !== null && s.localP95 !== undefined && (r.l95 === null || r.l95 === undefined || s.localP95 > r.l95)) r.l95 = s.localP95;
     per.set(s.root, r);
   }
-  let feed = null, local = null, worst = '';
+  let feed = null, local = null, l95 = null, worst = '';
   for (const [root, r] of per) {
     if (r.feed !== null && (feed === null || r.feed > feed)) { feed = r.feed; worst = root; }
     if (r.local !== null && (local === null || r.local > local)) local = r.local;
+    if (r.l95 !== null && r.l95 !== undefined && (l95 === null || r.l95 > l95)) l95 = r.l95;
   }
-  $('wsFeed').textContent = fmtDelay(feed) + (feed !== null && per.size > 1 ? ' ' + worst : '');
-  $('wsLocal').textContent = fmtDelay(local);
+  const ft = fmtDelay(feed) + (feed !== null && per.size > 1 ? ' ' + worst : '');
+  if ($('wsFeed').textContent !== ft) $('wsFeed').textContent = ft;
+  // 1.15.0 (review): the local delay's p95 beside its median
+  const lt = fmtDelay(local) + (local !== null && l95 !== null ? ' (p95 ' + fmtDelay(l95) + ')' : '');
+  if ($('wsLocal').textContent !== lt) $('wsLocal').textContent = lt;
   $('wsFps').textContent = !chartViews().length ? '-' : busy ? Math.round(fps) + ' fps' : 'idle';
   $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown:\n' +
     ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
@@ -563,15 +652,17 @@ function tconnect() {
     tws = sock;
     sock.onopen = () => { if (sock === tws) tTries = 0; };
     sock.onmessage = ev => { if (sock !== tws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } tmessage(m); };
-    sock.onclose = () => { if (sock !== tws) return; tws = null; core.lost('Not connected to ChartBridge.'); tretry(); };
+    sock.onclose = () => { if (sock !== tws) return; tws = null; if (core.TR.armed) armOffWhy = 'drop'; core.lost('Not connected to ChartBridge.'); tretry(); };
     sock.onerror = () => { /* onclose follows */ };
   }, tretry);
 }
-function tretry() { tTries++; tTimer = setTimeout(tconnect, Math.min(5000, 500 * tTries)); }
+/* 1.15.0 (review): the first try after a drop at once (not twice within 5 s), then the backoff as before */
+let tFast = 0;
+function tretry() { tTries++; const now = Date.now(), fast = tTries === 1 && now - tFast > 5000; if (fast) tFast = now; tTimer = setTimeout(tconnect, fast ? 0 : Math.min(5000, 500 * tTries)); }
 function tmessage(m) {
   switch (m.type) {
     case 'hello':
-      bridgeVer = typeof m.version === 'string' ? m.version : ''; syncConn();
+      bridgeVer = typeof m.version === 'string' ? m.version : ''; bridgeFeatures = Array.isArray(m.features) ? m.features.slice() : []; syncConn();
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
@@ -615,6 +706,7 @@ function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTra
 function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
   renderCharts();
+  renderAccounts();                                      // 1.15.0: the Account panels
   renderFlat();
   syncTitle();
 }
@@ -683,7 +775,7 @@ function actHere(a) {
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
     else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
-    else if (a.kind === 'cancel' && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
+    else if ((a.kind === 'cancel' || a.kind === 'cancelAny') && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
     else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which);
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
@@ -692,7 +784,24 @@ function actHere(a) {
   const cid = core.lastCid() !== cid0 ? core.lastCid() : '';
   return { sent: sentCount - before, note: notes.length ? notes[notes.length - 1] : '', cid };
 }
+/* 1.15.0 (Anthony): a press on an order line that does nothing says why. Armed off for a dropped connection (ChartBridge
+   restarted after a recompile, or the line went down) says so, until it is armed again; the ticket's window tells the
+   others (its published state's offWhy). */
+let armOffWhy = '';
+/* in the ticket's window: why its Armed is off, as the others are told it ('reconnected', 'dropped' or '') */
+const offWhyNow = () => (core.TR.armed || armOffWhy !== 'drop' ? '' : tws && tws.readyState === 1 && core.TR.enabled ? 'reconnected' : 'dropped');
+function pressOffText(root) {
+  const R = ticketRoot(), h = holds(), hd = h ? null : holder();
+  if (!h && !hd) return 'No window has the order ticket: add it to move or cancel orders.';
+  if (root !== R) return 'The order ticket is on ' + R + ': switch it to ' + root + ' to move or cancel these orders.';
+  if (ticketArmed()) return '';
+  const why = h ? offWhyNow() : hd && typeof hd.offWhy === 'string' ? hd.offWhy : '';   // the ticket's window's reason (review)
+  if (why === 'reconnected') return 'Armed went off: ChartBridge reconnected. Arm to move or cancel orders.';
+  if (why === 'dropped') return 'Armed went off: the connection to ChartBridge dropped.';
+  return 'Armed is off: arm to move or cancel orders.';
+}
 const tradeHost = {
+  pressOff: root => pressOffText(root),
   place: (side, price, root, kind) => chartAction({ kind: 'place', side, price, root, orderKind: kind }),
   move: (id, price, root, from) => chartAction({ kind: 'move', id, price, root, from }),
   cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
@@ -747,7 +856,8 @@ const closeTarget = () => ticketAccount() + ' ' + ticketRoot();
 function publish() {
   if (!holds()) return;
   const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty(),
-    stop: OT.cleanBracket(core.brackets[TK.root], core.cap()).stop, noStopOk: !core.noStopAsked() };   // NO STOP: other windows ask before they forward
+    stop: OT.cleanBracket(core.brackets[TK.root], core.cap()).stop, noStopOk: !core.noStopAsked(),   // NO STOP: other windows ask before they forward
+    offWhy: offWhyNow() };                                                                           // 1.15.0: why Armed went off, for their notes
   const k = JSON.stringify(st);
   if (k === TK.published) return;
   TK.published = k;
@@ -864,6 +974,7 @@ function mountTicket(v) {
   renderOrders();
 }
 function ticketArmedUi(on) {
+  if (on) armOffWhy = '';                                // armed again: the reason it went off is no longer news
   if (!TK.view) return;
   tk('armBtn').setAttribute('aria-checked', String(on));
   tk('armText').textContent = on ? 'ARMED' : 'Armed off';
@@ -969,7 +1080,7 @@ function headChart(v) {
   const p = v.panel;
   v.nameEl.textContent = v.contract && v.contract.split(' ')[0] === p.root ? v.contract : p.root;
   v.tfEl.textContent = W.tfLabel(p.tf, p.tf === 'range' ? p.range : 0);
-  v.viewBtn.title = 'Instrument and bars' + (p.tf === 'h1' ? '. ' + H1_NOTE : '');
+  v.viewBtn.title = 'Instrument and bars' + (p.tf === 'h1' ? '. ' + H1_NOTE : W.HTF_TFS.includes(p.tf) ? '. ' + HTF_NOTE : '');
   v.viewBtn.setAttribute('aria-label', 'Instrument and bars: ' + p.root + ', ' + W.tfLabel(p.tf, p.tf === 'range' ? p.range : 0));
 }
 
@@ -987,7 +1098,9 @@ function addView(p) {
     mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
-  } else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
+  } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
+  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>';
+  else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
   el.innerHTML = `<header class="ws-head"><span class="ws-grip" aria-hidden="true">⋮⋮</span>${mid}${close}</header>` +
@@ -999,6 +1112,8 @@ function addView(p) {
   views.set(p.id, v);
   if (p.type === 'chart') mountChart(v);
   else if (p.type === 'tape') mountTape(v);
+  else if (p.type === 'account') mountAccount(v);        // 1.15.0
+  else if (p.type === 'quotes') mountQuotes(v);
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -1070,7 +1185,7 @@ function addPanel(type) {
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' ? { type: 'ticket' } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -1152,7 +1267,11 @@ function mountTape(v) {
     const j = (head - i + TAPE_MAX) % TAPE_MAX;
     const k = W.tapeClass(Q[j], S[j]), cls = 'tp-row' + (k ? ' ' + k : '') + (B[j] ? ' big' : '');
     if (row.cls !== cls) { row.el.className = cls; row.cls = cls; }
-    row.t.textContent = W.fmtClock(T[j]); row.p.textContent = W.fmtPrice(P[j], dec); row.v.textContent = String(V[j]);
+    // 1.15.0 (review): a cell's text written only when it changed
+    const tt = W.fmtClock(T[j]), pt = W.fmtPrice(P[j], dec), vt = String(V[j]);
+    if (row.t.textContent !== tt) row.t.textContent = tt;
+    if (row.p.textContent !== pt) row.p.textContent = pt;
+    if (row.v.textContent !== vt) row.v.textContent = vt;
     if (row.el.hidden) row.el.hidden = false;
   }
   function drawTape() {
@@ -1202,7 +1321,8 @@ function mountTape(v) {
     };
     sock.onclose = () => { if (sock !== ws) return; ws = null; ready = false; setState('offline'); later(); };
   }
-  function later() { if (destroyed) return; tries++; reconnect = setTimeout(connect, Math.min(5000, 500 * tries)); }
+  let fastAt = 0;
+  function later() { if (destroyed) return; tries++; const now = Date.now(), fast = tries === 1 && now - fastAt > 5000; if (fast) fastAt = now; reconnect = setTimeout(connect, fast ? 0 : Math.min(5000, 500 * tries)); }
 
   sel.addEventListener('change', () => {
     if (!W.ROOTS.includes(sel.value) || sel.value === root) return;
@@ -1222,6 +1342,254 @@ function mountTape(v) {
   };
 }
 function refloorTapes() { for (const v of views.values()) if (v.tape) v.tape.refloor(); }
+
+/* ======================================================================== the Account panel and the Quote board (1.15.0)
+ * Anthony's consolidated form (2026-10-02), sized to sit under the ticket and anywhere else; nothing scrolls but a list's own
+ * rows (as Time and Sales). Read from what the page already has: the order connection's positions, working orders and
+ * today's fills (ChartBridge sends them; nothing new is asked), and the prices from the window's feed. The Account panel's
+ * Close is the ticket's own "Also open" Close (TradeCore flattenHere(root), works with Armed off, from this window's own
+ * connection as every Close); its x is the chart's x (chartAction: TradeCore's cancel in the ticket's window, forwarded
+ * from any other, needs Armed). No new way to send an order.
+ */
+/* ---------------- prices: one stand-in on the window's feed per instrument while a panel needs it (days 1 and no ticks, the
+   least ChartBridge sends; a chart's load of the instrument already holds it, so nothing new is asked then): the last
+   trade, the session's high and low (from 18:00 ET), the prior settlement (ChartBridge 0.3.7) */
+const QT = new Map();                                  // root -> quote line
+const quoteSubs = new Set();                           // panels redrawn when a price changes: 4 times a second at most
+/* Anthony's ruling (1.15.0): charts and orders first. A trade only notes the price (a few compares, no DOM); the Quote
+   board and the Account panel's figures are written at most 4 times a second, in one animation frame, and only the
+   cells whose text changed. They may lag a frame or 250 ms; they never cost the charts' frames or the tick path. */
+const QUOTE_MS = 250;
+let quoteTimer = 0;
+const etNowSec = () => U.zoneSeconds(Date.now() / 1000);
+function quoteChanged() {
+  if (quoteTimer) return;
+  quoteTimer = setTimeout(() => requestAnimationFrame(() => { quoteTimer = 0; for (const fn of quoteSubs) fn(); }), QUOTE_MS);
+}
+function watchQuote(root) {
+  let q = QT.get(root);
+  if (!q) {
+    q = { root, sock: null, users: 0, last: null, high: null, low: null, day: null, settle: null, settleDate: '', timer: 0, tries: 0 };
+    QT.set(root, q);
+    quoteOpen(q);
+  }
+  q.users++;
+  let done = false;
+  return () => { if (done) return; done = true; if (--q.users > 0) return; clearTimeout(q.timer); quoteClose(q); QT.delete(root); };
+}
+function quoteClose(q) { const s2 = q.sock; q.sock = null; if (s2) { s2.onmessage = s2.onclose = null; try { s2.close(); } catch (e) { /* closed */ } } }
+function quoteOpen(q) {
+  q.timer = 0;
+  let sock;
+  try { sock = hub.open(q.root); } catch (e) { return; }
+  q.sock = sock;
+  const range = (h, l, t) => {                         // the session's high and low (a new one from 18:00 ET)
+    const d = W.tradeDayOf(t);
+    if (q.day !== d) { if (q.day !== null && d < q.day) return; q.day = d; q.high = h; q.low = l; return; }
+    if (q.high === null || h > q.high) q.high = h;
+    if (q.low === null || l < q.low) q.low = l;
+  };
+  sock.onmessage = ev => {
+    const m = ev.message;
+    if (!m || q.sock !== sock) return;
+    if (m.type === 'ready') q.tries = 0;
+    if (m.type === 'hello') {
+      const i = (m.instruments || []).find(x => x && x.root === q.root);
+      if (i) { q.settle = typeof i.settlement === 'number' ? i.settlement : null; q.settleDate = i.settlementDate || ''; }
+      q.high = q.low = q.day = null;
+      sock.send({ type: 'subscribe', root: q.root, days: 1, tickHours: 0 });
+    } else if (m.type === 'history' && m.root === q.root && Array.isArray(m.bars)) {
+      const today = W.tradeDayOf(etNowSec());
+      for (const b of m.bars) { if (W.tradeDayOf(b[0]) === today) range(b[2], b[3], b[0]); }
+      if (m.bars.length) q.last = +m.bars[m.bars.length - 1][4];
+      quoteChanged();
+    } else if (m.type === 'tick' && m.root === q.root) {
+      q.last = +m.p; range(+m.p, +m.p, +m.t); quoteChanged();
+    } else if (m.type === 'settlement' && m.root === q.root) {
+      q.settle = typeof m.p === 'number' ? m.p : null; q.settleDate = m.date || ''; quoteChanged();
+    }
+  };
+  sock.onclose = () => { if (q.sock !== sock) return; q.sock = null; if (q.users > 0) { const n = ++q.tries; q.timer = setTimeout(() => { if (q.users > 0 && !q.sock) quoteOpen(q); }, n === 1 ? 0 : Math.min(5000, 500 * n)); } };
+}
+const quoteOf = r => QT.get(r) || null;
+
+/* ---------------- the Quote board: NQ, MNQ, ES, MES (the mockup's order); read only */
+const QUOTE_ROOTS = ['NQ', 'MNQ', 'ES', 'MES'];
+/* Rows are small grids (ws-grid-rows, workspace.css): on a narrow panel the change and percent, and the high and low, stack
+   in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel). */
+function mountQuotes(v) {
+  v.body.innerHTML = '<div class="qb-wrap gr gr-qb" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
+    '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
+    QUOTE_ROOTS.map(r => `<div class="gr-row" role="row" data-root="${r}"><span class="b" role="cell">${r}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
+    '<p class="qb-foot" data-q="foot"></p></div>';
+  const offs = QUOTE_ROOTS.map(watchQuote);
+  const cells = {};
+  for (const tr of v.body.querySelectorAll('[data-root]')) { const c = cells[tr.dataset.root] = {}; for (const td of tr.querySelectorAll('[data-q]')) c[td.dataset.q] = td; }
+  const set = (el, text, cls) => { if (el.textContent !== text) el.textContent = text; const k = cls || ''; if (el.className !== k) el.className = k; };
+  const render = () => {
+    let noSettle = 0;
+    for (const r of QUOTE_ROOTS) {
+      const q = quoteOf(r), c = cells[r], dec = precisionOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null, pct: null };
+      const cls = x.chg > 0 ? 'up' : x.chg < 0 ? 'dn' : '';
+      set(c.last, q && q.last !== null ? U.fmtPrice(q.last, dec) : '-', 'r');
+      set(c.chg, W.fmtSignedNum(x.chg, dec), cls);
+      set(c.pct, x.pct === null ? '' : W.fmtSignedNum(x.pct, 2) + '%', cls);
+      set(c.high, q && q.high !== null ? U.fmtPrice(q.high, dec) : '');
+      set(c.low, q && q.low !== null ? U.fmtPrice(q.low, dec) : '');
+      if (q && q.last !== null && q.settle === null) noSettle++;
+    }
+    const foot = noSettle ? 'Change from the prior settlement: blank until ChartBridge 0.3.7 or newer gives one.' : '';
+    for (const r of QUOTE_ROOTS) {                         // a tight board shows the last and percent: the rest in the row's tooltip
+      const q = quoteOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null }, dec = precisionOf(r);
+      const tip = r + (q && q.last !== null ? ' ' + U.fmtPrice(q.last, dec) : '') + (x.chg !== null ? ', ' + W.fmtSignedNum(x.chg, dec) + ' from the prior settlement' : '') +
+        (q && q.high !== null ? ', high ' + U.fmtPrice(q.high, dec) + ', low ' + U.fmtPrice(q.low, dec) : '');
+      const tr = cells[r].last.parentElement;
+      if (tr.title !== tip) tr.title = tip;
+    }
+    const f = v.body.querySelector('[data-q="foot"]');
+    if (f.textContent !== foot) { f.textContent = foot; f.hidden = !foot; }
+  };
+  quoteSubs.add(render);
+  render();
+  v.state = 'live';
+  v.quotes = { render };
+  /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
+     with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
+  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
+  v.destroy = () => { unfit(); quoteSubs.delete(render); for (const f of offs) f(); };
+}
+/* The Account panel's and the Quote board's classes from their size (`classes(width, height)` -> { class: on }), from a
+   ResizeObserver (container queries cost every chart frame, perf:workspace). Returns the undo. */
+function fitPanel(v, classes) {
+  if (typeof ResizeObserver !== 'function') return () => {};
+  const ro = new ResizeObserver(list => { for (const e of list) { const r = e.contentRect, k = classes(r.width, r.height); for (const c of Object.keys(k)) v.el.classList.toggle(c, !!k[c]); } });
+  ro.observe(v.el);
+  return () => ro.disconnect();
+}
+
+/* ---------------- the Account panel: a summary strip for the ticket's account, then Positions, Orders and Fills */
+/* The tabs, in order. A fourth, "Accounts" (the copier, after the cruise: a row per account with its position, P&L and
+   copy on or off), goes here as one more entry with its own render; it is not built. */
+const ACCOUNT_TABS = [{ id: 'pos', name: 'Positions' }, { id: 'ord', name: 'Orders' }, { id: 'fil', name: 'Fills' }];
+const accountViews = () => [...views.values()].filter(v => v.account);
+const SIDE_WORD = { buy: 'Buy', sell: 'Sell' };
+function orderTypeName(o) {
+  if (o.plan) return 'Planned ' + (o.plan.role === 'stop' ? 'stop' : 'target');
+  const kind = o.role === 'target' ? 'target' : o.role === 'stop' ? 'stop' : o.kind === 'limit' ? 'limit' : o.kind === 'stop' ? 'stop' : o.kind === 'stopLimit' ? 'stop limit' : o.kind === 'market' ? 'market' : String(o.kind || 'order');
+  return SIDE_WORD[o.side] + ' ' + kind;
+}
+function mountAccount(v) {
+  v.body.innerHTML = `<div class="ac">
+    <div class="ac-sum" role="group" aria-label="Today on the ticket's account">
+      <div title="Open P&amp;L of the positions now"><span>Open</span><b data-a="open"></b></div><div title="Realized today, from the fills (before commissions)"><span><span class="lb-full">Realized</span><span class="lb-short">Real.</span></span><b data-a="real"></b></div>
+      <div title="Realized and open together"><span>Day</span><b data-a="day"></b></div><div title="Trades today, flat to flat"><span>Trades</span><b data-a="trades"></b></div></div>
+    <div class="ac-tabs" role="tablist" aria-label="Account">${ACCOUNT_TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}">${t.name}<span class="ac-ct" data-ct="${t.id}"></span></button>`).join('')}</div>
+    <div class="ac-list" data-list role="tabpanel"></div>
+    <p class="ac-foot" data-a="foot" title="Close works with Armed off. × needs Armed, as on the chart.">Close works with Armed off. × needs Armed, as on the chart.</p>
+  </div>`;
+  const q = sel => v.body.querySelector(sel);
+  const A = v.account = { tab: 'pos', keys: {}, offs: new Map(), render: null };
+  v.state = 'live';
+  q('.ac-tabs').addEventListener('click', e => {
+    const b = e.target.closest('button[data-tab]'); if (!b) return;
+    b.blur();                                            // the hotkeys work at once (handBack)
+    A.tab = b.dataset.tab;
+    for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t === b));
+    A.keys.list = ''; A.render();
+  });
+  q('[data-list]').addEventListener('click', e => {
+    const b = e.target.closest('button[data-close], button[data-cancel]'); if (!b) return;
+    b.blur();
+    if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
+    if (b.dataset.close) core.flattenHere(b.dataset.close);                          // the ticket's "Also open" Close
+    /* Anthony (1.15.0): the x cancels an order of ANY instrument: TradeCore's own cancel (needs Armed, the order on the
+       ticket's account and still working), in the ticket's window or forwarded to it as the chart's x is */
+    else chartAction({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root });
+  });
+  const put = (k, el, text, cls) => { const key = text + '|' + cls; if (A.keys[k] === key) return; A.keys[k] = key; el.textContent = text; el.className = cls || ''; };
+  A.render = () => {
+    const TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct, now = etNowSec();
+    /* the prices of the instruments with a position (their open P&L): watched while open */
+    const roots = on ? W.ROOTS.filter(r => { const p = TR.positions.get(acct + '|' + r); return p && p.qty; }) : [];
+    for (const r of roots) if (!A.offs.has(r)) A.offs.set(r, watchQuote(r));
+    for (const [r, off] of A.offs) if (!roots.includes(r)) { off(); A.offs.delete(r); }
+    const pv = r => (instruments[r] || {}).pointValue || 0;
+    let open = 0, openKnown = true;
+    const posRows = roots.map(r => {
+      const p = TR.positions.get(acct + '|' + r), qq = quoteOf(r), last = qq && qq.last !== null ? qq.last : r === ticketRoot() ? ticketPrice(r) : null;
+      const pn = last !== null && last !== undefined ? U.openPnl(p.qty, p.avgPrice, last, pv(r)) : null;
+      if (pn && pn.dollars !== null) open += pn.dollars; else openKnown = false;
+      return { r, p, pn };
+    });
+    const today = on ? W.fillsToday([...tfills.values()], acct, now).map(f => Object.assign({}, f, { qty: +f.qty, p: +f.p, t: +f.t })) : [];
+    /* each instrument's position before today's first fill: what it is now less today's fills (not flat: that first
+       trade began before today and its P&L is not known) */
+    const start = {};
+    for (const r of W.ROOTS) {
+      const p = on ? TR.positions.get(acct + '|' + r) : null, net = today.filter(f => f.root === r).reduce((a, f) => a + (f.side === 'buy' ? 1 : -1) * f.qty, 0);
+      start[r] = (p ? p.qty : 0) - net;
+    }
+    const rt = W.roundTrips(today, pv, start);
+    const day = rt.realized !== null && openKnown ? rt.realized + open : null;
+    const pc = x => (x > 0.004 ? 'up' : x < -0.004 ? 'dn' : '');
+    put('open', q('[data-a="open"]'), !on ? '-' : openKnown ? W.fmtUsd(open) : 'waiting', on && openKnown ? pc(open) : '');
+    put('real', q('[data-a="real"]'), !on ? '-' : rt.realized === null ? 'n/a' : W.fmtUsd(rt.realized), on ? pc(rt.realized) : '');
+    put('day', q('[data-a="day"]'), !on || day === null ? '-' : W.fmtUsd(day), on && day !== null ? pc(day) : '');
+    put('trades', q('[data-a="trades"]'), on ? String(rt.trades) : '-', '');
+    const orders = on ? W.ROOTS.flatMap(r => core.chartOrders(acct, r).map(o => (o.root ? o : Object.assign({}, o, { root: r })))) : [];   // a planned line has no root of its own
+    const counts = { pos: posRows.length, ord: orders.length, fil: today.length };
+    for (const t of ACCOUNT_TABS) put('ct-' + t.id, q(`[data-ct="${t.id}"]`), String(counts[t.id]), 'ac-ct');
+    put('acct', v.el.querySelector('.ws-acct'), acct || 'No account', 'ws-acct');
+    /* the list of the tab shown */
+    /* rows as small grids (as the Quote board): on a narrow panel each pair (.pr) stacks in one cell.
+       1.15.0 (orders review: a Close replaced between press and release lost the click): the rows are built only when the
+       set of rows changes (instruments, order ids, fills); a price or P&L change writes only the text of its cell, so a
+       button is never replaced under the mouse. */
+    const vals = [];
+    const row = (k, cells) => `<div class="gr-row" role="row" data-k="${esc(k)}">${cells}</div>`, head = cells => `<div class="gr-row gr-h" role="row">${cells}</div>`;
+    const c = (text, cls, tip) => `<span role="cell" data-c="${vals.push({ text, cls: cls || '', tip: tip || '' }) - 1}"></span>`;   // a cell whose text changes
+    const pr = (a, b, cls) => `<span class="pr${cls ? ' ' + cls : ''}">${a}${b}</span>`;
+    const st = (html, cls) => `<span class="${cls || ''}" role="cell">${html}</span>`;           // a fixed cell (a button)
+    const h = (text, cls) => `<span class="${cls || ''}" role="columnheader">${text}</span>`;
+    let html;
+    if (!on) html = `<p class="ac-empty">${esc(core.TR.reason || 'Not connected to ChartBridge yet.')}</p>`;
+    else if (A.tab === 'pos') html = !posRows.length ? '<p class="ac-empty">Flat on every instrument.</p>' : '<div class="gr gr-pos" role="table" aria-label="Positions">' +
+      head(pr(h('Inst'), h('Qty', 'r')) + h('Avg', 'r') + pr(h('Open pt', 'r'), h('Open $', 'r'), 'r') + h('<span class="visually-hidden">Close</span>')) +
+      posRows.map(({ r, p, pn }) => row(r, pr(c(r, 'b'), c((p.qty > 0 ? '+' : '-') + Math.abs(p.qty), 'r ' + (p.qty > 0 ? 'up' : 'dn'))) + c(U.fmtPrice(p.avgPrice, precisionOf(r)), 'r') +
+        pr(c(pn ? W.fmtSignedNum(pn.points, precisionOf(r)) : '', 'r ' + (pn ? pc(pn.points) : '')), c(pn && pn.dollars !== null ? W.fmtUsd(pn.dollars) : '', 'r ' + (pn ? pc(pn.dollars) : '')), 'r') +
+        st(`<button type="button" class="ac-btn ac-close" data-close="${r}" title="Close ${r}: cancel its orders and close its position at market on ${esc(acct)}. Works with Armed off.">Close</button>`, 'r'))).join('') + '</div>';
+    else if (A.tab === 'ord') html = !orders.length ? '<p class="ac-empty">No working orders.</p>' : '<div class="gr gr-ord" role="table" aria-label="Working orders">' +
+      head(pr(h('Inst'), h('Qty', 'r')) + pr(h('Order'), h('Price', 'r'), 'r2') + h('<span class="visually-hidden">Cancel</span>')) +
+      orders.map(o => row(o.id, pr(c(o.root || '', 'b'), c(String(Math.max(0, (+o.qty || 0) - (+o.filled || 0))), 'r')) +
+        pr(c(orderTypeName(o), o.side === 'sell' ? 'dn' : 'up'), c(typeof o.price === 'number' ? U.fmtPrice(o.price, precisionOf(o.root)) : '', 'r'), 'r2') +
+        st(`<button type="button" class="ac-x" data-cancel="${esc(o.id)}" data-root="${esc(o.root || '')}" aria-label="Cancel this ${esc(o.root || '')} order" title="Cancel it (needs Armed, as the chart's x), on any instrument">×</button>`, 'r'))).join('') + '</div>';
+    else html = !today.length ? '<p class="ac-empty">No fills today.</p>' : '<div class="gr gr-fil" role="table" aria-label="Today\'s fills">' +
+      head(pr(h('Time'), h('Inst')) + pr(h('Side', 'r'), h('Price', 'r'), 'r') + h('Trade', 'r')) +
+      today.slice().sort((a, b) => b.t - a.t).map(f => {
+        const x = rt.byFill.get(f.id), trade = !x ? '' : x.open ? 'open' : x.pnl === null ? 'n/a' : W.fmtUsd(x.pnl), cls = !x || x.open || x.pnl === null ? 'mut' : pc(x.pnl);
+        const tip = x && x.pnl === null && !x.open ? 'This trade began before today: its first fills are not in today\'s list' : '';
+        return row(f.account + '|' + f.id, pr(c(W.fmtClock(f.t), 'mut'), c(f.root, 'b')) + pr(c((f.side === 'buy' ? 'B ' : 'S ') + f.qty, 'r ' + (f.side === 'buy' ? 'up' : 'dn')), c(U.fmtPrice(f.p, precisionOf(f.root)), 'r'), 'r') +
+          c(trade, 'r ' + cls, tip));
+      }).join('') + '</div>';
+    const el = q('[data-list]');
+    if (A.keys.list !== html) { A.keys.list = html; const top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; A.cells = [...el.querySelectorAll('[data-c]')]; A.rebuilt = (A.rebuilt || 0) + 1; }
+    const cells = A.cells || [];
+    for (let i = 0; i < vals.length && i < cells.length; i++) {
+      const e = cells[i], x = vals[i];
+      if (e.textContent !== x.text) e.textContent = x.text;
+      if (e.className !== x.cls) e.className = x.cls;
+      if ((e.title || '') !== x.tip) e.title = x.tip;
+    }
+  };
+  A.render();
+  quoteSubs.add(A.render);
+  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 360, 'gr-short': h < 170 }));
+  v.destroy = () => { unfit(); quoteSubs.delete(A.render); for (const off of A.offs.values()) off(); A.offs.clear(); };
+}
+/* order events, fills and positions: the Account panels again, once in the next animation frame */
+let accountRaf = 0;
+function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
+setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
 /* ---------------- popovers (Add panel, Settings, a chart's instrument and bars or its menu, a tape's gear): one open at a
    time; an outside click or Esc closes */
@@ -1270,9 +1638,12 @@ function openViewPop(v, anchor) {
     const p = v.panel, el = $('wsView');
     el.dataset.id = p.id;
     el.innerHTML = '<div class="vw-row" role="group" aria-label="Instrument">' + W.ROOTS.map(r => `<button type="button" data-root="${r}" aria-pressed="${r === p.root}">${r}</button>`).join('') + '</div>' +
-      '<div class="vw-row" role="group" aria-label="Bars">' + W.TFS.map(t => `<button type="button" data-tf="${t}" aria-pressed="${t === p.tf}"${t === 'h1' ? ' title="' + esc(H1_NOTE) + '"' : ''}>${TF_SHORT[t]}</button>`).join('') + '</div>' +
+      '<div class="vw-row" role="group" aria-label="Bars">' + W.TFS.filter(t => !W.HTF_TFS.includes(t)).map(t => `<button type="button" data-tf="${t}" aria-pressed="${t === p.tf}"${t === 'h1' ? ' title="' + esc(H1_NOTE) + '"' : ''}>${TF_SHORT[t]}</button>`).join('') + '</div>' +
+      /* 1.15.0: 4h, 1D and 1W on their own row; with ChartBridge before 0.3.7 they show and say what they need */
+      '<div class="vw-row" role="group" aria-label="NinjaTrader bars">' + W.HTF_TFS.map(t => `<button type="button" data-tf="${t}" aria-pressed="${t === p.tf}" title="${esc(htfServed() ? HTF_NOTE : HTF_OLD + ' (this PC: ' + (bridgeVer || '-') + ')')}"${htfServed() ? '' : ' class="vw-old"'}>${TF_SHORT[t]}</button>`).join('') +
+      (htfServed() ? '' : `<span class="vw-need">${esc(HTF_OLD)}</span>`) + '</div>' +
       (p.tf === 'range' ? `<label class="vw-range"><span>Range size</span><input type="number" min="1" max="400" step="1" inputmode="numeric" data-f="range" value="${p.range || ''}" aria-label="Range bar size for ${p.root} in ticks"><span>ticks</span></label>` : '') +
-      (p.tf === 'h1' ? `<p class="ws-help">${esc(H1_NOTE)}</p>` : '');
+      (p.tf === 'h1' ? `<p class="ws-help">${esc(H1_NOTE)}</p>` : W.HTF_TFS.includes(p.tf) ? `<p class="ws-help">${esc(htfServed() ? HTF_NOTE : HTF_OLD + '. This PC runs ChartBridge ' + (bridgeVer || '-') + '.')}</p>` : '');
     openPop(el, anchor, null, 'left');
   });
 }
@@ -1295,23 +1666,79 @@ $('wsView').addEventListener('change', e => {
 });
 $('wsView').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('[data-f="range"]')) { e.preventDefault(); e.target.dispatchEvent(new Event('change', { bubbles: true })); } });
 
-/* A chart's small menu: the drawing tools (they act on the next clicks on that chart), Clear and Reset view. */
+/* A chart's small menu: Reset view (1.15.0: the drawing tools moved to the ring, a middle-click on the chart). */
 function openMore(v, anchor) {
-  toggle($('wsMore'), anchor, () => {
-    const el = $('wsMore'), t = v.pane.chart.getTool();
-    el.dataset.id = v.panel.id;
-    for (const b of el.querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', String(t === b.dataset.tool));
-    openPop(el, anchor);
-  });
+  toggle($('wsMore'), anchor, () => { $('wsMore').dataset.id = v.panel.id; openPop($('wsMore'), anchor); });
 }
 $('wsMore').addEventListener('click', e => {
   const b = e.target.closest('button'), v = views.get($('wsMore').dataset.id);
   if (!b || !v || !v.pane) return;
-  const c = v.pane.chart;
-  if (b.dataset.tool) c.setTool(c.getTool() === b.dataset.tool ? null : b.dataset.tool);
-  else if (b.dataset.do === 'clear') c.clearDrawings();
-  else if (b.dataset.do === 'reset') c.reset();
+  if (b.dataset.do === 'reset') v.pane.chart.reset();
   closePops();
+});
+
+/* ---------------- the drawing ring (1.15.0, Anthony): a middle-click (no modifier) on a chart's plot opens four tools around
+   the pointer: Trend line (top), Price line (right), Clear this chart (bottom), Zone (left). A click arms the tool on THAT
+   chart; the armed tool draws one drawing, then is off. A click outside or Escape closes the ring; Escape also takes back
+   an armed tool or a drawing half made, on any chart. The middle button never places, moves or cancels an order, and its
+   press is kept from the browser over the charts (no Windows auto-scroll). The ring is fixed, never scrolls, stays inside
+   the chart (moved in from an edge), and gives the focus back to the page so the hotkeys work at once. */
+const RING_R = 40, RING_BTN = 32, RING_HALF = RING_R + RING_BTN / 2 + 2;
+const RING_NAMES = { trend: 'Trend line: click two points or drag', hline: 'Price line: click a price', zone: 'Zone: click two corners or drag' };
+let ring = null;                                         // { v } while the ring is open
+const chartOf = el => { const p = el && el.closest ? el.closest('.ws-panel.chart') : null, v = p ? views.get(p.dataset.id) : null; return v && v.pane ? v : null; };
+function plotRect(v) {
+  const cv = v.pane.chart && v.body.querySelector('canvas.ce-canvas');
+  if (!cv) return null;
+  const r = cv.getBoundingClientRect(), dp = v.pane.chart.deltaPane();
+  return { left: r.left, top: r.top, right: r.right - 78, bottom: r.top + dp.plotHeight };
+}
+function openRing(v, x, y) {
+  closePops(); closeRing();
+  const r = plotRect(v); if (!r) return;
+  const el = $('wsRing');
+  // centred on the pointer, moved in so the whole ring stays inside the chart's plot ("flips" from an edge)
+  const cx = Math.round(Math.max(r.left + RING_HALF, Math.min(r.right - RING_HALF, x))), cy = Math.round(Math.max(r.top + RING_HALF, Math.min(r.bottom - RING_HALF, y)));
+  el.style.left = (cx - RING_HALF) + 'px'; el.style.top = (cy - RING_HALF) + 'px';
+  const t = v.pane.chart.getTool();
+  for (const b of el.querySelectorAll('[data-ring]')) b.setAttribute('aria-pressed', String(t === b.dataset.ring));
+  el.hidden = false;
+  ring = { v };
+}
+function closeRing() {
+  if (!ring) return;
+  ring = null; $('wsRing').hidden = true;
+  if (document.activeElement && $('wsRing').contains(document.activeElement)) document.activeElement.blur();   // handBack
+}
+$('wsRing').addEventListener('click', e => {
+  const b = e.target.closest('button[data-ring]'), r = ring;
+  if (!b || !r || !views.has(r.v.panel.id)) { closeRing(); return; }
+  const c = r.v.pane.chart, what = b.dataset.ring, name = r.v.panel.root + ' ' + W.tfLabel(r.v.panel.tf, r.v.panel.range);
+  closeRing();
+  if (what === 'clear') { c.clearDrawings(); note('Drawings cleared on ' + name + '.', false); return; }
+  for (const o of chartViews()) if (o !== r.v && o.pane.chart.getTool()) o.pane.chart.setTool(null);   // one armed tool at a time
+  c.setTool(what);
+  note(RING_NAMES[what] + ' on ' + name + '. Escape cancels.', false, 6000);
+});
+$('wsRing').addEventListener('contextmenu', e => e.preventDefault());
+/* the middle button over the charts: the ring on the plot, and never the browser's auto-scroll anywhere on a chart */
+grid.addEventListener('pointerdown', e => {
+  if (e.button !== 1) return;
+  const v = chartOf(e.target);
+  if (!v || !e.target.closest('.chart-box')) return;
+  e.preventDefault(); e.stopPropagation();               // the chart never sees it: no pan, no order, no drawing
+  if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+  const r = plotRect(v);
+  if (r && e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom) openRing(v, e.clientX, e.clientY);
+}, true);
+for (const t of ['mousedown', 'auxclick']) grid.addEventListener(t, e => { if (e.button === 1 && chartOf(e.target) && e.target.closest('.chart-box')) { e.preventDefault(); e.stopPropagation(); } }, true);
+document.addEventListener('pointerdown', e => { if (ring && !$('wsRing').contains(e.target)) closeRing(); }, true);
+/* Escape closes the ring first (before a chart's own keys see it), then takes back an armed tool on any chart */
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && ring) { e.preventDefault(); e.stopPropagation(); closeRing(); } }, true);
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return;
+  const armed = chartViews().filter(v => v.pane.chart.getTool());
+  if (armed.length && !pop) { e.preventDefault(); for (const v of armed) v.pane.chart.setTool(null); note('Drawing tool off.', false, 3000); }
 });
 
 /* Large prints: one table in Settings (every instrument), one row in a tape's gear (its instrument). */
@@ -1365,7 +1792,8 @@ function renderGeneral() {
   const s = prefs.settings();
   for (const b of $('wsGlide').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.glide));
   for (const b of $('wsGridLines').children) b.setAttribute('aria-pressed', String(b.dataset.v === s.grid));
-  for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === s.room));
+  const room = prefs.roomSaved() ? s.room : LP.DEFAULT_ROOM_WS;   // 1.15.0: 80, 120 or 160 px, 120 until one is picked
+  for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === room));
   if (document.activeElement !== $('wsAtr')) $('wsAtr').value = s.atr;
   $('wsRangeMode').value = s.rangeMode;
 }
@@ -1386,7 +1814,7 @@ $('wsAtr').addEventListener('input', e => {
 $('wsAtr').addEventListener('change', e => { e.target.removeAttribute('aria-invalid'); e.target.value = prefs.settings().atr; });
 $('wsAtr').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
 $('wsRoom').addEventListener('click', e => {
-  const b = e.target.closest('button[data-v]'); if (!b || !LP.ROOMS.includes(+b.dataset.v)) return;
+  const b = e.target.closest('button[data-v]'); if (!b || !LP.ROOMS_WS.includes(+b.dataset.v)) return;
   prefs.setSetting('room', +b.dataset.v); renderGeneral();
   for (const v of chartViews()) v.pane.refreshSettings();
 });

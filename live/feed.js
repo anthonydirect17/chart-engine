@@ -25,7 +25,7 @@
  * 1.14.0: a load keeps each trade's Time and Sales category (q, ChartBridge 0.3.8) with it, so a tape that joins later or
  * a replay colours its trades as one there from the start; a "settlement" (0.3.7) is kept in the line's hello.
  * Seams for the next build (E2b): order messages (trading, orders, order, position, reject) are passed to every panel
- * of the line as ChartBridge sends them, and a stand-in drops anything a panel sends but subscribe and ping.
+ * of the line as ChartBridge sends them, and a stand-in drops anything a panel sends but subscribe, ping and (1.15.0) htf.
  *
  * No DOM; it also loads in Node for test/feed.test.js (pass `WebSocket` and, if wanted, `now` in the options).
  */
@@ -40,9 +40,17 @@ const LIVE_MAX = 1000000;          // live trades a load keeps for a panel that 
 const SLICE = 5000;                // live trades replayed per task
 const BACKFILL_MAX = 8000000;      // backfill trades a load keeps for a panel that joins later (the chart's own hard cap)
 const LOAD_TYPES = ['history', 'ticks', 'ready', 'profile'];
-const NO_TICKS = { tickHours: 0, window: false, tickFrom: null };   // what a panel that asked for no ticks is told
-const SENDS = ['subscribe', 'ping'];
+const NO_TICKS = { tickHours: 0, window: false, tickFrom: null };   // what a panel that asked for no ticks is told (and the load's days, 1.15.0)
+const SENDS = ['subscribe', 'ping', 'htf'];         // 1.15.0: htf (ChartBridge 0.3.7) asks for 4h, 1D or 1W bars: read only
 
+/** An htf request (1.15.0) rebuilt as exactly { type, root, tf, id } (id left out when there is none), or null when it is
+    not one ChartBridge would take (it refuses any other key or shape). */
+function htfOf(m) {
+  if (!m || typeof m.root !== 'string' || !['4h', '1D', '1W'].includes(m.tf)) return null;
+  const out = { type: 'htf', root: m.root, tf: m.tf };
+  if (Number.isInteger(m.id) && m.id >= 0 && m.id < 1e15) out.id = m.id;
+  return out;
+}
 /** What a subscribe asks for, with ChartBridge's defaults for anything left out (days 5, tickHours 8). */
 function needOf(m) {
   const days = Number.isFinite(+m.days) && m.days !== null && m.days !== '' ? Math.max(0, +m.days) : 5;
@@ -226,7 +234,7 @@ function create(options) {
   const wantsTicks = V => !!V.need && V.need.tickHours > 0;
   /* A load message as one panel gets it: its own subscribe id, and what the load holds for it (ChartLive.mount adopts it). */
   function copyFor(V, load, m) {
-    const c = Object.assign({}, m, { sub: V.sub, load: wantsTicks(V) ? load.info : NO_TICKS });
+    const c = Object.assign({}, m, { sub: V.sub, load: wantsTicks(V) ? load.info : Object.assign({ days: load.info.days }, NO_TICKS) });
     if (m.type === 'ready') c.readyAt = load.readyAt;
     return c;
   }
@@ -257,7 +265,7 @@ function create(options) {
     if (cur) for (const V of L.clients) if (V.load === cur && V.need) need = merge(need, V.need);
     const sub = L.useSub ? ++subSeq : null, at = now();
     const load = { sub, need, msgs: [], ready: false, readyAt: 0, live: new LiveLog(), bf: new LiveLog(BACKFILL_MAX), late: [],
-      info: { tickHours: need.tickHours, window: L.windowed && need.tickHours > 0, tickFrom: need.tickHours > 0 ? at - need.tickHours * 3600000 : null } };
+      info: { tickHours: need.tickHours, window: L.windowed && need.tickHours > 0, tickFrom: need.tickHours > 0 ? at - need.tickHours * 3600000 : null, days: need.days } };
     L.load = load;
     const msg = { type: 'subscribe', root: L.root, days: need.days, tickHours: need.tickHours };
     if (sub !== null) msg.sub = sub;
@@ -309,7 +317,9 @@ function create(options) {
         let m = data;
         if (typeof data === 'string') { try { m = JSON.parse(data); } catch (e) { return; } }
         if (!m || !SENDS.includes(m.type)) return;                              // read only: nothing else leaves a panel
-        if (m.type === 'ping') { const L = V.line; if (L && L.ws && L.state === 'open') { try { L.ws.send(JSON.stringify(m)); } catch (e) { /* closing */ } } return; }
+        if (m.type === 'htf') m = htfOf(m);                                        // only its own keys (ChartBridge refuses any other)
+        if (!m) return;
+        if (m.type === 'ping' || m.type === 'htf') { const L = V.line; if (L && L.ws && L.state === 'open') { try { L.ws.send(JSON.stringify(m)); } catch (e) { /* closing */ } } return; }
         subscribe(V, m);
       },
       close() {
@@ -384,5 +394,5 @@ function create(options) {
   };
 }
 
-return { create, needOf, merge, covers, LIVE_MAX, SLICE };
+return { create, needOf, merge, covers, htfOf, LIVE_MAX, SLICE };
 });

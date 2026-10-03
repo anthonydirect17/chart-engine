@@ -110,6 +110,11 @@
 //   ("htfBar" at most once a second), and "weekProfile" with the last 5 sessions' volume at price of the sample minutes
 //   (one listed "missing", as a session ChartBridge has no table for). With --test-controls, POST
 //   /test/settlement?root=MNQ&p=21456.25&date=2026-09-28 sends a "settlement" message to every page (p=null: none known).
+// --deep-history (chart 1.15.0): 62 days of sample minutes instead of a week, and a subscribe gets the `days` it asks for
+//   (calendar days back from the last minute; 5 when left out), as ChartBridge does, so a 1 hour chart's 30 days can be
+//   loaded and timed. With --test-controls, GET /test/received lists each subscribe's days too.
+// --data-037 with --test-controls: POST /test/htf?fail=<why> answers every later htf request with no bars and that error
+//   (as ChartBridge does after NinjaTrader's 15 s timeout or a refusal); /test/htf?fail= answers them again.
 // --scene=signals (chart signals, G1c): once a page is live on MNQ, MNQ's random walk stops and a scripted tape replays
 //   instead (test/signals-scene.mjs: sample trades with sides that read like a real stretch of regular hours, with a few
 //   large prints), --scene-warp=36 times faster than the clock (each trade stamped on the scene's own clock from the
@@ -139,6 +144,8 @@ const SCENE = flagValue('scene'), SCENE_WARP = +flagValue('scene-warp') || 36, S
 const PIN_OFF = !!flag('pin-off');
 const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
 const DATA_037 = !!flag('data-037');
+const DEEP = !!flag('deep-history');
+let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
@@ -223,6 +230,7 @@ function makeData(rootSym) {
   let tue = Math.floor(liveMin / 86400);
   while (new Date(tue * 86400000).getUTCDay() !== 2 || tue * 86400 + 37860 < liveMin) tue++;
   const feed = CALENDAR ? SampleFeed.create({ seed: 20260929 + rootSym.length, start: (tue - 8) * 86400 + 18 * 3600, live: tue * 86400 + 37860 })
+    : DEEP ? SampleFeed.create({ seed: 20260929 + rootSym.length, start: Date.UTC(2026, 6, 28, 18, 0) / 1000 })   // --deep-history: from Tue Jul 28 18:00 ET
     : SampleFeed.create({ seed: 20260929 + rootSym.length });
   const k = INSTR[rootSym].scale;
   const base = CALENDAR ? feed.base.filter(b => b.t <= liveMin) : feed.base.slice(0, -1);
@@ -423,6 +431,8 @@ function onMessage(c, text) {
   let m; try { m = JSON.parse(text); } catch (e) { return; }
   const type = m && typeof m.type === 'string' ? m.type : '?';
   received.types[type] = (received.types[type] || 0) + 1;
+  if (type === 'subscribe') { (received.subscribes = received.subscribes || []).push({ root: m.root, days: m.days, tickHours: m.tickHours, at: Date.now() }); if (received.subscribes.length > 200) received.subscribes.shift(); }
+  if (type === 'flatten' || type === 'cancel') { (received.orderActions = received.orderActions || []).push({ type, root: m.root, id: m.id, at: Date.now() }); if (received.orderActions.length > 200) received.orderActions.shift(); }
   if (V1) { if (m.type === 'subscribe') subscribe(c, m); return; }       // 0.2 ignores everything else
   if (m.type === 'subscribe') subscribe(c, m);
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
@@ -484,6 +494,7 @@ function onDataRequest(c, m, text) {
     if (m.type === 'htf') return send(c, { type: 'htf', root: m.root, tf: m.tf, id, name: null, bars: [], error: 'ChartBridge does not serve ' + m.root });
     return send(c, { type: 'weekProfile', root: m.root, id, tick: null, sessions: [], rows: [], error: 'ChartBridge does not serve ' + m.root });
   }
+  if (m.type === 'htf' && htfFail) return send(c, { type: 'htf', root: m.root, tf: m.tf, id, name: INSTR[m.root].name, bars: [], error: htfFail });
   if (m.type === 'htf') {
     const bars = htfBars(m.root, m.tf);
     c.htf = c.htf || new Map();
@@ -523,7 +534,8 @@ function subscribe(c, m) {
   c.root = r; c.ready = false;
   if (LIVE_FIRST) return subscribeTape(c, m, r);
   const seq = c.seq = (c.seq || 0) + 1;
-  const bars = data[r];
+  let bars = data[r];
+  if (DEEP) { const days = Number.isFinite(+m.days) && m.days !== null ? Math.min(60, Math.max(0, +m.days)) : 5, from = bars[bars.length - 1].t - days * 86400; bars = bars.filter(b => b.t >= from); }
   for (let i = 0; i < bars.length; i += 4000) {
     const chunk = bars.slice(i, i + 4000).map(b => [b.t, b.o, b.h, b.l, b.c, b.v]);
     send(c, { type: 'history', root: r, name: INSTR[r].name, barSeconds: 60, bars: chunk, done: i + 4000 >= bars.length });
@@ -685,6 +697,7 @@ const server = http.createServer((req, res) => {
         positions: Object.fromEntries(desk.positions) }));
     }
     else if (p === '/test/status') { for (const c of clients) send(c, { type: 'status', level: q.get('level') || 'error', text: q.get('text') || '' }); }
+    else if (p === '/test/htf' && DATA_037) htfFail = q.get('fail') || '';
     else if (p === '/test/settlement' && DATA_037) {
       settlement[r] = q.get('p') === 'null' ? null : +q.get('p'); if (q.get('date')) settlementDate[r] = q.get('date');
       for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
