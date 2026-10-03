@@ -1,0 +1,112 @@
+/* Markup Studio page (live/markup.html). The charts inside are styled by live.css; this is the page around them.
+   Dark only, the live pages' house style: purple accent, green and red only for trade sides. */
+:root {
+  color-scheme: dark;
+  --ms-bg: #06080C; --ms-panel: #0B0F15; --ms-line: #18212C; --ms-line2: #2A3645; --ms-field: #0F151D; --ms-row: #121922;
+  --ms-text: #E6EDF5; --ms-text2: #9AA8B8; --ms-muted: #7F8C9C;
+  --ms-accent: #7B5CFF; --ms-accent-deep: #2A1F4D; --ms-soft: #D8CCFF;
+  --ms-buy: #3DDC97; --ms-sell: #FF5C7A; --ms-warn: #FFC266; --ms-crimson: #C8102E;
+  --ms-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ms-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--ms-bg); color: var(--ms-text); font: 13px/1.4 var(--ms-sans); display: flex; flex-direction: column; overflow: hidden; }
+.dim { color: var(--ms-muted); }
+kbd { font: 500 10px var(--ms-mono); color: var(--ms-text2); border: 1px solid var(--ms-line2); border-radius: 3px; padding: 0 3px; margin-left: 2px; }
+
+.ms-top { display: flex; align-items: center; gap: 16px; padding: 6px 12px; border-bottom: 1px solid var(--ms-line); background: var(--ms-panel); flex: none; min-height: 34px; }
+.ms-brand { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ms-brand b { font-weight: 600; }
+.ms-mark { width: 4px; height: 16px; background: var(--ms-crimson); border-radius: 1px; }
+.ms-sub { color: var(--ms-muted); font-size: 12px; }
+.ms-tabs { display: flex; gap: 2px; background: var(--ms-field); border: 1px solid var(--ms-line2); border-radius: 6px; padding: 2px; }
+.ms-tabs button { background: none; border: 0; color: var(--ms-text2); font: 500 12px var(--ms-sans); padding: 3px 12px; border-radius: 4px; cursor: pointer; }
+.ms-tabs button.on { background: var(--ms-accent-deep); color: var(--ms-soft); }
+.ms-clock { font: 500 14px var(--ms-mono); display: flex; gap: 8px; align-items: baseline; }
+.ms-et { color: var(--ms-muted); font-size: 11px; }
+#msPlay { color: var(--ms-soft); font-size: 11px; }
+.ms-status.warn { color: var(--ms-warn); }
+.ms-tabs button:disabled { opacity: .4; cursor: not-allowed; }
+.ms-status { margin-left: auto; color: var(--ms-text2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ms-main { flex: 1; min-height: 0; display: flex; }
+.ms-charts { flex: 1; min-width: 0; display: flex; gap: 6px; padding: 6px; }
+.ms-pane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--ms-line); border-radius: 8px; overflow: hidden; background: #080B10; }
+.ms-pane-head { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-bottom: 1px solid var(--ms-line); min-height: 28px; }
+.ms-pane-name { font: 600 11px var(--ms-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ms-muted); white-space: nowrap; }
+.ms-pane-tools.chart-live { height: auto; min-height: 0; display: flex; flex-direction: row; flex-wrap: nowrap; padding: 0; border: 0; align-items: center; gap: 6px; flex: 1; min-width: 0; background: none; overflow: visible; position: relative; }
+.ms-chart { flex: 1; min-height: 0; position: relative; }
+.ms-chart .chart-live { min-height: 0; }
+.ms-overlay { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; }
+.ms-overlay.armed { pointer-events: auto; cursor: crosshair; }
+
+.ms-panel { width: 300px; flex: none; overflow-y: auto; border-left: 1px solid var(--ms-line); background: var(--ms-panel); padding: 8px 10px 16px; box-sizing: border-box; }
+.ms-sec { border-bottom: 1px solid var(--ms-line); padding: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.ms-sec[hidden] { display: none; }
+.ms-h { font: 600 11px var(--ms-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ms-text2); margin-top: 4px; }
+.ms-h .dim { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.ms-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ms-row[hidden] { display: none; }
+.ms-line { font: 12px var(--ms-mono); }
+.ms-btn { background: var(--ms-row); color: var(--ms-text); border: 1px solid var(--ms-line2); border-radius: 5px; padding: 5px 10px; font: 500 12px var(--ms-sans); cursor: pointer; }
+.ms-btn:hover:not(:disabled) { border-color: var(--ms-accent); }
+.ms-btn:disabled { opacity: .45; cursor: default; }
+.ms-btn.sm { padding: 3px 8px; }
+.ms-btn.primary { background: var(--ms-accent); border-color: var(--ms-accent); color: #fff; }
+.ms-btn.on { background: var(--ms-accent-deep); border-color: var(--ms-accent); color: var(--ms-soft); }
+input, select, textarea { background: var(--ms-field); color: var(--ms-text); border: 1px solid var(--ms-line2); border-radius: 5px; padding: 4px 6px; font: 12px var(--ms-sans); }
+textarea { resize: vertical; width: 100%; box-sizing: border-box; }
+#chipNew { flex: 1; min-width: 0; }
+select { max-width: 150px; }
+
+.ms-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.ms-seg.two { grid-template-columns: 1fr 1fr; }
+.ms-seg input { position: absolute; opacity: 0; pointer-events: none; }
+.ms-seg span { display: block; text-align: center; padding: 5px 2px; border: 1px solid var(--ms-line2); border-radius: 5px; background: var(--ms-row); font: 600 11px var(--ms-sans); cursor: pointer; }
+.ms-seg input:checked + span { background: var(--ms-accent-deep); border-color: var(--ms-accent); color: var(--ms-soft); }
+.ms-seg input:focus-visible + span { outline: 2px solid var(--ms-accent); }
+#dirSeg input[value=LONG]:checked + span { border-color: var(--ms-buy); color: var(--ms-buy); background: #0E2A1F; }
+#dirSeg input[value=SHORT]:checked + span { border-color: var(--ms-sell); color: var(--ms-sell); background: #2A0F17; }
+
+.ms-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ms-chip { background: var(--ms-row); border: 1px solid var(--ms-line2); color: var(--ms-text2); border-radius: 11px; padding: 2px 8px; font: 11px var(--ms-sans); cursor: pointer; }
+.ms-chip.on { background: var(--ms-accent-deep); border-color: var(--ms-accent); color: var(--ms-soft); }
+.ms-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.ms-tools .ms-btn { padding: 2px 7px; font-size: 11px; }
+.ms-marks, .ms-dis { list-style: none; margin: 0; padding: 0; font: 11px var(--ms-mono); display: flex; flex-direction: column; gap: 2px; }
+.ms-marks li { display: flex; justify-content: space-between; gap: 6px; }
+.ms-marks button { background: none; border: 0; color: var(--ms-muted); cursor: pointer; padding: 0 4px; }
+.ms-dis button { background: none; border: 0; color: var(--ms-soft); font: inherit; cursor: pointer; padding: 0; text-align: left; }
+.ms-msg { font-size: 12px; min-height: 16px; color: var(--ms-text2); }
+.ms-msg.err { color: var(--ms-warn); }
+.ms-table { border-collapse: collapse; font: 11px var(--ms-mono); width: 100%; }
+.ms-table td { padding: 2px 0; border-bottom: 1px solid var(--ms-line); vertical-align: top; }
+.ms-table td:last-child { text-align: right; color: var(--ms-text); padding-left: 8px; }
+.ms-table td:first-child { color: var(--ms-text2); }
+.verdict { font: 600 13px var(--ms-mono); }
+.verdict.take { color: var(--ms-soft); }
+
+.ms-panel.bot { width: 380px; }
+.ms-charts { position: relative; }
+.ms-log { max-height: 180px; overflow-y: auto; }
+.ms-log li { color: var(--ms-text2); }
+.ms-log b { color: var(--ms-text); font-weight: 500; margin-right: 6px; }
+.ms-grid td, .ms-grid th { padding: 2px 4px; border-bottom: 1px solid var(--ms-line); text-align: right; white-space: nowrap; }
+.ms-grid th { color: var(--ms-muted); font-weight: 500; }
+.ms-grid td:first-child, .ms-grid th:first-child { text-align: left; }
+.ms-table.ms-grid td:last-child { padding-left: 4px; }
+.ms-grid .n { color: var(--ms-muted); font-size: 10px; margin-left: 3px; }
+.ms-panel .ms-grid { display: block; overflow-x: auto; font-size: 10.5px; }
+.ms-panel .ms-grid td, .ms-panel .ms-grid th { padding: 2px 3px; }
+.ms-grid .win { color: var(--ms-buy); }
+.ms-grid .loss { color: var(--ms-sell); }
+.ms-summary { position: absolute; inset: 12px; z-index: 20; background: var(--ms-panel); border: 1px solid var(--ms-line2); border-radius: 8px;
+  padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.ms-summary[hidden] { display: none; }
+.ms-summary .ms-row .ms-btn { margin-left: auto; }
+.ms-summary .ms-grid { width: auto; }
+
+@media (max-width: 1100px) {
+  .ms-panel { width: 260px; }
+  .ms-sub { display: none; }
+}

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
+
+- **Markup Studio** (`tools/markup_studio.py`, `live/markup.html`): grade NQ liquidity sweeps blind on the chart's own Range 40
+  and 1 minute charts on a replay clock, with reason chips, role marks and spans, a machine read hidden until the grade is
+  saved, rule draft v0 with a running agreement score, and a CSV export. Read only, port 8790, the holdout (2026-04-01 on)
+  refused everywhere. No change to the live pages, the engine or `nt8/`. See docs/MARKUP_STUDIO.md.
+- Markup Studio: the history starts with the prior kept day's minutes, so the charts draw PDH, PDL, the prior close and the
+  prior day's value area (Anthony 2026-10-03); chip "stop limit on failed candle break".
+- Markup Studio: a **Bot tab** (`--bot=PATH`, a module speaking BOT_API 1) to watch a bot trade a bot day on the replay
+  clock and run it over every bot day with a summary and CSV/JSON files; days split once into bot and grading days
+  (`bot_split_v1.json`, seed 7), the blind queue on grading days only. The Studio holds no trading rule.
+
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 
 Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The 4h, 1D and
