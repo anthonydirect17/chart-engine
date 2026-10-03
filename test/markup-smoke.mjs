@@ -379,6 +379,16 @@ try {
   const ex = await until(() => bot.page.evaluate(() => document.getElementById('botExportMsg').textContent));
   check(!!ex && ex.includes(path.join('botruns', stamp)), 'Export says where the files are (' + ex + ')');
   await bot.page.close();
+  // a screen above 100% scaling (the laptop, 125%): each overlay canvas is exactly its chart's size, not its pixel size
+  const hi = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1.25 });
+  await hi.goto(`http://localhost:${PORT}/live/markup.html`);
+  const nov = await until(() => hi.evaluate(() => document.querySelectorAll('canvas.ms-overlay').length >= 2 && document.querySelectorAll('canvas.ms-overlay').length), 15000);
+  await sleep(800);
+  const off = await hi.evaluate(() => [...document.querySelectorAll('canvas.ms-overlay')].map(c => {
+    const r = c.getBoundingClientRect(), p = c.parentElement.getBoundingClientRect(); return Math.max(Math.abs(r.width - p.width), Math.abs(r.height - p.height));
+  }));
+  check(!!nov && off.length >= 2 && off.every(d => d < 1.5), 'at 125% scaling each overlay covers exactly its chart (off by ' + off.map(d => d.toFixed(1)).join(', ') + ' px)');
+  await hi.close();
 
   console.log('7. mutation proof: a bot view that leaks one future event must fail check 6');
   const csrc = fs.readFileSync(path.join(root, 'tools', 'markup_core.py'), 'utf8');
