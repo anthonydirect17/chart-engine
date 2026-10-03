@@ -469,7 +469,8 @@ def last_cross(day: Day, level: float, tick=TICK):
     return int(cross[-1])
 
 
-def machine_read(day: Day, clock_utc: int, level: float, cross_utc: int | None = None, tick=TICK, exclusive=False):
+def machine_read(day: Day, clock_utc: int, level: float, cross_utc: int | None = None, tick=TICK, exclusive=False,
+                 direction: str | None = None):
     """Bot-mechanics numbers for one level at the clock. `day` must already be cut at the clock (the server does it);
     the function also refuses any tick after clock_utc on its own (and, exclusive, one exactly at it, as blind mode
     does). No outcome is computed."""
@@ -480,12 +481,21 @@ def machine_read(day: Day, clock_utc: int, level: float, cross_utc: int | None =
         i = last_cross(day, level, tick)
     else:
         i = int(np.searchsorted(day.utc, cross_utc, 'left'))
+        if direction in ('long', 'short'):
+            # Several trades can share the cross's millisecond: step to the first one actually beyond the level on the
+            # candidate's side (a long is a sweep DOWN through the level, a short a sweep UP), never trusting tick order
+            # inside the millisecond to say which side the sweep was on.
+            below = direction == 'long'
+            while i < n and int(day.utc[i]) <= cross_utc and not (day.px[i] < level if below else day.px[i] > level):
+                i += 1
+            if i < n and int(day.utc[i]) > cross_utc:
+                i = int(np.searchsorted(day.utc, cross_utc, 'left'))
         if i >= n:
             i = None
     if i is None or i <= 0:
         return {'ok': False, 'why': 'no cross of this level at or before the clock'}
     tc = int(day.utc[i])
-    up = bool(day.px[i] > level)
+    up = bool(day.px[i] > level) if direction not in ('long', 'short') else direction == 'short'
     into = 1 if up else -1
     sgn = 1.0 if up else -1.0
     quotes = day.has_quotes

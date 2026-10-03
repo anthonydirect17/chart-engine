@@ -739,3 +739,17 @@ class Review2(unittest.TestCase):
         c = {'date': '2025-07-09', 'level_type': 'PDH', 'reclaim_wall_ms': 1752069366000 + 60_000, 'reclaim_utc_ms': 0}
         self.assertTrue(core.is_seen(c, seen))
 
+    def test_machine_read_side_with_trades_sharing_the_cross_millisecond(self):
+        """At HOME: a long (down-sweep) candidate whose cross millisecond also holds trades above the level was read as
+        'up through the level'. With the candidate's direction the read takes the side from the candidate."""
+        rows = [(W(10, 0) + k * 1000, 101.0, 2, '') for k in range(300)]          # above the level 100
+        t = W(10, 5)
+        rows += [(t, 100.25, 3, ''), (t, 99.0, 5, ''), (t + 2000, 98.75, 4, ''), (t + 9000, 100.5, 2, '')]
+        rows += [(t + 9000 + k * 1000, 100.75, 1, '') for k in range(1, 50)]
+        day = tape(rows)
+        clock = day.utc[-1] + 1
+        mr = core.machine_read(day, int(clock), 100.0, int(day.utc[300]), direction='long')
+        self.assertTrue(mr['ok'])
+        self.assertIn('down', mr['sweep'])
+        self.assertEqual(mr['depth_points'], 1.25)
+

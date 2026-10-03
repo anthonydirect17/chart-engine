@@ -443,7 +443,8 @@ class Studio:
                 cross = cross if cross is not None else cross2
             if lv is None:
                 return {'ok': False, 'why': 'mark a Level (or open a candidate) to read it'}
-            return core.machine_read(self.vis(), self.clock, float(lv), cross, exclusive=self.exclusive)
+            dirn = self.cand.get('dir') if self.mode == 'blind' and self.cand and cross == self.cand.get('cross_utc_ms') else None
+            return core.machine_read(self.vis(), self.clock, float(lv), cross, exclusive=self.exclusive, direction=dirn)
 
     def _level(self):
         """The level in force and its cross: the open candidate's, the one set in free mode, or else (free mode) the day's
@@ -497,7 +498,8 @@ class Studio:
                 elif lm:
                     level = {'type': 'marked', 'price': lm[-1]['price']}
             cross = self.cand['cross_utc_ms'] if self.cand else auto_cross if level is not None and level == self._level()[0] else None
-            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, exclusive=self.exclusive) if level else {'ok': False, 'why': 'no level'}
+            dirn = self.cand.get('dir') if self.cand and cross == self.cand.get('cross_utc_ms') else None
+            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, exclusive=self.exclusive, direction=dirn) if level else {'ok': False, 'why': 'no level'}
             rule = core.load_rule(self.rule_path)
             draft = core.draft_verdict(mr, rule)
             clock_wall = core.utc_to_wall(self.clock)
