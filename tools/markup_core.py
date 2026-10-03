@@ -512,10 +512,14 @@ def machine_read(day: Day, clock_utc: int, level: float, cross_utc: int | None =
 
     windows = [vol_between(tc - (5 - k) * MIN, tc - (4 - k) * MIN) for k in range(5)]
     slope = float(np.polyfit(np.arange(5), np.array(windows, dtype=float), 1)[0])
-    # the probe: from the cross to the first tick back on the original side by a tick, or to the clock
+    # the probe: from the cross to the reclaim, the reclaim defined as the detector does it (find_sweep): the first
+    # tick back on the original side by a tick AFTER the price has gone SWEEP_TICKS through. A wiggle back across the
+    # level before the push through is not the reclaim (at HOME it cut the probe to 0 s and 0.25 points).
     w = day.px[i:]
-    back = w <= level - RECLAIM_TICKS * tick + 1e-9 if up else w >= level + RECLAIM_TICKS * tick - 1e-9
-    r = i + int(np.argmax(back)) if back.any() else None
+    deep = w >= level + SWEEP_TICKS * tick - 1e-9 if up else w <= level - SWEEP_TICKS * tick + 1e-9
+    j = int(np.argmax(deep)) if deep.any() else 0
+    back = w[j:] <= level - RECLAIM_TICKS * tick + 1e-9 if up else w[j:] >= level + RECLAIM_TICKS * tick - 1e-9
+    r = i + j + int(np.argmax(back)) if back.any() else None
     end_utc = int(day.utc[r]) if r is not None else clock_utc
     probe_px = day.px[i:(r + 1 if r is not None else n)]
     depth = float((probe_px.max() - level) if up else (level - probe_px.min()))

@@ -753,3 +753,16 @@ class Review2(unittest.TestCase):
         self.assertIn('down', mr['sweep'])
         self.assertEqual(mr['depth_points'], 1.25)
 
+    def test_probe_runs_to_the_reclaim_after_the_push_not_the_first_wiggle(self):
+        """At HOME: price poked one tick above the level, ticked back under, then pushed 6 ticks through and came back.
+        The probe is cross to the reclaim after the push (depth 1.5, 20 s), not cross to the first wiggle (0.25, 0 s)."""
+        rows = [(W(10, 0) + k * 1000, 99.0, 2, '') for k in range(300)]          # below the level 100
+        t = W(10, 5)
+        rows += [(t, 100.25, 1, ''), (t + 1000, 99.75, 1, ''), (t + 5000, 101.5, 3, ''), (t + 20000, 99.5, 2, '')]
+        rows += [(t + 20000 + k * 1000, 99.25, 1, '') for k in range(1, 40)]
+        day = tape(rows)
+        mr = core.machine_read(day, int(day.utc[-1]) + 1, 100.0, int(day.utc[300]), direction='short')
+        self.assertTrue(mr['ok'])
+        self.assertEqual(mr['depth_points'], 1.5)
+        self.assertEqual(mr['probe_seconds'] if 'probe_seconds' in mr else mr.get('probe_time_s'), 20)
+
