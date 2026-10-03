@@ -86,6 +86,26 @@ select { max-width: 150px; }
 .verdict { font: 600 13px var(--ms-mono); }
 .verdict.take { color: var(--ms-soft); }
 
+.ms-panel.bot { width: 380px; }
+.ms-charts { position: relative; }
+.ms-log { max-height: 180px; overflow-y: auto; }
+.ms-log li { color: var(--ms-text2); }
+.ms-log b { color: var(--ms-text); font-weight: 500; margin-right: 6px; }
+.ms-grid td, .ms-grid th { padding: 2px 4px; border-bottom: 1px solid var(--ms-line); text-align: right; white-space: nowrap; }
+.ms-grid th { color: var(--ms-muted); font-weight: 500; }
+.ms-grid td:first-child, .ms-grid th:first-child { text-align: left; }
+.ms-table.ms-grid td:last-child { padding-left: 4px; }
+.ms-grid .n { color: var(--ms-muted); font-size: 10px; margin-left: 3px; }
+.ms-panel .ms-grid { display: block; overflow-x: auto; font-size: 10.5px; }
+.ms-panel .ms-grid td, .ms-panel .ms-grid th { padding: 2px 3px; }
+.ms-grid .win { color: var(--ms-buy); }
+.ms-grid .loss { color: var(--ms-sell); }
+.ms-summary { position: absolute; inset: 12px; z-index: 20; background: var(--ms-panel); border: 1px solid var(--ms-line2); border-radius: 8px;
+  padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.ms-summary[hidden] { display: none; }
+.ms-summary .ms-row .ms-btn { margin-left: auto; }
+.ms-summary .ms-grid { width: auto; }
+
 @media (max-width: 1100px) {
   .ms-panel { width: 260px; }
   .ms-sub { display: none; }

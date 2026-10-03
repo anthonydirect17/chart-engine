@@ -4,6 +4,9 @@
 
 Days (each a session from 18:00 the evening before to 16:59:55, one trade every 5 seconds, so a trade sits exactly on
 every minute boundary):
+  2026-03-05  quotes, a quiet day for the Bot tab (the seed 7 split makes it the bot's quote day and 2026-03-10 the
+              grading one): RTH inside the overnight range, so no candidate; flat at 21000 to 10:00, up 0.25 a trade to
+              21012 at 10:04, flat, up to 21013.25 at 11:00:25, down to 21005 at 11:03:10, flat (made up for the test bot)
   2026-03-09  a slow wave, no quotes; its RTH high is PDH for the next day
   2026-03-10  quotes; one clean PDH sweep: cross at 10:05:10, 8 ticks through at 10:05:30, reclaim at 10:05:50,
               the 10:05 candle closes back below (cut 10:06:00); the volume into the level dries up before the cross
@@ -76,8 +79,29 @@ def day_b(P, d='2026-03-10'):
     return t, px, vol, bid, ask
 
 
+def day_c(d='2026-03-05', B=21000.0):
+    t = session_times(d)
+    s = core.tod_s(t)
+    px = np.empty(t.size)
+    for i, x in enumerate(s):
+        if x >= 18 * 3600 or x < 9 * 3600 + 30 * 60:                      # overnight: B-30 .. B+30
+            p = B + 30 * math.sin(i / 400.0)
+        elif x < 10 * 3600:
+            p = B + 0.25 * (i % 2)
+        elif x < 11 * 3600:                                                # up 0.25 a trade from 10:00:00 to B+12
+            p = B + min(12.0, 0.25 * ((x - 10 * 3600) // 5))
+        else:                                                              # up to B+13.25 at 11:00:25, then down to B+5
+            k = (x - 11 * 3600) // 5
+            p = B + 12 + 0.25 * k if k <= 5 else max(B + 5, B + 13.25 - 0.25 * (k - 5))
+        px[i] = q(p)
+    up = np.r_[True, np.diff(px) >= 0]
+    return t, px, np.ones(t.size, dtype=np.int64), np.where(up, px - TICK, px), np.where(up, px, px + TICK)
+
+
 def write(out):
     os.makedirs(out, exist_ok=True)
+    tc, pc, vc, bc, ac = day_c()
+    np.savez(os.path.join(out, 'NQ_2026-03-05.npz'), wall_ms=tc, price=pc, volume=vc, bid=bc, ask=ac)
     ta, pa, va = day_a()
     np.savez(os.path.join(out, 'NQ_2026-03-09.npz'), wall_ms=ta, price=pa, volume=va)
     s = core.tod_s(ta)

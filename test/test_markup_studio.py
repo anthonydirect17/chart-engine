@@ -196,7 +196,7 @@ class LoaderAdapter(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_days_from_the_index_in_sample(self):
-        self.assertEqual(self.src.days(), ['2026-03-09', '2026-03-10'])
+        self.assertEqual(self.src.days(), ['2026-03-05', '2026-03-09', '2026-03-10'])
 
     def test_load_session(self):
         day = self.src.load('2026-03-10')
@@ -232,7 +232,7 @@ class LoaderAdapter(unittest.TestCase):
         lines = []
         self.assertEqual(ms.check(self.src, 'NQ', out=lines.append), 0)
         text = '\\n'.join(lines)
-        self.assertIn('days found (in sample, before 2026-04-01): 2, 2026-03-09 to 2026-03-10', text)
+        self.assertIn('days found (in sample, before 2026-04-01): 3, 2026-03-05 to 2026-03-10', text)
         self.assertIn('chosen day: 2026-03-10', text)
         self.assertIn('first tick: 2026-03-09 18:00:00.000 New York = 2026-03-09 22:00:00.000 UTC', text)
         self.assertIn('quotes: bid and ask', text)
@@ -453,7 +453,7 @@ class StudioFlow(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_holdout_at_every_entry_point(self):
-        self.assertEqual(self.src.days(), ['2026-03-09', '2026-03-10'])
+        self.assertEqual(self.src.days(), ['2026-03-05', '2026-03-09', '2026-03-10'])
         with self.assertRaises(core.HoldoutError):
             self.src.load('2026-04-02')
         with self.assertRaises(core.HoldoutError):
@@ -818,9 +818,9 @@ class PriorDay(unittest.TestCase):
         self.assertEqual(max(b[0] for b in bars), cut - 60)
 
     def test_no_prior_day_on_the_first_day(self):
-        self.st.free_load('2026-03-09', '10:00')
+        self.st.free_load('2026-03-05', '10:00')
         self.assertEqual(self.st.prior, [])
-        self.assertTrue(all(b[0] >= core.wall_of('2026-03-08', 18) // 1000 for b in self.history()))
+        self.assertTrue(all(b[0] >= core.wall_of('2026-03-04', 18) // 1000 for b in self.history()))
 
     def test_a_day_without_a_morning_is_passed_over(self):
         st = self.st

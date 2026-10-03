@@ -749,3 +749,111 @@ DEFAULT_CHIPS = ['weak volume into level', 'strong volume into level', 'volume d
                  'slow grind into level', 'too deep', 'shallow probe', 'clean reclaim close', 'wick reclaim',
                  'no confirmation yet', 'confirmation candle', 'near another level', 'trend day', 'chop', 'time of day',
                  'stop limit on failed candle break']
+
+
+# ------------------------------------------------------------------------------------------------ the Bot tab (BOT_API v1)
+# The Studio knows no trading rule: a bot module (scratchpad contract BOT_API v1) returns events, orders and trades for a
+# whole day, and the functions below only split the days, cut what the bot returned at the replay clock and sum trades.
+SPLIT_SEED = 7
+COSTS = {'NQ': (20.0, 4.50), 'MNQ': (2.0, 1.00)}          # $ per point, $ per round trip (1 contract)
+
+
+def bot_split(quote_days, last_only_days, seed=SPLIT_SEED) -> dict:
+    """Bot days and grading days: every last-only day goes to the bot; the quote days, sorted and shuffled with the seeded
+    shuffle, give their first ceil(n/2) to the bot and the rest to grading."""
+    q = [x['date'] for x in shuffled([{'date': d, 'cross_utc_ms': 0, 'level_type': ''} for d in sorted(set(quote_days))], seed)]
+    k = (len(q) + 1) // 2
+    return {'version': 1, 'seed': seed, 'bot': sorted(set(last_only_days) | set(q[:k])), 'grading': sorted(q[k:])}
+
+
+EVENT_KEYS = ('t', 'kind', 'text', 'price', 'level')
+ORDER_KEYS = ('id', 'side', 'type', 'role', 'price', 'limit', 't_from', 't_to', 'status')
+TRADE_KEYS = ('id', 'level_type', 'level_price', 'dir', 'entry_t', 'entry', 'stop', 'target', 'target_kind', 'features')
+EXIT_KEYS = ('exit_t', 'exit', 'reason', 'points', 'r')
+
+
+def _pick(d, keys):
+    return {k: d.get(k) for k in keys}
+
+
+def trade_cost(points, contract='NQ'):
+    per_point, rt = COSTS[contract]
+    return float(points) * per_point - rt
+
+
+def bot_view(result, clock_wall, exit_ids=()) -> dict:
+    """NO-FUTURE for the Bot tab: what the page may see of a bot's day at the clock (wall ms). Events with t <= clock; an
+    order only from t_from <= clock, its t_to clipped at the clock and its status only once t_to <= clock; a trade only
+    once entry_t <= clock, each exit only once its exit_t <= clock. Only the contract's fields pass (nothing else the bot
+    returned). Every /api/bot response about a loaded day is built here."""
+    c = int(clock_wall)
+    evs = (result or {}).get('events') or []
+    events = [_pick(e, EVENT_KEYS) for e in evs if e['t'] <= c]
+    orders = []
+    for o in (result or {}).get('orders') or []:
+        if o['t_from'] > c:
+            continue
+        x = _pick(o, ORDER_KEYS)
+        done = o['t_to'] <= c
+        x['t_to'] = min(int(o['t_to']), c)
+        x['status'] = o.get('status') if done else None
+        x['open'] = not done
+        orders.append(x)
+    trades = []
+    for t in (result or {}).get('trades') or []:
+        if t['entry_t'] > c:
+            continue
+        x = _pick(t, TRADE_KEYS)
+        x['exits'] = {k: _pick(v, EXIT_KEYS) for k, v in (t.get('exits') or {}).items() if v['exit_t'] <= c}
+        trades.append(x)
+    net = {}
+    for k in exit_ids:
+        pts = [t['exits'][k]['points'] for t in trades if k in t['exits']]
+        net[k] = {'trades': len(pts), 'points': round(sum(pts), 2), 'nq': round(sum(trade_cost(p) for p in pts), 2),
+                  'mnq': round(sum(trade_cost(p, 'MNQ') for p in pts), 2)}
+    return {'clock_wall_ms': c, 'events': events, 'orders': orders, 'trades': trades, 'net': net}
+
+
+def max_drawdown(pnls):
+    """The largest fall of closed-trade equity from its running peak (equity starts at 0)."""
+    eq = peak = dd = 0.0
+    for p in pnls:
+        eq += p
+        peak = max(peak, eq)
+        dd = max(dd, peak - eq)
+    return dd
+
+
+def bot_stats(rows) -> dict:
+    """rows: closed trades of one variant and one exit id, each {'points', 'r', 'exit_t'}. Costs per round trip, 1 contract."""
+    rows = sorted(rows, key=lambda x: x['exit_t'])
+    n = len(rows)
+    pts = [float(x['points']) for x in rows]
+    nq = [trade_cost(p) for p in pts]
+    mnq = [trade_cost(p, 'MNQ') for p in pts]
+    wins = sum(1 for p in pts if p > 0)
+    won, lost = sum(x for x in nq if x > 0), -sum(x for x in nq if x < 0)
+    rs = [float(x['r']) for x in rows if x.get('r') is not None]
+    r2 = lambda v: None if v is None else round(v, 2)
+    return {'trades': n, 'wins': wins, 'losses': n - wins, 'win_pct': r2(100.0 * wins / n) if n else None,
+            'avg_r': r2(sum(rs) / len(rs)) if rs else None, 'net_points': r2(sum(pts)),
+            'net_nq': r2(sum(nq)), 'net_nq_per_trade': r2(sum(nq) / n) if n else None,
+            'net_mnq': r2(sum(mnq)), 'net_mnq_per_trade': r2(sum(mnq) / n) if n else None,
+            'pf': r2(won / lost) if lost > 0 else None, 'max_dd_nq': r2(max_drawdown(nq)), 'max_dd_mnq': r2(max_drawdown(mnq))}
+
+
+def bot_summary(trades, variants, exit_ids) -> list:
+    """trades: [{'variant': id, 'level_type', 'dir', 'exits': {exit id: {...}}}]. One row per variant x exit id (group
+    'all'), then the same split by level_type and by dir. A trade without a given exit is left out of that exit's rows."""
+    out = []
+    for v in variants:
+        mine = [t for t in trades if t['variant'] == v]
+        groups = [('all', mine)]
+        for key in ('level_type', 'dir'):
+            for val in sorted({str(t.get(key)) for t in mine}):
+                groups.append((f'{key}={val}', [t for t in mine if str(t.get(key)) == val]))
+        for g, ts in groups:
+            for k in exit_ids:
+                rows = [t['exits'][k] for t in ts if k in (t.get('exits') or {})]
+                out.append({'variant': v, 'exit_id': k, 'group': g, **bot_stats(rows)})
+    return out

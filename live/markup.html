@@ -19,6 +19,7 @@
   <div class="ms-tabs" role="tablist">
     <button type="button" role="tab" id="tabBlind" class="on" aria-selected="true">Blind</button>
     <button type="button" role="tab" id="tabFree" aria-selected="false">Free</button>
+    <button type="button" role="tab" id="tabBot" aria-selected="false">Bot</button>
   </div>
   <div class="ms-clock"><span id="msDate" data-dates></span><span id="msClock">--:--:--</span><span class="ms-et">ET</span><span id="msPlay"></span></div>
   <div class="ms-status" id="msStatus"></div>
@@ -27,6 +28,12 @@
   <section class="ms-charts">
     <div class="ms-pane"><div class="ms-pane-head"><span class="ms-pane-name">Range 40</span><div class="chart-live ms-pane-tools" id="toolsRange"></div></div><div class="ms-chart" id="paneRange"></div></div>
     <div class="ms-pane"><div class="ms-pane-head"><span class="ms-pane-name">1 minute</span><div class="chart-live ms-pane-tools" id="tools1m"></div></div><div class="ms-chart" id="pane1m"></div></div>
+    <div class="ms-summary" id="botSummary" hidden>
+      <div class="ms-row"><span class="ms-h">Run all: every bot day, every variant</span><span class="dim" id="botSumNote"></span><button type="button" class="ms-btn sm" id="btnSumClose">Close</button></div>
+      <table class="ms-table ms-grid" id="botSumMain"></table>
+      <div class="ms-h">By level type and by side</div>
+      <table class="ms-table ms-grid" id="botSumBy"></table>
+    </div>
   </section>
   <aside class="ms-panel" id="msPanel">
     <section class="ms-sec" id="secBlind">
@@ -40,6 +47,17 @@
         <input id="freeTime" value="09:30" size="5" aria-label="Time (ET)">
         <button type="button" class="ms-btn" id="btnLoad">Load</button>
       </div>
+    </section>
+    <section class="ms-sec" id="secBot" data-dates hidden>
+      <div class="ms-line dim" id="botMsg"></div>
+      <div class="ms-row">
+        <select id="botDay" aria-label="Bot day"></select>
+        <select id="botVariant" aria-label="Variant"></select>
+        <button type="button" class="ms-btn" id="btnBotLoad">Load</button>
+      </div>
+      <div class="ms-line" id="botHead"></div>
+      <div class="ms-line dim" id="botProg"></div>
+      <div class="ms-msg" id="botErr" role="status"></div>
     </section>
     <section class="ms-sec" id="secClock">
       <div class="ms-row">
@@ -62,6 +80,20 @@
         <button type="button" class="ms-btn" id="btnJump30">Jump 30 min</button>
         <button type="button" class="ms-btn sm" id="btnPause2">Pause</button>
       </div>
+    </section>
+    <section class="ms-sec" id="secBotOut" hidden>
+      <div class="ms-h">Events <span class="dim">(newest first, up to the clock)</span></div>
+      <ul class="ms-dis ms-log" id="botEvents"></ul>
+      <div class="ms-h">Trades</div>
+      <table class="ms-table ms-grid" id="botTrades"></table>
+      <div class="ms-h">Net today by exit <span class="dim">(after costs, 1 contract)</span></div>
+      <table class="ms-table" id="botNet"></table>
+      <div class="ms-row">
+        <button type="button" class="ms-btn" id="btnRunAll">Run all bot days</button>
+        <button type="button" class="ms-btn sm" id="btnBotExport">Export</button>
+      </div>
+      <div class="ms-line dim" id="runAllMsg"></div>
+      <div class="ms-msg" id="botExportMsg"></div>
     </section>
     <form class="ms-sec" id="gradeForm" autocomplete="off">
       <div class="ms-h">Setup</div>

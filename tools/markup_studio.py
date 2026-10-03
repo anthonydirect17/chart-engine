@@ -19,6 +19,9 @@ Flags (defaults are the HOME PC's folders):
   --include-last-only                           blind queue also offers last-only days (volume is all 1 there; off by default)
   --check[=YYYY-MM-DD]                          load one in-sample day through the loader, print what the Studio sees, exit
   --source=npz                                  tests: <data>/<SYMBOL>_<YYYY-MM-DD>.npz with wall_ms, price, volume[, bid, ask]
+  --bot=PATH                                    a bot module (.py, BOT_API 1) for the Bot tab; the Studio knows no rule itself
+Days are split once into bot days and grading days (<marks>/bot_split_v1.json, never rewritten): the blind queue offers
+grading days only, the Bot tab bot days only.
 Holdout: any date from 2026-04-01 on is refused everywhere (listing, loading, candidates, free mode).
 Python 3.10+, stdlib + numpy only.
 """
@@ -28,6 +31,8 @@ import base64
 import csv
 import hashlib
 import importlib
+import importlib.util
+import io
 import json
 import math
 import mimetypes
@@ -85,6 +90,18 @@ class NpzSource:
         ask = z['ask'] if 'ask' in z.files else None
         return core.Day(d, z['wall_ms'], z['price'], z['volume'], bid, ask)
 
+    def quote_days(self):
+        """The days whose npz holds 'bid' (read from the archive's file list; no arrays are loaded)."""
+        out = []
+        for d in self.days():
+            try:
+                with np.load(os.path.join(self.folder, f'{self.symbol}_{d}.npz')) as z:
+                    if 'bid' in z.files:
+                        out.append(d)
+            except (OSError, ValueError) as e:
+                log(f'quote check: {d}: {e}')
+        return out
+
 
 class TickReplayError(RuntimeError):
     pass
@@ -139,6 +156,12 @@ class TickReplaySource:
             out.add(d)
         return sorted(out)
 
+    def quote_days(self):
+        """The in-sample days whose sessions_index.csv row says has_quotes yes (no day is loaded)."""
+        days = set(self.days())
+        return sorted({str(r['session_date']).strip()[:10] for r in self.rows()
+                       if r['symbol'].strip().upper() == self.symbol.upper() and _yes(r['has_quotes'])} & days)
+
     def load(self, d):
         d = core.check_date(d)                       # the holdout lock, before the loader runs
         s = self.mod.load_session(self.symbol, d, data_root=self.data_root)
@@ -155,13 +178,83 @@ class TickReplaySource:
         return core.Day(d, wall, np.asarray(t.last, dtype=np.float64), np.asarray(t.vol, dtype=np.int64), bid, ask)
 
 
+# ------------------------------------------------------------------------------------------------ the bot module
+class BotError(Exception):
+    pass
+
+
+BOT_USAGE = 'No bot loaded. Start the Studio with --bot=PATH (a .py file that speaks BOT_API 1) to use this tab.'
+
+
+def load_bot(path):
+    """Import a bot module from a .py file and check it speaks BOT_API 1. Returns {'module', 'name', 'variants',
+    'exit_ids', 'path'}; BotError with a plain message otherwise."""
+    p = os.path.abspath(str(path))
+    base = os.path.basename(p)
+    if not p.endswith('.py') or not os.path.isfile(p):
+        raise BotError(f'no bot file at {p} (give a .py file with --bot=PATH)')
+    try:
+        spec = importlib.util.spec_from_file_location('markup_bot_' + hashlib.sha1(p.encode()).hexdigest()[:8], p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except Exception as e:   # noqa: BLE001 - any import failure is a message in the page
+        raise BotError(f'could not import {base}: {type(e).__name__}: {e}') from e
+    api = getattr(mod, 'BOT_API', None)
+    if api != 1:
+        raise BotError(f'{base} has BOT_API = {api!r}; this Studio speaks BOT_API 1 only')
+    name = getattr(mod, 'NAME', None)
+    if not isinstance(name, str) or not name.strip():
+        raise BotError(f'{base} has no NAME (a short string)')
+    for f in ('variants', 'exit_ids', 'run'):
+        if not callable(getattr(mod, f, None)):
+            raise BotError(f'{base} has no {f}() function')
+    try:
+        variants, exits = mod.variants(), mod.exit_ids()
+    except Exception as e:   # noqa: BLE001
+        raise BotError(f'{base}: variants() or exit_ids() failed: {type(e).__name__}: {e}') from e
+    if not isinstance(variants, list) or not variants or not all(
+            isinstance(v, dict) and v.get('id') and isinstance(v.get('params', {}), dict) for v in variants):
+        raise BotError(f'{base}: variants() must return a non-empty list of {{"id", "label", "params"}}')
+    ids = [str(v['id']) for v in variants]
+    if len(set(ids)) != len(ids):
+        raise BotError(f'{base}: variants() has the same id twice')
+    if not isinstance(exits, list) or not exits or not all(isinstance(x, str) and x for x in exits):
+        raise BotError(f'{base}: exit_ids() must return a non-empty list of strings')
+    variants = [{'id': str(v['id']), 'label': str(v.get('label') or v['id']), 'params': dict(v.get('params') or {})} for v in variants]
+    return {'module': mod, 'name': name.strip(), 'variants': variants, 'exit_ids': list(exits), 'path': p}
+
+
+def check_result(res):
+    """A run() result in BOT_API 1's shape (the times the view filter needs), else BotError."""
+    if not isinstance(res, dict):
+        raise BotError('run() must return a dict with events, orders and trades')
+    try:
+        for e in res.setdefault('events', []):
+            e['t'] = int(e['t'])
+        for o in res.setdefault('orders', []):
+            o['t_from'], o['t_to'] = int(o['t_from']), int(o['t_to'])
+        for t in res.setdefault('trades', []):
+            t['entry_t'] = int(t['entry_t'])
+            for x in (t.get('exits') or {}).values():
+                x['exit_t'] = int(x['exit_t'])
+    except (KeyError, TypeError, ValueError, AttributeError) as e:
+        raise BotError(f'run() result is not in the BOT_API 1 shape: {type(e).__name__}: {e}') from e
+    return json.loads(json.dumps(res))       # a plain JSON copy (refuses what cannot be shown)
+
+
 # ------------------------------------------------------------------------------------------------ the studio
 class Refused(Exception):
     pass
 
 
+class Forbidden(Refused):
+    """Refused with 403: a grading day or a day outside the split asked of a bot endpoint."""
+
+
 class Studio:
-    def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False):
+    split, bot_days, grading_days = None, frozenset(), None     # until load_split() (tests build a bare Studio)
+
+    def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None):
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, symbol
         self.include_last_only = include_last_only     # blind queue: quote days only unless --include-last-only
         self.seen_report = []
@@ -184,6 +277,50 @@ class Studio:
         for r in self.seen_report:
             if r['rows'] and not r['parsed']:
                 log(f'already-seen file {r["path"]}: {r["rows"]} rows but none had a date and a reclaim time; columns: {", ".join(r["columns"])}')
+        self.prior_kept = None
+        self.bot, self.bot_error = None, ''
+        if bot_path:
+            try:
+                self.bot = load_bot(bot_path)
+                log(f'bot: {self.bot["name"]} from {self.bot["path"]}')
+            except BotError as e:
+                self.bot_error = str(e)
+                log('bot not loaded: ' + self.bot_error)
+        self.bot_lock = threading.Lock()
+        self.bot_cache, self.bot_runs, self.bot_key = {}, {}, None    # (date, variant id) -> result / run status
+        self.runall = {'running': False, 'k': 0, 'n': 0, 'error': '', 'folder': '', 'failed': [], 'rows': None}
+        self.load_split()
+
+    # ---------------------------------------------------------------- the day split
+    def load_split(self):
+        """<marks>/bot_split_v1.json: written on the first start that finds days (core.bot_split, seed 7) and only read
+        after that, never rewritten. Days not in it (new data) go to neither list and are logged."""
+        path = os.path.join(self.marks, 'bot_split_v1.json')
+        try:
+            days = self.source.days()
+        except Exception as e:   # noqa: BLE001 - the scan reports a bad source on the page
+            log(f'day split: cannot list the days: {e}')
+            days = None
+        if os.path.exists(path):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    sp = json.load(f)
+                if sp.get('version') != 1 or not isinstance(sp.get('bot'), list) or not isinstance(sp.get('grading'), list):
+                    raise ValueError('not a version 1 split')
+            except (OSError, ValueError, AttributeError) as e:
+                raise ValueError(f'cannot read {path} ({e}); it is never rewritten: fix or move it by hand') from e
+        else:
+            if not days:
+                return                                   # nothing to split yet: written on a start that finds days
+            q = set(self.source.quote_days())
+            sp = core.bot_split(q, [d for d in days if d not in q])
+            core.write_text(path, json.dumps(sp, indent=1))
+            log(f'day split written to {path}: {len(sp["bot"])} bot days, {len(sp["grading"])} grading days')
+        self.split = sp
+        self.bot_days, self.grading_days = frozenset(sp['bot']), frozenset(sp['grading'])
+        other = [d for d in days or () if d not in self.bot_days and d not in self.grading_days]
+        if other:
+            log(f'day split: {len(other)} day(s) not in {os.path.basename(path)} go to neither list: {", ".join(other[:10])}' + (' ...' if len(other) > 10 else ''))
 
     # ---------------------------------------------------------------- candidates
     def start_scan(self, background=True):
@@ -267,6 +404,8 @@ class Studio:
     def _skip(self, c):
         if not self.include_last_only and not c.get('quotes', True):
             return True                                   # blind grading reads volume: quote days only by default
+        if self.grading_days is not None and c['date'] not in self.grading_days:
+            return True                                   # bot days (and days outside the split) are never graded blind
         return c['id'] in self.graded_ids or c['id'] in self.seen_ids or not core.in_sample(c['date'])
 
     def queue(self):
@@ -275,6 +414,7 @@ class Studio:
                 order = self.order
                 self._queue = {'total': len(order), 'excluded_seen': sum(1 for c in order if c['id'] in self.seen_ids),
                                'graded': sum(1 for c in order if c['id'] in self.graded_ids),
+                               'bot_days': sum(1 for c in order if c['date'] in self.bot_days),
                                'remaining': sum(1 for c in order if not self._skip(c))}
             return self._queue
 
@@ -299,27 +439,35 @@ class Studio:
         """An ungraded blind candidate is open: nothing may show its future or its date until the grade is saved."""
         return self.mode == 'blind' and self.day is not None and not self.graded
 
-    def prior_bars(self, d):
-        """The 1-minute bars of the prior kept day (the one the scan takes PDH and PDL from: the last earlier in-sample day
-        that loads with a morning), so the page's Levels draw PDH, PDL, the prior close and the prior day's value area as on
-        the live charts. That day ends before this day's session starts: nothing after the clock comes with it."""
+    def prior_day(self, d, load=None):
+        """The prior kept day (the one the scan takes PDH and PDL from: the last earlier in-sample day that loads with a
+        morning), or None."""
+        load = load or self.source.load
         days = [x for x in self.source.days() if x < d]
         for x in reversed(days[-PRIOR_TRIES:]):
             try:
-                p = self.source.load(x)
+                p = load(x)
             except Exception as e:   # noqa: BLE001 - as the scan: a day that does not load is passed over
                 log(f'prior day {x} for {d}: skipped: {e}')
                 continue
             if core.has_morning(p):
-                return core.minute_bars(p)
-        return []
+                return p
+        return None
+
+    def prior_bars(self, d):
+        """The 1-minute bars of the prior kept day, so the page's Levels draw PDH, PDL, the prior close and the prior day's
+        value area as on the live charts. That day ends before this day's session starts: nothing after the clock comes
+        with it."""
+        p = self.prior_day(d)
+        return core.minute_bars(p) if p is not None else []
 
     def _load(self, d, clock_utc, mode):
         day = self.source.load(d)            # refuses the holdout
-        prior = self.prior_bars(day.date)
+        pday = self.prior_day(day.date)
+        prior = core.minute_bars(pday) if pday is not None else []
         with self.lock:
             self._drop_clients()
-            self.day, self.prior, self.mode, self.clock = day, prior, mode, int(clock_utc)
+            self.day, self.prior, self.prior_kept, self.mode, self.clock = day, prior, pday, mode, int(clock_utc)
             self.load_seq += 1
             self.playing, self.speed = False, 0
             self.steps, self.graded = 0, False
@@ -350,9 +498,7 @@ class Studio:
             self._free_allowed()
         d = core.check_date(d)
         if clock_utc is None:
-            hh, mm = parse_hhmm(tod or '09:30')
-            base = d if hh < 18 else (core.parse_date(d) - timedelta(days=1)).isoformat()
-            clock_utc = int(core.wall_to_utc([core.wall_of(base, hh, mm)])[0])
+            clock_utc = clock_of(d, tod or '09:30')
         self._load(d, clock_utc, 'free')
         with self.lock:
             self.cand, self.level = None, level
@@ -400,9 +546,7 @@ class Studio:
                     raise Refused('minutes must be a number from 1 to 1440')
                 to = self.clock + int(m * core.MIN)
             else:
-                hh, mm = parse_hhmm(tod)
-                base = self.day.date if hh < 18 else (core.parse_date(self.day.date) - timedelta(days=1)).isoformat()
-                to = int(core.wall_to_utc([core.wall_of(base, hh, mm)])[0])
+                to = clock_of(self.day.date, tod)
             if to <= self.clock:
                 raise Refused('the clock never moves backward: load the day again at an earlier time')
             self.playing = False
@@ -441,10 +585,15 @@ class Studio:
             if self.day is not None:
                 s.update(clock_utc_ms=self.clock, clock_tod=core.fmt_tod(core.utc_to_wall(self.clock)), steps=self.steps,
                          graded=self.graded, level=self._level()[0])
-                if self.mode == 'free':
+                if self.mode in ('free', 'bot'):
                     s['date'] = self.day.date
                 elif self.cand:
                     s['candidate'] = {'n': self.cand_no, 'ref': ref_of(self.cand['id'])}
+            if self.mode == 'bot' and self.bot_key:
+                run = self.bot_runs.get(self.bot_key, {})
+                s['bot_day'] = {'date': self.bot_key[0], 'variant': self.bot_key[1], 'status': run.get('status', ''),
+                                'progress': round(run.get('progress', 0.0), 3), 'error': run.get('error', '')}
+            s['bot'] = {'ready': self.bot is not None, 'runall': {k: self.runall[k] for k in ('running', 'k', 'n', 'error')}}
             return s
 
     def machine(self, level=None):
@@ -479,6 +628,8 @@ class Studio:
     def save(self, p):
         with self.lock:
             self._need_day()
+            if self.mode == 'bot':
+                raise Refused('the Bot tab saves no grades: grade in Blind or Free')
             if self.mode == 'blind' and self.graded:
                 raise Refused('this candidate is graded already')
             setup = p.get('setup')
@@ -589,6 +740,210 @@ class Studio:
             core.write_text(os.path.join(self.marks, 'chips.json'), json.dumps(extra, indent=1))
         return self.chips()
 
+    # ---------------------------------------------------------------- the Bot tab
+    def _bot_need(self):
+        if self.bot is None:
+            raise Refused(self.bot_error or BOT_USAGE)
+
+    def bot_day_ok(self, d):
+        """Every bot endpoint: the holdout (HoldoutError, 403), grading days and days outside the split (Forbidden, 403)."""
+        d = core.check_date(d)
+        if self.grading_days is not None and d in self.grading_days:
+            raise Forbidden(f'{d} is a grading day: the Bot tab opens bot days only (bot_split_v1.json)')
+        if d not in self.bot_days:
+            raise Forbidden(f'{d} is not a bot day (not in bot_split_v1.json)')
+        return d
+
+    def bot_info(self):
+        b = self.bot
+        return {'ok': b is not None, 'error': self.bot_error, 'usage': BOT_USAGE, 'name': b and b['name'],
+                'variants': [{'id': v['id'], 'label': v['label']} for v in b['variants']] if b else [],
+                'exit_ids': b['exit_ids'] if b else []}
+
+    def bot_day_list(self):
+        self._bot_need()
+        with self.lock:
+            if self.blind_open():
+                raise Refused('a blind candidate is open: save its grade first, then use the Bot tab')
+        return sorted(d for d in self.bot_days if core.in_sample(d))
+
+    def _variant(self, vid):
+        vs = self.bot['variants']
+        if vid in (None, ''):
+            return vs[0]
+        for v in vs:
+            if v['id'] == str(vid):
+                return v
+        raise Refused(f'the bot has no variant {vid}')
+
+    def bot_load(self, d, vid=None):
+        """Load a bot day like Free mode (clock 09:30) and run the bot once for (day, variant) in the background."""
+        self._bot_need()
+        with self.lock:
+            if self.blind_open():
+                raise Refused('a blind candidate is open: save its grade first, then use the Bot tab')
+        d = self.bot_day_ok(d)
+        v = self._variant(vid)
+        self._load(d, clock_of(d, '09:30'), 'bot')
+        with self.lock:
+            self.cand, self.level = None, None
+            self.bot_key = (d, v['id'])
+            day, prior = self.day, self.prior_kept
+        key = (d, v['id'])
+        with self.bot_lock:
+            start = key not in self.bot_cache and self.bot_runs.get(key, {}).get('status') != 'running'
+            if start:
+                self.bot_runs[key] = {'status': 'running', 'progress': 0.0, 'error': ''}
+            elif key in self.bot_cache:
+                self.bot_runs[key] = {'status': 'done', 'progress': 1.0, 'error': ''}
+        if start:
+            threading.Thread(target=self._bot_run_one, args=(day, prior, v), daemon=True).start()
+        return self.state()
+
+    def _bot_call(self, day, prior, v, progress=None):
+        res = self.bot['module'].run(day, prior, dict(v['params']), progress)
+        return check_result(res)
+
+    def _bot_run_one(self, day, prior, v):
+        key = (day.date, v['id'])
+        rec = self.bot_runs[key]
+
+        def progress(f):
+            try:
+                rec['progress'] = min(1.0, max(0.0, float(f)))
+            except (TypeError, ValueError):
+                pass
+        try:
+            res = self._bot_call(day, prior, v, progress)
+            with self.bot_lock:
+                self.bot_cache[key] = res
+            rec.update(status='done', progress=1.0)
+        except Exception as e:   # noqa: BLE001 - shown in the Bot tab
+            log(f'bot run {day.date} {v["id"]} failed: {type(e).__name__}: {e}')
+            rec.update(status='error', error=f'{type(e).__name__}: {e}')
+
+    def bot_view(self):
+        """What the Bot tab may show at the clock: the bot's result cut by core.bot_view (the no-future filter)."""
+        self._bot_need()
+        with self.lock:
+            if self.mode != 'bot' or self.day is None or self.bot_key is None:
+                raise Refused('load a bot day in the Bot tab first')
+            key, clock = self.bot_key, self.clock
+        self.bot_day_ok(key[0])
+        run = self.bot_runs.get(key, {})
+        res = self.bot_cache.get(key)
+        v = self._variant(key[1])
+        out = {'name': self.bot['name'], 'variant': v['id'], 'variant_label': v['label'], 'exit_ids': self.bot['exit_ids'],
+               'status': run.get('status', ''), 'progress': round(run.get('progress', 0.0), 3), 'error': run.get('error', '')}
+        out.update(core.bot_view(res, core.utc_to_wall(clock), self.bot['exit_ids']))
+        return out
+
+    def bot_runall_start(self):
+        self._bot_need()
+        with self.lock:
+            if self.blind_open():
+                raise Refused('a blind candidate is open: save its grade first, then use the Bot tab')
+        days = sorted(d for d in self.bot_days if core.in_sample(d))
+        with self.bot_lock:
+            if self.runall['running']:
+                raise Refused('Run all is running already')
+            self.runall = {'running': True, 'k': 0, 'n': len(days), 'error': '', 'folder': '', 'failed': [], 'rows': None}
+        threading.Thread(target=self._runall, args=(days,), daemon=True).start()
+        return self.bot_runall_status()
+
+    def bot_runall_status(self):
+        self._bot_need()
+        r = dict(self.runall)
+        r['variants'] = [{'id': v['id'], 'label': v['label']} for v in self.bot['variants']]
+        r['exit_ids'] = self.bot['exit_ids']
+        return r
+
+    def _runall(self, days):
+        """Every bot day x every variant, each day loaded once (results already cached are reused), then the summary
+        and the files in <marks>/botruns/<stamp>/."""
+        try:
+            variants, exits = self.bot['variants'], self.bot['exit_ids']
+            memo = {}
+
+            def load(x):
+                if x not in memo:
+                    memo[x] = self.source.load(x)
+                    while len(memo) > 4:                 # a day's prior is an earlier day: keep the last few
+                        del memo[next(iter(memo))]
+                return memo[x]
+            trades, failed = [], []
+            for k, d in enumerate(days):
+                self.runall['k'] = k
+                try:
+                    self.bot_day_ok(d)
+                    todo = [v for v in variants if (d, v['id']) not in self.bot_cache]
+                    if todo:
+                        day, prior = load(d), self.prior_day(d, load)
+                        for v in todo:
+                            res = self._bot_call(day, prior, v)
+                            with self.bot_lock:
+                                self.bot_cache[(d, v['id'])] = res
+                except Exception as e:   # noqa: BLE001 - one bad day never stops the run
+                    log(f'run all: {d} failed: {type(e).__name__}: {e}')
+                    failed.append(d)
+                    continue
+                for v in variants:
+                    for t in self.bot_cache[(d, v['id'])]['trades']:
+                        trades.append(dict(t, variant=v['id'], date=d))
+            self.runall['k'] = len(days)
+            rows = core.bot_summary(trades, [v['id'] for v in variants], exits)
+            folder = self._write_run(trades, rows, days, failed)
+            self.runall.update(running=False, folder=folder, failed=failed, rows=rows)
+        except Exception as e:   # noqa: BLE001 - shown in the Bot tab
+            log(f'run all failed: {type(e).__name__}: {e}')
+            self.runall.update(running=False, error=f'{type(e).__name__}: {e}')
+
+    def _write_run(self, trades, rows, days, failed):
+        base = os.path.join(self.marks, 'botruns')
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        folder, k = os.path.join(base, stamp), 1
+        while os.path.exists(folder):
+            k += 1
+            folder = os.path.join(base, f'{stamp}_{k}')
+        os.makedirs(folder)
+        exits = self.bot['exit_ids']
+        feats = []
+        for t in trades:
+            for f in (t.get('features') or {}):
+                if f not in feats:
+                    feats.append(f)
+        flat = []
+        for t in trades:
+            r = {'variant': t['variant'], 'date': t['date']}
+            r.update({k2: t.get(k2) for k2 in ('id', 'level_type', 'level_price', 'dir')})
+            r['entry_time'] = core.fmt_tod(t['entry_t'])
+            r.update({k2: t.get(k2) for k2 in ('entry_t', 'entry', 'stop', 'target', 'target_kind')})
+            for x in exits:
+                e = (t.get('exits') or {}).get(x) or {}
+                r[f'{x}_exit_time'] = core.fmt_tod(e['exit_t']) if e.get('exit_t') is not None else None
+                for k2 in ('exit_t', 'exit', 'reason', 'points', 'r'):
+                    r[f'{x}_{k2}'] = e.get(k2)
+                r[f'{x}_net_nq'] = round(core.trade_cost(e['points']), 2) if e.get('points') is not None else None
+                r[f'{x}_net_mnq'] = round(core.trade_cost(e['points'], 'MNQ'), 2) if e.get('points') is not None else None
+            for f in feats:
+                r['f_' + f] = (t.get('features') or {}).get(f)
+            flat.append(r)
+        labels = {v['id']: v['label'] for v in self.bot['variants']}
+        core.write_text(os.path.join(folder, 'trades.csv'), csv_text(flat))
+        core.write_text(os.path.join(folder, 'summary.csv'), csv_text([dict(r, variant_label=labels.get(r['variant'])) for r in rows]))
+        core.write_text(os.path.join(folder, 'summary.json'), json.dumps({
+            'version': 1, 'bot': self.bot['name'], 'stamp': os.path.basename(folder), 'days': days, 'failed_days': failed,
+            'variants': [{'id': v['id'], 'label': v['label'], 'params': v['params']} for v in self.bot['variants']],
+            'exit_ids': exits, 'costs': {k2: {'per_point': a, 'round_trip': b} for k2, (a, b) in core.COSTS.items()},
+            'rows': rows}, indent=1))
+        return folder
+
+    def bot_export(self):
+        self._bot_need()
+        if not self.runall.get('folder'):
+            raise Refused('nothing to export yet: press Run all bot days first')
+        return {'folder': self.runall['folder'], 'files': ['trades.csv', 'summary.csv', 'summary.json']}
+
     # ---------------------------------------------------------------- the charts' WebSocket (read only)
     def _drop_clients(self):
         for c in list(self.clients):
@@ -652,6 +1007,26 @@ class Studio:
 def ref_of(gid):
     """An opaque reference for a candidate or grade id (the ids carry the date)."""
     return 'G' + hashlib.sha1(str(gid).encode()).hexdigest()[:10]
+
+
+def clock_of(d, tod):
+    """The replay clock (UTC ms) for HH:MM on a session date (18:00 and later is the evening before)."""
+    hh, mm = parse_hhmm(tod)
+    base = d if hh < 18 else (core.parse_date(d) - timedelta(days=1)).isoformat()
+    return int(core.wall_to_utc([core.wall_of(base, hh, mm)])[0])
+
+
+def csv_text(rows):
+    cols = []
+    for r in rows:
+        for k in r:
+            if k not in cols:
+                cols.append(k)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=cols)
+    w.writeheader()
+    w.writerows(rows)
+    return buf.getvalue()
 
 
 def parse_hhmm(text):
@@ -813,6 +1188,18 @@ def make_handler(studio, port):
                     return self._json(200, studio.agreement())
                 if u.path == '/markup/list':
                     return self._json(200, {'items': studio.list_items()})
+                if u.path == '/api/bot/info':
+                    return self._json(200, studio.bot_info())
+                if u.path == '/api/bot/days':
+                    return self._json(200, {'days': studio.bot_day_list()})
+                if u.path == '/api/bot/view':
+                    return self._json(200, studio.bot_view())
+                if u.path == '/api/bot/runall':
+                    return self._json(200, studio.bot_runall_status())
+            except core.HoldoutError as e:
+                return self._json(403, {'error': str(e)})
+            except Forbidden as e:
+                return self._json(403, {'error': str(e)})
             except Refused as e:
                 return self._json(409, {'error': str(e)})
             except (ValueError, KeyError, TypeError, OverflowError) as e:
@@ -864,7 +1251,15 @@ def make_handler(studio, port):
                     return self._json(200, {'file': dest, 'rows': rows})
                 if path == '/markup/save':
                     return self._json(200, studio.save(p))
+                if path == '/api/bot/load':
+                    return self._json(200, studio.bot_load(p.get('date'), p.get('variant')))
+                if path == '/api/bot/runall':
+                    return self._json(200, studio.bot_runall_start())
+                if path == '/api/bot/export':
+                    return self._json(200, studio.bot_export())
             except core.HoldoutError as e:
+                return self._json(403, {'error': str(e)})
+            except Forbidden as e:
                 return self._json(403, {'error': str(e)})
             except Refused as e:
                 return self._json(409, {'error': str(e)})
@@ -1011,8 +1406,8 @@ def main(argv=None):
     seen = opt['seen'].split(',') if opt.get('seen') else default_seen()
     try:
         studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol,
-                        include_last_only='include-last-only' in opt)
-    except OSError as e:
+                        include_last_only='include-last-only' in opt, bot_path=opt.get('bot'))
+    except (OSError, ValueError) as e:
         sys.exit(f'cannot use the marks folder {marks}: {e}\nGive another with --marks=PATH.')
     try:
         server = Server(('127.0.0.1', port), make_handler(studio, port))

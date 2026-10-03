@@ -8,7 +8,8 @@
  *  2. Blind mode never shows a date: every text the charts draw on their canvases and every text or tooltip in the page
  *     goes through scrub(), which keeps the time of day and drops dates, weekdays and month names.
  * Then the app: two charts mounted read only with ChartLive.mount (live/EMBED.md), Range 40 and 1 minute, NQ; the grade
- * panel; marks drawn on an overlay above each chart.
+ * panel; marks drawn on an overlay above each chart. The Bot tab draws what /api/bot/view returns (the server cuts it at the
+ * clock) on the same overlays: orders, fills, the open trade's stop and target, exits.
  */
 (function () {
   'use strict';
@@ -62,7 +63,8 @@
   const COLORS = { Level: '#B69CFF', 'Failed candle': '#FFC266', 'Reclaim candle': '#7FD7FF', Entry: '#E6EDF5', Stop: '#FF5C7A', Target: '#3DDC97' };
   const TICK = 0.25;
   const A = { state: null, panes: {}, overlays: {}, tool: null, spanDraft: null, marks: [], spans: [], chips: [], chipOn: new Set(),
-    lastMount: '', machineTimer: 0, saved: false, uiMode: 'blind' };
+    lastMount: '', machineTimer: 0, saved: false, uiMode: 'blind', bot: null, botInfo: null, botAt: 0, botBusy: false, runallWas: false,
+    botDrawn: { orders: 0, fills: 0, exits: 0 } };
   window.__markup = A;
 
   async function api(path, body) {
@@ -73,6 +75,8 @@
   }
   const say = (id, text, err) => { const el = $(id); el.textContent = text || ''; el.classList.toggle('err', !!err); };
   const fmtP = p => (p === null || p === undefined || !isFinite(p)) ? '' : (+p).toFixed(2);
+  const fmtC = p => (p === null || p === undefined || !isFinite(p)) ? '' : (+p).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const signed = p => (p > 0 ? '+' : '') + (+p).toFixed(2);
   const todOf = t => { const s = ((Math.floor(t) % 86400) + 86400) % 86400; return [s / 3600 | 0, s / 60 % 60 | 0, s % 60].map(x => String(x).padStart(2, '0')).join(':'); };
 
   /* ---------------- the charts */
@@ -141,10 +145,12 @@
     setTool(null); renderMarks();
   }
   function draw() {
+    let drawn = null;
     for (const ov of Object.values(A.overlays)) {
       const w = ov.host.clientWidth, h = ov.host.clientHeight, dpr = window.devicePixelRatio || 1;
       if (ov.cv.width !== Math.round(w * dpr) || ov.cv.height !== Math.round(h * dpr)) { ov.cv.width = Math.round(w * dpr); ov.cv.height = Math.round(h * dpr); }
       const g = ov.cv.getContext('2d'), ch = ov.pane.chart;
+      if (!drawn) drawn = { orders: 0, fills: 0, exits: 0 };
       g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
       if (!ch || !ch.bars().length) continue;
       const plotW = w - 64;
@@ -174,8 +180,49 @@
         g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
         g.fillText(m.role, x + 8, y);
       }
+      if (A.uiMode === 'bot' && A.bot && A.state && A.state.mode === 'bot') drawBot(g, ch, A.bot, drawn);
     }
+    A.botDrawn = drawn;
     requestAnimationFrame(draw);
+  }
+  /* the bot's view at the clock (already cut by the server): orders, fills, stop and target, exits */
+  const TYPES = { stop: 'STP', stoplimit: 'STP LMT', limit: 'LMT', market: 'MKT' };
+  const ROLE_COLOR = { entry: '#E6EDF5', stop: '#FF5C7A', target: '#3DDC97' };
+  function xAt(ch, ms) { const i = barIndexAt(ch, ms / 1000); return i < 0 ? null : ch.barToX(i); }
+  function drawBot(g, ch, v, drawn) {
+    const nowX = ch.barToX(ch.bars().length - 1);
+    for (const o of v.orders || []) {
+      const x0 = xAt(ch, o.t_from), x1 = xAt(ch, o.t_to);
+      if (x0 === null || x1 === null) continue;
+      const y = ch.priceToY(o.price), c = ROLE_COLOR[o.role] || '#9AA8B8';
+      g.strokeStyle = c; g.lineWidth = 1.5; g.setLineDash(o.role === 'entry' ? [5, 3] : []);
+      g.beginPath(); g.moveTo(x0, y); g.lineTo(Math.max(x1, x0 + 8), y); g.stroke(); g.setLineDash([]);
+      if (o.role === 'entry') { g.fillStyle = c; g.fillText((o.side === 'sell' ? 'SELL ' : 'BUY ') + (TYPES[o.type] || o.type) + ' ' + fmtC(o.price), x0, y - 9); }
+      drawn.orders++;
+    }
+    const base = (v.exit_ids || [])[0];
+    for (const t of v.trades || []) {
+      const x0 = xAt(ch, t.entry_t);
+      if (x0 === null) continue;
+      const ex = t.exits && t.exits[base], x1 = ex ? xAt(ch, ex.exit_t) : nowX;
+      for (const [p, c] of [[t.stop, '#FF5C7A'], [t.target, '#3DDC97']]) {
+        if (p === null || p === undefined) continue;
+        const y = ch.priceToY(p);
+        g.strokeStyle = c; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0, y); g.lineTo(Math.max(x1, x0 + 8), y); g.stroke();
+      }
+      const y = ch.priceToY(t.entry), up = t.dir !== 'short';
+      g.fillStyle = up ? '#3DDC97' : '#FF5C7A';
+      g.beginPath(); g.moveTo(x0, y + (up ? -6 : 6)); g.lineTo(x0 - 6, y + (up ? 5 : -5)); g.lineTo(x0 + 6, y + (up ? 5 : -5)); g.closePath(); g.fill();
+      g.fillStyle = '#E6EDF5'; g.fillText(fmtC(t.entry), x0 + 9, y + (up ? 10 : -10));
+      drawn.fills++;
+      if (ex && x1 !== null) {
+        const ye = ch.priceToY(ex.exit);
+        g.fillStyle = ex.points > 0 ? '#3DDC97' : '#FF5C7A'; g.strokeStyle = '#06080C';
+        g.beginPath(); g.arc(x1, ye, 5, 0, Math.PI * 2); g.fill(); g.stroke();
+        g.fillText(ex.reason + ' ' + signed(ex.points), x1 + 9, ye);
+        drawn.exits++;
+      }
+    }
   }
 
   /* ---------------- marks UI */
@@ -217,13 +264,13 @@
   function resetForm() {
     $('gradeForm').reset(); A.chipOn.clear(); A.marks = []; A.spans = []; A.saved = false;
     renderChips(); renderMarks(); setTool(null); say('saveMsg', '');
-    $('secDraft').hidden = true; $('secMachine').hidden = A.uiMode === 'blind';
+    $('secDraft').hidden = true; $('secMachine').hidden = A.uiMode !== 'free';
   }
 
   /* ---------------- state and modes */
   function showState(s) {
     A.state = s;
-    const free = s.mode === 'free';
+    const free = s.mode === 'free' || s.mode === 'bot';
     setClock(s.clock_utc_ms || realNow(), s.playing ? s.speed : 0);
     $('msClock').textContent = s.clock_tod || '--:--:--';
     $('msDate').textContent = free && s.date ? s.date : '';
@@ -236,10 +283,9 @@
     $('btnNext').disabled = !(s.queue && s.queue.remaining > 0);
     // blind dates stay hidden while the server holds a blind candidate, whatever tab is showing
     BLIND = A.uiMode === 'blind' || s.mode === 'blind';
-    $('tabFree').disabled = !!s.blind_open;
-    $('tabFree').title = s.blind_open ? 'Save the grade first' : '';
-    if (s.blind_open && A.uiMode === 'free') setMode('blind');
-    if (s.queue) $('queueInfo').textContent = 'remaining ' + s.queue.remaining + ', graded ' + s.queue.graded + ', excluded ' + s.queue.excluded_seen + ' already-seen';
+    for (const id of ['tabFree', 'tabBot']) { $(id).disabled = !!s.blind_open; $(id).title = s.blind_open ? 'Save the grade first' : ''; }
+    if (s.blind_open && A.uiMode !== 'blind') setMode('blind');
+    if (s.queue) $('queueInfo').textContent = 'remaining ' + s.queue.remaining + ', graded ' + s.queue.graded + ', excluded ' + s.queue.excluded_seen + ' already-seen, ' + (s.queue.bot_days || 0) + ' on bot days';
     const blindLive = s.mode === 'blind' && s.loaded && !s.graded;
     $('candInfo').textContent = s.mode === 'blind' && s.candidate && s.level ? '#' + s.candidate.n + '  Level ' + s.level.type + ' ' + fmtP(s.level.price) : 'No candidate open';
     $('stepCount').textContent = s.mode === 'blind' && s.loaded ? 'steps after cut: ' + s.steps : '';
@@ -248,9 +294,96 @@
     $('revealRow').hidden = !(s.mode === 'blind' && s.graded);
     $('btnSave').disabled = !s.loaded || (s.mode === 'blind' && s.graded);
     if (blindLive) $('secMachine').hidden = true;
+    const ra = (s.bot && s.bot.runall) || {};
+    if (ra.running) { A.runallWas = true; $('runAllMsg').textContent = 'running: day ' + Math.min(ra.k + 1, ra.n) + ' of ' + ra.n; }
+    else if (A.runallWas) { A.runallWas = false; api('/api/bot/runall').then(showSummary).catch(e => say('botExportMsg', e.message, true)); }
+    $('btnRunAll').disabled = !!ra.running || !(s.bot && s.bot.ready);
+    const bd = s.bot_day;
+    if (A.uiMode === 'bot') $('botProg').textContent = !bd ? '' : bd.status === 'running' ? 'the bot is running on this day: ' + Math.round(100 * bd.progress) + '%' :
+      bd.status === 'error' ? 'the bot failed on this day: ' + bd.error : '';
+    if (A.uiMode === 'bot' && s.mode === 'bot' && s.loaded) botTick();
   }
   async function refresh() {
     try { showState(await api('/api/state')); } catch (e) { $('msStatus').textContent = 'Studio not reachable: ' + e.message; }
+  }
+
+  /* ---------------- the Bot tab */
+  async function botTick(force) {
+    if (A.botBusy || (!force && performance.now() - A.botAt < 400)) return;
+    A.botBusy = true; A.botAt = performance.now();
+    try { A.bot = await api('/api/bot/view'); renderBot(A.bot); } catch (e) { say('botErr', e.message, true); } finally { A.botBusy = false; }
+  }
+  function cell(tr, text, cls) { const td = tr.insertCell(); td.textContent = text; if (cls) td.className = cls; return td; }
+  function head(t, cols) { const tr = t.createTHead().insertRow(); for (const c of cols) { const th = document.createElement('th'); th.textContent = c; tr.appendChild(th); } }
+  function renderBot(v) {
+    $('secBotOut').hidden = false;
+    $('botHead').textContent = v.name + '  |  ' + v.variant_label;
+    const ul = $('botEvents'); ul.textContent = '';
+    for (const e of (v.events || []).slice().reverse()) {
+      const li = document.createElement('li'), b = document.createElement('b');
+      b.textContent = todOf(e.t / 1000); li.append(b, document.createTextNode(e.text || e.kind)); ul.appendChild(li);
+    }
+    const base = (v.exit_ids || [])[0], t = $('botTrades'); t.textContent = '';
+    head(t, ['Entry', 'Dir', 'Level', 'Price', 'Stop', 'Target', 'Result']);
+    const tb = t.createTBody();
+    for (const x of v.trades || []) {
+      const tr = tb.insertRow(), ex = x.exits && x.exits[base];
+      cell(tr, todOf(x.entry_t / 1000)); cell(tr, x.dir); cell(tr, (x.level_type || '') + ' ' + fmtP(x.level_price));
+      cell(tr, fmtP(x.entry)); cell(tr, fmtP(x.stop)); cell(tr, fmtP(x.target));
+      cell(tr, ex ? ex.reason + ' ' + signed(ex.points) : 'open', ex ? (ex.points > 0 ? 'win' : 'loss') : '');
+    }
+    const n = $('botNet'); n.textContent = '';
+    for (const k of v.exit_ids || []) {
+      const r = (v.net || {})[k] || { trades: 0, points: 0, nq: 0, mnq: 0 }, tr = n.insertRow();
+      cell(tr, k); cell(tr, signed(r.points) + ' pts  $' + r.nq.toFixed(2) + ' NQ  $' + r.mnq.toFixed(2) + ' MNQ  (' + r.trades + ' trades)');
+    }
+  }
+  function clearBot() {
+    A.bot = null; $('botDay').textContent = ''; $('secBotOut').hidden = true; $('botSummary').hidden = true;
+    for (const id of ['botEvents', 'botTrades', 'botNet']) $(id).textContent = '';
+    for (const id of ['botHead', 'botProg', 'botErr', 'runAllMsg', 'botExportMsg']) $(id).textContent = '';
+  }
+  async function loadBotDays() {
+    const info = A.botInfo;
+    const ok = !!(info && info.ok);
+    $('botMsg').textContent = !info ? '' : ok ? '' : (info.error ? 'Bot not loaded: ' + info.error : info.usage);
+    for (const id of ['botDay', 'botVariant', 'btnBotLoad']) $(id).disabled = !ok;
+    if (!ok) return;
+    try {
+      const { days } = await api('/api/bot/days');
+      const sel = $('botDay'), cur = sel.value; sel.textContent = '';
+      for (const d of days.slice().reverse()) { const o = document.createElement('option'); o.value = o.textContent = d; sel.appendChild(o); }
+      if (cur) sel.value = cur;
+      if (A.state && A.state.mode === 'bot') $('secBotOut').hidden = false;
+    } catch (e) { say('botErr', e.message, true); }
+  }
+  const SUM_COLS = [['trades', 'Trades'], ['wins', 'Wins'], ['losses', 'Losses'], ['win_pct', 'Win %'], ['avg_r', 'Avg R'], ['net_points', 'Net pts'],
+    ['net_nq', 'Net $ NQ'], ['net_nq_per_trade', '$ NQ / trade'], ['net_mnq', 'Net $ MNQ'], ['net_mnq_per_trade', '$ MNQ / trade'], ['pf', 'PF (NQ)'],
+    ['max_dd_nq', 'Max DD $ NQ'], ['max_dd_mnq', 'Max DD $ MNQ']];
+  function sumTable(t, rows, labels, withGroup) {
+    t.textContent = '';
+    head(t, ['Variant', 'Exit'].concat(withGroup ? ['Group'] : [], SUM_COLS.map(c => c[1])));
+    const tb = t.createTBody();
+    for (const r of rows) {
+      const tr = tb.insertRow();
+      cell(tr, labels[r.variant] || r.variant).title = r.variant; cell(tr, r.exit_id);
+      if (withGroup) cell(tr, r.group);
+      for (const [k] of SUM_COLS) {
+        const td = tr.insertCell(), v = r[k];
+        td.textContent = v === null || v === undefined ? (k === 'pf' && r.trades ? 'no losses' : 'n/a') : ['trades', 'wins', 'losses'].includes(k) ? String(v) : (+v).toFixed(2);
+        if (k !== 'trades') { const sp = document.createElement('span'); sp.className = 'n'; sp.textContent = '(' + r.trades + ')'; td.appendChild(sp); }
+      }
+    }
+  }
+  function showSummary(r) {
+    if (r.error) { $('runAllMsg').textContent = 'Run all failed: ' + r.error; return; }
+    if (!r.rows) return;
+    const labels = Object.fromEntries((r.variants || []).map(v => [v.id, v.id + ' ' + v.label]));
+    sumTable($('botSumMain'), r.rows.filter(x => x.group === 'all'), labels, false);
+    sumTable($('botSumBy'), r.rows.filter(x => x.group !== 'all'), labels, true);
+    $('botSumNote').textContent = r.n + ' bot days' + (r.failed && r.failed.length ? ', ' + r.failed.length + ' failed (see the window)' : '') + '; costs per round trip: NQ $4.50, MNQ $1.00; (n) = trades';
+    $('runAllMsg').textContent = 'done: ' + r.n + ' bot days';
+    if (A.uiMode === 'bot') $('botSummary').hidden = false;
   }
   async function act(path, body, opts) {
     try {
@@ -258,19 +391,23 @@
       showState(s);
       if (opts && opts.remount) { if (opts.reset) resetForm(); mount(); }
       return s;
-    } catch (e) { say('saveMsg', e.message, true); return null; }
+    } catch (e) { say(A.uiMode === 'bot' ? 'botErr' : 'saveMsg', e.message, true); return null; }
   }
   function setMode(m) {
-    if (m === 'free' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use Free mode.', true); return; }
+    if (m !== 'blind' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use ' + (m === 'bot' ? 'the Bot tab.' : 'Free mode.'), true); return; }
     A.uiMode = m;
-    const ui = m === 'blind';
+    const ui = m === 'blind', bot = m === 'bot';
     BLIND = ui || !A.state || A.state.mode === 'blind';           // the scrub stays on while a blind candidate is loaded
-    $('tabBlind').classList.toggle('on', ui); $('tabFree').classList.toggle('on', !ui);
-    $('tabBlind').setAttribute('aria-selected', String(ui)); $('tabFree').setAttribute('aria-selected', String(!ui));
-    $('secBlind').hidden = !ui; $('secFree').hidden = ui;
-    $('secMachine').hidden = ui;
+    for (const [id, k] of [['tabBlind', 'blind'], ['tabFree', 'free'], ['tabBot', 'bot']]) { $(id).classList.toggle('on', m === k); $(id).setAttribute('aria-selected', String(m === k)); }
+    $('secBlind').hidden = !ui; $('secFree').hidden = m !== 'free'; $('secBot').hidden = !bot;
+    $('secMachine').hidden = m !== 'free';
+    $('gradeForm').hidden = bot; $('secAgree').hidden = bot;
+    if (bot) $('secDraft').hidden = true;
+    else { $('secBotOut').hidden = true; $('botSummary').hidden = true; }
+    $('msPanel').classList.toggle('bot', bot);
     if (BLIND) scrubNode(document.body);
-    if (ui) { if (A.state && A.state.mode === 'free') { unmount(); resetForm(); } }
+    if (ui) { if (A.state && A.state.mode !== 'blind') { unmount(); resetForm(); } clearBot(); }
+    else if (bot) loadBotDays();
     else loadDays();
   }
   async function loadDays() {
@@ -358,6 +495,24 @@
     buildTools();
     $('tabBlind').addEventListener('click', () => setMode('blind'));
     $('tabFree').addEventListener('click', () => setMode('free'));
+    $('tabBot').addEventListener('click', () => setMode('bot'));
+    $('btnBotLoad').addEventListener('click', async () => {
+      say('botErr', ''); A.bot = null; $('botSummary').hidden = true;
+      if (await act('/api/bot/load', { date: $('botDay').value, variant: $('botVariant').value }, { remount: true, reset: true })) botTick(true);
+    });
+    $('btnRunAll').addEventListener('click', async () => {
+      try { await api('/api/bot/runall', {}); A.runallWas = true; $('runAllMsg').textContent = 'starting'; } catch (e) { say('botExportMsg', e.message, true); }
+    });
+    $('btnBotExport').addEventListener('click', async () => {
+      try { const r = await api('/api/bot/export', {}); say('botExportMsg', 'Files (' + r.files.join(', ') + ') in ' + r.folder); } catch (e) { say('botExportMsg', e.message, true); }
+    });
+    $('btnSumClose').addEventListener('click', () => { $('botSummary').hidden = true; });
+    api('/api/bot/info').then(info => {
+      A.botInfo = info;
+      const sel = $('botVariant'); sel.textContent = '';
+      for (const v of info.variants || []) { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label; sel.appendChild(o); }
+      if (A.uiMode === 'bot') loadBotDays();
+    }).catch(() => {});
     $('btnNext').addEventListener('click', async () => {
       if (await act('/api/blind/next', {}, { remount: true, reset: true })) api('/api/agreement').then(showAgreement).catch(() => {});
     });
@@ -380,7 +535,10 @@
     A.agreeTimer = setInterval(() => { if (A.state && A.state.mode === 'free') api('/api/agreement').then(showAgreement).catch(() => {}); }, 15000);
     setInterval(refresh, 250);
     A.machineTimer = setInterval(machine, 2000);
-    refresh().then(() => { if (A.state && A.state.loaded && A.state.mode === 'free') { setMode('free'); mount(); } else if (A.state && A.state.loaded && A.state.mode === 'blind') mount(); });
+    refresh().then(() => {
+      const st = A.state;
+      if (st && st.loaded && (st.mode === 'free' || st.mode === 'bot')) { setMode(st.mode); mount(); } else if (st && st.loaded && st.mode === 'blind') mount();
+    });
     requestAnimationFrame(draw);
   }
   document.addEventListener('DOMContentLoaded', init);

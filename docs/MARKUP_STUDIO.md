@@ -35,11 +35,39 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
   closed back beyond the level; entry A the reclaim close, entry B the confirmation break. Its numbers are in
   `tools/markup_rule_v0.json` (read at every save).
 - Add your own chips with the box under the chips (kept in `chips.json` in the marks folder).
-- No P&L and no outcome statistics anywhere.
+- No P&L and no outcome statistics in Blind or Free (the Bot tab sums the bot's own trades only).
+
+## Bot tab
+
+Watch a bot trade replayed days on the same charts, or run it over every bot day. The Studio knows no trading rule: it loads
+a bot module and shows what the bot returns, never more than the clock allows.
+
+- Start with a bot: `py -3 tools\markup_studio.py --bot=PATH` (a `.py` file that speaks BOT_API 1: `BOT_API`, `NAME`,
+  `variants()`, `exit_ids()`, `run(day, prior, params, progress)`). Without `--bot` the tab says how to start with one; a
+  module that does not load or check out says why there (and in the window), and the rest of the Studio works as before.
+  `test/markup_bot_fixture.py` is a made-up test bot for the tests only.
+- **The day split.** On the first start the Studio writes `bot_split_v1.json` in the marks folder: every last-only day and
+  half the quote days (sorted, shuffled with seed 7, the first half rounded up) are bot days, the other quote days are
+  grading days. It is never rewritten; days added later go to neither list (the window logs them). The blind queue offers
+  grading days only (its line counts the candidates "on bot days"); the Bot tab opens bot days only and refuses grading days
+  and the holdout (403). Free mode is unchanged.
+- **Using it.** Pick a bot day and a variant, **Load**: the day opens at 09:30 like Free mode (play, pause, Next candle, jump)
+  and the bot runs once on it in the background (the prior kept day goes with it, as for PDH/PDL). The charts draw each order
+  up to the clock (entry orders dashed white, "BUY STP 21,001.00"), fills with their price, the open trade's stop (red) and
+  target (green), and exits ("target +10.00"). The panel lists the bot's events (newest first), the day's trades (result per
+  the base exit once closed) and the day's net per exit id after costs. Nothing after the clock: `/api/bot/view` is cut by
+  one function (`bot_view` in `tools/markup_core.py`); events up to the clock, orders clipped at it with their status only
+  once ended, trades once entered and each exit once it happened. The tab is locked while a blind candidate is ungraded.
+- **Run all bot days** runs every bot day with every variant ("day k of n"), then shows the summary: per variant and exit
+  id the trades, wins, losses, win %, average R, net points, net $ NQ and MNQ (total and per trade; costs per round trip,
+  1 contract: NQ $20 a point less $4.50, MNQ $2 a point less $1.00), profit factor and max drawdown of closed-trade
+  equity, with the trade count next to every number, and the same split by level type and by side. Files:
+  `<marks>\botruns\<stamp>\trades.csv` (every trade with its features), `summary.csv`, `summary.json`; **Export** shows the folder.
 
 ## Flags
 
 `--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
+`--bot=PATH` (a bot module for the Bot tab)
 `--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
 `tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort).
 

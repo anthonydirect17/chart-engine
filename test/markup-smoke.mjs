@@ -10,6 +10,10 @@
 //   3. Grade: hotkeys 1 and S, a chip, a reason, Entry and Stop marks clicked on the chart, Save: the JSON file on disk.
 //   4. Free mode: a day and time, play; screenshots; holdout refusals.
 //   5. Mutation proof: a copy of the server that lets ONE tick past the clock through must FAIL check 1.
+//   6. Bot tab (the public test bot, test/markup_bot_fixture.py): a bot day loaded, played past the bot's entry; every
+//      /api/bot response recorded and checked against its clock, the bot's later exit in none of them; the order line and
+//      fill marker drawn; the event list holds nothing after the clock. Run all: the summary rows and a hand-worked net $.
+//   7. Mutation proof: a copy of the server whose view filter leaks ONE future bot event must FAIL check 6.
 //   npm run smoke:markup     (PYTHON=py to pick the interpreter; CHROMIUM_PATH to use a preinstalled browser; SHOTS_DIR)
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -39,7 +43,8 @@ function check(ok, m, sink) {
 }
 const servers = [];
 async function startServer(script, port, marks) {
-  const child = spawn(PY, [script, '--source=npz', '--data=' + dataDir, '--marks=' + marks, '--port=' + port, '--no-browser', '--seen=' + path.join(tmp, 'none.csv')],
+  const child = spawn(PY, [script, '--source=npz', '--data=' + dataDir, '--marks=' + marks, '--port=' + port, '--no-browser', '--seen=' + path.join(tmp, 'none.csv'),
+    '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py')],
     { stdio: ['ignore', 'pipe', 'inherit'] });
   servers.push(child);
   await new Promise(r => child.stdout.once('data', r));
@@ -163,6 +168,75 @@ async function noFutureRun(script, port, label, sink) {
   return { page, rec, marks };
 }
 
+/* Check 6: the Bot tab on 2026-03-05 (a bot day), test bot variant T1000: buy stop 21,001.00 armed 10:00:00, filled 10:00:20,
+   base target 21,011.00 at 10:03:40. The clock is taken past the fill but not to the exit. */
+const BOT_DAY = '2026-03-05';
+const botWall = (hh, mm, ss) => Date.UTC(2026, 2, 5, hh, mm, ss || 0);      // wall ms (New York clock stored as if UTC)
+async function botRun(port, label, sink) {
+  const { page, rec } = await openPage(port);
+  await page.click('#tabBot');
+  await until(() => page.evaluate(() => document.getElementById('botDay').options.length > 0));
+  const days = await page.evaluate(() => [...document.getElementById('botDay').options].map(o => o.value).sort());
+  check(JSON.stringify(days) === JSON.stringify(['2026-03-05', '2026-03-09']), `${label}: the day picker lists the bot days only (${days})`, sink);
+  await page.selectOption('#botDay', BOT_DAY);
+  await page.selectOption('#botVariant', 'T1000');
+  const s0 = rec.sockets.length;                                           // sockets of an earlier load (Free mode's day) are not this day's
+  await page.click('#btnBotLoad');
+  await chartsReady(page);
+  await until(async () => ((await state(port)).bot_day || {}).status === 'done');
+  await page.fill('#jumpTime', '10:00');
+  await page.click('#btnJump');
+  await chartsReady(page);
+  await sleep(600);
+  await page.click('#btnStep');                                            // 10:01:00
+  await sleep(600);
+  await page.click('[data-speed="5"]');                                    // about 7 s of replay
+  await sleep(1500);
+  await page.click('#btnPause');
+  await sleep(1200);
+  const fin = await (await fetch(`http://127.0.0.1:${port}/api/bot/view`, { headers: { Host: 'localhost:' + port } })).json();
+  const clock = fin.clock_wall_ms, fill = botWall(10, 0, 20), exit = botWall(10, 3, 40);
+  check(clock > fill && clock < exit, `${label}: the clock is past the bot's fill and before its exit (${new Date(clock).toISOString().slice(11, 19)})`, sink);
+  // every /api/bot response: nothing after the clock it was cut at, that clock never past the replay clock, and the bot's
+  // exit (later than every clock here) in none of them
+  const bad = [];
+  let n = 0;
+  for (const r of rec.responses) {
+    if (!/\/api\/bot\/view/.test(r.url)) continue;
+    let j; try { j = JSON.parse(r.body); } catch (e) { continue; }
+    n++;
+    const c = j.clock_wall_ms;
+    if (!(c <= clock)) bad.push('clock ' + c + ' after the replay clock');
+    const times = (j.events || []).map(e => e.t).concat((j.orders || []).flatMap(o => [o.t_from, o.t_to]), (j.trades || []).map(t => t.entry_t),
+      (j.trades || []).flatMap(t => Object.values(t.exits || {}).map(x => x.exit_t)));
+    for (const t of times) if (t > c) bad.push(`time ${t} after the response's clock ${c}`);
+    if ((j.events || []).some(e => e.kind === 'exit') || (j.trades || []).some(t => Object.keys(t.exits || {}).length) || r.body.includes(String(exit))) bad.push('the exit before its time');
+    if ((j.orders || []).some(o => o.open && o.status)) bad.push('an open order with its status');
+  }
+  check(n > 3 && !bad.length, `${label}: none of the ${n} /api/bot/view responses holds anything after its clock` + (bad.length ? ' (' + bad.length + ', e.g. ' + bad[0] + ')' : ''), sink);
+  // the charts' frames since the bot day's load: nothing after the replay clock (wall seconds)
+  let late = 0;
+  for (const s of rec.sockets.slice(s0)) for (const f of s.frames) {
+    let m; try { m = JSON.parse(f); } catch (e) { continue; }
+    if (m.type === 'tick' && m.t * 1000 > clock) late++;
+    if (m.type === 'ticks') for (const r of m.ticks) if (r[0] * 1000 > clock) late++;
+    if (m.type === 'history') for (const b of m.bars) if (b[0] * 1000 > clock) late++;
+  }
+  check(late === 0, `${label}: no chart frame holds a time after the clock (${late})`, sink);
+  const dom = await page.evaluate(() => ({ events: [...document.querySelectorAll('#botEvents li b')].map(b => b.textContent),
+    trades: document.querySelectorAll('#botTrades tbody tr').length, result: (document.querySelector('#botTrades tbody tr') || { cells: [] }).cells[6]?.textContent,
+    drawn: window.__markup.botDrawn, texts: window.__drawn.slice(-4000) }));
+  const tod = new Date(clock).toISOString().slice(11, 19);
+  check(JSON.stringify(dom.events) === JSON.stringify(['10:00:20', '10:00:00', '09:30:00']) && dom.events.every(t => t <= tod),
+    `${label}: the event list holds the fill, the arm and the note, newest first, nothing after the clock (${dom.events.join(', ')})`, sink);
+  check(dom.trades === 1 && dom.result === 'open', `${label}: one trade, still open`, sink);
+  check(!!dom.drawn && dom.drawn.orders > 0 && dom.drawn.fills > 0 && dom.drawn.exits === 0, `${label}: the order lines and the fill marker are drawn, no exit (${JSON.stringify(dom.drawn)})`, sink);
+  check(dom.texts.includes('BUY STP 21,001.00') && dom.texts.includes('21,001.00'), `${label}: the order is labeled BUY STP 21,001.00 and the fill 21,001.00`, sink);
+  check(!rec.errors.length, `${label}: no page errors (${rec.errors.join('; ')})`, sink);
+  if (!sink) await shot(page, 'markup-bot.png');
+  return { page, rec };
+}
+
 const DATE_RE = /\b\d{4}-\d{2}-\d{2}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)\b/;
 try {
   console.log('1. no future (the real server)');
@@ -193,6 +267,9 @@ try {
   check(mr.status === 409, 'blind: the machine read is refused before the grade is saved');
   check(await page.locator('#secMachine').isHidden(), 'blind: the machine read panel is hidden before the grade is saved');
   check(await page.locator('#tabFree').isDisabled(), 'blind: the Free tab is locked while the candidate is ungraded');
+  check(await page.locator('#tabBot').isDisabled(), 'blind: the Bot tab is locked while the candidate is ungraded');
+  const botEsc = await fetch(`http://127.0.0.1:${PORT}/api/bot/load`, { method: 'POST', headers: { Host: 'localhost:' + PORT, 'Content-Type': 'application/json' }, body: '{"date":"2026-03-05"}' });
+  check(botEsc.status === 409, 'blind: bot/load is refused while the candidate is ungraded');
   const esc = await fetch(`http://127.0.0.1:${PORT}/api/free/load`, { method: 'POST', headers: { Host: 'localhost:' + PORT, 'Content-Type': 'application/json' }, body: '{"date":"2026-03-10","time":"16:00"}' });
   check(esc.status === 409, 'blind: free/load is refused while the candidate is ungraded');
   const lst = await (await fetch(`http://127.0.0.1:${PORT}/markup/list`, { headers: { Host: 'localhost:' + PORT } })).text();
@@ -278,6 +355,46 @@ try {
     console.log('  mutant failed ' + sink.length + ' checks, for example: ' + sink.slice(0, 2).join(' / '));
     check(sink.length > 0, 'the smoke catches a server that sends one tick past the clock');
   } finally { fs.rmSync(mutant, { force: true }); }
+
+  console.log('6. bot tab (the public test bot)');
+  const bot = await botRun(PORT, 'bot', null);
+  const post2 = (p, b) => fetch(`http://127.0.0.1:${PORT}${p}`, { method: 'POST', headers: { Host: 'localhost:' + PORT, 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+  const g403 = await post2('/api/bot/load', { date: '2026-03-10' });
+  check(g403.status === 403 && /grading day/.test((await g403.json()).error), 'bot: a grading day is refused (403)');
+  check((await post2('/api/bot/load', { date: '2026-04-02' })).status === 403, 'bot: a holdout day is refused (403)');
+  await bot.page.click('#btnRunAll');
+  const nrows = await until(() => bot.page.evaluate(() => { const t = document.querySelector('#botSumMain tbody'); return !document.getElementById('botSummary').hidden && t && t.rows.length; }), 20000);
+  check(nrows === 4, 'Run all: the summary has one row per variant x exit id (2 x 2 = 4, got ' + nrows + ')');
+  const cellText = await bot.page.evaluate(() => {
+    const t = document.getElementById('botSumMain'), cols = [...t.tHead.rows[0].cells].map(c => c.textContent), r = t.tBodies[0].rows[0];
+    return { variant: r.cells[0].title, exit: r.cells[1].textContent, net: r.cells[cols.indexOf('Net $ NQ')].textContent };
+  });
+  // hand-worked: T1000 on 2026-03-05 buys 21,001.00 and the base target is 10 points up: 10 x $20 - $4.50 = $195.50 (1 trade)
+  check(cellText.variant === 'T1000' && cellText.exit === 'base' && cellText.net === '195.50(1)', 'Run all: T1000 base nets $195.50 NQ on one trade (' + JSON.stringify(cellText) + ')');
+  const runs = path.join(tmp, 'marks-' + PORT, 'botruns');
+  const stamp = fs.existsSync(runs) ? fs.readdirSync(runs)[0] : '';
+  check(!!stamp && ['trades.csv', 'summary.csv', 'summary.json'].every(n => fs.existsSync(path.join(runs, stamp, n))), 'Run all: trades.csv, summary.csv and summary.json in botruns/<stamp>/');
+  await shot(bot.page, 'markup-bot-summary.png');
+  await bot.page.click('#btnBotExport');
+  const ex = await until(() => bot.page.evaluate(() => document.getElementById('botExportMsg').textContent));
+  check(!!ex && ex.includes(path.join('botruns', stamp)), 'Export says where the files are (' + ex + ')');
+  await bot.page.close();
+
+  console.log('7. mutation proof: a bot view that leaks one future event must fail check 6');
+  const csrc = fs.readFileSync(path.join(root, 'tools', 'markup_core.py'), 'utf8');
+  const cline = "events = [_pick(e, EVENT_KEYS) for e in evs if e['t'] <= c]";
+  check(csrc.includes(cline), 'the bot view filter is where the mutation expects it');
+  const mcore = path.join(root, 'tools', '_mutant_markup_core.py'), mstudio = path.join(root, 'tools', '_mutant_bot_markup_studio.py');
+  fs.writeFileSync(mcore, csrc.replace(cline, cline + " + [_pick(e, EVENT_KEYS) for e in evs if e['t'] > c][:1]  # MUTANT"));
+  fs.writeFileSync(mstudio, src.replace('import markup_core as core', 'import _mutant_markup_core as core'));
+  try {
+    const sink = [];
+    await startServer(mstudio, PORT + 2, path.join(tmp, 'marks-' + (PORT + 2)));
+    const m = await botRun(PORT + 2, 'bot mutant', sink);
+    await m.page.close();
+    console.log('  mutant failed ' + sink.length + ' checks, for example: ' + sink.slice(0, 2).join(' / '));
+    check(sink.length > 0, 'the smoke catches a bot view that sends one event before its time');
+  } finally { fs.rmSync(mcore, { force: true }); fs.rmSync(mstudio, { force: true }); }
 } catch (e) {
   failures.push('crashed: ' + (e.stack || e.message));
   console.error(e);
