@@ -36,9 +36,12 @@
     "smoke:display": "node test/display-smoke.mjs",
     "smoke:h1": "node test/h1-smoke.mjs",
     "smoke:h1orders": "node test/h1-orders-smoke.mjs",
+    "smoke:markup": "node test/markup-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",
+    "bridge:replay": "python3 tools/markup_studio.py",
+    "test:markup": "python3 -m unittest discover -s test -p \"test_markup*.py\"",
     "check:nt8": "sh nt8/check/check.sh",
     "check:orders": "sh nt8/check/orders.sh"
   },

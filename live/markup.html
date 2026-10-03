@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markup Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="markup.css">
+<!-- Markup Studio (tools/markup_studio.py serves it): two read-only charts on a replay clock, and the grade panel.
+     markup.js loads first: it puts the page's clock on the replay clock and guards blind mode against dates. -->
+<script src="markup.js"></script>
+</head>
+<body>
+<header class="ms-top">
+  <div class="ms-brand"><span class="ms-mark"></span><b>Markup Studio</b><span class="ms-sub">NQ replay, read only</span></div>
+  <div class="ms-tabs" role="tablist">
+    <button type="button" role="tab" id="tabBlind" class="on" aria-selected="true">Blind</button>
+    <button type="button" role="tab" id="tabFree" aria-selected="false">Free</button>
+  </div>
+  <div class="ms-clock"><span id="msDate"></span><span id="msClock">--:--:--</span><span class="ms-et">ET</span><span id="msPlay"></span></div>
+  <div class="ms-status" id="msStatus"></div>
+</header>
+<main class="ms-main">
+  <section class="ms-charts">
+    <div class="ms-pane"><div class="ms-pane-head"><span class="ms-pane-name">Range 40</span><div class="chart-live ms-pane-tools" id="toolsRange"></div></div><div class="ms-chart" id="paneRange"></div></div>
+    <div class="ms-pane"><div class="ms-pane-head"><span class="ms-pane-name">1 minute</span><div class="chart-live ms-pane-tools" id="tools1m"></div></div><div class="ms-chart" id="pane1m"></div></div>
+  </section>
+  <aside class="ms-panel" id="msPanel">
+    <section class="ms-sec" id="secBlind">
+      <button type="button" class="ms-btn primary" id="btnNext">Next candidate</button>
+      <div class="ms-line" id="candInfo">No candidate open</div>
+      <div class="ms-line dim" id="queueInfo"></div>
+    </section>
+    <section class="ms-sec" id="secFree" hidden>
+      <div class="ms-row">
+        <select id="freeDay" aria-label="Day"></select>
+        <input id="freeTime" value="09:30" size="5" aria-label="Time (ET)">
+        <button type="button" class="ms-btn" id="btnLoad">Load</button>
+      </div>
+    </section>
+    <section class="ms-sec" id="secClock">
+      <div class="ms-row">
+        <button type="button" class="ms-btn" id="btnStep">Next candle</button>
+        <span class="ms-line dim" id="stepCount"></span>
+      </div>
+      <div class="ms-row" id="playRow">
+        <button type="button" class="ms-btn sm" data-speed="1">1x</button>
+        <button type="button" class="ms-btn sm" data-speed="5">5x</button>
+        <button type="button" class="ms-btn sm" data-speed="20">20x</button>
+        <button type="button" class="ms-btn sm" data-speed="60">60x</button>
+        <button type="button" class="ms-btn sm" id="btnPause">Pause</button>
+      </div>
+      <div class="ms-row" id="jumpRow">
+        <input id="jumpTime" placeholder="HH:MM" size="5" aria-label="Jump to (ET)">
+        <button type="button" class="ms-btn sm" id="btnJump">Jump</button>
+      </div>
+      <div class="ms-row" id="revealRow" hidden>
+        <button type="button" class="ms-btn" id="btnReveal">Reveal (play 5x)</button>
+        <button type="button" class="ms-btn" id="btnJump30">Jump 30 min</button>
+        <button type="button" class="ms-btn sm" id="btnPause2">Pause</button>
+      </div>
+    </section>
+    <form class="ms-sec" id="gradeForm" autocomplete="off">
+      <div class="ms-h">Setup</div>
+      <div class="ms-seg" id="setupSeg">
+        <label><input type="radio" name="setup" value="SWEEP"><span>SWEEP <kbd>1</kbd></span></label>
+        <label><input type="radio" name="setup" value="RETEST"><span>RETEST <kbd>2</kbd></span></label>
+        <label><input type="radio" name="setup" value="NONE"><span>NONE <kbd>3</kbd></span></label>
+        <label><input type="radio" name="setup" value="WAIT"><span>WAIT <kbd>4</kbd></span></label>
+      </div>
+      <div class="ms-h">Direction</div>
+      <div class="ms-seg two" id="dirSeg">
+        <label><input type="radio" name="direction" value="LONG"><span>LONG <kbd>L</kbd></span></label>
+        <label><input type="radio" name="direction" value="SHORT"><span>SHORT <kbd>S</kbd></span></label>
+      </div>
+      <div class="ms-h">Reason</div>
+      <div class="ms-chips" id="chips"></div>
+      <div class="ms-row"><input id="chipNew" placeholder="Add a chip" aria-label="New chip"><button type="button" class="ms-btn sm" id="chipAdd">Add</button></div>
+      <textarea id="reason" rows="2" placeholder="Your read, in your words"></textarea>
+      <div class="ms-h">Marks <span class="dim">(click a chart; Esc cancels)</span></div>
+      <div class="ms-tools" id="markTools"></div>
+      <div class="ms-tools" id="spanTools"></div>
+      <ul class="ms-marks" id="markList"></ul>
+      <button type="submit" class="ms-btn primary" id="btnSave">Save grade</button>
+      <div class="ms-msg" id="saveMsg" role="status"></div>
+    </form>
+    <section class="ms-sec" id="secDraft" hidden>
+      <div class="ms-h">Rule draft</div>
+      <div id="draftOut"></div>
+    </section>
+    <section class="ms-sec" id="secMachine" hidden>
+      <div class="ms-h">Machine read <span class="dim" id="machineNote"></span></div>
+      <table class="ms-table" id="machineOut"></table>
+    </section>
+    <section class="ms-sec" id="secAgree">
+      <div class="ms-h">Agreement with the draft</div>
+      <div class="ms-line" id="agreeOut">none yet</div>
+      <ul class="ms-dis" id="disList"></ul>
+      <button type="button" class="ms-btn sm" id="btnExport">Export CSV</button>
+      <div class="ms-msg" id="exportMsg"></div>
+    </section>
+  </aside>
+</main>
+<script src="../src/chart-engine.js"></script>
+<script src="bar-builder.js"></script>
+<script src="order-ticket.js"></script>
+<script src="live.js"></script>
+</body>
+</html>

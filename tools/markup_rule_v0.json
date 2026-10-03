@@ -1,0 +1,6 @@
+{
+  "name": "draft v0",
+  "about": "TAKE when the volume into the level is falling (slope of the five 1-minute windows before the cross, contracts per minute, below slope_below) AND a 1-minute candle has closed back beyond the level (one of reclaim_closes). Entry A = the reclaim candle's close, entry B = one tick past the failed candle (the confirmation break). Change the numbers here; the Studio reads this file at every save.",
+  "slope_below": 0.0,
+  "reclaim_closes": ["same-candle wick close back", "later candle close back"]
+}
