@@ -747,4 +747,5 @@ def export_csv(marks_dir) -> tuple[str, int]:
 
 DEFAULT_CHIPS = ['weak volume into level', 'strong volume into level', 'volume drying up', 'fast move into level',
                  'slow grind into level', 'too deep', 'shallow probe', 'clean reclaim close', 'wick reclaim',
-                 'no confirmation yet', 'confirmation candle', 'near another level', 'trend day', 'chop', 'time of day']
+                 'no confirmation yet', 'confirmation candle', 'near another level', 'trend day', 'chop', 'time of day',
+                 'stop limit on failed candle break']

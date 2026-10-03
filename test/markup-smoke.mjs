@@ -108,7 +108,11 @@ function noFuture(rec, clockUtc, sink, label) {
     for (let i = 0; same && i < want; i++) same = Math.abs(got[i][0] - FX.wall[i] / 1000) < 1e-6 && got[i][1] === FX.px[i] && got[i][2] === FX.vol[i];
     check(same, `${label}: the charts got exactly the day's ${want} ticks before the clock (got ${got.length})`, sink);
     check(FX.utc.includes(clockUtc) && !got.some(r => Math.abs(r[0] - clockWallS) < 1e-6), `${label}: the fixture's trade stamped exactly at the clock did not reach the page`, sink);
-    const hist = msgs.filter(m => m.type === 'history').flatMap(m => m.bars);
+    // the history starts with the prior kept day's minutes (for PDH, PDL, the prior close and the prior value area), all
+    // before this session's first trade
+    const all = msgs.filter(m => m.type === 'history').flatMap(m => m.bars);
+    const prior = all.filter(b => b[0] < FX.wall[0] / 1000), hist = all.slice(prior.length);
+    check(prior.length > 0 && JSON.stringify(prior) === JSON.stringify(FX.prior_bars), `${label}: the history starts with exactly the prior day's ${FX.prior_bars.length} minutes`, sink);
     const byMin = new Map();
     for (let i = 0; i < want; i++) {
       const k = Math.floor(FX.wall[i] / 60000) * 60, b = byMin.get(k);
@@ -182,6 +186,9 @@ try {
   check(!DATE_RE.test(seen.title) && !DATE_RE.test(seen.url), 'blind: no date in document.title or the URL');
   check(!DATE_RE.test(seen.drawn), 'blind: no date drawn on any chart canvas (crosshair time tag, axis day labels)' + (DATE_RE.exec(seen.drawn) ? ' (found ' + DATE_RE.exec(seen.drawn)[0] + ')' : ''));
   check(seen.drewTimeTag, 'blind: the charts still draw times of day (HH:MM)');
+  // the prior day levels in view (the fixture's prior close, PDL and the low end of its value area sit below this day's prices)
+  const pd = ['PDH', 'PD VAH'].filter(k => !seen.drawn.split(' | ').some(t => t.trim().startsWith(k)));
+  check(!pd.length, 'blind: the charts draw the prior day levels in view (PDH, PD VAH)' + (pd.length ? ' (missing ' + pd.join(', ') + ')' : ''));
   const mr = await fetch(`http://127.0.0.1:${PORT}/api/machine`, { headers: { Host: 'localhost:' + PORT } });
   check(mr.status === 409, 'blind: the machine read is refused before the grade is saved');
   check(await page.locator('#secMachine').isHidden(), 'blind: the machine read panel is hidden before the grade is saved');

@@ -6,6 +6,8 @@
   and 1 minute charts on a replay clock, with reason chips, role marks and spans, a machine read hidden until the grade is
   saved, rule draft v0 with a running agreement score, and a CSV export. Read only, port 8790, the holdout (2026-04-01 on)
   refused everywhere. No change to the live pages, the engine or `nt8/`. See docs/MARKUP_STUDIO.md.
+- Markup Studio: the history starts with the prior kept day's minutes, so the charts draw PDH, PDL, the prior close and the
+  prior day's value area (Anthony 2026-10-03); chip "stop limit on failed candle break".
 
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 

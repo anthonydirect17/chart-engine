@@ -86,7 +86,9 @@ def write(out):
     np.savez(os.path.join(out, 'NQ_2026-03-10.npz'), wall_ms=tb, price=pb, volume=vb, bid=bb, ask=ab)
     th, ph, vh = day_a('2026-04-02')
     np.savez(os.path.join(out, 'NQ_2026-04-02.npz'), wall_ms=th, price=ph, volume=vh)
-    info = {'PDH': P, 'days': {'2026-03-10': {'wall': tb.tolist(), 'utc': core.wall_to_utc(tb).tolist(), 'px': pb.tolist(), 'vol': vb.tolist()}}}
+    prior = core.minute_bars(core.Day('2026-03-09', ta, pa, va))         # the history the Studio sends before 2026-03-10's
+    info = {'PDH': P, 'days': {'2026-03-10': {'wall': tb.tolist(), 'utc': core.wall_to_utc(tb).tolist(), 'px': pb.tolist(), 'vol': vb.tolist(),
+                                              'prior_bars': prior}}}
     with open(os.path.join(out, 'fixture.json'), 'w') as f:
         json.dump(info, f)
     return info

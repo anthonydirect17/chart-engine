@@ -766,3 +766,68 @@ class Review2(unittest.TestCase):
         self.assertEqual(mr['depth_points'], 1.5)
         self.assertEqual(mr['probe_seconds'] if 'probe_seconds' in mr else mr.get('probe_time_s'), 20)
 
+
+
+def frame_texts(frames):
+    """The text of the server's (unmasked) WebSocket frames."""
+    out = []
+    for f in frames:
+        n, k = f[1] & 0x7F, 2
+        if n == 126:
+            n, k = int.from_bytes(f[2:4], 'big'), 4
+        elif n == 127:
+            n, k = int.from_bytes(f[2:10], 'big'), 10
+        out.append(f[k:k + n].decode('utf-8'))
+    return out
+
+
+class PriorDay(unittest.TestCase):
+    """Anthony 2026-10-03 at HOME: PDH, PDL, the prior close and PD VAH/VAL/POC were missing from the Studio's charts. The
+    page's Levels take them from the prior day's minutes in the history, so the history starts with the prior kept day."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = os.path.join(self.tmp.name, 'data')
+        self.marks = os.path.join(self.tmp.name, 'marks')
+        self.info = markup_fixture.write(self.data)
+        os.makedirs(self.marks)
+        self.src = ms.NpzSource(self.data, 'NQ')
+        self.st = ms.Studio(self.src, self.marks, os.path.join(HERE, '..', 'tools', 'markup_rule_v0.json'), [], 'NQ')
+        self.st.start_scan(background=False)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def history(self):
+        st = self.st
+        texts = frame_texts(st._load_frames(st.day, st.n_visible(), st.load_seq, st.prior))
+        return [b for m in map(json.loads, texts) if m['type'] == 'history' for b in m['bars']]
+
+    def test_blind_history_starts_with_the_prior_day_and_holds_nothing_after_the_cut(self):
+        s = self.st.blind_next()
+        bars = self.history()
+        start = core.wall_of('2026-03-09', 18) // 1000                  # this session's 18:00 start (wall seconds)
+        prior = [b for b in bars if b[0] < start]
+        self.assertEqual(prior, self.st.prior)
+        self.assertGreater(len(prior), 1000)
+        rth = [b for b in prior if 34200 <= b[0] % 86400 < 57600]
+        self.assertEqual(max(b[2] for b in rth), self.info['PDH'])      # the chart's PDH is the candidate's level
+        self.assertEqual(s['level']['price'], self.info['PDH'])
+        cut = core.wall_of(D, 10, 6) // 1000
+        self.assertLess(max(b[0] for b in bars), cut)                    # exclusive cut: the 10:06 minute is not there
+        self.assertEqual(max(b[0] for b in bars), cut - 60)
+
+    def test_no_prior_day_on_the_first_day(self):
+        self.st.free_load('2026-03-09', '10:00')
+        self.assertEqual(self.st.prior, [])
+        self.assertTrue(all(b[0] >= core.wall_of('2026-03-08', 18) // 1000 for b in self.history()))
+
+    def test_a_day_without_a_morning_is_passed_over(self):
+        st = self.st
+        orig = core.has_morning
+        try:
+            core.has_morning = lambda day: False
+            self.assertEqual(st.prior_bars(D), [])
+        finally:
+            core.has_morning = orig
+        self.assertEqual(st.prior_bars(D)[0][0], core.wall_of('2026-03-08', 18) // 1000)

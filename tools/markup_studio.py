@@ -54,6 +54,7 @@ SETUPS = ('SWEEP', 'RETEST', 'NONE', 'WAIT')
 SPEEDS = (1, 5, 20, 60)
 MARK_ROLES = ('Level', 'Failed candle', 'Reclaim candle', 'Entry', 'Stop', 'Target')
 SPAN_ROLES = ("Volume I'm reading", 'Approach')
+PRIOR_TRIES = 10       # in-sample days looked back through for the prior kept day (prior_bars)
 
 
 def visible_count(day, clock_utc, exclusive=False):
@@ -167,7 +168,7 @@ class Studio:
         self.seen = core.read_seen([p for p in seen_paths if p and os.path.isfile(p)], self.seen_report)
         self.lock = threading.RLock()
         self.clients = set()
-        self.day = None
+        self.day, self.prior = None, []
         self.mode = 'blind'
         self.clock = 0
         self.playing, self.speed, self.anchor = False, 0, (0.0, 0)
@@ -298,11 +299,27 @@ class Studio:
         """An ungraded blind candidate is open: nothing may show its future or its date until the grade is saved."""
         return self.mode == 'blind' and self.day is not None and not self.graded
 
+    def prior_bars(self, d):
+        """The 1-minute bars of the prior kept day (the one the scan takes PDH and PDL from: the last earlier in-sample day
+        that loads with a morning), so the page's Levels draw PDH, PDL, the prior close and the prior day's value area as on
+        the live charts. That day ends before this day's session starts: nothing after the clock comes with it."""
+        days = [x for x in self.source.days() if x < d]
+        for x in reversed(days[-PRIOR_TRIES:]):
+            try:
+                p = self.source.load(x)
+            except Exception as e:   # noqa: BLE001 - as the scan: a day that does not load is passed over
+                log(f'prior day {x} for {d}: skipped: {e}')
+                continue
+            if core.has_morning(p):
+                return core.minute_bars(p)
+        return []
+
     def _load(self, d, clock_utc, mode):
         day = self.source.load(d)            # refuses the holdout
+        prior = self.prior_bars(day.date)
         with self.lock:
             self._drop_clients()
-            self.day, self.mode, self.clock = day, mode, int(clock_utc)
+            self.day, self.prior, self.mode, self.clock = day, prior, mode, int(clock_utc)
             self.load_seq += 1
             self.playing, self.speed = False, 0
             self.steps, self.graded = 0, False
@@ -594,9 +611,9 @@ class Studio:
             if self.day is None or m.get('root') != r:
                 c.send({'type': 'status', 'level': 'info', 'text': 'No day loaded' if self.day is None else 'Markup Studio serves ' + r + ' only'})
                 return
-            day, n, seq = self.day, self.n_visible(), self.load_seq
+            day, prior, n, seq = self.day, self.prior, self.n_visible(), self.load_seq
             c.ready, c.sent = False, n
-        c.send_raw(self._load_frames(day, n, seq))         # the heavy part runs outside the lock (the page's polls go on)
+        c.send_raw(self._load_frames(day, n, seq, prior))         # the heavy part runs outside the lock (the page's polls go on)
         with self.lock:
             if self.day is not day or c.closed:
                 return
@@ -604,15 +621,16 @@ class Studio:
             c.ready = True
             self._release()                           # the trades the clock passed meanwhile
 
-    def _load_frames(self, day, n, seq):
+    def _load_frames(self, day, n, seq, prior=()):
         """The load's history and ticks messages as WebSocket frames, encoded once per day and cut: both charts subscribe to
-        the same load, so the second gets the same bytes (a full day is some 30 MB of JSON)."""
+        the same load, so the second gets the same bytes (a full day is some 30 MB of JSON). The history starts with the
+        prior kept day's minutes (prior_bars), then this day's up to the clock."""
         key = (seq, n)
         with self.cache_lock:
             if self.frames_key == key:
                 return self.frames
             r, v = self.symbol, day.upto(n)
-            bars = core.minute_bars(v)
+            bars = list(prior) + core.minute_bars(v)
             out = [ws_frame(json.dumps({'type': 'history', 'root': r, 'name': r + ' replay', 'barSeconds': 60, 'bars': bars[i:i + 4000],
                                         'done': i + 4000 >= len(bars)}, separators=(',', ':'))) for i in range(0, max(1, len(bars)), 4000)]
             out += [ws_frame(json.dumps({'type': 'ticks', 'root': r, 'ticks': tick_rows(v, i, min(n, i + 20000)), 'done': i + 20000 >= n},

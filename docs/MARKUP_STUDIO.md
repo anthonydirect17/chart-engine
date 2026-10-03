@@ -16,7 +16,8 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 
 - Training is on RTH sweeps only (09:31 to 16:00). Levels: PDH/PDL (prior day's RTH) and ONH/ONL (18:00 to 09:29:59),
   the last two only when the day's data really starts the evening before. The blind queue offers quote days only (real
-  volume and buy/sell); `--include-last-only` adds the others.
+  volume and buy/sell); `--include-last-only` adds the others. The charts load the prior kept day's minutes first, so the
+  LV button draws PDH, PDL, Prior close and PD VAH / VAL / POC as on the live charts (nothing of the day after the clock).
 
 
 - **Blind** (the default): Next candidate opens a sweep at its cut (the close of the 1-minute candle holding the reclaim). Only
