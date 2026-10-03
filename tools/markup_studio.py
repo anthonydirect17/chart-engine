@@ -913,7 +913,7 @@ def default_seen():
     out = [os.path.join(base, 'sweep_blind', 'KEY.csv')]
     prints = os.path.join(base, 'eventstudy_r1', 'prints')
     if os.path.isdir(prints):
-        out += [os.path.join(prints, n) for n in sorted(os.listdir(prints)) if n.lower().endswith('.csv')]
+        out += [os.path.join(prints, n) for n in sorted(os.listdir(prints)) if core.PRINT_NAME.match(n)]   # sweep (E2) prints only
     return out
 
 

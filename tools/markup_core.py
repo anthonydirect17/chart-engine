@@ -390,11 +390,21 @@ def _wall_from(value, day: str):
     return None
 
 
+# Round 1 sweep prints are named E2_<n>_<date>_<event ms>_<level>.csv (the event is the reclaim tick); the rows are ticks.
+PRINT_NAME = re.compile(r'^E2_\d+_(\d{4}-\d{2}-\d{2})_(\d{10,14})_(PDH|PDL|ONH|ONL)\.csv$', re.IGNORECASE)
+
+
 def read_seen(paths, report=None):
     """Best effort: [(date, level_type, reclaim_ms)] from the blind-chart KEY.csv and event-study print CSVs. `report`, a
     list, gets one {path, rows, parsed, columns} per file read (parsed: rows with a date and a reclaim time)."""
     seen = []
     for p in paths:
+        m = PRINT_NAME.match(re.split(r'[\\/]', str(p))[-1])     # either slash, whatever the OS
+        if m:                                   # an event-study print: the event is in the file name, not the rows
+            seen.append((m.group(1), m.group(3).upper(), float(m.group(2))))
+            if report is not None:
+                report.append({'path': p, 'rows': 1, 'parsed': 1, 'columns': ['file name']})
+            continue
         try:
             with open(p, newline='', encoding='utf-8-sig') as f:
                 rd = csv.DictReader(f)

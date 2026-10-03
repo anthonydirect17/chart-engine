@@ -730,3 +730,12 @@ class Review2(unittest.TestCase):
             s.include_last_only, s.graded_ids, s.seen_ids = flag, set(), set()
             self.assertEqual([s._skip(c_q), s._skip(c_l)], want)
 
+    def test_round1_sweep_prints_are_read_from_the_file_name(self):
+        rep = []
+        seen = core.read_seen([r'E:\x\E2_01_2025-07-09_1752069366000_PDH.csv'], rep)
+        self.assertEqual(seen, [('2025-07-09', 'PDH', 1752069366000.0)])
+        self.assertEqual(rep[0]['parsed'], 1)
+        self.assertIsNone(core.PRINT_NAME.match('E1_01_2025-07-07_1751895014000_ONL.csv'))
+        c = {'date': '2025-07-09', 'level_type': 'PDH', 'reclaim_wall_ms': 1752069366000 + 60_000, 'reclaim_utc_ms': 0}
+        self.assertTrue(core.is_seen(c, seen))
+
