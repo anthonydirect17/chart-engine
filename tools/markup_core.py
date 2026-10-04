@@ -29,8 +29,17 @@ try:                                   # Windows Python has no time zone databas
 except Exception:                      # noqa: BLE001 - the US rules below are used instead
     NY = None
 HOLDOUT = date(2026, 4, 1)           # this date and later is the holdout: never listed, loaded, scanned or graded
-TICK = 0.25                           # NQ
-SYMBOL = 'NQ'
+# Every instrument's numbers, in this one place: tick size, $ per point and $ per round trip (1 contract, commissions and
+# fees). The Studio runs on a full contract (one with a 'micro') and prices its trades on that contract and its micro.
+# PROVISIONAL: the ES and MES round trips are assumed the same as NQ's and MNQ's until Anthony confirms them.
+INSTRUMENTS = {
+    'NQ': {'tick': 0.25, 'point_value': 20.0, 'rt': 4.50, 'micro': 'MNQ'},
+    'ES': {'tick': 0.25, 'point_value': 50.0, 'rt': 4.50, 'micro': 'MES'},      # rt PROVISIONAL
+    'MNQ': {'tick': 0.25, 'point_value': 2.0, 'rt': 1.00},
+    'MES': {'tick': 0.25, 'point_value': 5.0, 'rt': 1.00},                     # rt PROVISIONAL
+}
+STUDIO_SYMBOLS = tuple(sorted(k for k, v in INSTRUMENTS.items() if v.get('micro')))
+TICK = INSTRUMENTS['NQ']['tick']      # the default tick of the candidate scan and the machine read; the Studio passes its own
 MIN = 60_000
 RTH_OPEN = 9 * 3600 + 30 * 60         # seconds of the day, wall clock
 RTH_CLOSE = 16 * 3600
@@ -56,6 +65,19 @@ def check_date(s) -> str:
     if d >= HOLDOUT:
         raise HoldoutError(f'{d.isoformat()} is in the holdout (2026-04-01 and later); the Studio refuses it')
     return d.isoformat()
+
+
+def instrument(symbol) -> dict:
+    """The Studio's instrument: {'symbol', 'tick', 'point_value', 'rt', 'micro', 'micro_point_value', 'micro_rt'}, or a
+    ValueError naming the symbols it knows. Never a silent default."""
+    sym = str(symbol or '').strip().upper()
+    if sym not in STUDIO_SYMBOLS:
+        raise ValueError(f'unknown symbol {symbol!r}: the Studio runs on {" or ".join(STUDIO_SYMBOLS)} '
+                         f'({" or ".join("--symbol=" + x for x in STUDIO_SYMBOLS)})')
+    i = INSTRUMENTS[sym]
+    m = INSTRUMENTS[i['micro']]
+    return {'symbol': sym, 'tick': i['tick'], 'point_value': i['point_value'], 'rt': i['rt'], 'micro': i['micro'],
+            'micro_point_value': m['point_value'], 'micro_rt': m['rt']}
 
 
 def in_sample(s) -> bool:
@@ -707,11 +729,23 @@ def list_grades(marks_dir):
     return out
 
 
+def marks_symbols(marks_dir, grades=None) -> set:
+    """The symbols a marks folder's own files name: its candidate cache (candidates_v1.json) and its grades."""
+    out = set()
+    try:
+        with open(os.path.join(marks_dir, 'candidates_v1.json'), encoding='utf-8') as f:
+            out.add(json.load(f).get('symbol'))
+    except (OSError, ValueError, AttributeError):
+        pass
+    out.update(g.get('symbol') for g in (list_grades(marks_dir) if grades is None else grades))
+    return {str(x).upper() for x in out if x}
+
+
 def export_csv(marks_dir) -> tuple[str, int]:
     """marks_export.csv: one flat row per grade."""
     rows = []
     for g in list_grades(marks_dir):
-        r = {k: g.get(k) for k in ('id', 'mode', 'date', 'clock_tod', 'clock_utc_ms', 'level_type', 'level_price',
+        r = {k: g.get(k) for k in ('id', 'mode', 'date', 'symbol', 'clock_tod', 'clock_utc_ms', 'level_type', 'level_price',
                                    'setup', 'direction', 'reason', 'steps_after_cut', 'saved_utc')}
         r['chips'] = ';'.join(g.get('chips') or [])
         d = g.get('draft') or {}
@@ -755,15 +789,44 @@ DEFAULT_CHIPS = ['weak volume into level', 'strong volume into level', 'volume d
 # The Studio knows no trading rule: a bot module (scratchpad contract BOT_API v1) returns events, orders and trades for a
 # whole day, and the functions below only split the days, cut what the bot returned at the replay clock and sum trades.
 SPLIT_SEED = 7
-COSTS = {'NQ': (20.0, 4.50), 'MNQ': (2.0, 1.00)}          # $ per point, $ per round trip (1 contract)
 
 
-def bot_split(quote_days, last_only_days, seed=SPLIT_SEED) -> dict:
+def bot_split(quote_days, last_only_days, seed=SPLIT_SEED, symbol=None) -> dict:
     """Bot days and grading days: every last-only day goes to the bot; the quote days, sorted and shuffled with the seeded
-    shuffle, give their first ceil(n/2) to the bot and the rest to grading."""
+    shuffle, give their first ceil(n/2) to the bot and the rest to grading. With a symbol the split records it."""
     q = [x['date'] for x in shuffled([{'date': d, 'cross_utc_ms': 0, 'level_type': ''} for d in sorted(set(quote_days))], seed)]
     k = (len(q) + 1) // 2
-    return {'version': 1, 'seed': seed, 'bot': sorted(set(last_only_days) | set(q[:k])), 'grading': sorted(q[k:])}
+    sp = {'version': 1, 'seed': seed, 'bot': sorted(set(last_only_days) | set(q[:k])), 'grading': sorted(q[k:])}
+    if symbol:
+        sp['symbol'] = symbol
+    return sp
+
+
+def check_split(sp, symbol, days=None, folder_symbols=()):
+    """A split file read back is this symbol's, or a ValueError (the Studio refuses to start; the file is never rewritten).
+    A split that names its symbol must name this one. A legacy split (no symbol: written before splits recorded one, all
+    of them NQ) is refused when the folder's grades or candidate cache name another symbol; else taken as NQ's for NQ,
+    and for another symbol only when every day in it is one of that symbol's days (`days`), with a warning. Returns the
+    warning to log, or None."""
+    have = sp.get('symbol')
+    if have is not None:
+        if str(have).upper() != symbol:
+            raise ValueError(f'its day split (bot_split_v1.json) is for {have}, not {symbol}: give {symbol} its own marks folder')
+        return None
+    others = sorted({str(x).upper() for x in folder_symbols if x} - {symbol})
+    if others:
+        raise ValueError(f'its day split (bot_split_v1.json) names no symbol and the folder holds {", ".join(others)} grades or '
+                         f'candidates: give {symbol} its own marks folder')
+    if symbol == 'NQ':
+        return None
+    if days is None:
+        raise ValueError(f'its day split (bot_split_v1.json) names no symbol and the {symbol} days cannot be listed to check it')
+    missing = sorted((set(sp['bot']) | set(sp['grading'])) - set(days))
+    if missing:
+        raise ValueError(f'its day split (bot_split_v1.json) names no symbol (an NQ split from before splits named theirs) and '
+                         f'{len(missing)} of its days are not {symbol} days (e.g. {missing[0]}): give {symbol} its own marks folder')
+    return (f'day split: bot_split_v1.json names no symbol; every one of its days is an {symbol} day, so it is taken as the '
+            f'{symbol} split (the file is not rewritten)')
 
 
 EVENT_KEYS = ('t', 'kind', 'text', 'price', 'level')
@@ -777,16 +840,27 @@ def _pick(d, keys):
 
 
 def trade_cost(points, contract='NQ'):
-    per_point, rt = COSTS[contract]
-    return float(points) * per_point - rt
+    """Net $ of one round trip of 1 contract: points times its $ per point, less its round trip (INSTRUMENTS)."""
+    c = INSTRUMENTS[contract]
+    return float(points) * c['point_value'] - c['rt']
 
 
-def bot_view(result, clock_wall, exit_ids=()) -> dict:
+def contracts(symbol) -> dict:
+    """What the dollar fields are in: {'symbol', 'contract', 'micro', 'point_value', 'rt', 'micro_point_value', 'micro_rt'}.
+    'usd' fields are 1 `contract` (the symbol), 'usd_micro' fields 1 `micro`, each after its round trip."""
+    i = instrument(symbol)
+    return {'symbol': i['symbol'], 'contract': i['symbol'], 'micro': i['micro'], 'point_value': i['point_value'], 'rt': i['rt'],
+            'micro_point_value': i['micro_point_value'], 'micro_rt': i['micro_rt']}
+
+
+def bot_view(result, clock_wall, exit_ids=(), symbol='NQ') -> dict:
     """NO-FUTURE for the Bot tab: what the page may see of a bot's day at the clock (wall ms). Events with t <= clock; an
     order only from t_from <= clock, its t_to clipped at the clock and its status only once t_to <= clock; a trade only
     once entry_t <= clock, each exit only once its exit_t <= clock. Only the contract's fields pass (nothing else the bot
-    returned). Every /api/bot response about a loaded day is built here."""
+    returned). Every /api/bot response about a loaded day is built here. Net $ per exit: 'usd' 1 symbol contract, 'usd_micro'
+    1 micro (contracts())."""
     c = int(clock_wall)
+    cs = contracts(symbol)
     evs = (result or {}).get('events') or []
     events = [_pick(e, EVENT_KEYS) for e in evs if e['t'] <= c]
     orders = []
@@ -809,9 +883,9 @@ def bot_view(result, clock_wall, exit_ids=()) -> dict:
     net = {}
     for k in exit_ids:
         pts = [t['exits'][k]['points'] for t in trades if k in t['exits']]
-        net[k] = {'trades': len(pts), 'points': round(sum(pts), 2), 'nq': round(sum(trade_cost(p) for p in pts), 2),
-                  'mnq': round(sum(trade_cost(p, 'MNQ') for p in pts), 2)}
-    return {'clock_wall_ms': c, 'events': events, 'orders': orders, 'trades': trades, 'net': net}
+        net[k] = {'trades': len(pts), 'points': round(sum(pts), 2), 'usd': round(sum(trade_cost(p, cs['contract']) for p in pts), 2),
+                  'usd_micro': round(sum(trade_cost(p, cs['micro']) for p in pts), 2)}
+    return {'clock_wall_ms': c, 'events': events, 'orders': orders, 'trades': trades, 'net': net, **cs}
 
 
 def max_drawdown(pnls):
@@ -824,25 +898,27 @@ def max_drawdown(pnls):
     return dd
 
 
-def bot_stats(rows) -> dict:
-    """rows: closed trades of one variant and one exit id, each {'points', 'r', 'exit_t'}. Costs per round trip, 1 contract."""
+def bot_stats(rows, symbol='NQ') -> dict:
+    """rows: closed trades of one variant and one exit id, each {'points', 'r', 'exit_t'}. Costs per round trip, 1 contract:
+    'usd' fields the symbol's contract, 'usd_micro' its micro (contracts()); the profit factor on the full contract."""
+    cs = contracts(symbol)
     rows = sorted(rows, key=lambda x: x['exit_t'])
     n = len(rows)
     pts = [float(x['points']) for x in rows]
-    nq = [trade_cost(p) for p in pts]
-    mnq = [trade_cost(p, 'MNQ') for p in pts]
+    usd = [trade_cost(p, cs['contract']) for p in pts]
+    micro = [trade_cost(p, cs['micro']) for p in pts]
     wins = sum(1 for p in pts if p > 0)
-    won, lost = sum(x for x in nq if x > 0), -sum(x for x in nq if x < 0)
+    won, lost = sum(x for x in usd if x > 0), -sum(x for x in usd if x < 0)
     rs = [float(x['r']) for x in rows if x.get('r') is not None]
     r2 = lambda v: None if v is None else round(v, 2)
     return {'trades': n, 'wins': wins, 'losses': n - wins, 'win_pct': r2(100.0 * wins / n) if n else None,
             'avg_r': r2(sum(rs) / len(rs)) if rs else None, 'net_points': r2(sum(pts)),
-            'net_nq': r2(sum(nq)), 'net_nq_per_trade': r2(sum(nq) / n) if n else None,
-            'net_mnq': r2(sum(mnq)), 'net_mnq_per_trade': r2(sum(mnq) / n) if n else None,
-            'pf': r2(won / lost) if lost > 0 else None, 'max_dd_nq': r2(max_drawdown(nq)), 'max_dd_mnq': r2(max_drawdown(mnq))}
+            'net_usd': r2(sum(usd)), 'net_usd_per_trade': r2(sum(usd) / n) if n else None,
+            'net_usd_micro': r2(sum(micro)), 'net_usd_micro_per_trade': r2(sum(micro) / n) if n else None,
+            'pf': r2(won / lost) if lost > 0 else None, 'max_dd_usd': r2(max_drawdown(usd)), 'max_dd_usd_micro': r2(max_drawdown(micro))}
 
 
-def bot_summary(trades, variants, exit_ids) -> list:
+def bot_summary(trades, variants, exit_ids, symbol='NQ') -> list:
     """trades: [{'variant': id, 'level_type', 'dir', 'exits': {exit id: {...}}}]. One row per variant x exit id (group
     'all'), then the same split by level_type and by dir. A trade without a given exit is left out of that exit's rows."""
     out = []
@@ -855,5 +931,5 @@ def bot_summary(trades, variants, exit_ids) -> list:
         for g, ts in groups:
             for k in exit_ids:
                 rows = [t['exits'][k] for t in ts if k in (t.get('exits') or {})]
-                out.append({'variant': v, 'exit_id': k, 'group': g, **bot_stats(rows)})
+                out.append({'variant': v, 'exit_id': k, 'group': g, **bot_stats(rows, symbol)})
     return out

@@ -1,4 +1,4 @@
-"""Markup Studio: grade NQ liquidity sweeps on the chart-engine charts, to turn reads into bot mechanics.
+"""Markup Studio: grade NQ or ES liquidity sweeps on the chart-engine charts, to turn reads into bot mechanics.
 
     py -3 tools\\markup_studio.py            then open http://localhost:8790/live/markup.html (opened for you)
 
@@ -15,13 +15,15 @@ Flags (defaults are the HOME PC's folders):
   --seen=PATH[,PATH]                            CSVs of events already seen (default: tickbench's sweep_blind KEY.csv and
                                                 eventstudy_r1 prints, when present)
   --rule=tools/markup_rule_v0.json              the rule draft's thresholds
-  --port=8790   --symbol=NQ   --no-browser
+  --port=8790   --no-browser
+  --symbol=NQ                                   NQ or ES (core.INSTRUMENTS: tick, $ per point, round trips); give each symbol
+                                                its own --marks folder (the day split records its symbol)
   --include-last-only                           blind queue also offers last-only days (volume is all 1 there; off by default)
   --check[=YYYY-MM-DD]                          load one in-sample day through the loader, print what the Studio sees, exit
   --source=npz                                  tests: <data>/<SYMBOL>_<YYYY-MM-DD>.npz with wall_ms, price, volume[, bid, ask]
   --bot=PATH                                    a bot module (.py, BOT_API 1) for the Bot tab; the Studio knows no rule itself
 Days are split once into bot days and grading days (<marks>/bot_split_v1.json, never rewritten): the blind queue offers
-grading days only, the Bot tab bot days only.
+grading days only, the Bot tab bot days only. A split made for another symbol is refused (core.check_split).
 Holdout: any date from 2026-04-01 on is refused everywhere (listing, loading, candidates, free mode).
 Python 3.10+, stdlib + numpy only.
 """
@@ -255,7 +257,9 @@ class Studio:
     split, bot_days, grading_days = None, frozenset(), None     # until load_split() (tests build a bare Studio)
 
     def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None):
-        self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, symbol
+        self.inst = core.instrument(symbol)                  # an unknown symbol is a ValueError, never NQ by default
+        self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, self.inst['symbol']
+        self.tick = self.inst['tick']
         self.include_last_only = include_last_only     # blind queue: quote days only unless --include-last-only
         self.seen_report = []
         self.seen = core.read_seen([p for p in seen_paths if p and os.path.isfile(p)], self.seen_report)
@@ -293,8 +297,9 @@ class Studio:
 
     # ---------------------------------------------------------------- the day split
     def load_split(self):
-        """<marks>/bot_split_v1.json: written on the first start that finds days (core.bot_split, seed 7) and only read
-        after that, never rewritten. Days not in it (new data) go to neither list and are logged."""
+        """<marks>/bot_split_v1.json: written on the first start that finds days (core.bot_split, seed 7, with the symbol)
+        and only read after that, never rewritten. A split that is not this symbol's is refused (core.check_split: the
+        Studio does not start). Days not in it (new data) go to neither list and are logged."""
         path = os.path.join(self.marks, 'bot_split_v1.json')
         try:
             days = self.source.days()
@@ -309,11 +314,14 @@ class Studio:
                     raise ValueError('not a version 1 split')
             except (OSError, ValueError, AttributeError) as e:
                 raise ValueError(f'cannot read {path} ({e}); it is never rewritten: fix or move it by hand') from e
+            warn = core.check_split(sp, self.symbol, days, core.marks_symbols(self.marks, self.grades))
+            if warn:
+                log(warn)
         else:
             if not days:
                 return                                   # nothing to split yet: written on a start that finds days
             q = set(self.source.quote_days())
-            sp = core.bot_split(q, [d for d in days if d not in q])
+            sp = core.bot_split(q, [d for d in days if d not in q], symbol=self.symbol)
             core.write_text(path, json.dumps(sp, indent=1))
             log(f'day split written to {path}: {len(sp["bot"])} bot days, {len(sp["grading"])} grading days')
         self.split = sp
@@ -368,7 +376,7 @@ class Studio:
                     try:
                         day = self.source.load(d)
                         if core.has_morning(day):
-                            found = core.find_candidates(day, tuple(prev) if prev else None)
+                            found = core.find_candidates(day, tuple(prev) if prev else None, self.tick)
                             hl = core.rth_hilo(day)
                             hilo = list(hl) if hl else prev
                         else:                                  # not a kept day (the research's rule)
@@ -610,7 +618,7 @@ class Studio:
             if lv is None:
                 return {'ok': False, 'why': 'mark a Level (or open a candidate) to read it'}
             dirn = self.cand.get('dir') if self.mode == 'blind' and self.cand and cross == self.cand.get('cross_utc_ms') else None
-            return core.machine_read(self.vis(), self.clock, float(lv), cross, exclusive=self.exclusive, direction=dirn)
+            return core.machine_read(self.vis(), self.clock, float(lv), cross, tick=self.tick, exclusive=self.exclusive, direction=dirn)
 
     def _level(self):
         """The level in force and its cross: the open candidate's, the one set in free mode, or else (free mode) the day's
@@ -667,7 +675,8 @@ class Studio:
                     level = {'type': 'marked', 'price': lm[-1]['price']}
             cross = self.cand['cross_utc_ms'] if self.cand else auto_cross if level is not None and level == self._level()[0] else None
             dirn = self.cand.get('dir') if self.cand and cross == self.cand.get('cross_utc_ms') else None
-            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, exclusive=self.exclusive, direction=dirn) if level else {'ok': False, 'why': 'no level'}
+            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, tick=self.tick, exclusive=self.exclusive,
+                                   direction=dirn) if level else {'ok': False, 'why': 'no level'}
             rule = core.load_rule(self.rule_path)
             draft = core.draft_verdict(mr, rule)
             clock_wall = core.utc_to_wall(self.clock)
@@ -758,7 +767,7 @@ class Studio:
         b = self.bot
         return {'ok': b is not None, 'error': self.bot_error, 'usage': BOT_USAGE, 'name': b and b['name'],
                 'variants': [{'id': v['id'], 'label': v['label']} for v in b['variants']] if b else [],
-                'exit_ids': b['exit_ids'] if b else []}
+                'exit_ids': b['exit_ids'] if b else [], **core.contracts(self.symbol)}
 
     def bot_day_list(self):
         self._bot_need()
@@ -835,7 +844,7 @@ class Studio:
         v = self._variant(key[1])
         out = {'name': self.bot['name'], 'variant': v['id'], 'variant_label': v['label'], 'exit_ids': self.bot['exit_ids'],
                'status': run.get('status', ''), 'progress': round(run.get('progress', 0.0), 3), 'error': run.get('error', '')}
-        out.update(core.bot_view(res, core.utc_to_wall(clock), self.bot['exit_ids']))
+        out.update(core.bot_view(res, core.utc_to_wall(clock), self.bot['exit_ids'], self.symbol))
         return out
 
     def bot_runall_start(self):
@@ -856,6 +865,7 @@ class Studio:
         r = dict(self.runall)
         r['variants'] = [{'id': v['id'], 'label': v['label']} for v in self.bot['variants']]
         r['exit_ids'] = self.bot['exit_ids']
+        r.update(core.contracts(self.symbol))
         return r
 
     def _runall(self, days):
@@ -891,7 +901,7 @@ class Studio:
                     for t in self.bot_cache[(d, v['id'])]['trades']:
                         trades.append(dict(t, variant=v['id'], date=d))
             self.runall['k'] = len(days)
-            rows = core.bot_summary(trades, [v['id'] for v in variants], exits)
+            rows = core.bot_summary(trades, [v['id'] for v in variants], exits, self.symbol)
             folder = self._write_run(trades, rows, days, failed)
             self.runall.update(running=False, folder=folder, failed=failed, rows=rows)
         except Exception as e:   # noqa: BLE001 - shown in the Bot tab
@@ -906,7 +916,7 @@ class Studio:
             k += 1
             folder = os.path.join(base, f'{stamp}_{k}')
         os.makedirs(folder)
-        exits = self.bot['exit_ids']
+        exits, cs = self.bot['exit_ids'], core.contracts(self.symbol)
         feats = []
         for t in trades:
             for f in (t.get('features') or {}):
@@ -914,7 +924,7 @@ class Studio:
                     feats.append(f)
         flat = []
         for t in trades:
-            r = {'variant': t['variant'], 'date': t['date']}
+            r = {'symbol': cs['contract'], 'micro': cs['micro'], 'variant': t['variant'], 'date': t['date']}
             r.update({k2: t.get(k2) for k2 in ('id', 'level_type', 'level_price', 'dir')})
             r['entry_time'] = core.fmt_tod(t['entry_t'])
             r.update({k2: t.get(k2) for k2 in ('entry_t', 'entry', 'stop', 'target', 'target_kind')})
@@ -923,18 +933,21 @@ class Studio:
                 r[f'{x}_exit_time'] = core.fmt_tod(e['exit_t']) if e.get('exit_t') is not None else None
                 for k2 in ('exit_t', 'exit', 'reason', 'points', 'r'):
                     r[f'{x}_{k2}'] = e.get(k2)
-                r[f'{x}_net_nq'] = round(core.trade_cost(e['points']), 2) if e.get('points') is not None else None
-                r[f'{x}_net_mnq'] = round(core.trade_cost(e['points'], 'MNQ'), 2) if e.get('points') is not None else None
+                for k2, c in (('usd', cs['contract']), ('usd_micro', cs['micro'])):
+                    r[f'{x}_net_{k2}'] = round(core.trade_cost(e['points'], c), 2) if e.get('points') is not None else None
             for f in feats:
                 r['f_' + f] = (t.get('features') or {}).get(f)
             flat.append(r)
         labels = {v['id']: v['label'] for v in self.bot['variants']}
         core.write_text(os.path.join(folder, 'trades.csv'), csv_text(flat))
-        core.write_text(os.path.join(folder, 'summary.csv'), csv_text([dict(r, variant_label=labels.get(r['variant'])) for r in rows]))
+        core.write_text(os.path.join(folder, 'summary.csv'), csv_text([dict(r, variant_label=labels.get(r['variant']), symbol=cs['contract'],
+                                                                                 micro=cs['micro']) for r in rows]))
         core.write_text(os.path.join(folder, 'summary.json'), json.dumps({
             'version': 1, 'bot': self.bot['name'], 'stamp': os.path.basename(folder), 'days': days, 'failed_days': failed,
             'variants': [{'id': v['id'], 'label': v['label'], 'params': v['params']} for v in self.bot['variants']],
-            'exit_ids': exits, 'costs': {k2: {'per_point': a, 'round_trip': b} for k2, (a, b) in core.COSTS.items()},
+            'exit_ids': exits, **cs,
+            'costs': {cs['contract']: {'per_point': cs['point_value'], 'round_trip': cs['rt']},
+                      cs['micro']: {'per_point': cs['micro_point_value'], 'round_trip': cs['micro_rt']}},
             'rows': rows}, indent=1))
         return folder
 
@@ -955,8 +968,12 @@ class Studio:
             self.clients.add(c)
             now = self.clock
         c.send({'type': 'hello', 'version': VERSION, 'now': now, 'accounts': [],
-                'instruments': [{'root': self.symbol, 'name': self.symbol + ' replay', 'tick': core.TICK, 'pointValue': 20}]})
+                'instruments': [self.hello_instrument()]})
         c.send({'type': 'execs', 'list': []})
+
+    def hello_instrument(self):
+        """The one instrument the hello announces (the page takes its chart root, header and tick from it)."""
+        return {'root': self.symbol, 'name': self.symbol + ' replay', 'tick': self.tick, 'pointValue': self.inst['point_value']}
 
     def ws_message(self, c, m):
         if not isinstance(m, dict) or m.get('type') != 'subscribe':
@@ -1323,7 +1340,11 @@ def player(studio, stop):
         time.sleep(0.04)
 
 
-def default_seen():
+def default_seen(symbol='NQ'):
+    """The research's already-seen NQ events (they match by date, level type and reclaim time, not price): NQ only. Another
+    symbol has none by default (--seen gives them)."""
+    if symbol != 'NQ':
+        return []
     base = r'E:\SchwabDesk_bulk\tickbench\runs'
     out = [os.path.join(base, 'sweep_blind', 'KEY.csv')]
     prints = os.path.join(base, 'eventstudy_r1', 'prints')
@@ -1370,7 +1391,7 @@ def check(source, symbol, day=None, out=print):
             if core.has_morning(p):
                 prev = core.rth_hilo(p)
                 break
-        cs = core.find_candidates(cur, prev)
+        cs = core.find_candidates(cur, prev, core.instrument(symbol)['tick'])
         if cs:
             c = cs[0]
             out(f'first candidate: {c["id"]} {c["level_type"]} {c["level_price"]} {c["dir"]}, cross {fmt_ms(core.utc_to_wall(c["cross_utc_ms"]), True)}, '
@@ -1387,7 +1408,10 @@ def main(argv=None):
     port = int(opt.get('port', 8790))
     if port == 8765:
         sys.exit('port 8765 is ChartBridge\'s; pick another')
-    symbol = opt.get('symbol', 'NQ')
+    try:
+        symbol = core.instrument(opt.get('symbol', 'NQ'))['symbol']
+    except ValueError as e:
+        sys.exit(f'Markup Studio: {e}')
     data = opt.get('data', r'E:\SchwabDesk_bulk\ticks_packed')
     marks = opt.get('marks', r'E:\SchwabDesk_bulk\marks')
     if opt.get('source') == 'npz':
@@ -1403,7 +1427,9 @@ def main(argv=None):
             sys.exit(check(source, symbol, None if opt['check'] == '1' else opt['check']))
         except (TickReplayError, ValueError) as e:
             sys.exit(f'CHECK FAILED: {e}')
-    seen = opt['seen'].split(',') if opt.get('seen') else default_seen()
+    seen = opt['seen'].split(',') if opt.get('seen') else default_seen(symbol)
+    if not opt.get('seen') and symbol != 'NQ':
+        log(f'already-seen: the default files are NQ events, not used for {symbol} (give --seen=CSV[,CSV] to exclude {symbol} ones)')
     try:
         studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol,
                         include_last_only='include-last-only' in opt, bot_path=opt.get('bot'))

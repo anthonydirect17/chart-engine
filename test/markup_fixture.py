@@ -1,6 +1,8 @@
-"""Synthetic NQ days for the Markup Studio tests. MADE-UP SAMPLE DATA, never market data.
+"""Synthetic NQ and ES days for the Markup Studio tests. MADE-UP SAMPLE DATA, never market data.
 
     python3 test/markup_fixture.py OUTDIR      writes OUTDIR/NQ_<date>.npz and OUTDIR/fixture.json
+    python3 test/markup_fixture.py OUTDIR ES   writes OUTDIR/ES_<date>.npz and OUTDIR/fixture_ES.json: the same days, the
+                                               same shapes, every price 15000 lower (BASES; the same split, the same sweep)
 
 Days (each a session from 18:00 the evening before to 16:59:55, one trade every 5 seconds, so a trade sits exactly on
 every minute boundary):
@@ -25,6 +27,7 @@ import markup_core as core  # noqa: E402
 
 TICK = 0.25
 q = lambda p: round(p / TICK) * TICK
+BASES = {'NQ': 0.0, 'ES': -15000.0}      # each symbol's made-up days: the NQ shapes moved by this many points
 
 
 def wall(d, hh, mm=0, ss=0.0):
@@ -37,10 +40,10 @@ def session_times(d):
     return np.arange(wall(prev, 18), wall(d, 17), 5000, dtype=np.int64)
 
 
-def day_a(d='2026-03-09'):
+def day_a(d='2026-03-09', base=0.0):
     t = session_times(d)
     k = np.arange(t.size)
-    px = np.array([q(20000 + 60 * math.sin(i / 900.0)) for i in k])
+    px = np.array([q(20000 + base + 60 * math.sin(i / 900.0)) for i in k])
     vol = 1 + (k % 3)
     return t, px, vol
 
@@ -98,26 +101,27 @@ def day_c(d='2026-03-05', B=21000.0):
     return t, px, np.ones(t.size, dtype=np.int64), np.where(up, px - TICK, px), np.where(up, px, px + TICK)
 
 
-def write(out):
+def write(out, symbol='NQ'):
     os.makedirs(out, exist_ok=True)
-    tc, pc, vc, bc, ac = day_c()
-    np.savez(os.path.join(out, 'NQ_2026-03-05.npz'), wall_ms=tc, price=pc, volume=vc, bid=bc, ask=ac)
-    ta, pa, va = day_a()
-    np.savez(os.path.join(out, 'NQ_2026-03-09.npz'), wall_ms=ta, price=pa, volume=va)
+    base = BASES[symbol]
+    tc, pc, vc, bc, ac = day_c(B=21000.0 + base)
+    np.savez(os.path.join(out, f'{symbol}_2026-03-05.npz'), wall_ms=tc, price=pc, volume=vc, bid=bc, ask=ac)
+    ta, pa, va = day_a(base=base)
+    np.savez(os.path.join(out, f'{symbol}_2026-03-09.npz'), wall_ms=ta, price=pa, volume=va)
     s = core.tod_s(ta)
     P = float(pa[(s >= 34200) & (s < 57600)].max())
     tb, pb, vb, bb, ab = day_b(P)
-    np.savez(os.path.join(out, 'NQ_2026-03-10.npz'), wall_ms=tb, price=pb, volume=vb, bid=bb, ask=ab)
-    th, ph, vh = day_a('2026-04-02')
-    np.savez(os.path.join(out, 'NQ_2026-04-02.npz'), wall_ms=th, price=ph, volume=vh)
+    np.savez(os.path.join(out, f'{symbol}_2026-03-10.npz'), wall_ms=tb, price=pb, volume=vb, bid=bb, ask=ab)
+    th, ph, vh = day_a('2026-04-02', base)
+    np.savez(os.path.join(out, f'{symbol}_2026-04-02.npz'), wall_ms=th, price=ph, volume=vh)
     prior = core.minute_bars(core.Day('2026-03-09', ta, pa, va))         # the history the Studio sends before 2026-03-10's
     info = {'PDH': P, 'days': {'2026-03-10': {'wall': tb.tolist(), 'utc': core.wall_to_utc(tb).tolist(), 'px': pb.tolist(), 'vol': vb.tolist(),
                                               'prior_bars': prior}}}
-    with open(os.path.join(out, 'fixture.json'), 'w') as f:
+    with open(os.path.join(out, 'fixture.json' if symbol == 'NQ' else f'fixture_{symbol}.json'), 'w') as f:
         json.dump(info, f)
     return info
 
 
 if __name__ == '__main__':
-    write(sys.argv[1])
+    write(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else 'NQ')
     print('fixture written to', sys.argv[1])

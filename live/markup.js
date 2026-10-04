@@ -7,9 +7,10 @@
  *     while paused). Only this page does this; the chart files are unchanged.
  *  2. Blind mode never shows a date: every text the charts draw on their canvases and every text or tooltip in the page
  *     goes through scrub(), which keeps the time of day and drops dates, weekdays and month names.
- * Then the app: two charts mounted read only with ChartLive.mount (live/EMBED.md), Range 40 and 1 minute, NQ; the grade
- * panel; marks drawn on an overlay above each chart. The Bot tab draws what /api/bot/view returns (the server cuts it at the
- * clock) on the same overlays: orders, fills, the open trade's stop and target, exits.
+ * Then the app: two charts mounted read only with ChartLive.mount (live/EMBED.md), Range 40 and 1 minute, on the instrument
+ * the server's hello announces (--symbol: NQ or ES; the header says which); the grade panel; marks drawn on an overlay
+ * above each chart. The Bot tab draws what /api/bot/view returns (the server cuts it at the clock) on the same overlays:
+ * orders, fills, the open trade's stop and target, exits.
  */
 (function () {
   'use strict';
@@ -61,8 +62,7 @@
   const ROLES = ['Level', 'Failed candle', 'Reclaim candle', 'Entry', 'Stop', 'Target'];
   const SPANS = ["Volume I'm reading", 'Approach'];
   const COLORS = { Level: '#B69CFF', 'Failed candle': '#FFC266', 'Reclaim candle': '#7FD7FF', Entry: '#E6EDF5', Stop: '#FF5C7A', Target: '#3DDC97' };
-  const TICK = 0.25;
-  const A = { state: null, panes: {}, overlays: {}, tool: null, spanDraft: null, marks: [], spans: [], chips: [], chipOn: new Set(),
+  const A = { inst: null, state: null, panes: {}, overlays: {}, tool: null, spanDraft: null, marks: [], spans: [], chips: [], chipOn: new Set(),
     lastMount: '', machineTimer: 0, saved: false, uiMode: 'blind', bot: null, botInfo: null, botAt: 0, botBusy: false, runallWas: false,
     botDrawn: { orders: 0, fills: 0, exits: 0 } };
   window.__markup = A;
@@ -79,17 +79,43 @@
   const signed = p => (p > 0 ? '+' : '') + (+p).toFixed(2);
   const todOf = t => { const s = ((Math.floor(t) % 86400) + 86400) % 86400; return [s / 3600 | 0, s / 60 % 60 | 0, s % 60].map(x => String(x).padStart(2, '0')).join(':'); };
 
+  /* ---------------- the instrument: the one the server's hello announces (root, name, tick), read once before the charts */
+  function readHello() {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket('ws://' + location.host + '/ws');
+      ws.onmessage = e => {
+        let m = null;
+        try { m = JSON.parse(e.data); } catch (err) { /* not JSON */ }
+        if (!m || m.type !== 'hello') return;
+        ws.close();
+        const i = (m.instruments || [])[0];
+        if (i && i.root) resolve(i); else reject(new Error('the hello names no instrument'));
+      };
+      ws.onerror = () => reject(new Error('Studio not reachable'));
+    });
+  }
+  const instReady = (async () => {
+    for (;;) {
+      try {
+        A.inst = await readHello();
+        return A.inst;
+      } catch (e) { await new Promise(r => setTimeout(r, 1000)); }
+    }
+  })();
+  const tickSize = () => (A.inst && +A.inst.tick > 0 ? +A.inst.tick : 0.25);
+
   /* ---------------- the charts */
   function unmount() {
     for (const k of Object.keys(A.panes)) { try { A.panes[k].destroy(); } catch (e) { /* gone */ } }
     A.panes = {}; A.overlays = {};
   }
   function mount() {
+    if (!A.inst) { instReady.then(mount); return; }               // the charts need the instrument's root first
     unmount();
     const wsUrl = () => 'ws://' + location.host + '/ws';
     // each chart has its own connection: a shared feed (live/feed.js) gives a 1 minute chart no tick backfill, so its delta
     // would count only from the load; the server encodes the load once and sends the same bytes to both
-    const opts = (prefix, tf) => ({ wsUrl, paneId: 'main', storagePrefix: prefix, view: { root: 'NQ', tf, range: 40 }, compact: true, toolbar: false });
+    const opts = (prefix, tf) => ({ wsUrl, paneId: 'main', storagePrefix: prefix, view: { root: A.inst.root, tf, range: 40 }, compact: true, toolbar: false });
     A.panes.range = ChartLive.mount($('paneRange'), opts('markup-range:', 'range'));
     A.panes.m1 = ChartLive.mount($('pane1m'), opts('markup-1m:', 'm1'));
     for (const [k, slot] of [['range', 'toolsRange'], ['m1', 'tools1m']]) {
@@ -123,7 +149,7 @@
     while (lo < hi) { const m = (lo + hi) >> 1; if (ch.barToX(m) < x) lo = m + 1; else hi = m; }
     let i = lo;
     if (i > 0 && Math.abs(ch.barToX(i - 1) - x) < Math.abs(ch.barToX(i) - x)) i--;
-    const price = Math.round(ch.yToPrice(y) / TICK) * TICK;
+    const price = Math.round(ch.yToPrice(y) / tickSize()) * tickSize();
     return { t: bars.length ? bars[Math.max(0, i)].t : null, price };
   }
   function onPress(ov, e) {
@@ -334,8 +360,8 @@
     }
     const n = $('botNet'); n.textContent = '';
     for (const k of v.exit_ids || []) {
-      const r = (v.net || {})[k] || { trades: 0, points: 0, nq: 0, mnq: 0 }, tr = n.insertRow();
-      cell(tr, k); cell(tr, signed(r.points) + ' pts  $' + r.nq.toFixed(2) + ' NQ  $' + r.mnq.toFixed(2) + ' MNQ  (' + r.trades + ' trades)');
+      const r = (v.net || {})[k] || { trades: 0, points: 0, usd: 0, usd_micro: 0 }, tr = n.insertRow();
+      cell(tr, k); cell(tr, signed(r.points) + ' pts  $' + r.usd.toFixed(2) + ' ' + v.contract + '  $' + r.usd_micro.toFixed(2) + ' ' + v.micro + '  (' + r.trades + ' trades)');
     }
   }
   function clearBot() {
@@ -357,10 +383,11 @@
       if (A.state && A.state.mode === 'bot') $('secBotOut').hidden = false;
     } catch (e) { say('botErr', e.message, true); }
   }
-  const SUM_COLS = [['trades', 'Trades'], ['wins', 'Wins'], ['losses', 'Losses'], ['win_pct', 'Win %'], ['avg_r', 'Avg R'], ['net_points', 'Net pts'],
-    ['net_nq', 'Net $ NQ'], ['net_nq_per_trade', '$ NQ / trade'], ['net_mnq', 'Net $ MNQ'], ['net_mnq_per_trade', '$ MNQ / trade'], ['pf', 'PF (NQ)'],
-    ['max_dd_nq', 'Max DD $ NQ'], ['max_dd_mnq', 'Max DD $ MNQ']];
-  function sumTable(t, rows, labels, withGroup) {
+  // the dollar columns name the server's contracts ('usd' 1 full contract, 'usd_micro' 1 micro: NQ and MNQ, or ES and MES)
+  const sumCols = (c, m) => [['trades', 'Trades'], ['wins', 'Wins'], ['losses', 'Losses'], ['win_pct', 'Win %'], ['avg_r', 'Avg R'], ['net_points', 'Net pts'],
+    ['net_usd', 'Net $ ' + c], ['net_usd_per_trade', '$ ' + c + ' / trade'], ['net_usd_micro', 'Net $ ' + m], ['net_usd_micro_per_trade', '$ ' + m + ' / trade'],
+    ['pf', 'PF (' + c + ')'], ['max_dd_usd', 'Max DD $ ' + c], ['max_dd_usd_micro', 'Max DD $ ' + m]];
+  function sumTable(t, rows, labels, withGroup, SUM_COLS) {
     t.textContent = '';
     head(t, ['Variant', 'Exit'].concat(withGroup ? ['Group'] : [], SUM_COLS.map(c => c[1])));
     const tb = t.createTBody();
@@ -379,9 +406,11 @@
     if (r.error) { $('runAllMsg').textContent = 'Run all failed: ' + r.error; return; }
     if (!r.rows) return;
     const labels = Object.fromEntries((r.variants || []).map(v => [v.id, v.id + ' ' + v.label]));
-    sumTable($('botSumMain'), r.rows.filter(x => x.group === 'all'), labels, false);
-    sumTable($('botSumBy'), r.rows.filter(x => x.group !== 'all'), labels, true);
-    $('botSumNote').textContent = r.n + ' bot days' + (r.failed && r.failed.length ? ', ' + r.failed.length + ' failed (see the window)' : '') + '; costs per round trip: NQ $4.50, MNQ $1.00; (n) = trades';
+    const cols = sumCols(r.contract, r.micro);
+    sumTable($('botSumMain'), r.rows.filter(x => x.group === 'all'), labels, false, cols);
+    sumTable($('botSumBy'), r.rows.filter(x => x.group !== 'all'), labels, true, cols);
+    $('botSumNote').textContent = r.n + ' bot days' + (r.failed && r.failed.length ? ', ' + r.failed.length + ' failed (see the window)' : '') +
+      '; costs per round trip: ' + r.contract + ' $' + (+r.rt).toFixed(2) + ', ' + r.micro + ' $' + (+r.micro_rt).toFixed(2) + '; (n) = trades';
     $('runAllMsg').textContent = 'done: ' + r.n + ' bot days';
     if (A.uiMode === 'bot') $('botSummary').hidden = false;
   }
@@ -493,6 +522,7 @@
 
   function init() {
     buildTools();
+    instReady.then(i => { $('msInst').textContent = i.name || i.root + ' replay'; });
     $('tabBlind').addEventListener('click', () => setMode('blind'));
     $('tabFree').addEventListener('click', () => setMode('free'));
     $('tabBot').addEventListener('click', () => setMode('bot'));

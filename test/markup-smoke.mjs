@@ -14,6 +14,8 @@
 //      /api/bot response recorded and checked against its clock, the bot's later exit in none of them; the order line and
 //      fill marker drawn; the event list holds nothing after the clock. Run all: the summary rows and a hand-worked net $.
 //   7. Mutation proof: a copy of the server whose view filter leaks ONE future bot event must FAIL check 6.
+//   8. ES (--symbol=ES, its own marks folder; the fixture's ES days): the header says ES, the charts' root is ES (from the
+//      server's hello), and the Bot tab's dollars are ES and MES (a hand-worked net $).
 //   npm run smoke:markup     (PYTHON=py to pick the interpreter; CHROMIUM_PATH to use a preinstalled browser; SHOTS_DIR)
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -32,6 +34,7 @@ const PORT = +(process.env.MARKUP_SMOKE_PORT || 8792);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'markup-smoke-'));
 const dataDir = path.join(tmp, 'data');
 execFileSync(PY, [path.join(root, 'test', 'markup_fixture.py'), dataDir], { stdio: 'ignore' });
+execFileSync(PY, [path.join(root, 'test', 'markup_fixture.py'), dataDir, 'ES'], { stdio: 'ignore' });   // ES_<date>.npz beside the NQ days
 const FX = JSON.parse(fs.readFileSync(path.join(dataDir, 'fixture.json'), 'utf8')).days['2026-03-10'];
 
 let checks = 0, failures = [];
@@ -42,9 +45,9 @@ function check(ok, m, sink) {
   return ok;
 }
 const servers = [];
-async function startServer(script, port, marks) {
+async function startServer(script, port, marks, symbol) {
   const child = spawn(PY, [script, '--source=npz', '--data=' + dataDir, '--marks=' + marks, '--port=' + port, '--no-browser', '--seen=' + path.join(tmp, 'none.csv'),
-    '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py')],
+    '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py')].concat(symbol ? ['--symbol=' + symbol] : []),
     { stdio: ['ignore', 'pipe', 'inherit'] });
   servers.push(child);
   await new Promise(r => child.stdout.once('data', r));
@@ -260,6 +263,8 @@ try {
   check(!DATE_RE.test(seen.title) && !DATE_RE.test(seen.url), 'blind: no date in document.title or the URL');
   check(!DATE_RE.test(seen.drawn), 'blind: no date drawn on any chart canvas (crosshair time tag, axis day labels)' + (DATE_RE.exec(seen.drawn) ? ' (found ' + DATE_RE.exec(seen.drawn)[0] + ')' : ''));
   check(seen.drewTimeTag, 'blind: the charts still draw times of day (HH:MM)');
+  const nqHead = await page.evaluate(() => document.querySelector('.ms-sub').textContent);
+  check(nqHead === 'NQ replay, read only', 'the header names the instrument the hello announced (' + nqHead + ')');
   // the prior day levels in view (the fixture's prior close, PDL and the low end of its value area sit below this day's prices)
   const pd = ['PDH', 'PD VAH'].filter(k => !seen.drawn.split(' | ').some(t => t.trim().startsWith(k)));
   check(!pd.length, 'blind: the charts draw the prior day levels in view (PDH, PD VAH)' + (pd.length ? ' (missing ' + pd.join(', ') + ')' : ''));
@@ -367,8 +372,10 @@ try {
   check(nrows === 4, 'Run all: the summary has one row per variant x exit id (2 x 2 = 4, got ' + nrows + ')');
   const cellText = await bot.page.evaluate(() => {
     const t = document.getElementById('botSumMain'), cols = [...t.tHead.rows[0].cells].map(c => c.textContent), r = t.tBodies[0].rows[0];
-    return { variant: r.cells[0].title, exit: r.cells[1].textContent, net: r.cells[cols.indexOf('Net $ NQ')].textContent };
+    return { variant: r.cells[0].title, exit: r.cells[1].textContent, net: r.cells[cols.indexOf('Net $ NQ')].textContent,
+      micro: r.cells[cols.indexOf('Net $ MNQ')].textContent, note: document.getElementById('botSumNote').textContent };
   });
+  check(cellText.micro === '19.00(1)' && cellText.note.includes('NQ $4.50, MNQ $1.00'), 'Run all: MNQ nets $19.00 and the note gives NQ $4.50, MNQ $1.00 (' + cellText.micro + ')');
   // hand-worked: T1000 on 2026-03-05 buys 21,001.00 and the base target is 10 points up: 10 x $20 - $4.50 = $195.50 (1 trade)
   check(cellText.variant === 'T1000' && cellText.exit === 'base' && cellText.net === '195.50(1)', 'Run all: T1000 base nets $195.50 NQ on one trade (' + JSON.stringify(cellText) + ')');
   const runs = path.join(tmp, 'marks-' + PORT, 'botruns');
@@ -405,6 +412,50 @@ try {
     console.log('  mutant failed ' + sink.length + ' checks, for example: ' + sink.slice(0, 2).join(' / '));
     check(sink.length > 0, 'the smoke catches a bot view that sends one event before its time');
   } finally { fs.rmSync(mcore, { force: true }); fs.rmSync(mstudio, { force: true }); }
+
+  console.log('8. ES: header, chart root and dollars follow --symbol');
+  const EP = PORT + 3, esMarks = path.join(tmp, 'marks_ES');
+  await startServer(path.join(root, 'tools', 'markup_studio.py'), EP, esMarks, 'ES');
+  const es = await openPage(EP);
+  const head = await until(() => es.page.evaluate(() => { const t = document.querySelector('.ms-sub').textContent; return /replay/.test(t) && t !== 'replay, read only' && t; }));
+  check(head === 'ES replay, read only', 'ES: the header says "ES replay, read only" (' + head + ')');
+  const split = JSON.parse(fs.readFileSync(path.join(esMarks, 'bot_split_v1.json'), 'utf8'));
+  check(split.symbol === 'ES', 'ES: the new day split records its symbol (' + split.symbol + ')');
+  await es.page.click('#tabBot');
+  await until(() => es.page.evaluate(() => document.getElementById('botDay').options.length > 0));
+  await es.page.selectOption('#botDay', BOT_DAY);
+  await es.page.selectOption('#botVariant', 'T1000');
+  await es.page.click('#btnBotLoad');
+  check(!!(await chartsReady(es.page)), 'ES: both charts load the ES day');
+  const roots = await es.page.evaluate(() => ['range', 'm1'].map(k => window.__markup.panes[k].view().root));
+  check(JSON.stringify(roots) === '["ES","ES"]', 'ES: both charts are on root ES (' + roots + ')');
+  const frames = es.rec.sockets.flatMap(x => x.frames).map(f => { try { return JSON.parse(f); } catch (e) { return null; } }).filter(Boolean);
+  const hello = frames.find(m => m.type === 'hello');
+  check(!!hello && JSON.stringify(hello.instruments) === JSON.stringify([{ root: 'ES', name: 'ES replay', tick: 0.25, pointValue: 50.0 }]), 'ES: the hello announces ES ($50 a point)');
+  const hroots = [...new Set(frames.filter(m => m.type === 'history' || m.type === 'ticks').map(m => m.root))];
+  check(JSON.stringify(hroots) === '["ES"]', 'ES: every history and ticks frame is for ES (' + hroots + ')');
+  const esBars = await es.page.evaluate(() => window.__markup.panes.m1.chart.bars().slice(-1)[0].c);
+  check(esBars > 5900 && esBars < 6100, 'ES: the chart shows the ES fixture prices (' + esBars + ')');
+  await until(async () => ((await state(EP)).bot_day || {}).status === 'done');
+  await es.page.fill('#jumpTime', '10:05');
+  await es.page.click('#btnJump');
+  await chartsReady(es.page);
+  const net = await until(() => es.page.evaluate(() => { const r = document.querySelector('#botNet tr'); return r && /1 trades/.test(r.textContent) && r.textContent; }));
+  check(!!net && net.includes('$495.50 ES') && net.includes('$49.00 MES') && !/NQ/.test(net), 'ES: the net by exit is in ES and MES (' + net + ')');
+  await es.page.click('#btnRunAll');
+  await until(() => es.page.evaluate(() => { const t = document.querySelector('#botSumMain tbody'); return !document.getElementById('botSummary').hidden && t && t.rows.length; }), 20000);
+  const sum = await es.page.evaluate(() => {
+    const t = document.getElementById('botSumMain'), cols = [...t.tHead.rows[0].cells].map(c => c.textContent), r = t.tBodies[0].rows[0];
+    return { cols, net: r.cells[cols.indexOf('Net $ ES')]?.textContent, micro: r.cells[cols.indexOf('Net $ MES')]?.textContent, note: document.getElementById('botSumNote').textContent };
+  });
+  check(['Net $ ES', '$ ES / trade', 'Net $ MES', '$ MES / trade', 'PF (ES)', 'Max DD $ ES', 'Max DD $ MES'].every(c => sum.cols.includes(c)) && !sum.cols.some(c => /NQ/.test(c)),
+    'ES: the summary columns name ES and MES (' + sum.cols.filter(c => /\$|PF/.test(c)).join(', ') + ')');
+  // hand-worked: T1000 base +10 points: ES 10 x $50 - $4.50 = $495.50, MES 10 x $5 - $1.00 = $49.00 (1 trade)
+  check(sum.net === '495.50(1)' && sum.micro === '49.00(1)', 'ES: T1000 base nets $495.50 ES and $49.00 MES on one trade (' + sum.net + ', ' + sum.micro + ')');
+  check(sum.note.includes('ES $4.50, MES $1.00'), 'ES: the summary note gives the ES and MES round trips (' + sum.note + ')');
+  check(!es.rec.errors.length, 'ES: no page errors (' + es.rec.errors.join('; ') + ')');
+  await shot(es.page, 'markup-es-bot.png');
+  await es.page.close();
 } catch (e) {
   failures.push('crashed: ' + (e.stack || e.message));
   console.error(e);

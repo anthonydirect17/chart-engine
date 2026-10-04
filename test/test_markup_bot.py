@@ -75,7 +75,8 @@ class Split(Base):
     def test_written_on_first_start(self):
         self.studio(bot=None)
         with open(self.split_file()) as f:
-            self.assertEqual(json.load(f), {'version': 1, 'seed': 7, 'bot': ['2026-03-05', '2026-03-09'], 'grading': ['2026-03-10']})
+            self.assertEqual(json.load(f), {'version': 1, 'seed': 7, 'bot': ['2026-03-05', '2026-03-09'], 'grading': ['2026-03-10'],
+                                              'symbol': 'NQ'})
 
     def test_never_changes_and_new_days_go_to_neither_list(self):
         self.studio(bot=None)
@@ -147,7 +148,7 @@ class ViewFilter(unittest.TestCase):
         self.assertEqual(v['orders'], [{'id': 'o1', 'side': 'buy', 'type': 'stop', 'role': 'entry', 'price': 10.0, 'limit': None,
                                         't_from': 500, 't_to': 1500, 'status': 'filled', 'open': False}])
         self.assertEqual([(t['id'], t['exits']) for t in v['trades']], [('X1', {})])
-        self.assertEqual(v['net']['base'], {'trades': 0, 'points': 0, 'nq': 0, 'mnq': 0})
+        self.assertEqual(v['net']['base'], {'trades': 0, 'points': 0, 'usd': 0, 'usd_micro': 0})
 
     def test_at_3000(self):
         v = core.bot_view(self.RES, 3000, ['base', 'alt'])
@@ -155,7 +156,7 @@ class ViewFilter(unittest.TestCase):
         o2 = v['orders'][1]
         self.assertEqual((o2['id'], o2['t_from'], o2['t_to'], o2['status'], o2['open']), ('o2', 2500, 3000, None, True))   # clipped, no status yet
         self.assertEqual(list(v['trades'][0]['exits']), ['base'])
-        self.assertEqual(v['net']['base'], {'trades': 1, 'points': 10.0, 'nq': 195.5, 'mnq': 19.0})
+        self.assertEqual(v['net']['base'], {'trades': 1, 'points': 10.0, 'usd': 195.5, 'usd_micro': 19.0})
         self.assertEqual(v['net']['alt']['trades'], 0)
 
     def test_at_4000(self):
@@ -194,14 +195,14 @@ class Summary(unittest.TestCase):
         # $ NQ per trade: 10*20-4.5 = 195.5, -104.5, 35.5, -64.5; MNQ: 19, -11, 3, -7
         self.assertEqual({k: a[k] for k in ('trades', 'wins', 'losses', 'win_pct', 'avg_r', 'net_points')},
                          {'trades': 4, 'wins': 2, 'losses': 2, 'win_pct': 50.0, 'avg_r': 0.2, 'net_points': 4.0})
-        self.assertEqual((a['net_nq'], a['net_nq_per_trade'], a['net_mnq'], a['net_mnq_per_trade']), (62.0, 15.5, 4.0, 1.0))
+        self.assertEqual((a['net_usd'], a['net_usd_per_trade'], a['net_usd_micro'], a['net_usd_micro_per_trade']), (62.0, 15.5, 4.0, 1.0))
         self.assertEqual(a['pf'], round(231.0 / 169.0, 2))                    # (195.5 + 35.5) / (104.5 + 64.5)
-        self.assertEqual((a['max_dd_nq'], a['max_dd_mnq']), (133.5, 15.0))    # equity 195.5, 91, 126.5, 62; MNQ 19, 8, 11, 4
+        self.assertEqual((a['max_dd_usd'], a['max_dd_usd_micro']), (133.5, 15.0))    # equity 195.5, 91, 126.5, 62; MNQ 19, 8, 11, 4
         groups = {r['group']: r for r in rows}
         self.assertEqual(set(groups), {'all', 'level_type=A', 'level_type=B', 'dir=long', 'dir=short'})
-        self.assertEqual((groups['level_type=B']['trades'], groups['level_type=B']['net_nq']), (2, -29.0))
+        self.assertEqual((groups['level_type=B']['trades'], groups['level_type=B']['net_usd']), (2, -29.0))
         self.assertEqual(groups['dir=short']['pf'], 0.0)                     # nothing won: 0 / 64.5
-        self.assertEqual(groups['dir=long']['max_dd_nq'], 104.5)
+        self.assertEqual(groups['dir=long']['max_dd_usd'], 104.5)
 
     def test_pf_without_losses_and_empty(self):
         s = core.bot_stats([{'points': 1.0, 'r': 1.0, 'exit_t': 1}])
@@ -268,7 +269,7 @@ class BotFlow(Base):
         self.at(st, '10:04')
         v = st.bot_view()
         self.assertEqual(v['trades'][0]['exits']['base']['points'], 10.0)
-        self.assertEqual(v['net']['base']['nq'], 195.5)
+        self.assertEqual(v['net']['base']['usd'], 195.5)
         # 03-09: the prior kept day (03-05, the Day the history uses) reaches the bot
         st.bot_load('2026-03-09', 'T1000')
         self.assertEqual(st.prior_kept.date, '2026-03-05')
@@ -335,13 +336,13 @@ class BotFlow(Base):
         r = st.bot_runall_status()
         self.assertEqual((r['error'], r['failed'], r['k'], r['n']), ('', [], 2, 2))
         self.assertEqual(sorted(loads), ['2026-03-05', '2026-03-09'])         # each day loaded once (03-05 is also 03-09's prior)
-        main = [(x['variant'], x['exit_id'], x['trades'], x['net_nq']) for x in r['rows'] if x['group'] == 'all']
+        main = [(x['variant'], x['exit_id'], x['trades'], x['net_usd']) for x in r['rows'] if x['group'] == 'all']
         self.assertEqual(main, [('T1000', 'base', 1, 195.5), ('T1000', 't5', 1, 95.5), ('T1100', 'base', 1, -104.5), ('T1100', 't5', 1, -104.5)])
         folder = st.bot_export()['folder']
         self.assertTrue(folder.startswith(os.path.join(self.marks, 'botruns')))
         with open(os.path.join(folder, 'trades.csv')) as f:
             rows = list(csv.DictReader(f))
-        self.assertEqual([(x['variant'], x['date'], x['entry_time'], x['base_points'], x['base_net_nq']) for x in rows],
+        self.assertEqual([(x['variant'], x['date'], x['entry_time'], x['base_points'], x['base_net_usd']) for x in rows],
                          [('T1000', '2026-03-05', '10:00:20', '10.0', '195.5'), ('T1100', '2026-03-05', '11:00:20', '-5.0', '-104.5')])
         self.assertIn('f_minutes_to_fill', rows[0])
         with open(os.path.join(folder, 'summary.json')) as f:

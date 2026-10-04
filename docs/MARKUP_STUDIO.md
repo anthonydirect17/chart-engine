@@ -1,6 +1,6 @@
 # Markup Studio
 
-Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned into bot rules. Read only: it cannot trade.
+Grade NQ (or ES) liquidity sweeps on our own charts, blind, so your reads can be turned into bot rules. Read only: it cannot trade.
 
 ## How to run it (Anthony, at HOME)
 
@@ -11,6 +11,23 @@ Grade NQ liquidity sweeps on our own charts, blind, so your reads can be turned 
 4. You should see "Finding candidates: N of M days" top right; when it says "Excluded N already-seen", press **Next candidate**.
 5. Your grades go to `E:\SchwabDesk_bulk\marks` (one JSON per grade, `marks_log.jsonl`, and `marks_export.csv` from **Export CSV**).
 6. To stop it: Ctrl+C in the window where you ran it. If it says the port is in use, it is already running (or stop the other one).
+
+## ES
+
+- Run it on ES with ES's own marks folder: `py -3 tools\markup_studio.py --symbol=ES --marks=E:\SchwabDesk_bulk\marks_ES`
+  (add `--bot=PATH` as for NQ; `--check --symbol=ES` first to see the ES days). Never point ES and NQ at the same marks
+  folder: the grades, the candidate cache and the day split are per symbol. NQ needs no flag (`--symbol=NQ` is the default).
+- `--symbol` takes NQ or ES; anything else stops the Studio at startup with the list it knows (never NQ by default).
+- Everything per symbol comes from one table, `INSTRUMENTS` in `tools/markup_core.py`: the tick (0.25 both), $ per point and
+  the round trip per contract. NQ $20 a point, $4.50 a round trip; MNQ $2, $1.00; ES $50, $4.50; MES $5, $1.00. **The ES and
+  MES round trips are provisional** (assumed the same as NQ's and MNQ's until Anthony confirms them); change them there only.
+- The page takes the instrument from the server's hello: the header ("ES replay, read only"), the charts' root and the mark
+  tick. The Bot tab's dollars name ES and MES.
+- **Split guard.** A new `bot_split_v1.json` records its symbol (`"symbol": "ES"`). On start the Studio refuses (and does not
+  start) when the folder's split names another symbol. A split without a symbol is one written before splits recorded theirs:
+  it is refused when the folder's grades or `candidates_v1.json` name another symbol; otherwise it is taken as NQ's for NQ,
+  and for ES only when every day in it is one of ES's in-sample days, with a line in the window ("taken as the ES split"). A
+  split file is never rewritten, so an old symbol-less ES split (marks_ES on the USB) keeps working as it is.
 
 ## Using it
 
@@ -48,7 +65,7 @@ a bot module and shows what the bot returns, never more than the clock allows.
   `test/markup_bot_fixture.py` is a made-up test bot for the tests only.
 - **The day split.** On the first start the Studio writes `bot_split_v1.json` in the marks folder: every last-only day and
   half the quote days (sorted, shuffled with seed 7, the first half rounded up) are bot days, the other quote days are
-  grading days. It is never rewritten; days added later go to neither list (the window logs them). The blind queue offers
+  grading days, and the symbol (see ES above for the guard). It is never rewritten; days added later go to neither list (the window logs them). The blind queue offers
   grading days only (its line counts the candidates "on bot days"); the Bot tab opens bot days only and refuses grading days
   and the holdout (403). Free mode is unchanged.
 - **Using it.** Pick a bot day and a variant, **Load**: the day opens at 09:30 like Free mode (play, pause, Next candle, jump)
@@ -59,17 +76,25 @@ a bot module and shows what the bot returns, never more than the clock allows.
   one function (`bot_view` in `tools/markup_core.py`); events up to the clock, orders clipped at it with their status only
   once ended, trades once entered and each exit once it happened. The tab is locked while a blind candidate is ungraded.
 - **Run all bot days** runs every bot day with every variant ("day k of n"), then shows the summary: per variant and exit
-  id the trades, wins, losses, win %, average R, net points, net $ NQ and MNQ (total and per trade; costs per round trip,
-  1 contract: NQ $20 a point less $4.50, MNQ $2 a point less $1.00), profit factor and max drawdown of closed-trade
-  equity, with the trade count next to every number, and the same split by level type and by side. Files:
-  `<marks>\botruns\<stamp>\trades.csv` (every trade with its features), `summary.csv`, `summary.json`; **Export** shows the folder.
+  id the trades, wins, losses, win %, average R, net points, net $ of 1 contract of the symbol and of 1 micro (NQ and MNQ,
+  or ES and MES; total and per trade, after each one's round trip, `INSTRUMENTS`), profit factor (full contract) and max
+  drawdown of closed-trade equity, with the trade count next to every number, and the same split by level type and by side.
+  Files: `<marks>\botruns\<stamp>\trades.csv` (every trade with its features), `summary.csv`, `summary.json`; **Export**
+  shows the folder.
+- **Dollar fields.** `usd` is 1 contract of the symbol, `usd_micro` 1 of its micro, each after its round trip. The day's net
+  (`/api/bot/view`): `net[exit] = {trades, points, usd, usd_micro}`. Summary rows: `net_usd`, `net_usd_per_trade`,
+  `net_usd_micro`, `net_usd_micro_per_trade`, `pf`, `max_dd_usd`, `max_dd_usd_micro`. `trades.csv`: `symbol`, `micro` and per
+  exit id `<exit>_net_usd`, `<exit>_net_usd_micro`; `summary.csv`: the rows with `symbol` and `micro`; `summary.json`:
+  `symbol`, `contract`, `micro`, `point_value`, `rt`, `micro_point_value`, `micro_rt` and `costs` (per contract name). Run
+  folders written before ES support have `nq` / `mnq` columns instead; the Studio never reads them back.
 
 ## Flags
 
-`--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
+`--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` (or ES) `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
 `--bot=PATH` (a bot module for the Bot tab)
 `--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
-`tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort).
+`tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort; those are NQ
+events, so with `--symbol=ES` there is no default and the window says so).
 
 ## How it works
 
@@ -89,7 +114,7 @@ a bot module and shows what the bot returns, never more than the clock allows.
   text and tooltips (the engine has no option to hide dates; the frozen chart files are unchanged).
 - Data: tickreplay's `loader.load_session(symbol, date, data_root=...)` (corrections applied; `Session.ticks`: `ts_ms`,
   `last`, `bid`, `ask`, `vol`, `has_quotes`). Days: `sessions_index.csv` in the tickreplay folder, the research's in-sample
-  list (NQ, before 2026-04-01, without `holiday_close`, `missing_day` or `truncated`; a day whose first RTH tick is after
+  list (the `--symbol`'s rows, before 2026-04-01, without `holiday_close`, `missing_day` or `truncated`; a day whose first RTH tick is after
   noon is dropped when scanned).
 - Candidates (Python, ticks up to each reclaim only): PDH/PDL the prior kept day's RTH high and low, ONH/ONL 18:00 to
   09:29:59; RTH from 09:31:00; through by 4 or more ticks, back by 1 or more tick on the original side within 120 s of the
