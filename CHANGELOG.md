@@ -12,7 +12,7 @@
   clock and run it over every bot day with a summary and CSV/JSON files; days split once into bot and grading days
   (`bot_split_v1.json`, seed 7), the blind queue on grading days only. The Studio holds no trading rule.
 - Markup Studio: **ES** (`--symbol=ES` with its own `--marks` folder). One instrument table (`INSTRUMENTS` in
-  `tools/markup_core.py`: tick, $ per point, round trip; ES and MES round trips provisional); the header, the charts' root
+  `tools/markup_core.py`: tick, $ per point, round trip; ES and MES cost the same as NQ and MNQ); the header, the charts' root
   and tick come from the server's hello; the Bot tab and Run all files give dollars as `usd` (1 contract of the symbol) and
   `usd_micro` (its micro) and name both; new day splits record their symbol and a split of another symbol is refused. NQ
   dollars unchanged; an unknown symbol stops the Studio at startup.

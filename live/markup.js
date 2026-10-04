@@ -40,7 +40,10 @@
   }
   function scrubNode(n) {
     if (!BLIND || !n) return;
-    if (n.nodeType === 1 && n.hasAttribute('data-dates')) return;     // the Free mode day picker and date (never shown with a blind candidate open)
+    // the Free and Bot sections and the date (never shown with a blind candidate open): the node or any ancestor, since a
+    // day picker's options are added as nodes of their own
+    const el = n.nodeType === 1 ? n : n.parentElement;
+    if (el && el.closest('[data-dates]')) return;
     if (n.nodeType === 3) { const v = scrub(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; return; }
     if (n.nodeType !== 1 || n.tagName === 'SCRIPT' || n.tagName === 'STYLE') return;
     for (const a of ['title', 'aria-label', 'placeholder']) { const v = n.getAttribute(a); if (v) { const w = scrub(v); if (w !== v) n.setAttribute(a, w); } }

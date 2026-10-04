@@ -31,12 +31,13 @@ except Exception:                      # noqa: BLE001 - the US rules below are u
 HOLDOUT = date(2026, 4, 1)           # this date and later is the holdout: never listed, loaded, scanned or graded
 # Every instrument's numbers, in this one place: tick size, $ per point and $ per round trip (1 contract, commissions and
 # fees). The Studio runs on a full contract (one with a 'micro') and prices its trades on that contract and its micro.
-# PROVISIONAL: the ES and MES round trips are assumed the same as NQ's and MNQ's until Anthony confirms them.
+# Round trips are Anthony's prop account rates; ES and MES cost the same as NQ and MNQ (NinjaTrader's commission table,
+# as of 2026-08-14, lists identical fees for ES/NQ and for MES/MNQ).
 INSTRUMENTS = {
     'NQ': {'tick': 0.25, 'point_value': 20.0, 'rt': 4.50, 'micro': 'MNQ'},
-    'ES': {'tick': 0.25, 'point_value': 50.0, 'rt': 4.50, 'micro': 'MES'},      # rt PROVISIONAL
+    'ES': {'tick': 0.25, 'point_value': 50.0, 'rt': 4.50, 'micro': 'MES'},
     'MNQ': {'tick': 0.25, 'point_value': 2.0, 'rt': 1.00},
-    'MES': {'tick': 0.25, 'point_value': 5.0, 'rt': 1.00},                     # rt PROVISIONAL
+    'MES': {'tick': 0.25, 'point_value': 5.0, 'rt': 1.00},
 }
 STUDIO_SYMBOLS = tuple(sorted(k for k, v in INSTRUMENTS.items() if v.get('micro')))
 TICK = INSTRUMENTS['NQ']['tick']      # the default tick of the candidate scan and the machine read; the Studio passes its own

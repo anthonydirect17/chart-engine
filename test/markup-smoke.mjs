@@ -181,6 +181,8 @@ async function botRun(port, label, sink) {
   await until(() => page.evaluate(() => document.getElementById('botDay').options.length > 0));
   const days = await page.evaluate(() => [...document.getElementById('botDay').options].map(o => o.value).sort());
   check(JSON.stringify(days) === JSON.stringify(['2026-03-05', '2026-03-09']), `${label}: the day picker lists the bot days only (${days})`, sink);
+  const labels = await page.evaluate(() => [...document.getElementById('botDay').options].map(o => [o.value, o.textContent]));
+  check(labels.every(([v, t]) => t.includes(v)), `${label}: the day picker's labels show their dates (the blind scrub leaves the Bot section alone): ${JSON.stringify(labels)}`, sink);
   await page.selectOption('#botDay', BOT_DAY);
   await page.selectOption('#botVariant', 'T1000');
   const s0 = rec.sockets.length;                                           // sockets of an earlier load (Free mode's day) are not this day's

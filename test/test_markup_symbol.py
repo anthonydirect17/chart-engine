@@ -65,7 +65,7 @@ class Instruments(unittest.TestCase):
 
 class Dollars(unittest.TestCase):
     def test_es_hand_worked(self):
-        # +37.5 points: ES 37.5 x $50 = $1,875 gross less the (provisional) $4.50; MES 37.5 x $5 = $187.50 less $1.00
+        # +37.5 points: ES 37.5 x $50 = $1,875 gross less the $4.50 round trip; MES 37.5 x $5 = $187.50 less $1.00
         self.assertEqual(37.5 * core.INSTRUMENTS['ES']['point_value'], 1875.0)
         self.assertEqual(37.5 * core.INSTRUMENTS['MES']['point_value'], 187.5)
         self.assertEqual(core.trade_cost(37.5, 'ES'), 1875.0 - core.INSTRUMENTS['ES']['rt'])
