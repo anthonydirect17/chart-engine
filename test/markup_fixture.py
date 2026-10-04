@@ -116,7 +116,10 @@ def write(out, symbol='NQ'):
     np.savez(os.path.join(out, f'{symbol}_2026-04-02.npz'), wall_ms=th, price=ph, volume=vh)
     prior = core.minute_bars(core.Day('2026-03-09', ta, pa, va))         # the history the Studio sends before 2026-03-10's
     info = {'PDH': P, 'days': {'2026-03-10': {'wall': tb.tolist(), 'utc': core.wall_to_utc(tb).tolist(), 'px': pb.tolist(), 'vol': vb.tolist(),
-                                              'prior_bars': prior}}}
+                                              'prior_bars': prior},
+                               # the first day (no prior kept day): the Trades tab's smoke opens the test bot's trades on it
+                               '2026-03-05': {'wall': tc.tolist(), 'utc': core.wall_to_utc(tc).tolist(), 'px': pc.tolist(), 'vol': vc.tolist(),
+                                              'prior_bars': []}}}
     with open(os.path.join(out, 'fixture.json' if symbol == 'NQ' else f'fixture_{symbol}.json'), 'w') as f:
         json.dump(info, f)
     return info

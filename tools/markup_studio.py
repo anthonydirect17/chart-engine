@@ -22,8 +22,14 @@ Flags (defaults are the HOME PC's folders):
   --check[=YYYY-MM-DD]                          load one in-sample day through the loader, print what the Studio sees, exit
   --source=npz                                  tests: <data>/<SYMBOL>_<YYYY-MM-DD>.npz with wall_ms, price, volume[, bid, ask]
   --bot=PATH                                    a bot module (.py, BOT_API 1) for the Bot tab; the Studio knows no rule itself
+  --trade-queue=PATH                            a Run all trades.csv: the Trades tab grades the bot's own trades blind (with --bot)
+  --trade-variant=ID  --trade-seed=11           the variant queued (default the bot's first) and the queue's shuffle seed
+  --trade-skip-days=YYYY-MM-DD[,..]             days never queued (already watched)
+  --trade-target=300                            the progress line's target
+  --trade-notes=PATH                            optional CSV (trade_id, variant, note[, score]) shown only after a grade is saved
 Days are split once into bot days and grading days (<marks>/bot_split_v1.json, never rewritten): the blind queue offers
 grading days only, the Bot tab bot days only. A split made for another symbol is refused (core.check_split).
+The Trades tab's queue (<marks>/trade_queue_v1.json) is written once too; flags that disagree with it are refused.
 Holdout: any date from 2026-04-01 on is refused everywhere (listing, loading, candidates, free mode).
 Python 3.10+, stdlib + numpy only.
 """
@@ -253,10 +259,31 @@ class Forbidden(Refused):
     """Refused with 403: a grading day or a day outside the split asked of a bot endpoint."""
 
 
+class TradeQueueError(ValueError):
+    """The Trades tab's flags cannot be used (a bad trades.csv, or flags that disagree with trade_queue_v1.json): the
+    Studio does not start."""
+
+
+class TradeMismatch(Refused):
+    """The bot loaded did not write the queue (a trade missing from its result, or different from the queue's row)."""
+
+
+class TradeSkip(Refused):
+    """One trade cannot be graded (its entry order is not found by the exact rule, or its day does not run): it is passed
+    over for this session and the next one is opened."""
+
+
+TRADES_USAGE = ('The Trades tab needs a bot and a queue: start the Studio with --bot=PATH --trade-queue=PATH (a Run all '
+                'trades.csv), optionally --trade-variant=ID --trade-skip-days=YYYY-MM-DD[,..].')
+RESULT_FIRST = ('m1', '2R')      # exit ids shown first in a trade's result when the bot has them; then the bot's order
+
+
 class Studio:
     split, bot_days, grading_days = None, frozenset(), None     # until load_split() (tests build a bare Studio)
 
-    def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None):
+    def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None,
+                 trade_queue=None, trade_variant=None, trade_seed=core.TRADE_SEED, trade_skip_days=(), trade_target=300,
+                 trade_notes=None):
         self.inst = core.instrument(symbol)                  # an unknown symbol is a ValueError, never NQ by default
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, self.inst['symbol']
         self.tick = self.inst['tick']
@@ -294,6 +321,17 @@ class Studio:
         self.bot_cache, self.bot_runs, self.bot_key = {}, {}, None    # (date, variant id) -> result / run status
         self.runall = {'running': False, 'k': 0, 'n': 0, 'error': '', 'folder': '', 'failed': [], 'rows': None}
         self.load_split()
+        # the Trades tab: the queue (written once), the grades (two files per trade, each written once), the skipped days
+        self.tq, self.tq_error, self.tq_rows, self.tq_variant, self.trade_target = None, '', {}, None, int(trade_target)
+        self.tgrades = core.list_trade_grades(os.path.join(marks_dir, 'trade_grades'))
+        self.tskip = self._read_skip_days()
+        self.trade, self.trade_no, self.t_refused = None, 0, {}
+        self.tprep, self.tprep_lock = None, threading.Lock()
+        self.notes, self.notes_sha = None, None
+        if trade_queue:
+            self.load_trade_queue(trade_queue, trade_variant, int(trade_seed), trade_skip_days)
+            if trade_notes:
+                self.load_notes(trade_notes)
 
     # ---------------------------------------------------------------- the day split
     def load_split(self):
@@ -441,7 +479,7 @@ class Studio:
     # ---------------------------------------------------------------- loading and the clock
     @property
     def exclusive(self):
-        return self.mode == 'blind'
+        return self.mode in ('blind', 'trades')     # a trade's cut is exclusive too: a tick stamped at it stays hidden
 
     def blind_open(self):
         """An ungraded blind candidate is open: nothing may show its future or its date until the grade is saved."""
@@ -469,10 +507,14 @@ class Studio:
         p = self.prior_day(d)
         return core.minute_bars(p) if p is not None else []
 
-    def _load(self, d, clock_utc, mode):
-        day = self.source.load(d)            # refuses the holdout
-        pday = self.prior_day(day.date)
-        prior = core.minute_bars(pday) if pday is not None else []
+    def _load(self, d, clock_utc, mode, pre=None):
+        """Open a day at a clock. `pre`: (day, prior kept day, its minute bars) already loaded (a prefetched trade)."""
+        if pre is None:
+            day = self.source.load(d)            # refuses the holdout
+            pday = self.prior_day(day.date)
+            prior = core.minute_bars(pday) if pday is not None else []
+        else:
+            day, pday, prior = pre
         with self.lock:
             self._drop_clients()
             self.day, self.prior, self.prior_kept, self.mode, self.clock = day, prior, pday, mode, int(clock_utc)
@@ -482,6 +524,8 @@ class Studio:
 
     def blind_next(self):
         with self.lock:
+            if self.trade_open():
+                raise Refused('a trade is open in the Trades tab: grade it first, then use Blind')
             order = [c for c in self.order if not self._skip(c)]
             if not order:
                 raise Refused('no candidates yet: the scan is still running' if not self.scan['done'] else 'no candidates left to grade')
@@ -498,8 +542,17 @@ class Studio:
         return self.state()
 
     def _free_allowed(self):
+        msg = self.locked_msg('Free mode')
+        if msg:
+            raise Refused(msg)
+
+    def locked_msg(self, what):
+        """Why Free and the Bot tab are shut now (a blind candidate or a trade open and ungraded), else None."""
         if self.blind_open():
-            raise Refused('a blind candidate is open: save its grade first, then use Free mode')
+            return f'a blind candidate is open: save its grade first, then use {what}'
+        if self.trade_open():
+            return f'a trade is open in the Trades tab: grade it first, then use {what}'
+        return None
 
     def free_load(self, d, tod=None, clock_utc=None, level=None):
         with self.lock:
@@ -519,13 +572,17 @@ class Studio:
     def _blind_locked(self):
         if self.blind_open():
             raise Refused('in blind mode the clock only steps one candle at a time until the grade is saved')
+        if self.trade_open():
+            raise Refused('in the Trades tab the clock stays at the cut (after ADJUST it steps one candle at a time) until the grade is saved')
 
     def step(self):
         with self.lock:
             self._need_day()
+            if self.trade_open() and self._tstage() == 1:
+                raise Refused('stage 1 is graded at the cut: press T, A or P first (after A the candles step)')
             self.playing = False
             self.clock = (self.clock // core.MIN + 1) * core.MIN
-            if self.blind_open():
+            if self.blind_open() or self.trade_open():
                 self.steps += 1
             self._release()
         return self.state()
@@ -589,14 +646,19 @@ class Studio:
         with self.lock:
             s = {'mode': self.mode, 'loaded': self.day is not None, 'playing': self.playing, 'speed': self.speed,
                  'scan': {k: self.scan[k] for k in ('running', 'done', 'days', 'total', 'skipped', 'error')},
-                 'queue': q, 'warnings': self.warnings(), 'blind_open': self.blind_open(), 'version': VERSION}
+                 'queue': q, 'warnings': self.warnings(), 'blind_open': self.blind_open(), 'trade_open': self.trade_open(),
+                 'version': VERSION}
             if self.day is not None:
                 s.update(clock_utc_ms=self.clock, clock_tod=core.fmt_tod(core.utc_to_wall(self.clock)), steps=self.steps,
                          graded=self.graded, level=self._level()[0])
-                if self.mode in ('free', 'bot'):
+                if self.mode in ('free', 'bot') or (self.mode == 'trades' and self.trade and self._tdone()):
                     s['date'] = self.day.date
                 elif self.cand:
                     s['candidate'] = {'n': self.cand_no, 'ref': ref_of(self.cand['id'])}
+            if self.mode == 'trades' and self.trade is not None:
+                s['trade'] = self._tpublic()
+            if self.tq is not None or self.tq_error:
+                s['trades'] = {'ready': self.tq is not None, 'counts': self.trade_counts() if self.tq is not None else None}
             if self.mode == 'bot' and self.bot_key:
                 run = self.bot_runs.get(self.bot_key, {})
                 s['bot_day'] = {'date': self.bot_key[0], 'variant': self.bot_key[1], 'status': run.get('status', ''),
@@ -609,6 +671,8 @@ class Studio:
             self._need_day()
             if self.blind_open():
                 raise Refused('the machine read stays hidden in blind mode until the grade is saved')
+            if self.trade_open():
+                raise Refused('the machine read stays hidden in the Trades tab until the grade is saved')
             cross = self.cand['cross_utc_ms'] if self.mode == 'blind' and self.cand else None
             lv = level
             if lv is None:
@@ -638,6 +702,8 @@ class Studio:
             self._need_day()
             if self.mode == 'bot':
                 raise Refused('the Bot tab saves no grades: grade in Blind or Free')
+            if self.mode == 'trades':
+                raise Refused('the Trades tab saves with its own keys (T, A, P)')
             if self.mode == 'blind' and self.graded:
                 raise Refused('this candidate is graded already')
             setup = p.get('setup')
@@ -703,7 +769,7 @@ class Studio:
         opaque ref and the time of day; the id and the date only in free mode (never while in blind mode)."""
         with self.lock:
             gs = [g for g in self.grades if (g.get('draft') or {}).get('verdict') in ('TAKE', 'PASS')]
-            blind = self.mode == 'blind'
+            blind = self.mode in ('blind', 'trades')
         agree = sum(1 for g in gs if g.get('agrees_with_draft'))
         dis = []
         for g in gs:
@@ -717,7 +783,7 @@ class Studio:
 
     def list_items(self):
         with self.lock:
-            blind = self.mode == 'blind'
+            blind = self.mode in ('blind', 'trades')
             return [{'ref': ref_of(g.get('id')), 'setup': g.get('setup')} if blind else {'id': g.get('id'), 'setup': g.get('setup')}
                     for g in self.grades]
 
@@ -772,8 +838,9 @@ class Studio:
     def bot_day_list(self):
         self._bot_need()
         with self.lock:
-            if self.blind_open():
-                raise Refused('a blind candidate is open: save its grade first, then use the Bot tab')
+            msg = self.locked_msg('the Bot tab')
+            if msg:
+                raise Refused(msg)
         return sorted(d for d in self.bot_days if core.in_sample(d))
 
     def _variant(self, vid):
@@ -789,8 +856,9 @@ class Studio:
         """Load a bot day like Free mode (clock 09:30) and run the bot once for (day, variant) in the background."""
         self._bot_need()
         with self.lock:
-            if self.blind_open():
-                raise Refused('a blind candidate is open: save its grade first, then use the Bot tab')
+            msg = self.locked_msg('the Bot tab')
+            if msg:
+                raise Refused(msg)
         d = self.bot_day_ok(d)
         v = self._variant(vid)
         self._load(d, clock_of(d, '09:30'), 'bot')
@@ -850,8 +918,9 @@ class Studio:
     def bot_runall_start(self):
         self._bot_need()
         with self.lock:
-            if self.blind_open():
-                raise Refused('a blind candidate is open: save its grade first, then use the Bot tab')
+            msg = self.locked_msg('the Bot tab')
+            if msg:
+                raise Refused(msg)
         days = sorted(d for d in self.bot_days if core.in_sample(d))
         with self.bot_lock:
             if self.runall['running']:
@@ -956,6 +1025,397 @@ class Studio:
         if not self.runall.get('folder'):
             raise Refused('nothing to export yet: press Run all bot days first')
         return {'folder': self.runall['folder'], 'files': ['trades.csv', 'summary.csv', 'summary.json']}
+
+    # ---------------------------------------------------------------- the Trades tab
+    # The bot's own trades, one at a time, frozen at the moment the bot placed the trade's entry order (the cut): ticks
+    # strictly before it, the bot's view at it (core.bot_view), never the trade's fill, status or exits, never the date.
+    # Stage 1 at the cut: TAKE, ADJUST or PASS (saved at once, immutable). Stage 2, ADJUST only: step candles, mark Entry,
+    # Stop and an optional Target, pick the entry type, save (immutable). Then the reveal. Nothing anywhere sums an outcome
+    # by label: the counts are graded, adjusted, skipped and remaining only.
+    def load_trade_queue(self, path, vid, seed, skip_days):
+        """<marks>/trade_queue_v1.json: written on the first start with --trade-queue, then only read; the flags given later
+        must agree with it (core.check_queue) or the Studio does not start (TradeQueueError). The trades.csv given is
+        checked by its sha256, not its path (a run folder may move)."""
+        if self.bot is None:
+            self.tq_error = 'the bot did not load: ' + (self.bot_error or 'start with --bot=PATH')
+            log('trades: ' + self.tq_error)
+            return
+        if self.split is None:
+            self.tq_error = 'there is no day split yet (no days found)'
+            log('trades: ' + self.tq_error)
+            return
+        src = os.path.abspath(str(path))
+        try:
+            rows, sha = core.read_trades_csv(src)
+        except (OSError, ValueError, UnicodeDecodeError, csv.Error) as e:
+            raise TradeQueueError(f'cannot read the trade queue source {src}: {e}') from e
+        try:
+            v = self._variant(vid)
+        except Refused as e:
+            raise TradeQueueError(f'--trade-variant: {e}') from e
+        syms = {str(r.get('symbol')).upper() for r in rows if r.get('symbol')}
+        if syms and syms != {self.symbol}:
+            raise TradeQueueError(f'{src} holds {", ".join(sorted(syms))} trades, not {self.symbol}')
+        if not syms and self.symbol != 'NQ':
+            raise TradeQueueError(f'{src} has no symbol column (a run from before ES support, so NQ), not {self.symbol}')
+        mine = [r for r in rows if r.get('variant') == v['id']]
+        if not mine:
+            raise TradeQueueError(f'{src} has no trades of variant {v["id"]}')
+        try:
+            skip = sorted({core.parse_date(x).isoformat() for x in skip_days if str(x).strip()})
+            want = {'version': core.QUEUE_VERSION, 'symbol': self.symbol, 'sha256': sha, 'variant': v['id'], 'seed': seed, 'skip_days': skip}
+            qpath = os.path.join(self.marks, 'trade_queue_v1.json')
+            if not os.path.exists(qpath):
+                items = core.trade_queue(mine, sha, v['id'], self.bot_days, skip, seed)
+                q = dict(want, source=src, bot=self.bot['name'], items=items,
+                         created_utc=datetime.now(timezone.utc).isoformat(timespec='seconds'))
+                if core.write_once(qpath, q):
+                    log(f'trade queue written to {qpath}: {len(items)} trades of {v["id"]} on bot days')
+            with open(qpath, encoding='utf-8') as f:
+                q = json.load(f)
+            core.check_queue(q, want)
+        except (OSError, ValueError, AttributeError) as e:
+            raise TradeQueueError(str(e)) from e
+        if q.get('source') != src:
+            log(f'trade queue: {src} is the same file (sha256) as the queue\'s source {q.get("source")}')
+        self.tq_rows = {(core.parse_date(str(r['date'])[:10]).isoformat(), str(r['id'])): r for r in mine}
+        lost = [it['qid'] for it in q['items'] if (it['date'], it['trade_id']) not in self.tq_rows]
+        if lost:
+            raise TradeQueueError(f'{len(lost)} queued trades are not in {src}')
+        self.tq, self.tq_variant = q, v
+
+    def load_notes(self, path):
+        """--trade-notes: a CSV (trade_id, variant, note[, score from -1 to 1]) shown only in the reveal ("Second opinion").
+        Read once at the start. A changed file (against the one the latest grade recorded) is logged, never refused."""
+        src = os.path.abspath(str(path))
+        try:
+            self.notes, self.notes_sha, warn = core.read_trade_notes(src)
+        except (OSError, ValueError, UnicodeDecodeError, csv.Error) as e:
+            raise TradeQueueError(f'cannot read --trade-notes {src}: {e}') from e
+        for w in warn:
+            log('trade notes: ' + w)
+        last = max((g for g in self.tgrades.values() if g.get('second_opinion')), key=lambda g: g.get('saved_utc') or '', default=None)
+        was = (last or {}).get('second_opinion', {}).get('notes_file_sha256') if last else None
+        if was and was != self.notes_sha:
+            log(f'trade notes: {src} has changed since the last grade that showed a note (sha256 {was[:12]} then, {self.notes_sha[:12]} now); going on')
+
+    def _trades_need(self):
+        if self.tq is None:
+            raise Refused(self.tq_error or TRADES_USAGE)
+
+    def _titems(self):
+        """The queue's items the Studio may open: in sample and on a bot day (the holdout lock, again at every use)."""
+        return [it for it in self.tq['items'] if core.in_sample(it['date']) and it['date'] in self.bot_days] if self.tq else []
+
+    def _tskip_set(self):
+        return {x['date'] for x in self.tskip}
+
+    def _read_skip_days(self):
+        try:
+            with open(os.path.join(self.marks, 'trade_skip_days.json'), encoding='utf-8') as f:
+                return list(json.load(f).get('days') or [])
+        except (OSError, ValueError, AttributeError):
+            return []
+
+    def _tnext_item(self, exclude=()):
+        """Next = the first queued trade not graded (both stages for an ADJUST), not on a skipped day and not refused."""
+        sk = self._tskip_set()
+        for it in self._titems():
+            if it['qid'] in exclude or it['qid'] in self.t_refused or it['date'] in sk:
+                continue
+            if not core.trade_grade_done(self.tgrades.get(it['qid'])):
+                return it
+        return None
+
+    def trade_counts(self):
+        """Counts only: never an outcome, never anything by label."""
+        items, sk = self._titems(), self._tskip_set()
+        done = {it['qid'] for it in items if core.trade_grade_done(self.tgrades.get(it['qid']))}
+        skipped = sum(1 for it in items if it['qid'] not in done and it['date'] in sk)
+        refused = sum(1 for it in items if it['qid'] not in done and it['date'] not in sk and it['qid'] in self.t_refused)
+        return {'total': len(items), 'target': self.trade_target, 'graded': len(done),
+                'adjusted': sum(1 for q in done if self.tgrades[q].get('label') == 'ADJUST'),
+                'skipped': skipped, 'skipped_days': len(sk), 'refused': refused,
+                'remaining': len(items) - len(done) - skipped - refused}
+
+    def trade_open(self):
+        """A trade is open and its grade not complete: its date and its outcome stay hidden, Free and Bot stay shut."""
+        return self.mode == 'trades' and self.day is not None and self.trade is not None and not self._tdone()
+
+    def _tdone(self):
+        return core.trade_grade_done(self.tgrades.get(self.trade['item']['qid']))
+
+    def _tstage(self):
+        g = self.tgrades.get(self.trade['item']['qid'])
+        return 1 if g is None else 2 if not core.trade_grade_done(g) else 3
+
+    def _tpublic(self):
+        """The open trade as /api/state shows it: opaque, no date, no trade id, nothing after the cut."""
+        t, g = self.trade, self.tgrades.get(self.trade['item']['qid'])
+        cut = t['at_cut']
+        out = {'n': t['n'], 'qid': t['item']['qid'], 'stage': self._tstage(), 'complete': self._tdone(), 'label': (g or {}).get('label'),
+               'cut_tod': cut['cut_tod'], 'dir': cut['dir'], 'level_type': cut['level_type'], 'level_price': cut['level_price'],
+               'entry_order': {k: cut['entry_order'].get(k) for k in ('side', 'type', 'price', 'limit')},
+               'stop': cut['stop'], 'target': cut['target'], 'open_ms': t['open_ms'], 'prefetched': t['prefetched']}
+        return out
+
+    def trades_info(self):
+        b = self.bot
+        return {'ok': self.tq is not None, 'error': self.tq_error, 'usage': TRADES_USAGE, 'bot': b and b['name'],
+                'variant': self.tq_variant and self.tq_variant['id'], 'target': self.trade_target, 'notes': self.notes is not None,
+                'counts': self.trade_counts() if self.tq is not None else None}
+
+    def _tprepare(self, item):
+        """Everything a trade's opening needs, off the lock (the prefetch runs it in the background): the day, its prior
+        kept day, the bot's result (the Bot tab's cache), the trade found by its id and checked against the queue's row,
+        its entry order (core.entry_order_of) and what the bot showed at the cut."""
+        d = self.bot_day_ok(item['date'])
+        row, v = self.tq_rows[(d, item['trade_id'])], self.tq_variant
+        try:
+            day = self.source.load(d)
+            pday = self.prior_day(d)
+            key = (d, v['id'])
+            res = self.bot_cache.get(key)
+            if res is None:
+                res = self._bot_call(day, pday, v)
+                with self.bot_lock:
+                    self.bot_cache[key] = res
+        except (core.HoldoutError, Refused):
+            raise
+        except Exception as e:   # noqa: BLE001 - a day that does not load or a bot that fails on it: this trade is passed over
+            raise TradeSkip(f'the day or the bot run failed: {type(e).__name__}: {e}') from e
+        hits = [t for t in res['trades'] if str(t.get('id')) == item['trade_id']]
+        if len(hits) != 1:
+            raise TradeMismatch('the bot loaded is not the one that wrote the queue: its result for this trade\'s day has '
+                                f'{len(hits)} trades with the queued id')
+        t = hits[0]
+        bad = core.trade_mismatch(row, t, self.tick)
+        if bad:
+            log(f'trades: {item["qid"]}: the bot\'s trade differs from the queue\'s row in {", ".join(bad)}: '
+                + '; '.join(f'{k} queue {row.get(k)!r} bot {t.get(k)!r}' for k in bad))
+            raise TradeMismatch('the bot loaded is not the one that wrote the queue: ' + ', '.join(bad) + ' differ')
+        try:
+            order, how = core.entry_order_of(res, t, self.tick)
+        except ValueError as e:
+            raise TradeSkip(f'its entry order cannot be found exactly ({e})') from e
+        cut_wall = int(order['t_from'])
+        return {'item': item, 'row': row, 'res': res, 'trade': t, 'order': order, 'how': how,
+                'at_cut': core.trade_at_cut(res, t, order), 'cut_wall': cut_wall,
+                'cut_utc': int(core.wall_to_utc([cut_wall])[0]),
+                'pre': (day, pday, core.minute_bars(pday) if pday is not None else [])}
+
+    def _prefetch(self):
+        """Prepare the trade after the open one in the background, so Next opens it at once."""
+        with self.lock:
+            cur = self.trade['item']['qid'] if self.trade else None
+            item = self._tnext_item(exclude={cur})
+        if item is None:
+            return
+        with self.tprep_lock:
+            if self.tprep and self.tprep['qid'] == item['qid']:
+                return
+            rec = {'qid': item['qid'], 'out': None, 'err': None, 'done': threading.Event()}
+            self.tprep = rec
+
+        def work():
+            try:
+                rec['out'] = self._tprepare(item)
+            except Exception as e:   # noqa: BLE001 - raised again when the trade is opened
+                rec['err'] = e
+            finally:
+                rec['done'].set()
+        threading.Thread(target=work, daemon=True).start()
+
+    def _tprep_get(self, item):
+        with self.tprep_lock:
+            rec = self.tprep if self.tprep and self.tprep['qid'] == item['qid'] else None
+            if rec:
+                self.tprep = None
+        if rec is None:
+            return self._tprepare(item), False
+        rec['done'].wait()
+        if rec['err'] is not None:
+            raise rec['err']
+        return rec['out'], True
+
+    def trades_next(self):
+        """Open the next trade at its cut. A trade open and not graded stays the one shown (Next never skips it); a trade
+        whose entry order cannot be found exactly is passed over (logged, counted as refused); a bot that does not match
+        the queue stops here (TradeMismatch, 409)."""
+        self._trades_need()
+        with self.lock:
+            if self.blind_open():
+                raise Refused('a blind candidate is open: save its grade first, then use the Trades tab')
+            if self.trade_open():
+                return dict(self.state(), open_ms=0, prefetched=False)
+        t0, notes = time.perf_counter(), []
+        while True:
+            with self.lock:
+                item = self._tnext_item()
+            if item is None:
+                raise Refused('no trades left to grade')
+            try:
+                prep, pre = self._tprep_get(item)
+                break
+            except TradeSkip as e:
+                log(f'trades: {item["qid"]} passed over: {e}')
+                with self.lock:
+                    self.t_refused[item['qid']] = str(e)
+                notes.append(str(e))
+        self._load(item['date'], prep['cut_utc'], 'trades', pre=prep['pre'])
+        ms_open = round((time.perf_counter() - t0) * 1000, 1)
+        with self.lock:
+            cut = prep['at_cut']
+            self.cand = None
+            self.level = {'type': cut['level_type'], 'price': float(cut['level_price'])} if cut['level_price'] not in (None, '') else None
+            self.trade_no += 1
+            self.trade = dict(prep, n=self.trade_no, open_ms=ms_open, prefetched=pre)
+            del self.trade['pre']
+        self._prefetch()
+        return dict(self.state(), open_ms=ms_open, prefetched=pre, passed_over=notes)
+
+    def _topen_need(self):
+        if self.mode != 'trades' or self.trade is None or self.day is None:
+            raise Refused('no trade open: press Next trade (N)')
+
+    def _opinion(self, item):
+        return None if self.notes is None else self.notes.get((self.tq_variant['id'], item['trade_id']))
+
+    def _opinion_record(self, item):
+        """What a grade records of the second opinion it revealed: the notes file's and the note's sha256 and the score."""
+        if self.notes is None:
+            return None
+        n = self._opinion(item)
+        return {'notes_file_sha256': self.notes_sha, 'found': bool(n), 'score': n['score'] if n else None,
+                'note_sha256': hashlib.sha256(n['note'].encode('utf-8')).hexdigest() if n else None}
+
+    def _tlog(self, rec):
+        with open(os.path.join(self.marks, 'trade_grades_log.jsonl'), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, sort_keys=True) + '\n')
+
+    def trades_save1(self, p):
+        """Stage 1 at the cut: the label (TAKE, ADJUST or PASS; the only field required), chips, reason, confidence 1 to 3.
+        Written once to trade_grades/<qid>.json; a second save is refused."""
+        with self.lock:
+            self._topen_need()
+            if self._tstage() != 1:
+                raise Refused('stage 1 of this trade is saved already')
+            label = p.get('label')
+            if label not in core.TRADE_LABELS:
+                raise Refused('pick TAKE, ADJUST or PASS (T, A or P)')
+            conf = p.get('confidence')
+            if conf in (None, '', 0):
+                conf = None
+            elif str(conf) not in ('1', '2', '3'):
+                raise Refused('confidence is 1, 2 or 3 (or none)')
+            else:
+                conf = int(conf)
+            t, it = self.trade, self.trade['item']
+            if self.clock != t['cut_utc']:
+                raise Refused('stage 1 is graded at the cut')
+            g = {'qid': it['qid'], 'trade_id': it['trade_id'], 'date': it['date'], 'symbol': self.symbol, 'bot': self.bot['name'],
+                 'variant': self.tq_variant['id'], 'queue_sha256': self.tq['sha256'], 'stage': 1, 'label': label,
+                 'chips': [str(c)[:80] for c in (p.get('chips') or [])][:40], 'reason': str(p.get('reason') or '').strip()[:2000],
+                 'confidence': conf, 'cut_utc_ms': t['cut_utc'], 'cut_exclusive': True, 'at_cut': t['at_cut'],
+                 'entry_order_link': t['how'], 'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+            if label != 'ADJUST':
+                g['second_opinion'] = self._opinion_record(it)
+            if not core.write_once(os.path.join(self.marks, 'trade_grades', it['qid'] + '.json'), g):
+                raise Refused('stage 1 of this trade is saved already (its file exists)')
+            self._tlog(g)
+            self.tgrades[it['qid']] = dict(g, adjust=None)
+            return {'ok': True, 'stage': 1, 'label': label, 'complete': self._tdone()}
+
+    def trades_save2(self, p):
+        """Stage 2, ADJUST only: the entry type and the Entry, Stop (both required) and Target marks, with the candles stepped
+        since the cut. Written once to trade_grades/<qid>.adjust.json."""
+        with self.lock:
+            self._topen_need()
+            it = self.trade['item']
+            g = self.tgrades.get(it['qid'])
+            if g is None:
+                raise Refused('save stage 1 first (T, A or P)')
+            if g.get('label') != 'ADJUST':
+                raise Refused('stage 2 is for ADJUST only')
+            if g.get('adjust'):
+                raise Refused('stage 2 of this trade is saved already')
+            et = p.get('entry_type')
+            if et not in core.ENTRY_TYPES:
+                raise Refused('the entry type is one of ' + ', '.join(core.ENTRY_TYPES))
+            marks = {}
+            for m in p.get('marks') or []:
+                if m.get('role') not in ('Entry', 'Stop', 'Target'):
+                    continue
+                tw, price = float(m['t']), float(m['price'])
+                if not (math.isfinite(tw) and math.isfinite(price)):
+                    raise Refused('a mark has no time or price')
+                tu = int(core.wall_to_utc([round(tw * 1000)])[0])
+                if tu >= self.clock:
+                    raise Refused('a mark is after the clock')
+                marks[m['role']] = {'role': m['role'], 'chart': m.get('chart'), 'bar_time_utc_ms': tu, 'bar_tod': core.fmt_tod(round(tw * 1000)), 'price': price}
+            if 'Entry' not in marks or 'Stop' not in marks:
+                raise Refused('mark your Entry and Stop first (E, S, then a click on the chart)')
+            adj = {'entry_type': et, 'entry': marks['Entry']['price'], 'stop': marks['Stop']['price'],
+                   'target': marks['Target']['price'] if 'Target' in marks else None, 'steps_after_cut': self.steps,
+                   'clock_utc_ms': self.clock, 'marks': list(marks.values()), 'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+            rec = {'qid': it['qid'], 'trade_id': it['trade_id'], 'date': it['date'], 'stage': 2, 'adjust': adj,
+                   'second_opinion': self._opinion_record(it)}
+            if not core.write_once(os.path.join(self.marks, 'trade_grades', it['qid'] + '.adjust.json'), rec):
+                raise Refused('stage 2 of this trade is saved already (its file exists)')
+            self._tlog(rec)
+            g['adjust'], g['second_opinion'] = adj, rec['second_opinion']
+            return {'ok': True, 'stage': 2, 'label': 'ADJUST', 'complete': True}
+
+    def trades_view(self):
+        """The bot on the charts: core.bot_view frozen AT THE CUT until the grade is complete (stepping candles after ADJUST
+        moves the ticks, never the bot's view), then at the clock. No dollars here."""
+        with self.lock:
+            self._topen_need()
+            it, res, done = self.trade['item'], self.trade['res'], self._tdone()
+            c = core.utc_to_wall(self.clock) if done else self.trade['cut_wall']
+        v = core.bot_view(res, c, self.bot['exit_ids'], self.symbol)
+        out = {'qid': it['qid'], 'name': self.bot['name'], 'exit_ids': self.bot['exit_ids'], 'frozen': not done}
+        out.update({k: v[k] for k in ('clock_wall_ms', 'events', 'orders', 'trades')})
+        return out
+
+    def trades_result(self):
+        """The reveal, only once the grade is complete (409 before): the date, the trade id and the bot's result for this
+        trade (each exit's points and R), and the second opinion when --trade-notes is given."""
+        with self.lock:
+            self._topen_need()
+            if not self._tdone():
+                raise Refused('the result shows once the grade is saved')
+            it, t, g = self.trade['item'], self.trade['trade'], self.tgrades[self.trade['item']['qid']]
+        ids = [x for x in RESULT_FIRST if x in (t.get('exits') or {})] + [x for x in self.bot['exit_ids'] if x not in RESULT_FIRST]
+        ids += [x for x in (t.get('exits') or {}) if x not in ids]
+        exits = [dict(id=k, reason=e.get('reason'), points=e.get('points'), r=e.get('r'), exit_tod=core.fmt_tod(e['exit_t']))
+                 for k in ids for e in [(t.get('exits') or {}).get(k)] if e]
+        return {'qid': it['qid'], 'date': it['date'], 'trade_id': it['trade_id'], 'label': g.get('label'), 'dir': t.get('dir'),
+                'entry': t.get('entry'), 'entry_tod': core.fmt_tod(t['entry_t']), 'stop': t.get('stop'), 'target': t.get('target'),
+                'exits': exits, 'notes': self.notes is not None, 'second_opinion': self._opinion(it)}
+
+    def trades_skip_day(self):
+        """"Seen this day before": the open trade's date goes into trade_skip_days.json (entries only ever added), every
+        queued trade of that day is skipped and nothing else is recorded for this trade. Only before stage 1 is saved."""
+        with self.lock:
+            self._topen_need()
+            if self._tstage() != 1:
+                raise Refused('this trade is graded already: a day is skipped before stage 1 only')
+            d, it = self.trade['item']['date'], self.trade['item']
+            days = self._read_skip_days()
+            if d not in {x['date'] for x in days}:
+                days.append({'date': d, 'qid': it['qid'], 'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')})
+                core.write_text(os.path.join(self.marks, 'trade_skip_days.json'), json.dumps({'version': 1, 'days': days}, indent=1))
+            self.tskip = days
+            self._drop_clients()
+            self.day, self.trade, self.level, self.playing = None, None, None, False
+            self.load_seq += 1
+        self._prefetch()
+        return self.state()
+
+    def trades_export(self):
+        dest, n = core.export_trade_grades(self.marks, self.tgrades)
+        return {'file': dest, 'rows': n}
 
     # ---------------------------------------------------------------- the charts' WebSocket (read only)
     def _drop_clients(self):
@@ -1213,6 +1673,12 @@ def make_handler(studio, port):
                     return self._json(200, studio.bot_view())
                 if u.path == '/api/bot/runall':
                     return self._json(200, studio.bot_runall_status())
+                if u.path == '/api/trades/info':
+                    return self._json(200, studio.trades_info())
+                if u.path == '/api/trades/view':
+                    return self._json(200, studio.trades_view())
+                if u.path == '/api/trades/result':
+                    return self._json(200, studio.trades_result())
             except core.HoldoutError as e:
                 return self._json(403, {'error': str(e)})
             except Forbidden as e:
@@ -1274,6 +1740,16 @@ def make_handler(studio, port):
                     return self._json(200, studio.bot_runall_start())
                 if path == '/api/bot/export':
                     return self._json(200, studio.bot_export())
+                if path == '/api/trades/next':
+                    return self._json(200, studio.trades_next())
+                if path == '/api/trades/save1':
+                    return self._json(200, studio.trades_save1(p))
+                if path == '/api/trades/save2':
+                    return self._json(200, studio.trades_save2(p))
+                if path == '/api/trades/skip_day':
+                    return self._json(200, studio.trades_skip_day())
+                if path == '/api/trades/export':
+                    return self._json(200, studio.trades_export())
             except core.HoldoutError as e:
                 return self._json(403, {'error': str(e)})
             except Forbidden as e:
@@ -1432,7 +1908,13 @@ def main(argv=None):
         log(f'already-seen: the default files are NQ events, not used for {symbol} (give --seen=CSV[,CSV] to exclude {symbol} ones)')
     try:
         studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol,
-                        include_last_only='include-last-only' in opt, bot_path=opt.get('bot'))
+                        include_last_only='include-last-only' in opt, bot_path=opt.get('bot'),
+                        trade_queue=opt.get('trade-queue'), trade_variant=opt.get('trade-variant'),
+                        trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)), trade_target=int(opt.get('trade-target', 300)),
+                        trade_skip_days=[x for x in opt.get('trade-skip-days', '').split(',') if x.strip()],
+                        trade_notes=opt.get('trade-notes'))
+    except TradeQueueError as e:
+        sys.exit(f'Markup Studio: the Trades tab cannot start: {e}')
     except (OSError, ValueError) as e:
         sys.exit(f'cannot use the marks folder {marks}: {e}\nGive another with --marks=PATH.')
     try:

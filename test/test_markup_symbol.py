@@ -249,12 +249,13 @@ class EsStudio(Base):
         self.assertEqual((r['error'], r['contract'], r['micro'], r['rt'], r['micro_rt']), ('', 'ES', 'MES', 4.5, 1.0))
         main = [(x['variant'], x['exit_id'], x['net_usd'], x['net_usd_micro']) for x in r['rows'] if x['group'] == 'all']
         self.assertEqual(main, [('T1000', 'base', 495.5, 49.0), ('T1000', 't5', 245.5, 24.0), ('T1100', 'base', -254.5, -26.0),
-                                ('T1100', 't5', -254.5, -26.0)])
+                                ('T1100', 't5', -254.5, -26.0), ('TM', 'base', 511.5, 49.5), ('TM', 't5', 236.5, 22.0)])
         folder = st.bot_export()['folder']
         with open(os.path.join(folder, 'trades.csv')) as f:
             rows = list(csv.DictReader(f))
         self.assertEqual([(x['symbol'], x['micro'], x['variant'], x['base_net_usd'], x['base_net_usd_micro']) for x in rows],
-                         [('ES', 'MES', 'T1000', '495.5', '49.0'), ('ES', 'MES', 'T1100', '-254.5', '-26.0')])
+                         [('ES', 'MES', 'T1000', '495.5', '49.0'), ('ES', 'MES', 'T1100', '-254.5', '-26.0'), ('ES', 'MES', 'TM', '495.5', '49.0'),
+                          ('ES', 'MES', 'TM', '-254.5', '-26.0'), ('ES', 'MES', 'TM', '270.5', '26.5')])
         self.assertFalse([k for k in rows[0] if 'nq' in k.lower()])
         with open(os.path.join(folder, 'summary.csv')) as f:
             srows = list(csv.DictReader(f))
@@ -277,7 +278,8 @@ class EsStudio(Base):
             js = json.load(f)
         self.assertEqual(js['costs'], {'NQ': {'per_point': 20.0, 'round_trip': 4.5}, 'MNQ': {'per_point': 2.0, 'round_trip': 1.0}})
         self.assertEqual([(x['variant'], x['exit_id'], x['net_usd'], x['net_usd_micro']) for x in js['rows'] if x['group'] == 'all'],
-                         [('T1000', 'base', 195.5, 19.0), ('T1000', 't5', 95.5, 9.0), ('T1100', 'base', -104.5, -11.0), ('T1100', 't5', -104.5, -11.0)])
+                         [('T1000', 'base', 195.5, 19.0), ('T1000', 't5', 95.5, 9.0), ('T1100', 'base', -104.5, -11.0), ('T1100', 't5', -104.5, -11.0),
+                          ('TM', 'base', 196.5, 18.0), ('TM', 't5', 86.5, 7.0)])
 
 
 if __name__ == '__main__':

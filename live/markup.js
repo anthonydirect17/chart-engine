@@ -10,7 +10,9 @@
  * Then the app: two charts mounted read only with ChartLive.mount (live/EMBED.md), Range 40 and 1 minute, on the instrument
  * the server's hello announces (--symbol: NQ or ES; the header says which); the grade panel; marks drawn on an overlay
  * above each chart. The Bot tab draws what /api/bot/view returns (the server cuts it at the clock) on the same overlays:
- * orders, fills, the open trade's stop and target, exits.
+ * orders, fills, the open trade's stop and target, exits. The Trades tab grades the bot's own trades, keyboard first: each
+ * opens frozen at the moment the bot placed its entry order (/api/trades/view is the bot's view at that cut), T, A or P
+ * saves at once, the result and the date come only from /api/trades/result after the save.
  */
 (function () {
   'use strict';
@@ -67,7 +69,8 @@
   const COLORS = { Level: '#B69CFF', 'Failed candle': '#FFC266', 'Reclaim candle': '#7FD7FF', Entry: '#E6EDF5', Stop: '#FF5C7A', Target: '#3DDC97' };
   const A = { inst: null, state: null, panes: {}, overlays: {}, tool: null, spanDraft: null, marks: [], spans: [], chips: [], chipOn: new Set(),
     lastMount: '', machineTimer: 0, saved: false, uiMode: 'blind', bot: null, botInfo: null, botAt: 0, botBusy: false, runallWas: false,
-    botDrawn: { orders: 0, fills: 0, exits: 0 } };
+    botDrawn: { orders: 0, fills: 0, exits: 0 }, tview: null, tvAt: 0, tvBusy: false, tBusy: false, tres: null, tConf: null, tSeenArm: false,
+    tinfo: null };
   window.__markup = A;
 
   async function api(path, body) {
@@ -210,6 +213,7 @@
         g.fillText(m.role, x + 8, y);
       }
       if (A.uiMode === 'bot' && A.bot && A.state && A.state.mode === 'bot') drawBot(g, ch, A.bot, drawn);
+      else if (A.uiMode === 'trades' && A.tview && A.state && A.state.mode === 'trades') drawBot(g, ch, A.tview, drawn);
     }
     A.botDrawn = drawn;
     requestAnimationFrame(draw);
@@ -271,7 +275,10 @@
     return b;
   }
   function renderMarks() {
-    const ul = $('markList'); ul.textContent = '';
+    for (const id of ['markList', 'tMarkList']) renderMarkList($(id));
+  }
+  function renderMarkList(ul) {
+    ul.textContent = '';
     const items = A.marks.map(m => ({ text: m.role + ' ' + m.chart + ' ' + todOf(m.t) + ' ' + fmtP(m.price), drop: () => { A.marks = A.marks.filter(x => x !== m); } }))
       .concat(A.spans.map(s => ({ text: s.role + ' ' + Math.round(s.t1 - s.t0) + ' s', drop: () => { A.spans = A.spans.filter(x => x !== s); } })));
     for (const it of items) {
@@ -282,7 +289,10 @@
     }
   }
   function renderChips() {
-    const box = $('chips'); box.textContent = '';
+    for (const id of ['chips', 'tChips']) renderChipBox($(id));
+  }
+  function renderChipBox(box) {
+    box.textContent = '';
     for (const c of A.chips) {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'ms-chip' + (A.chipOn.has(c) ? ' on' : ''); b.textContent = c;
@@ -292,7 +302,10 @@
   }
   function resetForm() {
     $('gradeForm').reset(); A.chipOn.clear(); A.marks = []; A.spans = []; A.saved = false;
-    renderChips(); renderMarks(); setTool(null); say('saveMsg', '');
+    $('tReason').value = ''; A.tConf = null; A.tSeenArm = false; A.tres = null; A.tview = null;
+    const st = document.querySelector('input[name=tEntryType][value="stop-limit"]'); if (st) st.checked = true;
+    clearResult();
+    renderChips(); renderMarks(); setTool(null); say('saveMsg', ''); say('tErr', '');
     $('secDraft').hidden = true; $('secMachine').hidden = A.uiMode !== 'free';
   }
 
@@ -302,7 +315,7 @@
     const free = s.mode === 'free' || s.mode === 'bot';
     setClock(s.clock_utc_ms || realNow(), s.playing ? s.speed : 0);
     $('msClock').textContent = s.clock_tod || '--:--:--';
-    $('msDate').textContent = free && s.date ? s.date : '';
+    $('msDate').textContent = (free || s.mode === 'trades') && s.date ? s.date : '';
     $('msPlay').textContent = s.playing ? s.speed + 'x' : '';
     const sc = s.scan || {};
     const warn = (s.warnings || []).join('; ');
@@ -311,16 +324,20 @@
     $('msStatus').classList.toggle('warn', !!warn);
     $('btnNext').disabled = !(s.queue && s.queue.remaining > 0);
     // blind dates stay hidden while the server holds a blind candidate, whatever tab is showing
-    BLIND = A.uiMode === 'blind' || s.mode === 'blind';
-    for (const id of ['tabFree', 'tabBot']) { $(id).disabled = !!s.blind_open; $(id).title = s.blind_open ? 'Save the grade first' : ''; }
+    BLIND = A.uiMode === 'blind' || s.mode === 'blind' || !!s.trade_open || (A.uiMode === 'trades' && !s.date);
+    const shut = !!(s.blind_open || s.trade_open);
+    for (const id of ['tabFree', 'tabBot']) { $(id).disabled = shut; $(id).title = shut ? 'Save the grade first' : ''; }
+    $('tabTrades').disabled = !!s.blind_open; $('tabBlind').disabled = !!s.trade_open;
     if (s.blind_open && A.uiMode !== 'blind') setMode('blind');
+    if (s.trade_open && A.uiMode !== 'trades') setMode('trades');
     if (s.queue) $('queueInfo').textContent = 'remaining ' + s.queue.remaining + ', graded ' + s.queue.graded + ', excluded ' + s.queue.excluded_seen + ' already-seen, ' + (s.queue.bot_days || 0) + ' on bot days';
     const blindLive = s.mode === 'blind' && s.loaded && !s.graded;
     $('candInfo').textContent = s.mode === 'blind' && s.candidate && s.level ? '#' + s.candidate.n + '  Level ' + s.level.type + ' ' + fmtP(s.level.price) : 'No candidate open';
-    $('stepCount').textContent = s.mode === 'blind' && s.loaded ? 'steps after cut: ' + s.steps : '';
-    $('btnStep').disabled = !s.loaded;
+    const tst = tStage(s);
+    $('stepCount').textContent = (s.mode === 'blind' && s.loaded) || tst === 2 ? 'steps after cut: ' + s.steps : '';
+    $('btnStep').disabled = !s.loaded || tst === 1;
     $('playRow').hidden = $('jumpRow').hidden = !free;
-    $('revealRow').hidden = !(s.mode === 'blind' && s.graded);
+    $('revealRow').hidden = !((s.mode === 'blind' && s.graded) || tst === 3);
     $('btnSave').disabled = !s.loaded || (s.mode === 'blind' && s.graded);
     if (blindLive) $('secMachine').hidden = true;
     const ra = (s.bot && s.bot.runall) || {};
@@ -331,6 +348,7 @@
     if (A.uiMode === 'bot') $('botProg').textContent = !bd ? '' : bd.status === 'running' ? 'the bot is running on this day: ' + Math.round(100 * bd.progress) + '%' :
       bd.status === 'error' ? 'the bot failed on this day: ' + bd.error : '';
     if (A.uiMode === 'bot' && s.mode === 'bot' && s.loaded) botTick();
+    if (A.uiMode === 'trades') showTrades(s, tst);
   }
   async function refresh() {
     try { showState(await api('/api/state')); } catch (e) { $('msStatus').textContent = 'Studio not reachable: ' + e.message; }
@@ -423,24 +441,158 @@
       showState(s);
       if (opts && opts.remount) { if (opts.reset) resetForm(); mount(); }
       return s;
-    } catch (e) { say(A.uiMode === 'bot' ? 'botErr' : 'saveMsg', e.message, true); return null; }
+    } catch (e) { say(A.uiMode === 'bot' ? 'botErr' : A.uiMode === 'trades' ? 'tErr' : 'saveMsg', e.message, true); return null; }
   }
   function setMode(m) {
-    if (m !== 'blind' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use ' + (m === 'bot' ? 'the Bot tab.' : 'Free mode.'), true); return; }
+    if (m !== 'blind' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use ' + (m === 'bot' ? 'the Bot tab.' : m === 'trades' ? 'the Trades tab.' : 'Free mode.'), true); return; }
+    if (m !== 'trades' && A.state && A.state.trade_open) { say('tErr', 'Grade the open trade first.', true); return; }
     A.uiMode = m;
-    const ui = m === 'blind', bot = m === 'bot';
-    BLIND = ui || !A.state || A.state.mode === 'blind';           // the scrub stays on while a blind candidate is loaded
-    for (const [id, k] of [['tabBlind', 'blind'], ['tabFree', 'free'], ['tabBot', 'bot']]) { $(id).classList.toggle('on', m === k); $(id).setAttribute('aria-selected', String(m === k)); }
+    const ui = m === 'blind', bot = m === 'bot', tr = m === 'trades';
+    // the scrub stays on while a blind candidate is loaded, and in the Trades tab until the trade's grade is saved
+    BLIND = ui || !A.state || A.state.mode === 'blind' || !!A.state.trade_open || (tr && !A.state.date);
+    for (const [id, k] of [['tabBlind', 'blind'], ['tabFree', 'free'], ['tabBot', 'bot'], ['tabTrades', 'trades']]) { $(id).classList.toggle('on', m === k); $(id).setAttribute('aria-selected', String(m === k)); }
     $('secBlind').hidden = !ui; $('secFree').hidden = m !== 'free'; $('secBot').hidden = !bot;
+    $('secKeys').hidden = $('secTrades').hidden = !tr;
+    if (!tr) $('secTGrade').hidden = $('secTAdjust').hidden = $('secTResult').hidden = true;
     $('secMachine').hidden = m !== 'free';
-    $('gradeForm').hidden = bot; $('secAgree').hidden = bot;
-    if (bot) $('secDraft').hidden = true;
-    else { $('secBotOut').hidden = true; $('botSummary').hidden = true; }
+    $('gradeForm').hidden = bot || tr; $('secAgree').hidden = bot || tr;
+    if (bot || tr) $('secDraft').hidden = true;
+    if (!bot) { $('secBotOut').hidden = true; $('botSummary').hidden = true; }
     $('msPanel').classList.toggle('bot', bot);
+    $('msPanel').classList.toggle('trades', tr);
     if (BLIND) scrubNode(document.body);
     if (ui) { if (A.state && A.state.mode !== 'blind') { unmount(); resetForm(); } clearBot(); }
+    else if (tr) { if (A.state && A.state.mode !== 'trades') { unmount(); resetForm(); } clearBot(); loadTrades(); }
     else if (bot) loadBotDays();
     else loadDays();
+  }
+
+  /* ---------------- the Trades tab: keyboard first; the date and the result only after the save */
+  const tStage = s => !s || s.mode !== 'trades' || !s.loaded || !s.trade ? 0 : s.trade.complete ? 3 : s.trade.stage;
+  const KEYS_ON = { 0: ['N', 'ESC'], 1: ['T', 'A', 'P', 'C', 'X', 'ESC'], 2: ['E', 'S', 'G', 'Y', 'R', 'N', 'ESC'], 3: ['N', 'SP', 'ESC'] };
+  function showTrades(s, st) {
+    const c = s.trades && s.trades.counts;
+    $('tProgress').textContent = c ? 'Graded ' + c.graded + ' of ' + c.target + ' (' + c.adjusted + ' adjusted, ' + c.skipped_days + ' days skipped); ' +
+      c.remaining + ' left in the queue' + (c.refused ? ', ' + c.refused + ' passed over' : '') : '';
+    const t = st ? s.trade : null;
+    $('secTGrade').hidden = st !== 1; $('secTAdjust').hidden = st !== 2; $('secTResult').hidden = st !== 3 || !A.tres;
+    for (const b of document.querySelectorAll('#tLabelSeg button')) { b.disabled = st !== 1; b.classList.toggle('on', !!t && t.label === b.dataset.label); }
+    for (const b of document.querySelectorAll('#tConfSeg button')) b.classList.toggle('on', String(A.tConf) === b.dataset.conf);
+    $('btnTNext').disabled = !(st === 0 || st === 3) || !(c && c.remaining > 0);
+    $('btnTSeen').disabled = st !== 1;
+    $('tInfo').textContent = t ? '#' + t.n + '  ' + (t.level_type || 'level') + ' ' + fmtP(t.level_price) + '  ' + t.dir + '  bot: ' +
+      (t.entry_order.side === 'sell' ? 'SELL ' : 'BUY ') + (TYPES[t.entry_order.type] || t.entry_order.type) + ' ' + fmtC(t.entry_order.price) +
+      (t.entry_order.limit !== null && t.entry_order.limit !== undefined ? ' limit ' + fmtC(t.entry_order.limit) : '') : 'No trade open';
+    $('tOpen').textContent = t ? 'opened in ' + t.open_ms + ' ms' + (t.prefetched ? ' (prefetched)' : '') : '';
+    const on = new Set(KEYS_ON[st] || []);
+    if (st === 0 && !(c && c.remaining > 0)) on.delete('N');
+    for (const li of document.querySelectorAll('#tKeys li')) li.classList.toggle('off', !on.has(li.dataset.k));
+    $('tKeyN').textContent = st === 2 ? 'save my trade' : 'next trade';
+    if (st === 3 && !A.tBusy && (!A.tres || A.tres.qid !== t.qid)) fetchResult(t.qid);
+    if (st) tTick();
+  }
+  async function tTick(force) {
+    if (A.tvBusy || (!force && performance.now() - A.tvAt < 400)) return;
+    A.tvBusy = true; A.tvAt = performance.now();
+    try { A.tview = await api('/api/trades/view'); } catch (e) { /* no trade open */ } finally { A.tvBusy = false; }
+  }
+  function clearResult() {
+    A.tres = null;
+    for (const id of ['tResHead', 'tResult', 'tOpinion']) $(id).textContent = '';
+    $('tOpinionBox').hidden = true; $('secTResult').hidden = true;
+  }
+  // the result of the trade `qid` only: one that comes back after Next opened another trade is dropped, so no earlier
+  // trade's date or result stays in the page while the next one is open
+  async function fetchResult(qid) {
+    if (A.tresBusy) return;
+    A.tresBusy = true;
+    try {
+      const r = await api('/api/trades/result');
+      const t = A.state && A.state.trade;
+      if (r.qid === qid && !A.tBusy && t && t.qid === qid) showResult(r);
+    } catch (e) { /* refused (409) once another trade is open: the next poll asks again if still due */ } finally { A.tresBusy = false; }
+  }
+  function showResult(r) {
+    A.tres = r;
+    $('tResHead').textContent = r.label + ' saved.  ' + r.date + '  trade ' + r.trade_id + '  ' + r.dir + ' ' + fmtC(r.entry) + ' at ' + r.entry_tod;
+    const t = $('tResult'); t.textContent = '';
+    head(t, ['Exit', 'Result', 'Points', 'R', 'At']);
+    const tb = t.createTBody();
+    for (const x of r.exits || []) {
+      const tr = tb.insertRow();
+      cell(tr, x.id); cell(tr, x.reason); cell(tr, signed(x.points), x.points > 0 ? 'win' : 'loss'); cell(tr, x.r === null || x.r === undefined ? '' : signed(x.r)); cell(tr, x.exit_tod);
+    }
+    $('tOpinionBox').hidden = !r.notes;
+    const o = r.second_opinion;
+    $('tOpinion').textContent = !r.notes ? '' : o ? o.note + (o.score === null || o.score === undefined ? '' : '  (score ' + o.score + ')') : 'no second opinion for this trade';
+    $('secTResult').hidden = false;
+  }
+  async function loadTrades() {
+    try {
+      const info = A.tinfo = await api('/api/trades/info');
+      $('tMsg').textContent = info.ok ? info.bot + ', variant ' + info.variant : info.error ? 'Trades tab not available: ' + info.error : info.usage;
+      const s = A.state;
+      if (info.ok && !(s && s.mode === 'trades' && s.loaded) && info.counts && info.counts.remaining > 0) tNext();
+    } catch (e) { say('tErr', e.message, true); }
+  }
+  async function tNext() {
+    if (A.tBusy) return;
+    A.tBusy = true; clearResult(); A.tview = null; disarmSeen();
+    try {
+      const s = await act('/api/trades/next', {}, { remount: true, reset: true });
+      if (s) { tTick(true); if (s.passed_over && s.passed_over.length) say('tErr', s.passed_over.length + ' trade(s) passed over: ' + s.passed_over.join('; '), true); }
+    } finally { A.tBusy = false; }
+  }
+  async function tSave1(label) {
+    if (A.tBusy) return;
+    A.tBusy = true;
+    try {
+      const r = await api('/api/trades/save1', { label, chips: [...A.chipOn], reason: $('tReason').value, confidence: A.tConf });
+      say('tErr', '');
+      await refresh();
+      if (r.complete && A.state.trade) fetchResult(A.state.trade.qid);
+    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
+  }
+  async function tSave2() {
+    if (A.tBusy) return;
+    const marks = A.marks.filter(m => ['Entry', 'Stop', 'Target'].includes(m.role));
+    if (!marks.some(m => m.role === 'Entry') || !marks.some(m => m.role === 'Stop')) { say('tErr', 'Mark your Entry (E) and Stop (S) first.', true); return; }
+    A.tBusy = true;
+    try {
+      const type = (document.querySelector('input[name=tEntryType]:checked') || {}).value;
+      await api('/api/trades/save2', { entry_type: type, marks });
+      say('tErr', ''); setTool(null);
+      await refresh();
+      if (A.state.trade) fetchResult(A.state.trade.qid);
+    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
+  }
+  function disarmSeen() { A.tSeenArm = false; $('btnTSeen').firstChild.textContent = 'Seen this day before '; }
+  async function tSeen() {
+    if (!A.tSeenArm) {
+      A.tSeenArm = true; $('btnTSeen').firstChild.textContent = 'Confirm: seen this day ';
+      say('tErr', 'Press X again to skip every trade of this day (Esc cancels).', true); return;
+    }
+    disarmSeen();
+    if (A.tBusy) return;
+    try { showState(await api('/api/trades/skip_day', {})); unmount(); resetForm(); } catch (e) { say('tErr', e.message, true); return; }
+    tNext();
+  }
+  function tradeKey(e) {
+    const st = tStage(A.state), K = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    const done = () => e.preventDefault();
+    if (K !== 'X' && A.tSeenArm) { disarmSeen(); say('tErr', ''); }
+    if (st === 1) {
+      if (K === 'T') { done(); tSave1('TAKE'); } else if (K === 'A') { done(); tSave1('ADJUST'); } else if (K === 'P') { done(); tSave1('PASS'); }
+      else if (K >= '1' && K <= '3') { done(); A.tConf = A.tConf === +K ? null : +K; showState(A.state); }
+      else if (K === 'X') { done(); tSeen(); }
+    } else if (st === 2) {
+      const role = { E: 'Entry', S: 'Stop', G: 'Target' }[K];
+      if (role) { done(); setTool(A.tool && A.tool.role === role ? null : { role, span: false }); }
+      else if (K >= '1' && K <= '4') { done(); const el = document.querySelector('input[name=tEntryType][value="' + ['stop-limit', 'stop-market', 'limit', 'market'][+K - 1] + '"]'); if (el) el.checked = true; }
+      else if (K === 'ArrowRight') { done(); act('/api/step'); }
+      else if (K === 'Enter' || K === 'N') { done(); tSave2(); }
+    } else if (K === 'Enter' || K === 'N') { done(); if (st === 0 || st === 3) tNext(); }
+    else if (K === ' ' && st === 3) { done(); act('/api/reveal'); }
   }
   async function loadDays() {
     try {
@@ -514,9 +666,11 @@
 
   function onKey(e) {
     if (e.key === 'Escape' && (A.tool || A.spanDraft)) { setTool(null); e.preventDefault(); return; }
+    if (e.key === 'Escape' && A.uiMode === 'trades') { if (document.activeElement === $('tReason')) $('tReason').blur(); if (A.tSeenArm) { disarmSeen(); say('tErr', ''); } return; }
     if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
     const t = e.target, tag = t && t.tagName;
     if (tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && t.type !== 'radio') || (t && t.isContentEditable)) return;
+    if (A.uiMode === 'trades') { tradeKey(e); return; }
     const pick = (name, v) => { const el = document.querySelector('input[name=' + name + '][value=' + v + ']'); if (el) { el.checked = true; e.preventDefault(); } };
     if (e.key >= '1' && e.key <= '4') pick('setup', ['SWEEP', 'RETEST', 'NONE', 'WAIT'][+e.key - 1]);
     else if (e.key === 'l' || e.key === 'L') pick('direction', 'LONG');
@@ -529,6 +683,18 @@
     $('tabBlind').addEventListener('click', () => setMode('blind'));
     $('tabFree').addEventListener('click', () => setMode('free'));
     $('tabBot').addEventListener('click', () => setMode('bot'));
+    $('tabTrades').addEventListener('click', () => setMode('trades'));
+    $('btnTNext').addEventListener('click', () => tNext());
+    $('btnTSeen').addEventListener('click', () => tSeen());
+    $('btnTSave2').addEventListener('click', () => tSave2());
+    for (const b of document.querySelectorAll('#tLabelSeg button')) b.addEventListener('click', () => tSave1(b.dataset.label));
+    for (const b of document.querySelectorAll('#tConfSeg button')) b.addEventListener('click', () => { A.tConf = A.tConf === +b.dataset.conf ? null : +b.dataset.conf; showState(A.state); });
+    for (const [r, k] of [['Entry', 'E'], ['Stop', 'S'], ['Target', 'G']]) {
+      const b = document.createElement('button'), kb = document.createElement('kbd');
+      b.type = 'button'; b.className = 'ms-btn'; b.dataset.role = r; kb.textContent = k; b.append(r + ' ', kb);
+      b.addEventListener('click', () => setTool(A.tool && A.tool.role === r ? null : { role: r, span: false }));
+      $('tMarkTools').appendChild(b);
+    }
     $('btnBotLoad').addEventListener('click', async () => {
       say('botErr', ''); A.bot = null; $('botSummary').hidden = true;
       if (await act('/api/bot/load', { date: $('botDay').value, variant: $('botVariant').value }, { remount: true, reset: true })) botTick(true);
@@ -570,7 +736,8 @@
     A.machineTimer = setInterval(machine, 2000);
     refresh().then(() => {
       const st = A.state;
-      if (st && st.loaded && (st.mode === 'free' || st.mode === 'bot')) { setMode(st.mode); mount(); } else if (st && st.loaded && st.mode === 'blind') mount();
+      if (st && st.loaded && (st.mode === 'free' || st.mode === 'bot' || st.mode === 'trades')) { setMode(st.mode); mount(); } else if (st && st.loaded && st.mode === 'blind') mount();
+      else if (st && st.trades && st.trades.ready && !st.blind_open) setMode('trades');      // started for the Trades tab: straight to the next trade
     });
     requestAnimationFrame(draw);
   }

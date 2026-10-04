@@ -337,13 +337,17 @@ class BotFlow(Base):
         self.assertEqual((r['error'], r['failed'], r['k'], r['n']), ('', [], 2, 2))
         self.assertEqual(sorted(loads), ['2026-03-05', '2026-03-09'])         # each day loaded once (03-05 is also 03-09's prior)
         main = [(x['variant'], x['exit_id'], x['trades'], x['net_usd']) for x in r['rows'] if x['group'] == 'all']
-        self.assertEqual(main, [('T1000', 'base', 1, 195.5), ('T1000', 't5', 1, 95.5), ('T1100', 'base', 1, -104.5), ('T1100', 't5', 1, -104.5)])
+        # TM: T1000's and T1100's trades and a short from 11:01:20 at 21,010.50 (base flat at 16:00 +5.50: 110 - 4.50; t5 +5)
+        self.assertEqual(main, [('T1000', 'base', 1, 195.5), ('T1000', 't5', 1, 95.5), ('T1100', 'base', 1, -104.5), ('T1100', 't5', 1, -104.5),
+                                ('TM', 'base', 3, 196.5), ('TM', 't5', 3, 86.5)])
         folder = st.bot_export()['folder']
         self.assertTrue(folder.startswith(os.path.join(self.marks, 'botruns')))
         with open(os.path.join(folder, 'trades.csv')) as f:
             rows = list(csv.DictReader(f))
         self.assertEqual([(x['variant'], x['date'], x['entry_time'], x['base_points'], x['base_net_usd']) for x in rows],
-                         [('T1000', '2026-03-05', '10:00:20', '10.0', '195.5'), ('T1100', '2026-03-05', '11:00:20', '-5.0', '-104.5')])
+                         [('T1000', '2026-03-05', '10:00:20', '10.0', '195.5'), ('T1100', '2026-03-05', '11:00:20', '-5.0', '-104.5'),
+                          ('TM', '2026-03-05', '10:00:20', '10.0', '195.5'), ('TM', '2026-03-05', '11:00:20', '-5.0', '-104.5'),
+                          ('TM', '2026-03-05', '11:01:20', '5.5', '105.5')])
         self.assertIn('f_minutes_to_fill', rows[0])
         with open(os.path.join(folder, 'summary.json')) as f:
             js = json.load(f)

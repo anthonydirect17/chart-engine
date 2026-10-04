@@ -53,7 +53,7 @@ Grade NQ (or ES) liquidity sweeps on our own charts, blind, so your reads can be
   closed back beyond the level; entry A the reclaim close, entry B the confirmation break. Its numbers are in
   `tools/markup_rule_v0.json` (read at every save).
 - Add your own chips with the box under the chips (kept in `chips.json` in the marks folder).
-- No P&L and no outcome statistics in Blind or Free (the Bot tab sums the bot's own trades only).
+- No P&L and no outcome statistics in Blind, Free or Trades (the Bot tab sums the bot's own trades only).
 
 ## Bot tab
 
@@ -89,10 +89,70 @@ a bot module and shows what the bot returns, never more than the clock allows.
   `symbol`, `contract`, `micro`, `point_value`, `rt`, `micro_point_value`, `micro_rt` and `costs` (per contract name). Run
   folders written before ES support have `nq` / `mnq` columns instead; the Studio never reads them back.
 
+## Trades tab
+
+Grade the bot's OWN trades blind, one at a time: TAKE, ADJUST or PASS, each frozen at the moment the bot placed the
+trade's entry order, the outcome and the date hidden until the grade is saved. It records your selection; a later analysis
+(not in the Studio) compares the bot's real results of your TAKE and PASS trades. The Studio still knows no trading rule.
+
+- **Start it** (HOME), with the bot that wrote the run and that run's `trades.csv`:
+  `py -3 tools\markup_studio.py --bot=E:\SchwabDesk_bulk\bot-lab-A1\bots\sweep_v0.py --trade-queue=E:\SchwabDesk_bulk\marks\botruns\20261003_164230\trades.csv --trade-variant=FC-S4-valid-L1 --trade-skip-days=2026-03-31`
+  (optional: `--trade-seed=11`, `--trade-target=300`, `--trade-notes=PATH`). Give the same flags on every start. The page
+  opens on the Trades tab and goes straight to the next trade.
+- **The queue**, `trade_queue_v1.json` in the marks folder, is written on the first start and never rewritten: every row of
+  the variant whose date is a bot day (`bot_split_v1.json`), in sample and not a `--trade-skip-days` day, sorted and shuffled
+  with the seed (11). It holds the symbol, the source path, the sha256 of the `trades.csv`, the variant, the seed, the skip
+  days and the items (`qid`, `trade_id`, `date`). A later start whose flags disagree with it (another file by sha256, variant,
+  seed or skip days) is refused with the difference named. Old run folders (`_net_nq` columns, no symbol column) work as
+  sources (NQ only); only `variant`, `date`, `id`, `dir`, `entry_t`, `entry` and `stop` are read. Next is always the first
+  trade not graded and not on a skipped day, so a restart comes back to the same trade at the same cut.
+- **Opening a trade** loads its day, runs the bot on it (the Bot tab's cache) and finds the trade by its id. It must match
+  the queue's row (entry and stop to the tick, `entry_t` to the ms, `dir`), else "the bot loaded is not the one that wrote
+  the queue" and nothing opens. While you grade one trade the next one is loaded in the background (prefetch), so Next opens
+  it at once (the panel says how long it took; on the test fixture about 10 ms cold, under 1 ms prefetched).
+- **The cut** is the `t_from` of the order whose fill opened the trade (`entry_order_of` in `tools/markup_core.py`): the
+  order the trade names in `entry_order` if it has that field; else the one entry order (role `entry`) on the trade's side,
+  status `filled`, working at the fill (`t_from <= entry_t <= t_to`); if several, the one ending at the fill at the fill
+  price, placed last, when only one is. Anything else, or an order filled the moment it was placed, is not guessed: that
+  trade is passed over (logged, counted as "passed over") and the next one opens.
+- **What you see at the cut**: the ticks strictly before it (exclusive, as Blind), the bot's view at it exactly as
+  `bot_view` gives it (the working entry order, any stop or target orders it has working, earlier trades of the day as past
+  history), the bot's level (dashed line) and its side. Never this trade's fill, status or exits, and never the date (the
+  Blind scrub; ids are opaque `qid`s). The bot's view stays frozen at the cut until the grade is complete.
+- **Stage 1** (the clock does not move): `T` TAKE, `A` ADJUST, `P` PASS save at once and lock the label. Chips, a reason and
+  confidence (`1` to `3`) are optional; set them before the key.
+- **Stage 2** (ADJUST only): `→` (or Next candle) steps one minute (counted as `steps_after_cut`); `E` Entry, `S` Stop, `G`
+  Target (optional) arm the mark tool, one click on the chart places each; `1` to `4` pick the entry type (stop-limit, the
+  default, stop-market, limit, market). `Enter` saves once Entry and Stop are placed.
+- **The reveal**, at once after the save: the date, the trade id and the bot's result for this trade (each exit's points and
+  R; exit ids `m1` and `2R` first when the bot has them), and the second opinion if `--trade-notes` is given. `Space` plays
+  on at 5x (optional), `Enter` or `N` opens the next trade. Before the save `/api/trades/result`, reveal, play and jump answer
+  409, and Free, Bot and their loads are locked while a trade is open.
+- **Seen this day before**: `X`, then `X` again to confirm (`Esc` cancels). The day goes into `trade_skip_days.json` (entries
+  only ever added) and every queued trade of that day is skipped; nothing else is recorded for that trade.
+- **The key legend** stays at the top of the panel; keys that do not apply now are dimmed.
+- **No running tally.** The page and the API show counts only ("Graded 137 of 300 (12 adjusted, 3 days skipped)"), never an
+  outcome by label. Deliberate: the analysis is pre-registered and read once.
+- **Second opinion** (`--trade-notes=PATH`, optional): a CSV with `trade_id`, `variant`, `note` (quoted when it holds commas)
+  and optionally `score` (-1 to 1). Shown only in the reveal ("no second opinion for this trade" when the file has none); never
+  before the save in any page text, response or frame. The grade records the notes file's sha256, the note's sha256 and the
+  score shown. A notes file that changed since the last grade is logged and used.
+- **Files** (marks folder): `trade_grades/<qid>.json` (stage 1: qid, trade_id, date, symbol, bot, variant, queue sha256,
+  label, chips, reason, confidence, saved_utc, `at_cut` with the side, level, the entry order's type, price and limit and the
+  stop and target the bot showed, and how the entry order was found), `trade_grades/<qid>.adjust.json` (stage 2: `adjust` with
+  entry_type, entry, stop, target, steps_after_cut and the marks with their bar times). Each is written once and never
+  overwritten: a second save of a stage is refused. Every save also appends a line to `trade_grades_log.jsonl`. **Export**
+  (`POST /api/trades/export`) writes `trade_grades.csv`, one row per grade, labels and the fields above, no outcome column.
+- API: `GET /api/trades/info`, `/api/trades/view`, `/api/trades/result`; `POST /api/trades/next`, `/api/trades/save1`
+  (`label`, `chips`, `reason`, `confidence`), `/api/trades/save2` (`entry_type`, `marks`), `/api/trades/skip_day`,
+  `/api/trades/export`.
+
 ## Flags
 
 `--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` (or ES) `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
 `--bot=PATH` (a bot module for the Bot tab)
+`--trade-queue=PATH` `--trade-variant=ID` `--trade-seed=11` `--trade-skip-days=YYYY-MM-DD[,..]` `--trade-target=300`
+`--trade-notes=PATH` (the Trades tab; with `--bot`)
 `--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
 `tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort; those are NQ
 events, so with `--symbol=ES` there is no default and the window says so).

@@ -16,6 +16,13 @@
 //   7. Mutation proof: a copy of the server whose view filter leaks ONE future bot event must FAIL check 6.
 //   8. ES (--symbol=ES, its own marks folder; the fixture's ES days): the header says ES, the charts' root is ES (from the
 //      server's hello), and the Bot tab's dollars are ES and MES (a hand-worked net $).
+//   9. Trades tab (--trade-queue, a synthetic trades.csv of the test bot's TM trades, and --trade-notes): the page opens the
+//      next trade by itself; at its cut (the entry order's t_from) the checks of 1 and 2 hold for 2026-03-05, every
+//      /api/trades/view response is frozen at the cut, the fill time, the date and the second opinion are nowhere; the key
+//      legend shows every key. Keyboard flow: T saves and reveals (date, result, second opinion), N opens the next trade
+//      prefetched and faster, A, Next candle, E click, S click, Enter saves an ADJUST, Space plays, X X skips the day.
+//  10. Mutation proof: a server that cuts one tick late, and one that leaks the second opinion into the bot view, must each
+//      FAIL the checks of 9.
 //   npm run smoke:markup     (PYTHON=py to pick the interpreter; CHROMIUM_PATH to use a preinstalled browser; SHOTS_DIR)
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -35,7 +42,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'markup-smoke-'));
 const dataDir = path.join(tmp, 'data');
 execFileSync(PY, [path.join(root, 'test', 'markup_fixture.py'), dataDir], { stdio: 'ignore' });
 execFileSync(PY, [path.join(root, 'test', 'markup_fixture.py'), dataDir, 'ES'], { stdio: 'ignore' });   // ES_<date>.npz beside the NQ days
-const FX = JSON.parse(fs.readFileSync(path.join(dataDir, 'fixture.json'), 'utf8')).days['2026-03-10'];
+const FXALL = JSON.parse(fs.readFileSync(path.join(dataDir, 'fixture.json'), 'utf8')).days;
+const FX = FXALL['2026-03-10'];
 
 let checks = 0, failures = [];
 function check(ok, m, sink) {
@@ -87,7 +95,7 @@ const state = port => fetch(`http://127.0.0.1:${port}/api/state`, { headers: { H
 const chartsReady = page => until(() => page.evaluate(() => { const p = window.__markup.panes; return !!(p.range && p.m1 && p.range.chart.bars().length && p.m1.chart.bars().length); }), 15000);
 
 /* Check 1: nothing after the clock reached the page, and what did reach it is exactly the day up to the clock. */
-function noFuture(rec, clockUtc, sink, label) {
+function noFuture(rec, clockUtc, sink, label, FX = FXALL['2026-03-10']) {
   // blind mode cuts EXCLUSIVE: a trade stamped exactly at the clock (the next candle's first) is not the page's yet
   const n = FX.utc.filter(u => u < clockUtc).length;
   const clockWallS = (clockUtc + (FX.wall[0] - FX.utc[0])) / 1000;       // one offset all day (no DST change in the fixture)
@@ -120,7 +128,7 @@ function noFuture(rec, clockUtc, sink, label) {
     // before this session's first trade
     const all = msgs.filter(m => m.type === 'history').flatMap(m => m.bars);
     const prior = all.filter(b => b[0] < FX.wall[0] / 1000), hist = all.slice(prior.length);
-    check(prior.length > 0 && JSON.stringify(prior) === JSON.stringify(FX.prior_bars), `${label}: the history starts with exactly the prior day's ${FX.prior_bars.length} minutes`, sink);
+    check((prior.length > 0 || !FX.prior_bars.length) && JSON.stringify(prior) === JSON.stringify(FX.prior_bars), `${label}: the history starts with exactly the prior day's ${FX.prior_bars.length} minutes`, sink);
     const byMin = new Map();
     for (let i = 0; i < want; i++) {
       const k = Math.floor(FX.wall[i] / 60000) * 60, b = byMin.get(k);
@@ -240,6 +248,80 @@ async function botRun(port, label, sink) {
   check(!rec.errors.length, `${label}: no page errors (${rec.errors.join('; ')})`, sink);
   if (!sink) await shot(page, 'markup-bot.png');
   return { page, rec };
+}
+
+
+/* Check 9: the Trades tab on the test bot's TM trades of 2026-03-05 (markup_bot_fixture): entry orders placed at 10:00:00,
+   11:00:00 and 11:01:00 (wall), filled 20 s later. */
+const TMX = { X1: { order: botWall(10, 0, 0), fill: botWall(10, 0, 20), label: 'BUY STP 21,001.00', entry: 21001.0, stop: 20996.0, dir: 'long' },
+  X2: { order: botWall(11, 0, 0), fill: botWall(11, 0, 20), label: 'BUY STP 21,013.00', entry: 21013.0, stop: 21008.0, dir: 'long' },
+  X3: { order: botWall(11, 1, 0), fill: botWall(11, 1, 20), label: 'SELL STP 21,010.50', entry: 21010.5, stop: 21015.5, dir: 'short' } };
+const NOTE = id => 'SECOND-OPINION ' + id + ', "volume dried up"';
+function tradesFiles() {
+  const head = 'symbol,micro,variant,date,id,level_type,level_price,dir,entry_time,entry_t,entry,stop,target,target_kind,base_exit_t,base_points,base_net_usd';
+  const rows = Object.entries(TMX).map(([id, x]) => ['NQ', 'MNQ', 'TM', BOT_DAY, id, 'time', x.entry, x.dir, new Date(x.fill).toISOString().slice(11, 19),
+    x.fill, x.entry, x.stop, '', '2R', x.fill + 60000, 0, -4.5].join(','));
+  const csvPath = path.join(tmp, 'trades.csv'), notes = path.join(tmp, 'notes.csv');
+  fs.writeFileSync(csvPath, [head].concat(rows).join('\n') + '\n');
+  fs.writeFileSync(notes, 'trade_id,variant,note,score\n' + Object.keys(TMX).map(id => `${id},TM,"${NOTE(id).replace(/"/g, '""')}",0.5`).join('\n') + '\n');
+  return ['--trade-queue=' + csvPath, '--trade-variant=TM', '--trade-notes=' + notes];
+}
+const sub = (rec, k) => ({ get sockets() { return rec.sockets.slice(k.s); }, get responses() { return rec.responses.slice(k.r); }, errors: rec.errors });
+const mark = rec => ({ s: rec.sockets.length, r: rec.responses.length });
+async function tradeOpen(port, n) {
+  return until(async () => { const s = await state(port); return s.loaded && s.trade_open && s.trade && s.trade.n === n && s.trade.stage === 1 && s; }, 15000);
+}
+/* The checks at a trade's cut: what reached the page (rec: since the trade opened) holds nothing after the cut. */
+async function tradesCut(port, marks, page, rec, n, label, sink) {
+  const s = await tradeOpen(port, n);
+  if (!check(!!s, `${label}: trade #${n} is open`, sink)) return null;
+  await chartsReady(page);
+  await sleep(1500);
+  const q = JSON.parse(fs.readFileSync(path.join(marks, 'trade_queue_v1.json'), 'utf8'));
+  const item = q.items.find(i => i.qid === s.trade.qid), x = TMX[item.trade_id], F5 = FXALL[BOT_DAY];
+  const orderUtc = F5.utc[F5.wall.indexOf(x.order)], fillUtc = F5.utc[F5.wall.indexOf(x.fill)];
+  check(s.clock_utc_ms === orderUtc && s.clock_tod === new Date(x.order).toISOString().slice(11, 19), `${label}: the clock is the entry order's t_from (${s.clock_tod})`, sink);
+  noFuture(rec, s.clock_utc_ms, sink, label + ' at the cut', F5);
+  const bad = [];
+  let nv = 0;
+  for (const r of rec.responses) {
+    if (!/\/api\/trades\/view/.test(r.url)) continue;
+    let j; try { j = JSON.parse(r.body); } catch (e) { continue; }
+    nv++;
+    if (!(j.clock_wall_ms <= x.order)) bad.push('view clock ' + j.clock_wall_ms + ' after the cut');
+    const times = (j.events || []).map(e => e.t).concat((j.orders || []).flatMap(o => [o.t_from, o.t_to]), (j.trades || []).map(t => t.entry_t),
+      (j.trades || []).flatMap(t => Object.values(t.exits || {}).map(e => e.exit_t)));
+    for (const t of times) if (t > j.clock_wall_ms) bad.push(`time ${t} after the view's clock`);
+    if ((j.trades || []).some(t => t.entry_t === x.fill)) bad.push('this trade (its fill) in the view');
+    if ((j.orders || []).some(o => o.open && o.status)) bad.push('an open order with its status');
+  }
+  check(nv > 2 && !bad.length, `${label}: none of the ${nv} /api/trades/view responses holds the fill or anything after the cut` + (bad.length ? ' (' + bad[0] + ')' : ''), sink);
+  const all = rec.sockets.flatMap(z => z.frames).concat(rec.responses.map(r => r.body)).join('\n');
+  check(!all.includes(String(x.fill)) && !all.includes(String(fillUtc)), `${label}: the fill's time is in no frame or response`, sink);
+  check(!/2026-03-05|20260305/.test(all) && !all.includes(item.trade_id + '"'), `${label}: no frame or response names the date or the trade id`, sink);
+  const dom = await page.evaluate(() => {
+    const titles = [...document.querySelectorAll('[title],[aria-label],[placeholder]')].map(e => [e.getAttribute('title'), e.getAttribute('aria-label'), e.getAttribute('placeholder')].join(' '));
+    const scripts = [...document.scripts].map(s => s.textContent).join('');
+    return { all: document.documentElement.textContent.replace(scripts, ''), html: document.documentElement.outerHTML, titles: titles.join(' | '), title: document.title,
+      url: location.href, drawn: window.__drawn.slice(-20000).join(' | '), drawnAll: window.__drawn.join(' | '), legend: !document.getElementById('secKeys').hidden && document.getElementById('secKeys').getBoundingClientRect().height > 40,
+      keys: [...document.querySelectorAll('#tKeys li')].map(li => [li.textContent.replace(/\s+/g, ' ').trim(), li.classList.contains('off')]) };
+  });
+  const dm = DATE_RE.exec(dom.all + ' ' + dom.titles + ' ' + dom.title + ' ' + dom.url + ' ' + dom.drawn);
+  check(!dm, `${label}: no date in the DOM, tooltips, title, URL or chart canvases` + (dm ? ' (found ' + dm[0] + ')' : ''), sink);
+  check(dom.drawnAll.includes(x.label), `${label}: the bot's working entry order is drawn (${x.label})`, sink);
+  check(![dom.html, all].some(t => t.includes('SECOND-OPINION')), `${label}: the second opinion is in no frame, response, page source or DOM before the save`, sink);
+  const want = ['T TAKE', 'A ADJUST', 'P PASS', 'E entry', 'S stop', 'G target', '1-4 entry type', '→ next candle', 'Enter/N', 'Space play 5x', 'X seen this day', 'Esc cancel'];
+  const miss = want.filter(w => !dom.keys.some(([t]) => t.startsWith(w)));
+  check(dom.legend && !miss.length, `${label}: the key legend is on screen and lists every key` + (miss.length ? ' (missing ' + miss.join(', ') + ')' : ''), sink);
+  const off = Object.fromEntries(dom.keys.map(([t, o]) => [t.split(' ')[0], o]));
+  check(!off.T && !off.A && !off.P && off.E && off.S && off.G, `${label}: T, A, P lit and E, S, G dimmed before ADJUST`, sink);
+  const get = p => fetch(`http://127.0.0.1:${port}${p}`, { headers: { Host: 'localhost:' + port } });
+  const post = (p, b) => fetch(`http://127.0.0.1:${port}${p}`, { method: 'POST', headers: { Host: 'localhost:' + port, 'Content-Type': 'application/json' }, body: JSON.stringify(b || {}) });
+  const codes = [(await get('/api/trades/result')).status, (await post('/api/reveal')).status, (await post('/api/free/load', { date: '2026-03-10' })).status,
+    (await post('/api/bot/load', { date: BOT_DAY })).status, (await post('/api/step')).status];
+  check(codes.every(c => c === 409), `${label}: result, reveal, Free, Bot and Next candle are refused (409) before stage 1 (${codes})`, sink);
+  check(await page.locator('#tabFree').isDisabled() && await page.locator('#tabBot').isDisabled(), `${label}: the Free and Bot tabs are locked`, sink);
+  return { s, item, x };
 }
 
 const DATE_RE = /\b\d{4}-\d{2}-\d{2}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)\b/;
@@ -371,7 +453,7 @@ try {
   check((await post2('/api/bot/load', { date: '2026-04-02' })).status === 403, 'bot: a holdout day is refused (403)');
   await bot.page.click('#btnRunAll');
   const nrows = await until(() => bot.page.evaluate(() => { const t = document.querySelector('#botSumMain tbody'); return !document.getElementById('botSummary').hidden && t && t.rows.length; }), 20000);
-  check(nrows === 4, 'Run all: the summary has one row per variant x exit id (2 x 2 = 4, got ' + nrows + ')');
+  check(nrows === 6, 'Run all: the summary has one row per variant x exit id (3 x 2 = 6, got ' + nrows + ')');
   const cellText = await bot.page.evaluate(() => {
     const t = document.getElementById('botSumMain'), cols = [...t.tHead.rows[0].cells].map(c => c.textContent), r = t.tBodies[0].rows[0];
     return { variant: r.cells[0].title, exit: r.cells[1].textContent, net: r.cells[cols.indexOf('Net $ NQ')].textContent,
@@ -458,6 +540,99 @@ try {
   check(!es.rec.errors.length, 'ES: no page errors (' + es.rec.errors.join('; ') + ')');
   await shot(es.page, 'markup-es-bot.png');
   await es.page.close();
+
+  console.log('9. trades tab (keyboard first)');
+  const TP = PORT + 4, tMarks = path.join(tmp, 'marks-trades'), tFlags = tradesFiles();
+  const startTrades = async (script, port, marks) => {
+    const child = spawn(PY, [script, '--source=npz', '--data=' + dataDir, '--marks=' + marks, '--port=' + port, '--no-browser', '--seen=' + path.join(tmp, 'none.csv'),
+      '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py')].concat(tFlags), { stdio: ['ignore', 'pipe', 'inherit'] });
+    servers.push(child);
+    await new Promise(r => child.stdout.once('data', r));
+    await until(async () => ((await state(port).catch(() => ({}))).scan || {}).done, 10000);
+  };
+  await startTrades(path.join(root, 'tools', 'markup_studio.py'), TP, tMarks);
+  const tr = await openPage(TP);
+  const t1 = await tradesCut(TP, tMarks, tr.page, tr.rec, 1, 'trades #1', null);
+  const cold = t1.s.trade.open_ms;
+  const prog0 = await tr.page.evaluate(() => document.getElementById('tProgress').textContent);
+  check(prog0.startsWith('Graded 0 of 300 (0 adjusted, 0 days skipped)'), 'trades: the progress line (' + prog0 + ')');
+  await shot(tr.page, 'markup-trades-cut.png');
+  await tr.page.mouse.move(5, 5);
+  await tr.page.keyboard.press('t');
+  const res1 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
+  check(!!res1 && res1.startsWith('TAKE saved.') && res1.includes(BOT_DAY) && res1.includes(t1.item.trade_id), 'T saves stage 1 and reveals the date and the trade (' + res1 + ')');
+  const op = await tr.page.evaluate(() => [document.getElementById('tOpinionBox').hidden, document.getElementById('tOpinion').textContent, document.getElementById('tResult').tBodies[0].rows.length]);
+  check(!op[0] && op[1].startsWith(NOTE(t1.item.trade_id)) && op[1].includes('score 0.5') && op[2] === 2, 'the reveal shows the result per exit and the second opinion (' + op[1] + ')');
+  const g1 = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_grades', t1.s.trade.qid + '.json'), 'utf8'));
+  check(g1.label === 'TAKE' && g1.date === BOT_DAY && g1.second_opinion.found && g1.second_opinion.score === 0.5, 'the grade file holds TAKE, the date and the second opinion shown');
+  check((await state(TP)).date === BOT_DAY, 'after the save the date shows');
+  await shot(tr.page, 'markup-trades-reveal.png');
+
+  const k2 = mark(tr.rec);
+  await tr.page.keyboard.press('n');
+  const t2 = await tradesCut(TP, tMarks, tr.page, sub(tr.rec, k2), 2, 'trades #2', null);
+  const warm = t2.s.trade.open_ms;
+  console.log(`  open a trade: cold ${cold} ms, prefetched ${warm} ms`);
+  check(t2.s.trade.prefetched && warm < Math.max(cold, 20), `N opens the next trade prefetched and fast (cold ${cold} ms, prefetched ${warm} ms)`);
+  check(!(await tr.page.evaluate(() => document.documentElement.textContent)).includes(BOT_DAY), 'N: the last trade\'s date left the page');
+  await tr.page.keyboard.press('a');
+  await until(async () => ((await state(TP)).trade || {}).stage === 2, 5000);
+  const lit = await until(() => tr.page.evaluate(() => { const o = Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])); return o.E && o; }), 4000) || {};
+  check(lit.E && lit.S && lit.G && lit.Y && lit.R && !lit.T, 'after A: E, S, G, entry type and next candle lit, T dimmed');
+  const before = (await state(TP)).clock_utc_ms;
+  await tr.page.keyboard.press('ArrowRight');
+  await until(async () => (await state(TP)).clock_utc_ms > before, 5000);
+  const tbox = await tr.page.locator('#pane1m .ce-host').boundingBox();
+  await tr.page.keyboard.press('e');
+  await tr.page.mouse.click(tbox.x + tbox.width * 0.5, tbox.y + tbox.height * 0.35);
+  await tr.page.keyboard.press('s');
+  await tr.page.mouse.click(tbox.x + tbox.width * 0.55, tbox.y + tbox.height * 0.6);
+  check(await tr.page.locator('#tMarkList li').count() === 2, 'ADJUST: E click and S click place two marks');
+  await tr.page.keyboard.press('Enter');
+  const res2 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
+  check(!!res2 && res2.startsWith('ADJUST saved.'), 'Enter saves stage 2 and reveals (' + res2 + ')');
+  const a2 = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_grades', t2.s.trade.qid + '.adjust.json'), 'utf8')).adjust;
+  check(a2.entry_type === 'stop-limit' && a2.steps_after_cut === 1 && a2.marks.length === 2 && a2.entry !== null && a2.stop !== null && a2.marks.every(m => m.bar_time_utc_ms < a2.clock_utc_ms),
+    'the adjust file: stop-limit by default, 1 step after the cut, Entry and Stop with their bar times');
+  await tr.page.keyboard.press(' ');
+  check(!!(await until(async () => { const s = await state(TP); return s.playing && s.speed === 5; }, 4000)), 'Space plays on at 5x');
+  await tr.page.click('#btnPause2');
+  await tr.page.keyboard.press('Enter');
+  await tradeOpen(TP, 3);
+  await until(() => tr.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#3') && !document.getElementById('btnTSeen').disabled), 5000);
+  await tr.page.keyboard.press('x');
+  check((await tr.page.evaluate(() => document.getElementById('tErr').textContent)).includes('Press X again'), 'X asks to confirm');
+  await tr.page.keyboard.press('x');
+  await until(() => fs.existsSync(path.join(tMarks, 'trade_skip_days.json')), 5000);
+  const skipped = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_skip_days.json'), 'utf8')).days.map(d => d.date);
+  check(JSON.stringify(skipped) === JSON.stringify([BOT_DAY]), 'X X adds the trade\'s day to trade_skip_days.json');
+  const prog = await until(() => tr.page.evaluate(() => { const t = document.getElementById('tProgress').textContent; return t.includes('1 days skipped') && t; }), 5000);
+  check(!!prog && prog.startsWith('Graded 2 of 300 (1 adjusted, 1 days skipped); 0 left'), 'the progress line counts only (' + prog + ')');
+  const st9 = await state(TP);
+  const flat = JSON.stringify(st9);
+  check(!/"(net|usd|win_pct|wins|pf|TAKE|PASS)"\s*:/.test(flat), 'no tally of outcomes by label in the state');
+  const tex = await (await fetch(`http://127.0.0.1:${TP}/api/trades/export`, { method: 'POST', headers: { Host: 'localhost:' + TP, 'Content-Type': 'application/json' }, body: '{}' })).json();
+  const head9 = fs.readFileSync(tex.file, 'utf8').split('\n')[0].split(',');
+  check(tex.rows === 2 && !head9.some(c => /points|net_|_r$|exit/.test(c)), 'Export: trade_grades.csv has the 2 grades and no outcome column (' + head9.length + ' columns)');
+  check(!tr.rec.errors.length, 'trades: no page errors (' + tr.rec.errors.join('; ') + ')');
+  await tr.page.close();
+
+  console.log('10. mutation proof: a late cut and a leaked second opinion must fail check 9');
+  const mutants = [['late', src.replace(line, "return min(len(day.utc), int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right')) + 1)  # MUTANT")],
+    ['note', src.replace("out = {'qid': it['qid'], 'name': self.bot['name'],", "out = {'leak': self._opinion(it), 'qid': it['qid'], 'name': self.bot['name'],  # MUTANT\n              ")]];
+  check(src.includes("out = {'qid': it['qid'], 'name': self.bot['name'],"), 'the trades view is where the note mutation expects it');
+  for (const [k, text] of mutants) {
+    const f = path.join(root, 'tools', `_mutant_trades_${k}_markup_studio.py`), mp = PORT + 5 + (k === 'late' ? 0 : 1), mm = path.join(tmp, 'marks-mutant-' + k);
+    fs.writeFileSync(f, text);
+    try {
+      await startTrades(f, mp, mm);
+      const sink = [], m = await openPage(mp);
+      await tradesCut(mp, mm, m.page, m.rec, 1, 'trades mutant ' + k, sink);
+      await m.page.close();
+      console.log(`  mutant ${k} failed ${sink.length} checks, for example: ${sink.slice(0, 2).join(' / ')}`);
+      check(sink.length > 0, `the smoke catches a Trades server with ${k === 'late' ? 'a cut one tick late' : 'the second opinion in the bot view'}`);
+    } finally { fs.rmSync(f, { force: true }); }
+  }
 } catch (e) {
   failures.push('crashed: ' + (e.stack || e.message));
   console.error(e);

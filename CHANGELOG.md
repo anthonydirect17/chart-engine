@@ -16,6 +16,14 @@
   and tick come from the server's hello; the Bot tab and Run all files give dollars as `usd` (1 contract of the symbol) and
   `usd_micro` (its micro) and name both; new day splits record their symbol and a split of another symbol is refused. NQ
   dollars unchanged; an unknown symbol stops the Studio at startup.
+- Markup Studio: a **Trades tab** (`--bot` with `--trade-queue=PATH`, a Run all `trades.csv`) to grade the bot's own trades
+  blind, keyboard first: each opens frozen when the bot placed its entry order (ticks before it, the bot's view at it, no
+  fill, outcome or date), `T`/`A`/`P` save TAKE, ADJUST or PASS at once, ADJUST then marks your entry, stop and target, and
+  the reveal shows the date and the bot's result per exit. The queue (`trade_queue_v1.json`, seed 11) and each grade file are
+  written once; flags that disagree with the queue are refused; a bot that does not match the queue's rows is refused;
+  "seen this day" skips a day (`trade_skip_days.json`); the next trade is prefetched; optional reveal-only notes
+  (`--trade-notes`); counts only, never outcomes by label; `trade_grades.csv` export. The test bot gains a variant TM (three
+  trades) and the Bot tab's Run all tests count it.
 
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 

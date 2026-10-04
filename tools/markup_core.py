@@ -12,6 +12,7 @@ Python 3.10+, stdlib + numpy only.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -934,3 +935,252 @@ def bot_summary(trades, variants, exit_ids, symbol='NQ') -> list:
                 rows = [t['exits'][k] for t in ts if k in (t.get('exits') or {})]
                 out.append({'variant': v, 'exit_id': k, 'group': g, **bot_stats(rows, symbol)})
     return out
+
+
+# ------------------------------------------------------------------------------------------------ the Trades tab
+# Anthony grades a bot's own trades blind, one at a time, frozen when the bot placed the trade's entry order: TAKE, ADJUST
+# or PASS. The functions below read a Run all trades.csv, build the queue (written once), check that the bot loaded is the
+# one that wrote it, find each trade's entry order (the cut) and keep the grades. Nothing here holds a trading rule, and
+# nothing here sums an outcome by label: the grades carry no result at all.
+TRADE_LABELS = ('TAKE', 'ADJUST', 'PASS')
+ENTRY_TYPES = ('stop-limit', 'stop-market', 'limit', 'market')
+TRADE_SEED = 11
+QUEUE_VERSION = 1
+
+
+def read_trades_csv(path):
+    """A Run all trades.csv: (rows, sha256 of the file's bytes). Old runs (net_nq / net_mnq columns, no symbol column) and
+    new ones (net_usd / net_usd_micro, symbol) both work: only variant, date, id, dir, entry_t, entry and stop are read."""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    rows = list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
+    need = ('variant', 'date', 'id', 'dir', 'entry_t', 'entry', 'stop')
+    missing = [c for c in need if rows and c not in rows[0]]
+    if not rows:
+        raise ValueError(f'{path} has no trades')
+    if missing:
+        raise ValueError(f'{path} has no column {", ".join(missing)} (is it a Run all trades.csv?)')
+    return rows, hashlib.sha256(raw).hexdigest()
+
+
+def qid_of(sha, variant, d, trade_id):
+    """An opaque queue id: no date, no trade id (a bot's trade ids may carry the date)."""
+    return 'Q' + hashlib.sha1(f'{sha}|{variant}|{d}|{trade_id}'.encode()).hexdigest()[:10]
+
+
+def trade_queue(rows, sha, variant, bot_days, skip_days=(), seed=TRADE_SEED) -> list:
+    """The queue's items [{qid, trade_id, date}]: every row of the variant on a bot day, in sample, not a skip day; sorted
+    (date, entry time, id) and shuffled with the seeded shuffle. A trade id twice on one day is refused (ambiguous)."""
+    skip, out, seen = set(skip_days), [], set()
+    for r in rows:
+        if r.get('variant') != variant:
+            continue
+        d = parse_date(str(r['date'])[:10]).isoformat()
+        if d not in bot_days or not in_sample(d) or d in skip:
+            continue
+        key = (d, str(r['id']))
+        if key in seen:
+            raise ValueError(f'trades.csv has trade id {r["id"]} twice on one day for variant {variant}')
+        seen.add(key)
+        out.append({'date': d, 't': int(float(r['entry_t'])), 'id': str(r['id'])})
+    out.sort(key=lambda x: (x['date'], x['t'], x['id']))
+    random.Random(seed).shuffle(out)
+    return [{'qid': qid_of(sha, variant, x['date'], x['id']), 'trade_id': x['id'], 'date': x['date']} for x in out]
+
+
+def check_queue(stored, want):
+    """A queue file read back must agree with the flags given now (symbol, the trades.csv's sha256, variant, seed, skip
+    days), else a ValueError naming each difference (the Studio refuses to start; the file is never rewritten)."""
+    diff = [f'{k}: the file has {stored.get(k)!r}, the flags give {want[k]!r}' for k in ('symbol', 'sha256', 'variant', 'seed', 'skip_days')
+            if stored.get(k) != want[k]]
+    if stored.get('version') != QUEUE_VERSION or not isinstance(stored.get('items'), list):
+        diff.insert(0, 'not a version 1 queue')
+    if diff:
+        raise ValueError('its trade queue (trade_queue_v1.json) disagrees with the flags given (' + '; '.join(diff) +
+                         '): start with the flags it was written with, or use another marks folder')
+
+
+def _same_px(a, b, tick):
+    blank = lambda x: x is None or (isinstance(x, str) and not x.strip())
+    if blank(a) or blank(b):
+        return blank(a) and blank(b)
+    return round(float(a) / tick) == round(float(b) / tick)
+
+
+def trade_mismatch(row, trade, tick=TICK) -> list:
+    """The fields where the bot's trade differs from the queue's source row: entry and stop to the tick, entry_t to the ms,
+    dir exactly. Empty when they match."""
+    bad = [k for k in ('entry', 'stop') if not _same_px(row.get(k), trade.get(k), tick)]
+    try:
+        if int(float(row.get('entry_t'))) != int(trade.get('entry_t')):
+            bad.append('entry_t')
+    except (TypeError, ValueError):
+        bad.append('entry_t')
+    if str(row.get('dir')) != str(trade.get('dir')):
+        bad.append('dir')
+    return bad
+
+
+def entry_order_of(result, trade, tick=TICK):
+    """The order whose fill opened `trade`, by an exact rule, never a guess: (order, how) or a ValueError.
+      1. The trade names it: trade['entry_order'] (an order id; optional, BOT_API 1 trades carry no order reference) ->
+         the one entry order with that id.
+      2. Else the entry orders (role 'entry') on the trade's side (buy for long, sell for short) that were working at the
+         fill (t_from <= entry_t <= t_to) and ended filled (status 'filled'). Exactly one: that one.
+      3. Several: those that ended at the fill (t_to == entry_t) with their price or limit equal to the fill price to the
+         tick; of those, the one with the latest t_from if no other has it. Anything else is refused as ambiguous.
+    The cut is that order's t_from, and it must be before the fill (an order filled the moment it was placed leaves no
+    moment to grade at): refused too."""
+    orders = (result or {}).get('orders') or []
+    ref = trade.get('entry_order')
+    if ref not in (None, ''):
+        hit = [o for o in orders if str(o.get('id')) == str(ref) and o.get('role') == 'entry']
+        if len(hit) != 1:
+            raise ValueError(f'the trade names entry order {ref}, but the result has {len(hit)} entry orders with that id')
+        o, how = hit[0], 'the trade names its entry order'
+    else:
+        side = {'long': 'buy', 'short': 'sell'}.get(trade.get('dir'))
+        et = int(trade['entry_t'])
+        live = [o for o in orders if o.get('role') == 'entry' and o.get('side') == side and o['t_from'] <= et <= o['t_to']
+                and o.get('status') == 'filled']
+        if not live:
+            raise ValueError('no filled entry order on the trade\'s side was working at its fill')
+        if len(live) == 1:
+            o, how = live[0], 'the one filled entry order on its side working at the fill'
+        else:
+            px = [x for x in live if x['t_to'] == et and (_same_px(x.get('price'), trade.get('entry'), tick)
+                                                         or _same_px(x.get('limit'), trade.get('entry'), tick))]
+            late = max((x['t_from'] for x in px), default=None)
+            px = [x for x in px if x['t_from'] == late]
+            if len(px) != 1:
+                raise ValueError(f'{len(live)} filled entry orders on the trade\'s side were working at its fill and the '
+                                 'price and time do not single one out')
+            o, how = px[0], 'of several working at the fill, the one ending at it at the fill price, placed last'
+    if not int(o['t_from']) < int(trade['entry_t']):
+        raise ValueError('the entry order filled the moment it was placed: there is no moment before the fill to grade at')
+    return o, how
+
+
+def trade_at_cut(result, trade, order) -> dict:
+    """What the bot showed of this trade at its cut (the entry order's t_from): the side and level, the entry order, and the
+    stop and target orders it had working then that were placed with or after the entry order (an earlier open trade's
+    are not this one's). No fill, no exit, no status."""
+    c = int(order['t_from'])
+    near = [o for o in (result or {}).get('orders') or [] if o['t_from'] >= c and o['t_from'] <= c < o['t_to'] and o.get('role') in ('stop', 'target')]
+    stops = [o['price'] for o in near if o['role'] == 'stop']
+    targets = [o['price'] for o in near if o['role'] == 'target']
+    return {'dir': trade.get('dir'), 'level_type': trade.get('level_type'), 'level_price': trade.get('level_price'),
+            'cut_wall_ms': c, 'cut_tod': fmt_tod(c),
+            'entry_order': {k: order.get(k) for k in ('id', 'side', 'type', 'price', 'limit')},
+            'stop': stops[0] if len(stops) == 1 else None, 'target': targets[0] if len(targets) == 1 else None,
+            'stops_shown': stops, 'targets_shown': targets}
+
+
+def read_trade_notes(path):
+    """--trade-notes: a CSV with trade_id, variant, note and optionally score (a number from -1 to 1). Returns ({(variant,
+    trade_id): {'note', 'score'}}, sha256 of the file, warnings). A trade named twice gets no note (warned); a score that is
+    not a number from -1 to 1 is dropped (warned). The Studio shows a note only in a trade's reveal."""
+    with open(path, 'rb') as f:
+        raw = f.read()
+    rd = csv.DictReader(io.StringIO(raw.decode('utf-8-sig')))
+    missing = [c for c in ('trade_id', 'variant', 'note') if c not in (rd.fieldnames or [])]
+    if missing:
+        raise ValueError('no column ' + ', '.join(missing))
+    out, twice, warn = {}, set(), []
+    for r in rd:
+        key = (str(r.get('variant') or '').strip(), str(r.get('trade_id') or '').strip())
+        if key in out or key in twice:
+            twice.add(key)
+            out.pop(key, None)
+            continue
+        score = None
+        if str(r.get('score') or '').strip():
+            try:
+                score = float(r['score'])
+                if not (-1.0 <= score <= 1.0):
+                    raise ValueError
+            except ValueError:
+                warn.append(f'score {r["score"]!r} of trade {key[1]} ({key[0]}) is not a number from -1 to 1: dropped')
+                score = None
+        out[key] = {'note': str(r.get('note') or ''), 'score': score}
+    for v, t in sorted(twice):
+        warn.append(f'trade {t} ({v}) is in the notes twice: it gets no note')
+    return out, hashlib.sha256(raw).hexdigest(), warn
+
+
+def write_once(dest, obj) -> bool:
+    """Write a JSON file whole, only if dest does not exist yet (a temp file, then _claim). False when it exists."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = f'{dest}.{os.getpid()}.{threading.get_ident()}.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(json.dumps(obj, indent=1, sort_keys=True))
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        return _claim(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def list_trade_grades(folder) -> dict:
+    """qid -> the grade: <qid>.json (stage 1) with, for an ADJUST whose stage 2 is saved, 'adjust' from <qid>.adjust.json.
+    Two files, each written once: a saved stage is never rewritten."""
+    out = {}
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return out
+    for n in names:
+        if not n.endswith('.json') or n.endswith('.adjust.json'):
+            continue
+        try:
+            with open(os.path.join(folder, n), encoding='utf-8') as f:
+                g = json.load(f)
+        except (OSError, ValueError):
+            continue
+        g['adjust'] = None
+        try:
+            with open(os.path.join(folder, n[:-5] + '.adjust.json'), encoding='utf-8') as f:
+                g['adjust'] = json.load(f).get('adjust')
+        except (OSError, ValueError):
+            pass
+        out[g.get('qid')] = g
+    return out
+
+
+def trade_grade_done(g) -> bool:
+    """A grade is complete once stage 1 is saved and, for an ADJUST, stage 2 too."""
+    return bool(g) and (g.get('label') != 'ADJUST' or bool(g.get('adjust')))
+
+
+def export_trade_grades(marks_dir, grades) -> tuple[str, int]:
+    """trade_grades.csv: one flat row per grade. Labels, the bot's trade at the cut and the adjust fields; NO outcome."""
+    rows = []
+    for g in sorted(grades.values(), key=lambda x: x.get('saved_utc') or ''):
+        cut = g.get('at_cut') or {}
+        eo = cut.get('entry_order') or {}
+        r = {k: g.get(k) for k in ('qid', 'trade_id', 'date', 'symbol', 'bot', 'variant', 'label', 'reason', 'confidence', 'saved_utc')}
+        r['chips'] = ';'.join(g.get('chips') or [])
+        r.update({'cut_tod': cut.get('cut_tod'), 'dir': cut.get('dir'), 'level_type': cut.get('level_type'), 'level_price': cut.get('level_price'),
+                  'bot_entry_order_type': eo.get('type'), 'bot_entry_order_price': eo.get('price'), 'bot_entry_order_limit': eo.get('limit'),
+                  'bot_stop': cut.get('stop'), 'bot_target': cut.get('target')})
+        a = g.get('adjust') or {}
+        r.update({'adjust_entry_type': a.get('entry_type'), 'adjust_entry': a.get('entry'), 'adjust_stop': a.get('stop'),
+                  'adjust_target': a.get('target'), 'steps_after_cut': a.get('steps_after_cut'), 'adjust_saved_utc': a.get('saved_utc')})
+        for m in a.get('marks') or []:
+            key = safe_name(m.get('role', '')).lower()
+            r[f'adjust_{key}_bar_utc_ms'], r[f'adjust_{key}_bar_tod'] = m.get('bar_time_utc_ms'), m.get('bar_tod')
+        rows.append(r)
+    cols = []
+    for r in rows:
+        for k in r:
+            if k not in cols:
+                cols.append(k)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=cols or ['qid'])
+    w.writeheader()
+    w.writerows(rows)
+    dest = os.path.join(marks_dir, 'trade_grades.csv')
+    write_text(dest, buf.getvalue())
+    return dest, len(rows)

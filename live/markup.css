@@ -110,3 +110,16 @@ select { max-width: 150px; }
   .ms-panel { width: 260px; }
   .ms-sub { display: none; }
 }
+
+/* the Trades tab: the key legend stays at the top of the panel while it scrolls */
+.ms-keys { position: sticky; top: -8px; z-index: 3; background: var(--ms-panel); padding-top: 8px; }
+.ms-keys ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font: 11px var(--ms-sans); }
+.ms-keys li { color: var(--ms-text); white-space: nowrap; }
+.ms-keys li.off { opacity: .35; }
+.ms-seg.three { grid-template-columns: repeat(3, 1fr); }
+.ms-seg.four { grid-template-columns: 1fr 1fr; }
+.ms-seg button { padding: 5px 2px; border: 1px solid var(--ms-line2); border-radius: 5px; background: var(--ms-row); color: var(--ms-text); font: 600 11px var(--ms-sans); cursor: pointer; }
+.ms-seg button.on { background: var(--ms-accent-deep); border-color: var(--ms-accent); color: var(--ms-soft); }
+.ms-seg button:disabled { opacity: .45; cursor: default; }
+#tLabelSeg button { padding: 8px 2px; font-size: 12px; }
+.ms-panel.trades { width: 330px; }
