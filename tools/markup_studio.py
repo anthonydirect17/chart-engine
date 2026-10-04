@@ -94,10 +94,10 @@ class NpzSource:
 
     def load(self, d):
         d = core.check_date(d)
-        z = np.load(os.path.join(self.folder, f'{self.symbol}_{d}.npz'))
-        bid = z['bid'] if 'bid' in z.files else None
-        ask = z['ask'] if 'ask' in z.files else None
-        return core.Day(d, z['wall_ms'], z['price'], z['volume'], bid, ask)
+        with np.load(os.path.join(self.folder, f'{self.symbol}_{d}.npz')) as z:     # closed at once (Windows keeps open files locked)
+            bid = z['bid'] if 'bid' in z.files else None
+            ask = z['ask'] if 'ask' in z.files else None
+            return core.Day(d, z['wall_ms'], z['price'], z['volume'], bid, ask)
 
     def quote_days(self):
         """The days whose npz holds 'bid' (read from the archive's file list; no arrays are loaded)."""

@@ -78,10 +78,18 @@ class TBase(Base):
         super().setUp()
         self.csv = write_csv(os.path.join(self.tmp.name, 'trades.csv'), good_rows())
 
+    def tearDown(self):
+        for st in getattr(self, '_studios', []):       # a prefetch still loading a day holds its file (Windows cannot delete it)
+            rec = getattr(st, 'tprep', None)
+            if rec:
+                rec['done'].wait(10)
+        super().tearDown()
+
     def tstudio(self, csv_path=None, variant='TM', bot=BOT, marks=None, **kw):
         st = ms.Studio(ms.NpzSource(self.data, 'NQ'), marks or self.marks, RULE, [], 'NQ', bot_path=bot,
                        trade_queue=csv_path or self.csv, trade_variant=variant, **kw)
         st.start_scan(background=False)
+        self._studios = getattr(self, '_studios', []) + [st]
         return st
 
     def qfile(self):
