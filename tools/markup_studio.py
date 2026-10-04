@@ -27,6 +27,7 @@ Flags (defaults are the HOME PC's folders):
   --trade-skip-days=YYYY-MM-DD[,..]             days never queued (already watched)
   --trade-target=300                            the progress line's target
   --trade-notes=PATH                            optional CSV (trade_id, variant, note[, score]) shown only after a grade is saved
+  --trade-exits=ID[,ID]                         the exits a graded trade's result shows, in that order (default: all, the bot's order)
 Days are split once into bot days and grading days (<marks>/bot_split_v1.json, never rewritten): the blind queue offers
 grading days only, the Bot tab bot days only. A split made for another symbol is refused (core.check_split).
 The Trades tab's queue (<marks>/trade_queue_v1.json) is written once too; flags that disagree with it are refused.
@@ -275,7 +276,6 @@ class TradeSkip(Refused):
 
 TRADES_USAGE = ('The Trades tab needs a bot and a queue: start the Studio with --bot=PATH --trade-queue=PATH (a Run all '
                 'trades.csv), optionally --trade-variant=ID --trade-skip-days=YYYY-MM-DD[,..].')
-RESULT_FIRST = ('m1', '2R')      # exit ids shown first in a trade's result when the bot has them; then the bot's order
 
 
 class Studio:
@@ -283,7 +283,7 @@ class Studio:
 
     def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None,
                  trade_queue=None, trade_variant=None, trade_seed=core.TRADE_SEED, trade_skip_days=(), trade_target=300,
-                 trade_notes=None):
+                 trade_notes=None, trade_exits=()):
         self.inst = core.instrument(symbol)                  # an unknown symbol is a ValueError, never NQ by default
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, self.inst['symbol']
         self.tick = self.inst['tick']
@@ -328,6 +328,12 @@ class Studio:
         self.trade, self.trade_no, self.t_refused = None, 0, {}
         self.tprep, self.tprep_lock = None, threading.Lock()
         self.notes, self.notes_sha = None, None
+        self.trade_exits = tuple(trade_exits or ())         # --trade-exits: the exits a graded trade's result shows
+        if self.trade_exits and self.bot:
+            unknown = [x for x in self.trade_exits if x not in self.bot['exit_ids']]
+            if unknown:
+                raise TradeQueueError(f'--trade-exits names {", ".join(unknown)}, which the bot does not have '
+                                      f'(it has {", ".join(self.bot["exit_ids"])})')
         if trade_queue:
             self.load_trade_queue(trade_queue, trade_variant, int(trade_seed), trade_skip_days)
             if trade_notes:
@@ -1376,7 +1382,18 @@ class Studio:
         v = core.bot_view(res, c, self.bot['exit_ids'], self.symbol)
         out = {'qid': it['qid'], 'name': self.bot['name'], 'exit_ids': self.bot['exit_ids'], 'frozen': not done}
         out.update({k: v[k] for k in ('clock_wall_ms', 'events', 'orders', 'trades')})
+        if self.trade_exits:                                 # only the exits --trade-exits names are drawn
+            out['exit_ids'] = list(self.trade_exits)
+            out['trades'] = [dict(t, exits={k: e for k, e in (t.get('exits') or {}).items() if k in self.trade_exits})
+                             for t in out['trades']]
         return out
+
+    def _trade_exit_ids(self, t):
+        """The exits a trade's result lists: --trade-exits in its order, else every exit in the bot's order."""
+        have = t.get('exits') or {}
+        if self.trade_exits:
+            return [x for x in self.trade_exits if x in have]
+        return [x for x in self.bot['exit_ids'] if x in have] + [x for x in have if x not in self.bot['exit_ids']]
 
     def trades_result(self):
         """The reveal, only once the grade is complete (409 before): the date, the trade id and the bot's result for this
@@ -1386,8 +1403,7 @@ class Studio:
             if not self._tdone():
                 raise Refused('the result shows once the grade is saved')
             it, t, g = self.trade['item'], self.trade['trade'], self.tgrades[self.trade['item']['qid']]
-        ids = [x for x in RESULT_FIRST if x in (t.get('exits') or {})] + [x for x in self.bot['exit_ids'] if x not in RESULT_FIRST]
-        ids += [x for x in (t.get('exits') or {}) if x not in ids]
+        ids = self._trade_exit_ids(t)
         exits = [dict(id=k, reason=e.get('reason'), points=e.get('points'), r=e.get('r'), exit_tod=core.fmt_tod(e['exit_t']))
                  for k in ids for e in [(t.get('exits') or {}).get(k)] if e]
         return {'qid': it['qid'], 'date': it['date'], 'trade_id': it['trade_id'], 'label': g.get('label'), 'dir': t.get('dir'),
@@ -1912,7 +1928,8 @@ def main(argv=None):
                         trade_queue=opt.get('trade-queue'), trade_variant=opt.get('trade-variant'),
                         trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)), trade_target=int(opt.get('trade-target', 300)),
                         trade_skip_days=[x for x in opt.get('trade-skip-days', '').split(',') if x.strip()],
-                        trade_notes=opt.get('trade-notes'))
+                        trade_notes=opt.get('trade-notes'),
+                        trade_exits=[x.strip() for x in opt.get('trade-exits', '').split(',') if x.strip()])
     except TradeQueueError as e:
         sys.exit(f'Markup Studio: the Trades tab cannot start: {e}')
     except (OSError, ValueError) as e:

@@ -341,6 +341,17 @@ class Grading(TBase):
         self.assertTrue(core.trade_grade_done(st2.tgrades[qid]))
         self.assertFalse(core.write_once(os.path.join(self.marks, 'trade_grades', qid + '.json'), {'qid': qid}))
 
+    def test_trade_exits_limit_the_result_and_the_view(self):
+        with self.assertRaisesRegex(ms.TradeQueueError, 'does not have'):
+            self.tstudio(trade_exits=('m1',))
+        st = self.tstudio(trade_exits=('t5',))
+        self.open_next(st)
+        st.trades_save1({'label': 'PASS'})
+        self.assertEqual([x['id'] for x in st.trades_result()['exits']], ['t5'])
+        v = st.trades_view()
+        self.assertEqual(v['exit_ids'], ['t5'])
+        self.assertTrue(all(set(t.get('exits') or {}) <= {'t5'} for t in v['trades']))
+
     def test_adjust_two_stages(self):
         st = self.tstudio()
         self.open_next(st)

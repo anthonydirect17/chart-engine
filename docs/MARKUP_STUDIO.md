@@ -97,7 +97,8 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 
 - **Start it** (HOME), with the bot that wrote the run and that run's `trades.csv`:
   `py -3 tools\markup_studio.py --bot=E:\SchwabDesk_bulk\bot-lab-A1\bots\sweep_v0.py --trade-queue=E:\SchwabDesk_bulk\marks\botruns\20261003_164230\trades.csv --trade-variant=FC-S4-valid-L1 --trade-skip-days=2026-03-31`
-  (optional: `--trade-seed=11`, `--trade-target=300`, `--trade-notes=PATH`). Give the same flags on every start. The page
+  (optional: `--trade-seed=11`, `--trade-target=300`, `--trade-notes=PATH`, `--trade-exits=ID[,ID]`: the only exits a graded
+  trade's result lists and draws, in that order; an exit the bot does not have is refused at startup). Give the same flags on every start. The page
   opens on the Trades tab and goes straight to the next trade.
 - **The queue**, `trade_queue_v1.json` in the marks folder, is written on the first start and never rewritten: every row of
   the variant whose date is a bot day (`bot_split_v1.json`), in sample and not a `--trade-skip-days` day, sorted and shuffled
