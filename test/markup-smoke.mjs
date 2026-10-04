@@ -21,8 +21,15 @@
 //      /api/trades/view response is frozen at the cut, the fill time, the date and the second opinion are nowhere; the key
 //      legend shows every key. Keyboard flow: T saves and reveals (date, result, second opinion), N opens the next trade
 //      prefetched and faster, A, Next candle, E click, S click, Enter saves an ADJUST, Space plays, X X skips the day.
-//  10. Mutation proof: a server that cuts one tick late, and one that leaks the second opinion into the bot view, must each
-//      FAIL the checks of 9.
+//      Only the trade being graded is drawn (one entry order at the cut; after the reveal only its fill and exits). Nothing
+//      about his own trade ("yours") reaches the page before the grade is complete; after the ADJUST is saved the reveal has
+//      the Your trade row in the --ms-yours accent and the charts draw YOU labels; marks on the other side of the bot's trade
+//      show the opposite-side note first.
+//  10. Mutation proof: a server that cuts one tick late, one that leaks the second opinion into the bot view, and one that
+//      leaves the other trades' orders in the Trades view must each FAIL the checks of 9.
+//  11. PASS, then "my trade instead" (M) with --trade-exits=t5: nothing of the outcome before his trade is saved or declined,
+//      the .mine.json files (instead, none), the reveal's Your trade instead row, and only the t5 legs drawn (never the
+//      primary target).
 //   npm run smoke:markup     (PYTHON=py to pick the interpreter; CHROMIUM_PATH to use a preinstalled browser; SHOTS_DIR)
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -309,8 +316,14 @@ async function tradesCut(port, marks, page, rec, n, label, sink) {
   const dm = DATE_RE.exec(dom.all + ' ' + dom.titles + ' ' + dom.title + ' ' + dom.url + ' ' + dom.drawn);
   check(!dm, `${label}: no date in the DOM, tooltips, title, URL or chart canvases` + (dm ? ' (found ' + dm[0] + ')' : ''), sink);
   check(dom.drawnAll.includes(x.label), `${label}: the bot's working entry order is drawn (${x.label})`, sink);
+  const api = rec.responses.filter(r => /\/api\//.test(r.url)).map(r => r.body).join('\n');
+  check(!/"yours/.test(api), `${label}: nothing about his own trade (yours) in any API response before the save`, sink);
+  const dr = await page.evaluate(() => window.__markup.botDrawn);
+  const ent = [...new Set(dr.entries)];
+  check(ent.length === 1 && ent[0] === x.label && !dr.fills && !dr.exits && !dr.legs.length && !dr.you.length,
+    `${label}: the overlay draws exactly this trade's entry order and nothing of another trade (${ent.join(', ')}; ${dr.fills} fills, ${dr.exits} exits, ${dr.legs.length} legs)`, sink);
   check(![dom.html, all].some(t => t.includes('SECOND-OPINION')), `${label}: the second opinion is in no frame, response, page source or DOM before the save`, sink);
-  const want = ['T TAKE', 'A ADJUST', 'P PASS', 'E entry', 'S stop', 'G target', '1-4 entry type', '→ next candle', 'Enter/N', 'Space play 5x', 'X seen this day', 'Esc cancel'];
+  const want = ['T TAKE', 'A ADJUST', 'P PASS', 'M my trade instead', 'E entry', 'S stop', 'G target', '1-4 entry type', '→ next candle', 'Enter/N', 'Space play 5x', 'X seen this day', 'Esc cancel'];
   const miss = want.filter(w => !dom.keys.some(([t]) => t.startsWith(w)));
   check(dom.legend && !miss.length, `${label}: the key legend is on screen and lists every key` + (miss.length ? ' (missing ' + miss.join(', ') + ')' : ''), sink);
   const off = Object.fromEntries(dom.keys.map(([t, o]) => [t.split(' ')[0], o]));
@@ -567,6 +580,10 @@ try {
   check(g1.label === 'TAKE' && g1.date === BOT_DAY && g1.second_opinion.found && g1.second_opinion.score === 0.5, 'the grade file holds TAKE, the date and the second opinion shown');
   check((await state(TP)).date === BOT_DAY, 'after the save the date shows');
   await shot(tr.page, 'markup-trades-reveal.png');
+  await sleep(800);
+  const dr1 = await tr.page.evaluate(() => window.__markup.botDrawn);
+  check([...new Set(dr1.entries)].join() === t1.x.label && dr1.fillPx.every(f => f === '21,001.00') && !dr1.you.length,
+    'after the TAKE reveal: only this trade\'s order is drawn (its fill comes after the clock), no YOU (' + [...new Set(dr1.entries)].join(', ') + ')');
 
   const k2 = mark(tr.rec);
   await tr.page.keyboard.press('n');
@@ -588,12 +605,39 @@ try {
   await tr.page.keyboard.press('s');
   await tr.page.mouse.click(tbox.x + tbox.width * 0.55, tbox.y + tbox.height * 0.6);
   check(await tr.page.locator('#tMarkList li').count() === 2, 'ADJUST: E click and S click place two marks');
+  const note = await tr.page.evaluate(() => !document.getElementById('tSideNote').hidden && document.getElementById('tSideNote').textContent);
+  check(note === "Your trade is long, the bot's is short: this counts as a PASS for the bot's trade. Saving records your trade.",
+    'ADJUST on the other side of the bot (it is short): the note shows before the save (' + note + ')');
+  const preApi = sub(tr.rec, k2).responses.filter(r => /\/api\//.test(r.url)).map(r => r.body).join('\n');
+  check(!/"yours/.test(preApi) && !preApi.includes(BOT_DAY), 'ADJUST stage 2: nothing about his trade (yours) and no date in any response before the save');
+  check(!(await tr.page.evaluate(() => window.__markup.botDrawn.you.length)), 'ADJUST stage 2: no YOU drawn before the save');
   await tr.page.keyboard.press('Enter');
   const res2 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
   check(!!res2 && res2.startsWith('ADJUST saved.'), 'Enter saves stage 2 and reveals (' + res2 + ')');
   const a2 = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_grades', t2.s.trade.qid + '.adjust.json'), 'utf8')).adjust;
   check(a2.entry_type === 'stop-limit' && a2.steps_after_cut === 1 && a2.marks.length === 2 && a2.entry !== null && a2.stop !== null && a2.marks.every(m => m.bar_time_utc_ms < a2.clock_utc_ms),
     'the adjust file: stop-limit by default, 1 step after the cut, Entry and Stop with their bar times');
+  check(a2.dir === 'long' && a2.opposite_side === true, 'the adjust file: dir long, opposite_side true');
+  const you = await until(() => tr.page.evaluate(() => {
+    const el = document.getElementById('tYours'), row = document.querySelector('#tResult tr.you'), d = window.__markup.botDrawn;
+    return !el.hidden && row && d.you.length && { text: el.textContent, color: getComputedStyle(el).color, rowColor: getComputedStyle(row.cells[0]).color,
+      row: row.textContent, you: d.you, entries: d.entries, fills: d.fillPx };
+  }), 8000);
+  check(!!you && you.text.startsWith('Your trade: long STP LMT') && you.color === 'rgb(255, 149, 0)' && you.rowColor === 'rgb(255, 149, 0)' && you.row.startsWith('YOU'),
+    'the reveal: a Your trade row and line in the accent #FF9500 (' + (you && you.text) + ')');
+  check(!!you && you.you.every(t => t.startsWith('YOU ')) && you.you.some(t => t.startsWith('YOU BUY STP LMT')),
+    'the charts draw his trade labelled YOU (' + (you ? [...new Set(you.you)].join(', ') : '') + ')');
+  check(!!you && [...new Set(you.entries)].join() === t2.x.label && you.fills.every(f => f === '21,010.50'), 'after the ADJUST reveal: only this trade\'s order and fill besides YOU');
+  await tr.page.click('#btnJump30');
+  await tr.page.evaluate(() => document.activeElement && document.activeElement.blur());   // keys go to the page, not the button
+  await until(async () => (await state(TP)).clock_tod >= '11:30', 5000);
+  await sleep(1200);
+  const dj = await tr.page.evaluate(() => window.__markup.botDrawn);
+  // by 11:31 the other trades have closed (the 10:00 long at its target, the 11:00 long at its stop); this one's base exit
+  // is still open (flat at 16:00)
+  check([...new Set(dj.fillPx)].join() === '21,010.50' && !dj.exitText.length && dj.you.length > 0,
+    '30 minutes on: only this trade\'s fill, no other trade\'s exit, and YOU (' + [...new Set(dj.exitText)].join(', ') + ')');
+  await shot(tr.page, 'markup-trades-yours.png');
   await tr.page.keyboard.press(' ');
   check(!!(await until(async () => { const s = await state(TP); return s.playing && s.speed === 5; }, 4000)), 'Space plays on at 5x');
   await tr.page.click('#btnPause2');
@@ -601,7 +645,8 @@ try {
   await tradeOpen(TP, 3);
   await until(() => tr.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#3') && !document.getElementById('btnTSeen').disabled), 5000);
   await tr.page.keyboard.press('x');
-  check((await tr.page.evaluate(() => document.getElementById('tErr').textContent)).includes('Press X again'), 'X asks to confirm');
+  const xq = await tr.page.evaluate(() => [document.getElementById('tErr').textContent, document.getElementById('tInfo').textContent, (window.__markup.state.trade || {}).stage]);
+  check(xq[0].includes('Press X again'), 'X asks to confirm (' + xq.join(' | ') + ')');
   await tr.page.keyboard.press('x');
   await until(() => fs.existsSync(path.join(tMarks, 'trade_skip_days.json')), 5000);
   const skipped = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_skip_days.json'), 'utf8')).days.map(d => d.date);
@@ -618,21 +663,99 @@ try {
   await tr.page.close();
 
   console.log('10. mutation proof: a late cut and a leaked second opinion must fail check 9');
+  const coreImport = 'import markup_core as core  # noqa: E402\n';
+  check(src.includes(coreImport), 'the core import is where the one-trade mutation expects it');
   const mutants = [['late', src.replace(line, "return min(len(day.utc), int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right')) + 1)  # MUTANT")],
-    ['note', src.replace("out = {'qid': it['qid'], 'name': self.bot['name'],", "out = {'leak': self._opinion(it), 'qid': it['qid'], 'name': self.bot['name'],  # MUTANT\n              ")]];
+    ['note', src.replace("out = {'qid': it['qid'], 'name': self.bot['name'],", "out = {'leak': self._opinion(it), 'qid': it['qid'], 'name': self.bot['name'],  # MUTANT\n              ")],
+    ['others', src.replace(coreImport, coreImport + "_only = core.trade_only\ncore.trade_only = lambda view, res, t, o: dict(_only(view, res, t, o), orders=view.get('orders'))  # MUTANT\n")]];
   check(src.includes("out = {'qid': it['qid'], 'name': self.bot['name'],"), 'the trades view is where the note mutation expects it');
   for (const [k, text] of mutants) {
-    const f = path.join(root, 'tools', `_mutant_trades_${k}_markup_studio.py`), mp = PORT + 5 + (k === 'late' ? 0 : 1), mm = path.join(tmp, 'marks-mutant-' + k);
+    const f = path.join(root, 'tools', `_mutant_trades_${k}_markup_studio.py`), mp = PORT + 5 + ['late', 'note', 'others'].indexOf(k), mm = path.join(tmp, 'marks-mutant-' + k);
     fs.writeFileSync(f, text);
     try {
       await startTrades(f, mp, mm);
       const sink = [], m = await openPage(mp);
-      await tradesCut(mp, mm, m.page, m.rec, 1, 'trades mutant ' + k, sink);
+      if (k === 'others') {                                  // trade #1 (10:00) has no other order; #2 (11:01) has three
+        await tradesCut(mp, mm, m.page, m.rec, 1, 'trades mutant ' + k, null);
+        await m.page.keyboard.press('t');
+        await until(() => m.page.evaluate(() => !document.getElementById('secTResult').hidden), 8000);
+        const km = mark(m.rec);
+        await m.page.keyboard.press('n');
+        await tradesCut(mp, mm, m.page, sub(m.rec, km), 2, 'trades mutant ' + k, sink);
+      } else await tradesCut(mp, mm, m.page, m.rec, 1, 'trades mutant ' + k, sink);
       await m.page.close();
       console.log(`  mutant ${k} failed ${sink.length} checks, for example: ${sink.slice(0, 2).join(' / ')}`);
-      check(sink.length > 0, `the smoke catches a Trades server with ${k === 'late' ? 'a cut one tick late' : 'the second opinion in the bot view'}`);
+      check(sink.length > 0, `the smoke catches a Trades server with ${{ late: 'a cut one tick late', note: 'the second opinion in the bot view', others: 'other trades\' orders in the Trades view' }[k]}`);
     } finally { fs.rmSync(f, { force: true }); }
   }
+
+  console.log('11. PASS, then my trade instead (M), with --trade-exits=t5');
+  const IP = PORT + 8, iMarks = path.join(tmp, 'marks-instead');
+  {
+    const child = spawn(PY, [path.join(root, 'tools', 'markup_studio.py'), '--source=npz', '--data=' + dataDir, '--marks=' + iMarks, '--port=' + IP, '--no-browser',
+      '--seen=' + path.join(tmp, 'none.csv'), '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py'), '--trade-exits=t5'].concat(tFlags), { stdio: ['ignore', 'pipe', 'inherit'] });
+    servers.push(child);
+    await new Promise(r => child.stdout.once('data', r));
+    await until(async () => ((await state(IP).catch(() => ({}))).scan || {}).done, 10000);
+  }
+  const ip = await openPage(IP);
+  const i1 = await tradeOpen(IP, 1);
+  await chartsReady(ip.page);
+  await sleep(800);
+  await ip.page.mouse.move(5, 5);
+  await ip.page.keyboard.press('p');
+  await until(async () => ((await state(IP)).trade || {}).stage === 4, 5000);
+  const pend = await until(() => ip.page.evaluate(() => !document.getElementById('secTPass').hidden && {
+    result: !document.getElementById('secTResult').hidden, text: document.documentElement.textContent,
+    lit: Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])) }), 5000);
+  check(!!pend && !pend.result && !pend.text.includes(BOT_DAY) && pend.lit.M && pend.lit.N && !pend.lit.T, 'P: the PASS waits for M or N; no result, no date, M lit');
+  await ip.page.keyboard.press('m');
+  const ihead = await until(() => ip.page.evaluate(() => !document.getElementById('secTAdjust').hidden && document.getElementById('tOwnHead').textContent), 4000);
+  check(ihead === 'Your trade instead', 'M opens his own trade\'s tools (' + ihead + ')');
+  const ibefore = (await state(IP)).clock_utc_ms;
+  await ip.page.keyboard.press('ArrowRight');
+  await until(async () => (await state(IP)).clock_utc_ms > ibefore, 5000);
+  const ib = await ip.page.locator('#pane1m .ce-host').boundingBox();
+  await ip.page.keyboard.press('e');
+  await ip.page.mouse.click(ib.x + ib.width * 0.5, ib.y + ib.height * 0.35);
+  await ip.page.keyboard.press('s');
+  await ip.page.mouse.click(ib.x + ib.width * 0.55, ib.y + ib.height * 0.6);
+  await ip.page.keyboard.press('g');
+  await ip.page.mouse.click(ib.x + ib.width * 0.6, ib.y + ib.height * 0.3);    // a target a little over the entry
+  const iapi = () => ip.rec.responses.filter(r => /\/api\//.test(r.url)).map(r => r.body).join('\n');
+  check(!/"yours/.test(iapi()) && !iapi().includes(BOT_DAY) && !ip.rec.responses.some(r => /\/api\/trades\/result/.test(r.url) && r.body.includes('"trade_id"')),
+    'before his trade instead is saved: no result, no date and nothing about his trade in any response');
+  await ip.page.keyboard.press('Enter');
+  const ires = await until(() => ip.page.evaluate(() => !document.getElementById('secTResult').hidden && !document.getElementById('tYours').hidden &&
+    { head: document.getElementById('tResHead').textContent, yours: document.getElementById('tYours').textContent }), 8000);
+  check(!!ires && ires.head.startsWith('PASS saved, your trade instead.') && ires.yours.startsWith('Your trade instead: long'), 'Enter saves his trade instead, then the reveal (' + (ires && ires.head) + ')');
+  const mine1 = JSON.parse(fs.readFileSync(path.join(iMarks, 'trade_grades', i1.trade.qid + '.mine.json'), 'utf8'));
+  const g1i = JSON.parse(fs.readFileSync(path.join(iMarks, 'trade_grades', i1.trade.qid + '.json'), 'utf8'));
+  check(mine1.kind === 'instead' && mine1.mine.after_reveal === false && mine1.mine.steps_after_cut === 1 && mine1.mine.dir === 'long' && g1i.label === 'PASS',
+    'the .mine.json: kind instead, after_reveal false, 1 step, long; the label stays PASS');
+  const il = await until(() => ip.page.evaluate(() => { const d = window.__markup.botDrawn; return d && d.legs.length && d.you.length && d; }), 5000) || { legs: [], you: [] };
+  const labels = [...new Set(il.legs.map(l => l.label))].sort().join(), prices = [...new Set(il.legs.map(l => l.price))].sort().join();
+  check(labels === 't5 stop,t5 target' && prices === '20996,21006' && !il.legs.some(l => l.price === 21011),
+    '--trade-exits=t5: the t5 stop and target are drawn, named, never the primary target 21,011.00 (' + labels + '; ' + prices + ')');
+  await ip.page.click('#btnJump30');
+  await ip.page.evaluate(() => document.activeElement && document.activeElement.blur());
+  const iy = await until(() => ip.page.evaluate(() => { const d = window.__markup.botDrawn; return d && d.you.some(t => /^YOU (target|stop|flat) /.test(t)) && [...new Set(d.you)]; }), 6000);
+  check(!!iy && iy.some(t => /^YOU \d/.test(t.replace(/,/g, ''))), '30 minutes on: his fill and his exit are drawn, labelled YOU (' + (iy || []).join(', ') + ')');
+  await shot(ip.page, 'markup-trades-instead.png');
+  await ip.page.keyboard.press('n');
+  await tradeOpen(IP, 2);
+  await until(() => ip.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#2') && !document.getElementById('secTGrade').hidden), 5000);
+  await ip.page.keyboard.press('p');
+  await until(() => ip.page.evaluate(() => !document.getElementById('secTPass').hidden), 5000);
+  const kp = mark(ip.rec);
+  await ip.page.keyboard.press('n');
+  const ires2 = await until(() => ip.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
+  const q2 = (await state(IP)).trade.qid;
+  const mine2 = JSON.parse(fs.readFileSync(path.join(iMarks, 'trade_grades', q2 + '.mine.json'), 'utf8'));
+  check(!!ires2 && ires2.startsWith('PASS saved.') && mine2.kind === 'none' && (await state(IP)).trade.n === 2, 'P then N: no trade of his own (kind none), then the result; the same trade stays open');
+  check(!sub(ip.rec, kp).responses.some(r => /\/api\/trades\/result/.test(r.url) && /"yours"/.test(r.body)), 'no Your trade in the result of a PASS without one');
+  check(!ip.rec.errors.length, 'instead: no page errors (' + ip.rec.errors.join('; ') + ')');
+  await ip.page.close();
 } catch (e) {
   failures.push('crashed: ' + (e.stack || e.message));
   console.error(e);

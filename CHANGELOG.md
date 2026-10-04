@@ -24,6 +24,17 @@
   "seen this day" skips a day (`trade_skip_days.json`); the next trade is prefetched; optional reveal-only notes
   (`--trade-notes`); counts only, never outcomes by label; `trade_grades.csv` export. The test bot gains a variant TM (three
   trades) and the Bot tab's Run all tests count it.
+- Markup Studio Trades tab: **your trade** after the grade. A bot may offer `simulate(day, prior, spec)` (optional in BOT_API
+  1): once an ADJUST is complete (or a PASS with his trade instead) the reveal shows his own trade's result by the bot's own
+  fill law, a "Your trade" row and line, and the charts draw it labelled YOU, all in one accent (`--ms-yours`, #FF9500);
+  his Entry, Stop and Target marks take the accent once saved. `/api/trades/result` gains `yours`, `/api/trades/view`
+  `yours_orders` and `yours_trade` (cut at the clock like the bot's), only after the grade is complete. **My trade
+  instead**: after P, `M` marks his own trade before any outcome shows (`<qid>.mine.json`, kind `instead`), `N`/`Enter`/`Esc`
+  goes on without one (kind `none`); the reveal waits for that choice. An ADJUST on the other side of the bot's trade is
+  saved with `opposite_side` and a note first. The Trades tab draws **only the trade being graded** (its entry order, legs,
+  fill and exits; no other trade's orders, no events). With `--trade-exits`, the listed exits' own legs from the optional
+  result key `exit_orders`, named ("t5 target"), else the primary target named "bot primary target". The Bot tab is
+  unchanged.
 
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 

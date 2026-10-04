@@ -6,6 +6,9 @@
   --ms-text: #E6EDF5; --ms-text2: #9AA8B8; --ms-muted: #7F8C9C;
   --ms-accent: #7B5CFF; --ms-accent-deep: #2A1F4D; --ms-soft: #D8CCFF;
   --ms-buy: #3DDC97; --ms-sell: #FF5C7A; --ms-warn: #FFC266; --ms-crimson: #C8102E;
+  /* the Trades tab's YOUR trade (after the grade): one amber-orange, apart from the bot's white, red and green, the marks'
+     colors, the level purple and the value-area amber; the canvas reads it from here */
+  --ms-yours: #FF9500; --ms-yours-deep: #3A2200;
   --ms-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --ms-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
@@ -123,3 +126,7 @@ select { max-width: 150px; }
 .ms-seg button:disabled { opacity: .45; cursor: default; }
 #tLabelSeg button { padding: 8px 2px; font-size: 12px; }
 .ms-panel.trades { width: 330px; }
+.ms-yours { color: var(--ms-yours); white-space: normal; }
+.ms-grid tr.you td, .ms-grid tr.you td:first-child { color: var(--ms-yours); }
+.ms-note { color: var(--ms-warn); white-space: normal; }
+.ms-note[hidden] { display: none; }

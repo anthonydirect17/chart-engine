@@ -355,6 +355,7 @@ class Grading(TBase):
         st = self.tstudio(trade_exits=('t5',))
         self.open_next(st)
         st.trades_save1({'label': 'PASS'})
+        st.trades_skip_mine()                                               # no trade of his own: the result shows
         self.assertEqual([x['id'] for x in st.trades_result()['exits']], ['t5'])
         v = st.trades_view()
         self.assertEqual(v['exit_ids'], ['t5'])
@@ -474,6 +475,8 @@ class SecondOpinion(TBase):
             self.assertNotIn(secret, before)
             self.assertNotIn('x2 note', before)
             st.trades_save1({'label': 'PASS'})
+            self.assertNotIn(secret, json.dumps([st.state(), st.trades_view()]))   # not while "my trade instead" is open
+            st.trades_skip_mine()
             res = st.trades_result()
             g = st.tgrades[st.trade['item']['qid']]['second_opinion']
             if tid == 'X1':

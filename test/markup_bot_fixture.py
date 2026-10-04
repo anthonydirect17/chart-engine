@@ -2,7 +2,15 @@
 
     at the variant's time, a buy stop 1 point over the last price (or a sell stop 1 point under it), good for 15 minutes;
     once filled, a stop and a target a fixed number of points away (per exit id); flat at 16:00. Days without quotes: no
-    trade (a note only). Variant TM arms three times (two buys and a sell), for the Trades tab's tests.
+    trade (a note only). Variant TM arms three times (two buys and a sell), for the Trades tab's tests, and also works a
+    sell stop 50 points under the last price from 10:59 to 11:15 that never fills (another entry order working at the
+    cuts of the 11:00 and 11:01 trades, which the Trades tab must not draw).
+
+    simulate(day, prior, spec) (optional in BOT_API 1): your own trade with a made-up law, hand-checkable: the entry fills
+    at the first tick at or after spec['t'] that reaches it (stops: at or through the entry, at that tick's price; limit:
+    at or through it, at the entry; market: that first tick's price), unless a tick at or through the stop comes first
+    ('stop traded before entry'); then out at the stop or the target (spec's, else 2R from the fill) at its price on the
+    first tick that reaches it, or at 16:00 at that tick's price ('flat'); never filled by 16:00: 'no fill'.
 
     python3 tools/markup_studio.py --bot=test/markup_bot_fixture.py
 Causal: everything decided at time t uses ticks with wall <= t only.
@@ -48,8 +56,9 @@ def _exit(day, j, entry, stop_pts, target_pts, flat_t, sgn=1):
     return int(day.wall[-1]), float(day.px[-1]), 'flat'
 
 
-def _arm(day, at, side, n, events, orders, trades, progress):
-    """One arm: the entry stop at `at`, its fill, stop and target orders and the trade (ids E<n>, S<n>, T<n>, X<n>)."""
+def _arm(day, at, side, n, events, orders, trades, progress, exit_orders):
+    """One arm: the entry stop at `at`, its fill, stop and target orders and the trade (ids E<n>, S<n>, T<n>, X<n>); each
+    exit's own stop and target in exit_orders (ids <exit>-S<n>, <exit>-T<n>, book X<n>:<exit>)."""
     sgn = 1 if side == 'buy' else -1
     exit_side = 'sell' if side == 'buy' else 'buy'
     t0 = _wall(day, at)
@@ -77,6 +86,10 @@ def _arm(day, at, side, n, events, orders, trades, progress):
     for k, (sp, tp) in EXITS.items():
         xt, xp, why = _exit(day, j, entry, sp, tp, flat_t, sgn)
         exits[k] = {'exit_t': xt, 'exit': xp, 'reason': why, 'points': round(sgn * (xp - entry), 2), 'r': round(sgn * (xp - entry) / sp, 3)}
+        for role, typ, px, tag in (('stop', 'stop', entry - sgn * sp, 'S'), ('target', 'limit', entry + sgn * tp, 'T')):
+            exit_orders[k].append({'id': f'{k}-{tag}{n}', 'side': exit_side, 'type': typ, 'role': role, 'price': px, 'limit': None,
+                                   't_from': tj, 't_to': xt, 'status': 'filled' if why == role else 'cancelled',
+                                   'exit_id': k, 'book': f'X{n}:{k}'})
     b = exits['base']
     sp, tp = EXITS['base']
     orders.append({'id': f'S{n}', 'side': exit_side, 'type': 'stop', 'role': 'stop', 'price': entry - sgn * sp, 'limit': None,
@@ -90,16 +103,81 @@ def _arm(day, at, side, n, events, orders, trades, progress):
 
 
 def run(day, prior, params, progress=None):
-    events, orders, trades = [], [], []
+    """BOT_API 1, with the optional 'exit_orders' (each exit's own stop and target per trade)."""
+    events, orders, trades, exit_orders = [], [], [], {k: [] for k in EXITS}
     open_t = _wall(day, '09:30')
     note = f'prior day high {float(np.max(prior.px)):.2f}' if prior is not None and len(prior.px) else 'no prior day'
     events.append({'t': open_t, 'kind': 'note', 'text': note, 'price': None, 'level': None})
     if not day.has_quotes:
         events.append({'t': open_t, 'kind': 'note', 'text': 'no quotes this day: no trade', 'price': None, 'level': None})
-        return {'events': events, 'orders': orders, 'trades': trades}
+        return {'events': events, 'orders': orders, 'trades': trades, 'exit_orders': exit_orders}
     for n, (at, side) in enumerate(params.get('arms') or [[params['at'], 'buy']], 1):
-        _arm(day, at, side, n, events, orders, trades, progress)
+        _arm(day, at, side, n, events, orders, trades, progress, exit_orders)
+    if params.get('arms'):                                   # TM: an entry order that never fills, working 10:59 to 11:15
+        t0 = _wall(day, '10:59')
+        i0 = int(np.searchsorted(day.wall, t0, 'right')) - 1
+        if i0 >= 0:
+            orders.append({'id': 'D1', 'side': 'sell', 'type': 'stop', 'role': 'entry', 'price': float(day.px[i0]) - 50.0,
+                           'limit': None, 't_from': t0, 't_to': t0 + 16 * MIN, 'status': 'expired'})
     if progress:
         progress(1.0)
     events.sort(key=lambda e: e['t'])
-    return {'events': events, 'orders': orders, 'trades': trades}
+    return {'events': events, 'orders': orders, 'trades': trades, 'exit_orders': exit_orders}
+
+
+TYPES = {'stop-limit': 'stoplimit', 'stop-market': 'stop', 'limit': 'limit', 'market': 'market'}
+
+
+def simulate(day, prior, spec):
+    """Your trade by the made-up law in the module's docstring (not a fill engine). spec: dir, entry_type, entry, stop,
+    target (None: 2R), t (wall ms)."""
+    sg = 1 if spec['dir'] == 'long' else -1
+    if not sg * (spec['entry'] - spec['stop']) > 0:
+        raise ValueError('the stop must be on the losing side of the entry')
+    side, out_side = ('buy', 'sell') if sg > 0 else ('sell', 'buy')
+    t, et, flat_t = int(spec['t']), spec['entry_type'], _wall(day, '16:00')
+    res = {'version': 'fixture_v1', 'filled': False, 'reason': 'no fill', 'entry_t': None, 'entry': None, 'exit_t': None,
+           'exit': None, 'points': None, 'r': None, 'target': spec.get('target'), 'orders': []}
+    entry = {'id': 'yours-entry', 'side': side, 'type': TYPES[et], 'role': 'entry', 'price': spec['entry'],
+             'limit': spec['entry'] + sg * 0.25 if et == 'stop-limit' else None, 't_from': t, 't_to': flat_t, 'status': 'cancelled'}
+    res['orders'].append(entry)
+    j = int(np.searchsorted(day.wall, t, 'left'))
+    k = None
+    for i in range(j, len(day.px)):
+        w, p = int(day.wall[i]), float(day.px[i])
+        if w >= flat_t:
+            break
+        if sg * (p - spec['stop']) <= 0:
+            entry['t_to'], res['reason'] = w, 'stop traded before entry'
+            return res
+        hit = (et == 'market' or (et == 'limit' and sg * (p - spec['entry']) <= 0)
+               or (et in ('stop-limit', 'stop-market') and sg * (p - spec['entry']) >= 0))
+        if hit:
+            k = i
+            break
+    if k is None:
+        return res
+    fill = spec['entry'] if et == 'limit' else float(day.px[k])
+    tk = int(day.wall[k])
+    entry.update(t_to=tk, status='filled')
+    risk = abs(fill - spec['stop'])
+    target = spec['target'] if spec.get('target') is not None else fill + sg * 2 * risk
+    res.update(filled=True, entry_t=tk, entry=fill, target=target)
+    xt, xp, why = int(day.wall[-1]), float(day.px[-1]), 'end of tape'
+    for i in range(k + 1, len(day.px)):
+        w, p = int(day.wall[i]), float(day.px[i])
+        if w >= flat_t:
+            xt, xp, why = w, p, 'flat'
+            break
+        if sg * (p - spec['stop']) <= 0:
+            xt, xp, why = w, spec['stop'], 'stop'
+            break
+        if sg * (p - target) >= 0:
+            xt, xp, why = w, target, 'target'
+            break
+    for role, typ, px in (('stop', 'stop', spec['stop']), ('target', 'limit', target)):
+        res['orders'].append({'id': 'yours-' + role, 'side': out_side, 'type': typ, 'role': role, 'price': px, 'limit': None,
+                              't_from': tk, 't_to': xt, 'status': 'filled' if why == role else 'cancelled'})
+    pts = round(sg * (xp - fill), 2)
+    res.update(reason=why, exit_t=xt, exit=xp, points=pts, r=round(pts / risk, 4))
+    return res

@@ -12,7 +12,10 @@
  * above each chart. The Bot tab draws what /api/bot/view returns (the server cuts it at the clock) on the same overlays:
  * orders, fills, the open trade's stop and target, exits. The Trades tab grades the bot's own trades, keyboard first: each
  * opens frozen at the moment the bot placed its entry order (/api/trades/view is the bot's view at that cut), T, A or P
- * saves at once, the result and the date come only from /api/trades/result after the save.
+ * saves at once, the result and the date come only from /api/trades/result after the save. The Trades tab draws only the
+ * trade being graded (the server sends no other). After a PASS, M marks his own trade instead (before any outcome shows).
+ * Once the grade is complete his own trade (an ADJUST's, or the one instead of a PASS) is drawn in the --ms-yours accent,
+ * labelled YOU, from /api/trades/view's yours_orders and yours_trade (the bot's simulate(), cut at the clock).
  */
 (function () {
   'use strict';
@@ -67,10 +70,14 @@
   const ROLES = ['Level', 'Failed candle', 'Reclaim candle', 'Entry', 'Stop', 'Target'];
   const SPANS = ["Volume I'm reading", 'Approach'];
   const COLORS = { Level: '#B69CFF', 'Failed candle': '#FFC266', 'Reclaim candle': '#7FD7FF', Entry: '#E6EDF5', Stop: '#FF5C7A', Target: '#3DDC97' };
+  // his own trade in the Trades tab once the grade is complete: the one accent (markup.css --ms-yours), on marks and drawings
+  const YOU = (getComputedStyle(document.documentElement).getPropertyValue('--ms-yours') || '').trim() || '#FF9500';
+  const YOU_INK = (getComputedStyle(document.documentElement).getPropertyValue('--ms-yours-deep') || '').trim() || '#3A2200';
+  const OWN_ROLES = ['Entry', 'Stop', 'Target'];
   const A = { inst: null, state: null, panes: {}, overlays: {}, tool: null, spanDraft: null, marks: [], spans: [], chips: [], chipOn: new Set(),
     lastMount: '', machineTimer: 0, saved: false, uiMode: 'blind', bot: null, botInfo: null, botAt: 0, botBusy: false, runallWas: false,
     botDrawn: { orders: 0, fills: 0, exits: 0 }, tview: null, tvAt: 0, tvBusy: false, tBusy: false, tres: null, tConf: null, tSeenArm: false,
-    tinfo: null };
+    tinfo: null, tMine: false };
   window.__markup = A;
 
   async function api(path, body) {
@@ -182,7 +189,7 @@
       const w = ov.host.clientWidth, h = ov.host.clientHeight, dpr = window.devicePixelRatio || 1;
       if (ov.cv.width !== Math.round(w * dpr) || ov.cv.height !== Math.round(h * dpr)) { ov.cv.width = Math.round(w * dpr); ov.cv.height = Math.round(h * dpr); }
       const g = ov.cv.getContext('2d'), ch = ov.pane.chart;
-      if (!drawn) drawn = { orders: 0, fills: 0, exits: 0 };
+      if (!drawn) drawn = { orders: 0, fills: 0, exits: 0, entries: [], legs: [], fillPx: [], exitText: [], yours: 0, you: [] };
       g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
       if (!ch || !ch.bars().length) continue;
       const plotW = w - 64;
@@ -204,16 +211,17 @@
         g.fillRect(Math.min(x0, x1) - 3, 0, Math.abs(x1 - x0) + 6, h - 24);
         g.fillStyle = s.role === 'Approach' ? '#7FD7FF' : '#FFC266'; g.fillText(s.role, Math.min(x0, x1), 12);
       }
+      const own = A.uiMode === 'trades' && tStage(A.state) === 3;          // his trade's marks take the accent once saved
       for (const m of A.marks) {
         const i = barIndexAt(ch, m.t);
         if (i < 0) continue;
-        const x = ch.barToX(i), y = ch.priceToY(m.price), c = COLORS[m.role] || '#fff';
+        const x = ch.barToX(i), y = ch.priceToY(m.price), c = own && OWN_ROLES.includes(m.role) ? YOU : COLORS[m.role] || '#fff';
         g.fillStyle = c; g.strokeStyle = '#06080C'; g.lineWidth = 1;
         g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
         g.fillText(m.role, x + 8, y);
       }
       if (A.uiMode === 'bot' && A.bot && A.state && A.state.mode === 'bot') drawBot(g, ch, A.bot, drawn);
-      else if (A.uiMode === 'trades' && A.tview && A.state && A.state.mode === 'trades') drawBot(g, ch, A.tview, drawn);
+      else if (A.uiMode === 'trades' && A.tview && A.state && A.state.mode === 'trades') { drawBot(g, ch, A.tview, drawn); drawYours(g, ch, A.tview, drawn); }
     }
     A.botDrawn = drawn;
     requestAnimationFrame(draw);
@@ -230,7 +238,14 @@
       const y = ch.priceToY(o.price), c = ROLE_COLOR[o.role] || '#9AA8B8';
       g.strokeStyle = c; g.lineWidth = 1.5; g.setLineDash(o.role === 'entry' ? [5, 3] : []);
       g.beginPath(); g.moveTo(x0, y); g.lineTo(Math.max(x1, x0 + 8), y); g.stroke(); g.setLineDash([]);
-      if (o.role === 'entry') { g.fillStyle = c; g.fillText((o.side === 'sell' ? 'SELL ' : 'BUY ') + (TYPES[o.type] || o.type) + ' ' + fmtC(o.price), x0, y - 9); }
+      if (o.role === 'entry') {
+        const label = (o.side === 'sell' ? 'SELL ' : 'BUY ') + (TYPES[o.type] || o.type) + ' ' + fmtC(o.price);
+        g.fillStyle = c; g.fillText(label, x0, y - 9); drawn.entries.push(label);
+      } else {
+        // the Trades tab names its legs: '<exit id> target' (the exit the result lists) or 'bot primary target'
+        if (o.label) { g.fillStyle = c; g.fillText(o.label + ' ' + fmtC(o.price), x0, y - 9); }
+        drawn.legs.push({ role: o.role, price: o.price, label: o.label || '' });
+      }
       drawn.orders++;
     }
     const base = (v.exit_ids || [])[0];
@@ -238,23 +253,67 @@
       const x0 = xAt(ch, t.entry_t);
       if (x0 === null) continue;
       const ex = t.exits && t.exits[base], x1 = ex ? xAt(ch, ex.exit_t) : nowX;
-      for (const [p, c] of [[t.stop, '#FF5C7A'], [t.target, '#3DDC97']]) {
+      for (const [p, c, role] of [[t.stop, '#FF5C7A', 'stop'], [t.target, '#3DDC97', 'target']]) {
         if (p === null || p === undefined) continue;
         const y = ch.priceToY(p);
         g.strokeStyle = c; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0, y); g.lineTo(Math.max(x1, x0 + 8), y); g.stroke();
+        const lab = role === 'target' ? t.target_label : '';
+        if (lab) { g.fillStyle = c; g.fillText(lab + ' ' + fmtC(p), x0 + 9, y - 9); }
+        drawn.legs.push({ role, price: p, label: lab || '', trade: true });
       }
       const y = ch.priceToY(t.entry), up = t.dir !== 'short';
       g.fillStyle = up ? '#3DDC97' : '#FF5C7A';
       g.beginPath(); g.moveTo(x0, y + (up ? -6 : 6)); g.lineTo(x0 - 6, y + (up ? 5 : -5)); g.lineTo(x0 + 6, y + (up ? 5 : -5)); g.closePath(); g.fill();
       g.fillStyle = '#E6EDF5'; g.fillText(fmtC(t.entry), x0 + 9, y + (up ? 10 : -10));
-      drawn.fills++;
+      drawn.fills++; drawn.fillPx.push(fmtC(t.entry));
       if (ex && x1 !== null) {
         const ye = ch.priceToY(ex.exit);
         g.fillStyle = ex.points > 0 ? '#3DDC97' : '#FF5C7A'; g.strokeStyle = '#06080C';
         g.beginPath(); g.arc(x1, ye, 5, 0, Math.PI * 2); g.fill(); g.stroke();
         g.fillText(ex.reason + ' ' + signed(ex.points), x1 + 9, ye);
-        drawn.exits++;
+        drawn.exits++; drawn.exitText.push(ex.reason + ' ' + signed(ex.points));
       }
+    }
+  }
+  /* his own trade (only once the grade is complete; already cut at the clock by the server), all in the YOU accent: the
+     entry order from placement to fill or cancel (dashed), the stop and target from the fill to the exit, the fill and the
+     exit markers, each labelled YOU */
+  const OWN_TYPES = { stop: 'STP', stoplimit: 'STP LMT', limit: 'LMT', market: 'MKT', 'stop-limit': 'STP LMT', 'stop-market': 'STP' };
+  function youTag(g, text, x, y, drawn) {
+    const w = g.measureText(text).width + 8;
+    g.fillStyle = YOU_INK; g.fillRect(x - 2, y - 8, w, 16);
+    g.fillStyle = YOU; g.fillText(text, x + 2, y);
+    drawn.you.push(text);
+  }
+  function drawYours(g, ch, v, drawn) {
+    const orders = v.yours_orders || [], t = v.yours_trade;
+    if (!orders.length && !t) return;
+    const nowX = ch.barToX(ch.bars().length - 1);
+    for (const o of orders) {
+      const x0 = xAt(ch, o.t_from), x1 = o.open ? nowX : xAt(ch, o.t_to);
+      if (x0 === null || x1 === null || o.price === null || o.price === undefined) continue;
+      const y = ch.priceToY(o.price);
+      g.strokeStyle = YOU; g.lineWidth = 2; g.setLineDash(o.role === 'entry' ? [5, 3] : []);
+      g.beginPath(); g.moveTo(x0, y); g.lineTo(Math.max(x1, x0 + 8), y); g.stroke(); g.setLineDash([]);
+      const what = o.role === 'entry' ? (o.side === 'sell' ? 'SELL ' : 'BUY ') + (OWN_TYPES[o.type] || o.type) : o.role === 'stop' ? 'STOP' : o.role === 'target' ? 'TARGET' : 'FLAT';
+      youTag(g, 'YOU ' + what + ' ' + fmtC(o.price), x0, y - 10, drawn);
+      drawn.yours++;
+    }
+    if (!t) return;
+    const x0 = xAt(ch, t.entry_t);
+    if (x0 === null) return;
+    const y = ch.priceToY(t.entry), up = t.dir !== 'short';
+    g.fillStyle = YOU; g.strokeStyle = '#06080C'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x0, y + (up ? -7 : 7)); g.lineTo(x0 - 7, y + (up ? 6 : -6)); g.lineTo(x0 + 7, y + (up ? 6 : -6)); g.closePath(); g.fill(); g.stroke();
+    youTag(g, 'YOU ' + fmtC(t.entry), x0 + 10, y + (up ? 12 : -12), drawn);
+    drawn.yours++;
+    const ex = t.exits && t.exits.yours, x1 = ex ? xAt(ch, ex.exit_t) : null;
+    if (ex && x1 !== null) {
+      const ye = ch.priceToY(ex.exit);
+      g.fillStyle = YOU; g.strokeStyle = '#06080C';
+      g.beginPath(); g.rect(x1 - 5, ye - 5, 10, 10); g.fill(); g.stroke();
+      youTag(g, 'YOU ' + ex.reason + ' ' + signed(ex.points), x1 + 10, ye, drawn);
+      drawn.yours++;
     }
   }
 
@@ -276,6 +335,18 @@
   }
   function renderMarks() {
     for (const id of ['markList', 'tMarkList']) renderMarkList($(id));
+    sideNote();
+  }
+  // ADJUST: marks on the other side of the bot's trade are saved too (opposite_side), with this note before the save
+  function sideNote() {
+    const s = A.state, t = s && s.trade, e = A.marks.find(m => m.role === 'Entry'), st = A.marks.find(m => m.role === 'Stop');
+    let text = '';
+    if (tStage(s) === 2 && t && e && st && e.price !== st.price) {
+      const mine = st.price < e.price ? 'long' : 'short';
+      if (mine !== t.dir) text = 'Your trade is ' + mine + ', the bot\'s is ' + t.dir + ': this counts as a PASS for the bot\'s trade. Saving records your trade.';
+    }
+    const el = $('tSideNote'); if (el.textContent !== text) el.textContent = text;
+    el.hidden = !text;
   }
   function renderMarkList(ul) {
     ul.textContent = '';
@@ -302,7 +373,7 @@
   }
   function resetForm() {
     $('gradeForm').reset(); A.chipOn.clear(); A.marks = []; A.spans = []; A.saved = false;
-    $('tReason').value = ''; A.tConf = null; A.tSeenArm = false; A.tres = null; A.tview = null;
+    $('tReason').value = ''; A.tConf = null; A.tSeenArm = false; A.tres = null; A.tview = null; A.tMine = false;
     const st = document.querySelector('input[name=tEntryType][value="stop-limit"]'); if (st) st.checked = true;
     clearResult();
     renderChips(); renderMarks(); setTool(null); say('saveMsg', ''); say('tErr', '');
@@ -334,7 +405,7 @@
     const blindLive = s.mode === 'blind' && s.loaded && !s.graded;
     $('candInfo').textContent = s.mode === 'blind' && s.candidate && s.level ? '#' + s.candidate.n + '  Level ' + s.level.type + ' ' + fmtP(s.level.price) : 'No candidate open';
     const tst = tStage(s);
-    $('stepCount').textContent = (s.mode === 'blind' && s.loaded) || tst === 2 ? 'steps after cut: ' + s.steps : '';
+    $('stepCount').textContent = (s.mode === 'blind' && s.loaded) || tst === 2 || tst === 4 ? 'steps after cut: ' + s.steps : '';
     $('btnStep').disabled = !s.loaded || tst === 1;
     $('playRow').hidden = $('jumpRow').hidden = !free;
     $('revealRow').hidden = !((s.mode === 'blind' && s.graded) || tst === 3);
@@ -469,13 +540,19 @@
 
   /* ---------------- the Trades tab: keyboard first; the date and the result only after the save */
   const tStage = s => !s || s.mode !== 'trades' || !s.loaded || !s.trade ? 0 : s.trade.complete ? 3 : s.trade.stage;
-  const KEYS_ON = { 0: ['N', 'ESC'], 1: ['T', 'A', 'P', 'C', 'X', 'ESC'], 2: ['E', 'S', 'G', 'Y', 'R', 'N', 'ESC'], 3: ['N', 'SP', 'ESC'] };
+  // stage 4: a PASS is saved; M marks his own trade instead (then the keys of 2), N, Enter or Esc go on without one
+  const KEYS_ON = { 0: ['N', 'ESC'], 1: ['T', 'A', 'P', 'C', 'X', 'ESC'], 2: ['E', 'S', 'G', 'Y', 'R', 'N', 'ESC'], 3: ['N', 'SP', 'ESC'],
+    4: ['M', 'R', 'N', 'ESC'] };
+  const ownTools = st => st === 2 || (st === 4 && A.tMine);
   function showTrades(s, st) {
     const c = s.trades && s.trades.counts;
     $('tProgress').textContent = c ? 'Graded ' + c.graded + ' of ' + c.target + ' (' + c.adjusted + ' adjusted, ' + c.skipped_days + ' days skipped); ' +
       c.remaining + ' left in the queue' + (c.refused ? ', ' + c.refused + ' passed over' : '') : '';
     const t = st ? s.trade : null;
-    $('secTGrade').hidden = st !== 1; $('secTAdjust').hidden = st !== 2; $('secTResult').hidden = st !== 3 || !A.tres;
+    if (st !== 4) A.tMine = false;
+    $('secTGrade').hidden = st !== 1; $('secTAdjust').hidden = !ownTools(st); $('secTResult').hidden = st !== 3 || !A.tres;
+    $('secTPass').hidden = !(st === 4 && !A.tMine);
+    $('tOwnHead').textContent = st === 4 ? 'Your trade instead' : 'Your trade';
     for (const b of document.querySelectorAll('#tLabelSeg button')) { b.disabled = st !== 1; b.classList.toggle('on', !!t && t.label === b.dataset.label); }
     for (const b of document.querySelectorAll('#tConfSeg button')) b.classList.toggle('on', String(A.tConf) === b.dataset.conf);
     $('btnTNext').disabled = !(st === 0 || st === 3) || !(c && c.remaining > 0);
@@ -484,10 +561,11 @@
       (t.entry_order.side === 'sell' ? 'SELL ' : 'BUY ') + (TYPES[t.entry_order.type] || t.entry_order.type) + ' ' + fmtC(t.entry_order.price) +
       (t.entry_order.limit !== null && t.entry_order.limit !== undefined ? ' limit ' + fmtC(t.entry_order.limit) : '') : 'No trade open';
     $('tOpen').textContent = t ? 'opened in ' + t.open_ms + ' ms' + (t.prefetched ? ' (prefetched)' : '') : '';
-    const on = new Set(KEYS_ON[st] || []);
+    const on = new Set(ownTools(st) ? KEYS_ON[2] : KEYS_ON[st] || []);
     if (st === 0 && !(c && c.remaining > 0)) on.delete('N');
     for (const li of document.querySelectorAll('#tKeys li')) li.classList.toggle('off', !on.has(li.dataset.k));
-    $('tKeyN').textContent = st === 2 ? 'save my trade' : 'next trade';
+    $('tKeyN').textContent = ownTools(st) ? 'save my trade' : st === 4 ? 'no trade, result' : 'next trade';
+    sideNote();
     if (st === 3 && !A.tBusy && (!A.tres || A.tres.qid !== t.qid)) fetchResult(t.qid);
     if (st) tTick();
   }
@@ -498,7 +576,8 @@
   }
   function clearResult() {
     A.tres = null;
-    for (const id of ['tResHead', 'tResult', 'tOpinion']) $(id).textContent = '';
+    for (const id of ['tResHead', 'tResult', 'tOpinion', 'tYours']) $(id).textContent = '';
+    $('tYours').hidden = true;
     $('tOpinionBox').hidden = true; $('secTResult').hidden = true;
   }
   // the result of the trade `qid` only: one that comes back after Next opened another trade is dropped, so no earlier
@@ -514,7 +593,7 @@
   }
   function showResult(r) {
     A.tres = r;
-    $('tResHead').textContent = r.label + ' saved.  ' + r.date + '  trade ' + r.trade_id + '  ' + r.dir + ' ' + fmtC(r.entry) + ' at ' + r.entry_tod;
+    $('tResHead').textContent = r.label + (r.yours && r.yours.kind === 'instead' ? ' saved, your trade instead.  ' : ' saved.  ') + r.date + '  trade ' + r.trade_id + '  ' + r.dir + ' ' + fmtC(r.entry) + ' at ' + r.entry_tod;
     const t = $('tResult'); t.textContent = '';
     head(t, ['Exit', 'Result', 'Points', 'R', 'At']);
     const tb = t.createTBody();
@@ -522,10 +601,32 @@
       const tr = tb.insertRow();
       cell(tr, x.id); cell(tr, x.reason); cell(tr, signed(x.points), x.points > 0 ? 'win' : 'loss'); cell(tr, x.r === null || x.r === undefined ? '' : signed(x.r)); cell(tr, x.exit_tod);
     }
+    showYours(r.yours);
     $('tOpinionBox').hidden = !r.notes;
     const o = r.second_opinion;
     $('tOpinion').textContent = !r.notes ? '' : o ? o.note + (o.score === null || o.score === undefined ? '' : '  (score ' + o.score + ')') : 'no second opinion for this trade';
     $('secTResult').hidden = false;
+  }
+  // his own trade in the reveal: a row under the bot's (YOU) and a line with the entry, the fill and the exit, in the accent
+  function showYours(y) {
+    const box = $('tYours');
+    box.textContent = ''; box.hidden = !y;
+    if (!y) return;
+    const sp = y.spec || {};
+    let text;
+    if (y.error) text = 'Your trade: ' + y.error;
+    else {
+      text = 'Your trade' + (y.kind === 'instead' ? ' instead' : '') + ': ' + sp.dir + ' ' + (OWN_TYPES[sp.entry_type] || sp.entry_type) + ' ' + fmtC(sp.entry) +
+        ', stop ' + fmtC(sp.stop) + ', target ' + (y.target === null || y.target === undefined ? '2R from the fill' : fmtC(y.target) + (y.target_kind === '2R' ? ' (2R)' : '')) + '. ';
+      text += y.filled ? 'Filled ' + todOf(y.entry_t / 1000) + ' at ' + fmtC(y.entry) + '; ' +
+        (y.exit_t === null || y.exit_t === undefined ? 'still open (' + y.reason + ')' : y.reason + ' ' + todOf(y.exit_t / 1000) + ' at ' + fmtC(y.exit) + ', ' + signed(y.points) + ' pts, ' + (y.r === null || y.r === undefined ? 'n/a' : signed(y.r)) + ' R') :
+        'Not filled (' + y.reason + ').';
+      const tb = $('tResult').tBodies[0] || $('tResult').createTBody(), tr = tb.insertRow();
+      tr.className = 'you';
+      cell(tr, 'YOU'); cell(tr, y.filled ? y.reason : 'no fill'); cell(tr, y.points === null || y.points === undefined ? '' : signed(y.points));
+      cell(tr, y.r === null || y.r === undefined ? '' : signed(y.r)); cell(tr, y.exit_t === null || y.exit_t === undefined ? '' : todOf(y.exit_t / 1000));
+    }
+    box.textContent = text;
   }
   async function loadTrades() {
     try {
@@ -555,13 +656,25 @@
   }
   async function tSave2() {
     if (A.tBusy) return;
+    const mine = tStage(A.state) === 4;
     const marks = A.marks.filter(m => ['Entry', 'Stop', 'Target'].includes(m.role));
     if (!marks.some(m => m.role === 'Entry') || !marks.some(m => m.role === 'Stop')) { say('tErr', 'Mark your Entry (E) and Stop (S) first.', true); return; }
     A.tBusy = true;
     try {
       const type = (document.querySelector('input[name=tEntryType]:checked') || {}).value;
-      await api('/api/trades/save2', { entry_type: type, marks });
+      await api(mine ? '/api/trades/save_mine' : '/api/trades/save2', { entry_type: type, marks });
       say('tErr', ''); setTool(null);
+      await refresh();
+      if (A.state.trade) fetchResult(A.state.trade.qid);
+    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
+  }
+  // after a PASS, no trade of his own (N, Enter or Esc): recorded, then the result shows
+  async function tSkipMine() {
+    if (A.tBusy) return;
+    A.tBusy = true;
+    try {
+      await api('/api/trades/skip_mine', {});
+      A.marks = A.marks.filter(m => !OWN_ROLES.includes(m.role)); A.tMine = false; setTool(null); renderMarks(); say('tErr', '');
       await refresh();
       if (A.state.trade) fetchResult(A.state.trade.qid);
     } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
@@ -585,7 +698,11 @@
       if (K === 'T') { done(); tSave1('TAKE'); } else if (K === 'A') { done(); tSave1('ADJUST'); } else if (K === 'P') { done(); tSave1('PASS'); }
       else if (K >= '1' && K <= '3') { done(); A.tConf = A.tConf === +K ? null : +K; showState(A.state); }
       else if (K === 'X') { done(); tSeen(); }
-    } else if (st === 2) {
+    } else if (st === 4 && !A.tMine) {
+      if (K === 'M') { done(); A.tMine = true; showState(A.state); }
+      else if (K === 'ArrowRight') { done(); act('/api/step'); }
+      else if (K === 'Enter' || K === 'N') { done(); tSkipMine(); }
+    } else if (st === 2 || st === 4) {
       const role = { E: 'Entry', S: 'Stop', G: 'Target' }[K];
       if (role) { done(); setTool(A.tool && A.tool.role === role ? null : { role, span: false }); }
       else if (K >= '1' && K <= '4') { done(); const el = document.querySelector('input[name=tEntryType][value="' + ['stop-limit', 'stop-market', 'limit', 'market'][+K - 1] + '"]'); if (el) el.checked = true; }
@@ -666,7 +783,12 @@
 
   function onKey(e) {
     if (e.key === 'Escape' && (A.tool || A.spanDraft)) { setTool(null); e.preventDefault(); return; }
-    if (e.key === 'Escape' && A.uiMode === 'trades') { if (document.activeElement === $('tReason')) $('tReason').blur(); if (A.tSeenArm) { disarmSeen(); say('tErr', ''); } return; }
+    if (e.key === 'Escape' && A.uiMode === 'trades') {
+      if (document.activeElement === $('tReason')) $('tReason').blur();
+      if (A.tSeenArm) { disarmSeen(); say('tErr', ''); }
+      else if (tStage(A.state) === 4) { e.preventDefault(); tSkipMine(); }       // Esc after a PASS: no trade of his own
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
     const t = e.target, tag = t && t.tagName;
     if (tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && t.type !== 'radio') || (t && t.isContentEditable)) return;

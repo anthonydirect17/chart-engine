@@ -1124,15 +1124,16 @@ def write_once(dest, obj) -> bool:
 
 
 def list_trade_grades(folder) -> dict:
-    """qid -> the grade: <qid>.json (stage 1) with, for an ADJUST whose stage 2 is saved, 'adjust' from <qid>.adjust.json.
-    Two files, each written once: a saved stage is never rewritten."""
+    """qid -> the grade: <qid>.json (stage 1) with, for an ADJUST whose stage 2 is saved, 'adjust' from <qid>.adjust.json,
+    and for a PASS, 'mine' from <qid>.mine.json (his own trade instead, kind 'instead', or kind 'none' when he went on
+    without one). Each file is written once: a saved stage is never rewritten."""
     out = {}
     try:
         names = sorted(os.listdir(folder))
     except OSError:
         return out
     for n in names:
-        if not n.endswith('.json') or n.endswith('.adjust.json'):
+        if not n.endswith('.json') or n.endswith('.adjust.json') or n.endswith('.mine.json'):
             continue
         try:
             with open(os.path.join(folder, n), encoding='utf-8') as f:
@@ -1145,17 +1146,145 @@ def list_trade_grades(folder) -> dict:
                 g['adjust'] = json.load(f).get('adjust')
         except (OSError, ValueError):
             pass
+        g['mine'] = None
+        try:
+            with open(os.path.join(folder, n[:-5] + '.mine.json'), encoding='utf-8') as f:
+                g['mine'] = json.load(f).get('mine')
+        except (OSError, ValueError):
+            pass
         out[g.get('qid')] = g
     return out
 
 
 def trade_grade_done(g) -> bool:
-    """A grade is complete once stage 1 is saved and, for an ADJUST, stage 2 too."""
-    return bool(g) and (g.get('label') != 'ADJUST' or bool(g.get('adjust')))
+    """A grade is complete once stage 1 is saved and, for an ADJUST, stage 2 too; for a PASS that offered "my trade
+    instead" (mine_offer, every PASS saved since it exists), once that is saved or declined."""
+    if not g:
+        return False
+    if g.get('label') == 'ADJUST':
+        return bool(g.get('adjust'))
+    if g.get('label') == 'PASS' and g.get('mine_offer'):
+        return bool(g.get('mine'))
+    return True
+
+
+def own_trade(g):
+    """His own trade of a complete grade, simulated in the reveal: ('adjust', the stage 2 record) for an ADJUST, ('instead',
+    the mine record) for a PASS with his trade instead, else (None, None)."""
+    if not trade_grade_done(g):
+        return None, None
+    if g.get('label') == 'ADJUST' and g.get('adjust'):
+        return 'adjust', g['adjust']
+    m = g.get('mine') or {}
+    if g.get('label') == 'PASS' and m.get('kind') == 'instead':
+        return 'instead', m
+    return None, None
+
+
+def mark_dir(entry, stop):
+    """The direction his marks say: the stop below the entry is long, above it short; None when they are equal."""
+    if entry is None or stop is None or float(stop) == float(entry):
+        return None
+    return 'long' if float(stop) < float(entry) else 'short'
+
+
+YOURS_ENTRY_TYPES = {t: t for t in ENTRY_TYPES}      # the Trades tab's stored entry type -> simulate()'s spec (the same names)
+
+
+def yours_spec(rec):
+    """simulate()'s spec from his stage 2 record (ADJUST or instead): the direction from the marks, the entry type, the
+    prices, and t = the replay clock when he saved it, as wall ms. ({spec}, None), or (None, a plain message) when it cannot
+    be simulated."""
+    d = mark_dir(rec.get('entry'), rec.get('stop'))
+    if d is None:
+        return None, 'cannot simulate (the stop is at the entry)'
+    tg = rec.get('target')
+    if tg is not None and (float(tg) <= float(rec['entry']) if d == 'long' else float(tg) >= float(rec['entry'])):
+        return None, 'cannot simulate (target on the losing side)'
+    et = YOURS_ENTRY_TYPES.get(rec.get('entry_type'))
+    if et is None:
+        return None, f'cannot simulate (entry type {rec.get("entry_type")!r})'
+    return {'dir': d, 'entry_type': et, 'entry': float(rec['entry']), 'stop': float(rec['stop']),
+            'target': None if tg is None else float(tg), 't': utc_to_wall(int(rec['clock_utc_ms']))}, None
+
+
+def yours_view(sim, clock_wall) -> dict:
+    """NO-FUTURE for his simulated trade, cut by bot_view exactly as the bot's: his orders from t_from <= clock (t_to
+    clipped, status once ended), his fill once entry_t <= clock and his exit once exit_t <= clock."""
+    if not isinstance(sim, dict) or sim.get('error'):
+        return {'orders': [], 'trade': None}
+    tr = []
+    if sim.get('filled') and sim.get('entry_t') is not None:
+        x = {'id': 'yours', 'dir': (sim.get('spec') or {}).get('dir'), 'entry_t': int(sim['entry_t']), 'entry': sim.get('entry'),
+             'stop': (sim.get('spec') or {}).get('stop'), 'target': sim.get('target'), 'exits': {}}
+        if sim.get('exit_t') is not None:
+            x['exits']['yours'] = {k: sim.get(k) for k in ('exit_t', 'exit', 'points', 'r')}
+            x['exits']['yours']['reason'] = sim.get('reason')
+        tr.append(x)
+    v = bot_view({'orders': sim.get('orders') or [], 'trades': tr}, clock_wall)
+    return {'orders': v['orders'], 'trade': v['trades'][0] if v['trades'] else None}
+
+
+LEG_ROLES = ('stop', 'target', 'flat')
+
+
+def _names(oid, tid):
+    """An order id that carries the trade id (the id itself, or the id then a separator), so it is that trade's order."""
+    return oid == tid or (oid.startswith(tid) and not oid[len(tid)].isalnum())
+
+
+def _trade_legs(orders, trade, order):
+    """Of `orders` (any list of order records), the stop, target and flat orders of this trade: on its exit side, and when
+    any of them names the trade (its book or id is the trade id, or the id then a separator) those only; else those placed
+    from the entry order's t_from to the trade's last exit (one position at a time)."""
+    tid = str(trade.get('id'))
+    out_side = {'long': 'sell', 'short': 'buy'}.get(trade.get('dir'))
+    ends = [int(x['exit_t']) for x in (trade.get('exits') or {}).values()]
+    last = max(ends) if ends else None
+    legs = [o for o in orders or [] if o.get('role') in LEG_ROLES and o.get('side') == out_side]
+    named = lambda o: _names(str(o.get('book') or ''), tid) or _names(str(o.get('id')), tid)
+    if any(named(o) for o in legs):
+        return [o for o in legs if named(o)]
+    return [o for o in legs if int(order['t_from']) <= int(o['t_from']) and (last is None or int(o['t_from']) <= last)]
+
+
+def trade_only(view, result, trade, order) -> dict:
+    """The Trades tab draws ONE trade: of a view already cut by bot_view, only this trade's entry order (by id and t_from),
+    its stop, target and flat legs (_trade_legs, decided on the whole result so the rule never changes with the clock),
+    the trade itself and no events (events are not tied to a trade exactly, so none)."""
+    tid, et = str(trade.get('id')), int(trade['entry_t'])
+    mine = {(str(o.get('id')), int(o['t_from'])) for o in _trade_legs((result or {}).get('orders'), trade, order)}
+    mine.add((str(order.get('id')), int(order['t_from'])))
+    out = dict(view)
+    out['orders'] = [o for o in view.get('orders') or [] if (str(o.get('id')), int(o['t_from'])) in mine
+                     and (o.get('role') != 'entry' or str(o.get('id')) == str(order.get('id')))]
+    out['trades'] = [t for t in view.get('trades') or [] if str(t.get('id')) == tid and int(t['entry_t']) == et]
+    out['events'] = []
+    return out
+
+
+PRIMARY_TARGET = 'bot primary target'
+
+
+def exit_legs(result, trade, order, exit_ids, clock_wall):
+    """The legs of the exits a graded trade lists (--trade-exits), from the result's optional 'exit_orders' ({exit id: order
+    records with role stop, target or flat}): this trade's (_trade_legs) of each named exit, cut at the clock exactly as
+    bot_view cuts 'orders', each labelled '<exit id> <role>'. None when the result has no exit_orders for those exits."""
+    eo = (result or {}).get('exit_orders') or {}
+    if not isinstance(eo, dict) or not any(eo.get(x) for x in exit_ids):
+        return None
+    out = []
+    for x in exit_ids:
+        legs = [o for o in _trade_legs(eo.get(x) or [], trade, order) if o.get('price') is not None]
+        for o in bot_view({'orders': legs}, clock_wall)['orders']:
+            o['exit_id'], o['label'] = x, f'{x} {o.get("role")}'
+            out.append(o)
+    return out
 
 
 def export_trade_grades(marks_dir, grades) -> tuple[str, int]:
-    """trade_grades.csv: one flat row per grade. Labels, the bot's trade at the cut and the adjust fields; NO outcome."""
+    """trade_grades.csv: one flat row per grade. Labels, the bot's trade at the cut, the adjust fields and his trade instead
+    of a PASS (instead_*); NO outcome."""
     rows = []
     for g in sorted(grades.values(), key=lambda x: x.get('saved_utc') or ''):
         cut = g.get('at_cut') or {}
@@ -1168,9 +1297,18 @@ def export_trade_grades(marks_dir, grades) -> tuple[str, int]:
         a = g.get('adjust') or {}
         r.update({'adjust_entry_type': a.get('entry_type'), 'adjust_entry': a.get('entry'), 'adjust_stop': a.get('stop'),
                   'adjust_target': a.get('target'), 'steps_after_cut': a.get('steps_after_cut'), 'adjust_saved_utc': a.get('saved_utc')})
+        r.update({'adjust_dir': a.get('dir'), 'adjust_opposite_side': a.get('opposite_side')})
         for m in a.get('marks') or []:
             key = safe_name(m.get('role', '')).lower()
             r[f'adjust_{key}_bar_utc_ms'], r[f'adjust_{key}_bar_tod'] = m.get('bar_time_utc_ms'), m.get('bar_tod')
+        mi = g.get('mine') or {}
+        r.update({'instead_kind': mi.get('kind'), 'instead_dir': mi.get('dir'), 'instead_entry_type': mi.get('entry_type'),
+                  'instead_entry': mi.get('entry'), 'instead_stop': mi.get('stop'), 'instead_target': mi.get('target'),
+                  'instead_steps_after_cut': mi.get('steps_after_cut'), 'instead_opposite_side': mi.get('opposite_side'),
+                  'instead_after_reveal': mi.get('after_reveal'), 'instead_saved_utc': mi.get('saved_utc')})
+        for m in mi.get('marks') or []:
+            key = safe_name(m.get('role', '')).lower()
+            r[f'instead_{key}_bar_utc_ms'], r[f'instead_{key}_bar_tod'] = m.get('bar_time_utc_ms'), m.get('bar_tod')
         rows.append(r)
     cols = []
     for r in rows:

@@ -197,7 +197,8 @@ BOT_USAGE = 'No bot loaded. Start the Studio with --bot=PATH (a .py file that sp
 
 def load_bot(path):
     """Import a bot module from a .py file and check it speaks BOT_API 1. Returns {'module', 'name', 'variants',
-    'exit_ids', 'path'}; BotError with a plain message otherwise."""
+    'exit_ids', 'path', 'simulate'} ('simulate': the optional simulate(day, prior, spec) function, else None); BotError with
+    a plain message otherwise."""
     p = os.path.abspath(str(path))
     base = os.path.basename(p)
     if not p.endswith('.py') or not os.path.isfile(p):
@@ -230,7 +231,9 @@ def load_bot(path):
     if not isinstance(exits, list) or not exits or not all(isinstance(x, str) and x for x in exits):
         raise BotError(f'{base}: exit_ids() must return a non-empty list of strings')
     variants = [{'id': str(v['id']), 'label': str(v.get('label') or v['id']), 'params': dict(v.get('params') or {})} for v in variants]
-    return {'module': mod, 'name': name.strip(), 'variants': variants, 'exit_ids': list(exits), 'path': p}
+    sim = getattr(mod, 'simulate', None)
+    return {'module': mod, 'name': name.strip(), 'variants': variants, 'exit_ids': list(exits), 'path': p,
+            'simulate': sim if callable(sim) else None}
 
 
 def check_result(res):
@@ -246,6 +249,13 @@ def check_result(res):
             t['entry_t'] = int(t['entry_t'])
             for x in (t.get('exits') or {}).values():
                 x['exit_t'] = int(x['exit_t'])
+        eo = res.get('exit_orders')                  # optional: {exit id: the stop, target and flat orders of that exit}
+        if eo is not None:
+            if not isinstance(eo, dict) or not all(isinstance(v, list) for v in eo.values()):
+                raise BotError('run() result: exit_orders must map each exit id to a list of orders')
+            for v in eo.values():
+                for o in v:
+                    o['t_from'], o['t_to'] = int(o['t_from']), int(o['t_to'])
     except (KeyError, TypeError, ValueError, AttributeError) as e:
         raise BotError(f'run() result is not in the BOT_API 1 shape: {type(e).__name__}: {e}') from e
     return json.loads(json.dumps(res))       # a plain JSON copy (refuses what cannot be shown)
@@ -327,6 +337,7 @@ class Studio:
         self.tskip = self._read_skip_days()
         self.trade, self.trade_no, self.t_refused = None, 0, {}
         self.tprep, self.tprep_lock = None, threading.Lock()
+        self.yours, self.yours_lock, self.t_revealed = {}, threading.Lock(), set()    # qid -> his trade simulated (memory only)
         self.notes, self.notes_sha = None, None
         self.trade_exits = tuple(trade_exits or ())         # --trade-exits: the exits a graded trade's result shows
         if self.trade_exits and self.bot:
@@ -1152,8 +1163,13 @@ class Studio:
         return core.trade_grade_done(self.tgrades.get(self.trade['item']['qid']))
 
     def _tstage(self):
+        """1 the call (T, A or P), 2 ADJUST's own trade, 4 after a PASS: his own trade instead (M) or none, 3 complete."""
         g = self.tgrades.get(self.trade['item']['qid'])
-        return 1 if g is None else 2 if not core.trade_grade_done(g) else 3
+        if g is None:
+            return 1
+        if core.trade_grade_done(g):
+            return 3
+        return 4 if g.get('label') == 'PASS' else 2
 
     def _tpublic(self):
         """The open trade as /api/state shows it: opaque, no date, no trade id, nothing after the cut."""
@@ -1252,6 +1268,8 @@ class Studio:
         with self.lock:
             if self.blind_open():
                 raise Refused('a blind candidate is open: save its grade first, then use the Trades tab')
+            if self.trade_open() and self._tstage() == 4:
+                self._mine_write(None)                       # Next after a PASS without M: no trade of his own
             if self.trade_open():
                 return dict(self.state(), open_ms=0, prefetched=False)
         t0, notes = time.perf_counter(), []
@@ -1276,6 +1294,7 @@ class Studio:
             self.level = {'type': cut['level_type'], 'price': float(cut['level_price'])} if cut['level_price'] not in (None, '') else None
             self.trade_no += 1
             self.trade = dict(prep, n=self.trade_no, open_ms=ms_open, prefetched=pre)
+            self.trade['sim_day'], self.trade['sim_prior'] = prep['pre'][0], prep['pre'][1]    # what the bot ran on
             del self.trade['pre']
         self._prefetch()
         return dict(self.state(), open_ms=ms_open, prefetched=pre, passed_over=notes)
@@ -1326,15 +1345,45 @@ class Studio:
                  'entry_order_link': t['how'], 'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
             if label != 'ADJUST':
                 g['second_opinion'] = self._opinion_record(it)
+            if label == 'PASS':
+                g['mine_offer'] = True                       # then M (his own trade instead) or Next, before the reveal
             if not core.write_once(os.path.join(self.marks, 'trade_grades', it['qid'] + '.json'), g):
                 raise Refused('stage 1 of this trade is saved already (its file exists)')
             self._tlog(g)
-            self.tgrades[it['qid']] = dict(g, adjust=None)
+            self.tgrades[it['qid']] = dict(g, adjust=None, mine=None)
             return {'ok': True, 'stage': 1, 'label': label, 'complete': self._tdone()}
 
+    def _tmarks(self, p):
+        """His own trade from the page (stage 2 of an ADJUST, or his trade instead of a PASS): the entry type and the Entry,
+        Stop (both required) and Target marks, each before the clock, with the candles stepped since the cut."""
+        et = p.get('entry_type')
+        if et not in core.ENTRY_TYPES:
+            raise Refused('the entry type is one of ' + ', '.join(core.ENTRY_TYPES))
+        marks = {}
+        for m in p.get('marks') or []:
+            if m.get('role') not in ('Entry', 'Stop', 'Target'):
+                continue
+            tw, price = float(m['t']), float(m['price'])
+            if not (math.isfinite(tw) and math.isfinite(price)):
+                raise Refused('a mark has no time or price')
+            tu = int(core.wall_to_utc([round(tw * 1000)])[0])
+            if tu >= self.clock:
+                raise Refused('a mark is after the clock')
+            marks[m['role']] = {'role': m['role'], 'chart': m.get('chart'), 'bar_time_utc_ms': tu, 'bar_tod': core.fmt_tod(round(tw * 1000)), 'price': price}
+        if 'Entry' not in marks or 'Stop' not in marks:
+            raise Refused('mark your Entry and Stop first (E, S, then a click on the chart)')
+        d = core.mark_dir(marks['Entry']['price'], marks['Stop']['price'])
+        if d is None:
+            raise Refused('your Stop is at your Entry: move one of them')
+        return {'entry_type': et, 'entry': marks['Entry']['price'], 'stop': marks['Stop']['price'],
+                'target': marks['Target']['price'] if 'Target' in marks else None, 'steps_after_cut': self.steps,
+                'clock_utc_ms': self.clock, 'marks': list(marks.values()), 'dir': d,
+                'opposite_side': d != self.trade['at_cut'].get('dir'),
+                'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+
     def trades_save2(self, p):
-        """Stage 2, ADJUST only: the entry type and the Entry, Stop (both required) and Target marks, with the candles stepped
-        since the cut. Written once to trade_grades/<qid>.adjust.json."""
+        """Stage 2, ADJUST only: his own trade (_tmarks). Marks on the other side of the bot's trade are saved too, with
+        opposite_side true (it counts as a PASS of the bot's trade). Written once to trade_grades/<qid>.adjust.json."""
         with self.lock:
             self._topen_need()
             it = self.trade['item']
@@ -1345,25 +1394,7 @@ class Studio:
                 raise Refused('stage 2 is for ADJUST only')
             if g.get('adjust'):
                 raise Refused('stage 2 of this trade is saved already')
-            et = p.get('entry_type')
-            if et not in core.ENTRY_TYPES:
-                raise Refused('the entry type is one of ' + ', '.join(core.ENTRY_TYPES))
-            marks = {}
-            for m in p.get('marks') or []:
-                if m.get('role') not in ('Entry', 'Stop', 'Target'):
-                    continue
-                tw, price = float(m['t']), float(m['price'])
-                if not (math.isfinite(tw) and math.isfinite(price)):
-                    raise Refused('a mark has no time or price')
-                tu = int(core.wall_to_utc([round(tw * 1000)])[0])
-                if tu >= self.clock:
-                    raise Refused('a mark is after the clock')
-                marks[m['role']] = {'role': m['role'], 'chart': m.get('chart'), 'bar_time_utc_ms': tu, 'bar_tod': core.fmt_tod(round(tw * 1000)), 'price': price}
-            if 'Entry' not in marks or 'Stop' not in marks:
-                raise Refused('mark your Entry and Stop first (E, S, then a click on the chart)')
-            adj = {'entry_type': et, 'entry': marks['Entry']['price'], 'stop': marks['Stop']['price'],
-                   'target': marks['Target']['price'] if 'Target' in marks else None, 'steps_after_cut': self.steps,
-                   'clock_utc_ms': self.clock, 'marks': list(marks.values()), 'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+            adj = self._tmarks(p)
             rec = {'qid': it['qid'], 'trade_id': it['trade_id'], 'date': it['date'], 'stage': 2, 'adjust': adj,
                    'second_opinion': self._opinion_record(it)}
             if not core.write_once(os.path.join(self.marks, 'trade_grades', it['qid'] + '.adjust.json'), rec):
@@ -1372,20 +1403,72 @@ class Studio:
             g['adjust'], g['second_opinion'] = adj, rec['second_opinion']
             return {'ok': True, 'stage': 2, 'label': 'ADJUST', 'complete': True}
 
+    def _mine_write(self, mine):
+        """<qid>.mine.json, written once (under the lock): his trade instead of a PASS (kind 'instead'), or None when he
+        went on without one (kind 'none'). after_reveal: whether this trade's result had been served before (it never is
+        before this decision; kept as a check)."""
+        it = self.trade['item']
+        g = self.tgrades.get(it['qid'])
+        if g is None or g.get('label') != 'PASS' or not g.get('mine_offer'):
+            raise Refused('"my trade instead" follows a PASS (P) only')
+        if g.get('mine'):
+            raise Refused('your trade instead of this PASS is saved already')
+        now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        rec_mine = dict(mine, kind='instead') if mine else {'kind': 'none', 'saved_utc': now}
+        rec_mine['after_reveal'] = it['qid'] in self.t_revealed
+        rec = {'qid': it['qid'], 'trade_id': it['trade_id'], 'date': it['date'], 'stage': 2, 'kind': rec_mine['kind'], 'mine': rec_mine}
+        if not core.write_once(os.path.join(self.marks, 'trade_grades', it['qid'] + '.mine.json'), rec):
+            raise Refused('your trade instead of this PASS is saved already (its file exists)')
+        self._tlog(rec)
+        g['mine'] = rec_mine
+        return {'ok': True, 'stage': 2, 'label': 'PASS', 'kind': rec_mine['kind'], 'complete': True}
+
+    def trades_save_mine(self, p):
+        """After a PASS: his own trade instead (M), the same fields as ADJUST's stage 2, before any outcome is shown.
+        Written once to trade_grades/<qid>.mine.json with kind 'instead'; the label stays PASS."""
+        with self.lock:
+            self._topen_need()
+            if self._tstage() != 4:
+                raise Refused('"my trade instead" follows a PASS (P), before the result shows')
+            return self._mine_write(self._tmarks(p))
+
+    def trades_skip_mine(self):
+        """After a PASS: no trade of his own (Next, Enter or Esc). Written once to <qid>.mine.json with kind 'none'; then the
+        result shows."""
+        with self.lock:
+            self._topen_need()
+            if self._tstage() != 4:
+                raise Refused('nothing to skip: "my trade instead" follows a PASS (P), before the result shows')
+            return self._mine_write(None)
+
     def trades_view(self):
         """The bot on the charts: core.bot_view frozen AT THE CUT until the grade is complete (stepping candles after ADJUST
-        moves the ticks, never the bot's view), then at the clock. No dollars here."""
+        moves the ticks, never the bot's view), then at the clock; only this trade (core.trade_only: its entry order, its
+        legs and fill and exits, no other trade, no events). Once complete with his own trade: yours_orders and
+        yours_trade, his simulated trade cut at the same clock (core.yours_view). No dollars here."""
         with self.lock:
             self._topen_need()
             it, res, done = self.trade['item'], self.trade['res'], self._tdone()
             c = core.utc_to_wall(self.clock) if done else self.trade['cut_wall']
-        v = core.bot_view(res, c, self.bot['exit_ids'], self.symbol)
+            trade, order = self.trade['trade'], self.trade['order']
+        v = core.trade_only(core.bot_view(res, c, self.bot['exit_ids'], self.symbol), res, trade, order)
         out = {'qid': it['qid'], 'name': self.bot['name'], 'exit_ids': self.bot['exit_ids'], 'frozen': not done}
         out.update({k: v[k] for k in ('clock_wall_ms', 'events', 'orders', 'trades')})
+        sim = self._yours() if done else None
+        if sim is not None:
+            y = core.yours_view(sim, c)
+            out['yours_orders'], out['yours_trade'] = y['orders'], y['trade']
         if self.trade_exits:                                 # only the exits --trade-exits names are drawn
             out['exit_ids'] = list(self.trade_exits)
             out['trades'] = [dict(t, exits={k: e for k, e in (t.get('exits') or {}).items() if k in self.trade_exits})
                              for t in out['trades']]
+            legs = core.exit_legs(res, trade, order, self.trade_exits, c)
+            if legs is not None:                             # the named exits' own legs, never the primary ones
+                out['orders'] = [o for o in out['orders'] if o.get('role') not in core.LEG_ROLES] + legs
+                out['trades'] = [dict(t, stop=None, target=None) for t in out['trades']]
+            else:                                            # no exit_orders: the primary legs, named so
+                out['orders'] = [dict(o, label=core.PRIMARY_TARGET) if o.get('role') == 'target' else o for o in out['orders']]
+                out['trades'] = [dict(t, target_label=core.PRIMARY_TARGET) for t in out['trades']]
         return out
 
     def _trade_exit_ids(self, t):
@@ -1403,12 +1486,52 @@ class Studio:
             if not self._tdone():
                 raise Refused('the result shows once the grade is saved')
             it, t, g = self.trade['item'], self.trade['trade'], self.tgrades[self.trade['item']['qid']]
+            self.t_revealed.add(it['qid'])
         ids = self._trade_exit_ids(t)
         exits = [dict(id=k, reason=e.get('reason'), points=e.get('points'), r=e.get('r'), exit_tod=core.fmt_tod(e['exit_t']))
                  for k in ids for e in [(t.get('exits') or {}).get(k)] if e]
-        return {'qid': it['qid'], 'date': it['date'], 'trade_id': it['trade_id'], 'label': g.get('label'), 'dir': t.get('dir'),
-                'entry': t.get('entry'), 'entry_tod': core.fmt_tod(t['entry_t']), 'stop': t.get('stop'), 'target': t.get('target'),
-                'exits': exits, 'notes': self.notes is not None, 'second_opinion': self._opinion(it)}
+        out = {'qid': it['qid'], 'date': it['date'], 'trade_id': it['trade_id'], 'label': g.get('label'), 'dir': t.get('dir'),
+               'entry': t.get('entry'), 'entry_tod': core.fmt_tod(t['entry_t']), 'stop': t.get('stop'), 'target': t.get('target'),
+               'exits': exits, 'notes': self.notes is not None, 'second_opinion': self._opinion(it)}
+        sim = self._yours()
+        if sim is not None:
+            out['yours'] = sim
+        return out
+
+    def _yours(self):
+        """His own trade (an ADJUST's stage 2, or his trade instead of a PASS) through the bot's simulate() on the day and prior
+        the bot ran on, once the grade is complete: the result with 'kind' and 'spec', or {'error': msg}. None when there
+        is nothing to simulate (TAKE, a PASS without his trade, a bot without simulate()). Cached per qid in memory, never
+        written: the grade files are not touched."""
+        with self.lock:
+            if self.trade is None or not self._tdone():
+                return None
+            qid = self.trade['item']['qid']
+            kind, rec = core.own_trade(self.tgrades.get(qid))
+            sim_fn = (self.bot or {}).get('simulate')
+            if kind is None or sim_fn is None:
+                return None
+            day, prior = self.trade['sim_day'], self.trade['sim_prior']
+        with self.yours_lock:
+            if qid in self.yours:
+                return self.yours[qid]
+            spec, err = core.yours_spec(rec)
+            if err:
+                out = {'error': err}
+            else:
+                try:
+                    out = json.loads(json.dumps(sim_fn(day, prior, dict(spec))))
+                    if not isinstance(out, dict):
+                        raise BotError('simulate() must return a dict')
+                    for o in out.setdefault('orders', []):
+                        o['t_from'], o['t_to'] = int(o['t_from']), int(o['t_to'])
+                except Exception as e:   # noqa: BLE001 - shown in the reveal instead of his result
+                    log(f'trades: {qid}: simulate() failed: {type(e).__name__}: {e}')
+                    out = {'error': f'cannot simulate ({type(e).__name__}: {e})'}
+                out['spec'] = spec
+            out['kind'] = kind
+            self.yours[qid] = out
+            return out
 
     def trades_skip_day(self):
         """"Seen this day before": the open trade's date goes into trade_skip_days.json (entries only ever added), every
@@ -1762,6 +1885,10 @@ def make_handler(studio, port):
                     return self._json(200, studio.trades_save1(p))
                 if path == '/api/trades/save2':
                     return self._json(200, studio.trades_save2(p))
+                if path == '/api/trades/save_mine':
+                    return self._json(200, studio.trades_save_mine(p))
+                if path == '/api/trades/skip_mine':
+                    return self._json(200, studio.trades_skip_mine())
                 if path == '/api/trades/skip_day':
                     return self._json(200, studio.trades_skip_day())
                 if path == '/api/trades/export':

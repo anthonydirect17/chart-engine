@@ -61,7 +61,8 @@ Watch a bot trade replayed days on the same charts, or run it over every bot day
 a bot module and shows what the bot returns, never more than the clock allows.
 
 - Start with a bot: `py -3 tools\markup_studio.py --bot=PATH` (a `.py` file that speaks BOT_API 1: `BOT_API`, `NAME`,
-  `variants()`, `exit_ids()`, `run(day, prior, params, progress)`). Without `--bot` the tab says how to start with one; a
+  `variants()`, `exit_ids()`, `run(day, prior, params, progress)`; optional: `simulate(day, prior, spec)` and the result key
+  `exit_orders`, both used by the Trades tab only, see **The bot contract's optional parts** there). Without `--bot` the tab says how to start with one; a
   module that does not load or check out says why there (and in the window), and the rest of the Studio works as before.
   `test/markup_bot_fixture.py` is a made-up test bot for the tests only.
 - **The day split.** On the first start the Studio writes `bot_split_v1.json` in the marks folder: every last-only day and
@@ -125,10 +126,32 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 - **Stage 2** (ADJUST only): `→` (or Next candle) steps one minute (counted as `steps_after_cut`); `E` Entry, `S` Stop, `G`
   Target (optional) arm the mark tool, one click on the chart places each; `1` to `4` pick the entry type (stop-limit, the
   default, stop-market, limit, market). `Enter` saves once Entry and Stop are placed.
-- **The reveal**, at once after the save: the date, the trade id and the bot's result for this trade (each exit's points and
-  R; exit ids `m1` and `2R` first when the bot has them), and the second opinion if `--trade-notes` is given. `Space` plays
-  on at 5x (optional), `Enter` or `N` opens the next trade. Before the save `/api/trades/result`, reveal, play and jump answer
-  409, and Free, Bot and their loads are locked while a trade is open.
+- **Stage 2 after PASS, "my trade instead"** (optional): after `P` the result waits. `M` opens the same tools as ADJUST's stage
+  2 (`E`, `S`, `G`, `1` to `4`, `→`, `Enter` saves) to mark the trade you would take instead (the other side, say);
+  `N`, `Enter` or `Esc` goes on without one. Either way the choice is saved before any outcome shows, then the reveal. The
+  label stays PASS. (A PASS saved before this existed has no `mine_offer` and is complete as it was.)
+- **The other side in an ADJUST**: marks whose stop is above the entry for a long bot trade (below for a short) are saved
+  with `opposite_side: true`, and the panel says so first ("Your trade is short, the bot's is long: this counts as a PASS
+  for the bot's trade. Saving records your trade."). Stop and entry at the same price are refused.
+- **The reveal**, after the grade is complete: the date, the trade id and the bot's result for this trade (each exit's points
+  and R; exit ids `m1` and `2R` first when the bot has them), and the second opinion if `--trade-notes` is given. `Space` plays
+  on at 5x (optional), `Enter` or `N` opens the next trade. Before the grade is complete `/api/trades/result`, reveal, play and
+  jump answer 409, and Free, Bot and their loads are locked while a trade is open.
+- **Your trade** (when the bot has `simulate()`): after an ADJUST's stage 2, or a PASS with your trade instead, the reveal
+  adds a "Your trade" row under the bot's rows (YOU, its exit, points, R, time) and a line with the entry type and price,
+  the fill time and price, the exit reason, time, points and R, all in the accent `--ms-yours` (#FF9500 amber-orange, apart
+  from the bot's white, red and green and the marks' colors). The charts draw your trade in that accent, each piece labelled
+  YOU: the entry order from placement to its fill or cancel (dashed), the stop and target from the fill to the exit, the
+  fill and the exit markers; your Entry, Stop and Target marks switch to the accent once saved. The Blind, Free and Bot tabs
+  keep their colors. It never touches a grade file: it is computed on demand, kept in memory per trade, deterministic. "Your
+  trade: cannot simulate (target on the losing side)" when your target contradicts your stop.
+- **Only this trade on the charts.** At the cut: this trade's entry order, its level and any stop or target the bot shows for
+  it; after the reveal: its fill, its legs and its exits. No other entry order (a bot may work several at once), no earlier
+  or later trade, no events list (events are not tied to a trade exactly). The legs are the exit side's stop, target and
+  flat orders whose id or book names the trade (`<trade id>` then a separator), when the bot's ids do; else those placed from
+  the entry order's `t_from` to the trade's last exit. With `--trade-exits`, the named exits' own legs from the result's
+  `exit_orders`, labelled `<exit id> stop` and `<exit id> target`, and never the primary legs; a bot without `exit_orders`
+  shows its primary legs with the target named "bot primary target". The Bot tab draws every trade as before.
 - **Seen this day before**: `X`, then `X` again to confirm (`Esc` cancels). The day goes into `trade_skip_days.json` (entries
   only ever added) and every queued trade of that day is skipped; nothing else is recorded for that trade.
 - **The key legend** stays at the top of the panel; keys that do not apply now are dimmed.
@@ -140,13 +163,35 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
   score shown. A notes file that changed since the last grade is logged and used.
 - **Files** (marks folder): `trade_grades/<qid>.json` (stage 1: qid, trade_id, date, symbol, bot, variant, queue sha256,
   label, chips, reason, confidence, saved_utc, `at_cut` with the side, level, the entry order's type, price and limit and the
-  stop and target the bot showed, and how the entry order was found), `trade_grades/<qid>.adjust.json` (stage 2: `adjust` with
-  entry_type, entry, stop, target, steps_after_cut and the marks with their bar times). Each is written once and never
-  overwritten: a second save of a stage is refused. Every save also appends a line to `trade_grades_log.jsonl`. **Export**
-  (`POST /api/trades/export`) writes `trade_grades.csv`, one row per grade, labels and the fields above, no outcome column.
+  stop and target the bot showed, and how the entry order was found; a PASS also `mine_offer: true`),
+  `trade_grades/<qid>.adjust.json` (stage 2: `adjust` with entry_type, entry, stop, target, steps_after_cut, clock_utc_ms,
+  `dir` (from the marks), `opposite_side` and the marks with their bar times), `trade_grades/<qid>.mine.json` (after a PASS:
+  `kind` and `mine`, the same fields as `adjust` plus `kind: "instead"` and `after_reveal` (false: the result is held back
+  until this is saved), or `kind: "none"`). Each is written once and never overwritten: a second save of a stage is refused.
+  Every save also appends a line to `trade_grades_log.jsonl`. **Export** (`POST /api/trades/export`) writes
+  `trade_grades.csv`, one row per grade, labels and the fields above (`adjust_dir`, `adjust_opposite_side`, `instead_kind`,
+  `instead_entry_type`, `instead_entry`, `instead_stop`, `instead_target`, `instead_steps_after_cut`,
+  `instead_opposite_side`, `instead_after_reveal`, ...), no outcome column.
 - API: `GET /api/trades/info`, `/api/trades/view`, `/api/trades/result`; `POST /api/trades/next`, `/api/trades/save1`
-  (`label`, `chips`, `reason`, `confidence`), `/api/trades/save2` (`entry_type`, `marks`), `/api/trades/skip_day`,
-  `/api/trades/export`.
+  (`label`, `chips`, `reason`, `confidence`), `/api/trades/save2` (`entry_type`, `marks`), `/api/trades/save_mine` (the same,
+  after a PASS), `/api/trades/skip_mine`, `/api/trades/skip_day`, `/api/trades/export`. `/api/trades/next` while the "my
+  trade instead" choice is open records "none" and opens the next trade.
+- **Your trade in the API**, only once the grade is complete and there is a trade of yours to simulate (absent for TAKE, a
+  PASS without your trade, or a bot without `simulate()`; nothing about it before): `/api/trades/result` gains `yours`, the
+  `simulate()` result plus `kind` (`adjust` or `instead`) and `spec`, or `{"error": msg, "kind"}`; `/api/trades/view` gains
+  `yours_orders` (your orders cut at the clock exactly as the bot's: from `t_from <= clock`, `t_to` clipped, status once
+  ended) and `yours_trade` (your fill once `entry_t <= clock`, its exit `exits.yours` once `exit_t <= clock`).
+
+### The bot contract's optional parts (Trades tab only; the Studio never requires them)
+
+- `simulate(day, prior, spec) -> dict`: your own trade on the bot's own fill law. The Studio builds `spec` from the stage 2
+  record: `dir` from the marks (stop below the entry: long; above: short), `entry_type` (`stop-limit`, `stop-market`,
+  `limit`, `market`, the stored value), `entry`, `stop`, `target` (or None), and `t` = the replay clock at the save
+  (`clock_utc_ms` as wall ms, `utc_to_wall`, as the rest of the Trades tab). It is called on the same day and prior the bot
+  ran on. It returns at least `filled`, `reason`, `entry_t`, `entry`, `exit_t`, `exit`, `points`, `r`, `target` and
+  `orders` (records like `run()`'s orders); a ValueError or any failure shows as "Your trade: cannot simulate (...)".
+- `exit_orders` in `run()`'s result: `{exit id: [order records, role stop, target or flat, with the trade's book]}`, the legs
+  of each exit (a bot whose result lists the primary exit's legs only). Cut at the clock like `orders`.
 
 ## Flags
 

@@ -41,6 +41,7 @@
       <div class="ms-h">Keys</div>
       <ul id="tKeys">
         <li data-k="T"><kbd>T</kbd> TAKE</li><li data-k="A"><kbd>A</kbd> ADJUST</li><li data-k="P"><kbd>P</kbd> PASS</li>
+        <li data-k="M"><kbd>M</kbd> my trade instead</li>
         <li data-k="C"><kbd>1</kbd>-<kbd>3</kbd> confidence</li>
         <li data-k="E"><kbd>E</kbd> entry</li><li data-k="S"><kbd>S</kbd> stop</li><li data-k="G"><kbd>G</kbd> target</li>
         <li data-k="Y"><kbd>1</kbd>-<kbd>4</kbd> entry type</li><li data-k="R"><kbd>&rarr;</kbd> next candle</li>
@@ -173,8 +174,13 @@
       <div class="ms-chips" id="tChips"></div>
       <textarea id="tReason" rows="2" placeholder="Your read, in your words (Esc leaves the box)"></textarea>
     </section>
+    <section class="ms-sec" id="secTPass" hidden>
+      <div class="ms-h">PASS saved</div>
+      <div class="ms-line">Your own trade instead? <kbd>M</kbd> to mark it (before any result shows).</div>
+      <div class="ms-line dim">No trade of yours: <kbd>N</kbd>/<kbd>Enter</kbd>/<kbd>Esc</kbd> shows the result.</div>
+    </section>
     <section class="ms-sec" id="secTAdjust" hidden>
-      <div class="ms-h">Your trade <span class="dim">(mark on the chart; candles step with &rarr;)</span></div>
+      <div class="ms-h"><span id="tOwnHead">Your trade</span> <span class="dim">(mark on the chart; candles step with &rarr;)</span></div>
       <div class="ms-seg four" id="tTypeSeg">
         <label><input type="radio" name="tEntryType" value="stop-limit" checked><span>stop-limit <kbd>1</kbd></span></label>
         <label><input type="radio" name="tEntryType" value="stop-market"><span>stop-market <kbd>2</kbd></span></label>
@@ -183,12 +189,14 @@
       </div>
       <div class="ms-tools" id="tMarkTools"></div>
       <ul class="ms-marks" id="tMarkList"></ul>
+      <div class="ms-line ms-note" id="tSideNote" hidden></div>
       <button type="button" class="ms-btn primary" id="btnTSave2">Save my trade <kbd>Enter</kbd></button>
     </section>
     <section class="ms-sec" id="secTResult" data-dates hidden>
       <div class="ms-h">Result</div>
       <div class="ms-line" id="tResHead"></div>
       <table class="ms-table ms-grid" id="tResult"></table>
+      <div class="ms-line ms-yours" id="tYours" hidden></div>
       <div id="tOpinionBox" hidden>
         <div class="ms-h">Second opinion</div>
         <div class="ms-line" id="tOpinion"></div>
