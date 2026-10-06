@@ -38,6 +38,12 @@
 - Markup Studio Trades tab: **label sets** (`--trade-labels-only`). The grade saves as usual, but no result, date or trade
   of his is shown, and the clock stays at the cut while a trade is open; the queue records `labels_only` and a start with
   the other setting is refused.
+- Markup Studio: the **Work list** (`--work=DIR`). Staged work items (`tools/markup_work.py add`, one JSON each with the same
+  settings as the flags, written once; `status` finishes one) are offered in the header's Work list with their counts only;
+  picking one, or a link `live/markup.html#work=<id>`, opens it (refused while a grade is open in the current item or Run all
+  runs; a failed open changes nothing), and the last one opens again at start. `GET /api/work` (no paths) may be read by the
+  origins given with `--allow-origin` (The Desk); nothing else is shared. `--log=FILE` and
+  `tools/studio-service/install-studio-task.ps1` start it at logon with no window and no desktop icon.
 
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 

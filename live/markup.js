@@ -383,6 +383,11 @@
   /* ---------------- state and modes */
   function showState(s) {
     A.state = s;
+    if (s.mode === 'none') {                                       // --work and no item open yet: the Work list only
+      $('msStatus').textContent = 'No work item is open: pick one from the Work list';
+      for (const id of ['tabBlind', 'tabFree', 'tabBot', 'tabTrades', 'btnNext']) $(id).disabled = true;
+      return;
+    }
     const free = s.mode === 'free' || s.mode === 'bot';
     setClock(s.clock_utc_ms || realNow(), s.playing ? s.speed : 0);
     $('msClock').textContent = s.clock_tod || '--:--:--';
@@ -423,6 +428,41 @@
   }
   async function refresh() {
     try { showState(await api('/api/state')); } catch (e) { $('msStatus').textContent = 'Studio not reachable: ' + e.message; }
+  }
+
+  /* ---------------- the Work list (--work): staged work items, one open at a time; opening another reloads the page */
+  const KIND = { sweeps: 'Sweeps', trades: 'Trades', labels: 'Label set', bot: 'Bot' };
+  const WORK_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+  function workText(it) {
+    const p = it.progress;
+    const prog = p ? (p.total ? p.done + ' of ' + p.total + ' graded' : p.done + ' graded') : '';
+    return it.title + '  (' + (KIND[it.kind] || it.kind) + (it.symbol ? ', ' + it.symbol : '') + (prog ? ', ' + prog : '') + ')';
+  }
+  function workMsg(text) { const el = $('msWorkMsg'); el.textContent = text || ''; el.hidden = !text; }
+  async function loadWork() {
+    let w;
+    try { w = await api('/api/work'); } catch (e) { $('msWorkBox').hidden = true; return null; }   // not started with --work
+    A.work = w;
+    const sel = $('msWork'); sel.textContent = '';
+    const items = (w.items || []).filter(it => WORK_ID.test(it.id));
+    if (!w.current) { const o = document.createElement('option'); o.value = ''; o.textContent = 'Pick the work to open'; o.disabled = true; sel.appendChild(o); }
+    for (const it of items.filter(x => x.status === 'active')) {
+      const o = document.createElement('option'); o.value = it.id; o.textContent = workText(it); sel.appendChild(o);
+    }
+    const fin = items.filter(x => x.status !== 'active');
+    if (fin.length) {
+      const g = document.createElement('optgroup'); g.label = 'Finished';
+      for (const it of fin) { const o = document.createElement('option'); o.value = it.id; o.textContent = workText(it) + ', ' + it.status; o.disabled = true; g.appendChild(o); }
+      sel.appendChild(g);
+    }
+    sel.value = w.current || '';
+    if (w.problems && w.problems.length) sel.title = 'Not offered: ' + w.problems.map(x => x.file + ' (' + x.reason + ')').join('; ');
+    $('msWorkBox').hidden = false;
+    return w;
+  }
+  async function openWork(id) {
+    if (A.work && id === A.work.current) return true;
+    try { await api('/api/work/open', { id }); return true; } catch (e) { workMsg(e.message); return false; }
   }
 
   /* ---------------- the Bot tab */
@@ -809,6 +849,13 @@
 
   function init() {
     buildTools();
+    $('msWork').addEventListener('focus', () => { loadWork(); });
+    $('msWork').addEventListener('change', async () => {
+      const id = $('msWork').value;
+      workMsg('');
+      if (await openWork(id)) location.reload();
+      else if (A.work) $('msWork').value = A.work.current || '';
+    });
     instReady.then(i => { $('msInst').textContent = i.name || i.root + ' replay'; });
     $('tabBlind').addEventListener('click', () => setMode('blind'));
     $('tabFree').addEventListener('click', () => setMode('free'));
@@ -867,9 +914,30 @@
     refresh().then(() => {
       const st = A.state;
       if (st && st.loaded && (st.mode === 'free' || st.mode === 'bot' || st.mode === 'trades')) { setMode(st.mode); mount(); } else if (st && st.loaded && st.mode === 'blind') mount();
+      else if (st && st.work && st.work.tab && st.work.tab !== 'blind' && st.mode !== 'none') setMode(st.work.tab);   // the work item's tab
       else if (st && st.trades && st.trades.ready && !st.blind_open) setMode('trades');      // started for the Trades tab: straight to the next trade
     });
     requestAnimationFrame(draw);
   }
-  document.addEventListener('DOMContentLoaded', init);
+  // a link from The Desk (live/markup.html#work=<id>) opens that work item first; a refusal (a grade still open in the item
+  // that is open, or a finished item) says why and leaves the open item as it is
+  const workHash = () => {
+    const m = /^#work=([a-z0-9][a-z0-9-]{0,63})$/.exec(location.hash);
+    if (m) history.replaceState(null, '', location.pathname + location.search);
+    return m && m[1];
+  };
+  async function boot() {
+    const id = workHash();
+    if (id) { A.work = await loadWork(); await openWork(id); }
+    await loadWork();
+    init();
+    window.addEventListener('hashchange', async () => {           // a link to this page while it is open
+      const want = workHash();
+      if (!want) return;
+      workMsg('');
+      await loadWork();
+      if (A.work && want !== A.work.current && await openWork(want)) location.reload();
+    });
+  }
+  document.addEventListener('DOMContentLoaded', boot);
 })();

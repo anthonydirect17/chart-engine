@@ -30,6 +30,9 @@
 //  11. PASS, then "my trade instead" (M) with --trade-exits=t5: nothing of the outcome before his trade is saved or declined,
 //      the .mine.json files (instead, none), the reveal's Your trade instead row, and only the t5 legs drawn (never the
 //      primary target).
+//  12. The Work list (--work, items staged with tools/markup_work.py): offered with counts and no paths, a stopped set listed
+//      but not offered, picking an item opens it, a link (#work=) is refused while a trade is open and says why, then opens
+//      once the grade is saved, and another origin allowed with --allow-origin reads /api/work and nothing else.
 //   npm run smoke:markup     (PYTHON=py to pick the interpreter; CHROMIUM_PATH to use a preinstalled browser; SHOTS_DIR)
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -756,6 +759,75 @@ try {
   check(!sub(ip.rec, kp).responses.some(r => /\/api\/trades\/result/.test(r.url) && /"yours"/.test(r.body)), 'no Your trade in the result of a PASS without one');
   check(!ip.rec.errors.length, 'instead: no page errors (' + ip.rec.errors.join('; ') + ')');
   await ip.page.close();
+
+  console.log('12. the Work list (--work): staged items, switching, the lock, a link from The Desk, the Desk origin');
+  {
+    const WP = PORT + 9, DP = PORT + 10, wd = path.join(tmp, 'work'), seenNone = path.join(tmp, 'seen-none.csv');
+    fs.writeFileSync(seenNone, '');
+    const tool = args => execFileSync(PY, [path.join(root, 'tools', 'markup_work.py')].concat(args), { encoding: 'utf8' });
+    const common = ['--work=' + wd, '--seen=' + seenNone];
+    tool(['add', ...common, '--id=sweeps', '--title=Sweeps blind', '--marks=' + path.join(tmp, 'w-sweeps')]);
+    tool(['add', ...common, '--id=labels', '--title=Label set A', '--created=2026-10-06', '--marks=' + path.join(tmp, 'w-labels'),
+      '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py'), '--trade-labels-only', '--trade-target=3', '--trade-variant=TM', tFlags[0]]);
+    tool(['add', ...common, '--id=old-set', '--title=Old practice set', '--marks=' + path.join(tmp, 'w-old')]);
+    tool(['status', '--work=' + wd, '--id=old-set', '--set=stopped']);
+    const desk = `http://127.0.0.1:${DP}`;
+    const child = spawn(PY, [path.join(root, 'tools', 'markup_studio.py'), '--work=' + wd, '--source=npz', '--data=' + dataDir, '--port=' + WP,
+      '--no-browser', '--allow-origin=' + desk], { stdio: ['ignore', 'pipe', 'inherit'] });
+    servers.push(child);
+    await new Promise(r => child.stdout.once('data', r));
+    const work = () => fetch(`http://127.0.0.1:${WP}/api/work`).then(r => r.json());
+    const w0 = await until(() => work().catch(() => null), 10000);
+    check(!!w0 && w0.current === null && w0.items.map(i => i.id).join() === 'labels,sweeps,old-set', 'work: three items offered, active first, nothing open at the first start (' + (w0 && w0.items.map(i => i.id)) + ')');
+    check(!!w0 && !JSON.stringify(w0).includes(tmp), 'work: the list carries no folders or file paths');
+    const wp = await openPage(WP);
+    await until(() => wp.page.evaluate(() => !document.getElementById('msWorkBox').hidden), 8000);
+    const opts = await wp.page.evaluate(() => [...document.getElementById('msWork').options].map(o => [o.value, o.textContent, o.disabled]));
+    check(opts.some(o => o[0] === 'labels' && o[1].includes('Label set A') && o[1].includes('0 of 3 graded') && !o[2]) &&
+      opts.some(o => o[0] === 'old-set' && o[2] && o[1].includes('stopped')), 'work: the Work list shows titles, kinds and counts; the stopped set is listed, not offered (' + JSON.stringify(opts) + ')');
+    const st0 = await until(() => wp.page.evaluate(() => document.getElementById('msStatus').textContent).then(t => t.includes('Work list') && t), 5000) || '';
+    check(st0.includes('pick one from the Work list'), 'work: with nothing open the page says to pick from the Work list (' + st0 + ')');
+    await shot(wp.page, 'markup-work-list.png');
+    await Promise.all([wp.page.waitForEvent('load'), wp.page.selectOption('#msWork', 'labels')]);
+    const lt = await tradeOpen(WP, 1);
+    check(!!lt && lt.labels_only && lt.work.current === 'labels' && !('date' in lt), 'work: picking the label set opens it on the Trades tab at the first trade, no date (' + (lt && lt.work.current) + ')');
+    await chartsReady(wp.page);
+    // a link while the trade is open and ungraded: refused, said on the page, the label set stays open
+    await wp.page.goto(`http://localhost:${WP}/live/markup.html#work=sweeps`);
+    const why = await until(() => wp.page.evaluate(() => !document.getElementById('msWorkMsg').hidden && document.getElementById('msWorkMsg').textContent), 8000);
+    check(!!why && why.includes('a trade is open') && (await state(WP)).work.current === 'labels' && !(await wp.page.evaluate(() => location.hash)),
+      'work: a link to another item while a trade is open is refused and says why (' + why + ')');
+    await tradeOpen(WP, 1);
+    await chartsReady(wp.page);
+    await sleep(500);
+    await wp.page.mouse.move(5, 5);
+    await wp.page.keyboard.press('t');
+    await until(async () => (await state(WP)).trade.complete, 8000);
+    const w1 = await work();
+    check(w1.items.find(i => i.id === 'labels').progress.done === 1, 'work: the list counts the grade (1 of 3)');
+    // a link from The Desk once the grade is saved: the sweeps item opens on the Blind tab, the hash is gone
+    await wp.page.goto(`http://localhost:${WP}/live/markup.html#work=sweeps`);
+    const sw = await until(async () => { const s = await state(WP); return s.work.current === 'sweeps' && s.mode === 'blind' && s; }, 10000);
+    check(!!sw && sw.work.tab === 'blind' && !(await wp.page.evaluate(() => location.hash)), 'work: the link opens the sweeps item on the Blind tab');
+    const shown = await until(() => wp.page.evaluate(() => { const el = document.getElementById('msWork'); return !!el && el.value === 'sweeps'; }).catch(() => false), 8000);
+    check(!!shown, 'work: after the reload the Work list shows the sweeps item open');
+    check(!wp.rec.errors.length, 'work: no page errors (' + wp.rec.errors.join('; ') + ')');
+    await wp.page.close();
+    // The Desk's origin may read the Work list, and nothing else
+    const http = await import('node:http');
+    const deskSrv = http.createServer((q, r) => { r.writeHead(200, { 'Content-Type': 'text/html' }); r.end('<!doctype html><title>desk</title>'); });
+    await new Promise(r => deskSrv.listen(DP, '127.0.0.1', r));
+    try {
+      const dp = await browser.newPage();
+      await dp.goto(desk + '/');
+      const got = await dp.evaluate(async u => {
+        const one = async p => { try { const r = await fetch(u + p, { mode: 'cors', credentials: 'omit' }); return r.status + ':' + (await r.json()).version; } catch (e) { return 'blocked'; } };
+        return [await one('/api/work'), await one('/api/state')];
+      }, `http://127.0.0.1:${WP}`);
+      check(got[0] === '200:1' && got[1] === 'blocked', 'work: The Desk\'s origin reads /api/work and nothing else (' + got.join(', ') + ')');
+      await dp.close();
+    } finally { deskSrv.close(); }
+  }
 } catch (e) {
   failures.push('crashed: ' + (e.stack || e.message));
   console.error(e);

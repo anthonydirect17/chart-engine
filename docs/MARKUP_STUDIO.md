@@ -12,6 +12,34 @@ Grade NQ (or ES) liquidity sweeps on our own charts, blind, so your reads can be
 5. Your grades go to `E:\SchwabDesk_bulk\marks` (one JSON per grade, `marks_log.jsonl`, and `marks_export.csv` from **Export CSV**).
 6. To stop it: Ctrl+C in the window where you ran it. If it says the port is in use, it is already running (or stop the other one).
 
+## The Work list: one Studio, started at logon, no icons
+
+Instead of a starter file per grading set, the Studio can run once in the background with a **work folder** of staged items
+and open any of them from its **Work** list (top left) or from a link, such as The Desk's Studio screen.
+
+1. **Stage an item** (a set's job does this, once): `py -3 tools\markup_work.py add --work=E:\SchwabDesk_bulk\studio_work
+   --id=label-approach --title="Label set 1: approach" --marks=E:\SchwabDesk_bulk\marks_label_approach --bot=PATH
+   --trade-queue=PATH --trade-variant=A80-STP --trade-target=30 --trade-labels-only --created=2026-10-06`. The item is
+   `<work>/<id>.json`; it carries the same settings as the command line flags (`--marks`, `--symbol`, `--bot`, `--trade-*`,
+   `--seen`, `--rule`, `--include-last-only`, and `--tab` for the tab it opens on), written once. Each item has its own marks
+   folder, so its queue, split and grades are its own exactly as before.
+2. **Finish an item**: `py -3 tools\markup_work.py status --work=DIR --id=ID --set=done` (or `stopped`). Finished items stay in
+   the list under "Finished" and are not opened. `py -3 tools\markup_work.py list --work=DIR` prints them with their counts.
+3. **Run the Studio on the folder**: `py -3 tools\markup_studio.py --work=DIR` (the item settings are refused on the command
+   line with `--work`). The Work list shows each item's title, kind (Sweeps, Trades, Label set, Bot), symbol and counts only
+   ("12 of 30 graded"; never an outcome). Picking one opens it and reloads the page; `live/markup.html#work=<id>` does the
+   same from a link. The last item opened opens again at the next start.
+4. **Leaving an item is refused while a grade is open in it** (a blind candidate or a trade not yet graded: the same lock as
+   Free and the Bot tab) or while Run all is running; the page says why and keeps the item open. Grade it (or skip it) first.
+5. **Start it at logon, no window**: `powershell -NoProfile -ExecutionPolicy Bypass -File tools\studio-service\install-studio-task.ps1
+   -Work DIR [-AllowOrigin https://desk.example.com]` registers the scheduled task "Markup Studio" for the signed-in user
+   (pythonw, `--log=<work>\_studio.log`, restart on failure, one instance), starts it and checks it answers.
+   `-Uninstall` removes the task. After a `git pull` of this folder, restart it: `schtasks /End /TN "Markup Studio"` then
+   `schtasks /Run /TN "Markup Studio"`.
+6. **Another page reading the list**: `--allow-origin=URL[,URL]` lets those origins (The Desk) read `GET /api/work` only, the
+   titles and counts with no folders or paths (CORS, with the private network preflight answered). Every other endpoint,
+   opening an item included, stays this page's own.
+
 ## ES
 
 - Run it on ES with ES's own marks folder: `py -3 tools\markup_studio.py --symbol=ES --marks=E:\SchwabDesk_bulk\marks_ES`
@@ -203,6 +231,7 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 
 `--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` (or ES) `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
 `--bot=PATH` (a bot module for the Bot tab)
+`--work=DIR` (the Work list; the item settings come from its items) `--allow-origin=URL[,URL]` `--log=FILE`
 `--trade-queue=PATH` `--trade-variant=ID` `--trade-seed=11` `--trade-skip-days=YYYY-MM-DD[,..]` `--trade-target=300`
 `--trade-notes=PATH` `--trade-exits=ID[,..]` `--trade-labels-only` (the Trades tab; with `--bot`)
 `--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in

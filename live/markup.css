@@ -22,6 +22,9 @@ kbd { font: 500 10px var(--ms-mono); color: var(--ms-text2); border: 1px solid v
 .ms-brand b { font-weight: 600; }
 .ms-mark { width: 4px; height: 16px; background: var(--ms-crimson); border-radius: 1px; }
 .ms-sub { color: var(--ms-muted); font-size: 12px; }
+.ms-work { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ms-text2); }
+.ms-work select { max-width: 280px; }
+.ms-work-msg { color: var(--ms-warn); max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ms-tabs { display: flex; gap: 2px; background: var(--ms-field); border: 1px solid var(--ms-line2); border-radius: 6px; padding: 2px; }
 .ms-tabs button { background: none; border: 0; color: var(--ms-text2); font: 500 12px var(--ms-sans); padding: 3px 12px; border-radius: 4px; cursor: pointer; }
 .ms-tabs button.on { background: var(--ms-accent-deep); color: var(--ms-soft); }

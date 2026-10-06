@@ -29,6 +29,12 @@ Flags (defaults are the HOME PC's folders):
   --trade-notes=PATH                            optional CSV (trade_id, variant, note[, score]) shown only after a grade is saved
   --trade-exits=ID[,ID]                         the exits a graded trade's result shows, in that order (default: all, the bot's order)
   --trade-labels-only                           a label set: grades save as usual, but no result or date is shown and the clock stays at the cut
+  --work=DIR                                    the Work list: staged work items (tools/markup_work.py), one opened at a time from
+                                                the page's Work list or live/markup.html#work=<id>; each item carries the flags above
+                                                (--marks, --symbol, --bot, --trade-*, ...), so they are refused on the command line
+  --allow-origin=URL[,URL]                      pages of other origins (The Desk) that may read GET /api/work, the Work list's
+                                                titles and counts; nothing else
+  --log=FILE                                    print to FILE instead of the console (the logon task: tools/studio-service)
 Days are split once into bot days and grading days (<marks>/bot_split_v1.json, never rewritten): the blind queue offers
 grading days only, the Bot tab bot days only. A split made for another symbol is refused (core.check_split).
 The Trades tab's queue (<marks>/trade_queue_v1.json) is written once too; flags that disagree with it are refused.
@@ -61,6 +67,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import markup_core as core  # noqa: E402
+import markup_work as work  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERSION = 'markup-studio-1'
@@ -1578,6 +1585,22 @@ class Studio:
         dest, n = core.export_trade_grades(self.marks, self.tgrades)
         return {'file': dest, 'rows': n}
 
+    def switch_msg(self):
+        """Why the Work list cannot leave this item now (a grade open, or Run all writing its files), else None."""
+        with self.lock:
+            msg = self.locked_msg('another work item')
+            if msg:
+                return msg
+            if self.runall['running']:
+                return 'Run all is still running: wait for it to finish, then open another work item'
+            return None
+
+    def close(self):
+        """The Work list opened another item: stop the clock and close the charts' connections (the page reloads)."""
+        with self.lock:
+            self.playing = False
+            self._drop_clients()
+
     # ---------------------------------------------------------------- the charts' WebSocket (read only)
     def _drop_clients(self):
         for c in list(self.clients):
@@ -1640,6 +1663,71 @@ class Studio:
             if c.ready and c.sent < n:
                 c.send_many([tick_msg(self.day, i, self.symbol) for i in range(c.sent, n)])
                 c.sent = n
+
+
+class Host:
+    """--work=DIR: one Studio at a time, opened from the work folder's items (tools/markup_work.py). The Work list (GET
+    /api/work, counts only, no paths) offers the active items; opening one (POST /api/work/open) builds its Studio exactly as
+    its command line flags would, and is refused while the open item has a grade open (the same lock as Free and the Bot
+    tab) or Run all running. A failed open leaves the current item as it was. The last opened item opens again at start."""
+
+    def __init__(self, folder, make_studio):
+        self.folder, self.make = folder, make_studio
+        self.lock = threading.Lock()
+        self.studio, self.current, self.title, self.tab = None, None, None, None
+
+    def listing(self):
+        items, problems = work.read_work(self.folder)
+        return {'version': 1, 'current': self.current, 'items': [work.public(it) for it in items],
+                'problems': [{'file': n, 'reason': why} for n, why in problems]}
+
+    def item(self, wid):
+        items, _ = work.read_work(self.folder)
+        return next((it for it in items if it['id'] == wid), None)
+
+    def open(self, wid, background=True):
+        if not isinstance(wid, str) or not work.ID_RE.match(wid):
+            raise Refused('no such work item')
+        with self.lock:
+            it = self.item(wid)
+            if it is None:
+                raise Refused(f'no work item {wid} (or its file has a problem: see the Work list)')
+            if it['status'] != 'active':
+                raise Refused(f'{it["title"]} is {it["status"]}: it is listed, not opened')
+            if wid == self.current and self.studio is not None:
+                return self.listing()
+            cur = self.studio
+            msg = cur.switch_msg() if cur is not None else None
+            if msg:
+                raise Refused(msg)
+            try:
+                new = self.make(it)
+            except (TradeQueueError, BotError, OSError, ValueError) as e:
+                raise Refused(f'{it["title"]} cannot open: {e}') from e
+            new.start_scan(background)
+            if cur is not None:
+                cur.close()
+            self.studio, self.current, self.title, self.tab = new, wid, it['title'], work.start_tab(it)
+            work.write_last(self.folder, wid)
+            log(f'work item opened: {wid}')
+        return self.listing()
+
+    def open_last(self, background=True):
+        wid = work.read_last(self.folder)
+        if wid:
+            try:
+                self.open(wid, background)
+            except Refused as e:
+                log(f'the last work item did not open: {e}')
+
+    def state(self):
+        st = self.studio
+        w = {'current': self.current, 'title': self.title, 'tab': self.tab}
+        if st is None:
+            return {'mode': 'none', 'loaded': False, 'version': VERSION, 'work': w}
+        s = st.state()
+        s['work'] = w
+        return s
 
 
 def ref_of(gid):
@@ -1770,9 +1858,19 @@ TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=u
          '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png'}
 
 
-def make_handler(studio, port):
+NO_ITEM = 'no work item is open: pick one from the Work list'
+
+
+def make_handler(target, port, allow_origins=()):
+    """target: a Studio, or a Host (--work) whose current Studio answers. allow_origins: pages of other origins (The Desk)
+    that may read GET /api/work only, the Work list's counts; every other path stays this page's own."""
     own = {f'http://localhost:{port}', f'http://127.0.0.1:{port}'}
     hosts = {f'localhost:{port}', f'127.0.0.1:{port}'}
+    host = target if isinstance(target, Host) else None
+    allowed = frozenset(o.rstrip('/') for o in allow_origins if o)
+
+    def cur():
+        return host.studio if host is not None else target
 
     class H(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
@@ -1780,31 +1878,57 @@ def make_handler(studio, port):
         def log_message(self, *a):
             pass
 
-        def _gate(self):
+        def _gate(self, shared=False):
+            """None when the request may go on. shared: GET /api/work, which an allowed origin (The Desk) may read too."""
+            self.cors = None
             if self.client_address[0] not in ('127.0.0.1', '::1', '::ffff:127.0.0.1'):
                 return 'this PC only'
             if self.headers.get('Host') not in hosts:
                 return 'bad host'
             o = self.headers.get('Origin')
             if o is not None and o not in own:
+                if shared and o in allowed:
+                    self.cors = o
+                    return None
                 return 'other origins are refused'
             return None
+
+        def do_OPTIONS(self):
+            """The preflight of an allowed origin's GET /api/work (with Chrome's private network header); nothing else."""
+            o = self.headers.get('Origin')
+            ok = (self.client_address[0] in ('127.0.0.1', '::1', '::ffff:127.0.0.1') and self.headers.get('Host') in hosts
+                  and o in allowed and urlparse(self.path).path == '/api/work'
+                  and self.headers.get('Access-Control-Request-Method', 'GET') == 'GET')
+            self.send_response(204 if ok else 403)
+            if ok:
+                self.send_header('Access-Control-Allow-Origin', o)
+                self.send_header('Access-Control-Allow-Methods', 'GET')
+                self.send_header('Access-Control-Max-Age', '600')
+                if self.headers.get('Access-Control-Request-Private-Network') == 'true':
+                    self.send_header('Access-Control-Allow-Private-Network', 'true')
+            self.send_header('Vary', 'Origin')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
 
         def _json(self, code, obj):
             body = json.dumps(obj).encode('utf-8')
             self.send_response(code)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Cache-Control', 'no-store')
+            if getattr(self, 'cors', None):
+                self.send_header('Access-Control-Allow-Origin', self.cors)
+                self.send_header('Vary', 'Origin')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
         def do_GET(self):
-            why = self._gate()
+            u = urlparse(self.path)
+            why = self._gate(shared=u.path == '/api/work')
             if why:
                 return self._json(403, {'error': why})
-            u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            studio = cur()
             if u.path == '/ws' and self.headers.get('Upgrade', '').lower() == 'websocket':
                 return self._ws()
             try:
@@ -1814,8 +1938,14 @@ def make_handler(studio, port):
                     self.send_header('Content-Length', '0')
                     self.end_headers()
                     return
+                if u.path == '/api/work':
+                    if host is None:
+                        return self._json(404, {'error': 'the Studio was not started with --work'})
+                    return self._json(200, host.listing())
                 if u.path == '/api/state':
-                    return self._json(200, studio.state())
+                    return self._json(200, host.state() if host is not None else studio.state())
+                if studio is None and (u.path.startswith('/api/') or u.path.startswith('/markup/')):
+                    return self._json(409, {'error': NO_ITEM})
                 if u.path == '/api/days':
                     return self._json(200, {'days': studio.source.days()})
                 if u.path == '/api/machine':
@@ -1871,7 +2001,14 @@ def make_handler(studio, port):
             if not isinstance(p, dict):
                 return self._json(400, {'error': 'send a JSON object'})
             path = urlparse(self.path).path
+            studio = cur()
             try:
+                if path == '/api/work/open':
+                    if host is None:
+                        return self._json(404, {'error': 'the Studio was not started with --work'})
+                    return self._json(200, host.open(p.get('id')))
+                if studio is None:
+                    return self._json(409, {'error': NO_ITEM})
                 if path == '/api/blind/next':
                     return self._json(200, studio.blind_next())
                 if path == '/api/free/load':
@@ -1955,6 +2092,11 @@ def make_handler(studio, port):
             self.wfile.flush()
             self.close_connection = True
             c = WsClient(self.connection)
+            studio = cur()
+            if studio is None:
+                c.send({'type': 'status', 'level': 'info', 'text': NO_ITEM})
+                c.close()
+                return
             studio.ws_open(c)
             try:
                 for text in c.frames():
@@ -1975,9 +2117,12 @@ class Server(ThreadingHTTPServer):
     allow_reuse_address = os.name != 'nt'
 
 
-def player(studio, stop):
+def player(target, stop):
+    """The replay clock's ticker: the Studio, or (--work) whichever item is open."""
     while not stop.is_set():
-        studio.tick_clock()
+        st = target.studio if isinstance(target, Host) else target
+        if st is not None:
+            st.tick_clock()
         time.sleep(0.04)
 
 
@@ -2043,57 +2188,139 @@ def check(source, symbol, day=None, out=print):
     return 0
 
 
+# the settings a work item carries (tools/markup_work.py): with --work they come from the items, not the command line
+ITEM_FLAGS = ('marks', 'symbol', 'seen', 'rule', 'include-last-only', 'bot', 'trade-queue', 'trade-variant', 'trade-seed',
+              'trade-skip-days', 'trade-target', 'trade-notes', 'trade-exits', 'trade-labels-only')
+DEFAULT_RULE = os.path.join(REPO, 'tools', 'markup_rule_v0.json')
+
+
+def make_source(opt, symbol):
+    """The tick source for a symbol: tickreplay's loader (or, for tests, --source=npz files). A plain ValueError on failure."""
+    data = opt.get('data', r'E:\SchwabDesk_bulk\ticks_packed')
+    if opt.get('source') == 'npz':
+        return NpzSource(data, symbol)
+    tr = opt.get('tickreplay', r'E:\SchwabDesk_bulk\tickreplay')
+    try:
+        return TickReplaySource(tr, data, symbol)
+    except Exception as e:   # noqa: BLE001 - a plain message, not a traceback
+        raise ValueError(f'could not load tickreplay from {tr}: {e} (give its folder with --tickreplay=PATH and the data '
+                         f'with --data=PATH)') from e
+
+
+def studio_for_item(it, source_for):
+    """A work item's Studio, built exactly as its command line flags would build it (tools/markup_work.py keys)."""
+    symbol = core.instrument(it.get('symbol') or 'NQ')['symbol']
+    seen = it['seen'] if 'seen' in it else default_seen(symbol)
+    return Studio(source_for(symbol), it['marks'], it.get('rule') or DEFAULT_RULE, seen, symbol,
+                  include_last_only=bool(it.get('include_last_only')), bot_path=it.get('bot'),
+                  trade_queue=it.get('trade_queue'), trade_variant=it.get('trade_variant'),
+                  trade_seed=int(it.get('trade_seed', core.TRADE_SEED)), trade_target=int(it.get('trade_target', 300)),
+                  trade_skip_days=list(it.get('trade_skip_days') or []), trade_notes=it.get('trade_notes'),
+                  trade_exits=list(it.get('trade_exits') or []), trade_labels_only=bool(it.get('trade_labels_only')))
+
+
+def origins(text):
+    """--allow-origin=URL[,URL]: whole origins only (scheme, host, optional port; no path)."""
+    out = []
+    for o in (x.strip().rstrip('/') for x in (text or '').split(',')):
+        if not o:
+            continue
+        if not re.match(r'^https?://[A-Za-z0-9.-]+(:\d+)?$', o):
+            raise ValueError(f'--allow-origin {o!r}: give an origin such as https://desk.example.com (no path)')
+        out.append(o)
+    return out
+
+
+def log_to(path):
+    """--log=FILE: everything the Studio prints goes to FILE (appended; moved to FILE.1 once past 5 MB), for a start with no
+    window (pythonw, the logon task in tools/studio-service)."""
+    try:
+        if os.path.getsize(path) > 5_000_000:
+            os.replace(path, path + '.1')
+    except OSError:
+        pass
+    f = open(path, 'a', encoding='utf-8', buffering=1)
+    sys.stdout = sys.stderr = f
+    print(f'--- Markup Studio starting {datetime.now().isoformat(timespec="seconds")} (pid {os.getpid()}) ---', flush=True)
+
+
 def main(argv=None):
     args = argv if argv is not None else sys.argv[1:]
     opt = dict(a[2:].split('=', 1) if '=' in a else (a[2:], '1') for a in args if a.startswith('--'))
+    if opt.get('log'):
+        log_to(opt['log'])
     port = int(opt.get('port', 8790))
     if port == 8765:
         sys.exit('port 8765 is ChartBridge\'s; pick another')
     try:
+        allow = origins(opt.get('allow-origin'))
+    except ValueError as e:
+        sys.exit(f'Markup Studio: {e}')
+    try:
         symbol = core.instrument(opt.get('symbol', 'NQ'))['symbol']
     except ValueError as e:
         sys.exit(f'Markup Studio: {e}')
-    data = opt.get('data', r'E:\SchwabDesk_bulk\ticks_packed')
-    marks = opt.get('marks', r'E:\SchwabDesk_bulk\marks')
-    if opt.get('source') == 'npz':
-        source = NpzSource(data, symbol)
-    else:
-        tr = opt.get('tickreplay', r'E:\SchwabDesk_bulk\tickreplay')
-        try:
-            source = TickReplaySource(tr, data, symbol)
-        except Exception as e:   # noqa: BLE001 - a plain message, not a traceback
-            sys.exit(f'Markup Studio could not load tickreplay from {tr}: {e}\nGive its folder with --tickreplay=PATH and the data with --data=PATH.')
     if 'check' in opt:
+        try:
+            source = make_source(opt, symbol)
+        except ValueError as e:
+            sys.exit(f'Markup Studio {e}')
         try:
             sys.exit(check(source, symbol, None if opt['check'] == '1' else opt['check']))
         except (TickReplayError, ValueError) as e:
             sys.exit(f'CHECK FAILED: {e}')
-    seen = opt['seen'].split(',') if opt.get('seen') else default_seen(symbol)
-    if not opt.get('seen') and symbol != 'NQ':
-        log(f'already-seen: the default files are NQ events, not used for {symbol} (give --seen=CSV[,CSV] to exclude {symbol} ones)')
+    if 'work' in opt:
+        clash = [f for f in ITEM_FLAGS if f in opt]
+        if clash:
+            sys.exit('Markup Studio: with --work each work item carries its own settings; leave out ' +
+                     ', '.join('--' + f for f in clash) + ' (tools/markup_work.py add stages an item)')
+        folder = opt['work']
+        if not os.path.isdir(folder):
+            sys.exit(f'Markup Studio: the work folder {folder} does not exist')
+        sources = {}
+
+        def source_for(sym):
+            if sym not in sources:
+                sources[sym] = make_source(opt, sym)
+            return sources[sym]
+
+        target = Host(folder, lambda it: studio_for_item(it, source_for))
+        target.open_last()
+        where = f'work items in {folder}'
+    else:
+        marks = opt.get('marks', r'E:\SchwabDesk_bulk\marks')
+        try:
+            source = make_source(opt, symbol)
+        except ValueError as e:
+            sys.exit(f'Markup Studio {e}')
+        seen = opt['seen'].split(',') if opt.get('seen') else default_seen(symbol)
+        if not opt.get('seen') and symbol != 'NQ':
+            log(f'already-seen: the default files are NQ events, not used for {symbol} (give --seen=CSV[,CSV] to exclude {symbol} ones)')
+        try:
+            target = Studio(source, marks, opt.get('rule', DEFAULT_RULE), seen, symbol,
+                            include_last_only='include-last-only' in opt, bot_path=opt.get('bot'),
+                            trade_queue=opt.get('trade-queue'), trade_variant=opt.get('trade-variant'),
+                            trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)), trade_target=int(opt.get('trade-target', 300)),
+                            trade_skip_days=[x for x in opt.get('trade-skip-days', '').split(',') if x.strip()],
+                            trade_notes=opt.get('trade-notes'),
+                            trade_exits=[x.strip() for x in opt.get('trade-exits', '').split(',') if x.strip()],
+                            trade_labels_only='trade-labels-only' in opt)
+        except TradeQueueError as e:
+            sys.exit(f'Markup Studio: the Trades tab cannot start: {e}')
+        except (OSError, ValueError) as e:
+            sys.exit(f'cannot use the marks folder {marks}: {e}\nGive another with --marks=PATH.')
+        where = f'marks in {marks}'
     try:
-        studio = Studio(source, marks, opt.get('rule', os.path.join(REPO, 'tools', 'markup_rule_v0.json')), seen, symbol,
-                        include_last_only='include-last-only' in opt, bot_path=opt.get('bot'),
-                        trade_queue=opt.get('trade-queue'), trade_variant=opt.get('trade-variant'),
-                        trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)), trade_target=int(opt.get('trade-target', 300)),
-                        trade_skip_days=[x for x in opt.get('trade-skip-days', '').split(',') if x.strip()],
-                        trade_notes=opt.get('trade-notes'),
-                        trade_exits=[x.strip() for x in opt.get('trade-exits', '').split(',') if x.strip()],
-                        trade_labels_only='trade-labels-only' in opt)
-    except TradeQueueError as e:
-        sys.exit(f'Markup Studio: the Trades tab cannot start: {e}')
-    except (OSError, ValueError) as e:
-        sys.exit(f'cannot use the marks folder {marks}: {e}\nGive another with --marks=PATH.')
-    try:
-        server = Server(('127.0.0.1', port), make_handler(studio, port))
+        server = Server(('127.0.0.1', port), make_handler(target, port, allow))
     except OSError as e:
         sys.exit(f'port {port} is in use (is the Studio already running?): {e}')
-    studio.start_scan()
+    if not isinstance(target, Host):
+        target.start_scan()
     server.daemon_threads = True
     stop = threading.Event()
-    threading.Thread(target=player, args=(studio, stop), daemon=True).start()
+    threading.Thread(target=player, args=(target, stop), daemon=True).start()
     url = f'http://localhost:{port}/live/markup.html'
-    print(f'Markup Studio on {url}  (marks in {marks}; Ctrl+C to stop)', flush=True)
+    print(f'Markup Studio on {url}  ({where}; Ctrl+C to stop)', flush=True)
     if 'no-browser' not in opt:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
