@@ -35,6 +35,9 @@
   fill and exits; no other trade's orders, no events). With `--trade-exits`, the listed exits' own legs from the optional
   result key `exit_orders`, named ("t5 target"), else the primary target named "bot primary target". The Bot tab is
   unchanged.
+- Markup Studio Trades tab: **label sets** (`--trade-labels-only`). The grade saves as usual, but no result, date or trade
+  of his is shown, and the clock stays at the cut while a trade is open; the queue records `labels_only` and a start with
+  the other setting is refused.
 
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 

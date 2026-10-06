@@ -182,6 +182,12 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
   `yours_orders` (your orders cut at the clock exactly as the bot's: from `t_from <= clock`, `t_to` clipped, status once
   ended) and `yours_trade` (your fill once `entry_t <= clock`, its exit `exits.yours` once `exit_t <= clock`).
 
+- **Label sets** (`--trade-labels-only`): a small queue graded for its labels only. The grade (label, chips, reason,
+  confidence) saves as usual, but no result, date or trade of yours is ever shown: the result after the save holds the
+  label and chips only, and step, play and jump are refused while a trade is open (the clock stays at the cut; Next goes
+  to the next one). The queue file records `labels_only`, and a start whose flag disagrees with it is refused either way,
+  so a label set cannot later be opened with results shown.
+
 ### The bot contract's optional parts (Trades tab only; the Studio never requires them)
 
 - `simulate(day, prior, spec) -> dict`: your own trade on the bot's own fill law. The Studio builds `spec` from the stage 2
@@ -198,7 +204,7 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 `--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` (or ES) `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
 `--bot=PATH` (a bot module for the Bot tab)
 `--trade-queue=PATH` `--trade-variant=ID` `--trade-seed=11` `--trade-skip-days=YYYY-MM-DD[,..]` `--trade-target=300`
-`--trade-notes=PATH` (the Trades tab; with `--bot`)
+`--trade-notes=PATH` `--trade-exits=ID[,..]` `--trade-labels-only` (the Trades tab; with `--bot`)
 `--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
 `tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort; those are NQ
 events, so with `--symbol=ES` there is no default and the window says so).
