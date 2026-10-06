@@ -238,6 +238,8 @@ try {
   await control(PORT, 'price', { root: 'NQ', p: 31053.75 });
   await control(PORT, 'hold', { root: 'NQ' });
   const qRow = await until(async () => { const r = await page.evaluate(() => { const row = document.querySelector('.ws-panel.quotes [data-root="NQ"]'); return row ? [...row.querySelectorAll('[data-q]')].reduce((o, e) => (o[e.dataset.q] = e.textContent, o), {}) : null; }); return r && r.last === '31,053.75' ? r : null; }, 'the NQ quote', 8000);
+  const qRoots = await page.evaluate(() => [...document.querySelectorAll('.ws-panel.quotes')].map(b => [...b.querySelectorAll('[data-root]')].map(r => r.dataset.root).join(',')));
+  check(qRoots.length > 0 && qRoots.every(x => x === 'NQ,ES'), '1.16.0: every Quote board has rows for NQ and ES only (' + JSON.stringify(qRoots) + ')');
   if (qRow) {
     const chg = 31053.75 - nqSet, pct = chg / nqSet * 100;
     const fmt = (v, d) => (v > 0 ? '+' : v < 0 ? '-' : '') + Math.abs(v).toFixed(d).replace(/\B(?=(\d{3})+(?!\d))/g, ',');

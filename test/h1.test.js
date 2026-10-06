@@ -184,6 +184,12 @@ test('quote board: change and percent from the prior settlement, blank without o
   assert.deepEqual(W.sessionRange([], now), { high: null, low: null });
 });
 
+test('quote board (1.16.0, Anthony 2026-10-05): rows for NQ and ES only; the charts and the ticket keep every root', () => {
+  assert.deepEqual(W.QUOTE_ROOTS, ['NQ', 'ES'], 'the MNQ and MES rows are gone');
+  assert.deepEqual(W.ROOTS, ['MNQ', 'NQ', 'MES', 'ES'], 'display only: every configured root still charts and trades');
+  for (const r of W.QUOTE_ROOTS) assert.ok(W.ROOTS.includes(r), r + ' is a configured root');
+});
+
 test('the workspace keeps an Account panel and a Quote board in its layouts (no instrument)', () => {
   assert.deepEqual(W.cleanPanel({ id: 'a', type: 'account', root: 'NQ', x: 10, y: 3, w: 2, h: 2 }), { id: 'a', type: 'account', x: 10, y: 3, w: 2, h: 2 });
   assert.deepEqual(W.cleanPanel({ id: 'q', type: 'quotes', x: 10, y: 5, w: 2, h: 1 }), { id: 'q', type: 'quotes', x: 10, y: 5, w: 2, h: 1 });

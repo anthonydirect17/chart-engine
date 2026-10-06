@@ -62,7 +62,7 @@ readout** on every chart (the bar countdown and the ATR), shown on small panels 
 hover, the hit areas and the x as before); a note when a press on an order does nothing ("Armed is off: arm to move or
 cancel orders", or "Armed went off: ChartBridge reconnected"); and two new panels: the **Account panel** (today's open,
 realized and day P&L and trades, then Positions with Close, Orders with x, and Fills with each flat-to-flat trade's P&L)
-and the **Quote board** (NQ, MNQ, ES, MES: last, change and % from the prior settlement, the session's high and low).
+and the **Quote board** (NQ and ES: last, change and % from the prior settlement, the session's high and low).
 
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).

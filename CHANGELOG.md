@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased: 1.16.0 (in progress)
+
+- **Quote board: NQ and ES only** (Anthony 2026-10-05): the MNQ and MES rows are gone (`QUOTE_ROOTS` in
+  `live/workspace.js`). Display only: the charts and the order ticket still trade every configured root.
+
 ## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
 
 - **Markup Studio** (`tools/markup_studio.py`, `live/markup.html`): grade NQ liquidity sweeps blind on the chart's own Range 40

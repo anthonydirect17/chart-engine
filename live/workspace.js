@@ -31,6 +31,9 @@
 const COLS = 12, ROWS = 6, MIN_W = 2, MIN_H = 1, MAX_PANELS = 12, MAX_LAYOUTS = 50, NAME_MAX = 40;
 /* The same lists as LivePrefs.ROOTS and LivePrefs.TFS in live.js (a test checks they match). */
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
+/* 1.16.0 (Anthony 2026-10-05): the Quote board's rows, NQ and ES only. Display only: the charts and the order ticket still
+   trade every root in ROOTS. */
+const QUOTE_ROOTS = ['NQ', 'ES'];
 const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
 /* 1.15.0: NinjaTrader's own 4h, 1D and 1W bars (ChartBridge 0.3.7 htf); with an older ChartBridge the choices show and say
    what they need */
@@ -412,7 +415,7 @@ return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
-  roundTrips, fillsToday, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
+  roundTrips, fillsToday, QUOTE_ROOTS, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -1413,8 +1416,8 @@ function quoteOpen(q) {
 }
 const quoteOf = r => QT.get(r) || null;
 
-/* ---------------- the Quote board: NQ, MNQ, ES, MES (the mockup's order); read only */
-const QUOTE_ROOTS = ['NQ', 'MNQ', 'ES', 'MES'];
+/* ---------------- the Quote board: NQ and ES (1.16.0, Anthony 2026-10-05; the micros' rows are gone); read only */
+const QUOTE_ROOTS = W.QUOTE_ROOTS;
 /* Rows are small grids (ws-grid-rows, workspace.css): on a narrow panel the change and percent, and the high and low, stack
    in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel). */
 function mountQuotes(v) {

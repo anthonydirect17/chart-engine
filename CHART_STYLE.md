@@ -554,7 +554,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today); its x cancels an order of any
   instrument (Armed). On a narrow panel (under 360 px)
   the summary goes two by two and each pair of columns stacks in one cell, so nothing is cut at 1366 px.
-- **Quote board (1.15.0):** NQ, MNQ, ES, MES: last, change and % from the prior settlement (buy green or sell red; blank
+- **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
   stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
 - **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures
