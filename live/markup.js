@@ -593,6 +593,14 @@
   }
   function showResult(r) {
     A.tres = r;
+    if (r.hidden) {                                      // a label set (--trade-labels-only): the grade only, no outcome
+      $('tResHead').textContent = r.label + ' saved.  Label set: no result is shown.' + (r.chips && r.chips.length ? '  Labels: ' + r.chips.join(', ') : '');
+      $('tResult').textContent = '';
+      showYours(null);
+      $('tOpinionBox').hidden = true;
+      $('secTResult').hidden = false;
+      return;
+    }
     $('tResHead').textContent = r.label + (r.yours && r.yours.kind === 'instead' ? ' saved, your trade instead.  ' : ' saved.  ') + r.date + '  trade ' + r.trade_id + '  ' + r.dir + ' ' + fmtC(r.entry) + ' at ' + r.entry_tod;
     const t = $('tResult'); t.textContent = '';
     head(t, ['Exit', 'Result', 'Points', 'R', 'At']);

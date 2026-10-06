@@ -28,6 +28,7 @@ Flags (defaults are the HOME PC's folders):
   --trade-target=300                            the progress line's target
   --trade-notes=PATH                            optional CSV (trade_id, variant, note[, score]) shown only after a grade is saved
   --trade-exits=ID[,ID]                         the exits a graded trade's result shows, in that order (default: all, the bot's order)
+  --trade-labels-only                           a label set: grades save as usual, but no result or date is shown and the clock stays at the cut
 Days are split once into bot days and grading days (<marks>/bot_split_v1.json, never rewritten): the blind queue offers
 grading days only, the Bot tab bot days only. A split made for another symbol is refused (core.check_split).
 The Trades tab's queue (<marks>/trade_queue_v1.json) is written once too; flags that disagree with it are refused.
@@ -293,7 +294,7 @@ class Studio:
 
     def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None,
                  trade_queue=None, trade_variant=None, trade_seed=core.TRADE_SEED, trade_skip_days=(), trade_target=300,
-                 trade_notes=None, trade_exits=()):
+                 trade_notes=None, trade_exits=(), trade_labels_only=False):
         self.inst = core.instrument(symbol)                  # an unknown symbol is a ValueError, never NQ by default
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, self.inst['symbol']
         self.tick = self.inst['tick']
@@ -340,6 +341,9 @@ class Studio:
         self.yours, self.yours_lock, self.t_revealed = {}, threading.Lock(), set()    # qid -> his trade simulated (memory only)
         self.notes, self.notes_sha = None, None
         self.trade_exits = tuple(trade_exits or ())         # --trade-exits: the exits a graded trade's result shows
+        # --trade-labels-only: a label set. The grade saves as usual, but no result, date or trade of his is shown, and
+        # the clock never leaves the cut while a set trade is open (replaying forward would show the outcome)
+        self.trade_labels_only = bool(trade_labels_only)
         if self.trade_exits and self.bot:
             unknown = [x for x in self.trade_exits if x not in self.bot['exit_ids']]
             if unknown:
@@ -592,9 +596,14 @@ class Studio:
         if self.trade_open():
             raise Refused('in the Trades tab the clock stays at the cut (after ADJUST it steps one candle at a time) until the grade is saved')
 
+    def _labels_hold(self):
+        if self.trade_labels_only and self.mode == 'trades' and self.trade is not None:
+            raise Refused('a label set shows no result: the clock stays at the cut (Next goes to the next one)')
+
     def step(self):
         with self.lock:
             self._need_day()
+            self._labels_hold()
             if self.trade_open() and self._tstage() == 1:
                 raise Refused('stage 1 is graded at the cut: press T, A or P first (after A the candles step)')
             self.playing = False
@@ -607,6 +616,7 @@ class Studio:
     def play(self, speed):
         with self.lock:
             self._need_day()
+            self._labels_hold()
             self._blind_locked()
             if speed not in SPEEDS:
                 raise Refused('speed must be one of 1, 5, 20, 60')
@@ -621,6 +631,7 @@ class Studio:
     def jump(self, tod=None, minutes=None):
         with self.lock:
             self._need_day()
+            self._labels_hold()
             self._blind_locked()
             if minutes is not None:
                 m = float(minutes)
@@ -668,12 +679,15 @@ class Studio:
             if self.day is not None:
                 s.update(clock_utc_ms=self.clock, clock_tod=core.fmt_tod(core.utc_to_wall(self.clock)), steps=self.steps,
                          graded=self.graded, level=self._level()[0])
-                if self.mode in ('free', 'bot') or (self.mode == 'trades' and self.trade and self._tdone()):
+                if self.mode in ('free', 'bot') or (self.mode == 'trades' and self.trade and self._tdone()
+                                                    and not self.trade_labels_only):
                     s['date'] = self.day.date
                 elif self.cand:
                     s['candidate'] = {'n': self.cand_no, 'ref': ref_of(self.cand['id'])}
             if self.mode == 'trades' and self.trade is not None:
                 s['trade'] = self._tpublic()
+            if self.trade_labels_only:
+                s['labels_only'] = True
             if self.tq is not None or self.tq_error:
                 s['trades'] = {'ready': self.tq is not None, 'counts': self.trade_counts() if self.tq is not None else None}
             if self.mode == 'bot' and self.bot_key:
@@ -1086,11 +1100,17 @@ class Studio:
                 items = core.trade_queue(mine, sha, v['id'], self.bot_days, skip, seed)
                 q = dict(want, source=src, bot=self.bot['name'], items=items,
                          created_utc=datetime.now(timezone.utc).isoformat(timespec='seconds'))
+                if self.trade_labels_only:
+                    q['labels_only'] = True
                 if core.write_once(qpath, q):
                     log(f'trade queue written to {qpath}: {len(items)} trades of {v["id"]} on bot days')
             with open(qpath, encoding='utf-8') as f:
                 q = json.load(f)
             core.check_queue(q, want)
+            if bool(q.get('labels_only')) != self.trade_labels_only:
+                raise ValueError('this queue was written ' + ('as a label set (start with --trade-labels-only)'
+                                                              if q.get('labels_only') else
+                                                              'with results shown (start without --trade-labels-only)'))
         except (OSError, ValueError, AttributeError) as e:
             raise TradeQueueError(str(e)) from e
         if q.get('source') != src:
@@ -1486,6 +1506,8 @@ class Studio:
             if not self._tdone():
                 raise Refused('the result shows once the grade is saved')
             it, t, g = self.trade['item'], self.trade['trade'], self.tgrades[self.trade['item']['qid']]
+            if self.trade_labels_only:                       # a label set: the grade only, nothing about the outcome
+                return {'qid': it['qid'], 'label': g.get('label'), 'hidden': True, 'chips': g.get('chips') or []}
             self.t_revealed.add(it['qid'])
         ids = self._trade_exit_ids(t)
         exits = [dict(id=k, reason=e.get('reason'), points=e.get('points'), r=e.get('r'), exit_tod=core.fmt_tod(e['exit_t']))
@@ -2056,7 +2078,8 @@ def main(argv=None):
                         trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)), trade_target=int(opt.get('trade-target', 300)),
                         trade_skip_days=[x for x in opt.get('trade-skip-days', '').split(',') if x.strip()],
                         trade_notes=opt.get('trade-notes'),
-                        trade_exits=[x.strip() for x in opt.get('trade-exits', '').split(',') if x.strip()])
+                        trade_exits=[x.strip() for x in opt.get('trade-exits', '').split(',') if x.strip()],
+                        trade_labels_only='trade-labels-only' in opt)
     except TradeQueueError as e:
         sys.exit(f'Markup Studio: the Trades tab cannot start: {e}')
     except (OSError, ValueError) as e:
