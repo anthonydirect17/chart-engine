@@ -498,6 +498,8 @@ function syncConn() {
   if (el.dataset.text !== text) { el.dataset.text = text; el.className = 'ws-conn' + (cls ? ' ' + cls : ''); $('wsConnText').textContent = text; }
   const t = versionText();
   if (el.title !== t) el.title = t;
+  // 1.16.0: the update notice's "copied: press F5" goes once the ChartBridge this window talks to is that version
+  if (window.ChartUpdateNotice && window.ChartUpdateNotice.bridge) window.ChartUpdateNotice.bridge(bridgeVer);
 }
 /* 1.14.0 (Anthony): the versions, quietly: the LIVE badge's tooltip and the foot of Settings */
 let bridgeVer = '', bridgeFeatures = [];

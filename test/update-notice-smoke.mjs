@@ -111,12 +111,19 @@ try {
   const w1 = await note(wide);
   check(w1 && w1.text === 'ChartBridge 0.3.4 ready to install (flat, then F5)' && await whole(wide), '1920 px, a page opened after the install: "ChartBridge 0.3.4 ready to install (flat, then F5)" (' + (w1 && w1.text) + ')');
   await wide.close();
-  writeUpdate('build-b', Date.now() - 1000, { copied: '0.3.4' });
+  writeUpdate('build-b', Date.now() - 1000, { copied: '0.3.5' });   // the fake's hello says 0.3.4: F5 not pressed yet
   await poll(page);
   const n3 = await note(page);
-  check(n3 && /ChartBridge 0\.3\.4(: F5 when flat| copied: press F5 when flat)$/.test(n3.text) && await whole(page), 'ChartBridge copied, waiting for F5: ' + (n3 && n3.text));
+  check(n3 && /ChartBridge 0\.3\.5(: F5 when flat| copied: press F5 when flat)$/.test(n3.text) && await whole(page), 'ChartBridge copied, waiting for F5: ' + (n3 && n3.text));
   check(same(before.obar, (await boxes(page)).obar) && same(before.stage, (await boxes(page)).stage), 'still nothing moved with the longer notice');
   await page.screenshot({ path: path.join(out, 'update-notice-1440-chartbridge.png'), clip: { x: 0, y: 760, width: 1440, height: 100 } });
+  // 1.16.0: the ChartBridge this page is connected to (its hello: 0.3.4) is already the copied version: no F5 note, at once
+  writeUpdate('build-b', Date.now() - 1000, { copied: '0.3.4' });
+  await poll(page);
+  const n3b = await note(page);
+  check(n3b && n3b.said === 'Update ready: reload when flat', '1.16.0: copied 0.3.4 and the hello says 0.3.4: the F5 note is gone, the page\'s own stays (' + (n3b && n3b.said) + ')');
+  check(await page.evaluate(() => { window.ChartUpdateNotice.bridge('0.3.3'); const a = document.querySelector('#updNote [role=status]').textContent; window.ChartUpdateNotice.bridge('fake-0.3.4'); const b = document.querySelector('#updNote [role=status]').textContent; return /copied: press F5 when flat$/.test(a) && b === 'Update ready: reload when flat'; }),
+    '1.16.0: an older hello brings the F5 note back, the copied version takes it away again, with no new read');
   // the page's own minute: it polls by itself (no test hook) and still never reloads
   check(await page.evaluate(() => window.__loadedOnce) === 'yes' && navigations === 0, 'still no reload');
 

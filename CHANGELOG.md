@@ -4,6 +4,11 @@
 
 - **Quote board: NQ and ES only** (Anthony 2026-10-05): the MNQ and MES rows are gone (`QUOTE_ROOTS` in
   `live/workspace.js`). Display only: the charts and the order ticket still trade every configured root.
+- **The F5 note clears itself**: "ChartBridge x copied: press F5 when flat" (`live/update-notice.js`) goes as soon as the
+  ChartBridge the page is connected to (its hello version) is x or newer, not at the updater's next run, and comes back if a
+  later hello is older. The page's connections tell the notice their hello version (`ChartUpdateNotice.bridge`, after
+  everything else in `live/live.js`'s hello; the workspace's connection badge); nothing is fetched or sent for it. Display
+  only: the order path is not touched. Tests: `test/update-notice.test.js`, `smoke:update`.
 
 ## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
 

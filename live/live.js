@@ -2493,6 +2493,9 @@ function start(container, opt, PAGE) {
         syncAccounts(m.accounts || []);
         subscribe(S.root);
         if (T) T.hello(m);                                 // protocol v2 (m.trading): sign in; ChartBridge 0.2 has no trading field
+        // 1.16.0: the update notice's "copied: press F5" goes once this ChartBridge is that version (display only, after
+        // everything else; a mounted chart has no notice)
+        if (window.ChartUpdateNotice && window.ChartUpdateNotice.bridge) window.ChartUpdateNotice.bridge(bridgeVersion);
         break;
       case 'history':
         if (m.root !== D.root || stale(m)) return;

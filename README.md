@@ -335,7 +335,8 @@ it never moves them; it never reloads anything):
 - **Update ready: reload when flat**: new page files are installed. Reload the page when flat to use them.
 - **ChartBridge x.y.z ready to install (flat, then F5)**: a new ChartBridge is staged. Nothing happens until Anthony
   installs it (below). A Windows notification says the same once, and so do `update.log` and `status.json`.
-- **ChartBridge x.y.z copied: press F5 when flat**: it was copied; it runs after F5 in the NinjaScript Editor.
+- **ChartBridge x.y.z copied: press F5 when flat**: it was copied; it runs after F5 in the NinjaScript Editor. The note goes as soon as
+  the ChartBridge the page is connected to says it is x.y.z or newer (1.16.0).
 - **Page files are being updated: do not reload yet**: files are being replaced right now (a few seconds).
 - **Page update cut off: run update-pc.ps1 status**: an install was cut off (a power loss, a closed lid). Do not
   reload. The next check repairs it by itself; when flat you can run `repair` (page files only, never ChartBridge).

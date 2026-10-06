@@ -10,7 +10,9 @@
  *     over two minutes, or 'interrupted', means the install was cut off: "Page update cut off", never "reload". The page keeps running the code it loaded, so an open trade is never disturbed; it only
  *     says "Update ready: reload when flat".
  *   - ChartBridge: "ChartBridge x.y.z ready to install (flat, then F5)" when the updater has staged a newer one, and
- *     "ChartBridge x.y.z copied: press F5 when flat" once Anthony has copied it and not compiled it yet.
+ *     "ChartBridge x.y.z copied: press F5 when flat" once Anthony has copied it and not compiled it yet. 1.16.0: that note
+ *     goes as soon as the ChartBridge this page is connected to (its hello version, told by the page's own connections
+ *     through ChartUpdateNotice.bridge) is x.y.z or newer, not at the updater's next run. Display only.
  * It never reloads the page, never opens anything, and sits on the status line at the bottom: it never covers the
  * order bar, the chart or anything of the live trade, and never moves them (it takes no room of its own on the line;
  * a smoke sweeps 700 to 1920 px). Nothing is sent anywhere. When an install was cut off and could not be finished,
@@ -21,10 +23,27 @@
  */
 (function () {
   'use strict';
+  /* ---------------- the pure part (unit tested in Node: test/update-notice.test.js) */
+  /** [major, minor, patch] of version text ("0.3.8", "fake-0.3.4"), or null when it names none. */
+  function versionOf(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
+  /** Whether version text v is at least `want`; false when either names no version. */
+  function atLeast(v, want) {
+    const a = versionOf(v), b = versionOf(want);
+    if (!a || !b) return false;
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return true;
+  }
+  /** Whether "ChartBridge `copied` copied: press F5" still applies, given the connected ChartBridge's hello version
+      (`connected`, '' or null before a hello): it goes once the connected one is that version or newer. */
+  function f5Pending(copied, connected) { return !!copied && !atLeast(connected, copied); }
+  const core = { versionOf, atLeast, f5Pending };
+  if (typeof module === 'object' && module.exports && typeof window === 'undefined') { module.exports = core; return; }
+
   const POLL_MS = 60000, SLOW_MS = 600000;       // once a minute; every 10 minutes while there is no update.json
   const STUCK_MS = 120000;                        // an install takes seconds; "installing" for 2 minutes means cut off
   const started = (performance && performance.timeOrigin) || Date.now();
   let base = null, timer = 0, el = null, pageNew = false, shown = { text: '', forms: [''], tip: '' };
+  let lastU = null, connected = '';                // the last update.json read; the connected ChartBridge's hello version
 
   function style() {
     if (document.getElementById('updNoticeStyle')) return;
@@ -100,7 +119,7 @@
     }
     if (cb.mixed) {
       // nothing about F5 or a ChartBridge to install while the files are mixed
-    } else if (cb.copied) {
+    } else if (f5Pending(cb.copied, connected)) {
       parts.push(['ChartBridge ' + cb.copied + ' copied: press F5 when flat', 'ChartBridge ' + cb.copied + ': F5 when flat']);
       tips.push('NinjaTrader > New > NinjaScript Editor > F5 while flat, then check /diag shows ' + cb.copied + '.');
     } else if (cb.ready) {
@@ -131,7 +150,7 @@
   function check() {
     return fetch('update.json', { cache: 'no-store' })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
-      .then(u => { schedule(POLL_MS); const m = messages(u); show(m); return m; },
+      .then(u => { schedule(POLL_MS); lastU = u; const m = messages(u); show(m); return m; },
         () => { schedule(base === null ? SLOW_MS : POLL_MS); return null; })   // keeps what it shows
       .catch(() => { schedule(POLL_MS); return null; });                     // polling never stops
   }
@@ -145,6 +164,14 @@
     const watch = setInterval(() => { if (spot()) { clearInterval(watch); ro.observe(el); } }, 1000);
   }
   window.addEventListener('resize', () => { if (el && !el.hidden) show(shown); });
-  window.ChartUpdateNotice = { checkNow: check };
+  /* A page's connection had ChartBridge's hello (live.js, the workspace): its version. The F5 note goes at once when it
+     is the copied version or newer (and comes back if a later hello is older); nothing is fetched or sent. */
+  function bridge(version) {
+    const v = typeof version === 'string' ? version : '';
+    if (v === connected) return;
+    connected = v;
+    if (lastU) { try { show(messages(lastU)); } catch (e) { /* the notice never breaks its caller's hello */ } }
+  }
+  window.ChartUpdateNotice = Object.assign({ checkNow: check, bridge }, core);
   check();
 })();
