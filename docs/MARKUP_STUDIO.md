@@ -20,7 +20,7 @@ Grade NQ (or ES) liquidity sweeps on our own charts, blind, so your reads can be
 - `--symbol` takes NQ or ES; anything else stops the Studio at startup with the list it knows (never NQ by default).
 - Everything per symbol comes from one table, `INSTRUMENTS` in `tools/markup_core.py`: the tick (0.25 both), $ per point and
   the round trip per contract. NQ $20 a point, $4.50 a round trip; MNQ $2, $1.00; ES $50, $4.50; MES $5, $1.00. The round trips
-  are Anthony's prop account rates; ES and MES cost the same as NQ and MNQ (NinjaTrader's commission table, as of
+  are the prop account rates; ES and MES cost the same as NQ and MNQ (NinjaTrader's commission table, as of
   2026-08-14). Change them there only.
 - The page takes the instrument from the server's hello: the header ("ES replay, read only"), the charts' root and the mark
   tick. The Bot tab's dollars name ES and MES.

@@ -32,7 +32,7 @@ except Exception:                      # noqa: BLE001 - the US rules below are u
 HOLDOUT = date(2026, 4, 1)           # this date and later is the holdout: never listed, loaded, scanned or graded
 # Every instrument's numbers, in this one place: tick size, $ per point and $ per round trip (1 contract, commissions and
 # fees). The Studio runs on a full contract (one with a 'micro') and prices its trades on that contract and its micro.
-# Round trips are Anthony's prop account rates; ES and MES cost the same as NQ and MNQ (NinjaTrader's commission table,
+# Round trips are the prop account rates; ES and MES cost the same as NQ and MNQ (NinjaTrader's commission table,
 # as of 2026-08-14, lists identical fees for ES/NQ and for MES/MNQ).
 INSTRUMENTS = {
     'NQ': {'tick': 0.25, 'point_value': 20.0, 'rt': 4.50, 'micro': 'MNQ'},
