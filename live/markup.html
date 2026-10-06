@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Markup Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="markup.css">
+<!-- Markup Studio (tools/markup_studio.py serves it): two read-only charts on a replay clock, and the grade panel.
+     markup.js loads first: it puts the page's clock on the replay clock and guards blind mode against dates. -->
+<script src="markup.js"></script>
+</head>
+<body>
+<header class="ms-top">
+  <div class="ms-brand"><span class="ms-mark"></span><b>Markup Studio</b><span class="ms-sub"><span id="msInst">replay</span>, read only</span></div>
+  <div class="ms-tabs" role="tablist">
+    <button type="button" role="tab" id="tabBlind" class="on" aria-selected="true">Blind</button>
+    <button type="button" role="tab" id="tabFree" aria-selected="false">Free</button>
+    <button type="button" role="tab" id="tabBot" aria-selected="false">Bot</button>
+    <button type="button" role="tab" id="tabTrades" aria-selected="false">Trades</button>
+  </div>
+  <div class="ms-clock"><span id="msDate" data-dates></span><span id="msClock">--:--:--</span><span class="ms-et">ET</span><span id="msPlay"></span></div>
+  <div class="ms-status" id="msStatus"></div>
+</header>
+<main class="ms-main">
+  <section class="ms-charts">
+    <div class="ms-pane"><div class="ms-pane-head"><span class="ms-pane-name">Range 40</span><div class="chart-live ms-pane-tools" id="toolsRange"></div></div><div class="ms-chart" id="paneRange"></div></div>
+    <div class="ms-pane"><div class="ms-pane-head"><span class="ms-pane-name">1 minute</span><div class="chart-live ms-pane-tools" id="tools1m"></div></div><div class="ms-chart" id="pane1m"></div></div>
+    <div class="ms-summary" id="botSummary" hidden>
+      <div class="ms-row"><span class="ms-h">Run all: every bot day, every variant</span><span class="dim" id="botSumNote"></span><button type="button" class="ms-btn sm" id="btnSumClose">Close</button></div>
+      <table class="ms-table ms-grid" id="botSumMain"></table>
+      <div class="ms-h">By level type and by side</div>
+      <table class="ms-table ms-grid" id="botSumBy"></table>
+    </div>
+  </section>
+  <aside class="ms-panel" id="msPanel">
+    <section class="ms-sec ms-keys" id="secKeys" hidden aria-label="Keys">
+      <div class="ms-h">Keys</div>
+      <ul id="tKeys">
+        <li data-k="T"><kbd>T</kbd> TAKE</li><li data-k="A"><kbd>A</kbd> ADJUST</li><li data-k="P"><kbd>P</kbd> PASS</li>
+        <li data-k="M"><kbd>M</kbd> my trade instead</li>
+        <li data-k="C"><kbd>1</kbd>-<kbd>3</kbd> confidence</li>
+        <li data-k="E"><kbd>E</kbd> entry</li><li data-k="S"><kbd>S</kbd> stop</li><li data-k="G"><kbd>G</kbd> target</li>
+        <li data-k="Y"><kbd>1</kbd>-<kbd>4</kbd> entry type</li><li data-k="R"><kbd>&rarr;</kbd> next candle</li>
+        <li data-k="N"><kbd>Enter</kbd>/<kbd>N</kbd> <span id="tKeyN">save or next</span></li><li data-k="SP"><kbd>Space</kbd> play 5x</li>
+        <li data-k="X"><kbd>X</kbd> seen this day</li><li data-k="ESC"><kbd>Esc</kbd> cancel</li>
+      </ul>
+    </section>
+    <section class="ms-sec" id="secTrades" hidden>
+      <div class="ms-line dim" id="tMsg"></div>
+      <div class="ms-line" id="tProgress"></div>
+      <div class="ms-row">
+        <button type="button" class="ms-btn primary" id="btnTNext">Next trade <kbd>N</kbd></button>
+        <button type="button" class="ms-btn sm" id="btnTSeen">Seen this day before <kbd>X</kbd></button>
+      </div>
+      <div class="ms-line" id="tInfo">No trade open</div>
+      <div class="ms-line dim" id="tOpen"></div>
+      <div class="ms-msg" id="tErr" role="status"></div>
+    </section>
+    <section class="ms-sec" id="secBlind">
+      <button type="button" class="ms-btn primary" id="btnNext">Next candidate</button>
+      <div class="ms-line" id="candInfo">No candidate open</div>
+      <div class="ms-line dim" id="queueInfo"></div>
+    </section>
+    <section class="ms-sec" id="secFree" data-dates hidden>
+      <div class="ms-row">
+        <select id="freeDay" aria-label="Day"></select>
+        <input id="freeTime" value="09:30" size="5" aria-label="Time (ET)">
+        <button type="button" class="ms-btn" id="btnLoad">Load</button>
+      </div>
+    </section>
+    <section class="ms-sec" id="secBot" data-dates hidden>
+      <div class="ms-line dim" id="botMsg"></div>
+      <div class="ms-row">
+        <select id="botDay" aria-label="Bot day"></select>
+        <select id="botVariant" aria-label="Variant"></select>
+        <button type="button" class="ms-btn" id="btnBotLoad">Load</button>
+      </div>
+      <div class="ms-line" id="botHead"></div>
+      <div class="ms-line dim" id="botProg"></div>
+      <div class="ms-msg" id="botErr" role="status"></div>
+    </section>
+    <section class="ms-sec" id="secClock">
+      <div class="ms-row">
+        <button type="button" class="ms-btn" id="btnStep">Next candle</button>
+        <span class="ms-line dim" id="stepCount"></span>
+      </div>
+      <div class="ms-row" id="playRow">
+        <button type="button" class="ms-btn sm" data-speed="1">1x</button>
+        <button type="button" class="ms-btn sm" data-speed="5">5x</button>
+        <button type="button" class="ms-btn sm" data-speed="20">20x</button>
+        <button type="button" class="ms-btn sm" data-speed="60">60x</button>
+        <button type="button" class="ms-btn sm" id="btnPause">Pause</button>
+      </div>
+      <div class="ms-row" id="jumpRow">
+        <input id="jumpTime" placeholder="HH:MM" size="5" aria-label="Jump to (ET)">
+        <button type="button" class="ms-btn sm" id="btnJump">Jump</button>
+      </div>
+      <div class="ms-row" id="revealRow" hidden>
+        <button type="button" class="ms-btn" id="btnReveal">Reveal (play 5x)</button>
+        <button type="button" class="ms-btn" id="btnJump30">Jump 30 min</button>
+        <button type="button" class="ms-btn sm" id="btnPause2">Pause</button>
+      </div>
+    </section>
+    <section class="ms-sec" id="secBotOut" hidden>
+      <div class="ms-h">Events <span class="dim">(newest first, up to the clock)</span></div>
+      <ul class="ms-dis ms-log" id="botEvents"></ul>
+      <div class="ms-h">Trades</div>
+      <table class="ms-table ms-grid" id="botTrades"></table>
+      <div class="ms-h">Net today by exit <span class="dim">(after costs, 1 contract)</span></div>
+      <table class="ms-table" id="botNet"></table>
+      <div class="ms-row">
+        <button type="button" class="ms-btn" id="btnRunAll">Run all bot days</button>
+        <button type="button" class="ms-btn sm" id="btnBotExport">Export</button>
+      </div>
+      <div class="ms-line dim" id="runAllMsg"></div>
+      <div class="ms-msg" id="botExportMsg"></div>
+    </section>
+    <form class="ms-sec" id="gradeForm" autocomplete="off">
+      <div class="ms-h">Setup</div>
+      <div class="ms-seg" id="setupSeg">
+        <label><input type="radio" name="setup" value="SWEEP"><span>SWEEP <kbd>1</kbd></span></label>
+        <label><input type="radio" name="setup" value="RETEST"><span>RETEST <kbd>2</kbd></span></label>
+        <label><input type="radio" name="setup" value="NONE"><span>NONE <kbd>3</kbd></span></label>
+        <label><input type="radio" name="setup" value="WAIT"><span>WAIT <kbd>4</kbd></span></label>
+      </div>
+      <div class="ms-h">Direction</div>
+      <div class="ms-seg two" id="dirSeg">
+        <label><input type="radio" name="direction" value="LONG"><span>LONG <kbd>L</kbd></span></label>
+        <label><input type="radio" name="direction" value="SHORT"><span>SHORT <kbd>S</kbd></span></label>
+      </div>
+      <div class="ms-h">Reason</div>
+      <div class="ms-chips" id="chips"></div>
+      <div class="ms-row"><input id="chipNew" placeholder="Add a chip" aria-label="New chip"><button type="button" class="ms-btn sm" id="chipAdd">Add</button></div>
+      <textarea id="reason" rows="2" placeholder="Your read, in your words"></textarea>
+      <div class="ms-h">Marks <span class="dim">(click a chart; Esc cancels)</span></div>
+      <div class="ms-tools" id="markTools"></div>
+      <div class="ms-tools" id="spanTools"></div>
+      <ul class="ms-marks" id="markList"></ul>
+      <button type="submit" class="ms-btn primary" id="btnSave">Save grade</button>
+      <div class="ms-msg" id="saveMsg" role="status"></div>
+    </form>
+    <section class="ms-sec" id="secDraft" hidden>
+      <div class="ms-h">Rule draft</div>
+      <div id="draftOut"></div>
+    </section>
+    <section class="ms-sec" id="secMachine" hidden>
+      <div class="ms-h">Machine read <span class="dim" id="machineNote"></span></div>
+      <table class="ms-table" id="machineOut"></table>
+    </section>
+    <section class="ms-sec" id="secAgree">
+      <div class="ms-h">Agreement with the draft</div>
+      <div class="ms-line" id="agreeOut">none yet</div>
+      <ul class="ms-dis" id="disList"></ul>
+      <button type="button" class="ms-btn sm" id="btnExport">Export CSV</button>
+      <div class="ms-msg" id="exportMsg"></div>
+    </section>
+    <!-- the Trades tab's grade, adjust and result (after Blind's form: the Blind tab's chips and mark tools come first) -->
+    <section class="ms-sec" id="secTGrade" hidden>
+      <div class="ms-h">Your call <span class="dim">(at the cut; T, A or P saves at once)</span></div>
+      <div class="ms-seg three" id="tLabelSeg">
+        <button type="button" data-label="TAKE">TAKE <kbd>T</kbd></button>
+        <button type="button" data-label="ADJUST">ADJUST <kbd>A</kbd></button>
+        <button type="button" data-label="PASS">PASS <kbd>P</kbd></button>
+      </div>
+      <div class="ms-h">Confidence <span class="dim">(optional)</span></div>
+      <div class="ms-seg three" id="tConfSeg">
+        <button type="button" data-conf="1">1 <kbd>1</kbd></button><button type="button" data-conf="2">2 <kbd>2</kbd></button><button type="button" data-conf="3">3 <kbd>3</kbd></button>
+      </div>
+      <div class="ms-h">Reason <span class="dim">(optional)</span></div>
+      <div class="ms-chips" id="tChips"></div>
+      <textarea id="tReason" rows="2" placeholder="Your read, in your words (Esc leaves the box)"></textarea>
+    </section>
+    <section class="ms-sec" id="secTPass" hidden>
+      <div class="ms-h">PASS saved</div>
+      <div class="ms-line">Your own trade instead? <kbd>M</kbd> to mark it (before any result shows).</div>
+      <div class="ms-line dim">No trade of yours: <kbd>N</kbd>/<kbd>Enter</kbd>/<kbd>Esc</kbd> shows the result.</div>
+    </section>
+    <section class="ms-sec" id="secTAdjust" hidden>
+      <div class="ms-h"><span id="tOwnHead">Your trade</span> <span class="dim">(mark on the chart; candles step with &rarr;)</span></div>
+      <div class="ms-seg four" id="tTypeSeg">
+        <label><input type="radio" name="tEntryType" value="stop-limit" checked><span>stop-limit <kbd>1</kbd></span></label>
+        <label><input type="radio" name="tEntryType" value="stop-market"><span>stop-market <kbd>2</kbd></span></label>
+        <label><input type="radio" name="tEntryType" value="limit"><span>limit <kbd>3</kbd></span></label>
+        <label><input type="radio" name="tEntryType" value="market"><span>market <kbd>4</kbd></span></label>
+      </div>
+      <div class="ms-tools" id="tMarkTools"></div>
+      <ul class="ms-marks" id="tMarkList"></ul>
+      <div class="ms-line ms-note" id="tSideNote" hidden></div>
+      <button type="button" class="ms-btn primary" id="btnTSave2">Save my trade <kbd>Enter</kbd></button>
+    </section>
+    <section class="ms-sec" id="secTResult" data-dates hidden>
+      <div class="ms-h">Result</div>
+      <div class="ms-line" id="tResHead"></div>
+      <table class="ms-table ms-grid" id="tResult"></table>
+      <div class="ms-line ms-yours" id="tYours" hidden></div>
+      <div id="tOpinionBox" hidden>
+        <div class="ms-h">Second opinion</div>
+        <div class="ms-line" id="tOpinion"></div>
+      </div>
+      <div class="ms-line dim">Next trade <kbd>Enter</kbd>/<kbd>N</kbd>, play on <kbd>Space</kbd></div>
+    </section>
+  </aside>
+</main>
+<script src="../src/chart-engine.js"></script>
+<script src="bar-builder.js"></script>
+<script src="order-ticket.js"></script>
+<script src="live.js"></script>
+</body>
+</html>

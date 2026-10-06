@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
+
+- **Markup Studio** (`tools/markup_studio.py`, `live/markup.html`): grade NQ liquidity sweeps blind on the chart's own Range 40
+  and 1 minute charts on a replay clock, with reason chips, role marks and spans, a machine read hidden until the grade is
+  saved, rule draft v0 with a running agreement score, and a CSV export. Read only, port 8790, the holdout (2026-04-01 on)
+  refused everywhere. No change to the live pages, the engine or `nt8/`. See docs/MARKUP_STUDIO.md.
+- Markup Studio: the history starts with the prior kept day's minutes, so the charts draw PDH, PDL, the prior close and the
+  prior day's value area (Anthony 2026-10-03); chip "stop limit on failed candle break".
+- Markup Studio: a **Bot tab** (`--bot=PATH`, a module speaking BOT_API 1) to watch a bot trade a bot day on the replay
+  clock and run it over every bot day with a summary and CSV/JSON files; days split once into bot and grading days
+  (`bot_split_v1.json`, seed 7), the blind queue on grading days only. The Studio holds no trading rule.
+- Markup Studio: **ES** (`--symbol=ES` with its own `--marks` folder). One instrument table (`INSTRUMENTS` in
+  `tools/markup_core.py`: tick, $ per point, round trip; ES and MES cost the same as NQ and MNQ); the header, the charts' root
+  and tick come from the server's hello; the Bot tab and Run all files give dollars as `usd` (1 contract of the symbol) and
+  `usd_micro` (its micro) and name both; new day splits record their symbol and a split of another symbol is refused. NQ
+  dollars unchanged; an unknown symbol stops the Studio at startup.
+- Markup Studio: a **Trades tab** (`--bot` with `--trade-queue=PATH`, a Run all `trades.csv`) to grade the bot's own trades
+  blind, keyboard first: each opens frozen when the bot placed its entry order (ticks before it, the bot's view at it, no
+  fill, outcome or date), `T`/`A`/`P` save TAKE, ADJUST or PASS at once, ADJUST then marks your entry, stop and target, and
+  the reveal shows the date and the bot's result per exit. The queue (`trade_queue_v1.json`, seed 11) and each grade file are
+  written once; flags that disagree with the queue are refused; a bot that does not match the queue's rows is refused;
+  "seen this day" skips a day (`trade_skip_days.json`); the next trade is prefetched; optional reveal-only notes
+  (`--trade-notes`); counts only, never outcomes by label; `trade_grades.csv` export. The test bot gains a variant TM (three
+  trades) and the Bot tab's Run all tests count it.
+- Markup Studio Trades tab: **your trade** after the grade. A bot may offer `simulate(day, prior, spec)` (optional in BOT_API
+  1): once an ADJUST is complete (or a PASS with his trade instead) the reveal shows his own trade's result by the bot's own
+  fill law, a "Your trade" row and line, and the charts draw it labelled YOU, all in one accent (`--ms-yours`, #FF9500);
+  his Entry, Stop and Target marks take the accent once saved. `/api/trades/result` gains `yours`, `/api/trades/view`
+  `yours_orders` and `yours_trade` (cut at the clock like the bot's), only after the grade is complete. **My trade
+  instead**: after P, `M` marks his own trade before any outcome shows (`<qid>.mine.json`, kind `instead`), `N`/`Enter`/`Esc`
+  goes on without one (kind `none`); the reveal waits for that choice. An ADJUST on the other side of the bot's trade is
+  saved with `opposite_side` and a note first. The Trades tab draws **only the trade being graded** (its entry order, legs,
+  fill and exits; no other trade's orders, no events). With `--trade-exits`, the listed exits' own legs from the optional
+  result key `exit_orders`, named ("t5 target"), else the primary target named "bot primary target". The Bot tab is
+  unchanged.
+- Markup Studio Trades tab: **label sets** (`--trade-labels-only`). The grade saves as usual, but no result, date or trade
+  of his is shown, and the clock stays at the cut while a trade is open; the queue records `labels_only` and a start with
+  the other setting is refused.
+
 ## 1.15.0 (2026-10-02): higher timeframes, deeper hour charts, the drawing ring, compact labels, the Account panel and the Quote board
 
 Page and engine only; works with ChartBridge 0.3.2 and newer, no recompile (`minChartBridge` stays 0.3.2). The 4h, 1D and

@@ -22,3 +22,9 @@ jobs:
       # without writing a lock file. No browsers are downloaded: `npm test` needs none.
       - run: npm install --no-package-lock --no-audit --no-fund
       - run: npm test
+      # Markup Studio's server is Python (stdlib + numpy): its unit tests, on both systems
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check numpy
+      - run: python -m unittest discover -s test -p "test_markup*.py"
