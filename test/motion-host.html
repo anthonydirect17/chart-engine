@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion host (test page)</title>
+<!-- A plain host page for test/motion-smoke.mjs: a made-up bot panel played with ChartMotion. Sample text only. -->
+<link rel="stylesheet" href="../live/motion.css">
+<style>
+  :root { --accent: #7B5CFF; --pos: #3DDC97; --text-2: #9AA8B8; }
+  body { background: #06080C; color: #E6EDF5; font: 13px system-ui, sans-serif; margin: 0; padding: 16px; }
+  .card { border: 1px solid #18212C; border-radius: 12px; padding: 14px; width: 420px; display: grid; gap: 10px; background: #0B0F15; }
+  .stamp { display: inline-block; justify-self: start; padding: 4px 10px; border: 2px solid var(--pos); color: var(--pos); border-radius: 6px; font-weight: 800; transform: rotate(-5deg); }
+  .meter { height: 6px; background: #18212C; border-radius: 3px; }
+  .meter i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  canvas { width: 100%; height: 60px; display: block; }
+</style>
+</head>
+<body>
+  <div class="card motion-atmo" id="panel">
+    <h3 id="head" data-in="0,.3" style="margin:0">Demo bot panel (made up)</h3>
+    <span class="stamp" id="stamp">L2 Ready</span>
+    <div id="row" data-in=".2,.5">Since loaded <span id="num" data-count="1284.5" data-dec="2" data-sign data-pre="$" data-in=".3,.8">+$1,284.50</span></div>
+    <div class="meter"><i id="bar" data-grow=".2,.6" style="width:40%"></i></div>
+    <canvas id="curve" data-in=".1,.9"></canvas>
+    <button type="button" id="btn" data-in=".4,.7">Load into slot 1</button>
+  </div>
+  <div class="motion-panel motion-out" id="toast">Saved</div>
+  <script src="../live/motion.js"></script>
+  <script>
+    window.clicks = 0;
+    document.getElementById('btn').addEventListener('click', () => { window.clicks++; });
+    const c = document.getElementById('curve');
+    c._draw = p => {
+      const { ctx, w, h } = ChartMotion.fitCanvas(c);
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = '#3DDC97'; ctx.lineWidth = 1.5; ctx.beginPath();
+      const n = Math.max(2, Math.round(p * 40));
+      for (let i = 0; i < n; i++) { const x = i / 39 * w, y = h - 6 - (i / 39) * (h - 12) - Math.sin(i * 0.9) * 6; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.stroke();
+      window.lastDraw = p;
+    };
+    c._draw(1);
+  </script>
+</body>
+</html>

@@ -117,3 +117,7 @@ Both `.motion-tip` and `.motion-panel` are shown at rest: only `.motion-out`, wh
 `node --test test/motion.test.js` (part of `npm test`): the curves, windows, number formatting, the one clock, finish
 on input, reduced motion, nothing scheduled while idle, and order surfaces left alone, with a fake clock and a tiny fake
 page.
+
+`npm run smoke:motion` (Chromium, `test/motion-smoke.mjs` on `test/motion-host.html`): the kit as a plain script and
+as a module import, a scene's start and end states in a real page, a click during a scene, reduced motion (page and
+system), and no animation frame while idle. Screenshots `test/out/motion-mid.png` and `motion-end.png`.
