@@ -530,7 +530,10 @@ Only the accounts named in `tradeAccounts` show in the order bar. Use `Sim101` f
   Delete, Escape, Tab), a modifier alone, a key that is not a letter, digit, F-key, numpad or punctuation key, and a
   combo another action has. A hotkey never fires while you type in a box or a select, while a menu or Settings is
   open, or from a held key's repeats, and the 0.4 s repeat guard applies. Kept in this browser
-  (`live-hotkeys-v1`). Only the trading page has them; a mounted chart ignores them.
+  (`live-hotkeys-v1`). Only the trading page has them; a mounted chart ignores them. The workspace has one more key
+  of its own (1.16.0), **Maximize panel**: none by default, it fills the grid with the panel under the mouse and the same
+  key puts it back. It can never be a trading key (refused both ways, with the reason shown), never fires while you
+  type in a box, and is kept apart in `live-ws-keys-v1`.
 - Apart from the hotkeys, no key places or changes orders (only Escape, which cancels a drag in progress), and the
   order buttons act on a mouse or touch click only: Enter or Space on a focused button sends nothing.
 - A limit on the wrong side of the market (a buy limit above the last price) is refused, since it would
