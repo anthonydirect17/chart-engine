@@ -145,7 +145,11 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
   status `filled`, working at the fill (`t_from <= entry_t <= t_to`); if several, the one ending at the fill at the fill
   price, placed last, when only one is. Anything else, or an order filled the moment it was placed, is not guessed: that
   trade is passed over (logged, counted as "passed over") and the next one opens.
-- **What you see at the cut**: the ticks strictly before it (exclusive, as Blind), the bot's view at it exactly as
+- **The trades on the cut's own stamp** (2026-10-07): most days are stamped to the whole second, so the trade that
+  finished the bot's signal bar often shares its stamp with the rest of that bar and with the next bar's first trades.
+  When the entry order carries `t_from_seq` (BOT_API, optional: how many trades on that stamp the bot had seen), exactly
+  those show at the cut; without it the cut stays strictly before the stamp, and the signal bar can be drawn short.
+- **What you see at the cut**: the ticks strictly before it (exclusive, as Blind) plus the `t_from_seq` ones above, the bot's view at it exactly as
   `bot_view` gives it (the working entry order, any stop or target orders it has working, earlier trades of the day as past
   history), the bot's level (dashed line) and its side. Never this trade's fill, status or exits, and never the date (the
   Blind scrub; ids are opaque `qid`s). The bot's view stays frozen at the cut until the grade is complete.
