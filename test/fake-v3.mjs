@@ -281,8 +281,8 @@ export class OrderDeskV3 extends OrderDesk {
     if (typeof m.id === 'string') ref.id = m.id;
     if (m.type === 'botSeen') { const why = this.blocked(conn) || checkKeysV3(m, text) || this.check_botSeen(m); if (why) this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); else this.do_botSeen(m); return !why; }
     let why = this.checkAction(conn) || checkKeysV3(m, text);
-    if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' in config.txt).';
-    if (!why && m.type === 'accountArchive' && !this.sw.accountChecks) why = 'accountArchive is off (accountChecks in config.txt).';
+    if (!why && V3_TYPES.includes(m.type) && SWITCH_OF[m.type] && !this.sw[SWITCH_OF[m.type]]) why = m.type + ' is off (' + SWITCH_OF[m.type] + ' = off in config.txt).';
+    if (!why && m.type === 'accountArchive' && !this.sw.accountChecks) why = 'accountArchive is off (accountChecks = off in config.txt).';
     if (!why) why = this['check_' + m.type](m);
     if (why) { this.send(conn, Object.assign({ type: 'reject' }, ref, { reason: why })); if (m.type === 'merge') this.merges.refused++; return false; }
     this['do_' + m.type](m, conn);
@@ -300,8 +300,8 @@ export class OrderDeskV3 extends OrderDesk {
   check_order(m) {
     const q = this.quoteOnly(m.root); if (q) return q;
     const e = this.checkEntryAccount(m.account); if (e) return e;
-    if ((m.kind === 'stopLimit' || m.kind === 'mit') && !this.sw.orderTypes) return 'Stop-limit and MIT orders are off (orderTypes in config.txt).';
-    if (m.strategy !== undefined && !this.sw.strategies) return 'Order Strategies are off (strategies in config.txt).';
+    if ((m.kind === 'stopLimit' || m.kind === 'mit') && !this.sw.orderTypes) return 'Stop-limit and MIT orders are off (orderTypes = off in config.txt).';
+    if (m.strategy !== undefined && !this.sw.strategies) return 'Order Strategies are off (strategies = off in config.txt).';
     if ((m.limitOffset !== undefined || m.limitPrice !== undefined) && m.kind !== 'stopLimit') return 'limitOffset and limitPrice go on a stopLimit order only.';
     if (this.sw.copier && this.copier.armed && m.account === this.copier.leader && [...this.copier.followers.values()].some(f => f.on)) {
       const st = m.strategy ? m.strategy.stop : m.bracket ? m.bracket.stop : 0;
@@ -370,7 +370,7 @@ export class OrderDeskV3 extends OrderDesk {
   check_cancel(m) {
     const o = this.orders.get(m.id);
     if (m.from !== undefined && m.from !== 'list') return 'from must be "list".';
-    if (m.from === 'list' && !this.sw.cancelFromList) return 'Cancel from the Working orders tab is off (cancelFromList in config.txt).';
+    if (m.from === 'list' && !this.sw.cancelFromList) return 'Cancel from the Working orders tab is off (cancelFromList = off in config.txt).';
     if (!o || !isWorking(o) || !this.watched(o.account) || !this.instruments[o.root] || this.instruments[o.root].quoteOnly) return 'No working order ' + m.id + '.';
     if (!this.exitAllowed(o.account)) return 'No working order ' + m.id + '.';
     return null;

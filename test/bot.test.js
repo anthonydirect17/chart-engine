@@ -379,7 +379,7 @@ test('fake bridge: botRails as ChartBridgeBot.cs SetRails: limits, root, all key
   const off = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: {}, port: 8765 }, instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 } },
     knownAccounts: ['Sim101'], token: 'tok', switches: { bot: false }, accountList: [{ name: 'Sim101', sim: true }], send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000 });
   out.length = 0; off.handle(conn, { type: 'botRails', maxTrades: 1, maxLosses: 1, root: 'MNQ' }, '{}');
-  assert.match(why(out), /botRails is off \(bot in config\.txt\)/);
+  assert.match(why(out), /botRails is off \(bot = off in config\.txt\)/);
 });
 
 test('files: the Bot tab is installed, loaded in order, and keeps motion off its order surfaces', () => {

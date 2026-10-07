@@ -236,7 +236,7 @@ function create(env) {
     // a price order needs the last price to be a limit or a stop (OT.placeKind): until one is known, only market orders
     if (kind !== 'market' && !(lastPrice() > 0)) { flash('No price yet: nothing was sent. Market orders and Flatten work.', 'warn'); return; }
     // 1.16.0: a stop-limit or an MIT entry only while ChartBridge says orderTypes is on (it refuses them otherwise)
-    if ((kind === 'stopLimit' || kind === 'mit') && !sw('orderTypes')) { flash('Not sent: stop-limit and MIT orders are off in ChartBridge (orderTypes in config.txt).', 'warn'); return; }
+    if ((kind === 'stopLimit' || kind === 'mit') && !sw('orderTypes')) { flash('Not sent: stop-limit and MIT orders are off in ChartBridge (orderTypes = off in config.txt).', 'warn'); return; }
     const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), R);
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
     const b = OT.cleanBracket(brackets[R], cap()), pos = TR.positions.get(TR.account + '|' + R);
@@ -709,7 +709,7 @@ function create(env) {
    * what B/E needs (Armed, connected, the account shown) and shows the result (`merge`: merged, restored or failed).
    */
   function merge() {
-    if (!sw('merge')) { flash('Merge is off in ChartBridge (merge in config.txt). Nothing was sent.', 'warn'); return; }
+    if (!sw('merge')) { flash('Merge is off in ChartBridge (merge = off in config.txt). Nothing was sent.', 'warn'); return; }
     if (!ready()) return;
     const account = TR.account, R = root(), pos = TR.positions.get(account + '|' + R);
     if (!pos || !pos.qty) { flash('Merge: no open position on ' + account + ' ' + R + '. Nothing was sent.', 'warn'); return; }

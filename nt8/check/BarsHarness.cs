@@ -448,6 +448,7 @@ public static class BarsHarness
         {
             File.Delete(Path.Combine(dir, "ChartBridge", "config.txt"));
             ChartBridgeConfig.Load();
+            OrdersHarness.AllOffLines();   // the base checks run with every v3 off line (0.3.8 exactly); Load put the default, on
             ChartBridgeConfig.AllowOrigins = originsWas;
             ChartBridgeConfig.DeskUrl = desk.Url;
             desk.Stop();

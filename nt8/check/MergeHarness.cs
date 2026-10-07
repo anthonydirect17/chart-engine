@@ -241,20 +241,24 @@ public static class MergeHarness
     // ------------------------------------------------------------ the switch
     static void Off()
     {
+        ChartBridgeSwitches.Reset();   // what ChartBridgeConfig.Load starts from
+        Check(ChartBridgeOrders.MergeOn, "merge is ON by default (Anthony 2026-10-07: no switches)");
+        OrdersHarness.AllOffLines();
+        ChartBridgeSwitches.Note("merge", "off");
         Account a = NewAccount("EVAL-A");
         Entry(a, true, 1, 25000); Entry(a, true, 1, 25004);
         int calls = a.Calls.Count;
         Thread.Sleep(150);
         Msg("merge", MergeMsg(a, "off"));
-        Check(Rejected("Merge is off in config.txt") && a.Calls.Count == calls, "merge off (the default): refused, nothing sent to NinjaTrader: " + Last());
-        Check(!ChartBridgeOrders.MergeOn, "merge is off by default");
+        Check(Rejected("Merge is off in config.txt (merge = off") && a.Calls.Count == calls, "merge = off: refused, nothing sent to NinjaTrader: " + Last());
+        Check(!ChartBridgeOrders.MergeOn, "merge = off turns it off");
         Done(a);
     }
 
     static void ConfigKey()
     {
         ChartBridgeSwitches.Note("merge", "yes");   // integration: ChartBridgeConfig.Load records every v3 switch in ChartBridgeSwitches
-        Check(!ChartBridgeOrders.MergeOn && Logged("merge = yes is not on, true or 1, so merge is OFF"), "merge = yes: off, with one Output line naming the value");
+        Check(!ChartBridgeOrders.MergeOn && Logged("merge = yes is not off or on, so merge is OFF"), "merge = yes: off, with one Output line naming the value");
         ChartBridgeSwitches.Note("merge", "ON");
         Check(ChartBridgeOrders.MergeOn, "merge = ON: on (any case)");
         ChartBridgeSwitches.Note("merge", "1");

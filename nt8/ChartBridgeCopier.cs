@@ -1,11 +1,12 @@
 // ChartBridge copier engine (protocol v3, ChartBridge 0.4.0). Part of the ChartBridge add-on; install it with the other
 // ChartBridge files. See nt8/PROTOCOL.md, "Copier engine (copier = on)" and "Copier engine: as built (0.4.0)".
 //
-// OFF by default: nothing here runs unless config.txt has "copier = on", and "trading = true" stays the master switch above
-// it. With the switch off every copier message is refused and every hook below returns at once, so ChartBridge behaves as
-// 0.3.8 did. Decided by Anthony (2026-10-07). The safety rules, each named where it is enforced:
-//   S1 Sim only. Every follower order (entry, stop, move, exit) needs an account on NinjaTrader's own simulator; a real
-//      account is refused at copierFollower and again before every order, and logged. 0.4.0 has no unlock.
+// ON by default (Anthony 2026-10-07: no switches, no Sim locks): "copier = off" in config.txt turns it off, and "trading = true"
+// stays the master switch above it. With the copier off every copier message is refused and every hook below returns at
+// once, so ChartBridge behaves as 0.3.8 did. The safety rules, each named where it is enforced:
+//   S1 Any account, every gate (Anthony 2026-10-07: no Sim lock). A follower may be a Sim account or a real one; every
+//      follower entry still needs the account gates (trading on, its checkmark or tradeAccounts, Connected, not Gone), and
+//      every exit a watched, Connected account. The bot's account is never a follower (see BotAccountWhy).
 //   S2 One leader. Only entries placed from ChartBridge's own page on the leader are copied, and only while the copier is
 //      armed with a follower on; such an entry must carry a stop. Exits on the leader are always copied, whatever caused them.
 //   S3 A stop at once. Each follower fill gets its own stop at the broker at the SAME PRICE as the leader's stop; when the
@@ -124,12 +125,12 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ---------------------------------------------------------------- the copier
     public static class ChartBridgeCopier
     {
-        // ---------------------------------------------------------- the switch (config.txt, off by default)
+        // ---------------------------------------------------------- the switch (config.txt, on by default; "copier = off" turns it off)
         // Integration (0.4.0): one source of truth for every v3 switch, ChartBridgeSwitches in ChartBridgeV3.cs. ChartBridgeConfig.Load
         // records "copier" there (on, true or 1 mean on, any case; anything else is off, with one Output line naming the value),
         // so the trading message's switches.copier and the copier can never disagree.
         public static bool Enabled { get { return ChartBridgeV3.Copier; } }
-        public static void ResetConfig() { ChartBridgeSwitches.Note("copier", "off"); }
+        public static void ResetConfig() { }   // the switch's default (on, Anthony 2026-10-07) is set in one place: ChartBridgeSwitches.Reset, in ChartBridgeConfig.Load
 
         // The key is ChartBridgeSwitches' (read in ChartBridgeConfig.Load before this): taken here only so nothing else reads it.
         public static bool ReadConfig(string key, string val) { return key == "copier"; }
@@ -260,7 +261,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             worker.Name = "ChartBridge copier";
             worker.Start();
             timer = new System.Threading.Timer(delegate { try { Tick(); } catch (Exception ex) { ChartBridgeServer.Log("copier tick error: " + ex.Message); } }, null, 1000, 1000);
-            ChartBridgeServer.Log("the copier is ON (Sim followers only); it starts stood down: press Re-arm on the page");
+            ChartBridgeServer.Log("the copier is ON (Sim or real followers, each through every account gate); it starts stood down: press Re-arm on the page");
         }
 
         public static void Stop()
@@ -320,8 +321,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- reading NinjaTrader
-        // S1: an account on NinjaTrader's own simulator: its Provider (Account.Provider, else Account.Connection.Options.Provider)
-        // reads exactly "Simulator". Anything else, or nothing readable, is not Sim (refused). Backtest and Playback never.
+        // An account on NinjaTrader's own simulator: its Provider (Account.Provider, else Account.Connection.Options.Provider)
+        // reads exactly "Simulator". Anything else, or nothing readable, is not Sim. Only shown (each follower's "sim", the page's
+        // SIM or LIVE mark); since Anthony's 2026-10-07 decision it refuses nothing.
         private static bool ReadSim(Account a)
         {
             if (a == null || ChartBridgeOrders.IsNeverTradable(a.Name ?? "")) return false;
@@ -439,7 +441,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string why = ChartBridgeOrders.CopierGate(client);   // trading on, the own signed-in page, 10 actions a second
                 if (why == null && !IsV3(client)) why = "copier messages are protocol v3: send {\"type\":\"client\",\"v\":3} first";
-                if (why == null && !Enabled) why = "The copier is off (copier in config.txt).";
+                if (why == null && !Enabled) why = "The copier is off (copier = off in config.txt).";
                 string[] allowed = null;
                 if (why == null && !Keys.TryGetValue(type, out allowed)) why = "unknown message type " + type;
                 else if (why == null) why = ChartBridgeOrders.CopierStrict(type, text, allowed);
@@ -526,15 +528,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
             Account a = Find(name);
             if (a == null || ChartBridgeOrders.IsNeverTradable(a.Name)) return "No account " + name + ".";
-            if (!IsSim(a))   // S1: refused here, and again before every order
+            // S1 (Anthony 2026-10-07): a real account may be a follower; its entries still pass every account gate (Eligible).
+            if (on.Groups[1].Value == "true" && IsBotAccount(a))   // review 2 finding 3: never the bot's account while the bot is on
             {
-                Decision(a.Name, "refused", null, a.Name + " is not a Sim account (NinjaTrader reports " + (ProviderOf(a) ?? "no provider") + "); nothing copied to it");
-                return a.Name + " is not a Sim account: the copier copies to Sim accounts only.";
-            }
-            if (on.Groups[1].Value == "true" && IsBotAccount(a))   // review 2 finding 3 (lead's default): never the bot's account while the bot is on
-            {
-                Decision(a.Name, "refused", null, BotAccountWhy + " (copierFollower refused)");
-                return BotAccountWhy;
+                Decision(a.Name, "refused", null, BotAccountWhy(a.Name) + " (copierFollower refused)");
+                return BotAccountWhy(a.Name);
             }
             if (on.Groups[1].Value == "true" && ChartBridgeOrders.MergeRunningOn(a))   // integration (lead's default): the copier and Merge never act on one account
                 return a.Name + " has a Merge running: it can become a copier follower once the merge has ended.";
@@ -578,12 +576,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             return hasStop ? null : "The copier needs a stop on every leader entry.";
         }
 
-        // Review 2 finding 3 (lead's default): Sim101, the bot's account, is never a copier follower while the bot is on (a copy
-        // and a bot trade on one account would mix: the bot's exits would close the copy, the copier's the bot's). Refused at
-        // copierFollower (on: true) and skipped before every copy; and the bot refuses entries while Sim101 is a follower that is on.
-        private const string BotAccountWhy = "Sim101 is the bot's account: it cannot be a copier follower while the bot is on (bot in config.txt).";
-        public const string BotFollowerWhy = "Sim101 is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page).";
+        // Review 2 finding 3: the bot's account (the one Anthony chose for the bot, Sim101 by default) is never a copier follower
+        // while the bot is on (a copy and a bot trade on one account would mix: the bot's exits would close the copy, the
+        // copier's the bot's). Refused at copierFollower (on: true) and skipped before every copy; the bot refuses entries while
+        // its account is a follower that is on; and botAccount refuses an account that is a follower that is on.
+        private static string BotAccountWhy(string name) { return name + " is the bot's account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first)."; }
+        public static string BotFollowerWhy(string name) { return name + " is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page)."; }
         private static bool IsBotAccount(Account a) { return a != null && ChartBridgeBot.Enabled && string.Equals(a.Name, ChartBridgeBot.BotAccount, StringComparison.OrdinalIgnoreCase); }
+
+        // The bot asks before it takes an account (botAccount): null when the copier does not use it as a follower that is on, or
+        // the leader (the leader's every exit is copied, so a bot position there would move the followers).
+        public static string BotAccountRefusal(string name)
+        {
+            if (!Enabled || string.IsNullOrEmpty(name)) return null;
+            lock (Lk)
+            {
+                if (IsLeader(name)) return name + " is the copier's leader: the bot cannot trade the leader's account while the copier is on (its exits would be copied to the followers).";
+                Follower f = FollowerNamed(name);
+                if (f != null && f.On) return BotFollowerWhy(name);
+            }
+            return null;
+        }
 
         // Integration (lead's default): Merge is refused on a copier follower while the copier is on. The copier closes, shrinks and
         // moves a follower's orders on its own (its "flatten this follower" goes to NinjaTrader directly and would not end a swap),
@@ -607,8 +620,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (isLeader) return account.Name + " is the copier's leader: the bot does not trade the leader's account while the copier is on (its exits would be copied to the followers).";
             if (isFollower)   // review 2 finding 3
             {
-                ChartBridgeServer.Log("copier: bot entry refused: " + BotFollowerWhy);
-                return BotFollowerWhy;
+                ChartBridgeServer.Log("copier: bot entry refused: " + BotFollowerWhy(account.Name));
+                return BotFollowerWhy(account.Name);
             }
             return null;
         }
@@ -738,10 +751,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // Called under PlaceLock: S1 once more, then the entry is sent and logged.
+        // Called under PlaceLock (after Eligible: S1's gates and S5): the entry is sent and logged.
         private static void Send(FEntry fe, Order o, string text)
         {
-            if (!IsSim(fe.A)) { Skip(fe.F, "not a Sim account", fe.A.Name + " is not a Sim account; nothing copied to it", fe.Root, o.Quantity, null); return; }
             lock (Lk) { FEntries[o] = fe; Placed[o] = ChartBridgeTime.NowUtcMs(); if (fe.OrdersMode) fe.L.Copies.Add(fe); fe.F.Skipped = null; fe.F.LastAction = "enter"; fe.F.LastAt = ChartBridgeTime.NowUtcMs(); }
             CopierTags[fe.Tag] = 0;   // review 2 finding 9: "by":"copier" (its stop and exits share the tag)
             ChartBridgeOrders.CopierSent(o, false);
@@ -763,13 +775,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static List<Follower> OnFollowers() { lock (Lk) return Followers.Where(f => f.On).ToList(); }
 
-        // S1 and S5: the follower may take this entry, or null with a short label (shown on the page) and the reason.
+        // S1 (every account gate) and S5: the follower may take this entry, or null with a short label (shown on the page) and the reason.
         private static Account Eligible(Follower f, string fRoot, LeaderEntry le, int fq, out Instrument inst, out string label, out string why)
         {
             inst = null; label = null; why = null;
             Account a = Find(f.Name);
             if (a == null) { label = "not connected"; why = f.Name + " is not in NinjaTrader"; return null; }
-            if (!IsSim(a)) { label = "not a Sim account"; why = a.Name + " is not a Sim account; nothing copied to it"; return null; }
             if (IsBotAccount(a)) { label = "bot account"; why = a.Name + " is the bot's account; nothing copied to it while the bot is on"; return null; }   // review 2 finding 3
             if (!Up(a)) { label = "not connected"; why = a.Name + " is not connected (" + ChartBridgeOrders.CopierStatus(a) + ")"; return null; }
             if (IsGone(a)) { label = "gone"; why = a.Name + " is gone"; return null; }
@@ -802,7 +813,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void Skip(Follower f, string label, string why, string root, int qty, double? leaderMs)
         {
             lock (Lk) { f.Skipped = label; f.LastAction = "skip"; f.LastAt = ChartBridgeTime.NowUtcMs(); skippedCount++; }
-            Event(f.Name, label == "not a Sim account" ? "refused" : "skip", root, qty, double.NaN, null, leaderMs, null, "skipped: " + why);
+            Event(f.Name, "skip", root, qty, double.NaN, null, leaderMs, null, "skipped: " + why);
         }
 
         // The trading session (18:00 New York to 18:00) a time belongs to: the loss limit holds until the next one.
@@ -968,7 +979,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<FStop> stops;
             bool busy;
             lock (Lk) { busy = Reduces.Any(r => r.C == c); stops = c.Stops.Where(s => !ChartBridgeOrders.CopierDone(s.Stop)).OrderByDescending(s => s.Born).ToList(); }
-            if (busy || stops.Count == 0 || !IsSim(c.A) || !Up(c.A)) return;
+            if (busy || stops.Count == 0 || !Up(c.A)) return;
             int exits = CopierOrdersOn(c.A, c.Inst, true, c.Dir).Where(o => stops.All(s => s.Stop != o)).Sum(o => o.Quantity - o.Filled);
             int excess = stops.Sum(s => Left(s)) + exits - l;
             if (excess <= 0) return;
@@ -993,12 +1004,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void PlaceStop(FEntry fe, Copy c, int filledMark, int qty, double price, double sp, double? slip, long fillTs, bool late)
         {
             string where = fe.Root + " " + fe.A.Name;
-            if (!IsSim(fe.A))
-            {
-                ChartBridgeOrders.CopierAlarm(where + ": the copier refuses every order on an account that is not Sim, so this follower's fill of " + qty + " has NO STOP from the copier; set the stop in NinjaTrader now");
-                Event(fe.A.Name, "refused", fe.Root, qty, double.NaN, slip, null, null, fe.A.Name + " is not a Sim account; nothing copied to it");
-                return;
-            }
             if (double.IsNaN(sp) || !(sp > 0))
             {
                 ChartBridgeOrders.CopierAlarm(where + ": the leader's stop price for this copy is not known, so the follower is flattened (never left without a stop)");
@@ -1153,7 +1158,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Order o = fe.Order;
                 if (!Working(o) || o.OrderType == OrderType.Market) continue;
-                if (!IsSim(fe.A)) { Event(fe.A.Name, "refused", fe.Root, o.Quantity, price, null, null, null, fe.A.Name + " is not a Sim account; nothing copied to it"); continue; }
                 string kind = o.OrderType == OrderType.Limit ? "limit" : "stop";
                 string bad = ChartBridgeOrders.CopierPriceProblem(fe.Root, fe.Inst.MasterInstrument.TickSize, kind, fe.Buy, price);
                 if (bad != null)
@@ -1174,7 +1178,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Lk) list = le.Copies.ToList();
             foreach (FEntry fe in list)
             {
-                if (!Working(fe.Order) || !IsSim(fe.A)) continue;   // S1: no order action on an account that is not Sim
+                if (!Working(fe.Order)) continue;
                 fe.A.Cancel(new[] { fe.Order });
                 Event(fe.A.Name, "sweep", fe.Root, fe.Order.Quantity - fe.Order.Filled, double.NaN, null, null, null, "cancelled with the leader's entry");
             }
@@ -1215,7 +1219,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Order o = s.Stop;
                 if (!Working(o) || Math.Abs(o.StopPrice - price) < 1e-9 || Math.Abs(s.Price - price) < 1e-9) continue;   // already there, or already asked for
                 Account a = o.Account;
-                if (!IsSim(a)) { Event(a.Name, "refused", s.C.Root, o.Quantity, price, null, null, null, a.Name + " is not a Sim account; nothing copied to it"); continue; }
                 if (!Up(a)) { Event(a.Name, "skip", s.C.Root, o.Quantity, price, null, null, null, "skipped: " + a.Name + " is not connected; its stop stays at " + P(o.StopPrice)); continue; }
                 o.StopPriceChanged = price;
                 a.Change(new[] { o });
@@ -1400,15 +1403,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             Event(c.A.Name, "flatten", c.Root, Math.Abs(ChartBridgeOrders.CopierListed(c.A, c.Inst)), double.NaN, null, Ms(ts, sent), null, "flattened: " + why);
         }
 
-        // Exits need a Sim account (S1) that is Connected and watched; closing never needs the checkmark or the armed copier.
+        // Exits need an account that is Connected and watched (S1); closing never needs the checkmark or the armed copier.
         private static bool ExitAllowed(Copy c, string what)
         {
-            if (!IsSim(c.A))
-            {
-                ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": not a Sim account, so the copier sends it nothing (not even the " + what + "); close it in NinjaTrader");
-                Event(c.A.Name, "refused", c.Root, 0, double.NaN, null, null, null, c.A.Name + " is not a Sim account; nothing copied to it");
-                return false;
-            }
             if (!Up(c.A) || !ChartBridgeServer.EnsureWatched(c.A))
             {
                 Event(c.A.Name, "skip", c.Root, 0, double.NaN, null, null, null, "skipped: " + c.A.Name + " is not connected; it keeps its stop at the broker, and is flattened when it is back if the leader is still flat");
@@ -1491,7 +1488,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 FEntry fe;
                 lock (Lk) FEntries.TryGetValue(o, out fe);
                 bool flatNow = Working(o) && now - kv.Value >= ChartBridgeOrders.YoungMs && o.Account != null && o.Instrument != null && Flat(o.Account, o.Instrument) &&
-                               !(fe != null && fe.OrdersMode && fe.L != null && Working(fe.L.Entry)) && IsSim(o.Account) && Up(o.Account) &&
+                               !(fe != null && fe.OrdersMode && fe.L != null && Working(fe.L.Entry)) && Up(o.Account) &&
                                ChartBridgeOrders.CopierSteady(o.Account);   // review 2 finding 5: v2's flat cleanup rule (a steady connection)
                 int seen = 0;
                 lock (Lk) { if (flatNow) { SweepFlat.TryGetValue(o, out seen); SweepFlat[o] = ++seen; } else SweepFlat.Remove(o); }
@@ -1609,7 +1606,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (tag == null || root == null || !entries.TryGetValue(tag, out ltag)) continue;
                     if (CopyEntryRx.IsMatch(o.Name ?? ""))
                     {
-                        if (!IsSim(a)) continue;
                         a.Cancel(new[] { o });
                         Event(a.Name, "sweep", root, o.Quantity - o.Filled, double.NaN, null, null, null, "cancelled a copier entry left from before the restart (it cannot be linked to the leader's)");
                         continue;
@@ -1733,12 +1729,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string StateJson()
         {
             if (!Enabled)
-                return "{\"type\":\"copier\",\"enabled\":false,\"simOnly\":true,\"armed\":false,\"standDownWhy\":" + CbJson.Str("The copier is off (copier in config.txt).") + ",\"leader\":null,\"mode\":\"executions\",\"followers\":[]}";
+                return "{\"type\":\"copier\",\"enabled\":false,\"simOnly\":false,\"armed\":false,\"standDownWhy\":" + CbJson.Str("The copier is off (copier = off in config.txt).") + ",\"leader\":null,\"mode\":\"executions\",\"followers\":[]}";
             string l, m, why, lroot;
             bool on;
             List<Follower> list;
             lock (Lk) { l = leader; m = mode; why = standDownWhy; on = armed; lroot = lastLeaderRoot; list = Followers.Select(f => new Follower { Name = f.Name, On = f.On, Qty = f.Qty, Size = f.Size, LossLimit = f.LossLimit, LastAction = f.LastAction, LastAt = f.LastAt, Slippage = f.Slippage, Skipped = f.Skipped }).ToList(); }
-            StringBuilder b = new StringBuilder("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":true,\"armed\":").Append(on ? "true" : "false")
+            StringBuilder b = new StringBuilder("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"armed\":").Append(on ? "true" : "false")
                 .Append(",\"standDownWhy\":").Append(why != null ? CbJson.Str(why) : "null").Append(",\"leader\":");
             Account la = Find(l);
             if (l == null) b.Append("null");

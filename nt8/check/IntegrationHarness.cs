@@ -159,7 +159,7 @@ public static class IntegrationHarness
             f1 = NewAccount("SIM-F1", Provider.Simulator);
             other = NewAccount("SIM-L", Provider.Simulator);
             ChartBridgeOrders.ResetConfig();
-            ChartBridgeSwitches.Reset();
+            OrdersHarness.AllOffLines();
             ChartBridgeOrders.ReadConfig("trading", "true");
             ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L");
             ChartBridgeOrders.ReadConfig("maxQty.MNQ", "10");
@@ -200,7 +200,7 @@ public static class IntegrationHarness
             ChartBridgeOrders.MergeConfirmMs = timings[0]; ChartBridgeOrders.MergeQuietMs = timings[1]; ChartBridgeOrders.MergePollMs = timings[2];
             ChartBridgeClient gone;
             Clients().TryRemove(71, out gone);
-            ChartBridgeSwitches.Reset();
+            OrdersHarness.AllOffLines();
             ChartBridgeOrders.ResetConfig();
             ChartBridgeOrders.Clear();
             lock (Account.All) { Account.All.Clear(); Account.All.AddRange(accountsWas); }
@@ -570,7 +570,7 @@ public static class IntegrationHarness
             ChartBridgeSwitches.Note("bot", "on");
             int leadCalls = lead.Calls.Count;
             Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"f9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
-            Check(Rejected("Sim101 is the bot's account: it cannot be a copier follower while the bot is on (bot in config.txt).") && Logged("copier refused Sim101"),
+            Check(Rejected("Sim101 is the bot's account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first).") && Logged("copier refused Sim101"),
                   "X10 (review 2 finding 3): bot on: Sim101 as a copier follower is refused, in plain words, and logged: " + Last());
 
             // the other way: Sim101 listed as a follower while the bot was off; with the bot on, the bot refuses entries
@@ -584,6 +584,16 @@ public static class IntegrationHarness
             string why = ChartBridgeOrders.PlaceBotEntry(BotEntry(), out placed);
             Check(why == "Sim101 is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page)." && placed == null && lead.Calls.Count == leadCalls && Logged("bot entry refused: Sim101 is a copier follower"),
                   "X10 (review 2 finding 3): Sim101 is a copier follower: a bot entry is refused, in plain words, nothing sent, logged: " + why);
+            // Anthony 2026-10-07 (the bot trades the account he chooses): the bot's account can never become a follower that is on,
+            // nor the copier's leader: botAccount refuses both, in plain words
+            lock (sent) sent.Clear();
+            ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba1\",\"account\":\"SIM-F1\"}");
+            Check(Rejected("SIM-F1 is a copier follower: the bot does not trade while the copier copies to its account") && ChartBridgeBot.BotAccount == "Sim101",
+                  "X10: botAccount: a copier follower that is on cannot become the bot's account: " + Last());
+            lock (sent) sent.Clear();
+            ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba2\",\"account\":\"SIM-L\"}");
+            Check(Rejected("SIM-L is the copier's leader: the bot cannot trade the leader's account while the copier is on") && ChartBridgeBot.BotAccount == "Sim101",
+                  "X10: botAccount: the copier's leader cannot become the bot's account: " + Last());
 
             // and the copier copies nothing to Sim101 while the bot is on
             Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r10\"}");

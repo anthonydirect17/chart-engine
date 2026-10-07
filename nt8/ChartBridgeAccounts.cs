@@ -3,7 +3,7 @@
 //
 // This file never places, changes or cancels an order (no Submit, Change, Cancel or Flatten here). It holds:
 //   (the v3 switches, which pages speak v3, and v3's strict messages are in ChartBridgeV3.cs, shared by every v3 lane);
-//   - gate 2 with accountChecks = on: the page's per-account checkmark, which ChartBridge saves itself in accounts.txt
+//   - gate 2 with accountChecks on (the default since Anthony's 2026-10-07 decision): the page's per-account checkmark, which ChartBridge saves itself in accounts.txt
 //     next to config.txt. First start (no accounts.txt) pre-checks tradeAccounts; afterwards only the checkmarks count.
 //     trading = true stays the master switch above every checkmark (ChartBridgeOrders.AccountTradable checks it first);
 //   - Gone: an account that is disconnected, disabled, or past its trailing drawdown for 10 s without a break loses its
@@ -256,7 +256,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (!has) return null;
             if (from != "list") return "from must be \"list\"";
-            if (!CancelFromListOn) return "Cancel from the Working orders tab is off (cancelFromList in config.txt)";
+            if (!CancelFromListOn) return "Cancel from the Working orders tab is off (cancelFromList = off in config.txt)";
             return null;
         }
 
@@ -355,7 +355,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null) m = ChartBridgeV3.Flat(text, type, keys, out why);
                 if (m != null) cid = ChartBridgeV3.Str(m, "cid");
                 if (why == null && m.ContainsKey("cid") && cid == null) why = "cid must be a plain string";
-                if (why == null && !On) why = type + " is off (accountChecks in config.txt)";
+                if (why == null && !On) why = type + " is off (accountChecks = off in config.txt)";
                 if (why == null) why = type == "accountTrade" ? AccountTrade(m) : AccountArchive(m);
                 if (why != null) client.Send(Reject(cid, why));
             }

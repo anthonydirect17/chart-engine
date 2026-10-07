@@ -812,7 +812,7 @@ test('0.4.0: the tape counters run after the send, on their own, with no lock an
 });
 
 // ---- 0.4.0 accounts (behaviour: nt8/check/AccountsHarness.cs under Mono, inside check:orders)
-test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and its switches are off by default', () => {
+test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and the v3 switches are ON by default (Anthony 2026-10-07)', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
   const acode = asrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
   const vsrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeV3.cs'), 'utf8');
@@ -834,10 +834,18 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and i
     assert.match(vcode, re);
   // never turns trading on or off, never changes a switch from inside
   assert.ok(!/Enabled\s*=/.test(acode) && !/TradeAccounts\.(Add|Clear|Remove)/.test(acode), 'never touches trading or tradeAccounts');
-  // the switches: off by default, on only for on, true or 1
-  assert.match(vcode, /private static readonly bool\[\] Values = new bool\[Names\.Length\];/);
+  // the switches (Anthony 2026-10-07: no switches): ON by default, at start and after every Reset; config.txt's off line turns one
+  // off; on, true and 1 leave it on; nothing else sets them (no lane's ResetConfig touches a switch)
+  assert.match(vcode, /private static readonly bool\[\] Values = Names\.Select\(n => true\)\.ToArray\(\);/);
+  assert.match(vcode, /public static void Reset\(\) \{ lock \(Values\) for \(int i = 0; i < Values\.Length; i\+\+\) Values\[i\] = true; \}/);
   assert.match(vcode, /bool on = v\.Equals\("on", StringComparison\.OrdinalIgnoreCase\) \|\| v\.Equals\("true", StringComparison\.OrdinalIgnoreCase\) \|\| v == "1";/);
   assert.match(bodyOf(code, 'public static void Load()'), /ChartBridgeSwitches\.Reset\(\);[\s\S]*ChartBridgeSwitches\.Note\(key, val\);/);
+  for (const f of ['ChartBridgeOrders.cs', 'ChartBridgeMerge.cs', 'ChartBridgeStrategies.cs', 'ChartBridgeCopier.cs', 'ChartBridgeBot.cs', 'ChartBridgeAccounts.cs', 'ChartBridge.cs']) {
+    const c = fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+    assert.ok(!/ChartBridgeSwitches\.Note\(/.test(c.replace('ChartBridgeSwitches.Note(key, val);', '')), f + ': only config.txt sets a switch');
+  }
+  // trading = true stays the master switch: its default and its reading never changed
+  assert.match(ocode, /public static void ResetConfig\(\) \{ Enabled = false;/);
   // the undocumented trailing drawdown is read by name (compiles on every NinjaTrader 8), and a 0 is not trusted until a value was seen
   assert.match(acode, /ItemNamed\("TrailingMaxDrawdown"\)/);
   assert.ok(!/AccountItem\.TrailingMaxDrawdown/.test(acode), 'TrailingMaxDrawdown only by name');
@@ -866,14 +874,14 @@ const mBody = name => {
   return mcode.slice(m.index);
 };
 
-test('0.4.0 B4: Merge ships, is checked, and is OFF by default', () => {
+test('0.4.0 B4: Merge ships, is checked, and is ON by default (the off line turns it off)', () => {
   assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeMerge.cs'));
   for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs [^\n]*ChartBridgeMerge\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/MergeHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("merge \(B4\)", MergeHarness\.Run\);/);
   // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the answer goes through the shared v3 send
   assert.match(mcode, /public static bool MergeOn \{ get \{ return ChartBridgeV3\.Merge; \} \}/);
-  assert.match(mBody('MergeResetConfig'), /ChartBridgeSwitches\.Note\("merge", "off"\);/);
+  assert.ok(!/ChartBridgeSwitches/.test(mBody('MergeResetConfig')), 'the switch default (on) is ChartBridgeSwitches.Reset\'s only');
   assert.match(fnBody('ResetConfig'), /MergeResetConfig\(\);/);
   assert.match(mBody('MergeReadConfig'), /return key == "merge";/);
   assert.match(mBody('MergeSendToV3Pages'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
@@ -939,10 +947,10 @@ test('0.4.0 copier: the file ships, is compiled and run by both checks, and is C
   assert.ok(!/\bnameof\(|\bout var\b/.test(ccode), 'nameof or out var');
 });
 
-test('0.4.0 copier: off by default, and it never turns trading or itself on', () => {
+test('0.4.0 copier: on by default (the off line turns it off), and it never turns trading or itself on or off', () => {
   // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the one v3 handshake and send (no stub left)
   assert.match(ccode, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Copier; \} \}/);
-  assert.match(copierBodies('ResetConfig'), /ChartBridgeSwitches\.Note\("copier", "off"\);/);
+  assert.ok(!/ChartBridgeSwitches/.test(copierBodies('ResetConfig')), 'the switch default (on) is ChartBridgeSwitches.Reset\'s only');
   assert.match(copierBodies('ReadConfig'), /return key == "copier";/);
   assert.match(copierBodies('IsV3'), /return ChartBridgeV3\.IsV3\(c\);/);
   assert.match(copierBodies('Broadcast'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
@@ -951,7 +959,7 @@ test('0.4.0 copier: off by default, and it never turns trading or itself on', ()
   // every hook returns at once with the switch off
   for (const f of ['LeaderEntryCheck', 'LeaderEntryRegister', 'LeaderEntrySent', 'LeaderEntryDropped', 'LeaderFilled', 'OnOrderUpdate', 'OnPositionUpdate', 'Tick', 'Start'])
     assert.match(copierBodies(f), /if \(!Enabled[ )|]/, f + ' checks the switch first');
-  assert.match(copierBodies('OnMessage'), /if \(why == null && !Enabled\) why = "The copier is off \(copier in config\.txt\)\.";/);
+  assert.match(copierBodies('OnMessage'), /if \(why == null && !Enabled\) why = "The copier is off \(copier = off in config\.txt\)\.";/);
   assert.match(copierBodies('OnMessage'), /string why = ChartBridgeOrders\.CopierGate\(client\);/, 'gates 1, 4 and 7 first');
 });
 
@@ -969,20 +977,27 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
   assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntrySent(order)') > place.indexOf('account.Submit('), 'the orders-mode copies go after it is sent');
 });
 
-test('0.4.0 copier: order calls only in its named functions; every one is Sim checked', () => {
+test('0.4.0 copier: order calls only in its named functions; every one passes the account gates (no Sim lock, Anthony 2026-10-07)', () => {
   const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'copier order call outside its named functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ccode), 'no ATM or cancel-all calls');
-  // S1: Sim before every order: directly, through Eligible, or through ExitAllowed
-  assert.match(copierBodies('Eligible'), /if \(!IsSim\(a\)\)/);
-  assert.match(copierBodies('ExitAllowed'), /if \(!IsSim\(c\.A\)\)/);
-  for (const f of ['Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'TrimStops', 'Sweep', 'Recover']) assert.match(copierBodies(f), /IsSim\(/, f + ' checks Sim');
+  // S1 (Anthony 2026-10-07): no Sim lock. Sim refuses nothing (it is only shown); every entry passes the account gates through
+  // Eligible (connected, not Gone, gate 2: the checkmark or tradeAccounts, the cap), every exit through ExitAllowed (connected, watched)
+  assert.ok(!/IsSim\(/.test(ccode.replace(copierBodies('StateJson'), '').replace(/public static Func<Account, bool> IsSim = ReadSim;/, '')), 'IsSim only marks a follower (StateJson)');
+  assert.ok(!/not a Sim account/.test(ccode), 'no Sim refusal left');
+  const elig = copierBodies('Eligible');
+  for (const re of [/if \(!Up\(a\)\)/, /if \(IsGone\(a\)\)/, /if \(!ChartBridgeOrders\.AccountTradable\(a\.Name\)\)/, /ChartBridgeOrders\.CopierFindAccount\(a\.Name, out w\) == null/, /ChartBridgeOrders\.CopierCapProblem\(/, /if \(IsBotAccount\(a\)\)/])
+    assert.match(elig, re, 'Eligible: ' + re);
+  assert.match(copierBodies('ExitAllowed'), /if \(!Up\(c\.A\) \|\| !ChartBridgeServer\.EnsureWatched\(c\.A\)\)/);
   for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /Eligible\(/, f + ' checks the follower');
   for (const f of ['StartReduce', 'SendReduce', 'Flatten', 'FlattenLate']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
-  // Sim is read from NinjaTrader's Provider, exactly "Simulator"; Backtest and Playback never
+  // the bot's account is never a follower that is on (both directions)
+  assert.match(ccode, /if \(on\.Groups\[1\]\.Value == "true" && IsBotAccount\(a\)\)/);
+  assert.match(copierBodies('BotEntryCheck'), /if \(isFollower\)/);
+  // Sim is read from NinjaTrader's Provider, exactly "Simulator"; Backtest and Playback never (for the page's SIM or LIVE mark)
   assert.match(copierBodies('ReadSim'), /IsNeverTradable\(a\.Name \?\? ""\)\) return false;\s*return ProviderOf\(a\) == "Simulator";/);
   // entries are sent under PlaceLock (one order check and send at a time across all pages); legs are GTC stops, entries Day
   for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /lock \(ChartBridgeOrders\.CopierPlaceLock\)/);
@@ -1017,14 +1032,26 @@ test('0.4.0 bot: the new file ships, is compile-checked and harnessed', () => {
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("bot \(B3\)", BotHarness\.Run\);/);
 });
 
-test('0.4.0 bot: off by default, Sim101 only, 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
+test('0.4.0 bot: on by default, the account Anthony chooses (Sim101 until then), 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
   // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the one v3 handshake and send (no stub left)
   assert.match(bcode, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Bot; \} \}/);
-  assert.match(bcode, /public static void ResetConfig\(\) \{ ChartBridgeSwitches\.Note\("bot", "off"\); ConfigRoot = "MNQ";/, 'off by default, botRoot MNQ');
+  assert.match(bcode, /public static void ResetConfig\(\) \{ ConfigRoot = "MNQ";/, 'botRoot MNQ; the switch default (on) is ChartBridgeSwitches.Reset\'s only');
   assert.match(bcode, /if \(key == "bot"\) return true;/);
   assert.ok(!/Stub|SwitchOn/.test(bcode), 'no v3 stub or second switch parser left in the bot');
   assert.match(bodyOf(bcode, 'private static void ToPages(string json)'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
-  assert.match(bcode, /public const string BotAccount = "Sim101";/);
+  assert.match(bcode, /public const string DefaultAccount = "Sim101";/);
+  assert.match(bcode, /public static string BotAccount \{ get \{ lock \(Sync\) return account; \} \}/);
+  assert.ok(!/account = /.test(bcode.replace(bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)'), '').replace(bodyOf(bcode, 'private static void LoadAccount()'), '').replace(bodyOf(bcode, 'private static void Reset()'), '').replace(/private static string account = DefaultAccount;/, '')),
+    'the bot\'s account changes only by botAccount (the page), bot-account.txt at start, or the reset to Sim101');
+  // botAccount: every gate, refused while the bot has a position or a working entry, never a copier follower or leader, a temp-file write
+  const setAcc = bodyOf(bcode, 'private static string SetAccount(Dictionary<string, Val> d)');
+  for (const re of [/string why = AccountProblemFor\(name, true\);/, /why = ChartBridgeCopier\.BotAccountRefusal\(name\);/, /if \(exposed \|\| WorkingEntries\(\)\.Count > 0\) return "the bot has a position or a working entry: choose its account when it is flat";/, /string err = SaveAccount\(name\);/])
+    assert.match(setAcc, re, 'SetAccount: ' + re);
+  assert.ok(setAcc.indexOf('SaveAccount(name)') > setAcc.indexOf('WorkingEntries()'), 'saved only after every refusal');
+  assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /File\.WriteAllLines\(tmp,[\s\S]*if \(File\.Exists\(AccountFile\)\) File\.Replace\(tmp, AccountFile, null\); else File\.Move\(tmp, AccountFile\);/);
+  const prob = bodyOf(bcode, 'private static string AccountProblemFor(string name, bool gates)');
+  for (const re of [/IsNeverTradable\(name \?\? ""\)/, /if \(gates && !ChartBridgeOrders\.AccountTradable\(name\)\)/, /a\.Connection\.Status != ConnectionStatus\.Connected/]) assert.match(prob, re, 'AccountProblemFor: ' + re);
+  assert.ok(!/IsSim\(/.test(prob), 'no Sim lock');
   assert.match(bcode, /public const int MaxQty = 1;/);
   assert.match(bcode, /public const int MaxTradesLimit = 5, MaxLossesLimit = 3;/);
   assert.match(bcode, /public const double SilenceMs = 5000/);
@@ -1036,8 +1063,11 @@ test('0.4.0 bot: off by default, Sim101 only, 1 contract; orders only through Ch
   assert.match(bodyOf(bcode, 'private static void OnBotFlatten()'), /if \(m != "auto"\) why = "flatten is for auto mode only";/, 'the bot\'s own flatten: auto only');
   assert.ok(!/ChartBridgeOrders\.FlattenForBot/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never flattens');
   assert.ok(!/trading = false|Enabled = true/.test(bcode), 'never turns trading or itself on or off');
-  // the order is always built from Sim101 and the bot's root, quantity 1
-  assert.match(bodyOf(bcode, 'private static string Place(Signal s, out Order placed)'), /"\{\\"type\\":\\"order\\",\\"account\\":\\"" \+ BotAccount \+ "\\",\\"root\\":\\"" \+ root \+/);
+  // the order is always built from the bot's account and root, quantity 1; a proposal is placed only on the account it named
+  const place = bodyOf(bcode, 'private static string Place(Signal s, string forAccount, out Order placed)');
+  assert.match(place, /string root, acct = BotAccount;/);
+  assert.match(place, /"\{\\"type\\":\\"order\\",\\"account\\":" \+ CbJson\.Str\(acct\) \+ ",\\"root\\":\\"" \+ root \+/);
+  assert.match(place, /if \(why == null && forAccount != null && forAccount != acct\) why = /);
   // the secret: never logged; constant time
   assert.ok(!/Log\([^;]*\+\s*(secret|given|givenSecret)\b/.test(bcode), 'the secret is never logged');
   assert.ok(!/Log\([^;]*\+\s*s\b(?!\.)/.test(bodyOf(bcode, 'private static void LoadSecret()')), 'nor the one just made');
@@ -1143,9 +1173,9 @@ test('0.4.0 B1: ChartBridgeStrategies.cs ships, is checked, is C# 5 and the rest
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(scode) && !/\?\.\w/.test(scode) && !/\bnameof\(/.test(scode), 'C# 5');
 });
 
-test('0.4.0 B1: switches off by default; off is 0.3.8 (every hook is behind a switch)', () => {
-  // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs)
-  assert.match(sBodies('ResetV3Config'), /ChartBridgeSwitches\.Note\("orderTypes", "off"\); ChartBridgeSwitches\.Note\("strategies", "off"\);/);
+test('0.4.0 B1: switches on by default; the off line gives 0.3.8 (every hook is behind a switch)', () => {
+  // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); their default (on) is ChartBridgeSwitches.Reset's
+  assert.ok(!/ChartBridgeSwitches/.test(sBodies('ResetV3Config')), 'ResetV3Config touches no switch');
   assert.match(scode, /public static bool OrderTypesOn \{ get \{ return ChartBridgeV3\.OrderTypes; \} \}/);
   assert.match(scode, /public static bool StrategiesOn \{ get \{ return ChartBridgeV3\.Strategies; \} \}/);
   assert.match(fnBody('ResetConfig'), /ResetV3Config\(\);/);

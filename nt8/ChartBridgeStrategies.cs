@@ -7,7 +7,8 @@
 // grid, the side of the market, the rate limit, strict keys), and each fill increment goes through KeepBracket and the
 // stop-already-traded check, the legs check, the missing-stop alarm, "never opens a position" and Flatten as in v2. What
 // lives here:
-//   - the two switches (config.txt orderTypes and strategies, off by default; off is 0.3.8 exactly: the hooks in
+//   - the two switches (config.txt orderTypes and strategies, ON by default since Anthony's 2026-10-07 decision; an off line
+//     gives 0.3.8 exactly: the hooks in
 //     ChartBridgeOrders.cs do nothing while a switch is off);
 //   - the price rules of a stop-limit and an MIT (PROTOCOL "Order types");
 //   - order.strategy: its strict reading and every rule of its table, refusals naming the key;
@@ -36,15 +37,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
     public static partial class ChartBridgeOrders
     {
-        // ---------------------------------------------------------- switches (config.txt, off by default)
-        // PROTOCOL "v3 switches": on, true and 1 mean on (any case); anything else is off, with one Output line.
+        // ---------------------------------------------------------- switches (config.txt, on by default; Anthony 2026-10-07)
+        // PROTOCOL "v3 switches": on unless config.txt has an off line (off, false or 0; any other value is off, with one Output line).
         // Integration (0.4.0): one source of truth for every v3 switch, ChartBridgeSwitches in ChartBridgeV3.cs. ChartBridgeConfig.Load
-        // records orderTypes and strategies there (on, true and 1 mean on, any case; anything else is off, with one Output line
-        // naming the value), so trading.switches and this file can never disagree.
+        // records orderTypes and strategies there, so trading.switches and this file can never disagree.
         public static bool OrderTypesOn { get { return ChartBridgeV3.OrderTypes; } }
         public static bool StrategiesOn { get { return ChartBridgeV3.Strategies; } }
 
-        private static void ResetV3Config() { ChartBridgeSwitches.Note("orderTypes", "off"); ChartBridgeSwitches.Note("strategies", "off"); }
+        private static void ResetV3Config() { }   // the switches' default (on, Anthony 2026-10-07) is set in one place: ChartBridgeSwitches.Reset, in ChartBridgeConfig.Load
 
         // Called first by ReadConfig: the keys are ChartBridgeSwitches' (read in ChartBridgeConfig.Load before this); taken here only.
         private static bool ReadV3Config(string key, string val) { return key == "orderTypes" || key == "strategies"; }

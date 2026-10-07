@@ -691,7 +691,7 @@ function mount(v, host) {
         }).join('') + '</div>' : '') +
         (S.archived.length ? `<p class="apg-arch">Archived: ${esc(S.archived.map(a => a.name).join(', '))}</p>` : '');
       foot = (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +
-        (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks is off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
+        (sw.accountChecks ? '' : ' Checkmarks are read only (accountChecks = off in config.txt).') + (S.enabled ? '' : ' ' + (S.reason || ''));
     } else if (P.tab === 'pos') {
       html = !positions.length ? '<p class="ac-empty">Flat on every account.</p>' : '<div class="gr apg-g apg-pos-g" role="table" aria-label="Open positions">' +
         row('h', h('Account') + h('Inst') + h('Qty', 'r') + h('Avg', 'r') + h('Unrealized', 'r') + h('Stop', 'r') + h('Target', 'r'), 'gr-h') +

@@ -1,9 +1,10 @@
 // ChartBridge 0.4.0 on Mono (inside check:orders): the bot channel (nt8/ChartBridgeBot.cs, PROTOCOL.md "Bot channel"). A MADE-UP
 // bot only ("Demo Opening Fade"): its signals are written here by hand, nothing here is a real bot's rule or market data.
-// Every refusal must never reach the stand-in accounts: a non-Sim101 order in every mode, shadow sends nothing, an unanswered
+// Every refusal must never reach the stand-in accounts: an order on any account but the bot's chosen one in every mode (the bot
+// trades the account Anthony chooses, Sim101 by default, Sim or LIVE: botAccount, 2026-10-07), shadow sends nothing, an unanswered
 // proposal is never sent, an accepted one is placed from its own parameters through the gates, the rails (1 contract, 5 trades,
 // 3 losing trades, the kill switch, one trade at a time), the heartbeat (unfilled entries cancelled, stops and targets kept, never
-// a flatten), the secret (wrong or missing: refused; never printed), and the switch off (404, every message refused).
+// a flatten), the secret (wrong or missing: refused; never printed), and the off line (404, every message refused).
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -112,6 +113,7 @@ public static class BotHarness
             Heartbeat();
             BotFlatten();
             Rails();
+            ChosenAccount();
             V2PageGetsNothing();
             Http();
             OffAgain();
@@ -166,12 +168,16 @@ public static class BotHarness
         Check(pc.Trader && pc2.Trader, "both pages signed in");
     }
 
-    // ------------------------------------------------------------ the switch off (the default): /bot is 404, everything refused
+    // ------------------------------------------------------------ on by default; the off line: /bot is 404, everything refused
     static void SwitchOff()
     {
         File.WriteAllLines(Path.Combine(home, "ChartBridge", "config.txt"), new[] { "trading = true" });
         ChartBridgeConfig.Load();
-        Check(!ChartBridgeBot.Enabled, "bot is off by default (no bot line in config.txt)");
+        Check(ChartBridgeBot.Enabled && ChartBridgeV3.SwitchesJson().Contains("\"bot\":true"), "bot is ON by default (no bot line in config.txt; Anthony 2026-10-07)");
+        File.WriteAllLines(Path.Combine(home, "ChartBridge", "config.txt"), new[] { "trading = true", "bot = off" });
+        ChartBridgeConfig.Load();
+        Check(!ChartBridgeBot.Enabled && ChartBridgeV3.SwitchesJson().Contains("\"bot\":false"), "bot = off turns it off (trading.switches.bot says so)");
+        OrdersHarness.AllOffLines();   // the other v3 off lines too: this harness runs with gate 2 as tradeAccounts
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A"); ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
         ChartBridgeBot.Start(false);
         Check(!File.Exists(Path.Combine(home, "ChartBridge", "bot-secret.txt")), "off: no bot-secret.txt is made");
@@ -182,16 +188,17 @@ public static class BotHarness
                                      "{\"type\":\"botSeen\",\"id\":\"x\",\"at\":1}" })
         {
             Page(m);
-            Check(PageReject().Contains("The bot channel is off (bot in config.txt)"), "off: " + m.Substring(9, 12) + "... refused");
+            Check(PageReject().Contains("The bot channel is off (bot = off in config.txt)"), "off: " + m.Substring(9, 12) + "... refused");
         }
         Check(sim.Calls.Count == n && eval.Calls.Count == 0 && Count(page, "bot") == 0, "off: nothing sent to NinjaTrader, no bot message to the page");
-        foreach (string[] kv in new[] { new[] { "bot = yes", "False" }, new[] { "bot = On", "True" }, new[] { "bot = 1", "True" }, new[] { "bot = off", "False" } })
+        foreach (string[] kv in new[] { new[] { "bot = yes", "False" }, new[] { "bot = On", "True" }, new[] { "bot = 1", "True" }, new[] { "bot = off", "False" }, new[] { "# no bot line", "True" } })
         {
             File.WriteAllLines(Path.Combine(home, "ChartBridge", "config.txt"), new[] { kv[0], "botRoot = mnq" });
             ChartBridgeConfig.Load();
             Check(ChartBridgeBot.Enabled.ToString() == kv[1] && ChartBridgeBot.ConfigRoot == "MNQ", "config.txt: " + kv[0] + " is " + kv[1] + "; botRoot upper-cased");
         }
-        Check(Logged("config.txt: bot = yes is not on, true or 1, so bot is OFF"), "config.txt: a value that is not on, true or 1 is off, with one Output line");
+        Check(Logged("config.txt: bot = yes is not off or on, so bot is OFF"), "config.txt: a value that is neither off nor on is off, with one Output line");
+        OrdersHarness.AllOffLines();
         ChartBridgeOrders.ReadConfig("trading", "true"); ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A"); ChartBridgeOrders.ReadConfig("maxQty.MNQ", "3");
     }
 
@@ -232,8 +239,8 @@ public static class BotHarness
         Check(BotReject().Contains("send botHello first"), "a signal before botHello: refused");
         Bot("{\"type\":\"botHello\",\"name\":\"Demo Opening Fade\"}");
         string w = Last(botOut, "welcome");
-        Check(w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\"") && w.Contains("\"root\":\"MNQ\"") && w.Contains("\"rails\":{\"maxQty\":1,\"maxTrades\":5,\"maxLosses\":3}") && w.Contains("\"name\":\"MNQ 12-26\""),
-              "botHello: welcome (shadow, Sim101, MNQ, the rails): " + w);
+        Check(w.Contains("\"mode\":\"shadow\"") && w.Contains("\"account\":\"Sim101\",\"sim\":true") && w.Contains("\"root\":\"MNQ\"") && w.Contains("\"rails\":{\"maxQty\":1,\"maxTrades\":5,\"maxLosses\":3}") && w.Contains("\"name\":\"MNQ 12-26\""),
+              "botHello: welcome (shadow, Sim101 with sim true, MNQ, the rails): " + w);
         Check(Last(page, "bot").Contains("\"connected\":true") && Last(page, "bot").Contains("\"name\":\"Demo Opening Fade\""), "the page's strip: connected, the bot's name");
         ChartBridgeBot.OnTick("{\"type\":\"tick\",\"root\":\"MNQ\",\"p\":25000.25,\"v\":1}");
         Check(Last(botOut, "tick").Contains("25000.25"), "the bot reads the live trades");
@@ -291,17 +298,16 @@ public static class BotHarness
             Check(BotReject().Contains("unknown key \\\"qty\\\""), mode + ": a signal with a qty is refused");
         }
         Check(sim.Calls.Count == n && eval.Calls.Count == 0, "no order reached any account");
-        // auto locked to Sim101 as NinjaTrader's simulator: a Sim101 that is not one is refused, in auto and on accept
+        // Anthony 2026-10-07: no Sim lock. An account NinjaTrader does not call its simulator is shown LIVE (sim false), not refused
         sim.Provider = Provider.Rithmic;
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
-        Check(PageReject().Contains("auto refused: Sim101 is not NinjaTrader's simulator"), "auto: refused when Sim101 is not NinjaTrader's simulator");
-        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"copilot\"}");
-        Bot(Sig(NewId(), Market("buy")));
-        Check(BotReject().Contains("Sim101 is not NinjaTrader's simulator") && Last(page, "botSignal").Contains("refused: Sim101 is not"), "copilot: no proposal when Sim101 is not the simulator");
+        Check(Last(page, "bot").Contains("\"mode\":\"auto\"") && Last(page, "bot").Contains("\"account\":\"Sim101\",\"sim\":false"), "auto: allowed on the bot's account when it is not a simulator, shown with sim false (LIVE)");
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         sim.Provider = Provider.Simulator;
+        Check(ChartBridgeBot.StripJson().Contains("\"account\":\"Sim101\",\"sim\":true"), "the strip says sim true for NinjaTrader's simulator");
         ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A");
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
-        Check(PageReject().Contains("auto refused: Sim101 may not trade from the chart"), "auto: refused when Sim101 is not tradable (gate 2)");
+        Check(PageReject().Contains("auto refused: Sim101 may not trade from the chart"), "auto: refused when the bot's account is not tradable (gate 2)");
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A");
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         Check(sim.Calls.Count == n && eval.Calls.Count == 0, "still nothing sent");
@@ -386,7 +392,7 @@ public static class BotHarness
         Check(fresh.Any(x => x.StartsWith("{\"type\":\"bot\"")) && fresh.Any(x => x.StartsWith("{\"type\":\"botProposal\"") && x.Contains(id) && x.Contains("\"state\":\"open\"")), "a page that signs in gets the strip and the open proposal");
     }
 
-    // ------------------------------------------------------------ auto: Sim101 only, through the gates, one trade at a time
+    // ------------------------------------------------------------ auto: on the bot's account (Sim101 here), through the gates, one trade at a time
     static void Auto()
     {
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
@@ -682,6 +688,105 @@ public static class BotHarness
         finally { try { l.Stop(); l.Close(); } catch (Exception) { } }
     }
 
+    // ------------------------------------------------------------ the bot's account: Anthony chooses it (Sim or LIVE), every gate applies
+    static string AccountMsg(string name) { return "{\"type\":\"botAccount\",\"cid\":\"ba\",\"account\":\"" + name + "\"}"; }
+    static string AccountFile() { return Path.Combine(home, "ChartBridge", "bot-account.txt"); }
+
+    static void ChosenAccount()
+    {
+        Settle();
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+        Check(ChartBridgeBot.BotAccount == "Sim101" && !File.Exists(AccountFile()), "the bot's account is Sim101 until Anthony chooses another (no bot-account.txt)");
+        int ns = sim.Calls.Count, ne = eval.Calls.Count;
+        Page(AccountMsg("NOPE-1"));
+        Check(PageReject().Contains("NOPE-1 is not in NinjaTrader"), "botAccount: an account NinjaTrader does not have is refused");
+        Account play = NewAccount("Playback101", Provider.Playback);
+        Page(AccountMsg("Playback101"));
+        Check(PageReject().Contains("Backtest or Playback account"), "botAccount: Playback refused");
+        Account.All.Remove(play);
+        Page("{\"type\":\"botAccount\",\"cid\":\"ba\",\"account\":\"EVAL-A\",\"mode\":\"auto\"}");
+        Check(PageReject().Contains("unknown key \\\"mode\\\""), "botAccount: strict keys");
+        Page("{\"type\":\"botAccount\",\"cid\":\"ba\",\"account\":\" EVAL-A\"}");
+        Check(PageReject().Contains("account must be an account name"), "botAccount: a name with spaces around it is refused");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101");
+        Page(AccountMsg("EVAL-A"));
+        Check(PageReject().Contains("EVAL-A may not trade from the chart") && ChartBridgeBot.BotAccount == "Sim101" && !File.Exists(AccountFile()), "botAccount: an account that is not tradable (gate 2) is refused; nothing changed");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A");
+        eval.Connection.Status = ConnectionStatus.ConnectionLost;
+        Page(AccountMsg("EVAL-A"));
+        Check(PageReject().Contains("EVAL-A is not connected") && ChartBridgeBot.BotAccount == "Sim101", "botAccount: an account that is not connected is refused");
+        eval.Connection.Status = ConnectionStatus.Connected;
+        ChartBridgeOrders.ReadConfig("trading", "false");
+        Page(AccountMsg("EVAL-A"));
+        Check(PageReject().Contains("trading is off") && ChartBridgeBot.BotAccount == "Sim101", "botAccount: trading = true stays the master switch");
+        ChartBridgeOrders.ReadConfig("trading", "true");
+
+        // accepted: a LIVE account (a made-up evaluation account; NinjaTrader does not call it a simulator)
+        Page(AccountMsg("EVAL-A"));
+        string b = Last(page, "bot");
+        Check(ChartBridgeBot.BotAccount == "EVAL-A" && b.Contains("\"account\":\"EVAL-A\",\"sim\":false"), "botAccount EVAL-A: accepted; the page is told (sim false: LIVE): " + b);
+        Check(File_("bot-account.txt").Contains("account\tEVAL-A") && File_("bot-account.txt").StartsWith("#") && !File.Exists(AccountFile() + ".tmp"), "bot-account.txt: written through a temp file, the account named");
+        Check(Last(botOut, "welcome").Contains("\"account\":\"EVAL-A\",\"sim\":false"), "the bot is told its account (welcome again), sim false");
+        Check(File_("bot.log").Contains("account EVAL-A (LIVE), was Sim101, set by the page"), "bot.log: the change, marked LIVE");
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Check(Last(page, "bot").Contains("\"mode\":\"auto\""), "auto on a LIVE account: allowed (no Sim lock)");
+        string id = NewId();
+        Bot(Sig(id, Market("buy")));
+        List<string> sentE = Calls(eval, ne);
+        Check(sentE.Count == 1 && Regex.IsMatch(sentE[0], "^submit CB#[0-9a-f]{8} bot s8 t16 Buy Market 1 ") && sim.Calls.Count == ns, "auto: placed on the chosen account EVAL-A, 1 contract; nothing on Sim101: " + string.Join(" | ", sentE));
+        Order entry = Newest(eval);
+        Update(entry);
+        Check(Last(botOut, "order").Contains("\"account\":\"EVAL-A\""), "the bot gets its own order on its account");
+        Page(AccountMsg("Sim101"));
+        Check(PageReject().Contains("the bot has a position or a working entry: choose its account when it is flat") && ChartBridgeBot.BotAccount == "EVAL-A", "botAccount: refused while the bot has a working entry");
+        Bot("{\"type\":\"withdraw\",\"id\":\"" + id + "\",\"reason\":\"Sample: no longer valid\"}");
+        Check(Calls(eval, ne).Count == 2 && Calls(eval, ne)[1].StartsWith("cancel CB#" + Tag(entry) + " bot"), "withdraw: the entry on EVAL-A is cancelled");
+        entry.OrderState = OrderState.Cancelled; Update(entry);
+        // a fill on the chosen account is the bot's trade (the rails count it), and its position blocks a change of account
+        Order e2 = null;
+        Bot(Sig(NewId(), Market("sell")));
+        e2 = eval.Orders.LastOrDefault(o => o.Name != null && o.Name.Contains(" bot ") && ChartBridgeOrders.IsWorking(o.OrderState));
+        Check(e2 != null, "auto on EVAL-A: a second entry placed");
+        if (e2 != null)
+        {
+            int trades = int.Parse(Regex.Match(Last(page, "bot"), "\"trades\":(\\d+)").Groups[1].Value);
+            e2.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            e2.Filled = 1; e2.AverageFillPrice = 25000; e2.OrderState = OrderState.Filled; Update(e2);
+            Deliver("EVAL-A", mnq, MarketPosition.Short, 1, 25000, e2.OrderId);
+            Check(Last(page, "bot").Contains("\"trades\":" + (trades + 1)) && Last(page, "bot").Contains("\"position\":{\"qty\":-1"), "a fill on the chosen account counts as the bot's trade (the rails hold)");
+            Page(AccountMsg("Sim101"));
+            Check(PageReject().Contains("choose its account when it is flat"), "botAccount: refused while the bot has a position");
+            Deliver("EVAL-A", mnq, MarketPosition.Long, 1, 24999, "EXIT" + Guid.NewGuid().ToString("N").Substring(0, 6));
+            foreach (Order o in eval.Orders.ToList()) if (ChartBridgeOrders.IsWorking(o.OrderState)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            eval.Positions.Clear();
+        }
+        // copilot: the proposal carries the account and the mark; a change of account expires it (never sent)
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"copilot\"}");
+        string pid = NewId();
+        Bot(Sig(pid, Market("buy")));
+        Check(Last(page, "botProposal").Contains("\"account\":\"EVAL-A\",\"sim\":false") && Last(page, "botProposal").Contains("\"state\":\"open\""), "copilot: the proposal names the account, sim false");
+        // a restart keeps the account
+        int beforeRestart = eval.Calls.Count;
+        Page(AccountMsg("Sim101"));
+        Check(ChartBridgeBot.BotAccount == "Sim101" && Last(page, "botProposal").Contains("\"id\":\"" + pid + "\"") && Last(page, "botProposal").Contains("\"state\":\"not answered\"") && eval.Calls.Count == beforeRestart,
+              "back to Sim101: the open proposal for EVAL-A expires as not answered, nothing sent");
+        Page(AccountMsg("EVAL-A"));
+        ChartBridgeBot.Stop(); ChartBridgeBot.Start(false);
+        Check(ChartBridgeBot.BotAccount == "EVAL-A", "a restart keeps the bot's account (bot-account.txt)");
+        File.WriteAllText(AccountFile(), "# torn\naccount\tEVAL-A\tx\n");
+        ChartBridgeBot.Stop(); ChartBridgeBot.Start(false);
+        Check(ChartBridgeBot.StripJson().Contains("\"standDown\":\"bot-account.txt has a line ChartBridge does not understand") && File_("bot-account.txt") == "# torn\naccount\tEVAL-A\tx\n",
+              "a bot-account.txt that cannot be read: the bot stands down, the file is left as it is");
+        Page(AccountMsg("Sim101"));
+        Check(ChartBridgeBot.BotAccount == "Sim101" && ChartBridgeBot.StripJson().Contains("\"standDown\":null") && File_("bot-account.txt").Contains("account\tSim101"), "choosing the account again clears it and rewrites the file");
+        // re-attach the bot for the rest of the harness
+        bc = new ChartBridgeClient(null, ChartBridgeBot.BotClientId);
+        bc.Tap = s2 => { lock (botOut) botOut.Add(s2); };
+        ChartBridgeBot.Attach(bc);
+        Bot("{\"type\":\"botHello\",\"name\":\"Demo Opening Fade\"}");
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+    }
+
     static string Get(int port, string path, string origin, string secret, out int status) { return Get(port, path, origin, secret, out status, null); }
 
     static string Get(int port, string path, string origin, string secret, out int status, string host)
@@ -709,14 +814,14 @@ public static class BotHarness
     // ------------------------------------------------------------ the switch turned off again: 0.3.8 behaviour, nothing from the bot
     static void OffAgain()
     {
-        int n = sim.Calls.Count;
+        int n = sim.Calls.Count, ne = eval.Calls.Count;
         ChartBridgeBot.Stop();
-        ChartBridgeBot.ResetConfig();
+        ChartBridgeSwitches.Note("bot", "off");   // the off line
         ChartBridgeBot.Start(false);
         Check(ChartBridgeBot.UpgradeCheck(null, "x", true) == 404 && !ChartBridgeBot.Attach(new ChartBridgeClient(null, -3)), "off again: /bot 404, no bot can attach");
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
         Check(PageReject().Contains("The bot channel is off"), "off again: page messages refused");
         ChartBridgeBot.OnBotMessage(bc, Sig(NewId(), Market("buy")));
-        Check(sim.Calls.Count == n && eval.Calls.Count == 0, "off again: nothing reaches NinjaTrader");
+        Check(sim.Calls.Count == n && eval.Calls.Count == ne, "off again: nothing reaches NinjaTrader");
     }
 }

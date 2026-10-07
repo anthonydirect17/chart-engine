@@ -1,4 +1,4 @@
-// ChartBridge 0.4.0: Merge stops and targets (config.txt "merge = on"; OFF by default). Part of the ChartBridge add-on;
+// ChartBridge 0.4.0: Merge stops and targets (ON by default, Anthony 2026-10-07; config.txt "merge = off" turns it off). Part of the ChartBridge add-on;
 // install with ChartBridgeOrders.cs (this file is more of the same class, ChartBridgeOrders, so it uses the gates and
 // helpers there and adds none of its own). The contract is nt8/PROTOCOL.md "Merge stops and targets (merge = on)".
 //
@@ -37,11 +37,11 @@ namespace NinjaTrader.NinjaScript.AddOns
     {
         // ---------------------------------------------------------- the switch (config.txt "merge"; PROTOCOL "v3 switches")
         // Integration (0.4.0): one source of truth for every v3 switch, ChartBridgeSwitches in ChartBridgeV3.cs. ChartBridgeConfig.Load
-        // records "merge" there (on, true or 1 mean on, any case; anything else is off, with one Output line naming the value), so
+        // records "merge" there (on by default; off, false or 0 turn it off, and any other value is off with one Output line), so
         // the trading message's switches.merge and this switch can never disagree.
         public static bool MergeOn { get { return ChartBridgeV3.Merge; } }
 
-        private static void MergeResetConfig() { ChartBridgeSwitches.Note("merge", "off"); }
+        private static void MergeResetConfig() { }   // the switch's default (on, Anthony 2026-10-07) is set in one place: ChartBridgeSwitches.Reset, in ChartBridgeConfig.Load
 
         // The key is ChartBridgeSwitches' (read in ChartBridgeConfig.Load before this): taken here only so nothing else reads it.
         private static bool MergeReadConfig(string key, string val) { return key == "merge"; }
@@ -448,7 +448,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Returns why it is refused (a reject; nothing reaches NinjaTrader), or null once the swap has started.
         private static string MergeStart(ChartBridgeClient client, string top, string cid)
         {
-            if (!MergeOn) return MergeRefuse("Merge is off in config.txt (merge = on turns it on)");
+            if (!MergeOn) return MergeRefuse("Merge is off in config.txt (merge = off; delete that line to turn it on)");
             string why, accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
             Account account = FindAccount(accountName, out why);                    // gate 2: allowed and Connected
             if (account == null) return MergeRefuse(why);

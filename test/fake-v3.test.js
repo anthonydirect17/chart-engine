@@ -150,7 +150,7 @@ test('order types: stop-limit (offset or price) and MIT, each on the grid and th
   assert.equal(sl.state, 'filled');
   d.act({ type: 'change', id: d.working()[0] ? d.working()[0].id : 'none', price: 1 });
   const e = await makeDesk({ switches: { orderTypes: false } });
-  assert.match(reasonOf(e.order({ kind: 'mit', price: 25399 })), /orderTypes in config.txt/);
+  assert.match(reasonOf(e.order({ kind: 'mit', price: 25399 })), /orderTypes = off in config.txt/);
 });
 
 test('quote-only roots: every order is refused with the plain reason', async () => {

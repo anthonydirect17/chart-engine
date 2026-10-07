@@ -3,17 +3,22 @@
 //
 // A local bot program on the trading PC (a rule program, never AI) connects on its own WebSocket path, /bot, with its own
 // permission level: the secret in bot-secret.txt next to config.txt, which ChartBridge makes on this PC and never prints.
-// It reads the live trades. It may send orders ONLY on Sim101 (NinjaTrader's simulator), and only through ChartBridge:
-// every bot order is built here from the bot's parameters (or a proposal's) and placed by ChartBridgeOrders.PlaceBotEntry,
-// through every v2 gate, inside the rails below. AI is never in the order path.
+// It reads the live trades. It may send orders ONLY on the bot's account, the one Anthony chooses on the page (botAccount,
+// Sim101 by default, a Sim or a live account: Anthony 2026-10-07, no Sim lock), and only through ChartBridge: every bot order is
+// built here from the bot's parameters (or a proposal's) and placed by ChartBridgeOrders.PlaceBotEntry, through every v2 gate
+// (trading on, the account's checkmark or tradeAccounts, Connected, the caps), inside the rails below. AI is never in the
+// order path. The bot itself never names an account.
 //
 // Rules, each checked in this file (the contract line is named where it is enforced):
-//   off by default: with "bot" not on in config.txt, /bot answers 404 and every bot page message is refused;
+//   on by default (Anthony 2026-10-07): with "bot = off" in config.txt, /bot answers 404 and every bot page message is refused;
 //   the upgrade needs a loopback address (ChartBridgeServer.Handle, as every request), NO Origin header (403), the secret in
 //     X-ChartBridge-Bot (constant-time compare; wrong or missing: 403), and no other bot (409);
 //   modes: shadow (nothing sent), copilot (a proposal to the signed-in pages; only Anthony's accept places it, from the
-//     proposal's own parameters; an unanswered proposal is never sent and expires as "not answered"), auto (Sim101 only);
-//     every start begins in shadow;
+//     proposal's own parameters; an unanswered proposal is never sent and expires as "not answered"), auto (on the bot's
+//     account); every start begins in shadow;
+//   the account: chosen on the page (botAccount), saved in bot-account.txt, Sim101 by default; refused while the bot has a
+//     position or a working entry, when it does not pass the account gates, and when the copier uses it (a follower that is
+//     on, or the leader);
 //   rails: 1 contract, on the bot's root only (botRoot, default MNQ, or its micro/mini sibling set from the page); at most 5
 //     trades a day; stand down after 3 losing trades; every entry needs a stop; the kill switch; one trade at a time;
 //   heartbeat: any bot message counts; 5 s of silence cancels the bot's unfilled entries, keeps any bot position's stop and
@@ -42,7 +47,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeBot
     {
         // ---------------------------------------------------------- fixed rails (PROTOCOL.md "Bot channel", Rails)
-        public const string BotAccount = "Sim101";          // the only account a bot order may go to, exact name
+        public const string DefaultAccount = "Sim101";      // the bot's account until Anthony chooses another (botAccount)
         public const int MaxQty = 1;                      // "at most 1 contract"
         public const int MaxTradesLimit = 5, MaxLossesLimit = 3;   // the page may lower these, never raise them (botRails)
         public const int MaxActionsPerSecond = 10;        // gate 7 for the bot connection
@@ -53,13 +58,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const int BotClientId = -1;                // the bot's ChartBridgeClient id (pages count up from 1)
 
         // ---------------------------------------------------------- settings (config.txt; read at start)
-        // bot = on (OFF by default). Integration (0.4.0): one source of truth for every v3 switch, ChartBridgeSwitches in
-        // ChartBridgeV3.cs (ChartBridgeConfig.Load records "bot" there), so trading.switches.bot and the bot channel never disagree.
+        // bot (ON by default, Anthony 2026-10-07; "bot = off" turns it off). Integration (0.4.0): one source of truth for every v3
+        // switch, ChartBridgeSwitches in ChartBridgeV3.cs (ChartBridgeConfig.Load records "bot" there), so trading.switches.bot and
+        // the bot channel never disagree.
         public static bool Enabled { get { return ChartBridgeV3.Bot; } }
         public static string ConfigRoot = "MNQ";          // botRoot
         public static string LibraryName = "bot-library.json";   // botLibrary (lead's default), served at GET /bot-library
 
-        public static void ResetConfig() { ChartBridgeSwitches.Note("bot", "off"); ConfigRoot = "MNQ"; LibraryName = "bot-library.json"; }
+        public static void ResetConfig() { ConfigRoot = "MNQ"; LibraryName = "bot-library.json"; }   // the switch's default (on) is ChartBridgeSwitches.Reset's, in ChartBridgeConfig.Load
 
         // Called by ChartBridgeConfig.Load for the keys it does not know itself.
         public static bool ReadConfig(string key, string val)
@@ -97,6 +103,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private class Proposal
         {
             public Signal S;
+            public string Account;                        // the bot's account when it was proposed: placed only on that one
             public string State = "open";                 // open, accepted, rejected, withdrawn, not answered
             public double SeenAt = -1, AnsweredAt = -1;   // page UTC ms, -1 = not yet
             public Order Entry;                           // placed on accept
@@ -112,6 +119,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool killed;
         private static int maxTrades = MaxTradesLimit, maxLosses = MaxLossesLimit;
         private static string railRoot;                   // the page's choice (botRails), or null for botRoot
+        private static string account = DefaultAccount;   // the bot's account (botAccount, bot-account.txt), exact name
+        private static string accountBroken;              // why bot-account.txt could not be read (no new entries)
         private static string railsBroken, dayBroken;     // why bot-rails.txt or bot-day.txt could not be read (no new entries)
         private static string secret;                     // never logged, never in /diag
         private static string secretState = "missing";   // ok, missing, unreadable (this word only goes to /diag)
@@ -140,6 +149,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Folder { get { return ChartBridgeConfig.Folder; } }
         private static string SecretFile { get { return Path.Combine(Folder, "bot-secret.txt"); } }
         private static string RailsFile { get { return Path.Combine(Folder, "bot-rails.txt"); } }
+        private static string AccountFile { get { return Path.Combine(Folder, "bot-account.txt"); } }
+
+        // The account the bot trades: Sim101 until Anthony chooses another on the page (botAccount).
+        public static string BotAccount { get { lock (Sync) return account; } }
         private static string DayFile { get { return Path.Combine(Folder, "bot-day.txt"); } }
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
@@ -153,10 +166,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!Enabled) return;
             LoadSecret();
             LoadRails();
+            LoadAccount();
             LoadDay();
             lock (Sync) noBotSinceMs = Now();
             if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
-            Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (Sim101 only, " + EffectiveRoot() + ", starting in shadow)");
+            Account ba = FindAccount();
+            Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (account " + BotAccount + (ba != null && IsSim(ba) ? " (Sim)" : " (LIVE)") + ", " + EffectiveRoot() + ", starting in shadow)");
         }
 
         public static void Stop()
@@ -176,6 +191,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bot = null; claimed = false; helloed = false; botName = null; lastMsgMs = 0; noBotSinceMs = 0; lastStripMs = 0;
                 mode = "shadow"; killed = false; maxTrades = MaxTradesLimit; maxLosses = MaxLossesLimit; railRoot = null; railsBroken = null; dayBroken = null;
+                account = DefaultAccount; accountBroken = null;
                 secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; ledQty = 0; ledCash = 0; ledAvg = 0;
                 Proposals.Clear(); EntryOfSignal.Clear(); Placed.Clear(); Tags.Clear(); CancelSent.Clear(); Actions.Clear(); lastSignalJson = null;
                 nSignals = nProposals = nAnswered = nNotAnswered = nPlaced = nRefused = nHeartbeatLost = 0;
@@ -274,6 +290,57 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static string EffectiveRoot() { lock (Sync) return railRoot ?? ConfigRoot; }
 
+        // ---------------------------------------------------------- the bot's account (bot-account.txt; Anthony 2026-10-07)
+        // "account<TAB>NAME" after two # lines, written by ChartBridge from the page (botAccount) through a temp file. No file: Sim101.
+        // A file that cannot be understood stands the bot down (no new entries) until the page chooses the account again or the
+        // file is deleted; nothing is guessed.
+        private static void LoadAccount()
+        {
+            string a = DefaultAccount, broken = null;
+            try
+            {
+                if (File.Exists(AccountFile))
+                {
+                    string found = null;
+                    foreach (string raw in File.ReadAllLines(AccountFile))
+                    {
+                        string line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#")) continue;
+                        string[] p = line.Split('\t');
+                        if (found == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
+                        else { broken = "bot-account.txt has a line ChartBridge does not understand"; break; }
+                    }
+                    if (broken == null && found == null) broken = "bot-account.txt names no account";
+                    if (broken == null) a = found;
+                }
+            }
+            catch (Exception ex) { broken = "bot-account.txt could not be read (" + ex.Message + ")"; }
+            if (broken != null) Log(broken + ": no new bot entries until the bot's account is chosen again on the Bot tab or the file is deleted");
+            lock (Sync) { account = a; accountBroken = broken == null ? null : broken + ": no new bot entries until the bot's account is chosen again on the Bot tab or the file is deleted"; }
+        }
+
+        private static string SaveAccount(string name)
+        {
+            try
+            {
+                Directory.CreateDirectory(Folder);
+                string tmp = AccountFile + ".tmp";
+                File.WriteAllLines(tmp, new[] { "# ChartBridge bot account (written by ChartBridge from the page's Bot tab; do not edit)",
+                    "# the one account the bot's orders go to; Sim101 when this file is missing", "account\t" + name });
+                if (File.Exists(AccountFile)) File.Replace(tmp, AccountFile, null); else File.Move(tmp, AccountFile);
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        // An account name as NinjaTrader shows it: plain printable text, no tab, quote or backslash (gate 8 would refuse it).
+        private static bool PlainName(string name)
+        {
+            if (string.IsNullOrEmpty(name) || name.Length > 200 || name.Trim() != name) return false;
+            foreach (char ch in name) if (ch < 0x20 || ch == 0x7f || ch == '"' || ch == '\\') return false;
+            return true;
+        }
+
         // ---------------------------------------------------------- the day (bot-day.txt; reset at 18:00 ET)
         // So a restart cannot forget today's trades and losses (lead's default). "session<TAB>yyyy-MM-dd", then one line per bot
         // trade, "trade<TAB><entry tag><TAB>open" or "trade<TAB><tag><TAB><realized dollars>". A file that cannot be read stands
@@ -361,6 +428,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (dayBroken != null) return dayBroken;
             if (railsBroken != null) return railsBroken;
+            if (accountBroken != null) return accountBroken;
             int losses = Trades.Values.Count(v => v < 0);
             if (losses >= maxLosses) return losses + " losing trades today: no new bot entries until 18:00 ET";
             return null;
@@ -490,6 +558,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "botSeen", new[] { "type", "id", "at" } },
             { "botAnswer", new[] { "type", "cid", "id", "answer", "at" } },
             { "botRails", new[] { "type", "cid", "maxTrades", "maxLosses", "root" } },   // lead's default (Anthony: rails changeable in the Bot tab)
+            { "botAccount", new[] { "type", "cid", "account" } },   // Anthony 2026-10-07: the bot trades the account he chooses
         };
 
         // ---------------------------------------------------------- the /bot WebSocket and GET /bot-library (ChartBridgeServer.Handle)
@@ -742,7 +811,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (type == null || !BotKeys.TryGetValue(type, out keys)) { ToBot(BotReject(id, "unknown bot message type " + (type ?? "(none)"))); return; }
             string odd = UnknownKey(d, keys);
             if (odd != null) { lock (Sync) nRefused++; ToBot(BotReject(id, "unknown key \"" + odd + "\" in " + type)); return; }   // e.g. "account": the bot never names one
-            if (!Enabled) { ToBot(BotReject(id, "The bot channel is off (bot in config.txt).")); return; }
+            if (!Enabled) { ToBot(BotReject(id, "The bot channel is off (bot = off in config.txt).")); return; }
             if (type == "beat") return;
             if (!RateOk(Actions)) { ToBot(BotReject(id, "too many bot messages (more than " + MaxActionsPerSecond + " a second)")); return; }
             if (type == "botHello") { OnHello(d); return; }
@@ -801,7 +870,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why != null) { s.Result = "refused: " + why; lock (Sync) nRefused++; }
                 else
                 {
-                    Proposal p = new Proposal { S = s };
+                    Proposal p = new Proposal { S = s, Account = BotAccount };
                     lock (Sync) { Proposals[s.Id] = p; nProposals++; }
                     s.Result = "proposed";
                     ToPages(ProposalJson(p));
@@ -809,9 +878,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             else
             {
-                // auto: ChartBridge places it, on Sim101 only, inside the rails and every gate.
+                // auto: ChartBridge places it, on the bot's account, inside the rails and every gate.
                 Order placed;
-                why = Place(s, out placed);
+                why = Place(s, null, out placed);
                 s.Result = why == null ? "placed" : "refused: " + why;
                 if (placed != null) lock (Sync) EntryOfSignal[s.Id] = placed;
             }
@@ -889,7 +958,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Notify();
         }
 
-        // flatten from the bot: auto mode only, and only the bot's own position on Sim101 (v2 Flatten: cancel, then market).
+        // flatten from the bot: auto mode only, and only the bot's own position on its account (v2 Flatten: cancel, then market).
         private static void OnBotFlatten()
         {
             string m, root = EffectiveRoot(), why = null;
@@ -904,33 +973,35 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- placing a bot order (auto, or an accepted proposal)
-        // The rails, then the account lock, then every v2 gate in ChartBridgeOrders (trading, gate 2 for Sim101, the cap at 1,
-        // grid, side of market, stale price, bracket). The order is built here from the signal's own parameters; the account is
-        // always Sim101 and the root always the bot's, whatever the bot sends.
-        private static string Place(Signal s, out Order placed)
+        // The rails, then the account, then every v2 gate in ChartBridgeOrders (trading, gate 2 for the bot's account, the cap at
+        // 1, grid, side of market, stale price, bracket). The order is built here from the signal's own parameters; the account is
+        // always the bot's (the one Anthony chose) and the root always the bot's, whatever the bot sends. forAccount: a proposal's
+        // account (placed only if it is still the bot's), or null.
+        private static string Place(Signal s, string forAccount, out Order placed)
         {
             placed = null;
             lock (PlaceGate)
             {
-                string root;
+                string root, acct = BotAccount;
                 string rootWhy = RootProblem(out root);
                 string why = RailsProblem() ?? AccountProblem(false) ?? rootWhy;
+                if (why == null && forAccount != null && forAccount != acct) why = "the bot's account changed from " + forAccount + " to " + acct + " after this proposal: nothing placed";
                 if (why != null) { lock (Sync) nRefused++; return why; }
-                string text = "{\"type\":\"order\",\"account\":\"" + BotAccount + "\",\"root\":\"" + root + "\",\"side\":\"" + s.Side + "\",\"kind\":\"" + s.Kind + "\",\"qty\":" + MaxQty +
+                string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(acct) + ",\"root\":\"" + root + "\",\"side\":\"" + s.Side + "\",\"kind\":\"" + s.Kind + "\",\"qty\":" + MaxQty +
                               (s.Kind == "market" ? "" : ",\"price\":" + s.PriceText) +
                               ",\"bracket\":{\"stop\":" + s.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + s.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
                 why = ChartBridgeOrders.PlaceBotEntry(text, out placed);
                 if (why != null) { lock (Sync) nRefused++; placed = null; return why; }
                 lock (Sync) { Placed.Add(placed); Tags.Add(TagOf(placed.Name)); nPlaced++; }
             }
-            BotLog("placed " + s.Side + " 1 " + EffectiveRoot() + " " + s.Kind + (s.PriceText != null ? " @ " + s.PriceText : "") + " stop " + s.StopTicks + " target " + s.TargetTicks + " on " + BotAccount + " (signal " + s.Id + ")");
+            BotLog("placed " + s.Side + " 1 " + EffectiveRoot() + " " + s.Kind + (s.PriceText != null ? " @ " + s.PriceText : "") + " stop " + s.StopTicks + " target " + s.TargetTicks + " on " + BotAccount + (SimNow() ? " (Sim)" : " (LIVE)") + " (signal " + s.Id + ")");
             return null;
         }
 
         // The rails (PROTOCOL.md "Bot channel", Rails). Null when a new bot entry may go.
         private static string RailsProblem()
         {
-            if (!Enabled) return "The bot channel is off (bot in config.txt).";
+            if (!Enabled) return "The bot channel is off (bot = off in config.txt).";
             if (!ChartBridgeOrders.Enabled) return "trading is off in config.txt";            // gate 1, the master switch above every v3 switch
             RollDay();
             lock (Sync)
@@ -945,16 +1016,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        // Sim101 only: the exact name, NinjaTrader's own simulator, and (for auto) tradable by gate 2.
-        private static string AccountProblem(bool forAuto)
+        // The bot's account (Anthony 2026-10-07: the one he chose, Sim or live; no Sim lock): it is in NinjaTrader under that exact
+        // name, never Backtest or Playback, and (for auto and for choosing it) passes the account gates now: tradable by gate 2
+        // (its checkmark, or tradeAccounts) and Connected. Every bot order passes the full gates again in PlaceBotEntry.
+        private static string AccountProblem(bool forAuto) { return AccountProblemFor(BotAccount, forAuto); }
+
+        private static string AccountProblemFor(string name, bool gates)
         {
-            Account a = FindAccount();
-            if (a == null) return BotAccount + " is not in NinjaTrader";
-            if (!IsSim(a)) return BotAccount + " is not NinjaTrader's simulator (or ChartBridge cannot tell): the bot trades Sim101 only";
-            if (forAuto && !ChartBridgeOrders.AccountTradable(BotAccount)) return BotAccount + " may not trade from the chart (tradeAccounts in config.txt): auto needs it";
-            if (forAuto && (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected)) return BotAccount + " is not connected";
+            if (ChartBridgeOrders.IsNeverTradable(name ?? "")) return name + " is a Backtest or Playback account: the bot never trades one";
+            Account a = FindAccount(name);
+            if (a == null) return name + " is not in NinjaTrader";
+            if (gates && !ChartBridgeOrders.AccountTradable(name))
+                return (ChartBridgeAccounts.On ? ChartBridgeAccounts.EntryRefusal(name) : name + " may not trade from the chart (tradeAccounts in config.txt)") + ": the bot needs it tradable";
+            if (gates && (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected)) return name + " is not connected";
             return null;
         }
+
+        // Is the bot's account on NinjaTrader's simulator now (for the SIM or LIVE mark; it refuses nothing).
+        private static bool SimNow() { Account a = FindAccount(); return a != null && IsSim(a); }
 
         private static string RootProblem(out string root)
         {
@@ -966,18 +1045,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        private static Account FindAccount()
+        private static Account FindAccount() { return FindAccount(BotAccount); }
+
+        private static Account FindAccount(string name)
         {
+            if (string.IsNullOrEmpty(name)) return null;
             lock (NinjaTrader.Cbi.Account.All)
-                foreach (Account a in NinjaTrader.Cbi.Account.All) if (a.Name == BotAccount) return a;   // exact, case and all
+                foreach (Account a in NinjaTrader.Cbi.Account.All) if (a.Name == name) return a;   // exact, case and all
             return null;
         }
 
         // NinjaTrader's simulator: the account's Provider (or its connection's) is Simulator. Read by name, so a NinjaTrader
-        // build without it compiles; when it cannot be read the answer is no (the bot is refused, never let through).
+        // build without it compiles; when it cannot be read the answer is no (shown as LIVE: the careful side). Since Anthony's
+        // 2026-10-07 decision this only marks SIM or LIVE; it refuses nothing.
         public static bool IsSim(Account a)
         {
-            if (a == null || a.Name != BotAccount) return false;
+            if (a == null) return false;
             string p = ProviderOf(a);
             if (p == null && a.Connection != null)
             {
@@ -1019,7 +1102,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) return tag != null && Tags.Contains(tag);
         }
 
-        // Every working bot entry on Sim101: those NinjaTrader lists (also after a restart, by name) and those just sent.
+        // Every working bot entry on the bot's account: those NinjaTrader lists (also after a restart, by name) and those just sent.
         private static List<Order> WorkingEntries()
         {
             List<Order> list = new List<Order>();
@@ -1068,7 +1151,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (c != null && json != null) c.Send(json);
         }
 
-        // Every execution, once (ChartBridgeServer.Deliver). Follows the bot's trade on Sim101: it opens with the first fill of a
+        // Every execution, once (ChartBridgeServer.Deliver). Follows the bot's trade on its account: it opens with the first fill of a
         // bot entry (a trade, even partly filled) and closes when that position is flat again, whatever closed it (its stop or
         // target, Flatten on the page, an order in NinjaTrader); its realized dollars come from those executions (lead's default).
         public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
@@ -1129,7 +1212,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        // ChartBridgeServer.OnPositionUpdate: the bot's position (Sim101, its root) to the bot.
+        // ChartBridgeServer.OnPositionUpdate: the bot's position (its account, its root) to the bot.
         public static void OnPosition(Account account, PositionEventArgs e)
         {
             if (!Enabled || account == null || account.Name != BotAccount || e == null || e.Position == null) return;
@@ -1139,7 +1222,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) c = helloed ? bot : null;
             if (c == null) return;
             int q = e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0;
-            c.Send("{\"type\":\"position\",\"account\":\"" + BotAccount + "\",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
+            c.Send("{\"type\":\"position\",\"account\":" + CbJson.Str(BotAccount) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
                    ",\"avgPrice\":" + (q != 0 ? CbJson.Num(e.AveragePrice) : "null") + "}");
         }
 
@@ -1175,7 +1258,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (strip) ToPages(StripJson());
         }
 
-        // ---------------------------------------------------------- messages from the page (botMode, botKill, botSeen, botAnswer, botRails)
+        // ---------------------------------------------------------- messages from the page (botMode, botKill, botSeen, botAnswer, botRails, botAccount)
         public static void OnPageMessage(ChartBridgeClient client, string type, string text)
         {
             string why;
@@ -1183,7 +1266,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string cid = d != null ? S(d, "cid") : null, id = d != null ? S(d, "id") : null;
             try
             {
-                if (!Enabled) { PageReject(client, cid, id, "The bot channel is off (bot in config.txt)."); return; }   // switch off: refused, nothing done
+                if (!Enabled) { PageReject(client, cid, id, "The bot channel is off (bot = off in config.txt)."); return; }   // switch off: refused, nothing done
                 string gate = SignedIn(client);
                 if (gate != null) { PageReject(client, cid, id, gate); return; }
                 if (d == null) { PageReject(client, cid, id, why); return; }
@@ -1197,6 +1280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (type == "botSeen") why = Seen(d);
                 else if (type == "botAnswer") why = AnswerProposal(d);
                 else if (type == "botRails") why = SetRails(d);
+                else if (type == "botAccount") why = SetAccount(d);
                 if (why != null) PageReject(client, cid, id, why);
             }
             catch (Exception ex)
@@ -1218,7 +1302,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string m = S(d, "mode");
             if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
-            if (m == "auto") { string why = AccountProblem(true); if (why != null) return "auto refused: " + why; }   // auto: Sim101 must be tradable
+            if (m == "auto") { string why = AccountProblem(true); if (why != null) return "auto refused: " + why; }   // auto: the bot's account must be tradable
             string old;
             List<Proposal> expired = new List<Proposal>();
             lock (Sync)
@@ -1296,14 +1380,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return null;
             }
             Order placed;
-            string why = Place(p.S, out placed), withdrawn;
+            string why = Place(p.S, p.Account, out placed), withdrawn;
             lock (Sync) { p.State = why == null ? "accepted" : "rejected"; p.Entry = placed; if (placed != null) EntryOfSignal[id] = placed; withdrawn = p.WithdrawnWhy; }
             // Review 2 finding 7: the bot withdrew it while it was being placed: cancelled at once if it has not filled.
             bool cancelled = why == null && withdrawn != null && placed != null && placed.Filled == 0 && Cancel(placed);
             if (cancelled) lock (Sync) p.State = "withdrawn";
             ToPages(ProposalJson(p));
-            ToBot(AnswerJson(id, why == null ? "accepted" : "refused", why == null ? "placed on " + BotAccount + (cancelled ? "; withdrawn during placement: its entry is cancelled" : "") : why));
-            BotLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + BotAccount : " but refused: " + why));
+            ToBot(AnswerJson(id, why == null ? "accepted" : "refused", why == null ? "placed on " + p.Account + (cancelled ? "; withdrawn during placement: its entry is cancelled" : "") : why));
+            BotLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + p.Account : " but refused: " + why));
             if (withdrawn != null && why == null)
                 BotLog("proposal " + id + " withdrawn during placement (" + withdrawn + "): " + (cancelled ? "its unfilled entry cancelled" : "its entry had already filled or ended; nothing cancelled (its stop and target stay)"));
             Notify();
@@ -1327,6 +1411,38 @@ namespace NinjaTrader.NinjaScript.AddOns
             Log("bot rails set by the page: " + t + " trades, " + l + " losing trades, " + root);
             BotLog("rails set by the page: " + t + " trades, " + l + " losing trades, " + root);
             ToBot(WelcomeJson());   // so the bot knows its root and rails (lead's default)
+            Notify();
+            return null;
+        }
+
+        // botAccount (Anthony 2026-10-07): the account the bot trades, Sim or live. Refused while the bot has a position or a
+        // working entry (its trade would be split across two accounts), when the account does not pass the account gates now
+        // (in NinjaTrader, never Backtest or Playback, its checkmark or tradeAccounts, Connected), and when the copier uses it (a
+        // follower that is on, or the leader). Saved in bot-account.txt; open proposals expire (they were for the old account).
+        private static string SetAccount(Dictionary<string, Val> d)
+        {
+            string name = S(d, "account");
+            if (!PlainName(name)) return "account must be an account name";
+            string why = AccountProblemFor(name, true);
+            if (why != null) return why;
+            why = ChartBridgeCopier.BotAccountRefusal(name);
+            if (why != null) return why;
+            bool exposed;
+            lock (Sync) exposed = openTag != null;
+            if (exposed || WorkingEntries().Count > 0) return "the bot has a position or a working entry: choose its account when it is flat";
+            string old = BotAccount;
+            bool broken;
+            lock (Sync) broken = accountBroken != null;
+            if (name == old && !broken) return null;   // already the bot's account
+            string err = SaveAccount(name);
+            if (err != null) return "bot-account.txt could not be saved (" + err + "); nothing changed";
+            List<Proposal> expired;
+            lock (Sync) { account = name; accountBroken = null; expired = ExpireOpenLocked(); }
+            foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToBot(AnswerJson(p.S.Id, "not answered", "the bot's account changed to " + name)); BotLog("proposal " + p.S.Id + " not answered (the bot's account changed to " + name + ")"); }
+            string mark = SimNow() ? "Sim" : "LIVE";
+            Log("bot account " + name + " (" + mark + "), was " + old + ", set by the page");
+            BotLog("account " + name + " (" + mark + "), was " + old + ", set by the page");
+            ToBot(WelcomeJson());   // so the bot knows its account
             Notify();
             return null;
         }
@@ -1389,6 +1505,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string StripJson()
         {
             StringBuilder b = new StringBuilder("{\"type\":\"bot\"");
+            bool simNow = SimNow();   // read before the lock (NinjaTrader's account list has its own)
             lock (Sync)
             {
                 double now = Now();
@@ -1399,7 +1516,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"connected\":").Append(bot != null && helloed ? "true" : "false")
                  .Append(",\"name\":").Append(botName != null && bot != null ? CbJson.Str(botName) : "null")
                  .Append(",\"mode\":").Append(CbJson.Str(mode))
-                 .Append(",\"account\":\"").Append(BotAccount).Append('"')
+                 .Append(",\"account\":").Append(CbJson.Str(account))
+                 .Append(",\"sim\":").Append(simNow ? "true" : "false")
                  .Append(",\"root\":").Append(CbJson.Str(root))
                  .Append(",\"position\":{\"qty\":").Append(ledQty.ToString(CultureInfo.InvariantCulture)).Append(",\"avgPrice\":").Append(ledQty != 0 ? CbJson.Num(ledAvg) : "null").Append('}')
                  .Append(",\"pnlToday\":").Append(CbJson.Num(Math.Round(pnl, 2)))
@@ -1435,7 +1553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string instruments = inst == null ? "[]" :
                 "[{\"root\":" + CbJson.Str(root) + ",\"name\":" + CbJson.Str(inst.FullName) + ",\"tick\":" + CbJson.Num(inst.MasterInstrument.TickSize) +
                 ",\"pointValue\":" + CbJson.Num(inst.MasterInstrument.PointValue) + ",\"quoteOnly\":false}]";
-            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":\"" + BotAccount + "\",\"root\":" + CbJson.Str(root) +
+            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + CbJson.Str(BotAccount) + ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"root\":" + CbJson.Str(root) +
                    ",\"rails\":{\"maxQty\":" + MaxQty + ",\"maxTrades\":" + t + ",\"maxLosses\":" + l + "},\"instruments\":" + instruments + "}";
         }
 
@@ -1454,7 +1572,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             string state;
             double seen, answered;
             lock (Sync) { state = p.State == "accepting" ? "open" : p.State; seen = p.SeenAt; answered = p.AnsweredAt; }
-            return "{\"type\":\"botProposal\",\"id\":" + CbJson.Str(s.Id) + ",\"at\":" + Ms(s.At) + ",\"account\":\"" + BotAccount + "\",\"root\":" + CbJson.Str(EffectiveRoot()) +
+            Account pa = FindAccount(p.Account);
+            return "{\"type\":\"botProposal\",\"id\":" + CbJson.Str(s.Id) + ",\"at\":" + Ms(s.At) + ",\"account\":" + CbJson.Str(p.Account ?? BotAccount) + ",\"sim\":" + (pa != null && IsSim(pa) ? "true" : "false") + ",\"root\":" + CbJson.Str(EffectiveRoot()) +
                    ",\"side\":" + CbJson.Str(s.Side) + ",\"kind\":" + CbJson.Str(s.Kind) + ",\"price\":" + (s.PriceText ?? "null") + ",\"qty\":" + MaxQty +
                    ",\"stopTicks\":" + s.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"targetTicks\":" + (s.TargetTicks > 0 ? s.TargetTicks.ToString(CultureInfo.InvariantCulture) : "null") +
                    ",\"reason\":" + CbJson.Str(s.Reason) + ",\"state\":" + CbJson.Str(state) + ",\"seenAt\":" + Ms(seen) + ",\"answeredAt\":" + Ms(answered) + "}";

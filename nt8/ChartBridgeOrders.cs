@@ -73,7 +73,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             int n;
             if (MergeReadConfig(key, val)) return true;   // 0.4.0 B4: merge = on (ChartBridgeMerge.cs)
-            if (ReadV3Config(key, val)) return true;   // 0.4.0 B1: orderTypes, strategies (off by default)
+            if (ReadV3Config(key, val)) return true;   // 0.4.0 B1: orderTypes, strategies (on by default; an off line turns one off)
             if (key == "trading") { Enabled = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1"; return true; }
             if (key == "tradeAccounts")
             {
@@ -619,8 +619,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why ?? PlaceOrder(top, bracketBody, null, null, true, out placed);
         }
 
-        // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on Sim101 and the bot's root.
-        public static string FlattenForBot(string root) { return Flatten("{\"account\":\"" + ChartBridgeBot.BotAccount + "\",\"root\":\"" + root + "\"}"); }
+        // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on the bot's account and root.
+        public static string FlattenForBot(string root) { return Flatten("{\"account\":" + CbJson.Str(ChartBridgeBot.BotAccount) + ",\"root\":\"" + root + "\"}"); }
 
         private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed)
         {

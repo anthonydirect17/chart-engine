@@ -94,7 +94,7 @@ public static class AccountsHarness
         finally
         {
             try { AccountsCall("UnwatchStatus"); } catch (Exception) { }
-            ChartBridgeSwitches.Reset();
+            OrdersHarness.AllOffLines();
             ChartBridgeAccounts.Clear();
             ChartBridgeOrders.ResetConfig();
             ChartBridgeConfig.AccountAllow = allowWas;
@@ -136,7 +136,32 @@ public static class AccountsHarness
     // ------------------------------------------------------------ the shared v3 plumbing (ChartBridgeV3.cs): a v2 page gets nothing new
     static void V3Plumbing()
     {
-        ChartBridgeSwitches.Reset();
+        ChartBridgeSwitches.Reset();   // the default, what ChartBridgeConfig.Load starts from
+        Check(ChartBridgeV3.AccountChecks && ChartBridgeV3.OrderTypes && ChartBridgeV3.Strategies && ChartBridgeV3.Merge && ChartBridgeV3.CancelFromList && ChartBridgeV3.Copier && ChartBridgeV3.Bot,
+              "v3: every switch ON by default (Anthony 2026-10-07: no switches)");
+        Check(ChartBridgeSwitches.Json() == "{\"accountChecks\":true,\"orderTypes\":true,\"strategies\":true,\"merge\":true,\"cancelFromList\":true,\"copier\":true,\"bot\":true}", "v3: trading.switches reports every switch true by default");
+        string cfgDir = Path.Combine(Path.GetTempPath(), "cb-switches-" + Guid.NewGuid().ToString("N")), homeWas = NinjaTrader.Core.Globals.UserDataDir;
+        Directory.CreateDirectory(Path.Combine(cfgDir, "ChartBridge"));
+        NinjaTrader.Core.Globals.UserDataDir = cfgDir;
+        try
+        {
+            File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "trading = true", "tradeAccounts = Sim101" });
+            ChartBridgeConfig.Load();
+            Check(ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get) && ChartBridgeOrders.Enabled, "config.txt with no v3 line: every v3 feature on; trading = true unchanged");
+            File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "trading = true", "merge = off", "copier = OFF", "bot = 0" });
+            ChartBridgeConfig.Load();
+            Check(!ChartBridgeV3.Merge && !ChartBridgeV3.Copier && !ChartBridgeV3.Bot && ChartBridgeV3.AccountChecks && ChartBridgeV3.OrderTypes && ChartBridgeV3.Strategies && ChartBridgeV3.CancelFromList,
+                  "config.txt: merge = off, copier = OFF and bot = 0 turn just those off; the rest stay on");
+            Check(ChartBridgeSwitches.Json().Contains("\"merge\":false") && ChartBridgeSwitches.Json().Contains("\"copier\":false") && ChartBridgeSwitches.Json().Contains("\"strategies\":true"), "trading.switches reports the real values");
+            File.WriteAllLines(Path.Combine(cfgDir, "ChartBridge", "config.txt"), new[] { "trading = false" });
+            ChartBridgeConfig.Load();
+            Check(!ChartBridgeOrders.Enabled && ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get), "trading = false stays the master switch; the v3 switches never change it");
+            File.Delete(Path.Combine(cfgDir, "ChartBridge", "config.txt"));
+            ChartBridgeConfig.Load();
+            Check(!ChartBridgeOrders.Enabled, "no config.txt: trading is off as before (its default never changed)");
+        }
+        finally { NinjaTrader.Core.Globals.UserDataDir = homeWas; try { Directory.Delete(cfgDir, true); } catch (Exception) { } Setup(); }
+        OrdersHarness.AllOffLines();
         Restart();
         ChartBridgeClient p3 = new ChartBridgeClient(null, 46); p3.Origin = "http://localhost:8765"; List<string> g3 = new List<string>(); p3.Tap = x => g3.Add(x);
         ChartBridgeClient p2 = new ChartBridgeClient(null, 47); p2.Origin = "http://localhost:8765"; List<string> g2 = new List<string>(); p2.Tap = x => g2.Add(x);
@@ -144,7 +169,7 @@ public static class AccountsHarness
         try
         {
             Check(!ChartBridgeV3.IsV3(p3) && !ChartBridgeV3.IsV3(p2) && !ChartBridgeV3.IsV3(null), "v3: no page is v3 before its client message");
-            Check(!ChartBridgeV3.AccountChecks && !ChartBridgeV3.OrderTypes && !ChartBridgeV3.Strategies && !ChartBridgeV3.Merge && !ChartBridgeV3.CancelFromList && !ChartBridgeV3.Copier && !ChartBridgeV3.Bot, "v3: every switch off by default");
+            Check(!ChartBridgeV3.AccountChecks && !ChartBridgeV3.OrderTypes && !ChartBridgeV3.Strategies && !ChartBridgeV3.Merge && !ChartBridgeV3.CancelFromList && !ChartBridgeV3.Copier && !ChartBridgeV3.Bot, "v3: every off line read: every switch off");
             Send(p3, "{\"type\":\"client\",\"v\":3}");
             Check(ChartBridgeV3.IsV3(p3) && !ChartBridgeV3.IsV3(p2), "v3: the client message marks that page only");
             SignIn(p3); SignIn(p2);
@@ -152,10 +177,10 @@ public static class AccountsHarness
             Check(t2 == ChartBridgeOrders.TradingJson(true, null) && !t2.Contains("switches"), "v2 page: the trading message is exactly v2's (no switches)");
             Check(g3.Any(x => x.StartsWith("{\"type\":\"trading\"") && x.Contains(",\"switches\":{\"accountChecks\":false,\"orderTypes\":false,\"strategies\":false,\"merge\":false,\"cancelFromList\":false,\"copier\":false,\"bot\":false}}")), "v3 page: trading carries the seven switches");
             ChartBridgeSwitches.Note("orderTypes", "ON"); ChartBridgeSwitches.Note("bot", "1"); ChartBridgeSwitches.Note("merge", "yes");
-            Check(ChartBridgeV3.OrderTypes && ChartBridgeV3.Bot && !ChartBridgeV3.Merge && NinjaTrader.Code.Output.Lines.Any(x => x.Contains("config.txt: merge = yes is not on, true or 1, so merge is OFF")), "switches: ON and 1 are on; anything else off, with an Output line");
+            Check(ChartBridgeV3.OrderTypes && ChartBridgeV3.Bot && !ChartBridgeV3.Merge && NinjaTrader.Code.Output.Lines.Any(x => x.Contains("config.txt: merge = yes is not off or on, so merge is OFF")), "switches: ON and 1 are on; a value that is neither off nor on is off, with an Output line");
             g3.Clear(); SignIn(p3);
             Check(g3.Any(x => x.StartsWith("{\"type\":\"trading\"") && x.Contains("\"orderTypes\":true") && x.Contains("\"bot\":true") && x.Contains("\"merge\":false")), "v3 page: the switches are config.txt's values");
-            ChartBridgeSwitches.Reset();
+            OrdersHarness.AllOffLines();
             Check(!g2.Any(x => x.StartsWith("{\"type\":\"accounts\"")) && !g2.Any(x => x.Contains("\"tradable\"")) && !g2.Any(x => x.Contains("switches")), "v2 page: no accounts, no tradable, no switches");
             Check(ChartBridgeV3.Flat("{\"type\":\"x\",\"a\":1}", "x", new[] { "type", "a" }, out why0) != null && why0 == null, "Flat: a flat message is read");
             Dictionary<string, string> m = ChartBridgeV3.Flat("{ \"type\" : \"x\" , \"n\" : 12 , \"b\" : true , \"s\" : \"hi\" , \"z\" : null }", "x", new[] { "type", "n", "b", "s", "z" }, out why0);
@@ -168,12 +193,12 @@ public static class AccountsHarness
             lock (p3.Actions) p3.Actions.Clear();
             for (int i = 0; i < 11; i++) typeof(ChartBridgeServer).GetMethod("OnClientMessage", PS).Invoke(null, new object[] { p3, "{\"type\":\"accountTrade\",\"account\":\"FUNDED-B\",\"on\":false}" });
             Check(Last(g3).Contains("too many order actions"), "v3 actions count in the 10 a second");
-            ChartBridgeSwitches.Reset();
+            OrdersHarness.AllOffLines();
         }
         finally
         {
             ChartBridgeClient gone; Clients().TryRemove(46, out gone); Clients().TryRemove(47, out gone);
-            ChartBridgeSwitches.Reset(); ChartBridgeAccounts.Clear();
+            OrdersHarness.AllOffLines(); ChartBridgeAccounts.Clear();
             foreach (string f in new[] { "accounts.txt", "accounts.log" }) File.Delete(Path.Combine(folder, f));   // the rest starts from a first start
         }
     }
@@ -182,7 +207,7 @@ public static class AccountsHarness
     // ------------------------------------------------------------ every switch off: 0.3.8 exactly
     static void SwitchOff()
     {
-        ChartBridgeSwitches.Reset();
+        OrdersHarness.AllOffLines();
         Restart();
         sent.Clear();
         Send(page, "{\"type\":\"client\",\"v\":3}");
@@ -203,9 +228,9 @@ public static class AccountsHarness
         Check(Rejected("account EVAL-A is in tradeAccounts but not connected in NinjaTrader"), "off: a tradeAccounts name NinjaTrader does not list: v2's reason, unchanged");
         Account.All.Add(evalA);
         Send(page, Trade("FUNDED-B", "true"));
-        Check(Rejected("accountTrade is off (accountChecks in config.txt)"), "off: accountTrade refused");
+        Check(Rejected("accountTrade is off (accountChecks = off in config.txt)"), "off: accountTrade refused");
         Send(page, "{\"type\":\"accountArchive\",\"account\":\"FUNDED-B\",\"confirm\":true}");
-        Check(Rejected("accountArchive is off (accountChecks in config.txt)"), "off: accountArchive refused");
+        Check(Rejected("accountArchive is off (accountChecks = off in config.txt)"), "off: accountArchive refused");
         Send(page, "{\"type\":\"flatten\",\"account\":\"FUNDED-B\",\"root\":\"MNQ\"}");
         Check(Rejected("tradeAccounts in config.txt") && fundedB.Calls.Count == calls, "off: Flatten on an account outside tradeAccounts is refused (v2)");
         ChartBridgeAccounts.Tick(ChartBridgeTime.NowUtcMs());
@@ -563,7 +588,7 @@ public static class AccountsHarness
         string id = IdOf(o);
         int calls = fundedB.Calls.Count;
         Send(page, "{\"type\":\"cancel\",\"id\":\"" + id + "\",\"from\":\"list\"}");
-        Check(Rejected("Cancel from the Working orders tab is off (cancelFromList in config.txt)") && fundedB.Calls.Count == calls, "cancelFromList off: refused, nothing sent");
+        Check(Rejected("Cancel from the Working orders tab is off (cancelFromList = off in config.txt)") && fundedB.Calls.Count == calls, "cancelFromList off: refused, nothing sent");
         ChartBridgeSwitches.Note("cancelFromList", "on");
         Send(page, "{\"type\":\"cancel\",\"id\":\"" + id + "\",\"from\":\"tab\"}");
         Check(Rejected("from must be \\\"list\\\"") && fundedB.Calls.Count == calls, "from other than list: refused");

@@ -75,8 +75,13 @@ public static class OrdersHarness
         return o;
     }
 
+    // Anthony 2026-10-07: every v3 switch is ON by default; config.txt's off lines turn them off. The base checks below are
+    // 0.3.8's, run with every off line written, so they prove that off is 0.3.8 exactly.
+    public static void AllOffLines() { foreach (string k in ChartBridgeSwitches.Names) ChartBridgeSwitches.Note(k, "off"); }
+
     public static int Main()
     {
+        AllOffLines();
         // 0.3.7: ChartBridge's folder (planned_brackets.txt) in a fresh directory, never a shared /tmp/nt8 from an earlier run
         string home = Path.Combine(Path.GetTempPath(), "cb-orders-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(home, "ChartBridge"));
@@ -868,6 +873,7 @@ public static class OrdersHarness
         SeamHarness.Run(Check);  // where the backfill meets the live trades (check/SeamHarness.cs, 0.3.3)
         SidesHarness.Run(Check); // the side of every trade, as pure rules (check/SidesHarness.cs, 0.3.4; its loads run inside SeamHarness)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
+        AllOffLines();           // PinHarness starts ChartBridge (config.txt read: the v3 default, on); the base stays 0.3.8's
         MarketsHarness.Run(Check);   // 0.4.0: quote-only markets, their rolls and settlement times, tape counters, error lines, /diag health (check/MarketsHarness.cs)
         Console.WriteLine("== base: " + checks + " checks, " + fails + " failed");
         Section("accounts (B2)", AccountsHarness.Run);  // 0.4.0: the per-account checkmark, Gone, Archive, cancel from the Working orders tab, switches off = 0.3.8 (check/AccountsHarness.cs)
@@ -1486,6 +1492,8 @@ public static class OrdersHarness
               "allowOrigins: a non-ASCII host is skipped, its punycode form is taken");
         File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "port = 8765" });
         ChartBridgeConfig.Load();
+        Check(ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get), "config.txt with no v3 line: every v3 switch is on (Anthony 2026-10-07)");
+        AllOffLines();   // the base checks run with every v3 off line (0.3.8 exactly)
         Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),
               "config.txt without allowOrigins: only ChartBridge's own page");
         ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.golivepage.com");

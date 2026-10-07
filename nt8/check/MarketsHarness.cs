@@ -368,6 +368,6 @@ public static class MarketsHarness
             ChartBridgeConfig.QuoteRoots = ChartBridgeMarkets.DefaultQuoteRoots();
             Check(string.Join(",", ChartBridgeConfig.QuoteRoots) == "YM,RTY,GC,SI,CL,6E,ZN,ZB", "the default: YM, RTY, GC, SI, CL, 6E, ZN, ZB");
         }
-        finally { NinjaTrader.Core.Globals.UserDataDir = dirWas; ChartBridgeOrders.ResetConfig(); try { Directory.Delete(dir, true); } catch (Exception) { } }
+        finally { NinjaTrader.Core.Globals.UserDataDir = dirWas; ChartBridgeOrders.ResetConfig(); OrdersHarness.AllOffLines(); try { Directory.Delete(dir, true); } catch (Exception) { } }
     }
 }

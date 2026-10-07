@@ -134,7 +134,7 @@ public static class CopierHarness
             ScaleOut();
             StopAlreadyTraded();
             ShortsAndContracts();
-            RealFollowerRefused();
+            RealFollowerAllowed();
             PositionLimit();
             DailyLoss();
             ConnectionDrop();
@@ -171,9 +171,12 @@ public static class CopierHarness
         Check(!ChartBridgeCopier.Enabled && !ChartBridgeV3.Copier && ChartBridgeCopier.ReadConfig("copier", "on") && !ChartBridgeCopier.Enabled,
               "copier = off: off (one source of truth: ChartBridgeSwitches; the copier's own key reader only takes the key)");
         ChartBridgeSwitches.Note("copier", "yes please");
-        Check(!ChartBridgeCopier.Enabled && Logged("copier = yes please is not on, true or 1, so copier is OFF"), "copier = anything but on/true/1: off, with one Output line naming the value");
+        Check(!ChartBridgeCopier.Enabled && Logged("copier = yes please is not off or on, so copier is OFF"), "copier = neither off nor on: off, with one Output line naming the value");
+        ChartBridgeSwitches.Reset();   // what ChartBridgeConfig.Load starts from
         ChartBridgeCopier.ResetConfig();
-        Check(!ChartBridgeCopier.Enabled, "copier is off by default");
+        Check(ChartBridgeCopier.Enabled && ChartBridgeV3.SwitchesJson().Contains("\"copier\":true"), "copier is ON by default (Anthony 2026-10-07: no switches)");
+        OrdersHarness.AllOffLines();   // the off line: 0.3.8 exactly, below
+        Check(!ChartBridgeCopier.Enabled, "copier = off: off");
         ChartBridgeCopier.Start();
         Msg("client", "{\"type\":\"client\",\"v\":3}");
         Msg("auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
@@ -182,7 +185,7 @@ public static class CopierHarness
         {
             sent.Clear();
             Msg(Regex.Match(m, "\"type\":\"(\\w+)\"").Groups[1].Value, m);
-            Check(Rejected("The copier is off (copier in config.txt)."), "switch off: refused: " + m);
+            Check(Rejected("The copier is off (copier = off in config.txt)."), "switch off: refused: " + m);
         }
         Check(!File.Exists(Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "copier.txt")), "switch off: no copier.txt written");
         int n1 = f1.Calls.Count;
@@ -208,7 +211,7 @@ public static class CopierHarness
         Msg("client", "{\"type\":\"client\",\"v\":3}");
         sent.Clear();
         Msg("copierGet", "{\"type\":\"copierGet\",\"cid\":\"g\"}");
-        Check(Last().StartsWith("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":true,\"armed\":false,\"standDownWhy\":\"ChartBridge started: check the accounts and press Re-arm\""), "on: the copier starts stood down: " + Last());
+        Check(Last().StartsWith("{\"type\":\"copier\",\"enabled\":true,\"simOnly\":false,\"armed\":false,\"standDownWhy\":\"ChartBridge started: check the accounts and press Re-arm\""), "on: the copier starts stood down: " + Last());
         sent.Clear(); Msg("copierRearm", "{\"type\":\"copierRearm\"}");
         Check(Rejected("No leader is set."), "Re-arm with no leader: refused");
         ChartBridgeClient other = new ChartBridgeClient(null, 93) { Origin = "http://localhost:8765" };
@@ -238,9 +241,9 @@ public static class CopierHarness
         Check(!Rejected("") && State().Contains("\"leader\":{\"account\":\"Sim101\",\"connection\":\"connected\""), "copierSet leader Sim101: set and told: " + State());
 
         sent.Clear();
-        Msg("copierFollower", Follower("EVAL-A", "true", "1", "micro", "null"));
-        Check(Rejected("EVAL-A is not a Sim account: the copier copies to Sim accounts only.") && Logged("EVAL-A is not a Sim account") && EventSaid("refused", "EVAL-A", null) == false,
-              "real account as a follower: refused at copierFollower and logged");
+        Msg("copierFollower", Follower("EVAL-A", "false", "1", "micro", "null"));
+        Check(!Rejected("") && State().Contains("{\"account\":\"EVAL-A\",\"sim\":false,\"on\":false"),
+              "a real account as a follower: accepted (Anthony 2026-10-07: no Sim lock), shown with sim false: " + State());
         Msg("copierFollower", "{\"type\":\"copierFollower\",\"account\":\"SIM-F1\",\"on\":true,\"qty\":3,\"size\":\"micro\"}"); Check(Rejected("copierFollower needs lossLimit."), "copierFollower missing a key: refused");
         Msg("copierFollower", Follower("SIM-F1", "true", "10", "micro", "null")); Check(Rejected("qty must be a whole number from 1 to 9."), "qty 10: refused");
         Msg("copierFollower", Follower("SIM-F1", "true", "\"3\"", "micro", "null")); Check(Rejected("qty must be a whole number from 1 to 9."), "qty as a string: refused");
@@ -259,7 +262,7 @@ public static class CopierHarness
         Msg("copierSet", "{\"type\":\"copierSet\",\"leader\":\"SIM-F1\"}"); Check(Rejected("SIM-F1 is a follower; the leader cannot be one."), "a follower as the leader: refused");
         string file = File.ReadAllText(Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "copier.txt"));
         Check(file.StartsWith("# ChartBridge copier (written by ChartBridge; do not edit)") && file.Contains("leader\tSim101") && file.Contains("mode\texecutions") &&
-              file.Contains("follower\tSIM-F1\ton\t3\tmicro\t0") && file.Contains("follower\tSIM-F2\ton\t1\tmini\t500") && !file.Contains("EVAL-A"), "copier.txt: leader, mode, one line per follower; never the refused account");
+              file.Contains("follower\tSIM-F1\ton\t3\tmicro\t0") && file.Contains("follower\tSIM-F2\ton\t1\tmini\t500") && file.Contains("follower\tEVAL-A\toff\t1\tmicro\t0"), "copier.txt: leader, mode, one line per follower (the real account too)");
 
         // stood down: the leader's entries are not copied, and need no stop
         int n1 = f1.Calls.Count;
@@ -445,16 +448,32 @@ public static class CopierHarness
         Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "500"));
     }
 
-    // ------------------------------------------------------------ a real follower refused (Sim only, again before every order)
-    static void RealFollowerRefused()
+    // ------------------------------------------------------------ a real follower (Anthony 2026-10-07: no Sim lock; every gate still applies)
+    static void RealFollowerAllowed()
     {
-        f3.Provider = Provider.Rithmic;   // the account changed (or the file was edited): not Sim any more
+        f3.Provider = Provider.Rithmic;   // a real (broker) account as a follower
         int b3 = f3.Calls.Count;
         sent.Clear();
+        Order e = LeaderEntry(1);
+        Check(After(f3, b3).Count == 1 && After(f3, b3)[0].Contains("Buy Market 1") && EventSaid("enter", "SIM-F3", null) && !EventSaid("refused", "SIM-F3", null),
+              "a real follower: copied like any follower (" + string.Join(" | ", After(f3, b3)) + ")");
+        FollowerFill(f3, mnq, 25000.25);
+        Check(f3.Orders.Any(o => o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState) && Math.Abs(o.StopPrice - 24998) < 1e-9),
+              "a real follower: its stop at the leader's stop price, as any follower");
+        ChartBridgeCopier.Tick(Now());
+        Check(State().Contains("{\"account\":\"SIM-F3\",\"sim\":false") && !State().Contains("not a Sim account"), "the copier message marks it not Sim (the page shows LIVE); nothing says refused");
+        int x3 = f3.Calls.Count;
+        Pos(lead, mnq, 0); Booked();
+        Check(After(f3, x3).Contains("flatten MNQ 12-26"), "a real follower: the leader flat means it is flattened (never an opposite order)");
+        Reset();
+        // the gates still apply: unchecked (not in tradeAccounts), it is skipped and nothing is sent
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-F2, SIM-F4, EVAL-A");
+        b3 = f3.Calls.Count;
+        sent.Clear();
         LeaderEntry(1);
-        Check(After(f3, b3).Count == 0 && EventSaid("refused", "SIM-F3", "SIM-F3 is not a Sim account; nothing copied to it") && Logged("SIM-F3 is not a Sim account; nothing copied to it"),
-              "a listed follower that is not Sim: refused before the order, logged, nothing sent");
-        Check(State().Contains("{\"account\":\"SIM-F3\",\"sim\":false") && State().Contains("\"skipped\":\"not a Sim account\""), "the copier message shows it as not Sim");
+        Check(After(f3, b3).Count == 0 && EventSaid("skip", "SIM-F3", "may not trade"), "a real follower that is not tradable (gate 2): skipped, nothing sent");
+        Reset();
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-F2, SIM-F3, SIM-F4, EVAL-A");
         f3.Provider = Provider.Simulator;
         Reset();
     }

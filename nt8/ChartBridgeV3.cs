@@ -1,11 +1,12 @@
 // ChartBridge protocol v3 plumbing (ChartBridge 0.4.0), shared by every v3 feature. Part of the ChartBridge add-on.
 // See nt8/PROTOCOL.md, "Protocol v3": "v3 switches", "Telling the page what is on" and "Strict messages in v3".
 //
-//   - ChartBridgeSwitches: the v3 switches read from config.txt (accountChecks, orderTypes, strategies, merge,
-//     cancelFromList, copier, bot), all OFF by default. It only records them; it never takes a key from another reader.
+//   - ChartBridgeSwitches: the v3 switches (accountChecks, orderTypes, strategies, merge, cancelFromList, copier, bot), all ON
+//     by default (Anthony 2026-10-07: no switches, no Sim locks). A config.txt line such as "merge = off" turns one off; nothing
+//     needs turning on. It only records them; it never takes a key from another reader. trading = true stays the master switch.
 //   - ChartBridgeV3: the helpers the v3 lanes call.
 //       IsV3(client)      the page sent {"type":"client","v":3}; a connection that never did is a v2 page and gets no v3 message
-//       AccountChecks, OrderTypes, Strategies, Merge, CancelFromList, Copier, Bot   each switch (false unless config.txt says on)
+//       AccountChecks, OrderTypes, Strategies, Merge, CancelFromList, Copier, Bot   each switch (true unless config.txt turns it off)
 //       SwitchesJson()    {"accountChecks":false,...}: the "switches" of a v3 page's trading message (ChartBridgeAccounts.TradingFor)
 //       Gate(client)      gates 1, 4 and 7 for a v3 action: trading on, the signed-in own page, and one of the 10 actions a second
 //       Flat(text, type, keys, out why)   gate 8 as extended for v3, for a flat message (one level, no list, no escape)
@@ -25,15 +26,21 @@ using NinjaTrader.Cbi;
 namespace NinjaTrader.NinjaScript.AddOns
 {
     // ------------------------------------------------------------------ the v3 switches (PROTOCOL.md "v3 switches")
+    // Anthony 2026-10-07: no switches, no Sim locks. Every v3 feature is ON as soon as ChartBridge 0.4.0 is installed; each key
+    // stays only as an optional OFF line in config.txt ("merge = off"). trading = true stays the master switch above them all,
+    // and nothing here ever changes it.
     public static class ChartBridgeSwitches
     {
         public static readonly string[] Names = { "accountChecks", "orderTypes", "strategies", "merge", "cancelFromList", "copier", "bot" };
-        private static readonly bool[] Values = new bool[Names.Length];
+        private static readonly bool[] Values = Names.Select(n => true).ToArray();   // the default: on
 
-        public static void Reset() { lock (Values) for (int i = 0; i < Values.Length; i++) Values[i] = false; }
+        // Every switch back to its default, on (ChartBridgeConfig.Load, before config.txt is read). The one place the switches'
+        // default is set: no lane's ResetConfig touches a switch.
+        public static void Reset() { lock (Values) for (int i = 0; i < Values.Length; i++) Values[i] = true; }
 
-        // Called by ChartBridgeConfig.Load for every key. on, true and 1 mean on (any case); anything else is off, and a value
-        // that is not plainly off (off, false, 0) gets one Output line naming the key and the value.
+        // Called by ChartBridgeConfig.Load for every key. off, false and 0 turn the switch off (any case); on, true and 1 leave
+        // it on. Any other value is read as OFF (only an off line has a reason to be there; lead's default), with one Output
+        // line naming the key and the value.
         public static void Note(string key, string val)
         {
             int i = Array.IndexOf(Names, key);
@@ -41,7 +48,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string v = (val ?? "").Trim();
             bool on = v.Equals("on", StringComparison.OrdinalIgnoreCase) || v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1";
             bool plainOff = v.Equals("off", StringComparison.OrdinalIgnoreCase) || v.Equals("false", StringComparison.OrdinalIgnoreCase) || v == "0";
-            if (!on && !plainOff) ChartBridgeServer.Log("config.txt: " + key + " = " + v + " is not on, true or 1, so " + key + " is OFF");
+            if (!on && !plainOff) ChartBridgeServer.Log("config.txt: " + key + " = " + v + " is not off or on, so " + key + " is OFF (" + key + " is on by default; the line is only needed to turn it off)");
             lock (Values) Values[i] = on;
         }
 

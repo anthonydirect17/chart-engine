@@ -119,9 +119,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
         //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
-        //   accountChecks = on            (0.4.0: gate 2 is the page's per-account checkmark, saved in accounts.txt; off by default;
-        //                                  see ChartBridgeAccounts.cs. The other v3 switches: orderTypes, strategies, merge,
-        //                                  cancelFromList, copier, bot, all off by default)
+        //   accountChecks = off           (0.4.0: every v3 feature is ON by default, Anthony 2026-10-07; a line like this turns one
+        //                                  off. accountChecks: gate 2 is the page's per-account checkmark, saved in accounts.txt;
+        //                                  see ChartBridgeAccounts.cs. The others: orderTypes, strategies, merge, cancelFromList,
+        //                                  copier, bot. trading = true stays the master switch above them all)
         //   allowOrigins = https://desk.example.com, http://100.88.192.33:8800
         //                                 (web pages besides ChartBridge's own that may open the read-only
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
@@ -129,15 +130,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  One line: the last allowOrigins line wins. Non-ASCII hosts in punycode.)
         //   quoteHours                    (0.3.4.1 to 0.3.6; no longer used since 0.3.7, said once in the Output window)
         //   bars = on, barsRoots, pc      (0.3.6: daily 1-minute bars to The Desk; off by default; see ChartBridgeBars.cs)
-        //   bot = on, botRoot, botLibrary (0.4.0: the bot channel, Sim101 only; off by default; see ChartBridgeBot.cs)
+        //   bot = off, botRoot, botLibrary (0.4.0: the bot channel, on by default, on the account chosen on the Bot tab; see ChartBridgeBot.cs)
         public static void Load()
         {
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
             ChartBridgeBars.ResetConfig();
-            ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all off unless config.txt turns one on
+            ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all ON unless config.txt turns one off (Anthony 2026-10-07)
             ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
-            ChartBridgeBot.ResetConfig();   // 0.4.0 bot: off by default
+            ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -163,7 +164,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
                 else if (key == "quoteHours") ChartBridgeServer.Log("config.txt: quoteHours is no longer used (its by-date tick load was replaced by the served window in 0.3.5 and removed in 0.3.7); the line can go");
-                else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = on (off by default; ChartBridgeCopier.cs)
+                else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
