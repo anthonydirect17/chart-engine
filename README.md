@@ -110,6 +110,7 @@ line; recompile or restart NinjaTrader after a change):
 |---|---|---|
 | `port` | `8765` | Web port (this PC only). |
 | `roots` | `MNQ, NQ, MES, ES` | Instruments offered. |
+| `quoteRoots` | `YM, RTY, GC, SI, CL, 6E, ZN, ZB` | ChartBridge 0.4.0: markets served for the Quote board only, each on its own front-month roll (NinjaTrader's rollover list when it covers today). Every order for them is refused. A root in both lists is quote only; `quoteRoots =` for none. See `nt8/PROTOCOL.md`, 0.4.0 hardening and markets. |
 | `contract.MNQ` | front month by the CME roll rule | Force a contract, e.g. `MNQ 12-26`. |
 | `days`, `tickHours` | `5`, `8` | 1-minute history days; tick backfill cap for seconds and range bars. |
 | `rangeHours` | `2` | 0.3.5: the hours of recent trades a Range or seconds chart opens with (1 to 8). |

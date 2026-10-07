@@ -1173,3 +1173,75 @@ String values must be plain (no backslash escapes, at most 200 characters).
 
 Orders placed in NinjaTrader itself (or anywhere else) on an allowed account also show on the chart,
 with `role` `other`, and can be moved or cancelled from the chart.
+
+## 0.4.0 hardening and markets
+
+### Quote-only markets
+
+`config.txt` `quoteRoots` (default `YM, RTY, GC, SI, CL, 6E, ZN, ZB`; `quoteRoots =` for none) names markets ChartBridge
+serves for the Quote board only. The traded roots stay `roots` (default `MNQ, NQ, MES, ES`); a root in both lists is
+quote only. A quote-only market streams like the others (`hello`, `subscribe`, `history`, `tick`, `profile`, `htf`,
+`weekProfile`, the prior settlement), and every order action for it is refused:
+
+- `order` and `flatten` naming it, and `change`, `plan` and `cancel` naming an order on it (placed in NinjaTrader),
+  get `reject` with the reason `<ROOT> is quote only: ChartBridge shows its prices on the Quote board and refuses every
+  order for it (quoteRoots in config.txt)`. One check, right after the gate and the strict message check, before any
+  other order code. Nothing reaches NinjaTrader.
+- The order code's lookups (`InstrumentFor`, `RootFor`) never return a quote-only root or contract, so its orders and
+  positions are not listed to the page as chart orders, as for any root ChartBridge does not trade.
+
+Each `hello` instrument carries two more fields, after `pointValue` and before `settlement`:
+
+| field | value |
+|---|---|
+| `quoteOnly` | `true` for a quote-only market (orders refused), `false` for a traded root |
+| `priceFormat` | `"decimal"`, or `"32nds"` for ZN and ZB: the page writes 104.109375 as `104'035` (104 and 3.5/32) |
+
+`tick` is NinjaTrader's tick size (MasterInstrument.TickSize); a table in `ChartBridgeTape.cs` is used only when
+NinjaTrader gives none (YM 1, RTY 0.1, GC 0.1, SI 0.005, CL 0.01, 6E 0.00005, ZN 1/64, ZB 1/32).
+
+Front month, per market (New York dates; `contract.<ROOT>` in `config.txt` still wins):
+
+1. NinjaTrader's own rollover list (Tools > Instruments > Rollovers, MasterInstrument.RolloverCollection): the contract
+   month of the latest rollover on or before today, used only when the list also holds a later one (else out of date).
+2. Else the table's rule, the roll 8 calendar days before a key date: YM and RTY as the equity index roots (the third
+   Friday, quarterly); 6E quarterly, its last trade two business days before the third Wednesday; CL every month, its
+   last trade three business days before the 25th of the month before (counted from the business day before the 25th
+   when the 25th is not one); GC (Feb, Apr, Jun, Aug, Oct, Dec), SI (Mar, May, Jul, Sep, Dec), ZN and ZB (quarterly),
+   their first notice day, the last business day of the month before. Business days: Monday to Friday, not an NYSE holiday.
+
+The traded roots keep their rule exactly (checked for every day of 2026 and 2027). How each root was resolved is in the
+Output window at start and in `/diag` `markets`.
+
+Prior settlement: as in 0.3.7, with each market's own settlement time in place of 16:00 ET when it is earlier (CL 14:30,
+GC 13:30, SI 13:25, ZN, ZB and 6E 15:00; 12:00 on an NYSE holiday or early close for all). The snapshot read at
+subscription now goes through the same one queue as the updates, in order, off NinjaTrader's thread.
+
+### Fills after a recompile
+
+The fills already delivered (`Seen`, keyed by account and execution id) are kept in memory only. After F5 the session's
+executions go to The Desk once more. The Desk stores each `(source, account, exec_id)` once and counts a repeat as a
+duplicate (not a rejection, so no Output line), and `pending_fills.jsonl` drops an identical line. Keeping `Seen` in a
+file would instead skip fills that never reached The Desk before the F5 (for example with `postFills` turned on in that
+same F5), so it stays in memory.
+
+### `/diag` additions
+
+| key | what |
+|---|---|
+| `health.memory` | sizes of what grows: `seenFills`, `books`, `pastSessions`, `profileRows`, `windowTrades`, `liveTradesHeld`, `sideTaggers`, `htfSeries`, `weekProfiles`, `settlementRoots`, `seamsKept`, `windowsKept`; `lastSweepUtcMs` (the 10 s sweep), `windowsDroppedAfterSession`, `lastWindowDropUtcMs`; `heapBytes`, `gcGen0`, `gcGen1`, `gcGen2` |
+| `health.threads` | thread-pool headroom: `poolWorkersFree`, `poolWorkersMin`, `poolWorkersMax`, `poolWorkersBusy`, `poolIoFree`, `poolIoMin`, `poolIoMax`; `processThreads`; `pageSendThreads` (one per open page) |
+| `health.pages` | `connects`, `closes`, `notKeepingUp` (pages closed for being behind), `sendErrors`, `lastConnectUtcMs`, `lastNotKeepingUpUtcMs`, `sendMs` (every send since the start) |
+| `health.errors` | each rate-limited error kind (`tick error`, `tick send error`, `history error`, `tape counter error`) and how many came; the Output window says each at most once a minute, with the count since its last line |
+| `pages[].sendMs` | that page's sends: `n`, `p50`, `p95`, `max` in ms |
+| `markets` | per served root: `contract`, `quoteOnly`, `tick`, `tableTick`, `priceFormat`, `settlesBy`, `resolvedBy` |
+| `tape` | `failed` (faults in the counters, never a lost trade), and per root `late` (prints of an earlier session) with `session` and `last`: `from` (18:00 ET) and `slots`, one per 15 minutes with prints: `at`, `prints`, `perSec`, `peakPerSec`, `gapMs` (`p50`, `p95`, `max`, by NinjaTrader's time on the prints), `sameMsU` and `sameMsRx` (share of prints in the same millisecond as the one before, by NinjaTrader's time and by arrival), `jumpTicks` (share of steps of `0`, `1`, `2`, `3+` ticks), `delayMs` (`p50`, `p95` of arrival minus NinjaTrader's time; `below0` counted apart) |
+
+Medians and p95 are read from fixed log buckets, each about 41 percent wider than the last: the value given is the
+bucket's upper edge ("at most"). Nothing is sorted and nothing is made per trade; `max` is exact.
+
+### Send loop
+
+Each page's send loop runs on its own thread (as the tick request worker does), so a page never holds a thread-pool
+thread while it waits for its next message. Order is unchanged: before every data entry, and between the held trades
+released after `ready`, the order lane is sent first.

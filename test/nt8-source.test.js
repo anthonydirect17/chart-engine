@@ -15,9 +15,16 @@ test('ChartBridge is read only: no order placement, change, cancel or flatten ca
   for (const re of forbidden) assert.ok(!re.test(code), 'found forbidden call: ' + re);
 });
 
-test('the per-client send loop never runs inline (0.1.0 deadlock)', () => {
-  assert.match(code, /Task\.Run\(\(\) => client\.SendLoop\(\)\)/);
+test('the per-client send loop never runs inline (0.1.0 deadlock), and runs on its own thread (0.4.0)', () => {
+  assert.match(code, /Task sending = Task\.Factory\.StartNew\(\(\) => client\.SendLoop\(\), CancellationToken\.None, TaskCreationOptions\.LongRunning, TaskScheduler\.Default\);/);
   assert.ok(!/=\s*client\.SendLoop\(\)/.test(code), 'SendLoop called inline');
+  // synchronous: an await would hand the rest of the loop (and its blocking wait on the outbox) to a pool thread
+  const loop = bodyOf(code, 'public void SendLoop()');
+  assert.ok(!/\bawait\b/.test(loop) && !/\bawait\b/.test(bodyOf(code, 'private bool SendOrderLane()')) && !/\bawait\b/.test(bodyOf(code, 'private bool SendText(string msg)')), 'no await in the send loop');
+  assert.match(bodyOf(code, 'private bool SendText(string msg)'), /Task send = Socket\.SendAsync\(new ArraySegment<byte>\(bytes\), WebSocketMessageType\.Text, true, cts\.Token\);\s*for \(;;\)\s*\{\s*try \{ if \(send\.Wait\(1000\)\) break; \} catch \(AggregateException\) \{ break; \}\s*if \(cts\.IsCancellationRequested\) throw new OperationCanceledException\(cts\.Token\);\s*\}\s*send\.GetAwaiter\(\)\.GetResult\(\);/);
+  // the order lane first, before every data entry and between the released trades, as before
+  assert.match(loop, /foreach \(object item in outbox\.GetConsumingEnumerable\(cts\.Token\)\)\s*\{\s*if \(!SendOrderLane\(\)\) return;\s*if \(item == Wake\) continue;/);
+  assert.match(loop, /foreach \(string msg in batch\)\s*\{\s*if \(!SendOrderLane\(\)\) return;/);
 });
 
 test('fill events read the instrument from e.Execution (ExecutionEventArgs has no Instrument)', () => {

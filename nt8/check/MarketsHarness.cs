@@ -40,6 +40,7 @@ public static class MarketsHarness
             Tape();
             TapeNeverStopsATrade();
             LogLimit();
+            SendThread();
             Health();
             ConfigKey();
         }
@@ -290,6 +291,52 @@ public static class MarketsHarness
         for (int i = 0; i < 1000; i++) CbLogLimit.Error("harness error", new InvalidOperationException("the same fault " + i));
         Check(LoggedCount("harness error: the same fault") == 1 && CbLogLimit.Count("harness error") == 1000 && CbLogLimit.DiagJson().Contains("\"harness error\":1000"),
               "1,000 faults of one kind: one Output line, all counted in /diag");
+    }
+
+    // ------------------------------------------------------------ item 1: each page's send loop on its own thread
+    // A stand-in socket: records which thread each send ran on; the page "closes" (a Close frame) after closeMs; hang: no
+    // send ever completes (a page that stopped reading).
+    class ThreadSocket : System.Net.WebSockets.WebSocket
+    {
+        public readonly List<string> Got = new List<string>(); public readonly List<bool> Pool = new List<bool>(); public readonly List<int> Thread_ = new List<int>();
+        public int CloseMs; public bool Hang; public volatile bool Aborted;
+        public override System.Net.WebSockets.WebSocketCloseStatus? CloseStatus { get { return null; } }
+        public override string CloseStatusDescription { get { return null; } }
+        public override System.Net.WebSockets.WebSocketState State { get { return Aborted ? System.Net.WebSockets.WebSocketState.Aborted : System.Net.WebSockets.WebSocketState.Open; } }
+        public override string SubProtocol { get { return null; } }
+        public override void Abort() { Aborted = true; }
+        public override System.Threading.Tasks.Task CloseAsync(System.Net.WebSockets.WebSocketCloseStatus st, string d, CancellationToken c) { return System.Threading.Tasks.Task.FromResult(0); }
+        public override System.Threading.Tasks.Task CloseOutputAsync(System.Net.WebSockets.WebSocketCloseStatus st, string d, CancellationToken c) { return System.Threading.Tasks.Task.FromResult(0); }
+        public override void Dispose() { }
+        public override System.Threading.Tasks.Task<System.Net.WebSockets.WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> b, CancellationToken c)
+        {
+            return System.Threading.Tasks.Task.Delay(CloseMs).ContinueWith(t => new System.Net.WebSockets.WebSocketReceiveResult(0, System.Net.WebSockets.WebSocketMessageType.Close, true));
+        }
+        public override System.Threading.Tasks.Task SendAsync(ArraySegment<byte> b, System.Net.WebSockets.WebSocketMessageType t, bool end, CancellationToken c)
+        {
+            lock (Got) { Got.Add(System.Text.Encoding.UTF8.GetString(b.Array, b.Offset, b.Count)); Pool.Add(Thread.CurrentThread.IsThreadPoolThread); Thread_.Add(Thread.CurrentThread.ManagedThreadId); }
+            return Hang ? new System.Threading.Tasks.TaskCompletionSource<int>().Task : System.Threading.Tasks.Task.FromResult(0);
+        }
+    }
+
+    static void SendThread()
+    {
+        string pagesBefore = ChartBridgeHealth.PagesJson();
+        ThreadSocket ws = new ThreadSocket { CloseMs = 400 };
+        System.Threading.Tasks.Task run = (System.Threading.Tasks.Task)Priv("RunClient", ws, CancellationToken.None, null);
+        bool ended = run.Wait(5000);
+        List<string> got; List<bool> pool; List<int> ids;
+        lock (ws.Got) { got = ws.Got.ToList(); pool = ws.Pool.ToList(); ids = ws.Thread_.ToList(); }
+        Check(ended && got.Count >= 2 && got[0].StartsWith("{\"type\":\"hello\"") && got.Any(x => x.StartsWith("{\"type\":\"execs\"")) && pool.All(x => !x) && ids.Distinct().Count() == 1,
+              "a page's sends (hello, execs) run on its own thread, never a thread-pool thread (" + got.Count + " sends, pool " + string.Join(",", pool) + ")");
+        Check(ChartBridgeHealth.ThreadsJson().Contains("\"pageSendThreads\":0") && ChartBridgeHealth.PagesJson() != pagesBefore, "the send thread ended with the page; connects and closes counted: " + ChartBridgeHealth.PagesJson());
+        // a page that stopped reading: its send never completes; once the page closes, the thread stops waiting within a second
+        ThreadSocket hung = new ThreadSocket { CloseMs = 200, Hang = true };
+        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+        run = (System.Threading.Tasks.Task)Priv("RunClient", hung, CancellationToken.None, null);
+        ended = run.Wait(5000);
+        Check(ended && sw.Elapsed.TotalMilliseconds < 2500 && ChartBridgeHealth.ThreadsJson().Contains("\"pageSendThreads\":0"),
+              "a page whose send never completes: after it closes, its send thread ends within a second (" + sw.Elapsed.TotalMilliseconds.ToString("0") + " ms), none left waiting");
     }
 
     static void Health()

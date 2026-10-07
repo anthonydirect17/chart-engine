@@ -1545,13 +1545,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             Admit(batch);
         }
 
-        private async Task<bool> SendText(string msg)
+        // 0.4.0: blocks this page's own send thread until the socket has taken the message (SendLoop). Once the page is closed
+        // the wait ends within a second even if the socket never answers, so no thread is left waiting on a dead page.
+        private bool SendText(string msg)
         {
             if (Socket.State != WebSocketState.Open) return false;
             byte[] bytes = Encoding.UTF8.GetBytes(msg);
             long t0 = Stopwatch.GetTimestamp();
             Interlocked.Exchange(ref sendStarted, t0);
-            await Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cts.Token);
+            Task send = Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cts.Token);
+            for (;;)
+            {
+                try { if (send.Wait(1000)) break; } catch (AggregateException) { break; }   // done; a failure is thrown below as itself
+                if (cts.IsCancellationRequested) throw new OperationCanceledException(cts.Token);
+            }
+            send.GetAwaiter().GetResult();
             Interlocked.Exchange(ref sendStarted, 0);
             NoteSendTime(Stopwatch.GetTimestamp() - t0);
             return true;
@@ -1565,13 +1573,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeHealth.SendMsAll.Add(ms);
         }
 
-        private async Task<bool> SendOrderLane()
+        private bool SendOrderLane()
         {
             string msg;
             while (orderLane.TryDequeue(out msg))
             {
                 Interlocked.Decrement(ref orderLaneCount);
-                if (!await SendText(msg)) return false;
+                if (!SendText(msg)) return false;
             }
             return true;
         }
@@ -1595,14 +1603,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             return !cts.IsCancellationRequested;
         }
 
-        public async Task SendLoop()
+        // 0.4.0: synchronous, on its own thread (RunClient starts it LongRunning, as the gate worker): it blocks on the outbox
+        // and on each send, so a page never holds a thread-pool thread (an await here would hand the loop back to the pool).
+        // The order is as before: the order lane goes first before every data entry and between the released trades.
+        public void SendLoop()
         {
             loopStarted = true;
+            ChartBridgeHealth.LoopStarted();
             try
             {
                 foreach (object item in outbox.GetConsumingEnumerable(cts.Token))
                 {
-                    if (!await SendOrderLane()) return;
+                    if (!SendOrderLane()) return;
                     if (item == Wake) continue;
                     Stamp ignored; queuedAt.TryDequeue(out ignored);   // this entry no longer waits
                     string[] batch = item as string[];
@@ -1611,7 +1623,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         string one = (string)item;
                         bool bulk = Bulk(one);
                         long t0 = Stopwatch.GetTimestamp();
-                        if (!await SendText(one)) return;
+                        if (!SendText(one)) return;
                         if (bulk)
                         {
                             Interlocked.Add(ref bulkSpent, Stopwatch.GetTimestamp() - t0);
@@ -1622,9 +1634,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     }
                     foreach (string msg in batch)   // the release after "ready": bulk too (review 4 B1)
                     {
-                        if (!await SendOrderLane()) return;
+                        if (!SendOrderLane()) return;
                         long t0 = Stopwatch.GetTimestamp();
-                        if (!await SendText(msg)) return;
+                        if (!SendText(msg)) return;
                         Interlocked.Add(ref bulkSpent, Stopwatch.GetTimestamp() - t0);
                     }
                 }
@@ -1636,7 +1648,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeHealth.SendError();
                 ChartBridgeServer.Log("Client " + Id + " send stopped: " + ex.Message + "; closing it.");
             }
-            finally { Close(); }   // every way out (review 5 N6: also when the socket is no longer open); Close is idempotent
+            finally { Close(); ChartBridgeHealth.LoopEnded(); }   // every way out (review 5 N6: also when the socket is no longer open); Close is idempotent
         }
 
         public string DiagJson()
@@ -2108,7 +2120,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             client.Origin = origin;
             Clients[id] = client;
             ChartBridgeHealth.Connected();   // 0.4.0: /diag health.pages
-            Task sending = Task.Run(() => client.SendLoop());   // SendLoop blocks on its queue; never run it inline (0.1.0 deadlock)
+            // SendLoop blocks on its queue: never run it inline (0.1.0 deadlock). 0.4.0: on its own thread, not a pool thread per page
+            Task sending = Task.Factory.StartNew(() => client.SendLoop(), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Dictionary<string, string> seen = new Dictionary<string, string>();
             client.Send(HelloJsonFor(seen));
             SettlementAfterHello(client, seen);   // 0.3.7: hello ends up right even if settlements.txt was read (or a value came) while it was built
