@@ -136,12 +136,20 @@ namespace NinjaTrader.Cbi
         public int Quantity { get; set; }
         public double AveragePrice { get; set; }
     }
+    // 0.4.0 copier: NinjaTrader's Provider (Simulator for its own simulator accounts), read by reflection in ChartBridgeCopier.cs.
+    // Unknown is the stand-in's default only (so an account is not Sim unless a harness says so).
+    public enum Provider { Unknown, Simulator, Playback, Rithmic, Tradovate }
+    public enum AccountItem { CashValue, RealizedProfitLoss, UnrealizedProfitLoss }   // 0.4.0 copier: Account.Get, read by reflection
+    public enum Currency { UsDollar }
     // Stand-in account: records every order call so the Mono harness can check the gates.
     public class Account
     {
         public static List<Account> All = new List<Account>();
         public string Name { get; set; }
         public Connection Connection { get; set; }
+        public Provider Provider { get; set; }                                          // 0.4.0 copier
+        public readonly Dictionary<AccountItem, double> Items = new Dictionary<AccountItem, double>();   // 0.4.0 copier: what Get answers
+        public double Get(AccountItem item, Currency currency) { double v; return Items.TryGetValue(item, out v) ? v : 0; }
         public List<Execution> Executions = new List<Execution>();
         public List<Order> Orders = new List<Order>();
         public List<Position> Positions = new List<Position>();

@@ -48,7 +48,7 @@ using NinjaTrader.Cbi;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    public static class ChartBridgeOrders
+    public static partial class ChartBridgeOrders   // 0.4.0 copier: partial, so ChartBridgeCopier.cs can read the gates through its wrappers
     {
         public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;
         public const double MaxPriceAgeMs = 300000;
@@ -412,6 +412,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
             if (client.Trader) { client.Send(OrdersJson()); foreach (string p in PositionJsons()) client.Send(p); }
+            if (client.Trader) ChartBridgeCopier.AfterAuth(client);   // 0.4.0 copier: a v3 page gets the copier's state
         }
 
         private static bool SlowEquals(string a, string b)
@@ -654,6 +655,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
             if (wantsLegs && reduces) return "a bracket can only go on an order that opens or adds; this order reduces the position";
+            string copierWhy = ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed
+            if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
             string name = "CB#" + tag + (kind == "market" ? "" : " atm") + " s" + stopTicks + " t" + targetTicks;
@@ -672,6 +675,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = stopTicks, TargetTicks = targetTicks };
             }
             account.Submit(new[] { order });
+            ChartBridgeCopier.LeaderEntrySent(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied
             ChartBridgeServer.Log("order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
                 (wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
@@ -941,6 +945,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Enabled && AccountTradable(account.Name) && root != null)
                 ChartBridgeServer.SendToTraders(OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null));
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
+            ChartBridgeCopier.OnOrderUpdate(account, o);   // 0.4.0 copier: follower fills get their stop; the leader's stop moves are followed
         }
 
         private static string Where(Account a, Instrument i)
@@ -1405,6 +1410,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Sync) { IdFor(x); Ours.Add(x); Manage(br.Account, br.Instrument); }
                 br.Account.Submit(new[] { x });
                 Alarm(where + ": price had already passed the stop level " + CbJson.Num(sp) + " (last " + CbJson.Num(last) + "); exited " + qty + " at market");
+                CopierLeaderFill(br, filled, qty, incPrice, null, sp);   // 0.4.0 copier: an increment that exited at once is not copied
                 return;
             }
             string oco = hasStop && hasTarget ? "cb-" + br.Tag + "-" + filled.ToString(CultureInfo.InvariantCulture) : "";
@@ -1425,6 +1431,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             br.Account.Submit(legs.ToArray());
             ChartBridgeServer.Log("bracket placed for " + qty + " on " + where + ": " +
                 (pair.Stop != null ? "stop " + CbJson.Num(sp) : "no stop") + ", " + (pair.Target != null ? "target " + CbJson.Num(tp) : "no target"));
+            CopierLeaderFill(br, filled, qty, incPrice, pair.Stop, sp);   // 0.4.0 copier: the leader's fill and its stop, to the followers
         }
 
         // A leg filled in part: shrink its partner to what is still open. A leg rejected: say so loudly.
@@ -1458,6 +1465,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             double now = ChartBridgeTime.NowUtcMs();
             if (e.MarketPosition == MarketPosition.Flat && SignedPosition(account, inst) == 0 && Steady(account, now))
                 CancelLeftoverLegs(account, inst, Where(account, inst), now);
+            ChartBridgeCopier.OnPositionUpdate(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);   // 0.4.0 copier: the leader's exits
         }
 
         // Flat: any ChartBridge stop or target still working would open a new position if it filled. Legs
@@ -1539,6 +1547,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // reflection, so a differently named property falls back to resetting every account (the safe side).
         private static void OnConnectionStatus(object sender, EventArgs e)
         {
+            ChartBridgeCopier.ConnectionChanged();   // 0.4.0 copier: a mass disconnect is seen at once
             object conn = null, status = null, previous = null;
             try
             {
