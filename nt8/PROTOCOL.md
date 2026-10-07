@@ -1694,6 +1694,34 @@ they are, the page shows Accept and Reject buttons and `botAnswer` is the same e
 The Desk checks its own rules on save; ChartBridge checks `order.strategy` again on every order (it never trusts the
 store).
 
+### The page's Account page (chart 1.16.0)
+
+How the chart page uses the messages above for its Account page (`live/accounts.js`, a workspace panel) and the Quote
+board. Page side only; nothing here changes what ChartBridge sends or accepts.
+
+- **Its own connection** (lead's default). The Account page opens one more WebSocket per window, sends `client` v3 right
+  after `hello` and signs in (`auth`) on it. It is opened only when `hello.features` lists `"v3"`; with an older ChartBridge
+  nothing new is opened and the panel says it needs 0.4.0. The order ticket's connection stays a v2 page, as in 0.3.8.
+  Its actions are exactly `accountTrade`, `accountArchive` (`confirm: true`, sent only after the page's own confirm in the
+  panel), `cancel` with `from: "list"`, `copierSet`, `copierFollower` (every key) and `copierRearm`; each control shows only
+  when its switch in `trading.switches` is `true` (a missing or non-boolean switch is off). Archive shows only with
+  `accountChecks` on, as ChartBridge refuses `accountArchive` with it off (lead's default).
+- **Limits** (lead's default; never estimated). Daily loss: the room is `roomDailyLoss`, else The Desk's `daily_loss_limit`
+  less today's loss (`pnlToday` below 0); the limit is The Desk's, else the room plus today's loss. Trailing drawdown: the
+  room is `roomDrawdown` only (The Desk has no high-water mark); the limit is The Desk's `trailing_drawdown`. Used is
+  (limit - room) / limit. The closer is the one with less room in dollars; its percent gives the level: amber from 70
+  percent, red from 90; when the closer's limit is unknown the other's percent is used; a room at or below 0 is red. Every
+  chart in the window shows the warning for the ticket's account (all its charts show that account's orders).
+- **The Desk** (lead's default). Its address is `/diag` `desk.deskUrl` (default `http://localhost:8800`);
+  `GET /api/chart-accounts` is read at start and every minute. Net on Today's trades needs a commission per contract per
+  side: the page reads an optional `commission` (`{"MNQ": 0.62, ...}`, the rate The Desk itself uses, its firm default
+  when the account has none) on each row; until The Desk sends it, net shows `n/a` and says why (an open item for The
+  Desk). A row of Today's trades opens The Desk's Review of that session, `#/futures/review/<date>` (the page has no
+  Desk trade id).
+- **Quote board.** After NQ and ES, every instrument `hello` marks `quoteOnly: true`, in the order YM, RTY, GC, SI, CL,
+  6E, ZN, ZB (any other after, by name); `priceFormat` `"32nds"` is shown in NinjaTrader's form (the half 32nd as a third
+  digit when the tick is under 1/32). No order control is ever offered for them.
+
 ### Order lane
 
 The v3 server-to-page messages `accounts`, `managed`, `merge`, `copier`, `copierEvent`, `bot`, `botSignal` and `botProposal`

@@ -600,7 +600,8 @@ function mount(v, host) {
     for (const a of accounts) for (const p of a.positions || []) if (p && p.qty) positions.push({ account: a.name, root: p.root, qty: p.qty, avgPrice: p.avgPrice });
     watchPositions([...new Set(positions.map(p => p.root))]);
     const now = host.now();
-    const groups = AC.tradesToday([...S.fills.values()], now, pv, (acct, r) => { const a = accounts.find(x => x.name === acct); const p = a && (a.positions || []).find(x => x.root === r); return p ? p.qty : 0; }, F.rateOf);
+    const archived = new Set(S.archived.map(x => x.name));        // an archived account leaves every list (its history stays on The Desk)
+    const groups = AC.tradesToday([...S.fills.values()].filter(x => !archived.has(x.account)), now, pv, (acct, r) => { const a = accounts.find(x => x.name === acct); const p = a && (a.positions || []).find(x => x.root === r); return p ? p.qty : 0; }, F.rateOf);
     const counts = { acc: accounts.length, pos: positions.length, ord: orders.length, trd: groups.reduce((n, g) => n + g.trips.filter(t => !t.open).length, 0), cop: (S.copier && S.copier.followers || []).filter(f => f.on).length, log: S.log.length };
     for (const t of TABS) { const el = v.body.querySelector(`[data-ct="${t.id}"]`), x = String(counts[t.id]); if (el.textContent !== x) el.textContent = x; }
 
