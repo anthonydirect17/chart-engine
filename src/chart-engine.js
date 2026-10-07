@@ -2110,20 +2110,29 @@ function create(container, options) {
     if (o.layers.trades && trades.length && n >= 0) {
       const chips = [];
       for (const tr of trades) {
-        const i1 = idxAtTime(tr.tIn), i2 = idxAtTime(tr.tOut);
+        // 1.16.0 (the Bot tab): a trade still open has no exit (tOut null): its entry mark only; `ghost` draws it faint and
+        // with no label (the bot's trades on Anthony's own charts)
+        const open = tr.tOut === null || tr.tOut === undefined, ga = tr.ghost ? 0.38 : 1;
+        const i1 = idxAtTime(tr.tIn), i2 = open ? i1 : idxAtTime(tr.tOut);
         if (i2 < from - 2 || i1 > to + 2) continue;
-        const x1 = xOf(i1), x2 = xOf(i2), y1 = yOf(tr.pIn), y2 = yOf(tr.pOut);
-        const pts = (tr.pOut - tr.pIn) * tr.dir;
+        const x1 = xOf(i1), x2 = xOf(i2), y1 = yOf(tr.pIn), y2 = open ? y1 : yOf(tr.pOut);
+        const pts = open ? 0 : (tr.pOut - tr.pIn) * tr.dir;
         const col = pts > 0 ? T.profit : pts < 0 ? T.loss : T.axisText;
-        ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.lineWidth = 1.25; ctx.setLineDash([3, 3]);
-        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+        if (!open) {
+          ctx.strokeStyle = col; ctx.globalAlpha = 0.85 * ga; ctx.lineWidth = 1.25; ctx.setLineDash([3, 3]);
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
+        }
+        ctx.globalAlpha = ga;
         const s = 5.5, d = tr.dir;                                // entry: triangle pointing the trade's way
         const side = d > 0 ? T.long : T.short, ring = ringOf(side);
         ctx.fillStyle = side; ctx.strokeStyle = ring || T.bg; ctx.lineWidth = ring ? 2 : 1.5;
         ctx.beginPath(); ctx.moveTo(x1, y1 - d * s); ctx.lineTo(x1 - s, y1 + d * s * 0.7); ctx.lineTo(x1 + s, y1 + d * s * 0.7); ctx.closePath(); ctx.stroke(); ctx.fill();
-        ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x2, y2, 4, 0, Math.PI * 2); ctx.fillStyle = T.exit; ctx.stroke(); ctx.fill();
-        if (V.spacing >= 2.5) {
+        if (!open) {
+          ctx.strokeStyle = T.bg; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(x2, y2, 4, 0, Math.PI * 2); ctx.fillStyle = T.exit; ctx.stroke(); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        if (V.spacing >= 2.5 && !tr.ghost && !open) {
           const txt = tr.label || ((pts > 0 ? '+' : '') + pts.toFixed(o.precision) + (o.unit ? ' ' + o.unit : ''));
           ctx.font = '500 11px ' + T.fontMono; const tw = ctx.measureText(txt).width;
           const lx = x2 + 9; let ly = y2 - 9;

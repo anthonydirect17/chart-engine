@@ -29,7 +29,8 @@
     "botMode": { "type": "botMode", "cid": "c17", "mode": "copilot" },
     "botKill": { "type": "botKill", "cid": "c18", "on": true },
     "botSeen": { "type": "botSeen", "id": "demo-0947-1", "at": 1791380820450 },
-    "botAnswer": { "type": "botAnswer", "cid": "c19", "id": "demo-0947-1", "answer": "accept", "at": 1791380821200 }
+    "botAnswer": { "type": "botAnswer", "cid": "c19", "id": "demo-0947-1", "answer": "accept", "at": 1791380821200 },
+    "botRails": { "type": "botRails", "cid": "c20", "maxTrades": 3, "maxLosses": 2 }
   },
   "serverToPage": {
     "hello.v3": { "type": "hello", "version": "0.4.0", "now": 1791380800000,

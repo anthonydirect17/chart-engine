@@ -67,6 +67,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   botKill: ['type', 'cid', 'on'],
   botSeen: ['type', 'id', 'at'],
   botAnswer: ['type', 'cid', 'id', 'answer', 'at'],
+  botRails: ['type', 'cid', 'maxTrades', 'maxLosses'],   // lane C4 (lead's default): tighten-only rails from the page
 });
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
 export const BOOL_KEYS = { accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'] };
@@ -74,8 +75,8 @@ export const BOT_KEYS = {
   botHello: ['type', 'name'], beat: ['type'], withdraw: ['type', 'id', 'reason'], flatten: ['type'],
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],
 };
-const V3_TYPES = ['accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer'];
-const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot' };
+const V3_TYPES = ['accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails'];
+const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot' };
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
 const WORKING = new Set(['working', 'partFilled']);
@@ -155,7 +156,7 @@ export class OrderDeskV3 extends OrderDesk {
     this.merges = { ok: 0, restored: 0, failed: 0, refused: 0, lastAtUtcMs: null };
     this.mergedSets = new Map();   // 'account|root' -> { stopId, targetIds } for a multi-target merge
     this.copier = { leader: 'Sim101', mode: 'executions', armed: false, standDownWhy: 'ChartBridge started: press Re-arm', followers: new Map(), drops: [], decisions: 0, skipped: 0, standDowns: 0, leaderMs: [] };
-    this.bot = { connected: false, simulated: false, name: null, mode: 'shadow', killed: false, standDown: null, trades: 0, losses: 0, lastBeat: 0, lastSignal: null, conn: null,
+    this.bot = { connected: false, simulated: false, name: null, mode: 'shadow', killed: false, standDown: null, trades: 0, losses: 0, lastBeat: 0, lastSignal: null, conn: null, maxTrades: 5, maxLosses: 3,
       proposals: new Map(), signals: [], stats: { signals: 0, proposals: 0, answered: 0, notAnswered: 0, placed: 0, refused: 0, heartbeatLost: 0 } };
     this.refreshAccounts();
   }
@@ -254,6 +255,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (o.kind === 'stopLimit' && o.limitPrice !== undefined) m.limitPrice = o.limitPrice;
     m.tradable = this.accounts.includes(o.account);
     if (o.by) m.by = o.by;
+    else if (o.parent && (this.orders.get(o.parent) || {}).by === 'bot') m.by = 'bot';   // lane C4 (lead's default): a bot entry's legs are the bot's too
     if (o.bucket) m.bucket = o.bucket;
     return m;
   }
@@ -753,14 +755,14 @@ export class OrderDeskV3 extends OrderDesk {
   botMsg() {
     const b = this.bot, p = this.pos('Sim101', this.botRoot);
     return { type: 'bot', enabled: this.sw.bot, connected: b.connected, name: b.name, mode: b.mode, account: 'Sim101', root: this.botRoot,
-      position: { qty: b.position ? p.qty : 0, avgPrice: b.position && p.qty ? p.avgPrice : null }, pnlToday: +(b.pnl || 0).toFixed(2), trades: b.trades, maxTrades: 5,
-      losses: b.losses, maxLosses: 3, killed: b.killed, standDown: b.standDown, lastBeatMs: b.connected ? this.now() - b.lastBeat : null, lastSignal: b.lastSignal };
+      position: { qty: b.position ? p.qty : 0, avgPrice: b.position && p.qty ? p.avgPrice : null }, pnlToday: +(b.pnl || 0).toFixed(2), trades: b.trades, maxTrades: b.maxTrades,
+      losses: b.losses, maxLosses: b.maxLosses, killed: b.killed, standDown: b.standDown, lastBeatMs: b.connected ? (b.simulated ? 400 : this.now() - b.lastBeat) : null, lastSignal: b.lastSignal };   // the simulated bot never misses a beat
   }
   botStateMsg() { const b = this.bot; return { type: 'botState', mode: b.mode, killed: b.killed, standDown: b.standDown, trades: b.trades, losses: b.losses }; }
   botNotify() { this.broadcastV3(this.botMsg()); if (this.bot.conn) this.send(this.bot.conn, this.botStateMsg()); }
   botClosed(pts) {
     const b = this.bot; b.pnl = (b.pnl || 0) + pts * this.instruments[this.botRoot].pointValue;
-    if (pts < 0) { b.losses++; if (b.losses >= 3) b.standDown = '3 losing trades today: no new bot entries until 18:00 ET'; }
+    if (pts < 0) { b.losses++; if (b.losses >= b.maxLosses) b.standDown = b.maxLosses + ' losing trades today: no new bot entries until 18:00 ET'; }
     if (!this.pos('Sim101', this.botRoot).qty) b.position = false;
     this.botNotify();
   }
@@ -797,13 +799,30 @@ export class OrderDeskV3 extends OrderDesk {
     this.botAnswerToBot(p.id, why ? 'refused' : 'accepted', why || 'placed on Sim101');
     if (why) this.broadcastV3({ type: 'status', level: 'warn', text: 'Bot proposal ' + p.id + ' was accepted but refused: ' + why });
   }
+  /* botRails (lane C4, lead's default, PROTOCOL.md "Bot rails from the page"): tighten only, both keys, each a whole
+     number from 1 to the rail in force; a ChartBridge start and the 18:00 ET reset go back to 5 and 3 */
+  check_botRails(m) {
+    const b = this.bot;
+    for (const [k, cur] of [['maxTrades', b.maxTrades], ['maxLosses', b.maxLosses]]) {
+      if (!isInt(m[k]) || m[k] < 1) return k + ' must be a whole number of 1 or more.';
+      if (m[k] > cur) return 'Rails can only be tightened: ' + k + ' is ' + cur + '.';
+    }
+    return null;
+  }
+  do_botRails(m) {
+    const b = this.bot;
+    b.maxTrades = m.maxTrades; b.maxLosses = m.maxLosses;
+    if (b.losses >= b.maxLosses && !b.standDown) b.standDown = b.maxLosses + ' losing trades today: no new bot entries until 18:00 ET';
+    this.logLine('bot', 'Sim101', 'rails tightened by the page: ' + b.maxTrades + ' trades, ' + b.maxLosses + ' losing trades');
+    this.botNotify();
+  }
   botAnswerToBot(id, answer, text) { if (this.bot.conn) this.send(this.bot.conn, { type: 'answer', id, answer, text }); }
   /** the rails, then every v2 gate; returns why it was refused or null */
   botPlace(s) {
     const b = this.bot;
     if (b.killed) return 'the kill switch is on';
     if (b.standDown) return b.standDown;
-    if (b.trades >= 5) return 'The bot has made 5 trades today (the limit).';
+    if (b.trades >= b.maxTrades) return 'The bot has made ' + b.maxTrades + ' trades today (the limit).';
     if (!(s.stopTicks >= 1)) return 'every bot entry needs a stop';
     if (!this.config.trading) return 'Trading is off.';
     const m = { type: 'order', account: 'Sim101', root: this.botRoot, side: s.side, kind: s.kind, qty: 1, bracket: { stop: s.stopTicks, target: s.targetTicks || 0 } };
@@ -852,7 +871,7 @@ export class OrderDeskV3 extends OrderDesk {
     return null;
   }
   welcomeMsg() {
-    return { type: 'welcome', version: '0.4.0', mode: this.bot.mode, account: 'Sim101', root: this.botRoot, rails: { maxQty: 1, maxTrades: 5, maxLosses: 3 },
+    return { type: 'welcome', version: '0.4.0', mode: this.bot.mode, account: 'Sim101', root: this.botRoot, rails: { maxQty: 1, maxTrades: this.bot.maxTrades, maxLosses: this.bot.maxLosses },
       instruments: Object.entries(this.instruments).map(([root, i]) => ({ root, name: i.name, tick: i.tick, pointValue: i.pointValue, quoteOnly: !!i.quoteOnly, priceFormat: i.priceFormat || 'decimal' })) };
   }
   /** every second: the heartbeat (5 s), the copier's sweep, Gone */
