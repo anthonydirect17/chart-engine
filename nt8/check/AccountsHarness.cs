@@ -1,6 +1,7 @@
 // ChartBridge 0.4.0 accounts on Mono (inside check:orders): the per-account checkmark as gate 2 (accountChecks = on), the
 // first-start pre-check from tradeAccounts, accounts.txt missing or unreadable (nothing checked, never rewritten), the 10 s
-// grace before Gone, Gone turning trading off for that account only, Archive only with confirm and only when Gone, the
+// grace before Gone, Gone holding entries for that account only and never clearing its checkmark (0.4.2), NinjaTrader's
+// trailing drawdown never making an account Gone (0.4.2), Archive only with confirm and only when Gone, the
 // money and room fields (null with a reason where NinjaTrader reports nothing), exits that always work, cancel from the
 // Working orders tab (refused while cancelFromList is off), a v3 page's wider view, and every switch off = 0.3.8.
 // Made-up accounts only (EVAL-A, FUNDED-B, Sim101, Playback101); nothing reaches a broker.
@@ -424,10 +425,10 @@ public static class AccountsHarness
         fundedB.Connection.Status = ConnectionStatus.ConnectionLost;
         ChartBridgeAccounts.Tick(t + 62000);
         ChartBridgeAccounts.Tick(t + 72000);
-        Check(!ChartBridgeAccounts.Checked("FUNDED-B") && ChartBridgeAccounts.Checked("EVAL-A") && Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "FUNDED-B").Contains("\"goneWhy\":\"disconnected\""), "connected, then dropped for 10 s: Gone, the checkmark lost (that account only)");
+        Check(!ChartBridgeAccounts.Checked("FUNDED-B") && ChartBridgeAccounts.Checked("EVAL-A") && Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "FUNDED-B").Contains("\"goneWhy\":\"disconnected\"") && Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "FUNDED-B").Contains("\"trade\":true"), "connected, then dropped for 10 s: Gone, entries wait, the checkmark kept (that account only)");
         fundedB.Connection.Status = ConnectionStatus.Connected;
         ChartBridgeAccounts.Tick(t + 73000);
-        Send(page, Trade("FUNDED-B", "true"));
+        Check(ChartBridgeAccounts.Checked("FUNDED-B"), "connected again: trades with its kept checkmark, nothing to tick (0.4.2)");
         // disabled at first sight, never connected: Gone after the grace all the same
         sim.Connection.Status = ConnectionStatus.Disconnected;
         Restart();
@@ -438,7 +439,7 @@ public static class AccountsHarness
         Account.FireStatus(sim, AccountStatus.Enabled);
         sim.Connection.Status = ConnectionStatus.Connected;
         ChartBridgeAccounts.Tick(t + 91000);
-        Send(page, Trade("Sim101", "true"));
+        Check(ChartBridgeAccounts.Checked("Sim101"), "enabled and connected again: its kept checkmark trades (0.4.2)");
         Check(ChartBridgeAccounts.Checked("Sim101") && ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "all three checked again");
     }
 
@@ -479,31 +480,46 @@ public static class AccountsHarness
         Check(ChartBridgeAccounts.Checked("EVAL-A"), "a break in the bad time starts the grace again");
         sent.Clear(); sentV2.Clear();
         ChartBridgeAccounts.Tick(t + 20500);
-        Check(!ChartBridgeAccounts.Checked("EVAL-A"), "lost for 10 s without a break: Gone, the checkmark off");
-        Check(ChartBridgeAccounts.Checked("FUNDED-B") && ChartBridgeAccounts.Checked("Sim101"), "Gone turns trading off for that account only");
-        Check(System.Text.RegularExpressions.Regex.IsMatch(File_("accounts.txt"), "\noff\t[0-9]+\tEVAL-A\n"), "Gone: the checkmark off is saved");
-        Check((File_("accounts.log") ?? "").Contains("\tEVAL-A\tgone\tdisconnected for 10 s; unchecked: trading is off for it\n"), "Gone: logged");
-        Check(sent.Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("EVAL-A is gone (disconnected for 10 s): trading is off for it")) && sentV2.Any(x => x.Contains("EVAL-A is gone")), "Gone: a status warn to the signed-in pages");
+        Check(!ChartBridgeAccounts.Checked("EVAL-A"), "lost for 10 s without a break: Gone, entries wait");
+        Check(ChartBridgeAccounts.Checked("FUNDED-B") && ChartBridgeAccounts.Checked("Sim101"), "Gone holds entries for that account only");
+        Check(System.Text.RegularExpressions.Regex.IsMatch(File_("accounts.txt"), "\ntrade\t[0-9]+\tEVAL-A\n"), "Gone: the checkmark is kept in accounts.txt (0.4.2: ChartBridge never clears one)");
+        Check((File_("accounts.log") ?? "").Contains("\tEVAL-A\tgone\tdisconnected for 10 s; the checkmark is kept: entries wait until it is back\n"), "Gone: logged");
+        Check(sent.Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("EVAL-A is gone (disconnected for 10 s): entries wait until it is back; its checkmark is kept")) && sentV2.Any(x => x.Contains("EVAL-A is gone")), "Gone: a status warn to the signed-in pages");
         string e = Entry(Accounts(), "EVAL-A");
-        Check(e.Contains("\"connection\":\"lost\"") && e.Contains("\"trade\":false") && e.Contains("\"tradable\":false") && e.Contains("\"state\":\"gone\"") && e.Contains("\"goneWhy\":\"disconnected\"") && !e.Contains("\"goneSince\":null"), "Gone: listed as gone, why and since");
-        Check(sent.Any(x => x.StartsWith("{\"type\":\"trading\"") && !x.Contains("EVAL-A")), "Gone: trading sent again without EVAL-A");
+        Check(e.Contains("\"connection\":\"lost\"") && e.Contains("\"trade\":true") && e.Contains("\"tradable\":false") && e.Contains("\"state\":\"gone\"") && e.Contains("\"goneWhy\":\"disconnected\"") && !e.Contains("\"goneSince\":null"), "Gone: listed as gone, why and since, the checkmark kept, not tradable");
+        Check(sent.Any(x => x.StartsWith("{\"type\":\"trading\"") && !x.Contains("EVAL-A")), "Gone: trading sent again without EVAL-A (the ticket offers it again when it is back)");
         int calls = evalA.Calls.Count;
         Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
-        Check(Rejected("EVAL-A is gone (disconnected)") && evalA.Calls.Count == calls, "Gone: entry refused");
+        Check(Rejected("EVAL-A is gone (disconnected): entries wait until it is back (its checkmark is kept)") && evalA.Calls.Count == calls, "Gone: entry refused");
         evalA.Connection.Status = ConnectionStatus.Connected;
-        Send(page, Trade("EVAL-A", "true"));
-        Check(Rejected("EVAL-A is gone") && !ChartBridgeAccounts.Checked("EVAL-A"), "Gone: accountTrade on refused until it is back");
+        sent.Clear();
         ChartBridgeAccounts.Tick(t + 21500);
         e = Entry(Accounts(), "EVAL-A");
-        Check(e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("EVAL-A"), "back: active again, the checkmark still off");
-        Check((File_("accounts.log") ?? "").Contains("\tEVAL-A\tactive again\t"), "back: logged");
+        Check(e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":true") && ChartBridgeAccounts.Checked("EVAL-A"), "back: active again and trading with its kept checkmark, nothing to tick");
+        Check((File_("accounts.log") ?? "").Contains("\tEVAL-A\tactive again\thealthy again; checked: entries are taken again\n"), "back: logged");
+        Check(sent.Any(x => x.Contains("\"level\":\"info\"") && x.Contains("EVAL-A is back (connected): its checkmark is kept, entries are taken again")), "back: an info status to the signed-in pages");
+        Check(sent.Any(x => x.StartsWith("{\"type\":\"trading\"") && x.Contains("EVAL-A")), "back: trading sent again with EVAL-A (the ticket offers it again)");
+        Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(evalA.Calls.Count == calls + 1 && evalA.Calls.Last().StartsWith("submit"), "back: an entry goes through");
+        // unchecked by Anthony, then Gone and back: it stays unchecked (ChartBridge never changes a checkmark either way)
+        Send(page, Trade("EVAL-A", "false"));
+        evalA.Connection.Status = ConnectionStatus.ConnectionLost;
+        ChartBridgeAccounts.Tick(t + 22000);
+        ChartBridgeAccounts.Tick(t + 32000);
+        Check(Entry(Accounts(), "EVAL-A").Contains("\"state\":\"gone\"") && Entry(Accounts(), "EVAL-A").Contains("\"trade\":false"), "unchecked, then Gone: still unchecked");
         Send(page, Trade("EVAL-A", "true"));
-        Check(ChartBridgeAccounts.Checked("EVAL-A"), "back: Anthony checks it again");
+        Check(Rejected("EVAL-A is gone") && !ChartBridgeAccounts.Checked("EVAL-A"), "Gone: accountTrade on refused until it is back");
+        evalA.Connection.Status = ConnectionStatus.Connected;
+        sent.Clear();
+        ChartBridgeAccounts.Tick(t + 33000);
+        Check(Entry(Accounts(), "EVAL-A").Contains("\"state\":\"active\"") && !ChartBridgeAccounts.Checked("EVAL-A") && sent.Any(x => x.Contains("EVAL-A is back (connected): it is not checked for trading")), "back unchecked: stays unchecked, said so");
+        Send(page, Trade("EVAL-A", "true"));
+        Check(ChartBridgeAccounts.Checked("EVAL-A"), "Anthony checks it again");
         // an account that NinjaTrader no longer lists (its connection is off) goes Gone too
         Account.All.Remove(evalA);
-        ChartBridgeAccounts.Tick(t + 30000);
-        ChartBridgeAccounts.Tick(t + 40001);
-        Check(!ChartBridgeAccounts.Checked("EVAL-A") && Entry(Accounts(), "EVAL-A").Contains("\"connection\":\"disconnected\"") && Entry(Accounts(), "EVAL-A").Contains("\"balance\":null"), "an account missing from NinjaTrader: Gone (disconnected), money null");
+        ChartBridgeAccounts.Tick(t + 40000);
+        ChartBridgeAccounts.Tick(t + 50001);
+        Check(!ChartBridgeAccounts.Checked("EVAL-A") && Entry(Accounts(), "EVAL-A").Contains("\"connection\":\"disconnected\"") && Entry(Accounts(), "EVAL-A").Contains("\"state\":\"gone\"") && Entry(Accounts(), "EVAL-A").Contains("\"balance\":null"), "an account missing from NinjaTrader: Gone (disconnected), money null");
     }
 
     // ------------------------------------------------------------ Archive: only with confirm, only when Gone
@@ -529,7 +545,7 @@ public static class AccountsHarness
         evalA.Connection.Status = ConnectionStatus.Connected;
         ChartBridgeAccounts.Tick(ChartBridgeTime.NowUtcMs() + 200000);
         string e = Entry(Accounts(), "EVAL-A");
-        Check(e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("EVAL-A") && File_("accounts.log").Contains("\tEVAL-A\tback from the archive\t"), "archived and connected again: back as active, unchecked, logged");
+        Check(e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":false") && !ChartBridgeAccounts.Checked("EVAL-A") && File_("accounts.log").Contains("\tEVAL-A\tback from the archive\t"), "archived and connected again: back as active, unchecked (Anthony archived it), logged");
         Send(page, Trade("EVAL-A", "true"));
     }
 
@@ -544,8 +560,7 @@ public static class AccountsHarness
         Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("Sim101"), "disabled: the other accounts keep their checkmark");
         Account.FireStatus(fundedB, AccountStatus.Enabled);
         ChartBridgeAccounts.Tick(t + 11000);
-        Check(Entry(Accounts(), "FUNDED-B").Contains("\"state\":\"active\""), "enabled again: active, unchecked");
-        Send(page, Trade("FUNDED-B", "true"));
+        Check(Entry(Accounts(), "FUNDED-B").Contains("\"state\":\"active\"") && ChartBridgeAccounts.Checked("FUNDED-B"), "enabled again: active, trading with its kept checkmark (0.4.2)");
     }
 
     // ------------------------------------------------------------ money and the room fields: as NinjaTrader reports them, else null with why
@@ -566,12 +581,16 @@ public static class AccountsHarness
         double t = ChartBridgeTime.NowUtcMs() + 400000;
         ChartBridgeAccounts.Tick(t);
         ChartBridgeAccounts.Tick(t + 10000);
-        Check(!ChartBridgeAccounts.Checked("Sim101") && Entry(Accounts(), "Sim101").Contains("\"goneWhy\":\"drawdown\""), "past the trailing drawdown for 10 s: Gone (drawdown)");
-        Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "drawdown: the other accounts keep their checkmark");
+        ChartBridgeAccounts.Tick(t + 60000);
+        e = Entry(Accounts(), "Sim101");
+        Check(ChartBridgeAccounts.Checked("Sim101") && e.Contains("\"state\":\"active\"") && e.Contains("\"tradable\":true") && e.Contains("\"roomDrawdown\":0"), "NinjaTrader's trailing drawdown at 0 for a minute: shown, never Gone, the checkmark kept (0.4.2)");
+        sim.Items[AccountItem.TrailingMaxDrawdown] = -250;
+        ChartBridgeAccounts.Tick(t + 61000);
+        ChartBridgeAccounts.Tick(t + 80000);
+        Check(ChartBridgeAccounts.Checked("Sim101") && Entry(Accounts(), "Sim101").Contains("\"roomDrawdown\":-250"), "below 0: shown as NinjaTrader gives it, never Gone (0.4.2)");
         sim.Items[AccountItem.TrailingMaxDrawdown] = 500;
-        ChartBridgeAccounts.Tick(t + 11000);
-        Send(page, Trade("Sim101", "true"));
-        Check(ChartBridgeAccounts.Checked("Sim101"), "room again: back, and checked again by the page");
+        ChartBridgeAccounts.Tick(t + 81000);
+        Check(ChartBridgeAccounts.Checked("Sim101"), "room again: nothing changed");
         sim.GetThrows = new InvalidOperationException("stand-in");
         e = Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "Sim101");
         Check(e.Contains("\"balance\":null") && e.Contains("\"roomDrawdown\":null") && e.Contains("could not give the trailing drawdown (stand-in)"), "NinjaTrader throws: null, never a guess");

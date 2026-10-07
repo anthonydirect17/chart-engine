@@ -100,17 +100,21 @@ test('accounts: tradeAccounts pre-checked on first start; checkmarks gate entrie
   assert.match(reasonOf(d.order({ account: 'EVAL-B' })), /not checked/);
   assert.equal(reasonOf(d.act({ type: 'flatten', account: 'EVAL-B', root: 'MNQ' })), null, 'Flatten on an unchecked account still works');
   assert.equal(d.desk.pos('EVAL-B', 'MNQ').qty, 0);
-  // Gone: lost for the grace, then the checkmark off and a warning
+  // Gone: lost for the grace, then entries wait and a warning; the checkmark is kept (0.4.2)
   d.desk.setConnection('EVAL-A', 'lost'); d.take();
   d.advance(500); d.desk.checkGone();
   assert.equal(d.desk.acct.get('EVAL-A').state, 'active', 'still inside the grace');
   d.advance(600); d.desk.checkGone();
   const a = d.desk.acct.get('EVAL-A');
-  assert.equal(a.state, 'gone'); assert.equal(a.trade, false); assert.equal(a.goneWhy, 'disconnected');
-  assert.match(d.take('status')[0].text, /EVAL-A is gone/);
+  assert.equal(a.state, 'gone'); assert.equal(a.trade, true); assert.equal(a.goneWhy, 'disconnected');
+  assert.equal(d.desk.accountsMsg().list.find(x => x.name === 'EVAL-A').tradable, false, 'Gone: not tradable');
+  assert.match(d.take('status')[0].text, /EVAL-A is gone \(disconnected for 1 s\): entries wait until it is back; its checkmark is kept/);
+  assert.match(reasonOf(d.order({ account: 'EVAL-A' })), /gone: entries wait until it is back/);
   assert.match(reasonOf(d.act({ type: 'accountTrade', account: 'EVAL-A', on: true })), /gone/);
   d.desk.setConnection('EVAL-A', 'connected');
-  assert.equal(d.desk.acct.get('EVAL-A').state, 'active'); assert.equal(d.desk.acct.get('EVAL-A').trade, false, 'back, the checkmark stays off');
+  assert.equal(d.desk.acct.get('EVAL-A').state, 'active'); assert.equal(d.desk.acct.get('EVAL-A').trade, true, 'back with its checkmark (0.4.2)');
+  assert.ok(d.desk.accounts.includes('EVAL-A'), 'back: tradable again, nothing to tick');
+  assert.match(d.take('status').pop().text, /EVAL-A is back \(connected\): its checkmark is kept/);
   // archive: only a gone account, only with confirm
   assert.match(reasonOf(d.act({ type: 'accountArchive', account: 'EVAL-A', confirm: true })), /not gone/);
   d.desk.setConnection('FUNDED-C', 'disabled'); d.advance(1100); d.desk.checkGone(); d.take();
