@@ -805,14 +805,6 @@ function localPresetStore(storage) {
 }
 
 /*
- * The page's clock (1.14.0, Anthony's item 9): the browser's monotonic clock (performance.now()) on a wall-clock base. The
- * base starts at performance.timeOrigin (the page load), and check() moves it to the PC's clock (Date.now()) whenever the
- * two differ by more than 50 ms, as ChartBridge re-anchors its own every 5 s: after Windows time sync steps the PC clock
- * the page follows within 5 s instead of showing a false "local -99 ms (PC clock behind)" until it reloads. now() stays
- * one addition (the live tick path's cost is unchanged), and every user of it (the local delay, the ticket link's
- * stamps) reads the same clock. Options: perfNow, wallNow (functions), origin (the first base), slackMs (50), everyMs (5000).
- */
-/*
  * The stale feed (1.16.0, Anthony): a chart whose line is live but has had no trade for 10 s in RTH (09:30 to 16:00 ET) or
  * 60 s outside it says so. Times are bar time (New York wall clock stored as if UTC). Never while CME Globex is shut (its
  * daily break 17:00 to 18:00 ET, and Friday 17:00 to Sunday 18:00 ET), when no trade is due. Holidays are not known here.
@@ -837,6 +829,14 @@ function staleSeconds(quietMs, t) {
   return sec >= (isRthEt(t) ? STALE_RTH_S : STALE_ETH_S) ? sec : 0;
 }
 
+/*
+ * The page's clock (1.14.0, Anthony's item 9): the browser's monotonic clock (performance.now()) on a wall-clock base. The
+ * base starts at performance.timeOrigin (the page load), and check() moves it to the PC's clock (Date.now()) whenever the
+ * two differ by more than 50 ms, as ChartBridge re-anchors its own every 5 s: after Windows time sync steps the PC clock
+ * the page follows within 5 s instead of showing a false "local -99 ms (PC clock behind)" until it reloads. now() stays
+ * one addition (the live tick path's cost is unchanged), and every user of it (the local delay, the ticket link's
+ * stamps) reads the same clock. Options: perfNow, wallNow (functions), origin (the first base), slackMs (50), everyMs (5000).
+ */
 const CLOCK_SLACK_MS = 50, CLOCK_EVERY_MS = 5000;
 function pageClock(o) {
   const opt = o || {};
