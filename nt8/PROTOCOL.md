@@ -1,10 +1,13 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
 **Read only by default.** Nothing in v1 can place, change or cancel an order. Order entry (v2, ChartBridge
 0.3.0 and later) is off unless `config.txt` has `trading = true`; see "Orders (protocol v2)" below.
 ChartBridge's own page is locked with a 4-digit PIN since 0.3.2; see "PIN" below.
+Since 0.4.0 (protocol v3) ChartBridge adds per-account trading checkmarks, more order types, Order Strategies, Merge,
+quote-only markets, a Sim-only copier and a bot channel, each off until `config.txt` turns it on; see "Protocol v3
+(ChartBridge 0.4.0)" at the end. v3 only adds: every rule before it stands.
 Since 0.3.4 every trade, live and in the backfill, carries its side (buy or sell) and how it was found; see
 "Trade side" below.
 Since 0.3.8 a resting (limit or stop) entry's planned stop and target are DISTANCES IN TICKS from its actual fill,
@@ -1173,3 +1176,489 @@ String values must be plain (no backslash escapes, at most 200 characters).
 
 Orders placed in NinjaTrader itself (or anywhere else) on an allowed account also show on the chart,
 with `role` `other`, and can be moved or cancelled from the chart.
+
+## Protocol v3 (ChartBridge 0.4.0)
+
+Decided by Anthony for the pre-cruise build (2026-10-07). v3 **only adds**: every v2 rule above (the eight safety gates,
+brackets per fill increment, the legs check, the missing-stop alarm, recovery by order names, Flatten never refused for
+anything new) stays exactly as written, and applies to everything below unless a line here says otherwise. Every new
+order feature, the copier and the bot channel ship **switched off**; `trading = true` stays the master switch above all of
+them; nothing in ChartBridge ever turns `trading` or a switch on by itself. Where Anthony's brief left a detail open, the
+safest simple choice is written and marked **(lead's default)**.
+
+Examples of every new message, both directions, are in `test/fixtures/protocol-v3.json`; the fake bridge
+(`test/fake-bridge.mjs --v3`) answers them with simulated state.
+
+### v3 switches (`config.txt`, all off by default)
+
+| key | off (default) | on |
+|---|---|---|
+| `accountChecks` | gate 2 is `tradeAccounts`, as in v2 | gate 2 is the page's per-account checkmark (see Accounts) |
+| `orderTypes` | `kind` is `market`, `limit`, `stop` | also `stopLimit` and `mit` |
+| `strategies` | an `order` with `strategy` is refused | Order Strategies (stop, up to 3 targets, breakeven, trailing) |
+| `merge` | `merge` is refused | Merge stops and targets |
+| `cancelFromList` | a `cancel` with `from: "list"` is refused | cancel from the page's Working orders tab |
+| `copier` | every `copier*` message is refused; nothing is copied | the copier engine (Sim followers only) |
+| `bot` | `/bot` answers 404; every `bot*` page message is refused | the bot channel |
+| `tapeStats` | no tape counters | `/diag` `tape` (see Tape timing) |
+| `quoteRoots` | none | the quote-only markets listed, e.g. `YM, RTY, GC, SI, CL, 6E, ZN, ZB` |
+| `botRoot` | `MNQ` | the one root the bot trades (a micro or a mini of a served root) |
+
+`on`, `true` and `1` mean on (any case); anything else is off, with one Output line naming the key and the value. The
+switches are read at start like every key (recompile or restart NinjaTrader after a change).
+
+### Telling the page what is on
+
+- `hello.features` adds `"v3"` (this ChartBridge speaks v3) and `"quoteOnly"` when `quoteRoots` names any root. Features are
+  not secret: every page that may read gets them.
+- **`client`** (page to server, new, the first v3 message): `{"type":"client","v":3}`, sent once right after `hello`. A
+  connection that never sends it is a v2 page and gets **no** v3 message at all (the 1.15 page keeps working on 0.4.0
+  unchanged; The Desk's relay sends nothing). `v` is a whole number; anything but 3 is refused with a `status` `warn`.
+- `trading` (answer to `auth`) adds `switches`: `{"accountChecks":false,"orderTypes":false,"strategies":false,"merge":false,
+  "cancelFromList":false,"copier":false,"bot":false}`, each the `config.txt` value, sent to a v3 page only. The page shows a
+  feature's controls only when its switch is true; ChartBridge refuses its messages either way when it is false.
+
+### Strict messages in v3 (gate 8, extended)
+
+Every v3 page message (and every bot message) follows gate 8 as written, with these additions and nothing looser:
+
+- **Keys:** only those in the tables below; another key, a key twice or a misspelt key is refused, never ignored.
+- **Values:** a string is plain (printable, no backslash escape, at most 200 characters); a whole number follows gate 8's
+  rule (no quotes, no decimals, no exponent, no leading zero, at most 9 digits); a price is a plain decimal; `true` and
+  `false` only for keys marked *bool*; `null` only where a table says so.
+- **Nesting:** no list anywhere from the page. The only nested objects are v2's `bracket` and v3's `strategy`, both on
+  `order` only, both flat inside (no object or list in them). `bracket` and `strategy` on one order is refused.
+- **Rate:** every v3 action (`accountTrade`, `accountArchive`, `merge`, `copier*`, `bot*` except `botSeen`) counts in gate 7's
+  10 actions a second per connection.
+- **Sign-in:** every v3 action needs the signed-in own page (gates 1 and 4), except `client`. A refusal is a `reject`
+  (`cid` or `id`, `reason`), never sent to NinjaTrader.
+
+### Accounts
+
+Accounts are picked up automatically: every account the `accounts` watch list in `config.txt` matches (default all, never
+Backtest or Playback). Nothing new to configure.
+
+**The checkmark (with `accountChecks = on`).** Trading is switched on per account by a checkmark on the page's Accounts tab.
+ChartBridge saves the checkmarks itself in `accounts.txt` next to `config.txt` (Anthony never edits a file): a first line
+`# ChartBridge accounts (written by ChartBridge; do not edit)`, then one line per account,
+`<state>\t<changed UTC ms>\t<account name>` with `<state>` `trade`, `off` or `archived`; written whole to a temp file and
+swapped in, off NinjaTrader's thread, read once at start before the accounts are watched. **First start** (no
+`accounts.txt`): every account named in `tradeAccounts` comes pre-checked and the file is written; after that only the
+checkmarks count and `tradeAccounts` is not read again (one Output line says so). A file that exists but cannot be read is
+never rewritten that run: every checkmark reads **off** and the pages get a `status` `error` ("accounts.txt could not be
+read: trading is off for every account until it can"). `trading = true` stays the PC master switch above every checkmark.
+Backtest and Playback accounts can never be checked. With `accountChecks` off, gate 2 is v2's `tradeAccounts` and the
+checkmark messages are refused; the Accounts tab still shows the list read only.
+
+**Gate 2 with the checkmark** (lead's default): an **entry** (an `order` that opens or adds, a `plan` that adds a stop or
+target to an entry that had none, a `strategy`, a copier entry on a follower, a bot entry) needs the account's checkmark, a
+Connected account and not Gone. **Exits** (`flatten`, `cancel`, `change` of a stop or target leg, the copier's exits, bracket
+upkeep) need only a watched, Connected account that is not Backtest or Playback: closing must always work, so unchecking an
+account, or its going Gone, never strands a position. `change` on an entry is an entry action.
+
+**Gone.** An account is **Gone** when, for 10 s without a break (the grace): its connection is not Connected
+(`connection` below), or NinjaTrader reports it disabled, or it is past its drawdown limit (`roomDrawdown` or
+`roomDailyLoss` 0 or below, where NinjaTrader reports them). At that moment its checkmark goes **off** and is saved, the
+pages get `accounts` and a `status` `warn` ("EVAL-A is gone (disconnected for 10 s): trading is off for it"), and the change
+is logged. Bracket upkeep and the missing-stop alarm keep running for it. When it comes back healthy it is listed as
+active again with the checkmark still **off**: Anthony checks it again (lead's default).
+
+**Archive.** Only Anthony, on the page, after confirming (`accountArchive` with `confirm: true`), and only for a Gone account.
+An archived account leaves every list (`accounts`, the copier, the Working orders tab); its history stays (fills, logs,
+The Desk). If it connects again it comes back as active and unchecked (lead's default), logged.
+
+**Every change is logged**: one line in the Output window and one appended to `accounts.log` (next to `config.txt`;
+`<UTC ISO time>\t<account>\t<what>\t<why>`, e.g. `checked by the page`, `gone: disconnected`, `archived by the page`).
+Account names appear only in these local files and the local page, never in `/diag` exports or reports.
+
+| page to server | fields (no others) | notes |
+|---|---|---|
+| `accountTrade` | `cid` (optional), `account`, `on` (*bool*) | set the checkmark. On is refused for an account that is Gone, archived, not Connected, Backtest or Playback, or with `accountChecks` off; off is always accepted (signed in) |
+| `accountArchive` | `cid` (optional), `account`, `confirm` (*bool*, must be `true`) | refused unless the account is Gone |
+
+| server to page | fields | when |
+|---|---|---|
+| `accounts` | `list`: `[account]` (every watched account not archived, by name), `archived`: `[{name, at}]` (UTC ms) | to a v3 page from ChartBridge's own origin, signed in or not, right after its `client`; again on every change: at once for a connection, checkmark or Gone change; at most once a second for money and position changes |
+
+An `account` is `{name, sim, connection, trade, tradable, state, goneWhy, goneSince, balance, pnlToday, realizedToday,
+unrealized, positions, roomDrawdown, roomDrawdownWhy, roomDailyLoss, roomDailyLossWhy}`:
+
+- `sim`: true when the account is on NinjaTrader's own simulator (Sim101 and sim accounts made in NinjaTrader), false for
+  any broker account, an evaluation or funded account included (a prop firm's "simulated" account is real to
+  NinjaTrader). The copier and the bot lean on this.
+- `connection`: `connected`, `connecting`, `lost` (connection lost, NinjaTrader retrying), `disconnected`.
+- `trade`: the checkmark (with `accountChecks` off: in `tradeAccounts`). `tradable`: what gate 2 says now (checkmark, the
+  master switch, Connected, not Gone).
+- `state`: `active` or `gone`; `goneWhy` (`disconnected`, `disabled`, `drawdown`, `dailyLoss`, or null), `goneSince` (UTC ms
+  or null).
+- Money in the account's currency as NinjaTrader reports it, numbers or null: `balance` (cash value), `realizedToday`,
+  `unrealized`, `pnlToday` (the two added).
+- `positions`: `[{root, name, qty, avgPrice}]` on served roots (signed `qty`), empty when flat.
+- `roomDrawdown` and `roomDailyLoss`: dollars left before the trailing drawdown and the daily loss limit, where NinjaTrader
+  reports them for this account (its risk values for that connection); else null, and `roomDrawdownWhy` /
+  `roomDailyLossWhy` says why in plain words ("NinjaTrader does not report a trailing drawdown for this account"). Never
+  estimated.
+
+**Positions and working orders across all accounts.** For a v3 page, `orders`, `order` and `position` cover every
+watched, non-archived account on the served contracts (gate 6 unchanged), not only the tradable ones. Each `order` adds
+`tradable` (*bool*, the account's gate 2 for entries) and, when a v3 feature placed it, `by` (`strategy`, `merge`,
+`copier`, `bot`) and `bucket` (a strategy target bucket, 1 to 3). A v2 page keeps v2's scope.
+
+**Cancel from the Working orders tab** (`cancelFromList = on`): `cancel` takes an optional `from` (`"list"`). With it, any
+working order on a watched, Connected, non-archived account on a served contract may be cancelled (checkmark or not; it
+is an exit action), one order per message, with the v2 OCO rule (a leg takes its partner). With the switch off, a `cancel`
+with `from: "list"` is refused ("Cancel from the Working orders tab is off (cancelFromList in config.txt)"). A `cancel`
+without `from` is v2's.
+
+### Order types (`orderTypes = on`)
+
+`order.kind` adds `stopLimit` and `mit`. Every existing gate applies to each: tick grid, `maxTicksAway`, the 300 s stale
+price, the caps (a working stop-limit or MIT counts in gate 3 like any order), the rate limit, strict keys.
+
+| kind | `price` | also | side of the market (refused otherwise) |
+|---|---|---|---|
+| `market` | none | | |
+| `limit` | the limit | | buy at or below last, sell at or above (v2) |
+| `stop` | the stop (stop market) | | buy above last, sell below (v2) |
+| `stopLimit` | the stop (trigger) | exactly one of `limitOffset` (whole ticks, 0 or more: the limit is the stop plus that many ticks for a buy, minus for a sell) or `limitPrice` (a price on the grid) | the stop as `stop`; the limit at or beyond the stop on the side that fills (a buy's limit at or above its stop, a sell's at or below) |
+| `mit` | the trigger | | buy below last, sell above (at the last price it would trigger at once: refused, use market) |
+
+`limitOffset`, when `maxBracketTicks` is set, is at most that; `limitPrice` passes gate 5's `maxTicksAway`. `limitOffset`
+and `limitPrice` on any other kind are refused.
+
+- **Moving** (`change`): a ChartBridge stop-limit moves its stop to `price` and keeps its limit the same number of ticks
+  away (the offset it had); an MIT moves its trigger. v2's "stop-limit orders can only be moved in NinjaTrader" still holds
+  for stop-limits placed elsewhere.
+- **Brackets and strategies** go on any entry kind. A stop-limit or MIT entry is a resting entry: v2's planned distances
+  (`atm`, `plan`) apply to its bracket exactly as to a limit or stop entry.
+- **Names**: `CB#1a2b3c4d atm s8 t16 sl` (stop-limit), `... mit` (MIT); the offset is read from the working order itself.
+- **Order messages**: `kind` is now `market`, `limit`, `stop`, `stopLimit`, `mit` or `other`; a stop-limit adds `limitPrice`.
+
+### Order Strategies (`strategies = on`)
+
+Like a NinjaTrader ATM strategy, run in ChartBridge. The strategies themselves are stored by the page in The Desk (shared
+by every PC, see Shared settings); ChartBridge keeps none: it receives the parameters with each entry and keeps only
+what the open position needs.
+
+**Sent with the entry**: `order` takes `strategy` (in place of `bracket`), one flat object:
+
+| key | value | rule |
+|---|---|---|
+| `name` | string, 1 to 40 characters | for the log and the page; not in the order name |
+| `stop` | whole ticks, 1 or more | required: the stop always sits at the broker |
+| `stopLimit` | whole ticks, 0 or more, or `null` | null or absent: a stop-market; a number: a stop-limit that far beyond the stop |
+| `t1`, `t2`, `t3` | whole ticks, 1 or more | target distances from the fill; none, one, two or three (in order: `t2` needs `t1`, `t3` needs `t2`) |
+| `t1Share`, `t2Share`, `t3Share` | whole percent, 1 to 100 | one per target given, none otherwise; they add up to exactly 100 |
+| `beAfter`, `bePlus` | whole ticks; `beAfter` 1 or more, `bePlus` 0 or more and below `beAfter` | both or neither: after `beAfter` ticks of profit, the stop goes to entry plus `bePlus` |
+| `trailAfter`, `trailBy`, `trailStep` | whole ticks, each 1 or more | all three or none: once `trailAfter` ticks in profit, the stop trails `trailBy` ticks behind the best price, moving only in steps of `trailStep` ticks or more |
+
+Every distance is at most `maxBracketTicks` when it is set. A strategy is refused on an order that would reduce the
+position (as a bracket). Refusals name the key ("t2Share must be a whole percent from 1 to 100").
+
+**Allocation** (one rule, used here and by Merge): `q` contracts over shares `s1..sn` (percent): each target gets
+`floor(q * s / 100)`; the contracts left over go one each to the targets with the largest remainders, a tie to the later
+target; the total is exactly `q`, never more than the position; a target that gets 0 is dropped for that increment.
+Example: 3 contracts at 33/33/34 give 1/1/1; 1 contract at 50/50 gives 0/1 (T1 dropped); 5 at 50/30/20 give 3/1/1.
+
+**Per fill increment** (v2's design): each increment of `q` contracts is allocated over the targets, and each target
+bucket `k` gets its own stop and target as an OCO pair for exactly its contracts, at that increment's own fill price
+(stop `stop` ticks away, target `tk` ticks away). With no targets, one stop for `q`. Legs are GTC; the stop-already-traded
+market exit, the legs check, the missing-stop alarm, "never opens a position" and Flatten all work per pair as in v2.
+Names: entry `CB#1a2b3c4d sg` (market) or `CB#1a2b3c4d atm sg` (resting), legs as v2 plus the bucket:
+`CB#1a2b3c4d stop f2 q1 p24990.25 k2`, `CB#1a2b3c4d target f2 q1 p24990.25 k2`.
+
+**Breakeven and trailing**, on ChartBridge's live trades for the root, per pair from that pair's own fill price: once the
+best price since the fill is `beAfter` ticks in profit, the pair's stop moves to fill plus `bePlus` (a sell the other way),
+once. Once it is `trailAfter` ticks in profit, the stop's level is best minus `trailBy` ticks, sent only when that is at
+least `trailStep` ticks better than the stop now. With both, the better level wins. A stop **never moves back** (never
+loosens), never to a price at or through the last trade (it waits for the next trade), at most one move per stop per
+500 ms (lead's default), always with `change` on the working stop at the broker (a stop-limit keeps its offset). A move
+NinjaTrader rejects leaves the stop where it was and raises a `status` `error`.
+
+**Saved for a restart**: `managed.txt` next to `config.txt`, one line per managed entry, `<tag>\t<strategy as the flat
+JSON object sent>\t<best price per pair>\t<saved UTC ms>`, written whole through a temp file off NinjaTrader's thread (at
+placement, at each fill, and at most once a second as the best price moves); a line goes when its entry is done and its
+legs are gone. **On a restart (F5, a crash)** with a managed position open, ChartBridge recovers the legs from their
+names as in v2 and the parameters from `managed.txt`, takes the best price as the larger of the saved one and the trades
+since the start, and keeps breakeven and trailing going: the pages get `managed` with `state` `resumed`. If it cannot
+(the line or the file is missing or unreadable, or the legs do not match it), it **leaves every stop where it is**, does not
+move them again, and says so: `managed` with `state` `unmanaged` and a `status` `error` ("MNQ EVAL-A: breakeven and
+trailing could not be resumed after the restart; the stop stays at 24,980.25. Manage it by hand").
+
+| server to page | fields | when |
+|---|---|---|
+| `managed` | `id` (the entry's order id), `account`, `root`, `side`, `name` (the strategy's), `strategy` (the flat object as sent), `state` (`waiting` entry not filled, `active`, `resumed`, `unmanaged`, `done`), `pairs`: `[{bucket, qty, fill, stopId, stop, targetId, target, be (*bool*, moved to breakeven), trailing (*bool*)}]`, `best` (price or null), `text` (null, or why) | to signed-in v3 pages after `auth` (every live managed entry), on every change |
+
+A `plan` on a strategy entry is refused in 0.4.0 (lead's default: cancel and place it again).
+
+### Merge stops and targets (`merge = on`)
+
+A Merge action (a page button and a hotkey) joins the per-leg stops and targets of one account's position on one root into
+**one stop and one target set for the full size at the FIRST leg's prices** (the oldest fill increment's working pair or
+pairs). A leg added after a merge gets its own bracket as usual, until Merge again.
+
+**Refused** (a `reject`, nothing sent to NinjaTrader) when: `merge` is off; the account or root fails a gate; the position
+is flat; there are fewer than two pairs; an entry (any ChartBridge entry, or an order placed elsewhere on the opening
+side) is working or part filled on that account and root; the position changed in the last 2 s or the two position
+readings disagree (the position is changing); the working ChartBridge stops do not cover exactly the position (let the
+legs check settle first); the account has not been Connected for 30 s without a break; or the first leg's stop is already
+through the market (a long's at or above the last trade, a short's at or below).
+
+**The result.** One stop order `S` for the whole position at the first leg's stop price.
+- With one target (or none) on the first leg: the first pair is kept and grown: `S` is its stop, `T` its target, still an
+  OCO pair (NinjaTrader keeps them in step).
+- With two or three targets on the first leg (a strategy): `S` is a new stop with no OCO, and the targets are new orders at
+  the first leg's target prices, the whole position allocated over the strategy's shares by the allocation rule above
+  (remainder by largest remainder, a tie to the last target, a 0-contract target dropped). As a target fills, ChartBridge
+  shrinks `S` to the position at once (`change` on its quantity); when `S` fills, ChartBridge cancels the targets.
+  Names: `CB#1a2b3c4d mstop q3 p24980.25`, `CB#1a2b3c4d mtarget q1 p25010.25 k2`.
+
+**The swap, in a fixed order.** Each step waits for NinjaTrader to confirm it (3 s at most) and re-reads the position and
+the working stop quantity before the next:
+
+1. Freeze the account and root: `order`, `plan`, `change`, `merge` and breakeven/trailing on it are refused or paused for the
+   swap; Flatten is always accepted and ends the swap at once.
+2. Remember every pair (ids, prices, quantities) for the restore.
+3. For each pair other than the one kept, **newest first**: cancel the pair (its stop; the OCO takes its target) and wait
+   until both are confirmed cancelled; then grow `S` by that pair's quantity (a `change` on the kept stop, or for a
+   strategy the first time a new `S` is placed for that quantity), then the kept target likewise. So the working stop
+   quantity is **never above the position** (never over-protected); a working stop is there throughout, and the pair's
+   contracts are covered again by `S` within one confirmation (lead's default: cancel first, then grow; the brief
+   moment between them is the accepted cost of never over-protecting).
+4. For a strategy, place the merged targets last (their total equals the position).
+5. Check: one working stop for exactly the position, targets not above it.
+
+**Any failure** (a step rejected, not confirmed in 3 s, a fill during the swap, a reconnect) stops the swap and **restores
+the original brackets**: `S` shrinks back pair by pair (shrink first, then place that pair again at its original prices),
+newest last, with the same checks. The page gets `merge` with `result` `restored` and the reason in plain words. If the
+restore itself fails, ChartBridge makes sure one working stop covers the whole position at the first leg's stop price
+(the stop-already-traded rule applies), and raises a `status` `error` ("MNQ EVAL-A: the merge failed and the original
+brackets could not be put back; ONE STOP at 24,980.25 covers 3 contracts; NO TARGET; check NinjaTrader"), `result`
+`failed`. A restart in the middle of a swap is caught by the legs check and the missing-stop alarm as in v2, with a
+`status` `error` naming the account and root. Every merge is logged (Output window) and counted in `/diag` `merges`.
+
+| page to server | fields (no others) |
+|---|---|
+| `merge` | `cid` (optional), `account`, `root` |
+
+| server to page | fields | when |
+|---|---|---|
+| `merge` | `cid` (when the page sent one), `account`, `root`, `result` (`merged`, `restored`, `failed`), `stop` (`{price, qty}` or null), `targets` (`[{price, qty}]`), `pairsBefore`, `text` | once per accepted merge, when it ends |
+
+### Quote-only markets (`quoteRoots`)
+
+`quoteRoots = YM, RTY, GC, SI, CL, 6E, ZN, ZB` (any of them; empty by default) streams these markets to the page like
+the others (`subscribe`, `history`, `ticks`, `tick`, `settlement`, `htf`, `weekProfile`). **Every order for them is refused**
+with a plain reason ("YM is quote only: ChartBridge does not trade it"), at gate 6, before any other gate: `order`, `change`,
+`plan`, `cancel`, `flatten`, `merge`, copier and bot. Orders placed in NinjaTrader on them are never sent to the page (gate 6
+as before). They are not in `profileRoots` or `barsRoots` unless listed there.
+
+**Front month** per root (each its own roll; `contract.<ROOT>` in `config.txt` overrides it, and is the fallback when
+NinjaTrader does not know the computed name). Lead's default rolls, close to NinjaTrader's own:
+
+| root | months | rolls to the next listed month |
+|---|---|---|
+| `YM`, `RTY` | Mar, Jun, Sep, Dec | 8 days before the third-Friday expiry (as NQ and ES) |
+| `6E` | Mar, Jun, Sep, Dec | 8 days before the third Wednesday |
+| `ZN`, `ZB` | Mar, Jun, Sep, Dec | on the 24th of the month before the contract month |
+| `GC` | Feb, Apr, Jun, Aug, Oct, Dec | on the 24th of the month before the contract month |
+| `SI` | Mar, May, Jul, Sep, Dec | on the 24th of the month before the contract month |
+| `CL` | every month | the contract for month m expires about the 20th of m minus 1, so on or after the 10th of a month the front is two months ahead, before it one month ahead |
+
+**How the page learns it.** Each `hello.instruments` entry (every root, not only these) adds:
+
+- `quoteOnly` (*bool*): true for a `quoteRoots` root; the page shows no order controls for it and sends no orders.
+- `tick` and `pointValue`: from NinjaTrader's master instrument, as for every root (YM 1, RTY 0.1, GC 0.1, SI 0.005,
+  CL 0.01, 6E 0.00005, ZN 0.015625, ZB 0.03125).
+- `format`: `"dec"` with `decimals` (YM 0, RTY 1, GC 1, SI 3, CL 2, 6E 5, NQ and ES 2), or for bonds NinjaTrader's 32nds:
+  `"32"` (ZB: `118'15` is 118 and 15/32: whole, an apostrophe, the 32nds as two digits) or `"64"` (ZN, half 32nds:
+  `104'035` is 104 and 3.5/32: whole, an apostrophe, the 32nds as two digits, then `0` or `5` for the half). Prices on the
+  wire stay plain decimals (`104.109375`); only the page formats them.
+
+### Copier engine (`copier = on`)
+
+**Sim only.** Every follower must be an account with `sim` true (NinjaTrader's simulator). A real account as a follower is
+refused at `copierFollower` and, should one ever be listed (the file edited, an account that changed), refused again
+before every order and logged ("copier: EVAL-A is not a Sim account; nothing copied to it"). The unlock for real accounts is
+a separate step Anthony takes later; 0.4.0 has no key for it (lead's default). The leader and every follower also need gate
+2 for entries (the checkmark, or `tradeAccounts`), and every gate applies to each follower order on its own account (caps
+on the follower's root, the rate of the copier itself is not counted against the page).
+
+**The leader** is one account, and only entries placed **from ChartBridge's own page** on it are copied (not entries placed
+in NinjaTrader, the phone or the bot). **Exits on the leader are always copied, whatever caused them**: a stop or target at
+the broker, the phone, NinjaTrader, Flatten. While the copier is armed with a follower on, a leader entry with no stop
+(no bracket stop, no strategy) is refused ("the copier needs a stop on every leader entry") (lead's default).
+
+**Followers**, saved per account: `on`, `qty` (1 to 9, contracts per leader contract), `size` (`micro` or `mini`: the
+leader's NQ or MNQ maps to MNQ or NQ, ES or MES to MES or ES). So a leader at 1 NQ with a follower at 3 `micro` gives that
+follower 3 MNQ.
+
+- **Executions mode** (`mode` `executions`): on each leader fill increment, every follower gets a **market** order for
+  `qty` per leader contract filled; followers always enter (no price check). Slippage per follower (its fill minus the
+  leader's, in ticks of the follower's root, signed so worse is positive) is logged and shown. The moment it fills, the
+  follower gets its own protective stop at the broker at the **same price** as the leader's stop for that increment (the
+  stop-already-traded rule applies: a market exit). When the leader's stop moves (a drag, breakeven, trailing, a merge),
+  each follower stop mapped to it moves to the same price.
+- **Orders mode** (`mode` `orders`): every leader entry order is placed for each follower as a real order (same kind and
+  prices, its own quantity); moved and cancelled with the leader's; on its fill the follower gets its stop as above.
+- **Never cross zero.** A follower exit is always "flatten this account" on that root (its own stop and targets cancelled
+  first, then the rest closed at market), never an opposite order sized from the leader. A leader scale-out (a partial
+  exit) reduces each follower by the same share, rounded to the nearest contract, at least 1, capped at what it holds; the
+  leader flat means every follower flat. A flat follower gets nothing.
+- **The sweep**: every second, any working order the copier placed on a follower with no position on that root is
+  cancelled, unless it is an orders-mode entry whose leader entry is still working.
+- **Skipped** (never partly): a follower at its position limit (gate 3 on its root) is skipped for that entry and
+  highlighted (`skipped` "position limit"); also a follower not Connected, Gone, unchecked, or past its loss limit.
+- **Follower daily loss limit** (an option, off by default): a flat dollar amount per follower (`lossLimit`), no buffer.
+  When its `pnlToday` is at or below minus the limit, it is skipped for new entries until the next session (18:00 ET);
+  its open position keeps its stop and the leader's exits are still copied to it (lead's default: nothing is flattened by
+  the limit). No profit goal.
+- **Mass disconnect** (lead's default: 3 or more followers, or the leader, leaving Connected within 10 s): the copier
+  **stands down**: nothing new is copied until Anthony presses Re-arm (`copierRearm`). While stood down, exits on the
+  leader are still copied to connected followers that hold a copier position, and their stops still follow (closing always
+  works). After every ChartBridge start the copier starts stood down (lead's default: a restart is a reason to look).
+- **Every copy decision is logged with its timing**: `copier.log` next to `config.txt` and the `copierEvent` message
+  (`leaderMs` from the leader's event to the follower's order sent, `fillMs` to its fill).
+- **Saved** in `copier.txt` next to `config.txt` (leader, mode, one line per follower), written by ChartBridge only.
+
+| page to server | fields (no others) | notes |
+|---|---|---|
+| `copierGet` | `cid` (optional) | answer: `copier` |
+| `copierSet` | `cid` (optional), `leader` (an account name), `mode` (`executions` or `orders`) | at least one of the two; refused while the leader has a position or working entry |
+| `copierFollower` | `cid` (optional), `account`, `on` (*bool*), `qty` (1 to 9), `size` (`micro` or `mini`), `lossLimit` (whole dollars, 1 or more, or `null` for off) | all keys required; saved at once; the leader cannot be a follower |
+| `copierRearm` | `cid` (optional) | refused while the leader is not Connected or 3 or more followers are not |
+
+| server to page | fields | when |
+|---|---|---|
+| `copier` | `enabled` (the switch), `simOnly` (true), `armed` (*bool*), `standDownWhy` (null or plain words), `leader` (`{account, connection, position}` or null), `mode`, `followers`: `[{account, sim, on, qty, size, root, position, lastAction, lastAt, slippageTicks, skipped, lossLimit, pnlToday, connection}]` | after `auth` and `copierGet`, and on every change |
+| `copierEvent` | `at` (UTC ms), `account`, `action` (`enter`, `stop`, `move`, `reduce`, `flatten`, `skip`, `sweep`, `standDown`, `rearm`, `refused`), `root`, `qty`, `price`, `slippageTicks`, `leaderMs`, `fillMs`, `text` | each copy decision |
+
+### Bot channel (`bot = on`)
+
+A local bot program on the trading PC (a rule program, never AI; the bot in this repository's tests is made up)
+connects on its own WebSocket path **`ws://localhost:<port>/bot`** with its own permission level. **AI is never in the
+order path**: every bot order is placed by ChartBridge from the bot's parameters, inside ChartBridge's rails.
+
+**Its secret.** With `bot = on`, ChartBridge makes `bot-secret.txt` next to `config.txt` on first start (two `#` comment
+lines, then 64 hex characters of random bytes); the bot reads it from that file. The upgrade to `/bot` needs: a loopback
+address (as every request), **no** `Origin` header (any `Origin`, so any browser page, gets 403), and the header
+`X-ChartBridge-Bot: <secret>` (constant-time compare; wrong or missing: 403). One bot connection at a time: a second gets 409.
+The secret is never printed in the Output window, `/diag` or any log; deleting the file makes a new one at the next start.
+
+**Modes** (set from the page, `botMode`; every ChartBridge start begins in `shadow`, auto never survives a restart, lead's
+default):
+
+- `shadow`: the bot's signals are shown and logged; no orders.
+- `copilot`: a fired signal becomes a **proposal** to every signed-in v3 page, with its reason. Anthony accepts or rejects
+  with one key (see Shared settings); the page sends `botSeen` the moment it shows it and `botAnswer` with
+  the moment he answered; both times are recorded. On accept, **ChartBridge places the order from the proposal's
+  parameters** (never from the page's, never anything else). An unanswered proposal is **never sent**: it expires when the
+  bot withdraws it (`withdraw`: its entry is no longer valid) and is logged as "not answered". Accepted orders go to
+  Sim101 only in 0.4.0 (lead's default).
+- `auto`: ChartBridge places the bot's fired signals itself, **on Sim101 only** (exact name and `sim` true; anything else
+  refused), locked there by ChartBridge whatever the bot sends.
+
+**Rails** (enforced in ChartBridge, whatever the bot sends; reset at 18:00 ET): at most **1 contract**, on `botRoot` only
+(default MNQ); at most **5 trades a day** (an entry that filled, even partly, is a trade); **stand down after 3 losing
+trades** (a closed bot trade with realized P&L below 0; no new entries until the next session); no dollar limit on Sim; every
+bot entry needs a stop (`stopTicks` 1 or more, lead's default); the **kill switch** on the page (`botKill`); all v2 gates
+(trading, Sim101's gate 2, caps, grid, side of market, rate) on top. **Heartbeat**: any bot message counts; 5 s of silence
+and ChartBridge cancels the bot's unfilled entries, keeps any bot position's stop and target, marks the bot lost and tells
+the page (`bot` and a `status` `warn`). The kill switch does the same and refuses every bot order until it is released.
+**ChartBridge never flattens the bot's position by itself**; Flatten on the page works as always.
+
+Bot orders are named `CB#1a2b3c4d bot s8 t16` and their legs as v2, so the legs check, the missing-stop alarm and restart
+recovery cover them.
+
+| bot to server | fields (no others) | notes |
+|---|---|---|
+| `botHello` | `name` (1 to 40 characters) | first message; answer `welcome` |
+| `beat` | none | at least every 2 s when nothing else is sent |
+| `signal` | `id` (1 to 40 characters, unique today), `action` (`fired` or `skipped`), `side`, `kind` (`market`, `limit`, `stop`), `price` (limit or stop only), `stopTicks`, `targetTicks` (whole ticks, or `null` for none), `reason` (1 to 200 characters) | `skipped` carries only `id`, `action`, `reason` (and optionally `side`); by mode: logged, proposed, or placed |
+| `withdraw` | `id`, `reason` | the entry is no longer valid: a proposal expires ("not answered"), an unfilled auto entry is cancelled |
+| `flatten` | none | auto mode only: close the bot's position on Sim101 (cancel its legs, then market) |
+
+| server to bot | fields | when |
+|---|---|---|
+| `welcome` | `version`, `mode`, `account` (`Sim101`), `root`, `rails` (`{maxQty, maxTrades, maxLosses}`), `instruments` (as `hello`) | answer to `botHello` |
+| `tick` | as the page's `tick` | every live trade on every served root |
+| `order`, `position`, `exec` | as the page's, for the bot's own orders and position only | on every change |
+| `botState` | `mode`, `killed`, `standDown` (null or why), `trades`, `losses` | on every change |
+| `answer` | `id`, `answer` (`accepted`, `rejected`, `not answered`, `refused`), `text` | the end of each proposal |
+| `reject` | `id`, `reason` | a signal or action refused by a rail or a gate |
+
+| page to server | fields (no others) | notes |
+|---|---|---|
+| `botMode` | `cid` (optional), `mode` (`shadow`, `copilot`, `auto`) | `auto` refused unless Sim101 is tradable |
+| `botKill` | `cid` (optional), `on` (*bool*) | on: as the heartbeat loss, and no bot order until off |
+| `botSeen` | `id`, `at` (page UTC ms, whole number) | the moment the proposal showed; not rate counted |
+| `botAnswer` | `cid` (optional), `id`, `answer` (`accept` or `reject`), `at` (page UTC ms) | an expired or already answered proposal is refused |
+
+| server to page | fields | when |
+|---|---|---|
+| `bot` | `enabled`, `connected`, `name`, `mode`, `account`, `root`, `position` (`{qty, avgPrice}`), `pnlToday`, `trades`, `maxTrades`, `losses`, `maxLosses`, `killed`, `standDown`, `lastBeatMs` (ms since the last bot message), `lastSignal` (the last `botSignal` or null) | after `auth`, on every change, and once a second while the bot is connected |
+| `botSignal` | `id`, `at`, `action`, `side`, `kind`, `price`, `stopTicks`, `targetTicks`, `reason`, `result` (`shadow`, `proposed`, `placed`, `refused: <why>`, `skipped`) | each signal |
+| `botProposal` | `id`, `at`, `account`, `root`, `side`, `kind`, `price`, `qty` (1), `stopTicks`, `targetTicks`, `reason`, `state` (`open`, `accepted`, `rejected`, `withdrawn`, `not answered`), `seenAt`, `answeredAt` | when proposed and at each change |
+
+### Tape timing and new `/diag` counters
+
+With `tapeStats = on`, `/diag` adds `tape`: per root, the slots of the current session (15 minutes each, New York time,
+`"09:30"` keys), the latest 96 kept, each:
+
+- `prints`, `perSec` (prints over the slot's elapsed seconds);
+- `gapMs`: `median`, `p95` (read from fixed buckets of the gap between consecutive prints, edges 0, 1, 2, 5, 10, 20, 50,
+  100, 200, 500, 1000, 2000, 5000 ms and over: the upper edge of the bucket the rank falls in), `longest` (exact);
+- `sameMsShare`: the share of prints stamped in the same millisecond as the print before (a batch);
+- `jumps`: `{"1": n, "2": n, "3+": n}`, prints that moved the price that many ticks from the print before;
+- `rxMinusU`: `median`, `p95` (the same buckets) and `max` of `rx - u` in ms.
+
+Counted on the live trade path with fixed arrays (no allocation per trade). Always in `/diag`, every switch or not:
+`memory` (`managedMb`, `gen0`, `gen1`, `gen2` collection counts, `trims` and `lastTrimUtcMs`: ChartBridge's own clean-ups of
+kept data); `threads` (`workerAvailable`, `workerMax`, `ioAvailable`, `ioMax`, `minWorkerAvailableToday`); `send` (per page:
+`messages`, `medianUs`, `p95Us`, `maxUs` of each WebSocket send, by the same bucket method); `reconnects` (`pages` opened since
+start, `lagCloses`, `feedDrops`, `accountReconnects`); and with the switches on, `merges` (`ok`, `restored`, `failed`,
+`refused`, `lastAtUtcMs`), `copier` (`decisions`, `skipped`, `standDowns`, median `leaderMs`), `bot` (`signals`, `proposals`,
+`answered`, `notAnswered`, `placed`, `refused`, `heartbeatLost`).
+
+**The page's receipt-to-frame readout** (page side, nothing on the wire): per chart, the time from a `tick` message's
+arrival to the end of the frame that drew it, median and p95 over the last 60 s, shown beside the delay readout.
+
+### Shared settings: Order Strategies and hotkeys
+
+Order Strategies and the trading hotkeys are saved **once** and shared by every PC through The Desk, like the chart colour
+presets (`GET`/`PUT /api/chart-presets`, a whole document with a `rev`, `409` on a stale `rev`). ChartBridge stores
+neither: the page sends a strategy's parameters with each entry.
+
+#### Desk endpoints used by the page
+
+The Desk's side is lane D2's contract (`DESK_SETTINGS_CONTRACT.md`, draft v1, 2026-10-07; final text in TheDesk
+`docs/API.md`). The page uses, with the same guard and CORS as `/api/chart-presets` (this PC and the Tailscale range
+only, never through the tunnel; CORS for `http://localhost:8765` and `http://127.0.0.1:8765`, `GET` and `PUT`):
+
+| endpoint | document | used for |
+|---|---|---|
+| `GET`, `PUT /api/chart-strategies` | `{rev, strategies: [{id, name, stop: {ticks, type, limitOffsetTicks}, targets: [{ticks, sharePct}], breakeven: {afterTicks, plusTicks} or null, trail: {startTicks, byTicks, stepTicks} or null, hotkey}]}` | the Order Strategies, at most 24 |
+| `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, merge, maximize}, modifiers: {limit, stop}}` | the trading hotkeys (Merge's key is `merge`) |
+| `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null |
+
+**From The Desk's strategy to `order.strategy`** (the page converts; ChartBridge takes only the flat form):
+
+| The Desk | `order.strategy` |
+|---|---|
+| `name` | `name` (`id` and `hotkey` stay on the page) |
+| `stop.ticks` | `stop` |
+| `stop.type` `"market"` / `"limit"` with `limitOffsetTicks` | `stopLimit` `null` / `limitOffsetTicks` |
+| `targets[0..2].ticks`, `.sharePct` | `t1`..`t3`, `t1Share`..`t3Share` |
+| `breakeven.afterTicks`, `.plusTicks` | `beAfter`, `bePlus` (both left out for `null`) |
+| `trail.startTicks`, `.byTicks`, `.stepTicks` | `trailAfter`, `trailBy`, `trailStep` (all left out for `null`) |
+
+Copilot's one-key accept and reject are not keys in D2's draft hotkeys document yet (an open item for the lead); until
+they are, the page shows Accept and Reject buttons and `botAnswer` is the same either way.
+
+The Desk checks its own rules on save; ChartBridge checks `order.strategy` again on every order (it never trusts the
+store).
+
+### Order lane
+
+The v3 server-to-page messages `accounts`, `managed`, `merge`, `copier`, `copierEvent`, `bot`, `botSignal` and `botProposal`
+go in the order lane (see "Two send lanes"), so a proposal or a copier event never waits behind market data.

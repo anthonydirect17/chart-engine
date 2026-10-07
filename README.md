@@ -127,6 +127,16 @@ line; recompile or restart NinjaTrader after a change):
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
 | `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
 | `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
+| `accountChecks` | off | ChartBridge 0.4.0: `on` makes each account's trading checkmark on the page's Accounts tab gate 2 in place of `tradeAccounts` (saved by ChartBridge in `accounts.txt`; on the first start the `tradeAccounts` names come pre-checked). `trading = true` stays the master switch. |
+| `orderTypes` | off | 0.4.0: `on` adds stop-limit and MIT orders. |
+| `strategies` | off | 0.4.0: `on` takes Order Strategies with an entry (stop, up to 3 targets, breakeven, trailing). |
+| `merge` | off | 0.4.0: `on` turns on Merge (one stop and one target set for the whole position at the first leg's prices). |
+| `cancelFromList` | off | 0.4.0: `on` lets the Working orders tab cancel an order on any watched account. |
+| `quoteRoots` | none | 0.4.0: quote-only markets streamed to the page, never traded, e.g. `YM, RTY, GC, SI, CL, 6E, ZN, ZB`. |
+| `copier` | off | 0.4.0: `on` turns on the copier engine (followers must be Sim accounts). |
+| `bot` | off | 0.4.0: `on` opens the bot channel (`/bot`, its own secret in `bot-secret.txt`; auto orders on Sim101 only). |
+| `botRoot` | `MNQ` | 0.4.0: the one root the bot may trade (1 contract). |
+| `tapeStats` | off | 0.4.0: `on` adds the tape timing counters to `/diag` (`tape`). |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
 matches only the `Host` header, so the `localhost` address alone does not keep other devices out. ChartBridge
