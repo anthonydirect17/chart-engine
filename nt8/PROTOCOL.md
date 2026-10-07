@@ -1177,6 +1177,12 @@ String values must be plain (no backslash escapes, at most 200 characters).
 Orders placed in NinjaTrader itself (or anywhere else) on an allowed account also show on the chart,
 with `role` `other`, and can be moved or cancelled from the chart.
 
+**Who placed it (0.4.0, review 2).** On a v3 page (protocol v3, after `client`), `order` and each item of `orders` also
+carry `by` when the bot or the copier placed the order: `"by": "bot"` for a bot entry (named `CB#<tag> bot ...`) or a leg
+of one the bot channel follows, `"by": "copier"` for any order the copier placed on a follower (its entry, stop, exit or
+reduce). An order that already says `by` (a strategy's) keeps it; the page's own orders and orders placed in NinjaTrader
+carry none. A v2 page never gets `by` for these: its `order` message stays byte for byte 0.3.8's.
+
 ## 0.4.0 hardening and markets
 
 ### Quote-only markets
@@ -1785,7 +1791,7 @@ follower 3 MNQ.
 | server to page | fields | when |
 |---|---|---|
 | `copier` | `enabled` (the switch), `simOnly` (true), `armed` (*bool*), `standDownWhy` (null or plain words), `leader` (`{account, connection, position}` or null), `mode`, `followers`: `[{account, sim, on, qty, size, root, position, lastAction, lastAt, slippageTicks, skipped, lossLimit, pnlToday, connection}]` | after `auth` and `copierGet`, and on every change |
-| `copierEvent` | `at` (UTC ms), `account`, `action` (`enter`, `stop`, `move`, `reduce`, `flatten`, `skip`, `sweep`, `standDown`, `rearm`, `refused`), `root`, `qty`, `price`, `slippageTicks`, `leaderMs`, `fillMs`, `text` | each copy decision |
+| `copierEvent` | `at` (UTC ms), `account`, `action` (`enter`, `stop`, `move`, `reduce`, `flatten`, `skip`, `sweep`, `standDown`, `rearm`, `refused`, `recovered`), `root`, `qty`, `price`, `slippageTicks`, `leaderMs`, `fillMs`, `text` | each copy decision |
 
 #### Copier engine: as built (0.4.0, `nt8/ChartBridgeCopier.cs`)
 
@@ -1852,6 +1858,50 @@ The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) ru
   Output window gets the same line. A follower's fill is logged with its stop (`stop`: price, slippage, `fillMs`).
 - **`/diag` `copier`** (only with the switch on): `armed`, `followers`, `followersOn`, `decisions`, `skipped`, `standDowns`,
   `leaderMsMedian` (of the last 200), `openCopies`, `settingsReadFailed`, `settingsSaveFailed`. No account names.
+
+**Review 2 fixes (as built).** Anthony's rules: the copier never crosses zero; no copier exit can open or add a position the
+other way; a follower's stop sits at the same price as the leader's and moves when it moves; when in doubt, refuse. Each
+fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `IntegrationHarness.cs` (X9 to X11).
+
+- **A late fill after the copier flattened a follower** (finding 1). When the copier flattens a follower, every copier
+  entry there that could still fill is marked. A fill of a marked entry (its order event late) is never protected as a new
+  position: no market exit, no lone stop. If the leader is flat (both readings) it is "flatten this follower": the copier's
+  own working orders there are cancelled first, then NinjaTrader's Flatten closes what it holds, only when it holds something
+  by both readings; when it holds nothing, nothing else is sent and the missed exit check (4 s) flattens it if a position
+  shows later. If the leader is not flat, what it holds gets a stop sized as below. Always a `status` `error` and a log line.
+  Fills that waited for a stop on that follower get none once it is flattened (NinjaTrader's Flatten closes them).
+- **Every protective stop or exit is sized to what the follower holds** (finding 1): its position on the copy's side, the two
+  readings agreeing, minus the copier's stops and exits already working there, and never more than the fill. Nothing is
+  sent when that is 0, when it is flat, or when it holds the other side (a `status` `error` says so). While the two
+  readings differ (the fill's position update is on its way) the stop waits, and goes at the next position update or second
+  in which they agree (a `status` `warn` after 2 s; after NinjaTrader's unbooked fills expire, 11 s, the smaller reading is
+  used) (lead's default). This also covers the orders mode stop that waited for the leader's (CheckWaits).
+- **A scale-out reduces only the copier's own share** (finding 2): the share is of the contracts the copier gave that
+  follower, and the reduce is never more than the copier still holds there above its new size, and never so much that the
+  stops left working on that side (the copier's, shrunk first, and the follower's own) would exceed the position. A
+  follower's own contracts and its own stops are never touched. When the copier's whole share closes while the follower
+  also holds its own contracts, it is a reduce of the share (its copier stops cancelled first), not NinjaTrader's Flatten.
+  A copier with no share there sends nothing. After a restart the share is what the recovered copier stops cover.
+- **Sim101 and the bot** (finding 3, lead's default): while `bot = on`, Sim101 (the bot's account) cannot be turned on as a
+  copier follower ("Sim101 is the bot's account: it cannot be a copier follower while the bot is on (bot in config.txt).");
+  one already listed is skipped before every copy (`skipped` `bot account`); and the bot refuses entries while Sim101 is a
+  follower that is on ("Sim101 is a copier follower: the bot does not trade while the copier copies to its account (turn
+  that follower off on the page)."). Both refusals are logged. Turning that follower off is always allowed.
+- **Stop prices in step** (finding 4): each follower stop records the price the copier placed it at or last moved it to.
+  Every leader stop event re-syncs any follower stop mapped to it whose recorded price differs, not only when the leader's
+  price changed; a follower stop placed while the leader's stop was already elsewhere follows it at once.
+- **The sweep** (finding 5) cancels a copier order on a flat follower only on a connection that has been steady 30 s (v2's
+  flat cleanup rule) and after two flat readings in a row (two sweeps, a second apart), besides the 3 s young order rule.
+- **A copy recovered without its leader** (finding 6): after a restart, a recovered copier stop whose leader entry is not
+  listed is told plainly (`copierEvent` `recovered` and a `status` `warn`: "SIM-F1: copied position recovered without its
+  leader; only its own stop protects it", with the follower's name). It is in the missed exit check by root: the leader flat
+  on every contract of that market (NQ and MNQ, or ES and MES; both readings, no other month, no ChartBridge entry working)
+  for 4 s flattens it (the zero rule). A recovered follower stop whose leader stop is found (at the same price, or all that
+  entry's stops at one price) is re-synced to the leader's current stop price at once.
+- **Registered before Submit** (finding 8): the page's leader entry is registered for copying before it is sent, so a fill
+  NinjaTrader reports inside Submit is copied; it is dropped when Submit throws or NinjaTrader rejects it at once (orders
+  mode then places no follower order for it).
+- **`by`** (finding 9): copier orders carry `"by": "copier"` on v3 pages only (see "Who placed it" under Orders).
 
 ### Bot channel (`bot = on`)
 
@@ -1987,6 +2037,12 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   `proposals`, `answered`, `notAnswered`, `placed`, `refused`, `heartbeatLost`, `secretFile`.
 - **`bot.log`** next to `config.txt`: one line per signal, proposal outcome (`not answered` included), placement, trade and
   mode change, `<UTC ISO time><TAB><what>`. Never the secret.
+- **Review 2: a `withdraw` while an accept is being placed** (finding 7): it is noted, and the entry is cancelled as soon as
+  it is placed if it has not filled (`state` `withdrawn`, the bot's `answer` says so, `bot.log` "withdrawn during
+  placement"). If it had already filled, nothing is cancelled (its stop and target stay) and the log says so.
+- **Review 2: Sim101 as a copier follower** (finding 3): the bot refuses entries while Sim101 is a copier follower that is
+  on, and the copier refuses Sim101 as a follower while the bot is on (see the copier's review 2 notes).
+- **Review 2: `by`** (finding 9): bot orders carry `"by": "bot"` on v3 pages only (see "Who placed it" under Orders).
 
 ### The order lanes together (0.4.0 integration)
 

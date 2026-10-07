@@ -103,6 +103,7 @@ public static class BotHarness
             Shadow();
             NeverAnotherAccount();
             Copilot();
+            WithdrawDuringPlacement();   // review 2 finding 7
             Auto();
             Size();
             Losses();
@@ -354,6 +355,25 @@ public static class BotHarness
         AfterAuthSeesOpenProposal(d);
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         Check(Last(page, "botProposal").Contains("\"id\":\"" + d + "\"") && Last(page, "botProposal").Contains("\"state\":\"not answered\"") && sim.Calls.Count == m, "leaving copilot: an open proposal expires as not answered, never sent");
+    }
+
+    // ------------------------------------------------------------ review 2 finding 7: a withdraw that arrives while an accept is being placed
+    static void WithdrawDuringPlacement()
+    {
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"copilot\"}");
+        int n = sim.Calls.Count;
+        string id = NewId();
+        Bot(Sig(id, "\"side\":\"sell\",\"kind\":\"limit\",\"price\":25001,\"stopTicks\":12,\"targetTicks\":24"));
+        // the bot's withdraw reaches ChartBridge while NinjaTrader takes the accepted entry (inside Submit)
+        sim.OnCall = (kind, o) => { if (kind == "submit" && (o.Name ?? "").Contains(" bot ")) { sim.OnCall = null; Bot("{\"type\":\"withdraw\",\"id\":\"" + id + "\",\"reason\":\"Sample: price left the level\"}"); } };
+        try { Page("{\"type\":\"botAnswer\",\"cid\":\"w1\",\"id\":\"" + id + "\",\"answer\":\"accept\",\"at\":1791380834000}"); }
+        finally { sim.OnCall = null; }
+        List<string> c = Calls(sim, n);
+        Check(c.Count == 2 && Regex.IsMatch(c[0], "^submit CB#[0-9a-f]{8} bot s12 t24 Sell Limit 1 ") && c[1].StartsWith("cancel CB#" + Tag(Newest(sim)) + " bot"),
+              "review 2 finding 7: a withdraw during the accept's placement: the entry is cancelled as soon as it is placed (it had not filled): " + string.Join(" | ", c));
+        Check(Last(page, "botProposal").Contains("\"state\":\"withdrawn\"") && File_("bot.log").Contains("withdrawn during placement"), "review 2 finding 7: the proposal ends withdrawn, logged \"withdrawn during placement\"");
+        Settle();
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
     }
 
     static void AfterAuthSeesOpenProposal(string id)

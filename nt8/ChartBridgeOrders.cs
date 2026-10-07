@@ -726,9 +726,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = stopTicks, TargetTicks = targetTicks };
             }
             if (strat != null) { string unsaved = SaveNewManaged(tag, order); if (unsaved != null) return unsaved; }   // 0.4.0 fix1 (F5): accepted only once its managed.txt line is written
-            account.Submit(new[] { order });
+            if (!bot) ChartBridgeCopier.LeaderEntryRegister(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is); review 2: registered before Submit, so a fill inside Submit is copied
+            try { account.Submit(new[] { order }); }
+            catch (Exception) { if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied
             placed = order;
-            if (!bot) ChartBridgeCopier.LeaderEntrySent(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is)
+            if (!bot) ChartBridgeCopier.LeaderEntrySent(order);   // 0.4.0 copier: orders mode places the followers' orders now (a rejected entry is dropped)
             ChartBridgeServer.Log((bot ? "bot " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
                 (strat != null ? " with strategy " + strat.Json : wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
@@ -863,7 +865,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (saveErr != null)
                 PlanSaveAlarm(where + ": the planned stop and target of entry CB#" + br.Tag + " are set (stop " + TicksText(newSt) + " / target " + TicksText(newTt) +
                       " ticks) but could not be saved (" + saveErr + "); after a recompile or restart it would use the ticks it was placed with");
-            if (Enabled && ChartBridgeAccounts.Seen(o.Account.Name)) ChartBridgeAccounts.SendScoped(o.Account, OrderJson(o, null), true);   // the page sees the new planned ticks (0.4.0 accounts: each page its scope)
+            if (Enabled && ChartBridgeAccounts.Seen(o.Account.Name)) ChartBridgeAccounts.SendScoped(o.Account, OrderJson(o, null), true, o);   // the page sees the new planned ticks (0.4.0 accounts: each page its scope)   // 0.4.0 review 2: o for a v3 page's "by"
             return null;
         }
 
@@ -1016,7 +1018,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Alarm(where + ": the market EXIT was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + "; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: v2 pages the tradable accounts (as before), v3 pages every watched one
-                ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true);
+                ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true, o);   // 0.4.0 review 2: o for a v3 page's "by"
             try { if (ChartBridgeBot.Watching(o)) ChartBridgeBot.OnOrderUpdate(account, o, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.4.0 bot: the bot sees its own orders
             catch (Exception ex) { ChartBridgeServer.Log("bot order update error: " + ex.Message); }
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
@@ -2224,7 +2226,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
-                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null)));
+                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null), o));   // 0.4.0 review 2: o for a v3 page's "by"
             }
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }

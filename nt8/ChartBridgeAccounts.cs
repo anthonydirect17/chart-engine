@@ -302,17 +302,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Gate 2 for entries right now (the "tradable" flag): the checkmark (or tradeAccounts) and the master switch, Connected.
         private static bool TradableNow(string name, string connection) { return ChartBridgeOrders.AccountTradable(name) && connection == "connected"; }
 
-        // An order message as a page should get it: a v3 page also gets "tradable" (gate 2 for entries now, Gone included).
-        public static string ForPage(ChartBridgeClient c, Account a, string orderJson)
+        // An order message as a page should get it: a v3 page also gets "tradable" (gate 2 for entries now, Gone included) and
+        // (review 2 finding 9) "by" for a bot or copier order (ChartBridgeV3.OrderBy; o null: none).
+        public static string ForPage(ChartBridgeClient c, Account a, string orderJson, Order o = null)
         {
             if (!IsV3(c) || a == null || !orderJson.EndsWith("}", StringComparison.Ordinal)) return orderJson;
-            string gw;
+            string gw, by = orderJson.Contains(",\"by\":") ? "" : ChartBridgeV3.OrderBy(o);
             bool tradable = !Gone(a.Name, out gw) && TradableNow(a.Name, ConnectionText(a));
-            return orderJson.Substring(0, orderJson.Length - 1) + ",\"tradable\":" + (tradable ? "true" : "false") + "}";
+            return orderJson.Substring(0, orderJson.Length - 1) + by + ",\"tradable\":" + (tradable ? "true" : "false") + "}";
         }
 
         // A live order or position message: to every signed-in page that sees the account (NinjaTrader's thread: no lookups).
-        public static void SendScoped(Account a, string json, bool isOrder)
+        public static void SendScoped(Account a, string json, bool isOrder, Order o = null)
         {
             string account = a.Name;
             bool tradable = ChartBridgeOrders.AccountTradable(account), listed = Listed(account);
@@ -320,7 +321,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (ChartBridgeClient c in ChartBridgeServer.AllClients())
             {
                 if (!c.Trader) continue;
-                if (IsV3(c)) { if (listed) c.Send(isOrder ? (v3json ?? (v3json = ForPage(c, a, json))) : json); }
+                if (IsV3(c)) { if (listed) c.Send(isOrder ? (v3json ?? (v3json = ForPage(c, a, json, o))) : json); }
                 else if (tradable) c.Send(json);
             }
         }

@@ -19,6 +19,7 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using NinjaTrader.Cbi;
 #endregion
 
 namespace NinjaTrader.NinjaScript.AddOns
@@ -67,6 +68,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly ConditionalWeakTable<ChartBridgeClient, object> Pages = new ConditionalWeakTable<ChartBridgeClient, object>();
 
         public static bool IsV3(ChartBridgeClient c) { object o; return c != null && Pages.TryGetValue(c, out o); }
+
+        // Review 2 finding 9: who placed an order, for a v3 page's order message only (ChartBridgeAccounts.ForPage), so a v2
+        // page's order message stays exactly 0.3.8's: ,"by":"bot" for a bot order (its entry, named "CB#<tag> bot ...", or a leg
+        // of one the bot channel follows), ,"by":"copier" for an order the copier placed on a follower; "" otherwise (an order
+        // that already says "by", a strategy's, keeps it).
+        private static readonly System.Text.RegularExpressions.Regex BotNameRx = new System.Text.RegularExpressions.Regex("^CB#[0-9a-f]{8} bot ");
+        public static string OrderBy(Order o)
+        {
+            if (o == null) return "";
+            try
+            {
+                if (BotNameRx.IsMatch(o.Name ?? "") || ChartBridgeBot.Watching(o)) return ",\"by\":\"bot\"";
+                if (ChartBridgeCopier.IsCopierOrder(o)) return ",\"by\":\"copier\"";
+            }
+            catch (Exception ex) { ChartBridgeServer.Log("order by error: " + ex.Message); }
+            return "";
+        }
 
         public static bool AccountChecks { get { return ChartBridgeSwitches.Get("accountChecks"); } }
         public static bool OrderTypes { get { return ChartBridgeSwitches.Get("orderTypes"); } }
