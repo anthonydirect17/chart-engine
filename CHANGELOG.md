@@ -1,5 +1,13 @@
 # Changelog
 
+## ChartBridge 0.4.1 (2026-10-07): compiles on NinjaTrader 8.1
+
+- ChartBridge 0.4.0 did not compile on WORK's NinjaTrader 8.1.6.3 (CS1503 at ChartBridge.cs line 2266): it passed
+  `Instrument.GetInstrument` as a method group, and NinjaTrader's GetInstrument has an optional second parameter, so it
+  does not convert to `Func<string, Instrument>`. It is a lambda now, as ChartBridgeBars.cs already does. The Mono
+  stand-in for GetInstrument now has the same optional parameter, so `check:nt8` catches this kind of error. No other
+  change; the page is unchanged (no page install).
+
 ## 1.16.0 (2026-10-07): the pre-cruise release with ChartBridge 0.4.0 (every new feature on, no Sim locks)
 
 - **No switches, no Sim locks** (Anthony 2026-10-07: "I do not want another arbitrary block ... I am capable of only

@@ -60,7 +60,9 @@ namespace NinjaTrader.Cbi
     {
         public string FullName { get; set; }
         public MasterInstrument MasterInstrument { get; set; }
-        public static Instrument GetInstrument(string name) { return null; }
+        // Shaped like NinjaTrader 8.1 (a second, optional parameter): a method group "Instrument.GetInstrument" does not
+        // convert to Func<string, Instrument> there (CS1503 on WORK, 2026-10-07), so it must not here either.
+        public static Instrument GetInstrument(string name, bool createIfNotFound = false) { return null; }
     }
     public class Execution
     {
