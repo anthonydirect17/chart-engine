@@ -434,6 +434,32 @@ chart page's order bar (`live/trade.js`), so everything below about the order ba
   the focus, or a box, menu or dialog has it.
 - Chrome or Edge (they keep the one ticket with the Web Locks API).
 
+## The Bot tab (1.16.0)
+
+With ChartBridge 0.4.0's bot channel switched on (`bot = on` in `config.txt`, off by default), the workspace has a **Bot**
+tab in the top bar (also `?tab=bot`), and **Pop out** opens the same thing in its own window (`bot.html`, for a third
+monitor). With the switch off the Bot tab says the bot channel is off on this PC and offers nothing. The bot is a rule
+program on this PC, never AI: **ChartBridge places every bot order**, inside its rails, from the bot's own parameters.
+
+- **Library:** one slot; two shelves, Ready (L1 or higher) and Research (Shadow only). Each frozen Bot-Lab build with its
+  evidence badge, one sentence, its equity curve and numbers; a click opens it full screen with the large curve, the rule
+  card, the settings, the live record and "Conditions it works best in". Read from `GET /bot-library`
+  (`docs/BOT_LIBRARY.md`); no file: "No frozen builds on this PC".
+- **The bot's own chart** (MNQ by default) with its working entry, stop and target and its trades.
+- **Bot panel:** on or off, Sim101, the size, the status and heartbeat, the position and today's P&L, the mode (Shadow,
+  Copilot, Sim auto when ChartBridge allows it; Sim auto asks once more), the **rails** (trades x of 5, losing trades x of
+  3; amber from 70%, red from 90%; **Tighten the rails**, never loosen), the **kill switch** (on in one click; release in
+  two), the **day type** (every call logged with its time), and Today (signals and trades with each reason), Log and
+  Options (sound for notices, off by default; Less motion).
+- **Bot strip:** one thin line per bot across the top of the **Main** tab only; a click opens the Bot tab.
+- **Pop-ups:** a corner notice for a signal, an entry or exit, a limit, a stand-down, the heartbeat lost. A **copilot
+  proposal pops up wherever you are**, with the bot's reason: Accept or Reject with the buttons, or one key (The Desk's
+  `accept` and `reject` hotkeys; none by default). An unanswered proposal is never sent; when the bot withdraws it, it
+  says "not answered" and goes.
+- **Ghost marks:** the bot's trades, faint, on your own charts: a chart's ⋯ menu, per chart, off by default.
+- **Motion** (`live/motion.js`) on the Bot tab and the Library only. The kill switch, the mode, Accept and Reject, the
+  position and P&L never move; a click during an entrance acts at once. Settings > Motion: Less.
+
 ## Trading from the chart
 
 Decided by Anthony on 2026-09-29: market buy and sell, limit and stop by clicking a price, brackets (stop
@@ -713,6 +739,8 @@ npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy fee
 npm run smoke:ib         # Initial balance forming, locked, on every view and mounted; the Background presets, saved per prefix
 npm run smoke:live-first # the served window and the session table: exact range bars, profile and VWAP against the fake's tape
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
+npm run smoke:bot        # the Bot tab against the fake's v3 bot channel: strip, Library, panel, proposals, pop-out, switch off
+npm run perf:bot         # the Bot tab's entrance and Library playing while its live chart draws: the chart's gates hold
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
 npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window, the daily bars and the 0.3.7 data side under Mono

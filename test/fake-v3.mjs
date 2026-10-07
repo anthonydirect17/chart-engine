@@ -251,6 +251,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (o.kind === 'stopLimit' && o.limitPrice !== undefined) m.limitPrice = o.limitPrice;
     m.tradable = this.accounts.includes(o.account);
     if (o.by) m.by = o.by;
+    else if (o.parent && (this.orders.get(o.parent) || {}).by === 'bot') m.by = 'bot';   // lane C4 (lead's default): a bot entry's legs are the bot's too
     if (o.bucket) m.bucket = o.bucket;
     return m;
   }

@@ -2325,7 +2325,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
   chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; },
   /* 1.16.0: the Bot tab (read it; its actions go through ChartBridge's checks) */
-  bot: () => (botDesk ? botDesk.state() : null) };
+  bot: () => (botDesk ? botDesk.state() : null),
+  /* the Bot tab's entrance played again (test/perf-bot.mjs: the motion kit running while the live chart draws) */
+  botReplay: () => !!(botDesk && botDesk.replay()) };
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on a connection of their own; everything bot shows
    only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */

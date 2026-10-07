@@ -297,7 +297,7 @@ function create(o) {
     put(x.el.querySelector('[data-k="msg"]'), 'textContent', text);
     x.ended = true;
     setTimeout(() => dropProposal(p.id), why === 'not answered' ? 2500 : 1200);
-    notice({ kind: 'proposal', level: why === 'not answered' ? 'amber' : '', text: 'Copilot: ' + text });
+    notice({ kind: 'proposal', level: why === 'not answered' ? 'amber' : '', text });
   }
   function dropProposal(id) { const x = propEls.get(id); if (x) { x.el.remove(); propEls.delete(id); } }
   propBox.addEventListener('click', e => {
@@ -381,7 +381,7 @@ function create(o) {
     d.innerHTML = '<span class="bt-cap">' + esc({ signal: 'Signal', entry: 'Entry', exit: 'Exit', limit: 'Limit', standDown: 'Stand-down', heartbeat: 'Heartbeat', kill: 'Kill switch', proposal: 'Copilot', status: 'ChartBridge', refused: 'Refused' }[n.kind] || 'Bot') + '</span><span>' + esc(n.text) + '</span>';
     d.addEventListener('click', () => d.remove());
     notes.prepend(d);
-    while (notes.children.length > 4) notes.lastChild.remove();
+    while (notes.children.length > 3) notes.lastChild.remove();
     setTimeout(() => d.remove(), n.level === 'red' ? 12000 : 6000);
     beep(n.level);
   }
@@ -468,7 +468,15 @@ function create(o) {
   }
   let resizeT = 0;
   window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { const M = MO(); if (!M || !M.running()) drawCurves(); }, 120); });
-  function playLibrary() { const M = MO(); const lib = q('.bt-lib'); if (M && lib) M.scene(lib, { ms: 900 }); }
+  /** A scene on el with its moving pieces on layers of their own while it plays (bot.css .bt-playing); a click or a key
+      during it finishes it at once and still acts (the kit's R4). Returns the scene's run, or null without the kit. */
+  function scene(el, ms) {
+    const M = MO(); if (!M || !el) return null;
+    const run = M.scene(el, { ms, onDone: () => el.classList.remove('bt-playing') });   // a scene before it on el ends first
+    if (!run.done()) el.classList.add('bt-playing');
+    return run;
+  }
+  function playLibrary() { scene(q('.bt-lib'), 900); }
 
   /* ---------------- the full-screen entry: large equity curve, tiles, rule card, settings, live record, conditions */
   function openDetail(i) {
@@ -507,8 +515,7 @@ function create(o) {
     cv._draw(1);
     d.addEventListener('click', e => { if (e.target === d || e.target.closest('[data-act="close"]')) closeDetail(); });
     d.querySelector('[data-act="close"]').focus({ preventScroll: true });
-    const M = MO();
-    if (M) M.scene(card, { ms: 1300 });
+    scene(card, 1300);
   }
   function closeDetail() { if (S.detail) { S.detail.el.remove(); S.detail = null; } }
   function liveRecordHtml(b, loaded) {
@@ -550,7 +557,9 @@ function create(o) {
   }
   function drawCurve(c, eq, p, big) {
     const M = MO();
-    const f = M ? M.fitCanvas(c) : (() => { const r = c.getBoundingClientRect(); c.width = Math.max(1, r.width); c.height = Math.max(1, r.height); return { ctx: c.getContext('2d'), w: c.width, h: c.height }; })();
+    // the size is read at a scene's first and last frames only: a layout read in every frame of an entrance costs (perf:bot)
+    if (!c._fit || p <= 0 || p >= 1) c._fit = M ? M.fitCanvas(c) : (() => { const r = c.getBoundingClientRect(); c.width = Math.max(1, r.width); c.height = Math.max(1, r.height); return { ctx: c.getContext('2d'), w: c.width, h: c.height }; })();
+    const f = c._fit;
     const ctx = f.ctx, w = f.w, h = f.h;
     if (!ctx) return;
     ctx.clearRect(0, 0, w, h);
@@ -598,6 +607,7 @@ function create(o) {
     const off = !S.on;
     if (tabBtn) {
       put(tabBtn, 'hidden', S.v3 !== true && !S.shown);           // a ChartBridge that speaks v3 has a Bot tab
+      tog(document.body, 'bt-has-tab', !tabBtn.hidden);
       attr(tabBtn, 'aria-pressed', String(S.shown));
       tog(tabBtn, 'bt-alert', S.on && !!S.bot && (BC.rails(S.bot).level === 'red' || !!S.bot.standDown || !!S.bot.killed || (S.bot.enabled && !S.bot.connected)));
       attr(tabBtn, 'title', off ? 'Bot: the bot channel is off on this PC' : 'Bot tab');
@@ -870,7 +880,7 @@ function create(o) {
   /* ---------------- the bot strip (Main tab only): one thin line per bot */
   function renderStrip() {
     if (!strip) return;
-    const show = S.on && !!S.bot && !S.shown && S.layout === 'Main';
+    const show = S.on && !!S.bot && !!S.bot.name && !S.shown && S.layout === 'Main';   // a bot that said hello today
     put(strip, 'hidden', !show);
     if (!show) return;
     const m = BC.stripModel(S.bot, p => fmtPx(p));
@@ -903,9 +913,9 @@ function create(o) {
   /** The entrance scene (motion kit): the Library, the panel's pieces and the chart's header rise in; the chart, the
       kill switch, the mode, position and P&L do not move (R3). A click or key during it finishes it and acts (R4). */
   function play() {
-    const M = MO(), grid = q('[data-k="grid"]');
-    if (!M || !grid || grid.hidden) return null;
-    return M.scene(grid, { ms: 1100 });
+    const grid = q('[data-k="grid"]');
+    if (!grid || grid.hidden) return null;
+    return scene(grid, 1100);
   }
 
   /* ---------------- heartbeat line: once a second while the tab or the strip shows (the `bot` message comes as often) */

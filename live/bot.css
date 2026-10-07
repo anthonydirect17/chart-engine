@@ -11,6 +11,11 @@
 .ws-btn.bt-tabbtn { font-weight: 600; letter-spacing: .02em; }
 .ws-btn.bt-tabbtn[aria-pressed="true"] { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); box-shadow: inset 0 0 0 1px var(--ws-tint-line); }
 .ws-btn.bt-tabbtn.bt-alert { border-color: color-mix(in srgb, var(--ws-sell) 60%, transparent); color: #FFC9D3; }
+/* room for the Bot button on a 1366 px screen: the "Layout" word goes (the list says what it is) and the delay readout
+   gives way before any button does */
+body.bt-has-tab .ws-lbl[for="wsLayout"] { display: none; }
+body.bt-has-tab .ws-stat { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+body.bt-has-tab .ws-top > .ws-btn { flex-shrink: 0; }
 body.bt-on .ws-grid { display: none !important; }
 body:not(.bt-on) .bt-view.bt-in-ws { display: none !important; }
 
@@ -42,6 +47,12 @@ body:not(.bt-on) .bt-view.bt-in-ws { display: none !important; }
 .bt-help.warn { color: var(--ws-warn); }
 .bt-why { margin: 0; color: var(--ws-text2); font-size: 11.5px; }
 .bt-view :focus-visible, .bt-props :focus-visible, .bt-strip :focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+
+/* Cheap motion (M7, perf:bot): the atmosphere is a still layer of its own, painted once, never again with each piece that
+   moves over it; while a scene plays (.bt-playing, set by bot.js until it ends) the moving pieces are layers of their own,
+   so a fade or a rise is composited, not painted again. At rest nothing has a layer of its own. */
+.bt-view.motion-atmo::before, .bt-dcard.motion-atmo::before { will-change: transform; }
+.bt-playing :is([data-in], [data-grow], .stamp):not(canvas) { will-change: opacity, translate, scale; }
 
 /* off: the bot channel is off on this PC; the tab offers nothing */
 .bt-off { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
@@ -129,7 +140,8 @@ body:not(.bt-on) .bt-view.bt-in-ws { display: none !important; }
 .bt-opt .ws-seg button { height: 24px; }
 
 /* ---------------- the full-screen library entry */
-.bt-detail { position: fixed; inset: 0; z-index: 60; background: rgba(4, 6, 9, .86); backdrop-filter: blur(6px); display: flex; padding: 16px; box-sizing: border-box; }
+/* no backdrop blur: it would blur the live chart again in every frame (perf:bot) */
+.bt-detail { position: fixed; inset: 0; z-index: 60; background: rgba(4, 6, 9, .9); display: flex; padding: 16px; box-sizing: border-box; }
 .bt-dcard { margin: auto; width: min(1280px, 100%); max-height: 100%; overflow: auto; background: var(--ws-panel); border: 1px solid var(--ws-line2); border-radius: 18px; box-shadow: 0 40px 120px rgba(0, 0, 0, .7); }
 .bt-dhead { display: flex; gap: 12px 16px; align-items: center; flex-wrap: wrap; padding: 16px 20px 12px; border-bottom: 1px solid var(--ws-line); }
 .bt-dtitle { min-width: 0; flex: 1 1 320px; }
@@ -207,10 +219,11 @@ body.ws-tight .bt-strip { padding: 2px 2px 0; }
 .bt-prop-msg:empty { display: none; }
 
 /* ---------------- corner notices: a signal, an entry or exit, a limit, a stand-down, the heartbeat */
-.bt-notes { position: fixed; bottom: 16px; left: 16px; z-index: 75; display: flex; flex-direction: column-reverse; gap: 6px; width: min(340px, calc(100vw - 32px)); pointer-events: none; }
-.bt-note { pointer-events: auto; display: grid; gap: 2px; background: var(--bt-panel3); border: 1px solid var(--ws-tint-line); border-left: 3px solid var(--ws-accent); border-radius: 9px; padding: 7px 10px; font: 12px/1.4 var(--ws-sans); color: var(--ws-text); box-shadow: 0 14px 34px rgba(0, 0, 0, .5); cursor: pointer; }
+.bt-notes { position: fixed; bottom: 12px; left: 12px; z-index: 75; display: flex; flex-direction: column-reverse; gap: 4px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.bt-note { pointer-events: auto; display: flex; gap: 8px; align-items: baseline; background: var(--bt-panel3); border: 1px solid var(--ws-tint-line); border-left: 3px solid var(--ws-accent); border-radius: 8px; padding: 5px 10px; font: 12px/1.35 var(--ws-sans); color: var(--ws-text); box-shadow: 0 14px 34px rgba(0, 0, 0, .5); cursor: pointer; }
 .bt-note.amber { border-left-color: var(--ws-warn); }
 .bt-note.red { border-left-color: var(--ws-sell); border-color: color-mix(in srgb, var(--ws-sell) 45%, transparent); }
+.bt-note .bt-cap { flex: none; }
 
 /* narrow screens: the panel under the chart, the library last */
 @media (max-width: 1100px) {

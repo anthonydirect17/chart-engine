@@ -1648,6 +1648,33 @@ recovery cover them.
 | `botSignal` | `id`, `at`, `action`, `side`, `kind`, `price`, `stopTicks`, `targetTicks`, `reason`, `result` (`shadow`, `proposed`, `placed`, `refused: <why>`, `skipped`) | each signal |
 | `botProposal` | `id`, `at`, `account`, `root`, `side`, `kind`, `price`, `qty` (1), `stopTicks`, `targetTicks`, `reason`, `state` (`open`, `accepted`, `rejected`, `withdrawn`, `not answered`), `seenAt`, `answeredAt` | when proposed and at each change |
 
+#### Bot rails from the page, the library, and the bot's legs (lane C4, lead's defaults)
+
+The Bot tab (chart page 1.16.0, `live/bot.js`) needs three things the tables above do not have. Each is the safest simple
+choice, marked **(lead's default)**; ChartBridge 0.4.0 builds them (lane B3), and `test/fake-v3.mjs` does them already.
+
+- **`botRails`** (page to server, **(lead's default)**): `cid` (optional), `maxTrades`, `maxLosses` (no others; both
+  required). Each a whole number from 1 to the rail **in force now**: the page can only tighten. A value above the rail in
+  force is refused ("Rails can only be tightened: maxTrades is 5."); so is anything with the bot switch off, as every `bot*`
+  message. It counts in gate 7's rate and needs the signed-in own page, like `botKill`. The new rails apply at once to the
+  next entry (`trades` at or over `maxTrades`: no new entry; `losses` at or over `maxLosses`: stand down). They hold until
+  the 18:00 ET reset; the reset and every ChartBridge start go back to 1 contract, 5 trades and 3 losing trades (the
+  rails a page cannot loosen are ChartBridge's own). `bot` (`maxTrades`, `maxLosses`) and `welcome.rails` carry the rails
+  in force. Example in `test/fixtures/protocol-v3.json` (`pageToServer.botRails`).
+- **A bot entry's legs carry `by: "bot"`** too **(lead's default)**: the stop and the target ChartBridge places for a bot
+  entry are placed by the bot feature, so a v3 page can tell the bot's working orders from Anthony's own on Sim101 (the Bot
+  tab's chart shows the bot's lines only).
+- **`GET /bot-library`** **(lead's default)**: the frozen Bot-Lab builds for the Bot tab's Library, one local JSON file
+  served as it is (`Content-Type: application/json`, `Cache-Control: no-store`). This PC only, as every request; the page
+  sends the PIN unlock header (`X-ChartBridge-Unlock`) as for `GET /session`. No file, or the bot switch off: `404` (the
+  page says "No frozen builds on this PC"). ChartBridge never reads anything from the file and never sends it anywhere: it
+  carries no order, rule program or secret. The file's shape is `docs/BOT_LIBRARY.md`; a made-up example is
+  `test/fixtures/bot-library.json`.
+
+Copilot's one-key Accept and Reject: the page reads `keys.accept` and `keys.reject` from The Desk's hotkeys document
+(`GET /api/chart-hotkeys`) when The Desk has them (no default key; D2's draft has seven keys, so the two are the lead's
+open item); they are never a trading hotkey of the page. The buttons always work, and `botAnswer` is the same either way.
+
 ### Tape timing and new `/diag` counters
 
 The tape counters and the hardening counters are built and documented in "0.4.0 hardening and markets" above (`/diag`
