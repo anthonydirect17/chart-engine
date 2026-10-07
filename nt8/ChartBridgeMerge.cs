@@ -996,8 +996,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (result == "merged") b.Append(string.Join(",", MergeResultTargets(s).Select(t => "{\"price\":" + CbJson.Num(t.LimitPrice) + ",\"qty\":" + (t.Quantity - t.Filled) + "}")));
             b.Append("],\"pairsBefore\":").Append(s.Units.Count).Append(",\"text\":").Append(CbJson.Str(text ?? "")).Append('}');
             ChartBridgeServer.Log("merge " + result + " on " + s.Where + ": " + text);
-            // Lead's default until the v3 "client" flag lands: the answer goes to the page that asked (it speaks v3: it sent merge).
-            try { s.Client.Send(b.ToString()); } catch (Exception ex) { ChartBridgeServer.Log("merge: could not tell the page (" + ex.Message + ")"); }
+            MergeSendToV3Pages(s.Client, b.ToString());
+        }
+
+        // STUB for the integrator: the shared v3 plumbing (the "client" handshake, which pages speak v3) is lane B2's. Until it is
+        // merged, the "merge" answer goes only to the page that asked (it speaks v3: it sent merge). Swap this body for B2's
+        // helper (send to every signed-in v3 page). Nothing else in this file depends on v3 plumbing.
+        private static void MergeSendToV3Pages(ChartBridgeClient asked, string json)
+        {
+            try { if (asked != null) asked.Send(json); } catch (Exception ex) { ChartBridgeServer.Log("merge: could not tell the page (" + ex.Message + ")"); }
         }
 
         // Prices: "24980.25" in names and on the wire; "24,980.25" in text Anthony reads.
