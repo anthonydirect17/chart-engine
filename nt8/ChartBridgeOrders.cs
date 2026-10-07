@@ -383,7 +383,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
                 if (why == null && type != "flatten" && type != "merge") why = MergeFreezeWhy(type, top, id);   // 0.4.0 B4: a Merge swap freezes its account and root
                 if (why != null) { Reject(client, cid, id, why); return; }
-                if (type == "flatten") MergeOnFlatten(top);   // 0.4.0 B4: Flatten ends a Merge swap at once (then flattens as always)
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid, strategyBody);
                 else if (type == "change") why = ChangeOrder(top, id);
                 else if (type == "plan") why = PlanOrder(top, id);
@@ -898,7 +897,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (br.Account == account && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;   // a late fill raises an alarm
             StopManaging(account, inst);   // 0.4.0 B1: no breakeven or trailing move races the flatten
             NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
-            account.Flatten(new[] { inst });   // cancels working orders for the instrument, then closes the position
+            // 0.4.0 fix1 (F1): a Merge swap on this account and root ends only here, once Flatten passed its gates, in one step with
+            // the flatten call (MergeFlattenSend); a refused Flatten leaves the swap to go on or restore as before.
+            MergeFlattenSend(account, inst, () => account.Flatten(new[] { inst }));   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
             return null;
         }

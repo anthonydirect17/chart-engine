@@ -13,7 +13,9 @@
 //   MergeStart     the page's "merge" message: every refusal, then the freeze, then the swap on its own thread
 //   MergeSwap      the fixed order: newest pair first, cancel it, wait, re-read, grow the stop, wait, re-read
 //   MergeRestore   any failure: shrink first, then put each pair back at its own prices, newest last
-//   MergeFallback  the restore failed: one stop for the whole position at the first leg's stop price, and a status error
+//   MergeFallback  the restore failed: what no stop covers gets one stop at the first leg's stop price (no working stop is
+//                  cancelled first, fix1), and a status error naming what covers what
+//   MergeOnFlip    the position turned to the other side mid-swap: no restore, the old side's legs cancelled, a status error
 //   MergeOnOrderUpdate   upkeep of a multi-target merged set (a target fills: the stop shrinks; the stop fills: targets go)
 // Order calls (Submit, Change, Cancel) are made only in MergeAct (the swap, its restore and fallback, always under
 // MergeSendLock with the Flatten check) and in MergeKeepSet (the upkeep). Written in C# 5 (NinjaTrader 8).
@@ -161,6 +163,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public List<Order> Placed = new List<Order>();        // every order this merge placed (S, merged targets, pairs put back)
             public int[] TargetBuckets; public double[] TargetPrices; public int[] Shares;
             public volatile bool Aborted;                      // Flatten arrived, or ChartBridge stopped (set under MergeSendLock)
+            public volatile bool FlattenSent;                  // fix1 (F1): Flatten passed its gates and was sent (the only Flatten abort)
             public volatile bool Stopped;                      // ChartBridge stopped (Clear): merge_swap.txt stays for the next start
             public volatile bool Restoring;                    // the restore or fallback runs: a fill no longer stops a step
             public volatile string Trouble;                    // a fill, an order error: the next check stops the swap
@@ -176,6 +179,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly List<KeyValuePair<double, string>> MergeHeldAlarms = new List<KeyValuePair<double, string>>();
         private static bool mergeMarkerRead;
         private static int mergeOcoSeq;
+        // Fix1: a restored pair's OCO id is unique across runs too (a restart starts the count again): the run's start, in
+        // seconds, as hex ("cb-1a2b3c4d-2-r67012ab3-1").
+        private static readonly string MergeRunId = ((long)(ChartBridgeTime.NowUtcMs() / 1000)).ToString("x", CultureInfo.InvariantCulture);
+        private static readonly object MergeFileLock = new object();   // fix1: merge_swap.txt, one writer at a time (two swaps on two accounts)
 
         private static void MergeClear()
         {
@@ -183,7 +190,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (MergeLock)
             {
                 running = MergeSwaps.Values.ToList();
-                MergeSwaps.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear();
+                MergeSwaps.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear();
                 mergeMarkerRead = false;
             }
             lock (MergeSendLock) foreach (MergeSwapState s in running) { s.Stopped = true; s.Aborted = true; }   // a running swap sends nothing more
@@ -227,21 +234,41 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Flatten (always accepted): the swap on that account and root stops at once, before any further order call.
-        private static void MergeOnFlatten(string top)
+        // Fix1 (F1): called by Flatten itself, only after Flatten passed its gates (the account Connected, the root served), and
+        // the flatten call is made under the same lock, so nothing the swap sends can follow it. A Flatten that is refused never
+        // gets here: the swap goes on, or restores, exactly as without it, and its answer never says Flatten ended it. If the
+        // flatten call itself throws, the swap is let go again (it restores; "Flatten could not be sent").
+        private static void MergeFlattenSend(Account a, Instrument inst, Action flatten)
         {
-            string name = Str(top, "account");
-            Instrument inst = ChartBridgeServer.InstrumentFor((Str(top, "root") ?? "").ToUpperInvariant());
-            if (name == null || inst == null) return;
             List<MergeSwapState> hit;
-            lock (MergeLock) hit = MergeSwaps.Values.Where(s => s.Account.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && SameInstrument(s.Instrument, inst)).ToList();
-            lock (MergeSendLock) foreach (MergeSwapState s in hit) s.Aborted = true;   // after this, the swap sends nothing more
+            lock (MergeLock) hit = MergeSwaps.Values.Where(s => s.Account == a && SameInstrument(s.Instrument, inst)).ToList();
+            lock (MergeSendLock)
+            {
+                foreach (MergeSwapState s in hit) s.Aborted = true;   // after this, the swap sends nothing more
+                try { flatten(); }
+                catch (Exception ex)
+                {
+                    foreach (MergeSwapState s in hit) { if (s.Trouble == null) s.Trouble = "Flatten could not be sent (" + ex.Message + ")"; s.Aborted = false; }
+                    throw;
+                }
+                foreach (MergeSwapState s in hit) s.FlattenSent = true;
+            }
         }
 
         // ---------------------------------------------------------- events (hooks from OnOrderUpdate and OnPositionUpdate)
         private static void MergeSawPosition(Account a, Instrument i)
         {
             if (a == null || i == null) return;
-            lock (MergeLock) MergeChangedAt[PosKey(a, i)] = ChartBridgeTime.NowUtcMs();
+            KeyValuePair<string, double> first;
+            bool again;
+            double now = ChartBridgeTime.NowUtcMs();
+            lock (MergeLock)
+            {
+                MergeChangedAt[PosKey(a, i)] = now;
+                again = MergeFirstSeen.TryGetValue(PosKey(a, i), out first) && now - first.Value <= MoveTtlMs;   // fix1: a merged target first seen with fills
+                if (MergeFirstSeen.ContainsKey(PosKey(a, i)) && !again) MergeFirstSeen.Remove(PosKey(a, i));
+            }
+            if (again) MergeShrinkToHeld(a, i, first.Key);
         }
 
         // Every order event. A fill on the account and contract is "the position is changing" for 2 s; during a swap it stops the
@@ -271,6 +298,39 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;   // the swap owns the orders on this account and contract until it ends
             }
             if (delta > 0 && known && IsMergedLeg(o)) MergeKeepSet(a, o, delta);
+            else if (!known && o.Filled > 0 && MergedRole(o.Name) == "target") MergeKeepSetFirstSeen(a, o);   // fix1: after a restart
+        }
+
+        // Fix1: a merged target first seen with fills (after a restart its history is unknown, so a delta cannot be counted):
+        // the merged stop shrinks to what NinjaTrader's position holds beyond the other ChartBridge stops, at once if the
+        // position already shows the fill, else at the position update that follows (within MoveTtlMs). NinjaTrader's own
+        // position only: the fills-in-transit reading can count a fill from before the restart twice. It never grows the stop
+        // and never cancels it on this reading (flat, the other side, or nothing left is for the legs check, once settled).
+        private static readonly Dictionary<string, KeyValuePair<string, double>> MergeFirstSeen = new Dictionary<string, KeyValuePair<string, double>>();   // account|contract -> tag, time
+
+        private static void MergeKeepSetFirstSeen(Account a, Order target)
+        {
+            MergeLeg leg = MergeParse(target);
+            if (leg == null || !leg.Merged) return;
+            lock (MergeLock) MergeFirstSeen[PosKey(a, target.Instrument)] = new KeyValuePair<string, double>(leg.Tag, ChartBridgeTime.NowUtcMs());
+            MergeShrinkToHeld(a, target.Instrument, leg.Tag);
+        }
+
+        private static void MergeShrinkToHeld(Account a, Instrument inst, string tag)
+        {
+            List<Order> working = MergeWorkingOrders(a, inst);
+            Order s = working.FirstOrDefault(o => { MergeLeg l = MergeParse(o); return l != null && l.Merged && l.Tag == tag && l.Role == "stop" && IsWorking(o.OrderState); });
+            if (s == null) return;
+            bool closingBuy = IsBuy(s);
+            int now = SignedPosition(a, inst);
+            if (now == 0 || (now < 0) != closingBuy) return;
+            int others = working.Where(o => o != s && IsBuy(o) == closingBuy && MayFill(o.OrderState) && MergeParse(o) != null && MergeParse(o).Role == "stop").Sum(o => Math.Max(0, o.Quantity - o.Filled));
+            int asked = s.QuantityChanged > 0 ? Math.Min(s.Quantity, s.QuantityChanged) : s.Quantity;
+            int open = asked - s.Filled, want = Math.Abs(now) - others;
+            if (want <= 0 || want >= open) return;
+            s.QuantityChanged = want + s.Filled;
+            a.Change(new[] { s });
+            ChartBridgeServer.Log("merge upkeep " + Where(a, inst) + ": a merged target first seen with fills (after a restart); the merged stop shrinks to " + want + " (the position " + Math.Abs(now) + ", other stops " + others + ")");
         }
 
         private static bool MergeSwapOrder(MergeSwapState s, Order o)
@@ -324,7 +384,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (MergeLock) { read = mergeMarkerRead; mergeMarkerRead = true; }
             if (read) return;
             List<string> lines = new List<string>();
-            try { if (File.Exists(MergeMarkerFile)) lines = File.ReadAllLines(MergeMarkerFile).Where(l => l.Trim().Length > 0).ToList(); File.Delete(MergeMarkerFile); }
+            try { lock (MergeFileLock) { if (File.Exists(MergeMarkerFile)) lines = File.ReadAllLines(MergeMarkerFile).Where(l => l.Trim().Length > 0).ToList(); File.Delete(MergeMarkerFile); } }
             catch (Exception ex) { ChartBridgeServer.Log("merge: merge_swap.txt could not be read (" + ex.Message + ")"); }
             foreach (string l in lines)
             {
@@ -345,17 +405,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (string t in texts) client.Send("{\"type\":\"status\",\"level\":\"error\",\"text\":" + CbJson.Str(t) + "}");
         }
 
+        // Fix1: read, changed and written whole under MergeFileLock (two swaps on two accounts never lose each other's line),
+        // through a temp file swapped in (a crash never leaves half a file).
         private static void MergeMarker(MergeSwapState s, bool running)
         {
             try
             {
-                List<string> lines = File.Exists(MergeMarkerFile) ? File.ReadAllLines(MergeMarkerFile).ToList() : new List<string>();
-                string me = s.Account.Name + "\t" + s.Root;
-                lines.RemoveAll(l => l.StartsWith(me + "\t", StringComparison.Ordinal) || l == me);
-                if (running) lines.Add(me + "\t" + ((long)ChartBridgeTime.NowUtcMs()).ToString(CultureInfo.InvariantCulture));
-                Directory.CreateDirectory(ChartBridgeConfig.Folder);
-                if (lines.Count == 0) { if (File.Exists(MergeMarkerFile)) File.Delete(MergeMarkerFile); }
-                else File.WriteAllLines(MergeMarkerFile, lines.ToArray());
+                lock (MergeFileLock)
+                {
+                    List<string> lines = File.Exists(MergeMarkerFile) ? File.ReadAllLines(MergeMarkerFile).ToList() : new List<string>();
+                    string me = s.Account.Name + "\t" + s.Root;
+                    lines.RemoveAll(l => l.StartsWith(me + "\t", StringComparison.Ordinal) || l == me);
+                    if (running) lines.Add(me + "\t" + ((long)ChartBridgeTime.NowUtcMs()).ToString(CultureInfo.InvariantCulture));
+                    Directory.CreateDirectory(ChartBridgeConfig.Folder);
+                    if (lines.Count == 0) { if (File.Exists(MergeMarkerFile)) File.Delete(MergeMarkerFile); return; }
+                    string tmp = MergeMarkerFile + ".tmp";
+                    File.WriteAllLines(tmp, lines.ToArray());
+                    if (File.Exists(MergeMarkerFile)) File.Replace(tmp, MergeMarkerFile, null); else File.Move(tmp, MergeMarkerFile);
+                }
             }
             catch (Exception ex) { ChartBridgeServer.Log("merge: merge_swap.txt could not be written (" + ex.Message + ")"); }
         }
@@ -544,8 +611,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 why = MergeSwap(s);
                 if (why == null) why = MergeVerify(s);
+                if (why == "Flatten" && !s.Aborted) why = s.Trouble ?? "Flatten could not be sent";   // fix1 (F1): the swap was let go again
                 if (why == null) text = MergeDoneText(s);
                 else if (s.Aborted) { result = "failed"; text = MergeAbortText(s); }
+                else if (MergeFlipped(s)) { result = "failed"; text = MergeOnFlip(s); }   // fix1: never a restore that adds to the new position
                 else
                 {
                     ChartBridgeServer.Log("merge on " + s.Where + " stopped (" + why + "); putting the original brackets back");
@@ -564,20 +633,23 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             finally
             {
+                // Integration (lane B1; lead's default): the pairs breakeven and trailing followed are gone (merged, or placed again as
+                // new orders), so they stop on this position; every stop stays where it is and the pages are told (managed, unmanaged).
+                // Fix1 (F4): before the unfreeze (breakeven and trailing stay paused until then) and before the swap's line leaves
+                // merge_swap.txt, so managed.txt already says "merged" when a restart can next read it.
+                try { if (!s.Stopped) StrategiesMerged(s.Account, s.Instrument, s.Root + " " + s.Account.Name + ": Merge " + result + "; breakeven and trailing stopped for this position, every stop stays where it is (manage it by hand)"); }
+                catch (Exception ex) { ChartBridgeServer.Log("merge: strategies could not be told (" + ex.Message + ")"); }
                 lock (MergeLock) { if (!s.Stopped) { MergeSwaps.Remove(s.Key); MergeChangedAt[s.Key] = ChartBridgeTime.NowUtcMs(); } }   // unfreeze
                 if (!s.Stopped) MergeMarker(s, false);   // ChartBridge stopped mid-swap: the next start says so
             }
-            // Integration (lane B1; lead's default): the pairs breakeven and trailing followed are gone (merged, or placed again as
-            // new orders), so they stop on this position; every stop stays where it is and the pages are told (managed, unmanaged).
-            try { if (!s.Stopped) StrategiesMerged(s.Account, s.Instrument, s.Root + " " + s.Account.Name + ": Merge " + result + "; breakeven and trailing stopped for this position, every stop stays where it is (manage it by hand)"); }
-            catch (Exception ex) { ChartBridgeServer.Log("merge: strategies could not be told (" + ex.Message + ")"); }
             MergeFinish(s, result, text);
         }
 
         private static string MergeAbortText(MergeSwapState s)
         {
-            return s.Stopped ? "ChartBridge stopped during the merge; check the position's stop in NinjaTrader"
-                             : "Flatten ended the merge; Flatten cancels the working orders and closes the position";
+            if (s.Stopped) return "ChartBridge stopped during the merge; check the position's stop in NinjaTrader";
+            return s.FlattenSent ? "Flatten ended the merge; Flatten cancels the working orders and closes the position"
+                                 : "the merge was stopped; check the position's stop in NinjaTrader";
         }
 
         // Contract steps 2 to 4. Null when every step was confirmed, or why it stopped.
@@ -842,11 +914,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (s.Aborted) return "Flatten";
             if (MayFill(u.Stop.OrderState)) return null;   // its cancel never landed: it is still there
+            if (MergeFlipped(s)) return "the position turned to the other side";   // fix1: the fallback then cancels the old side (MergeOnFlip)
             int pos = Math.Abs(SignedPosition(s.Account, s.Instrument)), qty = Math.Min(u.Qty, pos - MergeStopCover(s));
             if (qty <= 0) { ChartBridgeServer.Log("merge restore on " + s.Where + ": " + u.Name() + " not placed again; the position no longer needs it"); return null; }
             List<MergeSpec> specs = u.Specs.Where(sp => sp.Role == "stop" || !u.Merged).ToList();
             bool oco = specs.Count > 1 && specs.All(sp => sp.Oco);
-            string ocoId = oco ? "cb-" + u.Tag + "-" + u.Fill + (u.Bucket > 0 ? "k" + u.Bucket : "") + "-r" + Interlocked.Increment(ref mergeOcoSeq).ToString(CultureInfo.InvariantCulture) : "";
+            string ocoId = oco ? "cb-" + u.Tag + "-" + u.Fill + (u.Bucket > 0 ? "k" + u.Bucket : "") + "-r" + MergeRunId + "-" + Interlocked.Increment(ref mergeOcoSeq).ToString(CultureInfo.InvariantCulture) : "";
             List<Order> place = specs.Select(sp => MergeCreate(s, sp, Math.Min(qty, sp.Qty), ocoId)).ToList();
             Pair pair = null;
             if (!u.Merged)
@@ -874,52 +947,152 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- the restore failed
-        // "ChartBridge makes sure one working stop covers the whole position at the first leg's stop price (the stop-already-traded
-        // rule applies), and raises a status error". Every other ChartBridge stop and target on it is cancelled first (so the one
-        // stop is never above the position), then one stop: the merged stop resized, or a new one; a market exit if a trade from
-        // the last 2 s is at or through that price. Returns the text.
+        // PROTOCOL "Merge": "If the restore itself fails, ChartBridge makes sure one working stop covers the whole position at the
+        // first leg's stop price (the stop-already-traded rule applies), and raises a status error".
+        // Fix1 (F3): never by cancelling a stop first. A working stop is never cancelled or moved here before something else covers
+        // its contracts, and moving one into another would need a moment with two stops for the same contracts (over-protected)
+        // or none (unprotected). So: every stop and target still working stays where it is (a pair keeps its OCO target); the
+        // contracts no working stop covers get ONE stop at the first leg's stop price (the merged stop this merge placed grown,
+        // when it has no OCO partner, or a new mstop), or a market exit when a trade from the last 2 s is at or through that
+        // price; stops above the position (a fill during the swap) are trimmed, this merge's own stop first, a target before its
+        // stop. A placement that is rejected or not confirmed leaves every existing stop in place. The status error names what
+        // covers what. Flat: every ChartBridge leg there is cancelled (nothing to protect, and a stop could open a position).
+        // The position turned to the other side: MergeOnFlip. Returns the text.
         private static string MergeFallback(MergeSwapState s, string why, string rwhy)
         {
-            ChartBridgeServer.Log("merge restore on " + s.Where + " failed (" + rwhy + "); one stop for the whole position at " + MergeText(s.StopPx));
+            ChartBridgeServer.Log("merge restore on " + s.Where + " failed (" + rwhy + "); covering what no stop covers at " + MergeText(s.StopPx));
             s.Restoring = true;
-            Order keep = s.Stop != null && s.NewStop && IsWorking(s.Stop.OrderState) ? s.Stop : null;   // a merged stop with no OCO partner can stay
-            List<Order> others = MergeWorkingOrders(s.Account, s.Instrument).Where(o => MergeParse(o) != null && o != keep && IsWorking(o.OrderState)).ToList();
-            MergeCancelOrders(s, others);   // best effort: whatever is still working is counted below, so the stop is never above the position
+            if (MergeFlipped(s)) return MergeOnFlip(s);
+            string head = s.Where + ": the merge failed and the original brackets could not be put back";
+            // This merge's own merged targets, and a target whose OCO stop is gone (a pair put back with its stop rejected): never
+            // the OCO partner of a working stop, so cancelling them leaves every stop working.
+            List<Order> all = MergeWorkingOrders(s.Account, s.Instrument);
+            MergeCancelOrders(s, all.Where(o => MayFill(o.OrderState) && ((s.Placed.Contains(o) && MergedRole(o.Name) == "target") ||
+                (MergeParse(o) != null && MergeParse(o).Role == "target" && !string.IsNullOrEmpty(o.Oco) && !all.Any(x => x != o && x.Oco == o.Oco && MayFill(x.OrderState)))) ).ToList());
             int pos = Math.Abs(SignedPosition(s.Account, s.Instrument));
-            int need = pos - (MergeStopCover(s) - (keep != null ? keep.Quantity - keep.Filled : 0));   // what the one stop must cover
-            string text, head = s.Where + ": the merge failed and the original brackets could not be put back";
-            if (pos == 0) text = head + "; the position is flat now; check NinjaTrader";
-            else if (need <= 0) { if (keep != null) MergeResize(s, keep, 0); text = head + "; the stops still working cover the position; NO TARGET; check NinjaTrader"; }
+            string text;
+            if (pos == 0)
+            {
+                List<Order> legs = MergeWorkingOrders(s.Account, s.Instrument).Where(o => MergeParse(o) != null).ToList();
+                string c = MergeCancelOrders(s, legs);
+                text = head + "; the position is flat now, so ChartBridge cancelled its " + legs.Count + " stop and target order(s) there" +
+                       (c != null ? " (not confirmed: " + c + ")" : "") + "; check NinjaTrader";
+            }
             else
             {
-                double last;
-                bool through = FreshLast(s.Root, FreshTickMs, out last) && (s.Pos > 0 ? s.StopPx >= last : s.StopPx <= last);
-                string put;
-                if (through)
+                int cover = MergeStopCover(s);
+                string did;
+                if (cover > pos)
                 {
-                    // The stop-already-traded rule (PROTOCOL "Brackets"): a trade from the last 2 s at or through the stop: exit at market.
-                    if (keep != null) MergeResize(s, keep, 0);
-                    Order x = s.Account.CreateOrder(s.Instrument, MergeExitAction(s), OrderType.Market, OrderEntry.Manual, TimeInForce.Day, need, 0, 0, "",
-                        "CB#" + s.First[0].Tag + " exit f" + s.First[0].Fill + " q" + need + " p" + MergePrice(s.StopPx), NinjaTrader.Core.Globals.MaxDate, null);
-                    put = MergeSubmit(s, new List<Order> { x }, null);
-                    text = head + "; price had already passed the stop level " + MergeText(s.StopPx) + " (last " + MergeText(last) + "), so ChartBridge EXITED " + need +
-                           " at market" + (put != null ? ", and that did not go through (" + put + "): the position may have NO STOP" : "") + "; check NinjaTrader";
+                    string t = MergeTrim(s, cover - pos);
+                    did = t == null ? "ChartBridge trimmed the stops to the position" : "the stops cover more than the position and could not be trimmed (" + t + ")";
                 }
-                else
-                {
-                    if (keep != null) put = MergeResize(s, keep, need);
-                    else
-                    {
-                        Order f = s.First[0].Stop;
-                        Order st = s.Account.CreateOrder(s.Instrument, MergeExitAction(s), f.OrderType, OrderEntry.Manual, TimeInForce.Gtc, need,
-                            f.OrderType == OrderType.StopLimit ? f.LimitPrice : 0, s.StopPx, "", "CB#" + s.First[0].Tag + " mstop q" + need + " p" + MergePrice(s.StopPx), NinjaTrader.Core.Globals.MaxDate, null);
-                        put = MergeSubmit(s, new List<Order> { st }, null);
-                    }
-                    text = put == null
-                        ? head + "; ONE STOP at " + MergeText(s.StopPx) + " covers " + MergeStopCover(s) + " contracts; NO TARGET; check NinjaTrader"
-                        : head + ", and the one stop for the position could not be placed (" + put + "); the position may have NO STOP; act in NinjaTrader now";
-                }
+                else if (cover < pos) did = MergeCoverGap(s, pos - cover);
+                else did = "nothing was cancelled; the stops still working cover the position";
+                text = head + "; " + did + "; " + MergeCoverText(s) + "; check NinjaTrader";
             }
+            Alarm(text);
+            return text;
+        }
+
+        // The contracts no working stop covers (need): one stop at the first leg's stop price, confirmed, or a market exit when
+        // the stop level has already traded. Never touches a working stop other than growing this merge's own merged stop.
+        private static string MergeCoverGap(MergeSwapState s, int need)
+        {
+            double last;
+            if (FreshLast(s.Root, FreshTickMs, out last) && (s.Pos > 0 ? s.StopPx >= last : s.StopPx <= last))
+            {
+                // The stop-already-traded rule (PROTOCOL "Brackets"): a trade from the last 2 s at or through the stop: exit at market.
+                Order x = s.Account.CreateOrder(s.Instrument, MergeExitAction(s), OrderType.Market, OrderEntry.Manual, TimeInForce.Day, need, 0, 0, "",
+                    "CB#" + s.First[0].Tag + " exit f" + s.First[0].Fill + " q" + need + " p" + MergePrice(s.StopPx), NinjaTrader.Core.Globals.MaxDate, null);
+                string put = MergeSubmit(s, new List<Order> { x }, null);
+                return "price had already passed the stop level " + MergeText(s.StopPx) + " (last " + MergeText(last) + "), so ChartBridge EXITED the " + need +
+                       " contract(s) no stop covered at market" + (put != null ? ", and that did not go through (" + put + "): " + need + " contract(s) may have NO STOP; act in NinjaTrader now" : "");
+            }
+            Order keep = s.Stop != null && s.NewStop && IsWorking(s.Stop.OrderState) && string.IsNullOrEmpty(s.Stop.Oco) ? s.Stop : null;
+            string why;
+            if (keep != null) why = MergeResize(s, keep, keep.Quantity - keep.Filled + need);
+            else
+            {
+                Order f = s.First[0].Stop;
+                Order st = s.Account.CreateOrder(s.Instrument, MergeExitAction(s), f.OrderType, OrderEntry.Manual, TimeInForce.Gtc, need,
+                    f.OrderType == OrderType.StopLimit ? f.LimitPrice : 0, s.StopPx, "", "CB#" + s.First[0].Tag + " mstop q" + need + " p" + MergePrice(s.StopPx), NinjaTrader.Core.Globals.MaxDate, null);
+                why = MergeSubmit(s, new List<Order> { st }, null);
+            }
+            if (why == null) return "nothing working was cancelled, and ONE STOP at " + MergeText(s.StopPx) + " now covers the " + need + " contract(s) no stop covered";
+            return "the stop for the " + need + " contract(s) no stop covered could not be placed (" + why + "), so every stop still working stays where it is and " +
+                   need + " contract(s) may have NO STOP; act in NinjaTrader now";
+        }
+
+        // Stops above the position: trimmed by `excess` contracts, this merge's own stop first, then the newest; an OCO target
+        // first goes down to its stop's new size (a target never above its stop), then the stop. Only ever less protection than
+        // the position's excess, never a stop below what is held. Null, or why it stopped.
+        private static string MergeTrim(MergeSwapState s, int excess)
+        {
+            bool closingBuy = s.Pos < 0;
+            List<Order> stops = MergeWorkingOrders(s.Account, s.Instrument).Where(o => { MergeLeg l = MergeParse(o); return l != null && l.Role == "stop" && IsBuy(o) == closingBuy && IsWorking(o.OrderState); }).ToList();
+            stops.Reverse();   // newest first (NinjaTrader's list is oldest first)
+            if (s.Stop != null && stops.Remove(s.Stop)) stops.Insert(0, s.Stop);
+            foreach (Order st in stops)
+            {
+                if (excess <= 0) break;
+                int open = st.Quantity - st.Filled, now = open - Math.Min(open, excess);
+                if (!string.IsNullOrEmpty(st.Oco))
+                    foreach (Order t in MergeWorkingOrders(s.Account, s.Instrument).Where(o => o != st && o.Oco == st.Oco && IsWorking(o.OrderState)).ToList())
+                        if (now > 0 && t.Quantity - t.Filled > now) { string w = MergeResize(s, t, now); if (w != null) return w; }
+                string why = MergeResize(s, st, now);   // 0 cancels it (and its OCO target with it)
+                if (why != null) return why;
+                excess -= open - now;
+            }
+            return excess > 0 ? "no stop left to trim" : null;
+        }
+
+        // What covers what, for the status error: "the stops cover 3 of 3 contracts (2 at 24,998, 1 at 25,002); targets 1 at 25,004".
+        private static string MergeCoverText(MergeSwapState s)
+        {
+            bool closingBuy = s.Pos < 0;
+            int pos = Math.Abs(SignedPosition(s.Account, s.Instrument)), cover = 0;
+            SortedDictionary<double, int> stops = new SortedDictionary<double, int>(), targets = new SortedDictionary<double, int>();
+            foreach (Order o in MergeWorkingOrders(s.Account, s.Instrument))
+            {
+                MergeLeg l = MergeParse(o);
+                if (l == null || IsBuy(o) != closingBuy || !MayFill(o.OrderState)) continue;
+                int open = Math.Max(0, o.Quantity - o.Filled);
+                SortedDictionary<double, int> into = l.Role == "stop" ? stops : targets;
+                double px = l.Role == "stop" ? o.StopPrice : o.LimitPrice;
+                int had;
+                into.TryGetValue(px, out had);
+                into[px] = had + open;
+                if (l.Role == "stop") cover += open;
+            }
+            Func<SortedDictionary<double, int>, string> list = d => string.Join(", ", d.Select(kv => kv.Value + " at " + MergeText(kv.Key)));
+            return "the working stops cover " + cover + " of " + pos + " contract(s)" + (stops.Count > 0 ? " (" + list(stops) + ")" : "") +
+                   (cover < pos ? ": " + (pos - cover) + " contract(s) have NO STOP" : "") + (targets.Count > 0 ? "; targets " + list(targets) : "; NO TARGET");
+        }
+
+        // ---------------------------------------------------------- the position turned to the other side mid-swap
+        // Fix1: a long that is now short (or the reverse). Nothing is put back: a stop or target of the old position is on the
+        // side that adds to the new one. Every ChartBridge leg on the old closing side is cancelled (none covers anything held),
+        // the new position's own legs stay, and a status error says what is left.
+        private static bool MergeFlipped(MergeSwapState s)
+        {
+            int now = SignedPosition(s.Account, s.Instrument), eff = EffectivePosition(s.Account, s.Instrument);
+            return (now != 0 && Math.Sign(now) != Math.Sign(s.Pos)) || (eff != 0 && Math.Sign(eff) != Math.Sign(s.Pos));
+        }
+
+        private static string MergeOnFlip(MergeSwapState s)
+        {
+            s.Restoring = true;
+            bool oldClosingBuy = s.Pos < 0;
+            int now = SignedPosition(s.Account, s.Instrument);
+            List<Order> old = MergeWorkingOrders(s.Account, s.Instrument).Where(o => MergeParse(o) != null && IsBuy(o) == oldClosingBuy).ToList();
+            string c = MergeCancelOrders(s, old);
+            bool newClosingBuy = now < 0;
+            int cover = MergeWorkingOrders(s.Account, s.Instrument).Where(o => { MergeLeg l = MergeParse(o); return l != null && l.Role == "stop" && IsBuy(o) == newClosingBuy && MayFill(o.OrderState); })
+                                                               .Sum(o => Math.Max(0, o.Quantity - o.Filled));
+            string text = s.Where + ": the position turned from " + s.Pos + " to " + now + " during the merge; nothing was put back (it would add to the new position); ChartBridge cancelled the " +
+                          old.Count + " stop and target order(s) of the old position" + (c != null ? " (not confirmed: " + c + ")" : "") + "; its stops cover " + cover + " of the " +
+                          Math.Abs(now) + " contract(s) held now" + (cover < Math.Abs(now) ? ": " + (Math.Abs(now) - cover) + " contract(s) have NO STOP; act in NinjaTrader now" : "; check NinjaTrader");
             Alarm(text);
             return text;
         }
@@ -949,9 +1122,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             StringBuilder b = new StringBuilder("{\"type\":\"merge\"");
             if (s.Cid != null) b.Append(",\"cid\":").Append(CbJson.Str(s.Cid));
             b.Append(",\"account\":").Append(CbJson.Str(s.Account.Name)).Append(",\"root\":").Append(CbJson.Str(s.Root)).Append(",\"result\":").Append(CbJson.Str(result));
-            Order stop = result == "restored" ? null : MergeWorkingOrders(s.Account, s.Instrument).FirstOrDefault(o => { MergeLeg l = MergeParse(o); return l != null && l.Role == "stop" && IsWorking(o.OrderState); });
-            if (result == "merged" || (result == "failed" && stop != null && !s.Aborted))
+            Order stop = result != "merged" ? null : MergeWorkingOrders(s.Account, s.Instrument).FirstOrDefault(o => { MergeLeg l = MergeParse(o); return l != null && l.Role == "stop" && IsWorking(o.OrderState); });
+            // Fix1 (F3): after a failed merge several stops can be working (none is cancelled to make one); "stop" then gives the
+            // first leg's stop price and the contracts the working stops at that price cover (lead's default; the text says the rest).
+            int atPx = 0;
+            if (result == "failed" && !s.Aborted)
+                foreach (Order o in MergeWorkingOrders(s.Account, s.Instrument))
+                {
+                    MergeLeg l = MergeParse(o);
+                    if (l != null && l.Role == "stop" && IsWorking(o.OrderState) && Math.Abs(o.StopPrice - s.StopPx) < 1e-9) atPx += Math.Max(0, o.Quantity - o.Filled);
+                }
+            if (result == "merged")
                 b.Append(",\"stop\":{\"price\":").Append(CbJson.Num(stop != null ? stop.StopPrice : s.StopPx)).Append(",\"qty\":").Append(stop != null ? stop.Quantity - stop.Filled : 0).Append('}');
+            else if (atPx > 0) b.Append(",\"stop\":{\"price\":").Append(CbJson.Num(s.StopPx)).Append(",\"qty\":").Append(atPx).Append('}');
             else b.Append(",\"stop\":null");
             b.Append(",\"targets\":[");
             if (result == "merged") b.Append(string.Join(",", MergeResultTargets(s).Select(t => "{\"price\":" + CbJson.Num(t.LimitPrice) + ",\"qty\":" + (t.Quantity - t.Filled) + "}")));

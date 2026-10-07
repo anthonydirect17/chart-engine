@@ -358,6 +358,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool Announced;                // the done message went out
             public bool Quiet;                    // recovered with nothing working and nothing to wait for: not told to the page
             public bool Paused;                   // PauseStrategies (Merge's swap freezes breakeven and trailing on its account and root)
+            public bool Merged;                   // fix1 (F4): a Merge swap ran on its position; saved in managed.txt ("merged"), so a restart never resumes it
         }
 
         // StratLock guards the records and managed.txt's memory. It is a leaf: nothing else is locked and nothing is sent
@@ -419,6 +420,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // (merged, restored or failed), breakeven and trailing stop for every managed entry there: the pairs they followed are
         // gone (cancelled, or placed again as new orders), and PROTOCOL "Merge" gives a merged stop no breakeven or trailing.
         // Every stop stays where it is, and the pages are told (managed, state unmanaged, with the reason).
+        // Fix1 (F4): "no breakeven or trailing after a merge" is saved, not only kept in memory: each entry is marked merged and
+        // managed.txt is written whole (through its temp file) here, on the merge's own thread, before the swap's line leaves
+        // merge_swap.txt; a restart then recovers it as unmanaged ("merged"), and nothing moves its stop again.
         internal static void StrategiesMerged(Account account, Instrument inst, string text)
         {
             List<MEntry> hit = new List<MEntry>();
@@ -426,11 +430,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (MEntry m in ManagedByTag.Values)
                     if (m.Account == account && SameInstrument(m.Instrument, inst) && m.State != "done")
                     {
-                        m.NoMoves = true; m.Paused = false;
+                        m.NoMoves = true; m.Paused = false; m.Merged = true;
                         if (m.State != "waiting") { m.State = "unmanaged"; m.Text = text; m.Quiet = false; }
                         hit.Add(m);
                     }
-            foreach (MEntry m in hit) ManagedChanged(m, true);
+            if (hit.Count > 0)
+            {
+                lock (StratLock) saveDirty = true;
+                WriteManagedLogged();   // durable now (a failed write is loud and tried again every 2 s, as every managed.txt write)
+            }
+            foreach (MEntry m in hit) ManagedChanged(m, false);
         }
 
         // Integration: the one v3 handshake (ChartBridgeV3.TellLanes) for a page that signed in before its client message.
@@ -851,11 +860,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string bad = line.Json.Length >= 2 ? ParseStrategy(line.Json.Substring(1, line.Json.Length - 2), out s) : "empty";
                 if (bad != null) { s = null; why = "its line in managed.txt could not be read (" + bad + ")"; }
             }
+            bool merged = why == null && line != null && line.Merged;   // fix1 (F4): a Merge ran on it: never resumed
+            if (merged) why = MergedRestartText;
             double tick = inst.MasterInstrument.TickSize;
             if (why == null) why = LegsMismatch(s, buy, legs, tick);
             if (why == null && !StrategiesOn) why = "Order Strategies are off in config.txt (strategies)";
             if (why == null && !Enabled) why = "trading is off in config.txt";
-            MEntry m = new MEntry { Tag = tag, Entry = entry, Account = account, Instrument = inst, Buy = buy, Root = ChartBridgeServer.RootFor(inst), S = s, NoMoves = why != null };
+            MEntry m = new MEntry { Tag = tag, Entry = entry, Account = account, Instrument = inst, Buy = buy, Root = ChartBridgeServer.RootFor(inst), S = s, NoMoves = why != null, Merged = merged };
             double[] hl;
             lock (StratLock) { if (m.Root == null || !SinceStart.TryGetValue(m.Root, out hl)) hl = null; }
             foreach (RLeg l in legs)
@@ -889,6 +900,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!open && !waiting && (entry == null || !IsWorking(entry.OrderState)))
                 ChartBridgeServer.Log("strategy entry CB#" + tag + " on " + where + " recovered with no working leg" + (why != null ? " (" + why + ")" : ""));
             else if (why == null) ChartBridgeServer.Log("strategy entry CB#" + tag + " on " + where + ": " + (m.State == "resumed" ? "breakeven and trailing resumed after the restart (" + m.Pairs.Count + " pair(s))" : "waiting for its fill, recovered after the restart"));
+            else if (merged) ChartBridgeServer.Log("strategy entry CB#" + tag + " on " + where + ": " + MergedRestartText);   // fix1 (F4): expected, not an alarm
             else if (open)
             {
                 List<string> stops = m.Pairs.Where(p => p.Stop != null).Select(p => Price(p.Stop.StopPrice)).Distinct().ToList();
@@ -1043,7 +1055,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // thread (at placement, at each fill, at most once a second as the best price moves, and every 2 s while it has
         // changed or a write failed). Read once at start with planned_brackets.txt (LoadPlans, a pool thread). A file that
         // exists but cannot be read is never rewritten that run. Lines older than 7 days are dropped when read.
-        private class ManagedLine { public string Json; public Dictionary<string, double> Best = new Dictionary<string, double>(); public double At; }
+        private class ManagedLine { public string Json; public Dictionary<string, double> Best = new Dictionary<string, double>(); public double At; public bool Merged; }
+        // Fix1 (F4): a fifth field "merged" marks an entry a Merge swap ran on (a line without it is read as before).
+        private const string MergedRestartText = "merged before the restart: breakeven and trailing stay off for this position, every stop stays where it is (manage it by hand)";
         private static readonly Dictionary<string, ManagedLine> ManagedLines = new Dictionary<string, ManagedLine>();   // lines read and not yet recovered
         private static bool managedReadFailed, saveDirty;
         private static string saveFailed;
@@ -1051,7 +1065,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int saveQueued;
         private static readonly object ManagedFileLock = new object();
         public static Func<string> ManagedReadFault, ManagedWriteFault;   // test hooks (unused in NinjaTrader)
-        private static readonly Regex ManagedLineRx = new Regex("^([0-9a-f]{8})\t(\\{[^\t]*\\})\t([^\t]*)\t([0-9]{1,15})$");
+        private static readonly Regex ManagedLineRx = new Regex("^([0-9a-f]{8})\t(\\{[^\t]*\\})\t([^\t]*)\t([0-9]{1,15})(\tmerged)?$");   // fix1 (F4): optional "merged"
 
         private static string ManagedFile { get { return Path.Combine(ChartBridgeConfig.Folder, "managed.txt"); } }
 
@@ -1084,7 +1098,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 if (!m.Success) { bad++; continue; }
                                 double at = double.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
                                 if (now - at > PlanKeepMs) continue;
-                                ManagedLine line = new ManagedLine { Json = m.Groups[2].Value, At = at };
+                                ManagedLine line = new ManagedLine { Json = m.Groups[2].Value, At = at, Merged = m.Groups[5].Success };
                                 if (m.Groups[3].Value != "-")
                                     foreach (string part in m.Groups[3].Value.Split(','))
                                     {
@@ -1169,13 +1183,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         if (m.S == null) continue;
                         string best = string.Join(",", m.Pairs.Select(p => "f" + p.F + "k" + p.K + ":" + p.Best.ToString("R", CultureInfo.InvariantCulture)));
-                        lines.Add(m.Tag + "\t" + m.S.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)now).ToString(CultureInfo.InvariantCulture));
+                        lines.Add(m.Tag + "\t" + m.S.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)now).ToString(CultureInfo.InvariantCulture) + (m.Merged ? "\tmerged" : ""));
                     }
                     foreach (KeyValuePair<string, ManagedLine> kv in ManagedLines)
                         if (!ManagedByTag.ContainsKey(kv.Key))
                         {
                             string best = string.Join(",", kv.Value.Best.Select(b => b.Key + ":" + b.Value.ToString("R", CultureInfo.InvariantCulture)));
-                            lines.Add(kv.Key + "\t" + kv.Value.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture));
+                            lines.Add(kv.Key + "\t" + kv.Value.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture) + (kv.Value.Merged ? "\tmerged" : ""));
                         }
                     saveDirty = false;
                     lastSaveMs = now;
