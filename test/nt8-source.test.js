@@ -943,7 +943,7 @@ test('0.4.0 copier: off by default, and it never turns trading or itself on', ()
   assert.ok(!/Stub|NoteV3/.test(ccode), 'no v3 stub left in the copier');
   assert.ok(!/ChartBridgeOrders\.Enabled\s*=|ReadConfig\("trading"|\bEnabled = true\b/.test(ccode), 'never sets trading or the switch');
   // every hook returns at once with the switch off
-  for (const f of ['LeaderEntryCheck', 'LeaderEntrySent', 'LeaderFilled', 'OnOrderUpdate', 'OnPositionUpdate', 'Tick', 'Start'])
+  for (const f of ['LeaderEntryCheck', 'LeaderEntryRegister', 'LeaderEntrySent', 'LeaderEntryDropped', 'LeaderFilled', 'OnOrderUpdate', 'OnPositionUpdate', 'Tick', 'Start'])
     assert.match(copierBodies(f), /if \(!Enabled[ )|]/, f + ' checks the switch first');
   assert.match(copierBodies('OnMessage'), /if \(why == null && !Enabled\) why = "The copier is off \(copier in config\.txt\)\.";/);
   assert.match(copierBodies('OnMessage'), /string why = ChartBridgeOrders\.CopierGate\(client\);/, 'gates 1, 4 and 7 first');
@@ -957,11 +957,14 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
   }
   const place = fnBody('PlaceOrderLocked');
   assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0)') < place.indexOf('account.Submit('), 'the stop rule is checked before the leader entry is sent');
-  assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntrySent(order, kind, price)') > place.indexOf('account.Submit('), 'the leader entry is registered after it is sent');
+  // review 2 finding 8: registered before Submit (a fill inside Submit is copied); dropped if Submit throws; orders-mode copies after
+  assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntryRegister(order, kind, price)') < place.indexOf('account.Submit('), 'the leader entry is registered before it is sent');
+  assert.match(place, /try \{ account\.Submit\(new\[\] \{ order \}\); \}\s*catch \(Exception\) \{ if \(!bot\) ChartBridgeCopier\.LeaderEntryDropped\(order\); throw; \}/);
+  assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntrySent(order)') > place.indexOf('account.Submit('), 'the orders-mode copies go after it is sent');
 });
 
 test('0.4.0 copier: order calls only in its named functions; every one is Sim checked', () => {
-  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'Sweep', 'Recover'];
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'Sweep', 'Recover'];   // FlattenLate: review 2 finding 1
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
@@ -972,7 +975,7 @@ test('0.4.0 copier: order calls only in its named functions; every one is Sim ch
   assert.match(copierBodies('ExitAllowed'), /if \(!IsSim\(c\.A\)\)/);
   for (const f of ['Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'Sweep', 'Recover']) assert.match(copierBodies(f), /IsSim\(/, f + ' checks Sim');
   for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /Eligible\(/, f + ' checks the follower');
-  for (const f of ['StartReduce', 'SendReduce', 'Flatten']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
+  for (const f of ['StartReduce', 'SendReduce', 'Flatten', 'FlattenLate']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
   // Sim is read from NinjaTrader's Provider, exactly "Simulator"; Backtest and Playback never
   assert.match(copierBodies('ReadSim'), /IsNeverTradable\(a\.Name \?\? ""\)\) return false;\s*return ProviderOf\(a\) == "Simulator";/);
   // entries are sent under PlaceLock (one order check and send at a time across all pages); legs are GTC stops, entries Day
@@ -982,7 +985,13 @@ test('0.4.0 copier: order calls only in its named functions; every one is Sim ch
   assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) return;[\s\S]*c\.A\.Flatten\(new\[\] \{ c\.Inst \}\);/);
   assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
   assert.match(copierBodies('CheckReduces'), /SendReduce\(r\);/);
-  assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), k = held - r\.Target;/);
+  // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position
+  assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), stops = StopsWorking\(c\.A, c\.Inst, c\.Dir\), k = Math\.Min\(r\.Cut, held - stops\);/);
+  assert.match(copierBodies('ScaleOut'), /int basis = c\.Intended;\s*if \(basis <= 0\) return;/);
+  // review 2 finding 1: a late fill on a follower the copier flattened is never protected as a new position; stops sized to what is held
+  assert.match(copierBodies('ProtectFill'), /if \(exited != null\) \{ LateFill\(fe, mark, qty, price, fillTs, exited\); return; \}/);
+  assert.match(copierBodies('PlaceStop'), /int room = Room\(c, /);
+  assert.match(copierBodies('Flatten'), /fe\.Exited = why;/);
   // /diag names no account
   assert.ok(!/Name|leader\b(?!MsMedian)/.test(copierBodies('DiagJson').replace(/LeaderMs/g, '')), '/diag copier has counts only');
 });
@@ -1075,7 +1084,8 @@ test('0.4.0 integration: exactly one v3 handshake and one v3 send; no lane keeps
   // a bot entry is never a copier leader entry, and never on the copier's leader account
   const place = fnBody('PlaceOrderLocked');
   assert.match(place, /string copierWhy = bot \? ChartBridgeCopier\.BotEntryCheck\(account\) : ChartBridgeCopier\.LeaderEntryCheck\(account, stopTicks > 0\);/);
-  assert.match(place, /if \(!bot\) ChartBridgeCopier\.LeaderEntrySent\(order, kind, price\);/);
+  assert.match(place, /if \(!bot\) ChartBridgeCopier\.LeaderEntryRegister\(order, kind, price\);/);
+  assert.match(place, /if \(!bot\) ChartBridgeCopier\.LeaderEntrySent\(order\);/);
   assert.ok(place.indexOf('copierWhy') < place.indexOf('account.Submit('), 'the copier checks come before the order is sent');
   // Merge and Order Strategies: one leg-name rule, one allocation rule, one source of shares; breakeven paused for the swap
   const scode2 = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeStrategies.cs'), 'utf8'));

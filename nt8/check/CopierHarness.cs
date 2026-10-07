@@ -628,6 +628,7 @@ public static class CopierHarness
         // SIM-F3's order is still working, the leader has filled, SIM-F3 is flat: the sweep cancels it once it is 3 s old
         Order fo3 = f3.Orders.Last();
         int d3 = f3.Calls.Count;
+        ConnectedSince()[f3] = 0;   // SIM-F3 (down in ConnectionDrop) has been back for 30 s: a steady connection
         ChartBridgeCopier.Tick(Now());
         Check(f3.Calls.Count == d3, "the sweep waits 3 s after an order is sent");
         ChartBridgeCopier.Tick(Now() + ChartBridgeOrders.YoungMs + 100);

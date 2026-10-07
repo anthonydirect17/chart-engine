@@ -100,6 +100,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string State = "open";                 // open, accepted, rejected, withdrawn, not answered
             public double SeenAt = -1, AnsweredAt = -1;   // page UTC ms, -1 = not yet
             public Order Entry;                           // placed on accept
+            public string WithdrawnWhy;                   // review 2 finding 7: a withdraw that arrived while the accept was being placed
         }
 
         private static ChartBridgeClient bot;             // the connected bot, or null
@@ -870,7 +871,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 EntryOfSignal.TryGetValue(id, out entry);
                 if (p != null && p.State == "open") { p.State = "not answered"; nNotAnswered++; was = "open"; }   // never sent
                 else if (p != null && p.State == "accepted") { was = "accepted"; entry = p.Entry; }
+                else if (p != null && p.State == "accepting") { p.WithdrawnWhy = reason; was = "accepting"; }   // review 2 finding 7: AnswerProposal cancels it once placed
             }
+            if (was == "accepting") { BotLog("withdraw " + id + " arrived while its accept is being placed: the entry is cancelled as soon as it is placed if it has not filled (" + reason + ")"); return; }
             int cancelled = entry != null && Cancel(entry) ? 1 : 0;   // an unfilled entry; its legs and any position are untouched
             if (was == "accepted" && cancelled > 0) lock (Sync) p.State = "withdrawn";
             else if (was == "accepted") was = null;   // filled or done already: nothing to withdraw
@@ -1293,11 +1296,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return null;
             }
             Order placed;
-            string why = Place(p.S, out placed);
-            lock (Sync) { p.State = why == null ? "accepted" : "rejected"; p.Entry = placed; if (placed != null) EntryOfSignal[id] = placed; }
+            string why = Place(p.S, out placed), withdrawn;
+            lock (Sync) { p.State = why == null ? "accepted" : "rejected"; p.Entry = placed; if (placed != null) EntryOfSignal[id] = placed; withdrawn = p.WithdrawnWhy; }
+            // Review 2 finding 7: the bot withdrew it while it was being placed: cancelled at once if it has not filled.
+            bool cancelled = why == null && withdrawn != null && placed != null && placed.Filled == 0 && Cancel(placed);
+            if (cancelled) lock (Sync) p.State = "withdrawn";
             ToPages(ProposalJson(p));
-            ToBot(AnswerJson(id, why == null ? "accepted" : "refused", why == null ? "placed on " + BotAccount : why));
+            ToBot(AnswerJson(id, why == null ? "accepted" : "refused", why == null ? "placed on " + BotAccount + (cancelled ? "; withdrawn during placement: its entry is cancelled" : "") : why));
             BotLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + BotAccount : " but refused: " + why));
+            if (withdrawn != null && why == null)
+                BotLog("proposal " + id + " withdrawn during placement (" + withdrawn + "): " + (cancelled ? "its unfilled entry cancelled" : "its entry had already filled or ended; nothing cancelled (its stop and target stay)"));
             Notify();
             return why == null ? null : "accepted, but refused: " + why;
         }
