@@ -1870,12 +1870,17 @@ fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `Integration
   by both readings; when it holds nothing, nothing else is sent and the missed exit check (4 s) flattens it if a position
   shows later. If the leader is not flat, what it holds gets a stop sized as below. Always a `status` `error` and a log line.
   Fills that waited for a stop on that follower get none once it is flattened (NinjaTrader's Flatten closes them).
-- **Every protective stop or exit is sized to what the follower holds** (finding 1): its position on the copy's side, the two
-  readings agreeing, minus the copier's stops and exits already working there, and never more than the fill. Nothing is
-  sent when that is 0, when it is flat, or when it holds the other side (a `status` `error` says so). While the two
-  readings differ (the fill's position update is on its way) the stop waits, and goes at the next position update or second
-  in which they agree (a `status` `warn` after 2 s; after NinjaTrader's unbooked fills expire, 11 s, the smaller reading is
-  used) (lead's default). This also covers the orders mode stop that waited for the leader's (CheckWaits).
+- **Every protective stop or exit is sized to what the follower holds** (finding 1, changed by review 3): it goes AT ONCE,
+  on the fill's own event, sized to the fill capped by the LARGER of the follower's two position readings on the copy's side
+  (the fill's position update is usually still on its way) minus the copier's stops and exits that may still fill there.
+  Nothing is sent when that is 0, when it is flat, or when it holds the other side (a `status` `error` says so). A late fill
+  whose leader is not flat is sized from the smaller reading. There is no wait. Once both readings agree, the copier's stops
+  there are shrunk to what it holds (newest first; never while a reduce runs; flat or the other way is left to the sweep),
+  so they never stay above the position. This also covers the orders mode stop that waited for the leader's (CheckWaits).
+- **A fill handled while the copier's Flatten runs** (review 3): each follower contract keeps a count of the copier's
+  flattens, raised before NinjaTrader's Flatten is sent. A fill is recorded with the count of its moment; if the count moved
+  before its stop is placed, the fill is late (as above), so no stop or exit is sent after the Flatten. A copier stop or
+  exit whose cancel is still pending counts as cover (it may still fill), for the stop size and for the reduce.
 - **A scale-out reduces only the copier's own share** (finding 2): the share is of the contracts the copier gave that
   follower, and the reduce is never more than the copier still holds there above its new size, and never so much that the
   stops left working on that side (the copier's, shrunk first, and the follower's own) would exceed the position. A

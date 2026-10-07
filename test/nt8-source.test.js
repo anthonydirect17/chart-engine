@@ -970,7 +970,7 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
 });
 
 test('0.4.0 copier: order calls only in its named functions; every one is Sim checked', () => {
-  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'Sweep', 'Recover'];   // FlattenLate: review 2 finding 1
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
@@ -979,7 +979,7 @@ test('0.4.0 copier: order calls only in its named functions; every one is Sim ch
   // S1: Sim before every order: directly, through Eligible, or through ExitAllowed
   assert.match(copierBodies('Eligible'), /if \(!IsSim\(a\)\)/);
   assert.match(copierBodies('ExitAllowed'), /if \(!IsSim\(c\.A\)\)/);
-  for (const f of ['Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'Sweep', 'Recover']) assert.match(copierBodies(f), /IsSim\(/, f + ' checks Sim');
+  for (const f of ['Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'TrimStops', 'Sweep', 'Recover']) assert.match(copierBodies(f), /IsSim\(/, f + ' checks Sim');
   for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /Eligible\(/, f + ' checks the follower');
   for (const f of ['StartReduce', 'SendReduce', 'Flatten', 'FlattenLate']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
   // Sim is read from NinjaTrader's Provider, exactly "Simulator"; Backtest and Playback never
@@ -996,7 +996,11 @@ test('0.4.0 copier: order calls only in its named functions; every one is Sim ch
   assert.match(copierBodies('ScaleOut'), /int basis = c\.Intended;\s*if \(basis <= 0\) return;/);
   // review 2 finding 1: a late fill on a follower the copier flattened is never protected as a new position; stops sized to what is held
   assert.match(copierBodies('ProtectFill'), /if \(exited != null\) \{ LateFill\(fe, mark, qty, price, fillTs, exited\); return; \}/);
-  assert.match(copierBodies('PlaceStop'), /int room = Room\(c, /);
+  assert.match(copierBodies('PlaceStop'), /int room = Room\(c, late, out roomWhy\);/);
+  // review 3: late judged by the per-contract flatten count (set before Flatten is sent); the stop at once, no wait list
+  assert.match(copierBodies('Flatten'), /FlattenSeq\[key\] = seq \+ 1;[\s\S]*c\.A\.Flatten\(/);
+  assert.match(copierBodies('ProtectFill'), /exited = fe\.Exited \?\? \(now != seq \?/);
+  assert.ok(!/Settles|Unsettled/.test(ccode), 'no wait list for a follower stop');
   assert.match(copierBodies('Flatten'), /fe\.Exited = why;/);
   // /diag names no account
   assert.ok(!/Name|leader\b(?!MsMedian)/.test(copierBodies('DiagJson').replace(/LeaderMs/g, '')), '/diag copier has counts only');

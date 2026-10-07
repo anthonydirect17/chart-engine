@@ -149,6 +149,7 @@ public static class CopierHarness
         catch (Exception ex) { Check(false, "copier harness threw: " + ex); }
         finally
         {
+            ChartBridgeCopier.HarnessQueued = null;
             ChartBridgeCopier.Stop();
             ChartBridgeClient gone; Clients().TryRemove(91, out gone); Clients().TryRemove(92, out gone);
             ChartBridgeCopier.HarnessManual = false;
@@ -688,6 +689,8 @@ public static class CopierHarness
         ReduceOnlyTheCopierShare();
         ScaleOutToZeroKeepsOwn();
         StopSizedToWhatIsHeld();
+        FillDuringFlatten();     // review 3 A
+        CancelPendingCovers();   // review 3 A
         StopResync();
         SweepNeedsSteadyFlatTwice();
         Msg("copierFollower", Follower("SIM-F1", "true", "3", "micro", "null"));
@@ -812,8 +815,9 @@ public static class CopierHarness
         Reset();
     }
 
-    // Finding 1: a protective stop is sized to what the follower holds on that side (both readings agree) minus the copier's
-    // working stops; nothing when that is 0, flat or the other way.
+    // Finding 1 and review 3 B: a follower's stop goes at once, in the same event as its fill, sized to the fill capped by the
+    // larger reading on that side minus the copier's stops; shrunk to what it holds once both readings agree; nothing when it
+    // holds the other side.
     static void StopSizedToWhatIsHeld()
     {
         ChartBridgeOrders.NoteLast("MNQ", 25000);
@@ -822,15 +826,32 @@ public static class CopierHarness
         Order fe = CopyEntry(f1);
         if (fe == null) { Check(false, "review 2: SIM-F1 got a copy of 2"); Reset(); return; }
         int b = f1.Calls.Count;
-        Fill(f1, fe, 2, 25000);
-        Check(After(f1, b).Count == 0, "review 2 finding 1: a fill whose position has not landed yet: its stop waits for the two readings to agree (nothing sized from the fill alone)");
+        Fill(f1, fe, 2, 25000);   // the fill's order event; its position update has not landed
+        List<string> c = After(f1, b);
+        Check(c.Count == 1 && Regex.IsMatch(c[0], "^submit CB#[0-9a-f]{8} stop f2 q2 p25000 Sell StopMarket 2 L0 S24998 "), "review 3 B: the stop is at the broker within the same event as the fill (sized from the larger reading, 2): " + string.Join(" | ", c));
+        Order fs = CopierStop(f1);
         Pos(f1, mnq, 1);   // the position shows 1: the other was closed in NinjaTrader at once
-        Check(After(f1, b).Count == 0, "review 2 finding 1: the readings still differ (1 and 2): still nothing sent");
+        Check(After(f1, b).Count == 1, "review 3 B: while the readings differ (1 and 2) the stop is left as it is");
         Booked();
         ChartBridgeCopier.Tick(Now());
-        List<string> c = After(f1, b);
-        Check(c.Count == 1 && Regex.IsMatch(c[0], "^submit CB#[0-9a-f]{8} stop f2 q1 p25000 Sell StopMarket 1 L0 S24998 "), "review 2 finding 1: the stop is sized to what SIM-F1 holds (1), not to the fill (2): " + string.Join(" | ", c));
-        Check(Logged("only 1 of the fill's 2 are held"), "review 2 finding 1: the smaller stop is logged");
+        c = After(f1, b);
+        Check(fs != null && c.Count == 2 && c[1].StartsWith("change " + fs.Name) && c[1].EndsWith(" Q1") && EventSaid("stop", "SIM-F1", "shrunk to what it holds, 1"),
+              "review 3 B: once both readings agree on 1, the copier stop shrinks to 1 (never above the position): " + string.Join(" | ", c));
+        if (fs != null) { fs.Quantity = 1; Update(f1, fs); }
+        ChartBridgeCopier.Tick(Now());
+        Check(After(f1, b).Count == 2 && SellStops(f1, mnq) <= 1, "review 3 B: shrunk once; the stops stay within the position");
+        Reset();
+
+        // a hand edit in NinjaTrader makes the two readings disagree: the stop still goes at once
+        LeaderEntry(1);
+        fe = CopyEntry(f1);
+        if (fe == null) { Check(false, "review 2: SIM-F1 got a copy of 1"); Reset(); return; }
+        Pos(f1, mnq, 2);   // SIM-F1 bought 2 by hand; that fill's order event has not come
+        b = f1.Calls.Count;
+        Fill(f1, fe, 1, 25000);
+        bool differ = ChartBridgeOrders.CopierListed(f1, mnq) != ChartBridgeOrders.CopierEffective(f1, mnq);
+        c = After(f1, b);
+        Check(differ && c.Count == 1 && Regex.IsMatch(c[0], "^submit CB#[0-9a-f]{8} stop f1 q1 p25000 Sell StopMarket 1 L0 S24998 "), "review 3 B: readings that disagree (a hand edit) do not delay the stop: " + string.Join(" | ", c));
         Reset();
 
         // the other way: SIM-F1 is short when its copy's fill is reported: nothing is sent
@@ -840,20 +861,56 @@ public static class CopierHarness
         b = f1.Calls.Count;
         Pos(f1, mnq, -1); Booked();
         Fill(f1, fe, 1, 25000);
-        Pos(f1, mnq, -1); Booked();
         ChartBridgeCopier.Tick(Now());
         Check(After(f1, b).Count == 0 && Logged("holds the other side"), "review 2 finding 1: a follower holding the other side gets no stop and no exit from a copy's fill: " + string.Join(" | ", After(f1, b)));
         Reset();
+    }
 
-        // flat by both readings: nothing is sent
+    // Review 3 A: a fill event handled while the copier's Flatten runs (recorded before it, protected after it) is late: no stop
+    // after NinjaTrader's Flatten.
+    static void FillDuringFlatten()
+    {
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e = lead.Orders.Last();
+        Fill(lead, e, 1, 25000); Pos(lead, mnq, 1);
+        Order fe1 = CopyEntry(f1);
+        if (fe1 == null) { Check(false, "review 3 A: SIM-F1 got the first copy"); Reset(); return; }
+        Fill(f1, fe1, 1, 25000); Pos(f1, mnq, 1);
+        Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
+        Order fe2 = CopyEntry(f1);
+        if (fe2 == null || fe2 == fe1) { Check(false, "review 3 A: SIM-F1 got the second copy"); Reset(); return; }
+        ChartBridgeCopier.HarnessQueued = new List<Action>();   // the copier thread is busy: work waits, in order
+        foreach (Order s in lead.Orders.Where(o => (o.Name ?? "").Contains(" stop ") && ChartBridgeOrders.IsWorking(o.OrderState)).ToList()) Fill(lead, s, s.Quantity, 24998);
+        Pos(lead, mnq, 0);                 // queued: the leader's exit, which flattens SIM-F1
+        Fill(f1, fe2, 1, 25000);           // SIM-F1's second fill is handled now: queued after the exit
+        int b = f1.Calls.Count;
+        ChartBridgeCopier.HarnessRunQueued();   // the Flatten runs, then that fill's protection
+        List<string> c = After(f1, b);
+        Check(c.Count > 0 && c[0] == "flatten MNQ 12-26" && !SendsExitOrStop(c) && Logged("flattened while its fill was being handled"),
+              "review 3 A: a fill handled while the Flatten ran is late: no stop or exit after NinjaTrader's Flatten (it is flattened again if it holds): " + string.Join(" | ", c));
+        Reset();
+    }
+
+    // Review 3 A: a copier stop whose cancel is still pending counts as cover (it may still fill).
+    static void CancelPendingCovers()
+    {
         LeaderEntry(1);
-        fe = CopyEntry(f1);
-        if (fe == null) { Check(false, "review 2: SIM-F1 got a copy of 1"); Reset(); return; }
-        b = f1.Calls.Count;
-        Fill(f1, fe, 1, 25000);
-        Booked();   // the fill never reaches the position (closed at once): flat by both readings
-        ChartBridgeCopier.Tick(Now());
-        Check(After(f1, b).Count == 0 && Logged("it is flat"), "review 2 finding 1: a follower flat by both readings gets no stop and no exit: " + string.Join(" | ", After(f1, b)));
+        FollowerFill(f1, mnq, 25000);
+        Order s1 = CopierStop(f1);
+        if (s1 == null) { Check(false, "review 3 A: SIM-F1 has its copier stop"); Reset(); return; }
+        s1.OrderState = OrderState.CancelPending;   // its cancel was sent; NinjaTrader has not confirmed
+        Pos(f1, mnq, 0); Booked();                  // its contract closed in NinjaTrader
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e = lead.Orders.Last();
+        Fill(lead, e, 2, 25000); Pos(lead, mnq, 3);
+        Order fe = CopyEntry(f1);
+        if (fe == null) { Check(false, "review 3 A: SIM-F1 got a copy of 2"); Reset(); return; }
+        int b = f1.Calls.Count;
+        Fill(f1, fe, 2, 25000);
+        List<string> c = After(f1, b);
+        Check(c.Count == 1 && Regex.IsMatch(c[0], " Sell StopMarket 1 L0 S24998 "), "review 3 A: SIM-F1 holds 2 with a copier stop for 1 still being cancelled: the new stop is for 1 (the pending one counts): " + string.Join(" | ", c));
         Reset();
     }
 

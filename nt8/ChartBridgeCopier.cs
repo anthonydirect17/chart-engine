@@ -184,7 +184,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Price: the stop price the copier last asked for (placed at, or moved to); review 2 finding 4.
-        private class FStop { public Order Stop, LeaderStop; public Copy C; public double Born, Price; public bool RemapSaid; }
+        // Asked: the quantity the copier last asked for (placed, shrunk or cancelled to its filled part), -1 before any change.
+        private class FStop { public Order Stop, LeaderStop; public Copy C; public double Born, Price; public int Asked = -1; public bool RemapSaid; }
 
         private class Copy     // a follower's copied position on one contract
         {
@@ -200,8 +201,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Cut: how many of the copier's own contracts the reduce takes (review 2 finding 2: never the follower's own).
         private class Reduce { public Copy C; public int Target, Cut; public long Ts; public double Since; public string Why; public readonly Dictionary<Order, int> Watch = new Dictionary<Order, int>(); }
         private class Waiting { public FEntry Fe; public int Mark, Qty; public double Price, Since; public long FillTs; }
-        // Review 2 finding 1: a follower fill whose stop (or exit) waits until the follower's two position readings agree.
-        private class Unsettled { public FEntry Fe; public Copy C; public int Mark, Qty; public double Price, Sp, Since; public double? Slip; public long FillTs; public bool Said; }
 
         private static string leader, mode = "executions", lastLeaderRoot = "MNQ";
         private static bool armed, loadFailed;
@@ -219,7 +218,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly List<KeyValuePair<string, double>> Drops = new List<KeyValuePair<string, double>>();
         private static readonly List<Reduce> Reduces = new List<Reduce>();
         private static readonly List<Waiting> Waits = new List<Waiting>();
-        private static readonly List<Unsettled> Settles = new List<Unsettled>();
+        // Review 3 A: account|contract -> how many times the copier has flattened that follower contract. A fill is recorded with
+        // the count of its moment; if the count moved before its stop is placed, the fill is late (LateFill).
+        private static readonly Dictionary<string, int> FlattenSeq = new Dictionary<string, int>();
         private static readonly Dictionary<Order, int> SweepFlat = new Dictionary<Order, int>();   // review 2 finding 5: flat readings in a row
         // Review 2 finding 9: the tags of every copier order (entries, stops, exits, reduces), read on NinjaTrader's thread to
         // mark a copier order "by":"copier" for v3 pages (its own lock, never Lk).
@@ -235,7 +236,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             leader = null; mode = "executions"; lastLeaderRoot = "MNQ"; armed = false; standDownWhy = StartWhy; loadFailed = false; saveFailed = null;
             Followers.Clear(); LeaderByTag.Clear(); LeaderByOrder.Clear(); FEntries.Clear(); FStops.Clear(); LeaderStopPrice.Clear(); Copies.Clear(); Placed.Clear();
-            LeaderPos.Clear(); WasUp.Clear(); Drops.Clear(); Reduces.Clear(); Waits.Clear(); Settles.Clear(); SweepFlat.Clear(); LeaderMs.Clear(); CopierTags.Clear();
+            LeaderPos.Clear(); WasUp.Clear(); Drops.Clear(); Reduces.Clear(); Waits.Clear(); FlattenSeq.Clear(); SweepFlat.Clear(); LeaderMs.Clear(); CopierTags.Clear();
             decisions = 0; skippedCount = 0; standDowns = 0; lastStateSent = null;
         }
 
@@ -280,7 +281,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void Work(Action a)
         {
             BlockingCollection<Action> q = queue;
-            if (HarnessManual) { Run(a); return; }
+            if (HarnessManual) { List<Action> held = HarnessQueued; if (held != null) { held.Add(a); return; } Run(a); return; }
             if (q == null) return;   // stopped: nothing runs
             try { q.Add(a); } catch (InvalidOperationException) { }   // stopping
         }
@@ -293,6 +294,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeServer.Log("copier error: " + ex);
                 ChartBridgeOrders.CopierAlarm("copier error (" + ex.Message + "); check every follower's position and stop in NinjaTrader");
             }
+        }
+
+        // Test hooks (HarnessManual only): while HarnessQueued is set, copier work waits in it, in order, and HarnessRunQueued runs
+        // it; so the harness can put a NinjaTrader event between the moment work is queued and the moment it runs.
+        public static List<Action> HarnessQueued;
+        public static void HarnessRunQueued()
+        {
+            List<Action> list = HarnessQueued;
+            HarnessQueued = null;
+            if (list != null) foreach (Action a in list) Run(a);
         }
 
         // Test hook: true once the copier thread has nothing queued or running.
@@ -748,6 +759,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             return tag != null && CopierTags.ContainsKey(tag);
         }
 
+        private static List<Copy> CopiesNow() { lock (Lk) return Copies.Values.ToList(); }
+
         private static List<Follower> OnFollowers() { lock (Lk) return Followers.Where(f => f.On).ToList(); }
 
         // S1 and S5: the follower may take this entry, or null with a short label (shown on the page) and the reason.
@@ -829,11 +842,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A follower entry filled (all or part): the new contracts get their stop (S3), on the copier thread.
         private static void FollowerEntryUpdate(FEntry fe, Order o)
         {
-            int inc = 0;
+            int inc = 0, seq;
             double price = 0;
             long fillTs = Stopwatch.GetTimestamp();
             lock (Lk)
             {
+                FlattenSeq.TryGetValue(SeqKey(fe.A, fe.Inst), out seq);   // review 3 A: the flatten count at this fill's moment
                 int filled = o.Filled;
                 if (filled > fe.Covered)
                 {
@@ -843,7 +857,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     fe.Covered = filled; fe.CoveredValue = value;
                 }
             }
-            if (inc > 0) { int q = inc, mark = fe.Covered; double p = price; Work(() => ProtectFill(fe, mark, q, p, fillTs)); }
+            if (inc > 0) { int q = inc, mark = fe.Covered, at = seq; double p = price; Work(() => ProtectFill(fe, mark, q, p, fillTs, at)); }
             if (o.OrderState == OrderState.Rejected) Event(fe.A.Name, "refused", fe.Root, o.Quantity, double.NaN, null, null, null, "NinjaTrader rejected the follower's entry");
         }
 
@@ -851,10 +865,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         // known (orders mode, the leader not filled yet) waits for the leader's stop; no stop possible: flatten.
         // Review 2 finding 1: a fill on a follower the copier had already flattened (its order event late) is never protected as
         // a new position (LateFill), and every stop or exit is sized to what the follower holds (PlaceStop).
-        private static void ProtectFill(FEntry fe, int mark, int qty, double price, long fillTs)
+        // Review 3 A: also late when the copier flattened that follower contract after this fill was recorded and before this runs
+        // (a fill event handled while the Flatten ran): its stop would come after NinjaTrader's Flatten, which could not cancel it.
+        private static string SeqKey(Account a, Instrument inst) { return a.Name + "|" + inst.FullName; }
+
+        private static void ProtectFill(FEntry fe, int mark, int qty, double price, long fillTs, int seq)
         {
             string exited;
-            lock (Lk) exited = fe.Exited;
+            lock (Lk)
+            {
+                int now;
+                FlattenSeq.TryGetValue(SeqKey(fe.A, fe.Inst), out now);
+                exited = fe.Exited ?? (now != seq ? "flattened while its fill was being handled" : null);
+            }
             if (exited != null) { LateFill(fe, mark, qty, price, fillTs, exited); return; }
             Copy c = CopyFor(fe.A, fe.F, fe.Inst, fe.Root, fe.LInst, fe.Buy ? 1 : -1);
             double? slip = null;
@@ -871,7 +894,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Decision(fe.A.Name, "wait", fe.Root, "filled " + qty + " at " + P(price) + " before the leader; its stop waits for the leader's (at most " + (LeaderStopWaitMs / 1000) + " s)");
                 return;
             }
-            PlaceStop(fe, c, mark, qty, price, sp, slip, fillTs, null);
+            PlaceStop(fe, c, mark, qty, price, sp, slip, fillTs, false);
         }
 
         // Review 2 finding 1 (S4, never cross zero): a fill whose order event arrives after the copier flattened that follower.
@@ -891,7 +914,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 lock (Lk) c.Intended += qty;
                 Decision(fe.A.Name, "stop", fe.Root, "a late fill of " + qty + " after the copier had flattened it; the leader is not flat, so it gets only a stop sized to what it holds");
-                PlaceStop(fe, c, mark, qty, price, StopPriceFor(fe), null, fillTs, null);
+                PlaceStop(fe, c, mark, qty, price, StopPriceFor(fe), null, fillTs, true);   // sized from the smaller reading
                 return;
             }
             FlattenLate(c, qty, fillTs);
@@ -900,7 +923,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void FlattenLate(Copy c, int qty, long ts)
         {
             if (!ExitAllowed(c, "flatten")) return;
-            List<Order> mine = CopierOrdersOn(c.A, c.Inst, false);
+            List<Order> mine = CopierOrdersOn(c.A, c.Inst, false).Where(o => Working(o)).ToList();
             if (mine.Count > 0) c.A.Cancel(mine.ToArray());   // the copier's own orders first
             if (Held(c.A, c.Inst, c.Dir) > 0) { Flatten(c, "a fill arrived after it was flattened; the leader is flat (the zero rule)", ts); return; }
             lock (Lk) c.Intended = 0;
@@ -908,56 +931,66 @@ namespace NinjaTrader.NinjaScript.AddOns
                   (mine.Count > 0 ? mine.Count + " copier order(s) cancelled, " : "") + "nothing else sent (the missed-exit check flattens it if a position shows)");
         }
 
-        // The copier's working orders on a follower's contract (exitsOnly: only stops, exits and reduces on the side that closes dir).
+        // The copier's orders on a follower's contract that may still fill (review 3 A: a cancel still pending counts; exitsOnly:
+        // only its stops, exits and reduces on the side that closes dir).
         private static List<Order> CopierOrdersOn(Account a, Instrument inst, bool exitsOnly, int dir = 0)
         {
             List<Order> all;
             lock (Lk) all = Placed.Keys.Concat(FStops.Keys).Distinct().ToList();
-            return all.Where(o => Working(o) && o.Account == a && o.Instrument != null && o.Instrument.FullName == inst.FullName &&
+            return all.Where(o => !ChartBridgeOrders.CopierDone(o) && o.Account == a && o.Instrument != null && o.Instrument.FullName == inst.FullName &&
                                   (!exitsOnly || (!CopyEntryRx.IsMatch(o.Name ?? "") && ChartBridgeOrders.CopierIsBuy(o) == (dir < 0)))).ToList();
         }
 
-        // Review 2 finding 1: what a protective stop or exit for this copy may cover: the follower's position on the copy's side,
-        // the two readings agreeing, minus the copier's stops and exits already working there. -1 while the readings differ (a fill
-        // or a position update is on its way; settled false takes the smaller reading instead). 0 (with why): flat, the other
-        // way, or already covered.
-        private static int Room(Copy c, bool settled, out string why)
+        // What a protective stop or exit for this copy may cover (review 2 finding 1, review 3 B): the follower's position on the
+        // copy's side minus the copier's stops and exits that may still fill there. Review 3 B: the stop goes at once, so the
+        // LARGER reading is used (the fill's own position update is usually still on its way), never more than either reading
+        // shows on that side; TrimStops shrinks it once the readings agree. smaller: the smaller reading (a late fill). 0 (with
+        // why): flat, the other way, or already covered.
+        private static int Room(Copy c, bool smaller, out string why)
         {
             int l = ChartBridgeOrders.CopierListed(c.A, c.Inst) * c.Dir, e = ChartBridgeOrders.CopierEffective(c.A, c.Inst) * c.Dir;
             why = null;
             if (l < 0 || e < 0) { why = c.A.Name + " holds the other side"; return 0; }
             if (l == 0 && e == 0) { why = "it is flat"; return 0; }
-            if (l != e && settled) return -1;
-            int held = Math.Min(l, e), cover = CopierOrdersOn(c.A, c.Inst, true, c.Dir).Sum(o => o.Quantity - o.Filled);
-            why = "it holds " + held + (l != e ? " (the smaller reading)" : "") + ", the copier's working stops and exits cover " + cover;
+            int held = smaller ? Math.Min(l, e) : Math.Max(l, e), cover = CopierOrdersOn(c.A, c.Inst, true, c.Dir).Sum(o => o.Quantity - o.Filled);
+            if (held <= 0) { why = "it is flat by one reading"; return 0; }
+            why = "it holds " + held + (l != e ? (smaller ? " (the smaller reading)" : " (the larger reading)") : "") + ", the copier's stops and exits cover " + cover;
             return Math.Max(0, held - cover);
         }
 
-        // Fills whose stop waits for the follower's two position readings to agree: at each position update and every second.
-        private static void CheckSettles(double now)
+        // Review 3 B: once a follower's two readings agree, its copier stops are shrunk to what it holds (a stop placed at once from
+        // the larger reading may cover a fill that never reached the position). Flat or the other way is the sweep's. Never while a
+        // reduce runs (it shrinks the stops itself).
+        private static void TrimStops(Copy c)
         {
-            List<Unsettled> list;
-            lock (Lk) { list = Settles.ToList(); Settles.Clear(); }
-            foreach (Unsettled u in list)
-            {
-                string exited;
-                lock (Lk) exited = u.Fe.Exited;
-                if (exited != null) { Decision(u.Fe.A.Name, "stop", u.Fe.Root, "a fill of " + u.Qty + " that waited for its position: the copier flattened it meanwhile (" + exited + "); no stop"); continue; }
-                if (!u.Said && now - u.Since >= LeaderStopWaitMs)
+            int l = ChartBridgeOrders.CopierListed(c.A, c.Inst) * c.Dir, e = ChartBridgeOrders.CopierEffective(c.A, c.Inst) * c.Dir;
+            if (l != e || l <= 0) return;
+            List<FStop> stops;
+            bool busy;
+            lock (Lk) { busy = Reduces.Any(r => r.C == c); stops = c.Stops.Where(s => !ChartBridgeOrders.CopierDone(s.Stop)).OrderByDescending(s => s.Born).ToList(); }
+            if (busy || stops.Count == 0 || !IsSim(c.A) || !Up(c.A)) return;
+            int exits = CopierOrdersOn(c.A, c.Inst, true, c.Dir).Where(o => stops.All(s => s.Stop != o)).Sum(o => o.Quantity - o.Filled);
+            int excess = stops.Sum(s => Left(s)) + exits - l;
+            if (excess <= 0) return;
+            List<Order> cancel = new List<Order>(), change = new List<Order>();
+            lock (Lk)
+                foreach (FStop s in stops)
                 {
-                    u.Said = true;
-                    ChartBridgeOrders.CopierWarn(u.Fe.Root + " " + u.Fe.A.Name + ": a copied fill of " + u.Qty + " still waits for NinjaTrader's position to show it; its stop goes as soon as it does");
+                    if (excess <= 0) break;
+                    int left = Left(s);
+                    if (left <= 0) continue;
+                    if (left <= excess) { cancel.Add(s.Stop); s.Asked = s.Stop.Filled; excess -= left; }
+                    else { s.Asked = s.Stop.Filled + left - excess; s.Stop.QuantityChanged = s.Asked; change.Add(s.Stop); excess = 0; }
                 }
-                double sp = StopPriceFor(u.Fe);
-                if (double.IsNaN(sp) || !(sp > 0)) sp = u.Sp;
-                PlaceStop(u.Fe, u.C, u.Mark, u.Qty, u.Price, sp, u.Slip, u.FillTs, u);
-            }
+            if (cancel.Count > 0) c.A.Cancel(cancel.ToArray());
+            if (change.Count > 0) c.A.Change(change.ToArray());
+            Event(c.A.Name, "stop", c.Root, l, double.NaN, null, null, null, "its copier stops shrunk to what it holds, " + l + ", now that both readings agree (" + cancel.Count + " cancelled, " + change.Count + " changed)");
         }
 
-        // Review 2 finding 1: the wait for the two readings ends at the latest when NinjaTrader's unbooked fills expire.
-        private static double SettleGiveUpMs { get { return ChartBridgeOrders.MoveTtlMs + 1000; } }
+        // A copier stop's open quantity as last asked for (a shrink or cancel not yet confirmed counts as done for the trim).
+        private static int Left(FStop s) { int q = s.Asked >= 0 ? Math.Min(s.Stop.Quantity, s.Asked) : s.Stop.Quantity; return Math.Max(0, q - s.Stop.Filled); }
 
-        private static void PlaceStop(FEntry fe, Copy c, int filledMark, int qty, double price, double sp, double? slip, long fillTs, Unsettled waited)
+        private static void PlaceStop(FEntry fe, Copy c, int filledMark, int qty, double price, double sp, double? slip, long fillTs, bool late)
         {
             string where = fe.Root + " " + fe.A.Name;
             if (!IsSim(fe.A))
@@ -972,19 +1005,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Flatten(c, "no stop price known for its fill", fillTs);
                 return;
             }
-            // Review 2 finding 1 (S4): sized to what the follower holds on that side minus the copier's stops and exits already
-            // working; nothing when that is 0, flat or the other way. While the two readings differ it waits (never sized from
-            // the fill alone).
+            // Review 2 finding 1 and review 3 B (S3, S4): at once, sized to the fill capped by what the follower holds on that side
+            // (the larger reading; a late fill: the smaller) minus the copier's stops and exits that may still fill there; nothing
+            // when that is 0, flat or the other way. TrimStops shrinks it once the readings agree.
             string roomWhy;
-            double nowMs = ChartBridgeTime.NowUtcMs();
-            int room = Room(c, waited == null || nowMs - waited.Since < SettleGiveUpMs, out roomWhy);
-            if (room < 0)
-            {
-                Unsettled u = waited ?? new Unsettled { Fe = fe, C = c, Mark = filledMark, Qty = qty, Price = price, Sp = sp, Slip = slip, FillTs = fillTs, Since = nowMs };
-                lock (Lk) Settles.Add(u);
-                if (waited == null) Decision(fe.A.Name, "wait", fe.Root, "filled " + qty + " at " + P(price) + "; its stop waits for NinjaTrader's position to show the fill (the two readings differ)");
-                return;
-            }
+            int room = Room(c, late, out roomWhy);
             if (room < qty)
             {
                 lock (Lk) c.Intended = Math.Max(0, c.Intended - (qty - room));
@@ -1018,7 +1043,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             FStop fs;
             lock (Lk)
             {
-                fs = new FStop { Stop = s, LeaderStop = ls, C = c, Born = ChartBridgeTime.NowUtcMs(), Price = sp };   // review 2 finding 4: the price used
+                fs = new FStop { Stop = s, LeaderStop = ls, C = c, Born = ChartBridgeTime.NowUtcMs(), Price = sp, Asked = qty };   // review 2 finding 4: the price used
                 FStops[s] = fs; c.Stops.Add(fs); Placed[s] = fs.Born;
                 if (ls != null && !LeaderStopPrice.ContainsKey(ls)) LeaderStopPrice[ls] = ls.StopPrice > 0 ? ls.StopPrice : sp;
                 fe.F.LastAction = "stop";
@@ -1064,7 +1089,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ready = Waits.Where(w => w.Fe.L == le).ToList();
                 Waits.RemoveAll(w => w.Fe.L == le);
             }
-            foreach (Waiting w in ready) PlaceStop(w.Fe, CopyFor(w.Fe.A, w.Fe.F, w.Fe.Inst, w.Fe.Root, w.Fe.LInst, w.Fe.Buy ? 1 : -1), w.Mark, w.Qty, w.Price, price, null, w.FillTs, null);
+            foreach (Waiting w in ready) PlaceStop(w.Fe, CopyFor(w.Fe.A, w.Fe.F, w.Fe.Inst, w.Fe.Root, w.Fe.LInst, w.Fe.Buy ? 1 : -1), w.Mark, w.Qty, w.Price, price, null, w.FillTs, false);
             MoveStops(unmapped.Where(s => Math.Abs(s.Stop.StopPrice - price) > 1e-9).ToList(), price, "stop moved to the leader's stop now that the leader filled");
         }
 
@@ -1085,7 +1110,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     double tick = fe.Inst.MasterInstrument.TickSize;
                     if (ticks > 0) sp = ChartBridgeOrders.CopierRound(fe.Buy ? w.Price - ticks * tick : w.Price + ticks * tick, tick);
                 }
-                PlaceStop(fe, c, w.Mark, w.Qty, w.Price, sp, null, w.FillTs, null);   // review 2 finding 1: sized to what it holds
+                PlaceStop(fe, c, w.Mark, w.Qty, w.Price, sp, null, w.FillTs, false);   // review 2 finding 1: sized to what it holds
             }
         }
 
@@ -1207,13 +1232,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 int prev;
-                bool known, settles = false, isLeader;
+                bool known, isLeader;
+                Copy trim = null;
                 lock (Lk)
                 {
                     isLeader = IsLeader(account.Name);
                     if (!isLeader)
                     {
-                        settles = Settles.Any(u => u.C.A == account && u.C.Inst.FullName == inst.FullName);
+                        Copies.TryGetValue(account.Name + "|" + inst.FullName, out trim);
                         known = false; prev = 0;
                     }
                     else
@@ -1222,7 +1248,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         LeaderPos[inst.FullName] = signed;
                     }
                 }
-                if (settles) Work(() => CheckSettles(ChartBridgeTime.NowUtcMs()));   // review 2 finding 1: a follower's fill waited for this position
+                if (trim != null) Work(() => TrimStops(trim));   // review 3 B: a follower's position: its copier stops never above it once the readings agree
                 if (!isLeader) return;
                 if (known && prev == signed) return;
                 long ts = Stopwatch.GetTimestamp();
@@ -1287,8 +1313,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (excess <= 0) break;
                 int left = s.Stop.Quantity - s.Stop.Filled;
-                if (left <= excess) { cancel.Add(s.Stop); r.Watch[s.Stop] = 0; excess -= left; }
-                else { s.Stop.QuantityChanged = s.Stop.Filled + left - excess; change.Add(s.Stop); r.Watch[s.Stop] = left - excess; excess = 0; }
+                if (left <= excess) { cancel.Add(s.Stop); r.Watch[s.Stop] = 0; s.Asked = s.Stop.Filled; excess -= left; }
+                else { s.Stop.QuantityChanged = s.Stop.Filled + left - excess; s.Asked = s.Stop.QuantityChanged; change.Add(s.Stop); r.Watch[s.Stop] = left - excess; excess = 0; }
             }
             lock (Lk) { Reduces.RemoveAll(x => x.C == c); Reduces.Add(r); }
             if (cancel.Count > 0) c.A.Cancel(cancel.ToArray());
@@ -1339,12 +1365,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             Event(c.A.Name, "reduce", c.Root, k, double.NaN, null, Ms(r.Ts, sent), null, "reduced by " + k + " to " + r.Target + " (" + r.Why + ")");
         }
 
-        // Every working stop on the side that closes dir on that contract, the follower's own included (contracts left).
+        // Every stop that may still fill (review 3 A: a cancel still pending counts) on the side that closes dir on that contract,
+        // the follower's own included (contracts left).
         private static int StopsWorking(Account a, Instrument inst, int dir)
         {
             List<Order> orders;
             lock (a.Orders) orders = a.Orders.ToList();
-            return orders.Where(o => Working(o) && o.Instrument != null && o.Instrument.FullName == inst.FullName && (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit) &&
+            return orders.Where(o => !ChartBridgeOrders.CopierDone(o) && o.Instrument != null && o.Instrument.FullName == inst.FullName && (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit) &&
                                      ChartBridgeOrders.CopierIsBuy(o) == (dir < 0)).Sum(o => o.Quantity - o.Filled);
         }
 
@@ -1355,11 +1382,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Lk)
             {
                 c.Intended = 0; Reduces.RemoveAll(x => x.C == c);
+                int seq;
+                string key = SeqKey(c.A, c.Inst);
+                FlattenSeq.TryGetValue(key, out seq);
+                FlattenSeq[key] = seq + 1;   // review 3 A: before Flatten is sent: a fill recorded before this and protected after it is late
                 // Review 2 finding 1: a fill of a copier entry still on its way there is late from now on (LateFill, never protected
                 // as a new position), and fills waiting for a stop get none (NinjaTrader's Flatten closes them).
                 foreach (FEntry fe in FEntries.Values) if (fe.A == c.A && fe.Inst.FullName == c.Inst.FullName && fe.Covered < fe.Order.Quantity) fe.Exited = why;
                 Waits.RemoveAll(w => w.Fe.A == c.A && w.Fe.Inst.FullName == c.Inst.FullName);
-                Settles.RemoveAll(u => u.C.A == c.A && u.C.Inst.FullName == c.Inst.FullName);
             }
             if (Flat(c.A, c.Inst)) return;
             if (!ExitAllowed(c, "flatten")) return;
@@ -1402,7 +1432,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Sweep(now);
                 CheckReduces(now);
                 CheckWaits(now);
-                CheckSettles(now);
+                foreach (Copy c in CopiesNow()) TrimStops(c);   // review 3 B
                 Remap();
                 Reconcile(now);
                 Cleanup();
@@ -1519,7 +1549,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bool leaderFlat = c.LInst != null ? Flat(la, c.LInst) && !entries.Any(e => e.Inst.FullName == c.LInst.FullName && Working(e.Entry)) : LeaderFlatOnRoot(la, c.Root, entries);
                 bool mismatch = Held(c.A, c.Inst, c.Dir) > 0 && Up(c.A) && ChartBridgeOrders.CopierSteady(la) && leaderFlat;
                 bool pending;
-                lock (Lk) pending = Reduces.Any(r => r.C == c) || Waits.Any(w => w.Fe.Inst == c.Inst && w.Fe.A == c.A) || Settles.Any(u => u.C == c);
+                lock (Lk) pending = Reduces.Any(r => r.C == c) || Waits.Any(w => w.Fe.Inst == c.Inst && w.Fe.A == c.A);
                 if (!mismatch || pending) { c.FlatSince = 0; continue; }
                 if (c.FlatSince == 0) { c.FlatSince = now; continue; }
                 if (now - c.FlatSince < ChartBridgeOrders.SettleMs) continue;
@@ -1621,7 +1651,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Lk)
             {
-                foreach (Order o in FEntries.Keys.Where(o => ChartBridgeOrders.CopierDone(o) && !Waits.Any(w => w.Fe.Order == o) && !Settles.Any(u => u.Fe.Order == o)).ToList()) FEntries.Remove(o);
+                foreach (Order o in FEntries.Keys.Where(o => ChartBridgeOrders.CopierDone(o) && !Waits.Any(w => w.Fe.Order == o)).ToList()) FEntries.Remove(o);
                 foreach (Order o in SweepFlat.Keys.Where(o => ChartBridgeOrders.CopierDone(o)).ToList()) SweepFlat.Remove(o);
                 foreach (Order o in FStops.Keys.Where(o => ChartBridgeOrders.CopierDone(o)).ToList()) { FStop s = FStops[o]; s.C.Stops.Remove(s); FStops.Remove(o); }
                 foreach (Order o in LeaderStopPrice.Keys.Where(o => ChartBridgeOrders.CopierDone(o) && !FStops.Values.Any(s => s.LeaderStop == o)).ToList()) LeaderStopPrice.Remove(o);
@@ -1633,7 +1663,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (Copy c in copies)
             {
                 bool idle;
-                lock (Lk) idle = c.Stops.Count == 0 && !Reduces.Any(r => r.C == c) && !Settles.Any(u => u.C == c) && !FEntries.Values.Any(fe => fe.A == c.A && fe.Inst == c.Inst);
+                lock (Lk) idle = c.Stops.Count == 0 && !Reduces.Any(r => r.C == c) && !FEntries.Values.Any(fe => fe.A == c.A && fe.Inst == c.Inst);
                 if (idle && Flat(c.A, c.Inst)) lock (Lk) { Copies.Remove(c.A.Name + "|" + c.Inst.FullName); }
             }
         }
