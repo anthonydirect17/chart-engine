@@ -198,6 +198,10 @@ public static class AccountsHarness
         Check(Rejected("may not trade from the chart (tradeAccounts in config.txt)") && fundedB.Calls.Count == calls, "off: an account not in tradeAccounts is refused with v2's reason, nothing sent");
         Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(evalA.Calls.Count == 1 && evalA.Calls[0].StartsWith("submit"), "off: an account in tradeAccounts trades as before");
+        Account.All.Remove(evalA);
+        Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Rejected("account EVAL-A is in tradeAccounts but not connected in NinjaTrader"), "off: a tradeAccounts name NinjaTrader does not list: v2's reason, unchanged");
+        Account.All.Add(evalA);
         Send(page, Trade("FUNDED-B", "true"));
         Check(Rejected("accountTrade is off (accountChecks in config.txt)"), "off: accountTrade refused");
         Send(page, "{\"type\":\"accountArchive\",\"account\":\"FUNDED-B\",\"confirm\":true}");
@@ -381,8 +385,9 @@ public static class AccountsHarness
         int calls = evalA.Calls.Count;
         Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(Rejected("EVAL-A is not connected (Disconnected)") && evalA.Calls.Count == calls, "not connected yet: an order is refused by the normal gate");
+        int callsB = fundedB.Calls.Count;
         Send(page, Order("FUNDED-B", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
-        Check(Rejected("FUNDED-B is in tradeAccounts but not connected in NinjaTrader") || Rejected("not connected"), "not listed yet: refused");
+        Check(Rejected("account FUNDED-B is not connected in NinjaTrader") && !Rejected("tradeAccounts") && fundedB.Calls.Count == callsB, "not listed yet: refused, the reason names no tradeAccounts (accountChecks on)");
         // Anthony signs in by hand: it trades at once, with the saved checkmark
         evalA.Connection.Status = ConnectionStatus.Connected;
         Account.All.Add(fundedB);

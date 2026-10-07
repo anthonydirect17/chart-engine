@@ -446,7 +446,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account found = null;
             lock (Account.All)
                 foreach (Account a in Account.All) if (a.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { found = a; break; }
-            if (found == null) { why = "account " + name + " is in tradeAccounts but not connected in NinjaTrader"; return null; }
+            if (found == null) { why = "account " + name + (ChartBridgeAccounts.On ? " is not connected in NinjaTrader" : " is in tradeAccounts but not connected in NinjaTrader"); return null; }   // 0.4.0 accounts: no tradeAccounts in the reason when the checkmark is gate 2
             string status = StatusOf(found);
             if (status != "Connected") { why = "account " + name + " is not connected (" + status + ")"; return null; }
             if (!ChartBridgeServer.EnsureWatched(found)) { why = "ChartBridge is not listening to account " + name + " yet; try again in a few seconds"; return null; }
