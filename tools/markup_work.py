@@ -5,7 +5,8 @@ the Studio started once with --work=DIR (at logon) opens any of them from its Wo
 (live/markup.html#work=<id>), instead of one starter file per set.
 
     py -3 tools\\markup_work.py add --work=DIR --id=label-approach --title="Label set 1: approach" --marks=DIR
-        --bot=PATH --trade-queue=PATH --trade-variant=ID --trade-target=30 --trade-labels-only [--note=TEXT]
+        --bot=PATH --trade-queue=PATH --trade-variant=ID --trade-target=30 --trade-labels-only [--trade-question=approach]
+        [--note=TEXT]
     py -3 tools\\markup_work.py status --work=DIR --id=label-approach --set=done
     py -3 tools\\markup_work.py list --work=DIR
 
@@ -18,9 +19,9 @@ the Studio started once with --work=DIR (at logon) opens any of them from its Wo
   marks            the marks folder (grades, queue, split): each item has its own
   tab              the tab it opens on: blind, free, bot or trades (default trades with a trade queue, else blind)
   bot, trade_queue, trade_variant, trade_seed, trade_skip_days (list), trade_target, trade_notes, trade_exits (list),
-  trade_labels_only, include_last_only, seen (list), rule
+  trade_labels_only, trade_question (a label set's question, e.g. approach), include_last_only, seen (list), rule
 Files whose names start with "_" are not items (the Studio keeps _last_opened.txt there).
-The list shows counts only (graded so far, the target): never an outcome.
+The list shows counts only (graded so far, the target when the item has one): never an outcome.
 """
 from __future__ import annotations
 
@@ -38,7 +39,7 @@ STATUSES = ('active', 'done', 'stopped')
 TABS = ('blind', 'free', 'bot', 'trades')
 KINDS = {'sweeps': 'Sweeps', 'trades': 'Trades', 'labels': 'Label set', 'bot': 'Bot'}
 TEXT = ('id', 'title', 'status', 'created', 'note', 'symbol', 'marks', 'tab', 'bot', 'trade_queue', 'trade_variant',
-        'trade_notes', 'rule')
+        'trade_notes', 'rule', 'trade_question')
 LISTS = ('trade_skip_days', 'trade_exits', 'seen')
 INTS = ('trade_seed', 'trade_target')
 BOOLS = ('trade_labels_only', 'include_last_only')
@@ -92,7 +93,8 @@ def check_item(it, name=None):
         raise WorkError(f'tab {tab!r}: one of {", ".join(TABS)}')
     if it.get('trade_queue') and not it.get('bot'):
         raise WorkError('a trade queue needs its bot (bot)')
-    for k in ('trade_labels_only', 'trade_variant', 'trade_seed', 'trade_skip_days', 'trade_target', 'trade_notes', 'trade_exits'):
+    for k in ('trade_labels_only', 'trade_variant', 'trade_seed', 'trade_skip_days', 'trade_target', 'trade_notes', 'trade_exits',
+              'trade_question'):
         if it.get(k) and not it.get('trade_queue'):
             raise WorkError(f'{k} needs a trade queue (trade_queue)')
     if tab == 'trades' and not it.get('trade_queue'):
@@ -101,6 +103,13 @@ def check_item(it, name=None):
         raise WorkError('tab bot needs a bot (bot)')
     if it.get('trade_target') is not None and it['trade_target'] < 1:
         raise WorkError('trade_target must be 1 or more')
+    if it.get('trade_question'):
+        if not it.get('trade_labels_only'):
+            raise WorkError('trade_question is for a label set: it needs trade_labels_only')
+        try:
+            core.question(it['trade_question'])
+        except ValueError as e:
+            raise WorkError(f'trade_question: {e}') from e
     out = dict(it)
     out['kind'] = kind_of(it)
     return out
@@ -146,20 +155,28 @@ def read_work(folder):
 
 
 def progress(it):
-    """Counts only. Trades and label sets: the queued trades graded so far and the target (the queue's size when smaller);
-    sweeps: the blind grades saved so far, no total. None for the Bot tab, or when nothing can be read."""
+    """Counts only. Trades and label sets: the grades of this item's own queue (a grade counts when its queue sha256, else
+    its trade id, is the queue's: a marks folder shared with other work never adds to it) and the target (the queue's size
+    when smaller; none without trade_target, then the list says "N graded"); sweeps: the blind grades saved so far, no
+    total. None for the Bot tab, or when nothing can be read."""
     marks = it['marks']
     if it.get('trade_queue'):
-        target = int(it.get('trade_target') or 300)
+        target = it.get('trade_target') or None
         try:
             with open(os.path.join(marks, 'trade_queue_v1.json'), encoding='utf-8') as f:
                 q = json.load(f)
-            qids = [x['qid'] for x in q.get('items', [])]
+            items = [(x['qid'], str(x['trade_id'])) for x in q.get('items', [])]
+            sha = q.get('sha256')
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             return {'done': 0, 'total': target}            # the queue is written on the first open
         grades = core.list_trade_grades(os.path.join(marks, 'trade_grades'))
-        done = sum(1 for qid in qids if core.trade_grade_done(grades.get(qid)))
-        return {'done': done, 'total': min(target, len(qids))}
+
+        def ours(g, tid):
+            if not core.trade_grade_done(g):
+                return False
+            return g['queue_sha256'] == sha if g.get('queue_sha256') else str(g.get('trade_id')) == tid
+        done = sum(1 for qid, tid in items if ours(grades.get(qid), tid))
+        return {'done': done, 'total': min(target, len(items)) if target else None}
     if kind_of(it) == 'sweeps':
         return {'done': sum(1 for g in core.list_grades(marks) if g.get('mode') == 'blind'), 'total': None}
     return None
@@ -192,7 +209,7 @@ FLAG_KEYS = {'id': 'id', 'title': 'title', 'note': 'note', 'created': 'created',
              'bot': 'bot', 'trade-queue': 'trade_queue', 'trade-variant': 'trade_variant', 'trade-notes': 'trade_notes',
              'rule': 'rule', 'trade-seed': 'trade_seed', 'trade-target': 'trade_target', 'trade-skip-days': 'trade_skip_days',
              'trade-exits': 'trade_exits', 'seen': 'seen', 'trade-labels-only': 'trade_labels_only',
-             'include-last-only': 'include_last_only', 'status': 'status'}
+             'include-last-only': 'include_last_only', 'status': 'status', 'trade-question': 'trade_question'}
 PATH_KEYS = ('marks', 'bot', 'trade_queue', 'trade_notes', 'rule')
 
 

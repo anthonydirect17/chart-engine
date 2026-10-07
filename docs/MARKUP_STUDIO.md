@@ -27,7 +27,9 @@ and open any of them from its **Work** list (top left) or from a link, such as T
    the list under "Finished" and are not opened. `py -3 tools\markup_work.py list --work=DIR` prints them with their counts.
 3. **Run the Studio on the folder**: `py -3 tools\markup_studio.py --work=DIR` (the item settings are refused on the command
    line with `--work`). The Work list shows each item's title, kind (Sweeps, Trades, Label set, Bot), symbol and counts only
-   ("12 of 30 graded"; never an outcome). Picking one opens it and reloads the page; `live/markup.html#work=<id>` does the
+   ("12 of 30 graded"; never an outcome). A Trades item counts only the grades of its own queue (a grade's queue sha256,
+   else its trade id, must be the queue's), so a marks folder shared with other work never adds to it; an item without
+   `--trade-target` says "354 graded", never "of 300". Picking one opens it and reloads the page; `live/markup.html#work=<id>` does the
    same from a link. The last item opened opens again at the next start.
 4. **Leaving an item is refused while a grade is open in it** (a blind candidate or a trade not yet graded: the same lock as
    Free and the Bot tab) or while Run all is running; the page says why and keeps the item open. Grade it (or skip it) first.
@@ -36,7 +38,10 @@ and open any of them from its **Work** list (top left) or from a link, such as T
    (pythonw, `--log=<work>\_studio.log`, restart on failure, one instance), starts it and checks it answers.
    `-Uninstall` removes the task. After a `git pull` of this folder, restart it: `schtasks /End /TN "Markup Studio"` then
    `schtasks /Run /TN "Markup Studio"`.
-6. **Another page reading the list**: `--allow-origin=URL[,URL]` lets those origins (The Desk) read `GET /api/work` only, the
+6. **The log** (`_studio.log`): a client that closes its connection early (a reload, a closed tab, The Desk's poll; on
+   Windows WinError 10054 or 10053) is one line, "a client closed its connection early (ConnectionResetError, WinError
+   10054)", not a traceback. Any other error keeps its full traceback.
+7. **Another page reading the list**: `--allow-origin=URL[,URL]` lets those origins (The Desk) read `GET /api/work` only, the
    titles and counts with no folders or paths (CORS, with the private network preflight answered). Every other endpoint,
    opening an item included, stays this page's own.
 
@@ -126,7 +131,7 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 
 - **Start it** (HOME), with the bot that wrote the run and that run's `trades.csv`:
   `py -3 tools\markup_studio.py --bot=E:\SchwabDesk_bulk\bot-lab-A1\bots\sweep_v0.py --trade-queue=E:\SchwabDesk_bulk\marks\botruns\20261003_164230\trades.csv --trade-variant=FC-S4-valid-L1 --trade-skip-days=2026-03-31`
-  (optional: `--trade-seed=11`, `--trade-target=300`, `--trade-notes=PATH`, `--trade-exits=ID[,ID]`: the only exits a graded
+  (optional: `--trade-seed=11`, `--trade-target=N` (without it the progress line counts only, "Graded 12"), `--trade-notes=PATH`, `--trade-exits=ID[,ID]`: the only exits a graded
   trade's result lists and draws, in that order; an exit the bot does not have is refused at startup). Give the same flags on every start. The page
   opens on the Trades tab and goes straight to the next trade.
 - **The queue**, `trade_queue_v1.json` in the marks folder, is written on the first start and never rewritten: every row of
@@ -187,8 +192,8 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 - **Seen this day before**: `X`, then `X` again to confirm (`Esc` cancels). The day goes into `trade_skip_days.json` (entries
   only ever added) and every queued trade of that day is skipped; nothing else is recorded for that trade.
 - **The key legend** stays at the top of the panel; keys that do not apply now are dimmed.
-- **No running tally.** The page and the API show counts only ("Graded 137 of 300 (12 adjusted, 3 days skipped)"), never an
-  outcome by label. Deliberate: the analysis is pre-registered and read once.
+- **No running tally.** The page and the API show counts only ("Graded 137 of 300 (12 adjusted, 3 days skipped)", or
+  "Graded 137 (...)" without `--trade-target`), never an outcome by label. Deliberate: the analysis is pre-registered and read once.
 - **Second opinion** (`--trade-notes=PATH`, optional): a CSV with `trade_id`, `variant`, `note` (quoted when it holds commas)
   and optionally `score` (-1 to 1). Shown only in the reveal ("no second opinion for this trade" when the file has none); never
   before the save in any page text, response or frame. The grade records the notes file's sha256, the note's sha256 and the
@@ -219,6 +224,19 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
   label and chips only, and step, play and jump are refused while a trade is open (the clock stays at the cut; Next goes
   to the next one). The queue file records `labels_only`, and a start whose flag disagrees with it is refused either way,
   so a label set cannot later be opened with results shown.
+- **Question sets** (`--trade-question=ID`, with `--trade-labels-only`; 2026-10-07, Anthony: "on a focused grade like
+  that, we simplify the chip set and require an answer"): the set asks one question, from the Studio's small table
+  (`QUESTIONS` in `tools/markup_core.py`; generic words, no bot rule). The grade then shows only that question's choices,
+  in pairs, instead of the chip list; T, A and P stay disabled (buttons and key legend) until one choice of every pair is
+  picked, and the panel says what is missing ("To save T, A or P, pick speed into the signal (fast push or slow grind).").
+  The server refuses a grade without every answer (409). Confidence stays optional; the reason box stays. The grade file
+  carries `question` and `answers` (`{"volume": "heavy", "speed": "slow grind"}`), the result line names them, and
+  **Export** adds `question` and `answer_<pair>` columns. The queue file records `question`; a start with another question,
+  or without it, is refused (either way). Normal Trades grading and plain label sets are unchanged.
+  - `approach`: volume into the signal, `light` (key `L`) or `heavy` (`H`); speed into the signal, `fast push` (`F`) or
+    `slow grind` (`G`).
+  - Stage it: `py -3 tools\markup_work.py add ... --trade-labels-only --trade-question=approach` (the item key
+    `trade_question`, checked against the table).
 
 ### The bot contract's optional parts (Trades tab only; the Studio never requires them)
 
@@ -231,13 +249,55 @@ trade's entry order, the outcome and the date hidden until the grade is saved. I
 - `exit_orders` in `run()`'s result: `{exit id: [order records, role stop, target or flat, with the trade's book]}`, the legs
   of each exit (a bot whose result lists the primary exit's legs only). Cut at the clock like `orders`.
 
+## Builds panel and run comparison (Bot tab)
+
+- **Builds**: the builds the bot's repository lists in its `BUILDS.md` (found from the `--bot` file's folder up to the
+  repository's root), read only: name, file and a short note, from the first table whose first column is Name (else
+  Build); the File column (or the first `.py` path in the row; `-` for none) and the What column (cut to 160 characters).
+  No path leaves the server. Without `--bot`, or without a `BUILDS.md`, the panel says so. `GET /api/builds`.
+- **Compare two runs**: pick two Run all results of this marks folder (`botruns/<stamp>/summary.json`) and press
+  **Compare**: they show side by side over the charts, each with its counts (bot, bot days, failed days, trades per
+  variant, the round trips) and its per-exit table, the same columns as the Run all summary (group "all" only). Runs
+  written before ES support read as NQ and MNQ. Refused while a grade is open, like the Bot tab. `GET /api/bot/runs`,
+  `GET /api/bot/compare?a=STAMP&b=STAMP`.
+
+## Day tab
+
+Call the day, U (up), D (down) or C (chop), at the replay clock, on days you have already graded or seen (design: Bot-Lab
+`notes/DESIGN_day_tab.md`).
+
+- **Days**: the grading days (the split) with a blind grade in this marks folder, or in the already-seen files (`--seen`);
+  never a bot day, never a day the blind queue still holds unseen, never the holdout. Listed as "Day 1 (graded)", the
+  date hidden (the blind scrub is on in this tab, on the page and the charts' canvases). **Load** opens the day at 09:30;
+  play, step and jump forward as in Free mode; the clock never moves backward.
+- **A call**: set confidence (`1` to `3`, optional) and words (optional) first, then `U`, `D` or `C` saves at once. The
+  server stamps the replay clock (a time sent by the page is never read). A changed mind is a new call; the call in force
+  at a time is the latest stamped at or before it. A call outside RTH (09:30 to 16:00) is stored `scored: false`.
+- **What shows**: the open day's calls stamped up to the clock, the last one "in force"; a call made later in the day (on
+  an earlier visit) stays hidden until the clock reaches it. Counts only (calls, days, calls in RTH): nothing is scored
+  or compared in the Studio.
+- **The log**: `day_calls.jsonl` in the marks folder, one JSON row per call, append only: `seq` (from 1, no gaps),
+  `prev_hash` (the row before's `row_hash`; 64 zeros for the first), `row_hash` (sha256 of the row's canonical JSON,
+  sorted keys, without `row_hash`), `date`, `call`, `confidence`, `words`, `clock_utc_ms`, `clock_wall_ms`, `clock_tod`,
+  `scored`, `seen_before`, `saved_utc`, `symbol`. The chain is checked when the Studio starts and again before every
+  append: a changed, missing, reordered or unreadable row stops the Day tab with the line named (the rest of the Studio
+  works). Nothing ever rewrites the file.
+- API: `GET /api/day/days`, `GET /api/day/view`, `POST /api/day/open` (`ref`), `POST /api/day/call` (`call`,
+  `confidence`, `words`).
+
+## Motion
+
+The panels' entrances (the Work list, Builds, the run comparison, the Day tab) use the motion kit (`live/motion.js`,
+`docs/MOTION.md`): a short rise in, rows staggered. Never the charts. Any key or click finishes it; reduced motion (Windows
+or the page setting) shows the panel at once; without the kit the panels simply show.
+
 ## Flags
 
 `--tickreplay=DIR` `--data=DIR` `--marks=DIR` `--port=8790` `--symbol=NQ` (or ES) `--rule=FILE` `--no-browser` `--check[=YYYY-MM-DD]`
 `--bot=PATH` (a bot module for the Bot tab)
 `--work=DIR` (the Work list; the item settings come from its items) `--allow-origin=URL[,URL]` `--log=FILE`
-`--trade-queue=PATH` `--trade-variant=ID` `--trade-seed=11` `--trade-skip-days=YYYY-MM-DD[,..]` `--trade-target=300`
-`--trade-notes=PATH` `--trade-exits=ID[,..]` `--trade-labels-only` (the Trades tab; with `--bot`)
+`--trade-queue=PATH` `--trade-variant=ID` `--trade-seed=11` `--trade-skip-days=YYYY-MM-DD[,..]` `--trade-target=N`
+`--trade-notes=PATH` `--trade-exits=ID[,..]` `--trade-labels-only` `--trade-question=ID` (the Trades tab; with `--bot`)
 `--include-last-only` (blind queue normally offers quote days only, where volume and buy/sell are real) `--seen=CSV[,CSV]` (events already seen; default: `tickbench\runs\sweep_blind\KEY.csv` and the CSVs in
 `tickbench\runs\eventstudy_r1\prints\`, matched by date, level and reclaim within 180 s, best effort; those are NQ
 events, so with `--symbol=ES` there is no default and the window says so).

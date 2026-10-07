@@ -133,3 +133,21 @@ select { max-width: 150px; }
 .ms-grid tr.you td, .ms-grid tr.you td:first-child { color: var(--ms-yours); }
 .ms-note { color: var(--ms-warn); white-space: normal; }
 .ms-note[hidden] { display: none; }
+
+/* a label set's question (--trade-question): one row of choices per pair, both required before T, A or P */
+.ms-qpair { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+.ms-qpair .ms-qlabel { font: 11px var(--ms-sans); color: var(--ms-text2); }
+.ms-qpair .ms-seg { grid-template-columns: 1fr 1fr; }
+.ms-qpair.missing .ms-qlabel { color: var(--ms-warn); }
+
+/* run comparison: two Run all results side by side */
+.ms-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.ms-cmp-side { min-width: 0; overflow-x: auto; display: flex; flex-direction: column; gap: 6px; }
+.ms-cmp-side .ms-line { white-space: normal; color: var(--ms-text2); }
+
+/* the Builds panel: name, file, note */
+.ms-panel .ms-builds td { white-space: normal; text-align: left; vertical-align: top; }
+.ms-panel .ms-builds td:first-child { white-space: nowrap; color: var(--ms-soft); }
+.ms-panel .ms-builds td:nth-child(2) { color: var(--ms-text2); }
+.ms-panel.day { width: 330px; }
+#dayCallSeg button { padding: 8px 2px; font-size: 12px; }
