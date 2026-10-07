@@ -343,11 +343,14 @@ public static class MergeHarness
         Check(a.Calls.Count == k && !Sent("EVAL-D: the position is 5 but ChartBridge's working stops cover"), "the legs check leaves the merged stop and targets alone (one group), and the missing-stop alarm counts the merged stop");
 
         // Targets fill: the stop shrinks to the position at once; the stop fills: the targets are cancelled.
-        watching = true;
+        int n1 = a.Calls.Count;
+        Hold = (kind, o) => kind == "change";   // NinjaTrader has not confirmed this shrink yet when the next fill comes
         t1.Filled = 2; t1.OrderState = OrderState.Filled; SetPos(a, 3); Update(a, t1);
-        Check(S.Quantity == 3, "T1 fills 2: the merged stop shrinks to 3 at once: " + S.Quantity);
+        Hold = null;
+        Check(CallsFrom(a, n1).Count == 1 && CallsFrom(a, n1)[0] == "change " + S.Name + " L0 S0 Q3", "T1 fills 2: the merged stop is shrunk to 3 at once: " + string.Join(" | ", CallsFrom(a, n1)));
+        watching = true;
         t2.Filled = 1; t2.OrderState = OrderState.PartFilled; SetPos(a, 2); Update(a, t2);
-        Check(S.Quantity == 2, "T2 fills 1 of 2: the merged stop shrinks to 2: " + S.Quantity);
+        Check(S.Quantity == 2, "T2 fills 1 of 2 before that shrink is confirmed: the merged stop goes to 2 (from the 3 asked, never from the 5 still shown): " + S.Quantity);
         S.Filled = 2; S.OrderState = OrderState.Filled; Update(a, S); SetPos(a, 0);
         Check(t2.OrderState == OrderState.Cancelled && t3.OrderState == OrderState.Cancelled, "the merged stop fills: the targets left are cancelled");
         watching = false;

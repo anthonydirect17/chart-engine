@@ -339,7 +339,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Order s = set.FirstOrDefault(o => MergedRole(o.Name) == "stop");
                 if (s == null) return;
-                int open = s.Quantity - s.Filled - delta;
+                // From the size last asked for when a shrink is not confirmed yet (two fills in a row), never from more.
+                int asked = s.QuantityChanged > 0 ? Math.Min(s.Quantity, s.QuantityChanged) : s.Quantity;
+                int open = asked - s.Filled - delta;
                 if (open <= 0) a.Cancel(new[] { s });
                 else { s.QuantityChanged = open + s.Filled; a.Change(new[] { s }); }
                 ChartBridgeServer.Log("merge upkeep " + where + ": a merged target filled " + delta + "; the merged stop " + (open <= 0 ? "is cancelled" : "shrinks to " + open));
