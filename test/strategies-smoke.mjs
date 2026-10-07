@@ -259,6 +259,16 @@ try {
   check(runner && JSON.stringify({ stop: runner.stop, targets: runner.targets, breakeven: runner.breakeven, trail: runner.trail, hotkey: runner.hotkey }) === JSON.stringify({ stop: { ticks: 12, type: 'limit', limitOffsetTicks: 2 },
     targets: [{ ticks: 8, sharePct: 34 }, { ticks: 16, sharePct: 33 }, { ticks: 32, sharePct: 33 }], breakeven: { afterTicks: 4, plusTicks: 1 }, trail: { startTicks: 12, byTicks: 6, stepTicks: 2 }, hotkey: 'Num8' }), 'saved in The Desk\'s form: ' + JSON.stringify(runner));
   check(/^[A-Za-z0-9_-]{1,64}$/.test(runner ? runner.id : ''), 'a new id The Desk takes: ' + (runner && runner.id));
+  // a new one, then Delete (asked once): the whole document saved without it
+  await A.click('#sg-list [data-sg="+"]'); await wait(200);
+  await fill('name', 'Temp');
+  await A.click('#sg-save'); await until(async () => /^Saved Temp in The Desk/.test(await err()), 'Temp saved');
+  check(desk.docs.strategies.strategies.length === 3, 'three strategies in The Desk');
+  await A.click('#sg-del'); await wait(200);
+  check(/Delete Temp on every PC\? Click Delete again\./.test(await err()) && desk.docs.strategies.strategies.length === 3, 'Delete asks once');
+  await A.click('#sg-del'); await until(async () => /^Deleted Temp\./.test(await err()), 'Temp deleted');
+  check(JSON.stringify(desk.docs.strategies.strategies.map(x => x.name)) === '["Scalp 2","Runner 3T"]' && desk.docs.strategies.rev === 4, 'deleted in The Desk (rev 4)');
+  await A.click('#sg-list [data-sg="' + runner.id + '"]'); await wait(200);
   await A.setViewportSize({ width: 1366, height: 768 }); await wait(300);
   const dfit = await A.evaluate(() => { const d = document.getElementById('wsDialog'), r = d.getBoundingClientRect(); return { top: r.top >= 0, bottom: r.bottom <= innerHeight, scroll: d.scrollHeight <= d.clientHeight + 1 }; });
   await A.screenshot({ path: path.join(out, 'strategies-dialog-1366.png') });
@@ -346,6 +356,8 @@ try {
   check(!(await lastOrder()) && (await notes(A)).some(t => /point at (a|the) MNQ chart/.test(t)), 'off a chart: nothing sent, said why: ' + (await notes(A)).slice(-1)[0]);
   // a click with Alt held (Shift+click buys): the entry type by the side of the market (the orders above out of the way)
   await tk(A, 'cancelAllBtn').click(); await until(async () => !(await state()).orders.length, 'cancelled');
+  // and gone from the chart too (a press on a label still drawn would grab it, not place an order)
+  await until(() => A.evaluate(i => window.workspace.chart(i).getOrders().length === 0, mnq.id), 'no order lines on the chart');
   await clear(A);
   const y = await yOf(L + 6);
   await A.keyboard.down('Alt'); await A.keyboard.down('Shift'); await A.mouse.click(box.x + box.width * 0.45, box.y + y); await A.keyboard.up('Shift'); await A.keyboard.up('Alt'); await wait(600);
