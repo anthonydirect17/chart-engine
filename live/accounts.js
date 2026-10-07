@@ -15,12 +15,17 @@
  * "Protocol v3"); ChartBridge refuses the message anyway when it is off. Messages are exactly the contract's. Nothing here
  * moves: no motion on this page (rule R3: order surfaces, the Accounts warnings and the copier stay instant).
  *
- * Its own connection. The page opens one more WebSocket to ChartBridge for this (the feed, below), sends `client` v3 on it
- * and signs in on it like the order ticket does; the order ticket's connection stays a v2 page exactly as in 0.3.8. The
- * feed starts only when ChartBridge's hello lists "v3", so with an older ChartBridge nothing new is opened.
+ * The window's one v3 connection (the feed, below). The page opens one more WebSocket to ChartBridge per window, sends
+ * `client` v3 on it and signs in on it like the order ticket does. It is shared by every 0.4.0 part of the window: this
+ * page, the order ticket's 0.4.0 parts (the switches, `managed`, the Merge result) and the Bot tab (live/bot.js), each
+ * through listen() and post(). The order ticket's own connection stays a v2 page exactly as in 0.3.8, and every order
+ * action (`order`, `change`, `plan`, `cancel`, `flatten`, `merge`, and this page's cancel from the list) goes on it, the one
+ * order path (env.orderSend). The feed starts only when ChartBridge's hello lists "v3", so with an older ChartBridge nothing
+ * new is opened. nt8/PROTOCOL.md "The page's v3 connection (chart 1.16.0)".
  *
  * Limits come from ChartBridge (roomDrawdown, roomDailyLoss) where NinjaTrader reports them, else from The Desk's
- * GET /api/chart-accounts (deskUrl from ChartBridge's /diag; nt8/PROTOCOL.md "Shared settings"). Never estimated.
+ * GET /api/chart-accounts. The Desk's address has one source on the page: deskBase() below (ChartBridge's /diag
+ * desk.deskUrl, the deskUrl in config.txt). Never estimated.
  *
  * This file has two parts, as workspace.js:
  *   AccountsCore   the pure parts (formats, the limit percent, round trips, gross and net, the copier's rows). No DOM; it
@@ -338,6 +343,28 @@ const AC = window.AccountsCore;
 const SWITCH_KEYS = ['accountChecks', 'orderTypes', 'strategies', 'merge', 'cancelFromList', 'copier', 'bot'];
 const LOG_MAX = 200;
 const DESK_EVERY_MS = 60000;
+const DESK_DEFAULT = 'http://localhost:8800';
+
+/**
+ * The Desk's address, the page's one source of truth (1.16.0): ChartBridge's `deskUrl` in config.txt, read from its /diag
+ * (`desk.deskUrl`; this PC only, as the page is). ChartBridge already sends its fills there, so one line in config.txt
+ * sets it for the Account page, the shared hotkeys and Order Strategies, and the Bot tab alike. ChartBridge's default,
+ * http://localhost:8800, when /diag has none. Read once per page load; a failed read is tried again on the next ask.
+ */
+let deskAsk = null, deskKnown = '';
+function deskBase(fetchFn) {
+  if (deskAsk) return deskAsk;
+  const f = fetchFn || ((u, o) => fetch(u, o));
+  const p = Promise.resolve().then(() => f('/diag', { cache: 'no-store' })).then(r => (r.ok ? r.json() : null)).then(j => {
+    const u = j && j.desk && typeof j.desk.deskUrl === 'string' ? j.desk.deskUrl : '';
+    deskKnown = /^https?:\/\/[^\s"'<>]+$/.test(u) ? u.replace(/\/+$/, '') : DESK_DEFAULT;
+    return deskKnown;
+  }, () => { deskAsk = null; return DESK_DEFAULT; });
+  deskAsk = p;
+  return p;
+}
+/** the address read so far (for a label), or ChartBridge's default before the first answer */
+const deskNow = () => deskKnown || DESK_DEFAULT;
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const p2 = n => (n < 10 ? '0' : '') + n;
 /* a UTC time in ms as the page's clock shows it: New York time, HH:MM:SS */
@@ -345,18 +372,23 @@ const etFmt = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone:
 const hms = ms => { if (etFmt) return etFmt.format(new Date(ms)); const d = new Date(ms); return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); };
 
 /**
- * The Account page's connection to ChartBridge, one per window. env:
+ * The window's v3 connection to ChartBridge, one per window. env:
  *   wsUrl()       the WebSocket address (may return a promise: the PIN unlock)
  *   pin           ChartBridgePin or null (its headers() for GET /session)
  *   framed        true inside another page's frame: never signs in
  *   fetch(u, o)   window.fetch
  *   changed()     the state changed: the host redraws (the panels, the charts' limit warnings)
  *   note(text, warn)  a short note in the window
- * start(features) opens it when ChartBridge's hello lists "v3" (else it stays closed: nothing new with an older one).
+ *   orderSend(m)  sends an order action on the order ticket's connection (the one order path); true when sent
+ *   desk          false: never reads The Desk's limits (the Bot window has no Account page)
+ * start(features) opens it when ChartBridge's hello lists "v3" (else it stays closed: nothing new with an older one);
+ * startAny() connects at once and lets ChartBridge's own hello decide (the Bot window, which has no other connection).
+ * listen({ message, closed }) hands every message ChartBridge sends on it, and the drop, to another part of the window;
+ * post(m) sends one of that part's v3 messages (true when sent).
  */
 function createFeed(env) {
   const S = {
-    v3: false, open: false, signedIn: false, enabled: false, reason: 'Not connected to ChartBridge yet.',
+    v3: false, open: false, signedIn: false, enabled: false, reason: 'Not connected to ChartBridge yet.', trading: null, version: '',
     switches: Object.fromEntries(SWITCH_KEYS.map(k => [k, false])), tradeAccounts: [],
     accounts: [], archived: [], got: false, instruments: {}, orders: new Map(), positions: new Map(), fills: new Map(),
     copier: null, log: [], desk: new Map(), deskUrl: '', deskState: 'not asked', deskAt: 0,
@@ -366,6 +398,8 @@ function createFeed(env) {
   const log = (text, level) => { if (!text) return; S.log.unshift({ at: Date.now(), text, level: level || '' }); if (S.log.length > LOG_MAX) S.log.length = LOG_MAX; };
   const cid = () => 'ap' + Date.now().toString(36) + '-' + (++seq);
   const mine = new Map();                                 // cid -> what was asked (its refusal goes to the window's note)
+  const subs = new Set();                                // listen(): the window's other v3 parts
+  const tell = (k, m) => { for (const s of subs) { if (typeof s[k] === 'function') { try { s[k](m); } catch (e) { setTimeout(() => { throw e; }); } } } };
 
   function start(features) {
     const v3 = Array.isArray(features) && features.includes('v3');
@@ -374,7 +408,12 @@ function createFeed(env) {
     if (started) return;
     started = true; stopped = false;
     connect();
-    readDesk();
+    if (env.desk !== false) readDesk();
+  }
+  function startAny() {
+    if (started) return;
+    started = true; stopped = false;
+    connect();
   }
   function stop() {
     started = false; stopped = true; clearTimeout(timer); clearTimeout(deskTimer);
@@ -389,21 +428,35 @@ function createFeed(env) {
       try { sock = new WebSocket(url); } catch (e) { retry(); return; }
       ws = sock;
       sock.onopen = () => { if (sock === ws) { tries = 0; S.open = true; } };
-      sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } message(m, sock); };
+      sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } if (!m || typeof m !== 'object') return; message(m, sock); tell('message', m); };
       sock.onclose = () => {
         if (sock !== ws) return;
-        ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.';
+        ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null;
         S.switches = Object.fromEntries(SWITCH_KEYS.map(k => [k, false]));      // controls go until ChartBridge names them again
-        changed(); retry();
+        changed(); tell('closed'); retry();
       };
       sock.onerror = () => { /* onclose follows */ };
     }, retry);
   }
   function retry() { if (stopped) return; tries++; timer = setTimeout(connect, Math.min(5000, 500 * tries)); }
+  const remember = obj => { if (obj.cid) { mine.set(obj.cid, obj.type); if (mine.size > 100) mine.delete(mine.keys().next().value); } };
   function send(obj) {
     if (!ws || ws.readyState !== 1) { env.note('Not sent: not connected to ChartBridge.', true); return false; }
     ws.send(JSON.stringify(obj));
-    if (obj.cid) { mine.set(obj.cid, obj.type); if (mine.size > 100) mine.delete(mine.keys().next().value); }
+    remember(obj);
+    return true;
+  }
+  /* an order action of this page (cancel from the list) goes on the order ticket's connection, the one order path; its
+     refusal comes back there and the host hands it to takeReject */
+  function sendOrder(obj) {
+    if (typeof env.orderSend !== 'function' || !env.orderSend(obj)) { env.note('Not sent: not connected to ChartBridge.', true); return false; }
+    remember(obj);
+    return true;
+  }
+  /** another part's v3 message on this connection: true when sent (it shows its own note when not) */
+  function post(obj) {
+    if (!ws || ws.readyState !== 1) return false;
+    ws.send(JSON.stringify(obj));
     return true;
   }
   function signIn(sock) {
@@ -424,6 +477,7 @@ function createFeed(env) {
         S.instruments = {};
         for (const i of m.instruments || []) if (i && typeof i.root === 'string') S.instruments[i.root] = i;
         const v3 = Array.isArray(m.features) && m.features.includes('v3');
+        S.v3 = v3; S.version = typeof m.version === 'string' ? m.version : '';
         if (!v3) { S.reason = 'The Account page needs ChartBridge 0.4.0 or newer.'; changed(); return; }
         sock.send(JSON.stringify({ type: 'client', v: 3 }));      // first, right after hello (PROTOCOL.md "Telling the page what is on")
         S.orders.clear(); S.positions.clear();
@@ -433,7 +487,7 @@ function createFeed(env) {
       }
       case 'client': return;
       case 'trading': {
-        S.signedIn = true; S.enabled = !!m.enabled; S.reason = m.enabled ? '' : m.reason || 'Trading is off.';
+        S.signedIn = true; S.enabled = !!m.enabled; S.reason = m.enabled ? '' : m.reason || 'Trading is off.'; S.trading = m;
         S.tradeAccounts = Array.isArray(m.accounts) ? m.accounts.slice() : [];
         const sw = m.switches && typeof m.switches === 'object' ? m.switches : {};
         S.switches = Object.fromEntries(SWITCH_KEYS.map(k => [k, m.enabled === true && sw[k] === true]));   // strictly true
@@ -470,11 +524,7 @@ function createFeed(env) {
   function readDesk() {
     clearTimeout(deskTimer);
     if (stopped) return;
-    const base = S.deskUrl ? Promise.resolve(S.deskUrl) : env.fetch('/diag', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(j => {
-      const u = j && j.desk && typeof j.desk.deskUrl === 'string' ? j.desk.deskUrl : '';
-      return /^https?:\/\/[^\s"'<>]+$/.test(u) ? u.replace(/\/+$/, '') : 'http://localhost:8800';
-    }, () => 'http://localhost:8800');
-    base.then(url => { S.deskUrl = url; return env.fetch(url + '/api/chart-accounts', { cache: 'no-store', mode: 'cors', credentials: 'omit' }); })
+    deskBase(env.fetch).then(url => { S.deskUrl = url; return env.fetch(url + '/api/chart-accounts', { cache: 'no-store', mode: 'cors', credentials: 'omit' }); })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
       .then(j => { S.desk = AC.cleanDesk(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; })
       .then(() => { changed(); if (!stopped) deskTimer = setTimeout(readDesk, DESK_EVERY_MS); });
@@ -482,13 +532,16 @@ function createFeed(env) {
   const account = name => S.accounts.find(a => a.name === name) || null;
   const limit = name => { const a = account(name); return a ? AC.limitState(a, S.desk.get(name)) : null; };
   return {
-    S, start, stop, account, limit,
+    S, start, startAny, stop, account, limit, post,
+    listen(part) { subs.add(part); return () => subs.delete(part); },
+    /** a refusal that came back on the order ticket's connection for an action of this page: true when it was one */
+    takeReject(m) { if (!m || !m.cid || !mine.has(m.cid)) return false; message(m); return true; },
     /** the limit warning level of an account: '', 'amber' or 'red' */
     level: name => { const s = limit(name); return s ? s.level : ''; },
     /* the page's v3 actions, exactly the contract's messages; each only when its switch is on (ChartBridge checks again) */
     accountTrade: (name, on) => S.switches.accountChecks && send({ type: 'accountTrade', cid: cid(), account: name, on: !!on }),
     accountArchive: name => S.switches.accountChecks && send({ type: 'accountArchive', cid: cid(), account: name, confirm: true }),
-    cancelFromList: id => S.switches.cancelFromList && send({ type: 'cancel', cid: cid(), id, from: 'list' }),
+    cancelFromList: id => S.switches.cancelFromList && sendOrder({ type: 'cancel', cid: cid(), id, from: 'list' }),
     copierSet: (what) => S.switches.copier && send(Object.assign({ type: 'copierSet', cid: cid() }, what)),
     copierFollower: row => {
       if (!S.switches.copier) return false;
@@ -740,5 +793,5 @@ function mount(v, host) {
   return { render, destroy: () => { unfit(); host.quoteSubs.delete(render); for (const off of P.offs.values()) off(); P.offs.clear(); }, state: P };
 }
 
-return { createFeed, mount, TABS };
+return { createFeed, mount, TABS, deskBase, deskNow, DESK_DEFAULT };
 })();

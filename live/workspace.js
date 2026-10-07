@@ -656,16 +656,27 @@ function tnote(text, level) {
 const tTimers = new Set();
 const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); fn(); }, ms); tTimers.add(id); return id; };
 
-/* 1.16.0: the Account page's connection (live/accounts.js): its own WebSocket, `client` v3 and signed in like the ticket; the
-   ticket's connection above stays a v2 page as in 0.3.8. Opened only when ChartBridge's hello lists "v3". */
+/* 1.16.0: the window's one v3 connection (live/accounts.js createFeed): its own WebSocket, `client` v3 and signed in like
+   the ticket, opened only when ChartBridge's hello lists "v3". It is shared by the Account page, the order ticket's 0.4.0
+   parts (the switches, `managed`, the Merge result: below) and the Bot tab (live/bot.js). The ticket's connection stays a
+   v2 page exactly as in 0.3.8, and every order action goes on it (the Account page's cancel from the list too: orderSend).
+   nt8/PROTOCOL.md "The page's v3 connection (chart 1.16.0)". */
 const AF = window.AccountsPage ? window.AccountsPage.createFeed({
   wsUrl, pin: PIN, framed: FRAMED, fetch: (u, o) => fetch(u, o), note: (text, warn) => note(text, !!warn, warn ? 8000 : 4000),
-  changed: () => { renderLimits(); renderAccountPages(); },
+  changed: () => { syncV3(); renderLimits(); renderAccountPages(); },
+  orderSend: obj => !!obj && obj.type === 'cancel' && obj.from === 'list' && core.cancelFromList(obj.id, obj.cid),
 }) : null;
+/* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
+let v3Key = 'null';
+function syncV3() {
+  const sw = AF && AF.S.signedIn && AF.S.enabled ? AF.S.switches : null, k = JSON.stringify(sw);
+  if (k === v3Key) return;
+  v3Key = k; core.setSwitches(sw); deskCheck();
+}
 const core = TC.create({
   LP, prefs, pin: PIN, framed: FRAMED, framedReason: 'This page is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own window.',
   fetch: (u, o) => fetch(u, o),
-  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },
+  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },   // the one order path
   open: () => !!tws && tws.readyState === 1, sock: () => tws,
   root: () => ticketRoot(),
   lastPrice: () => ticketPrice(ticketRoot()),
@@ -690,11 +701,19 @@ const core = TC.create({
   },
   dropNoStop: () => dropNoStop(),
   flattened: r => flattenedHere(r),
-  /* 1.16.0 (protocol v3): this page says `client` v3 to a ChartBridge 0.4.0 and reads its switches; the active Order
-     Strategy goes with each entry while `strategies` is on (OrderStrategies.toWire, The Desk's form to ChartBridge's) */
-  v3: true,
+  /* 1.16.0 (protocol v3): the active Order Strategy goes with each entry while `strategies` is on (OrderStrategies.toWire,
+     The Desk's form to ChartBridge's); the switches come from the window's v3 connection (syncV3) */
   strategy: () => { const st = activeStrategy(); return st ? { name: st.name, wire: OS.toWire(st) } : null; },
   merged: () => {},
+});
+/* 1.16.0: what only the v3 connection gets, for the ticket: `managed` and the Merge result (Merge itself goes on the ticket's
+   connection, as every order action); its errors and warnings are said as the ticket's own (the Bot tab says the bot's) */
+if (AF) AF.listen({
+  message: m => {
+    if (m.type === 'managed' || m.type === 'merge') core.message(m);
+    else if (m.type === 'status' && typeof m.text === 'string' && m.text && (m.level === 'error' || (m.level === 'warn' && !/^Bot\b/.test(m.text)))) alertOnce(m.text, m.level === 'warn', true);
+  },
+  closed: () => core.v3Lost(),
 });
 let forwarding = false;                               // acting on another window's forward (it asked its own questions)
 let noStopQ = null;                                   // the NO STOP question open in this window (askNoStop, below)
@@ -724,16 +743,18 @@ function tmessage(m) {
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
-      if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the Account page's own v3 connection (only when ChartBridge speaks v3)
+      if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the window's v3 connection (only when ChartBridge speaks v3)
       for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
-      if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab connects only to a ChartBridge that speaks v3
+      if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
-    case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text) alertLoud(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
+    case 'status': if (m.level === 'error') alertOnce(m.text); else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
   }
+  // 1.16.0: the Account page's cancel from the list went on this connection; its refusal is said there
+  if (m.type === 'reject' && AF && AF.takeReject(m)) return;
   // an order this window sent for a click in another window: ChartBridge's refusal (or NinjaTrader's rejection) goes
   // back to that window's note too
   const f = m.cid && fwdCids.get(m.cid);
@@ -751,6 +772,16 @@ function alertLoud(text, warn) {
   if (!warn) alertErr = true;
   $('wsAlertText').textContent = alerts.join('\n'); $('wsAlert').hidden = false;
   $('wsAlert').classList.toggle('warn', !alertErr);                // red once an error is in it
+}
+/* 1.16.0: a status ChartBridge sends to both of this window's connections (the ticket's and the v3 one) is said once: the
+   ticket's copy is skipped when the v3 connection said the same within 5 s, and the other way round */
+const alertSaid = new Map();                          // text -> { at, v3 }
+function alertOnce(text, warn, v3) {
+  const now = Date.now(), was = alertSaid.get(text);
+  for (const [k, x] of alertSaid) if (now - x.at > 5000) alertSaid.delete(k);
+  if (was && now - was.at <= 5000 && was.v3 !== !!v3) return;
+  alertSaid.set(text, { at: now, v3: !!v3 });
+  alertLoud(text, warn);
 }
 $('wsAlertClose').addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; });
 function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n.show; $('wsUnsentText').textContent = n.text; }
@@ -1169,12 +1200,13 @@ setInterval(syncKeys, 250);
    strategies shared by every PC through The Desk. Each part shows only while ChartBridge's `switches` say it is on
    (nt8/PROTOCOL.md "Protocol v3"); with every switch off this page is the 1.15 page. The order path is TradeCore's
    (live/trade.js); the rules are OrderStrategies' (live/order-strategies.js). No motion on any of it.
-   Saved here: live-strategy-v1 (the active strategy's id, every window of this browser), live-desk-url-v1 (The Desk's
-   address), live-desk-cache-v1 (the last copy read of both documents), live-desk-sync-v1 (whether the hotkeys are kept in
-   The Desk now: the single chart page then shows them read only). */
+   Saved here: live-strategy-v1 (the active strategy's id, every window of this browser), live-desk-cache-v1 (the last copy
+   read of both documents), live-desk-sync-v1 (whether the hotkeys are kept in The Desk now: the single chart page then
+   shows them read only). The Desk's address is not kept here: it is ChartBridge's deskUrl (AccountsPage.deskBase). */
 const EXTRA_KEYS = [{ id: 'merge', sw: 'merge' }, { id: 'accept', sw: 'bot' }, { id: 'reject', sw: 'bot' }];
 const STRAT_KEY = 'live-strategy-v1', DESK_SYNC_KEY = 'live-desk-sync-v1';
-const DESK = OS.createDesk({ fetch: (u, o) => fetch(u, o), storage: store });
+/* The Desk's address: one source for the whole page, ChartBridge's deskUrl (AccountsPage.deskBase, /diag desk.deskUrl) */
+const DESK = OS.createDesk({ fetch: (u, o) => fetch(u, o), storage: store, base: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)) });
 /* on: the switches need The Desk; hk, st: the documents in use (The Desk's, or the last copy read); readAt: when last read */
 const DS = { on: false, hk: null, st: null, readAt: 0, reading: null, firstRead: true };
 const loadDeskCache = () => { const h = DESK.cached('hotkeys'), t = DESK.cached('strategies'); DS.hk = h ? h.doc : null; DS.st = t ? t.doc : null; DS.hkAt = h ? h.at : 0; };
@@ -1242,6 +1274,7 @@ function applyDeskHotkeys() {
   if (was !== JSON.stringify(HK) + '|' + viewKeys().maximize) for (const v of views.values()) setMaxButton(v, maxId === v.panel.id);
 }
 function deskChanged() {
+  if (botDesk) botDesk.keysChanged();                           // the copilot's Accept and Reject keys on its buttons
   if (!$('wsSettings').hidden) renderHotkeys();
   if (SG.open) renderStrategies();
   const id = activeStrategyId();
@@ -1262,7 +1295,7 @@ function renderDeskUi() {
   $('wsHkWhere').textContent = local ? 'the same keys as the single chart page' : 'shared by every PC through The Desk';
   $('wsHkHelp').hidden = !local; $('wsHkHelpShared').hidden = local;   // the short help while shared, so Settings fits 1366x768
   if (!DS.on) return;
-  if (document.activeElement !== $('wsDeskUrl')) $('wsDeskUrl').value = DESK.url();
+  if ($('wsDeskUrl').textContent !== DESK.url()) $('wsDeskUrl').textContent = DESK.url();
   const mode = deskMode(), at = t => (t ? new Date(t).toLocaleTimeString() : '');
   const n = stratList().length;
   const text = mode === 'readonly' ? DESK.error + ' The hotkeys and strategies shown are the last copy read (' + at(DS.hkAt) + '), read only, until it answers.'
@@ -1281,12 +1314,6 @@ function renderDeskUi() {
   $('wsStratNote').textContent = mode === 'local' && !DS.st ? 'The strategies are kept in The Desk, which has not answered on this browser yet.'
     : n + ' strateg' + (n === 1 ? 'y' : 'ies') + (a ? '; ' + a.name + ' is active on the ticket.' : '; the ticket uses its bracket.') + (mode === 'readonly' ? ' Read only: The Desk does not answer.' : '');
 }
-$('wsDeskUrl').addEventListener('change', e => {
-  if (!DESK.setUrl(e.target.value)) { e.target.setAttribute('aria-invalid', 'true'); $('wsDeskNote').textContent = 'Type The Desk\'s address, like http://localhost:8800, or the Tailscale address and port of The Desk\'s PC.'; return; }
-  e.target.removeAttribute('aria-invalid');
-  DS.firstRead = true; deskRead();
-});
-$('wsDeskUrl').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
 $('wsDeskTry').addEventListener('click', () => deskRead());
 /* Save one hotkey in The Desk (the whole document with the rev read; a 409 reads it again) */
 function saveKeyDesk(id, combo) {
@@ -2877,13 +2904,14 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* the Bot tab's entrance played again (test/perf-bot.mjs: the motion kit running while the live chart draws) */
   botReplay: () => !!(botDesk && botDesk.replay()) };
 
-/* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on a connection of their own; everything bot shows
-   only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */
+/* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot
+   shows only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */
 let botDesk = null;
 function startBot() {
   if (!window.BotDesk) return;
-  botDesk = window.BotDesk.create({ wsUrl, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
-    els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK, waitHello: true,
+  botDesk = window.BotDesk.create({ v3: AF, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK,
+    copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),            // The Desk's hotkeys document (its accept and reject), as read here
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);

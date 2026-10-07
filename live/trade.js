@@ -40,8 +40,6 @@
  *   dropNoStop()         F2 review: close an open NO STOP question, its order not sent (Close, Flatten all and Armed
  *                        going off call it; the answer is also bound to the instrument, account and Armed it was asked in)
  *   flattened(root)      a Close or Flatten (root) or Flatten all (null) was pressed here, for other windows (optional)
- *   v3                   1.16.0: true on a page that speaks protocol v3 (the workspace): after a `hello` naming "v3" it
- *                        sends `client` v3, so ChartBridge 0.4.0 tells it its `switches` (nt8/PROTOCOL.md "Protocol v3")
  *   strategy()           1.16.0 (optional): the active Order Strategy, { name, wire } (wire: The Desk's strategy as
  *                        OrderStrategies.toWire gives it), or null for the bracket; used only while `switches.strategies`
  *   merged(m)            1.16.0 (optional): ChartBridge's `merge` result arrived (the host shows it)
@@ -85,11 +83,13 @@ function create(env) {
     account: '',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
-    /* 1.16.0 (protocol v3): ChartBridge's switches (all off unless a v3 `trading` says on), its managed strategies by entry
-       id (`managed`), and the last Merge result per 'account|root' (`merge`) */
+    /* 1.16.0 (protocol v3): ChartBridge's switches (all off unless the window's v3 connection says on: setSwitches), its
+       managed strategies by entry id (`managed`), and the last Merge result per 'account|root' (`merge`). This connection
+       stays a v2 page (it never sends `client`); those three come from the window's v3 connection (live/accounts.js) */
     switches: OS ? OS.cleanSwitches(null) : {}, managed: new Map(), merges: new Map(),
   };
   const sw = k => !!OS && TR.switches[k] === true;
+  let v3sw = null;                                    // the switches the window's v3 connection last read (null: none)
   /* The bracket's cap (1.13.0): 200 ticks for ChartBridge before 0.3.7, none for 0.3.7 and newer unless config.txt sets
      maxBracketTicks. Read as saved (up to OT.NO_CAP) and cut to the cap once ChartBridge says which it is. */
   const cap = () => OT.bracketCap(TR.version, TR.maxBracketTicks);
@@ -148,7 +148,7 @@ function create(env) {
     TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
     TR.maxQty = t.maxQty || {};
     TR.maxBracketTicks = Number.isInteger(t.maxBracketTicks) && t.maxBracketTicks > 0 ? t.maxBracketTicks : 0;   // 0.3.7: only when config.txt sets it
-    if (OS) TR.switches = OS.cleanSwitches(TR.enabled ? t.switches : null);   // 1.16.0: a v3 page's switches; off with trading off
+    if (OS) TR.switches = OS.cleanSwitches(TR.enabled ? v3sw : null);   // 1.16.0: the v3 connection's switches; off with trading off
     recap();
     // a Cancel all under way stops for what ChartBridge would refuse: all of it while trading is off, and the orders of
     // an account no longer on its list (review 2 S1; they cannot be cancelled from the page then)
@@ -186,8 +186,6 @@ function create(env) {
   function hello(m) {
     TR.version = m && typeof m.version === 'string' ? m.version : '';   // 0.3.7 and newer: no 200-tick cap on the page
     recap();
-    /* 1.16.0: a v3 page says so right after `hello` (PROTOCOL.md "Telling the page what is on"), before it signs in */
-    if (env.v3 === true && OS && m && Array.isArray(m.features) && m.features.includes('v3')) send({ type: 'client', v: 3 });
     if (m && m.trading) { applyTrading(m.trading); signIn(); }
   }
   /** A message from ChartBridge about trading; true when it was one. */
@@ -721,6 +719,29 @@ function create(env) {
     flash('Merge sent for ' + account + ' ' + R + ': ChartBridge joins the stops and targets into one set at the first leg\'s prices.', '');
     env.changed();
   }
+  /**
+   * 1.16.0: ChartBridge's switches as the window's v3 connection read them (its `trading.switches`), or null when it has
+   * none (an older ChartBridge, not signed in, dropped). They count only while this connection's trading is on.
+   */
+  function setSwitches(s) {
+    v3sw = s && typeof s === 'object' ? Object.assign({}, s) : null;
+    if (!OS) return;
+    TR.switches = OS.cleanSwitches(TR.enabled ? v3sw : null);
+    env.changed();
+  }
+  /**
+   * 1.16.0: Cancel on the Account page's Working orders tab (cancelFromList on; PROTOCOL.md "Cancel from the Working orders
+   * tab"): one order by its id, on any watched account, sent on this connection like every order action (the one order
+   * path, counted in the 10 a second). ChartBridge checks it is an exit on a watched, Connected account (the OCO rule).
+   * True when it went out.
+   */
+  function cancelFromList(id, cid) {
+    if (!sw('cancelFromList') || typeof id !== 'string' || !id || typeof cid !== 'string' || !open()) return false;
+    send({ type: 'cancel', cid, id, from: 'list' });
+    return true;
+  }
+  /** 1.16.0: the v3 connection dropped: its managed states and Merge results go (ChartBridge sends them again) */
+  function v3Lost() { TR.managed.clear(); TR.merges.clear(); setSwitches(null); }
   /** The managed strategies of one account and instrument (1.16.0), oldest entry first. */
   function managedOf(account, r) { return [...TR.managed.values()].filter(m => m.account === account && m.root === r); }
 
@@ -835,7 +856,7 @@ function create(env) {
     planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
-    merge, managedOf, switchOn: sw,
+    merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
     /** for tests (test/order-account.test.js): the inner steps, run on their own */

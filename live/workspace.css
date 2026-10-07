@@ -455,6 +455,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .chart-live .hk-in.hk-ro, .chart-live .hk-clear.hk-ro { opacity: .55; cursor: not-allowed; }
 .ws-in { flex: 1 1 auto; min-width: 0; height: 26px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 0 8px; font: 12px var(--ws-mono); }
 .ws-in[aria-invalid="true"] { border-color: var(--ws-sell); }
+.ws-desk-url { flex: 1 1 auto; min-width: 0; font-family: var(--ws-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* 1.16.0: deskUrl in ChartBridge's config.txt, shown */
 .ws-help.ws-warn, .ws-err.ws-warn, .sg-sum.ws-warn { color: var(--ws-warn); }
 .ws-err.ws-ok { color: var(--ws-buy); }
 .ws-mod { width: 90px; }

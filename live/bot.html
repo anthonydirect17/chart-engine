@@ -14,8 +14,9 @@
 </head>
 <body>
 <!-- The Bot tab in its own window (1.16.0): the Bot tab's Pop out, or http://localhost:8765/bot.html, for a third monitor.
-     The same Library, chart and bot panel as the workspace's Bot tab, on a connection of its own; copilot proposals pop up
-     here too. Shown only when ChartBridge's bot switch is on. -->
+     The same Library, chart and bot panel as the workspace's Bot tab, on this window's one v3 connection (live/accounts.js
+     createFeed, as every workspace window has); copilot proposals pop up here too, answered with the buttons (their keys
+     work in the workspace's windows). Shown only when ChartBridge's bot switch is on. -->
 <header class="ws-top">
   <span class="ws-title">BOT</span>
   <span class="ws-clock"><span id="btClock">--:--:--</span> <span class="ws-et">ET</span></span>
@@ -31,6 +32,8 @@
 <script src="live.js"></script>
 <script src="feed.js"></script>
 <script src="motion.js"></script>
+<!-- the window's v3 connection (the Account page's createFeed; no Account page here) -->
+<script src="accounts.js"></script>
 <script src="bot-core.js"></script>
 <script src="bot.js"></script>
 <script>
@@ -45,11 +48,14 @@
   const clock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const tick = () => { document.getElementById('btClock').textContent = clock.format(new Date()); };
   tick(); setInterval(tick, 1000);
-  const readKeys = () => { try { return window.OrderTicket.cleanHotkeys(JSON.parse(store.getItem('live-hotkeys-v1'))); } catch (e) { return {}; } };
+  const framed = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
   const start = () => {
     const hub = window.ChartFeed.create({ wsUrl });
-    window.botDesk = window.BotDesk.create({ popout: true, wsUrl, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, els: { view: document.getElementById('btView') }, tradingKeys: readKeys });
+    /* this window's one v3 connection: it connects at once and ChartBridge's hello decides (an older one: nothing more) */
+    const v3 = window.AccountsPage.createFeed({ wsUrl, pin: PIN, framed, desk: false, fetch: (u, o) => fetch(u, o), note: () => {}, changed: () => {} });
+    window.botDesk = window.BotDesk.create({ popout: true, v3, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, els: { view: document.getElementById('btView') } });
     window.botDesk.showTab(true);
+    v3.startAny();
   };
   if (PIN) PIN.gate().then(start); else start();
 })();

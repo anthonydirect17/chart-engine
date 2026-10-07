@@ -209,13 +209,15 @@ async function loadFeed() {
   for (const k of Object.keys(saved)) if (saved[k] === undefined) delete global[k];
   const notes = [];
   const fetches = [];
+  const viaOrders = [];                                   // what went on the order ticket's connection (env.orderSend)
   const feed = page.createFeed({
     wsUrl: () => 'ws://localhost:8765/ws', pin: null, framed: false, changed: () => {}, note: t => notes.push(t),
+    orderSend: m => { viaOrders.push(m); sent.push(m); return true; },
     fetch: u => { fetches.push(u); return Promise.resolve(u === '/session' ? { ok: true, text: () => Promise.resolve('{"token":"tok"}') }
       : u === '/diag' ? { ok: true, json: () => Promise.resolve({ desk: { deskUrl: 'http://localhost:8800' } }) }
       : { ok: true, json: () => Promise.resolve({ accounts: [{ account: 'EVAL-A', daily_loss_limit: 1000, trailing_drawdown: 2000 }] }) }); },
   });
-  return { feed, sent, socks, notes, fetches, FakeSocket, settle: () => new Promise(r => setTimeout(r, 5)) };
+  return { feed, page, sent, socks, notes, fetches, viaOrders, FakeSocket, settle: () => new Promise(r => setTimeout(r, 5)) };
 }
 test('the Account page\'s connection: client v3 right after hello, then auth; its actions are exactly the contract\'s messages', async () => {
   const V = await import('./fake-v3.mjs');
@@ -251,6 +253,12 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     for (const m of F.sent) assert.equal(V.checkKeysV3(m, JSON.stringify(m)), null, JSON.stringify(m));
     assert.equal(F.sent[1].confirm, true, 'Archive always carries confirm: true (sent only after the page\'s own confirm)');
     assert.equal(F.sent[2].from, 'list');
+    assert.deepEqual(F.viaOrders, [F.sent[2]], 'cancel from the list goes on the order ticket\'s connection (the one order path), nothing else does');
+    // its refusal comes back on that connection: the host hands it here (takeReject), said in the window and the Log
+    F.notes.length = 0;
+    assert.equal(F.feed.takeReject({ type: 'reject', cid: F.sent[2].cid, reason: 'No working order o14.' }), true);
+    assert.deepEqual(F.notes, ['Refused by ChartBridge: No working order o14.']);
+    assert.equal(F.feed.takeReject({ type: 'reject', cid: 'someone-else', reason: 'x' }), false, 'another part\'s refusal is not taken');
     assert.ok(F.sent.every(m => typeof m.cid === 'string' && /^[A-Za-z0-9-]{1,40}$/.test(m.cid)));
     // a refusal of the page's own message: the window's note and the Log
     F.notes.length = 0;
@@ -262,9 +270,17 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     assert.equal(F.feed.level('EVAL-A'), 'red'); assert.equal(F.feed.level('NOPE'), '');
     s.deliver({ type: 'accounts', list: [{ name: 'EVAL-A', sim: false, connection: 'lost', trade: false, tradable: false, state: 'gone', goneWhy: 'disconnected', pnlToday: -100, positions: [] }], archived: [] });
     assert.match(F.feed.S.log[0].text, /EVAL-A: gone \(disconnected\)/);
-    // a dropped connection: the controls go until ChartBridge names the switches again
+    // a dropped connection: the controls go until ChartBridge names the switches again; the other parts are told
+    const heard = [];
+    const off = F.feed.listen({ message: m => heard.push(m.type), closed: () => heard.push('(closed)') });
+    s.deliver({ type: 'bot', enabled: true });
+    assert.equal(F.feed.post({ type: 'botKill', cid: 'b1', on: true }), true, 'another part posts on the same connection');
+    assert.deepEqual(F.sent[F.sent.length - 1], { type: 'botKill', cid: 'b1', on: true });
     s.onclose();
     assert.ok(Object.values(F.feed.S.switches).every(x => x === false));
+    assert.deepEqual(heard, ['bot', '(closed)']);
+    assert.equal(F.feed.post({ type: 'botKill', cid: 'b2', on: true }), false, 'nothing sent while closed');
+    off();
   } finally { F.feed.stop(); global.WebSocket = G; if (G === undefined) delete global.WebSocket; }
 });
 test('an older ChartBridge (hello without "v3"): no connection is opened, the page says what it needs', async () => {
@@ -294,7 +310,13 @@ test('the Account page is a workspace panel: its type, the Add menu, its files i
   // no account names but the made-up ones, no dashes Anthony reads
   for (const t of [js, css]) assert.doesNotMatch(t, /[–—]/);
   // the order ticket's connection stays v2: only the Account page's own connection sends client v3
-  const ws = read('live/workspace.js'), trade = read('live/trade.js');
-  assert.doesNotMatch(ws + trade, /type: 'client'/);
+  const ws = read('live/workspace.js'), trade = read('live/trade.js'), bot = read('live/bot.js');
+  assert.doesNotMatch(ws + trade + bot, /type: 'client'/);
   assert.match(js, /sock\.send\(JSON\.stringify\(\{ type: 'client', v: 3 \}\)\)/);
+  // one v3 connection per window, shared: the Bot tab opens no WebSocket of its own, and gets the workspace's one
+  assert.doesNotMatch(bot, /new WebSocket\(/);
+  assert.match(ws, /window\.BotDesk\.create\(\{ v3: AF,/);
+  assert.match(read('live/bot.html'), /src="accounts\.js"/);
+  // one source for The Desk's address: ChartBridge's deskUrl (/diag), nothing kept per browser
+  for (const t of [ws, bot, read('live/order-strategies.js')]) assert.doesNotMatch(t, /live-desk-url-v1/);
 });

@@ -299,15 +299,19 @@ function fakeDesk() {
   const mem = new Map(), storage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)) };
   return { docs, calls, fetch, storage, mem, setDown: v => { down = v; } };
 }
-test('createDesk: the address, a read kept as the last copy, a save with its rev, a 409 read again, 400 and unreachable', async () => {
-  const f = fakeDesk(), desk = OS.createDesk({ fetch: f.fetch, storage: f.storage });
-  assert.equal(desk.url(), 'http://localhost:8800', 'The Desk\'s default address');
-  assert.equal(desk.setUrl('nope'), false); assert.equal(desk.setUrl('http://127.0.0.1:8800/'), true);
-  assert.equal(desk.url(), 'http://127.0.0.1:8800');
+test('createDesk: the address from its one source, a read kept as the last copy, a save with its rev, a 409 read again, 400 and unreachable', async () => {
+  // no source (or a bad one): ChartBridge's default address
+  const f0 = fakeDesk(), d0 = OS.createDesk({ fetch: f0.fetch, storage: f0.storage, base: () => Promise.resolve('nope') });
+  assert.equal(d0.url(), 'http://localhost:8800', 'The Desk\'s default address');
+  await d0.read('hotkeys'); assert.equal(f0.calls[0][1], 'http://localhost:8800/api/chart-hotkeys');
+  // the page's one source (ChartBridge's deskUrl, read from /diag): nothing kept in this browser for it
+  const f = fakeDesk(), desk = OS.createDesk({ fetch: f.fetch, storage: f.storage, base: () => Promise.resolve('http://127.0.0.1:8800/') });
   assert.equal(OS.deskUrl('http://localhost:8800/api'), '', 'no path');
+  assert.equal('url' in OS.DESK_KEYS, false, 'no address of its own in this browser');
   assert.equal(desk.cached('hotkeys'), null);
   let r = await desk.read('hotkeys');
   assert.equal(r.ok, true); assert.equal(desk.reach, 'ok'); assert.equal(f.calls[0][1], 'http://127.0.0.1:8800/api/chart-hotkeys');
+  assert.equal(desk.url(), 'http://127.0.0.1:8800');
   assert.equal(desk.cached('hotkeys').doc.keys.buy, 'Alt+B');
   // a save sends the whole document with the rev read; the stored one (rev + 1) is kept
   const next = clone(desk.cached('hotkeys').doc); next.keys.merge = 'Alt+G';
@@ -341,7 +345,7 @@ function harness(o = {}) {
   const mem = new Map(), prefs = LP.create({ getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)) });
   const sent = [], flashes = [], H = { strategy: null, last: 100, qty: 1 };
   const core = TC.create({
-    LP, prefs, v3: o.v3 !== false, fetch: () => new Promise(() => {}), send: m => sent.push(m), open: () => true, sock: () => H,
+    LP, prefs, fetch: () => new Promise(() => {}), send: m => sent.push(m), open: () => true, sock: () => H,
     root: () => 'MNQ', lastPrice: () => H.last, qty: () => H.qty, pickerAccount: () => core.TR.account, wantedAccount: () => 'Sim101', tick: () => 0.25, served: () => true, fmt: p => String(p),
     flash: (t, l) => flashes.push([t, l]), later: () => {}, changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {}, batch: () => {}, unsent: () => {},
     destroyed: () => false, now: (() => { let t = 0; return () => (t += 1000); })(), confirmNoStop: () => true,
@@ -349,25 +353,36 @@ function harness(o = {}) {
   });
   return { core, sent, flashes, H, prefs };
 }
-const trading = sw => Object.assign({ type: 'trading', enabled: true, accounts: ['Sim101'], maxQty: { '*': 5 } }, sw ? { switches: sw } : {});
+const trading = () => ({ type: 'trading', enabled: true, accounts: ['Sim101'], maxQty: { '*': 5 } });
+/* the switches come from the window's v3 connection (setSwitches); the ticket's own `trading` never carries them */
+const withSwitches = (h, sw, extra) => { h.core.setSwitches(sw); h.core.message(Object.assign(trading(), extra || {})); };
 const ALL_ON = { accountChecks: true, orderTypes: true, strategies: true, merge: true, cancelFromList: true, copier: true, bot: true };
 
-test('TradeCore: `client` v3 right after a v3 hello, before sign-in; never to a v2 ChartBridge or from a v2 page', () => {
+test('TradeCore: the ticket\'s connection stays a v2 page (never `client`); the switches come from the v3 connection', () => {
   let h = harness();
   h.core.hello({ type: 'hello', version: '0.4.0', features: ['v3'], trading: { enabled: false, reason: 'sign in', accounts: [], maxQty: {} } });
-  assert.deepEqual(h.sent, [{ type: 'client', v: 3 }]);
+  assert.deepEqual(h.sent, [], 'nothing new on the ticket\'s connection, whatever ChartBridge speaks');
   h = harness();
   h.core.hello({ type: 'hello', version: '0.3.8', features: ['liveFirst'], trading: { enabled: false, accounts: [], maxQty: {} } });
   assert.deepEqual(h.sent, [], 'a 0.3.8 ChartBridge gets nothing new');
-  h = harness({ v3: false });
-  h.core.hello({ type: 'hello', version: '0.4.0', features: ['v3'], trading: { enabled: false, accounts: [], maxQty: {} } });
-  assert.deepEqual(h.sent, [], 'the single chart page stays a v2 page');
+  // a `trading` carrying switches on this connection is not believed: only setSwitches (the v3 connection) turns one on
+  h = harness();
+  h.core.message(Object.assign(trading(), { switches: ALL_ON }));
+  assert.deepEqual(h.core.TR.switches, OS.cleanSwitches(null));
+  h.core.setSwitches(ALL_ON);
+  assert.equal(h.core.switchOn('merge'), true);
+  h.core.message(Object.assign(trading(), { enabled: false, reason: 'off' }));
+  assert.equal(h.core.switchOn('merge'), false, 'off while this connection\'s trading is off');
+  h.core.message(trading());
+  assert.equal(h.core.switchOn('merge'), true, 'on again with trading');
+  h.core.v3Lost();
+  assert.deepEqual(h.core.TR.switches, OS.cleanSwitches(null), 'the v3 connection dropped: every switch off');
 });
 
 test('TradeCore: with every switch off nothing new is sent (the bracket as in 1.15, no strategy, no stop-limit, no merge)', async () => {
   const V = await V3;
   const h = harness();
-  h.core.message(trading({ accountChecks: false, orderTypes: false, strategies: false, merge: false, cancelFromList: false, copier: false, bot: false }));
+  withSwitches(h, { accountChecks: false, orderTypes: false, strategies: false, merge: false, cancelFromList: false, copier: false, bot: false });
   h.core.TR.armed = true;
   h.H.strategy = { name: 'Scalp 2', wire: OS.toWire(SCALP) };
   h.core.brackets.MNQ = { stop: 8, target: 16 };
@@ -379,14 +394,14 @@ test('TradeCore: with every switch off nothing new is sent (the bracket as in 1.
   assert.equal(h.sent.length, 0); assert.match(h.flashes.pop()[0], /stop-limit and MIT orders are off in ChartBridge/);
   h.core.merge();
   assert.equal(h.sent.length, 0); assert.match(h.flashes.pop()[0], /Merge is off in ChartBridge/);
-  // switches never sent (a v2 page, or trading with no switches): all off
-  const h2 = harness(); h2.core.message(trading()); assert.deepEqual(h2.core.TR.switches, OS.cleanSwitches(null));
+  // no switches from the v3 connection (an older ChartBridge): all off
+  const h2 = harness(); h2.core.message(trading()); assert.deepEqual(h2.core.TR.switches, OS.cleanSwitches(null), 'none read: all off');
 });
 
 test('TradeCore: the active strategy goes in place of the bracket (strict keys), never on an order that reduces', async () => {
   const V = await V3;
   const h = harness();
-  h.core.message(trading(ALL_ON));
+  withSwitches(h, ALL_ON);
   h.core.TR.armed = true;
   h.core.brackets.MNQ = { stop: 8, target: 16 };
   h.H.strategy = { name: 'Scalp 2', wire: OS.toWire(SCALP) };
@@ -410,21 +425,21 @@ test('TradeCore: the active strategy goes in place of the bracket (strict keys),
   assert.equal(m.strategy, undefined); assert.equal(m.bracket, undefined);
   assert.match(h.flashes.pop()[0], /\(no strategy: it reduces the position\)/);
   // a strategy ChartBridge would refuse (over maxBracketTicks) is not sent
-  h.core.message(Object.assign(trading(ALL_ON), { maxBracketTicks: 10 }));
+  withSwitches(h, ALL_ON, { maxBracketTicks: 10 });
   h.core.TR.armed = true;
   h.core.message({ type: 'position', account: 'Sim101', root: 'MNQ', qty: 0, avgPrice: null });
   h.core.sendOrder('buy', 'market', null);
   assert.equal(h.sent.length, 0);
   assert.match(h.flashes.pop()[0], /^Not sent: strategy Scalp 2: stop must be at most 10/);
   // no strategy picked: the bracket as before
-  h.core.message(trading(ALL_ON)); h.core.TR.armed = true; h.H.strategy = null;
+  withSwitches(h, ALL_ON); h.core.TR.armed = true; h.H.strategy = null;
   h.core.sendOrder('buy', 'market', null);
   assert.deepEqual(h.sent.pop().bracket, { stop: 8, target: 16 });
 });
 
 test('TradeCore: a strategy has its stop, so NO STOP is never asked for it; the bracket stop 0 still asks', () => {
   const h = harness();
-  h.core.message(trading(ALL_ON)); h.core.TR.armed = true; h.core.brackets.MNQ = { stop: 0, target: 0 };
+  withSwitches(h, ALL_ON); h.core.TR.armed = true; h.core.brackets.MNQ = { stop: 0, target: 0 };
   h.H.strategy = { name: 'Scalp 2', wire: OS.toWire(SCALP) };
   h.core.sendOrder('buy', 'market', null);
   assert.equal(h.sent.length, 1, 'sent at once with its strategy');
@@ -435,7 +450,7 @@ test('TradeCore: a strategy has its stop, so NO STOP is never asked for it; the 
 
 test('TradeCore: placeChecked takes a stop-limit or an MIT by the side of the market it rests on', () => {
   const h = harness();
-  h.core.message(trading(ALL_ON)); h.core.TR.armed = true; h.core.brackets.MNQ = { stop: 8, target: 16 };
+  withSwitches(h, ALL_ON); h.core.TR.armed = true; h.core.brackets.MNQ = { stop: 8, target: 16 };
   h.core.placeChecked('buy', 'stopLimit', 101); assert.equal(h.sent.pop().kind, 'stopLimit');
   h.core.placeChecked('buy', 'mit', 99); assert.equal(h.sent.pop().kind, 'mit');
   h.core.placeChecked('buy', 'stopLimit', 99);
@@ -447,7 +462,7 @@ test('TradeCore: placeChecked takes a stop-limit or an MIT by the side of the ma
 test('TradeCore: Merge sends exactly { type, cid, account, root } with Armed and a position; the result and managed states are kept', async () => {
   const V = await V3;
   const h = harness();
-  h.core.message(trading(ALL_ON));
+  withSwitches(h, ALL_ON);
   h.core.merge();
   assert.equal(h.sent.length, 0, 'not while disarmed');
   h.core.TR.armed = true;

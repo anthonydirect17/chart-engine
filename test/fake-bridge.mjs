@@ -48,6 +48,8 @@
 //                                   minute's volume), so 33 hours of NQ come to about 1.8 million ticks
 //   --live-rate=100                 live trades per second on average, with a burst of 3 times that for 1.5 s in
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
+//   --desk-url=http://127.0.0.1:8837  /diag's desk.deskUrl (config.txt deskUrl; default http://localhost:8800): The Desk's
+//                                   address, the page's one source for it (chart 1.16.0)
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day)
 //   --pc-clock-offset=-45010        the clock of the PC ChartBridge runs on, as seconds off the real one (default: the
@@ -796,7 +798,7 @@ const server = http.createServer((req, res) => {
   if (p === '/diag') {   // same shape as ChartBridge's /diag, sample values
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
-      desk: { postFills: false, deskUrl: 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
+      desk: { postFills: false, deskUrl: flagValue('desk-url') || 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
       ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
         pin: { set: pin.isSet() } }),
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),

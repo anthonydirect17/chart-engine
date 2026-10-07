@@ -4,11 +4,23 @@
  * draws it. The workspace (live/index.html) creates one; the bot-only window (live/bot.html, for a third monitor) creates
  * one with { popout: true }.
  *
- *   const desk = BotDesk.create({ wsUrl, headers, feed, storage, els: { tab, view, strip, notes }, ... });
+ *   const desk = BotDesk.create({ v3, headers, feed, storage, els: { tab, view, strip, notes }, ... });
  *
- * Its own connection to ChartBridge (as the order ticket has its own): hello, then `client` v3, then the sign-in (GET
- * /session, `auth`). Everything shows only when ChartBridge says `trading.switches.bot` is true; with it off the Bot tab
- * says the bot channel is off on this PC and offers nothing (no strip, no pop-ups, no ghost marks).
+ * No connection of its own: it uses the window's one v3 connection (o.v3, live/accounts.js createFeed, shared with the
+ * Account page and the order ticket's 0.4.0 parts): its messages through v3.listen, its own few through v3.post.
+ * Everything shows only when ChartBridge says `trading.switches.bot` is true; with it off the Bot tab says the bot channel
+ * is off on this PC and offers nothing (no strip, no pop-ups, no ghost marks).
+ *
+ * As ChartBridge 0.4.0 built it (nt8/ChartBridgeBot.cs; PROTOCOL.md "The bot channel as built"):
+ *   - The bot's orders: ChartBridge sends the page no mark on an order or a fill (its names, `CB#1a2b3c4d bot s8 t16`,
+ *     stay in NinjaTrader). The bot trades only on Sim101 and only on its root (`bot.root`), so the page takes the working
+ *     orders and the fills on Sim101 on that root as the bot's (Anthony's own Sim101 orders on that root too: said in
+ *     the panel).
+ *   - The rails (`botRails`): maxTrades 1 to 5, maxLosses 1 to 3 and the root (botRoot or its micro or mini), all three
+ *     sent; ChartBridge keeps them in bot-rails.txt (a restart and a new day keep them) and refuses a change while the
+ *     bot has a position or a working entry.
+ *   - The copilot's one-key answer: the workspace's hotkeys (The Desk's `accept` and `reject`) fire a cancelable
+ *     `chart-copilot-key` event; this file answers it (one handler). The Bot window (bot.html) has the buttons only.
  *
  * Safety (BUILD_RULES; PROTOCOL.md "Bot channel"):
  *   - The page never builds an order for the bot. Accept sends `botAnswer` with the proposal's id; ChartBridge places the
@@ -36,8 +48,8 @@ const tog = (el, cls, on) => { if (el && el.classList.contains(cls) !== !!on) el
 const TF_NAMES = { s15: '15 sec', s30: '30 sec', m1: '1 min', m5: '5 min', m15: '15 min' };
 const MICRO = { MNQ: 'micro', MES: 'micro', NQ: 'mini', ES: 'mini' };
 const FAMILY = { MNQ: 'NQ', NQ: 'NQ', MES: 'ES', ES: 'ES' };
-const DESK_KEY = 'live-desk-url-v1', CHART_KEY = 'live-bot-chart-v1';
-const DESK_DEFAULT = 'http://localhost:8800';
+const CHART_KEY = 'live-bot-chart-v1';
+const SIBLING = { MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' };   // the bot's root may be botRoot or its micro or mini
 
 function create(o) {
   o = o || {};
@@ -49,10 +61,10 @@ function create(o) {
 
   /* ---------------- state */
   const S = {
-    sock: null, tries: 0, timer: 0, fastAt: 0, destroyed: false,
+    destroyed: false,
     v3: null, version: '', instruments: {}, trading: null, signedIn: false, on: false,
     accounts: null, bot: null, layout: '', shown: popout, cidSeq: 0,
-    orders: new Map(), botIds: new Set(), pending: new Map(),    // pending: cid -> { kind, id }
+    orders: new Map(), pending: new Map(),    // orders: Sim101's working orders by id; pending: cid -> { kind, id }
     library: { state: 'idle', bots: [], problems: [], text: '' }, libAt: 0,
     keys: { accept: '', reject: '', notes: [], from: '' },
     killConfirm: 0, autoConfirm: 0, railsEdit: false, panelTab: 'today', detail: null,
@@ -86,7 +98,7 @@ function create(o) {
         '<div class="bt-ph" data-in=".02,.3"><span class="bt-t" data-k="chartName">Chart</span>' +
           '<select class="ws-sel bt-tf" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
           '<span class="chart-live ws-lv" data-k="ind"></span>' +
-          '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines">Bot trades</span>' +
+          '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge does not mark the bot\'s orders, so these are Sim101\'s on the bot\'s root: your own Sim101 orders there show too.">Bot trades</span>' +
           (popout ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
         '<div class="bt-chart" data-k="chart" data-no-motion></div>' +
       '</section>' +
@@ -111,10 +123,11 @@ function create(o) {
           '<div class="bt-sec" data-in=".16,.44"><span class="bt-cap">Rails <span class="bt-capn">ChartBridge enforces them</span></span>' +
             '<div class="bt-rail" data-k="railT"><div class="top"><span>Trades</span><span class="mono" data-k="railTText">-</span></div><div class="bt-meter"><i data-grow=".2,.6"></i></div></div>' +
             '<div class="bt-rail" data-k="railL"><div class="top"><span>Losing trades</span><span class="mono" data-k="railLText">-</span></div><div class="bt-meter"><i data-grow=".24,.64"></i></div></div>' +
-            '<div class="bt-rails-edit" data-k="railsEdit" hidden><label>Trades <input type="number" min="1" step="1" inputmode="numeric" data-k="railTIn"></label>' +
-              '<label>Losing trades <input type="number" min="1" step="1" inputmode="numeric" data-k="railLIn"></label>' +
-              '<button type="button" class="ws-btn primary" data-act="railsSave">Tighten</button><button type="button" class="ws-btn" data-act="railsCancel">Cancel</button></div>' +
-            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="railsOpen" data-k="railsOpen">Tighten the rails</button><span class="bt-why" data-k="railsWhy"></span></div>' +
+            '<div class="bt-rails-edit" data-k="railsEdit" hidden><label>Trades <input type="number" min="1" max="5" step="1" inputmode="numeric" data-k="railTIn"></label>' +
+              '<label>Losing trades <input type="number" min="1" max="3" step="1" inputmode="numeric" data-k="railLIn"></label>' +
+              '<label>Root <select class="ws-sel" data-k="railRoot" aria-label="The bot\'s root"></select></label>' +
+              '<button type="button" class="ws-btn primary" data-act="railsSave">Set</button><button type="button" class="ws-btn" data-act="railsCancel">Cancel</button></div>' +
+            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="railsOpen" data-k="railsOpen" title="At most 5 trades and 3 losing trades a day (ChartBridge\'s own limits), on botRoot or its micro or mini; only while the bot is flat">Change the rails</button><span class="bt-why" data-k="railsWhy"></span></div>' +
           '</div>' +
           '<button type="button" class="bt-kill" data-no-motion data-act="kill" data-k="kill">Kill switch</button>' +
           '<div class="bt-sec" data-in=".22,.5"><span class="bt-cap">Day type <span class="bt-capn">every call logged</span></span>' +
@@ -128,49 +141,16 @@ function create(o) {
       '</div>';
   }
 
-  /* ---------------- the connection: hello, client v3, sign in */
-  const sendRaw = m => { try { if (S.sock && S.sock.readyState === 1) { S.sock.send(JSON.stringify(m)); return true; } } catch (e) { /* closed */ } return false; };
+  /* ---------------- the window's v3 connection (o.v3): its messages in, this tab's few out */
+  const V3 = o.v3 || null;
+  const sendRaw = m => !!V3 && V3.post(m);
   const cid = () => 'bt' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
-  function connect() {
-    S.timer = 0;
-    if (S.destroyed) return;
-    let sock;
-    Promise.resolve().then(() => (typeof o.wsUrl === 'function' ? o.wsUrl() : o.wsUrl)).then(url => {
-      if (S.destroyed) return;
-      try { sock = new WebSocket(url); } catch (e) { retry(); return; }
-      S.sock = sock;
-      sock.onopen = () => { if (sock === S.sock) S.tries = 0; };
-      sock.onmessage = ev => { if (sock !== S.sock) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } onMessage(m); };
-      sock.onclose = () => { if (sock !== S.sock) return; S.sock = null; lost(); retry(); };
-      sock.onerror = () => { /* onclose follows */ };
-    }, retry);
-  }
-  function retry() {
-    if (S.destroyed) return;
-    S.tries++;
-    const now = Date.now(), fast = S.tries === 1 && now - S.fastAt > 5000;
-    if (fast) S.fastAt = now;
-    S.timer = setTimeout(connect, fast ? 0 : Math.min(5000, 500 * S.tries));
-  }
   function lost() {
-    S.signedIn = false; S.trading = null; S.orders.clear();
+    S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear();
     S.bot = null;                                    // nothing stale while ChartBridge is away; the next `bot` says it all
     for (const p of props.clear()) dropProposal(p.id);
     S.pending.clear();
     render();
-  }
-  function signIn() {
-    if (S.framed) return;
-    const sock = S.sock;
-    const h = typeof o.headers === 'function' ? o.headers() : {};
-    fetch('/session', { cache: 'no-store', headers: h || {} })
-      .then(r => (r.ok ? r.text() : Promise.reject(new Error('GET /session answered ' + r.status))))
-      .then(body => {
-        let token = null;
-        try { const j = JSON.parse(body); token = typeof j === 'string' ? j : j && j.token; } catch (e) { token = body.trim(); }
-        if (token && sock === S.sock) sendRaw({ type: 'auth', token });
-      })
-      .catch(() => { if (sock === S.sock) setTimeout(() => { if (sock === S.sock && !S.signedIn) signIn(); }, 3000); });
   }
   function onMessage(m) {
     switch (m && m.type) {
@@ -179,7 +159,6 @@ function create(o) {
         S.instruments = {};
         for (const i of m.instruments || []) if (i && i.root) S.instruments[i.root] = i;
         S.v3 = Array.isArray(m.features) && m.features.includes('v3');
-        if (S.v3) { sendRaw({ type: 'client', v: 3 }); signIn(); }
         render();
         return;
       }
@@ -196,6 +175,7 @@ function create(o) {
       case 'botSignal': onSignal(m); return;
       case 'botProposal': onProposal(m); return;
       case 'orders': S.orders.clear(); for (const x of m.list || []) noteOrder(x); renderChartLines(); return;
+      case 'position': return;
       case 'order': noteOrder(m); renderChartLines(); return;
       case 'exec': onExec(m); return;
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); return;
@@ -204,15 +184,19 @@ function create(o) {
     }
   }
 
-  /* ---------------- the bot's own orders and fills (its lines on the Bot tab's chart, its marks) */
-  const isBotOrder = x => !!x && (x.by === 'bot' || S.botIds.has(x.id) || (x.parent && S.botIds.has(x.parent)) || (typeof x.name === 'string' && /^CB#[0-9a-f]+ bot\b/.test(x.name)));
+  /* ---------------- the bot's own orders and fills (its lines on the Bot tab's chart, its marks). ChartBridge 0.4.0 marks
+     neither (the order names stay in NinjaTrader): the bot trades only on its account (Sim101) and its root, so those are
+     taken as the bot's (BotCore.isBotMark). Kept by id for every Sim101 order, so a root change shows the right ones. */
+  const isBotMark = x => BC.isBotMark(x, S.bot);
   function noteOrder(x) {
-    if (!x || typeof x.id !== 'string' || !isBotOrder(x)) return;
-    S.botIds.add(x.id);
+    if (!x || typeof x.id !== 'string' || x.account !== BC.BOT_ACCOUNT) return;
     if (x.state === 'working' || x.state === 'partFilled') S.orders.set(x.id, x); else S.orders.delete(x.id);
   }
+  const simFills = new Map();                      // Sim101's fills this session, by id: read again when the bot's root is known
   function onExec(f, quiet) {
-    if (!f || typeof f.order !== 'string' || !S.botIds.has(f.order)) return;
+    if (!f || typeof f.id !== 'string' || f.account !== BC.BOT_ACCOUNT) return;
+    simFills.set(f.id, f); if (simFills.size > 500) simFills.delete(simFills.keys().next().value);
+    if (!isBotMark(f)) return;
     log.add({ k: 'fill:' + f.id, kind: 'fill', at: isNum(f.u) && f.u > 0 ? f.u : Date.now(), text: (f.side === 'buy' ? 'Bought ' : 'Sold ') + f.qty + ' ' + (f.root || '') + ' at ' + fmtPx(f.p),
       extra: { side: f.side, qty: f.qty, p: f.p, t: f.t, root: f.root } });
     if (!quiet) { renderTrips(); renderPanelTab(); }
@@ -224,9 +208,10 @@ function create(o) {
   function onBot(m) {
     const prev = S.bot;
     S.bot = m;
+    if (!prev || prev.root !== m.root || prev.account !== m.account) { for (const f of simFills.values()) onExec(f, true); renderTrips(); }   // the fills that came before the bot's root was known
     if (S.on && prev) for (const n of BC.noticesFrom(prev, m, BC.fmtUsd, v => fmtPx(v))) { notice(n); log.add({ k: 'n:' + n.kind + ':' + Date.now(), kind: 'notice', text: n.text, level: n.level }); }
     if (prev && prev.mode !== m.mode) log.add({ k: 'mode:' + Date.now(), kind: 'mode', text: 'Mode: ' + (BC.MODE_NAME[m.mode] || m.mode) });
-    if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses)) log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: ' + m.maxTrades + ' trades, ' + m.maxLosses + ' losing trades' });
+    if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses || prev.root !== m.root)) log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: ' + m.maxTrades + ' trades, ' + m.maxLosses + ' losing trades, ' + m.root });
     render();
   }
   function onSignal(s) {
@@ -353,35 +338,25 @@ function create(o) {
     for (const x of propEls.values()) put(x.el.querySelector('[data-k="age"]'), 'textContent', ((Date.now() - x.shownAt) / 1000).toFixed(0) + ' s');
     ageTimer = setTimeout(ageTick, 1000);
   }
-  /* one key: The Desk's `accept` and `reject` hotkeys (no default; the buttons always work) */
-  function onKey(e) {
-    if (!propEls.size || e.repeat || !(S.keys.accept || S.keys.reject)) return;
-    const t = e.target;
-    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-    const combo = window.OrderTicket && window.OrderTicket.hotkeyCombo ? window.OrderTicket.hotkeyCombo(e) : '';
-    if (!combo) return;
-    const ans = combo === S.keys.accept ? 'accept' : combo === S.keys.reject ? 'reject' : '';
-    if (!ans) return;
+  /* One key: the workspace's hotkeys (The Desk's `accept` and `reject`, no default) fire a cancelable `chart-copilot-key`
+     event (live/workspace.js); this is its one handler. It answers the oldest open proposal and cancels the event (the
+     workspace then says nothing more); with none open it leaves the event alone (the workspace says so). */
+  function onCopilotKey(e) {
+    const ans = e && e.detail ? e.detail.answer : '';
+    if (!S.on || (ans !== 'accept' && ans !== 'reject')) return;
     const open = [...propEls.values()].filter(x => !x.ended).sort((a, b) => a.shownAt - b.shownAt)[0];
     if (!open) return;
-    e.preventDefault(); e.stopPropagation();
+    e.preventDefault();
     answer(open.p.id, ans);
   }
-  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('chart-copilot-key', onCopilotKey);
+  /** the keys shown on the buttons and in Options: what the workspace has (o.copilotKeys), checked as before */
   function loadKeys() {
-    let base = '';
-    try { base = storage.getItem(DESK_KEY) || ''; } catch (e) { base = ''; }
-    if (!/^https?:\/\/[^\s/]+$/.test(base)) base = DESK_DEFAULT;
-    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
-    const t = setTimeout(() => { if (ctl) ctl.abort(); }, 3000);
-    fetch(base + '/api/chart-hotkeys', { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error('answered ' + r.status))))
-      .then(doc => {
-        const k = BC.answerKeys(doc, typeof o.tradingKeys === 'function' ? o.tradingKeys() : {}, window.OrderTicket ? window.OrderTicket.hotkeyRefused : null);
-        S.keys = Object.assign(k, { from: 'desk' });
-      })
-      .catch(() => { S.keys = { accept: '', reject: '', notes: [], from: 'none' }; })
-      .then(() => { clearTimeout(t); renderPanelTab(); });
+    if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
+    const doc = o.copilotKeys();
+    if (!doc) { S.keys = { accept: '', reject: '', notes: [], from: 'none' }; return; }
+    const k = BC.answerKeys(doc, typeof o.tradingKeys === 'function' ? o.tradingKeys() : {}, window.OrderTicket ? window.OrderTicket.hotkeyRefused : null);
+    S.keys = Object.assign(k, { from: 'desk' });
   }
 
   /* ---------------- corner notices: a signal, an entry or exit, a limit, a stand-down, the heartbeat (sound optional) */
@@ -690,7 +665,7 @@ function create(o) {
       put(bar, 'className', x.level === 'ok' ? '' : x.level);
       tog(box, 'amber', x.level === 'amber'); tog(box, 'red', x.level === 'red');
     }
-    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades));
+    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades) || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="railsEdit"]'), 'hidden', !S.railsEdit);
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', b.killed ? (S.killConfirm > Date.now() ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
@@ -753,8 +728,9 @@ function create(o) {
   function optionsHtml() {
     const M = MO(), less = M ? M.reduced() : true;
     const k = S.keys;
-    const keys = k.accept || k.reject ? 'Accept ' + (k.accept ? '<span class="bt-keycap">' + esc(k.accept) + '</span>' : 'none') + ', Reject ' + (k.reject ? '<span class="bt-keycap">' + esc(k.reject) + '</span>' : 'none') + ' (The Desk\'s hotkeys)' :
-      k.from === 'desk' ? 'None set on The Desk: Accept and Reject are buttons only.' : k.from === 'none' ? 'The Desk could not be reached for the keys: Accept and Reject are buttons only.' : 'Reading The Desk\'s hotkeys...';
+    const keys = k.accept || k.reject ? 'Accept ' + (k.accept ? '<span class="bt-keycap">' + esc(k.accept) + '</span>' : 'none') + ', Reject ' + (k.reject ? '<span class="bt-keycap">' + esc(k.reject) + '</span>' : 'none') + ' (The Desk\'s hotkeys, set in the workspace\'s Settings)' :
+      k.from === 'desk' ? 'None set on The Desk: Accept and Reject are buttons only.' : k.from === 'window' ? 'In this window Accept and Reject are buttons; their keys work in the workspace\'s windows.' :
+        'The workspace has not read The Desk\'s hotkeys: Accept and Reject are buttons only.';
     return '<div class="bt-opt"><span>Sound with a notice</span><span class="ws-seg" role="group"><button type="button" data-opt="sound" data-v="off" aria-pressed="' + !opts.sound + '">Off</button><button type="button" data-opt="sound" data-v="on" aria-pressed="' + opts.sound + '">On</button></span></div>' +
       '<div class="bt-opt"><span>Motion</span><span class="ws-seg" role="group"><button type="button" data-opt="motion" data-v="full" aria-pressed="' + !less + '">Full</button><button type="button" data-opt="motion" data-v="less" aria-pressed="' + less + '">Less</button></span></div>' +
       '<p class="bt-help">Less motion shows every scene in its final state. The kill switch, Accept and Reject, the position and P&amp;L never move either way.</p>' +
@@ -790,7 +766,7 @@ function create(o) {
       renderPanel();
       return;
     }
-    if (pt) { S.panelTab = pt.dataset.ptab; if (S.panelTab === 'options' && !S.keys.from) loadKeys(); renderPanelTab(); return; }
+    if (pt) { S.panelTab = pt.dataset.ptab; if (S.panelTab === 'options') loadKeys(); renderPanelTab(); return; }
     if (op) {
       if (op.dataset.opt === 'sound') { BC.setOption(storage, 'sound', op.dataset.v === 'on'); opts = BC.readOptions(storage); if (opts.sound) beep(''); }
       else if (op.dataset.opt === 'motion' && MO()) { MO().setReducedMotion(op.dataset.v === 'less'); if (typeof o.onMotion === 'function') o.onMotion(); }
@@ -811,15 +787,18 @@ function create(o) {
     } else if (a === 'railsOpen') {
       const b = S.bot || {};
       S.railsEdit = true; railsWhy('');
-      q('[data-k="railTIn"]').max = b.maxTrades; q('[data-k="railTIn"]').value = b.maxTrades;
-      q('[data-k="railLIn"]').max = b.maxLosses; q('[data-k="railLIn"]').value = b.maxLosses;
+      q('[data-k="railTIn"]').max = BC.RAIL_MAX.maxTrades; q('[data-k="railTIn"]').value = b.maxTrades;
+      q('[data-k="railLIn"]').max = BC.RAIL_MAX.maxLosses; q('[data-k="railLIn"]').value = b.maxLosses;
+      const rs = q('[data-k="railRoot"]'), r = b.root || botRoot();
+      rs.replaceChildren(...[r, SIBLING[r]].filter(Boolean).map(x => new Option(x + ' (' + (MICRO[x] || 'contract') + ')', x)));
+      rs.value = r;
       renderPanel();
       q('[data-k="railTIn"]').focus();
     } else if (a === 'railsCancel') { S.railsEdit = false; railsWhy(''); renderPanel(); }
     else if (a === 'railsSave') {
-      const r = BC.railsChange(S.bot, { maxTrades: q('[data-k="railTIn"]').value, maxLosses: q('[data-k="railLIn"]').value });
+      const r = BC.railsChange(S.bot, { maxTrades: q('[data-k="railTIn"]').value, maxLosses: q('[data-k="railLIn"]').value, root: q('[data-k="railRoot"]').value });
       if (r.error) { railsWhy(r.error); return; }
-      if (sendBot(r.msg, 'rails')) { S.railsEdit = false; railsWhy('Sent. ChartBridge holds the tighter rails until 18:00 ET.'); log.add({ k: 'askrails:' + Date.now(), kind: 'rails', text: 'Asked to tighten: ' + r.msg.maxTrades + ' trades, ' + r.msg.maxLosses + ' losing trades' }); }
+      if (sendBot(r.msg, 'rails')) { S.railsEdit = false; railsWhy('Sent. ChartBridge keeps them (bot-rails.txt) until you change them again.'); log.add({ k: 'askrails:' + Date.now(), kind: 'rails', text: 'Asked for ' + r.msg.maxTrades + ' trades, ' + r.msg.maxLosses + ' losing trades, ' + r.msg.root }); }
       renderPanel();
     } else if (a === 'popout') popOut();
   }
@@ -946,20 +925,21 @@ function create(o) {
   /* (the `bot` message arrives once a second from ChartBridge while the bot is connected: render() covers it) */
 
   if (popout) S.shown = true;
-  /* The workspace passes its order connection's hello (o.waitHello): this page opens its own connection only when
-     ChartBridge speaks v3, so a 0.3.x ChartBridge sees no extra connection at all. The bot-only window connects at once. */
-  if (!o.waitHello) connect();
+  /* the window's v3 connection: every message it gets, and its drop */
+  const unlisten = V3 ? V3.listen({ message: onMessage, closed: () => lost() }) : () => {};
   render();
-  if (!popout) setTimeout(loadKeys, 1500); else loadKeys();
+  loadKeys();
 
   const api = {
     VERSION,
-    /** the workspace's hello (its order connection's): connect for the bot channel only with a v3 ChartBridge */
+    /** the workspace's hello (its order connection's): with an older ChartBridge the v3 connection never opens, so the
+        tab says what it lacks from this one */
     hello(m) {
-      const v3 = !!(m && Array.isArray(m.features) && m.features.includes('v3'));
-      if (!v3) { if (!S.sock && !S.timer) { S.v3 = false; S.version = m && typeof m.version === 'string' ? m.version : ''; render(); } return; }
-      if (!S.sock && !S.timer && !S.destroyed) connect();
+      if (m && Array.isArray(m.features) && m.features.includes('v3')) return;
+      S.v3 = false; S.version = m && typeof m.version === 'string' ? m.version : ''; render();
     },
+    /** the workspace's hotkeys changed (The Desk read): the keys shown on the buttons */
+    keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); } },
     showTab, shown: () => S.shown, on: () => S.on,
     layoutChanged(name) { S.layout = String(name || ''); if (S.shown && !popout) showTab(false); renderStrip(); },
     /** the chart menu's ghost switch (workspace.js): whether it is offered and on, and to flip it */
@@ -973,7 +953,7 @@ function create(o) {
     state: () => ({ on: S.on, v3: S.v3, signedIn: S.signedIn, shown: S.shown, bot: S.bot, library: { state: S.library.state, n: S.library.bots.length, problems: S.library.problems.slice() },
       proposals: [...propEls.keys()], keys: Object.assign({}, S.keys), dayType: days.current(), dayCalls: days.calls().length, log: log.list().length, trips: trips(), chart: !!S.chart, detail: !!S.detail }),
     chart: () => (S.chart ? S.chart.chart : null),
-    destroy() { S.destroyed = true; clearTimeout(S.timer); if (S.sock) { const s = S.sock; S.sock = null; try { s.close(); } catch (e) { /* closed */ } } unmountChart(); document.removeEventListener('keydown', onKey, true); propBox.remove(); },
+    destroy() { S.destroyed = true; unlisten(); unmountChart(); document.removeEventListener('chart-copilot-key', onCopilotKey); propBox.remove(); },
   };
   window.addEventListener('storage', e => {
     if (e.key === BC.KEYS.log || e.key === BC.KEYS.dayType) { renderPanel(); renderTrips(); }

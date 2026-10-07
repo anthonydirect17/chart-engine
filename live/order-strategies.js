@@ -399,18 +399,20 @@ function mergeLine(m) {
 }
 
 /* ---------------- The Desk: the two documents, read and saved whole, a copy kept in this browser */
-const DESK_KEYS = { url: 'live-desk-url-v1', cache: 'live-desk-cache-v1' };
+const DESK_KEYS = { cache: 'live-desk-cache-v1' };
 const DESK_DEFAULT = 'http://localhost:8800';
 const DOCS = { hotkeys: { path: '/api/chart-hotkeys', clean: cleanHotkeysDoc, what: 'hotkeys' }, strategies: { path: '/api/chart-strategies', clean: cleanStrategiesDoc, what: 'strategies' } };
-/** The Desk's address as typed: a scheme, a host and a port, no path, no trailing slash; '' when it is not one. */
+/** The Desk's address: a scheme, a host and a port, no path, no trailing slash; '' when it is not one. */
 function deskUrl(v) {
   const s = typeof v === 'string' ? v.trim().replace(/\/+$/, '') : '';
   return /^https?:\/\/[A-Za-z0-9.\-[\]:]+$/.test(s) && s.length <= 200 ? s : '';
 }
 /**
- * The Desk's two documents. o: { fetch, storage ({ getItem, setItem }), timeoutMs (5000) }. Each read and each save
+ * The Desk's two documents. o: { fetch, storage ({ getItem, setItem }), base, timeoutMs (5000) }. Each read and each save
  * keeps the document in this browser (live-desk-cache-v1), so a PC that cannot reach The Desk shows the last copy read.
- *   url() / setUrl(text)      The Desk's address (live-desk-url-v1; http://localhost:8800 until one is typed)
+ *   base()                    The Desk's address (a string or a promise of one): the page's one source, ChartBridge's
+ *                             deskUrl in config.txt (AccountsPage.deskBase, from /diag); http://localhost:8800 without it
+ *   url()                     the address last used (for a label)
  *   cached(which)             the last copy read ({ doc, at } or null), which = 'hotkeys' | 'strategies'
  *   read(which)               Promise of { ok, doc } or { ok: false, error, status }
  *   save(which, doc)          Promise of { ok, doc } (the stored document, rev + 1) or { ok: false, error, conflict,
@@ -424,8 +426,9 @@ function createDesk(o) {
   const set = (k, v) => { try { if (!st) return false; st.setItem(k, v); return true; } catch (e) { return false; } };
   const desk = { reach: 'unknown', error: '' };
   const readCache = () => { try { const v = JSON.parse(get(DESK_KEYS.cache)); return isObj(v) ? v : {}; } catch (e) { return {}; } };
-  desk.url = () => { let v = null; try { v = JSON.parse(get(DESK_KEYS.url)); } catch (e) { v = null; } return deskUrl(v) || DESK_DEFAULT; };
-  desk.setUrl = text => { const u = deskUrl(text); if (!u) return false; return set(DESK_KEYS.url, JSON.stringify(u)); };
+  let last = DESK_DEFAULT;
+  desk.url = () => last;
+  const base = async () => { let v = ''; try { v = typeof o.base === 'function' ? await o.base() : ''; } catch (e) { v = ''; } last = deskUrl(v) || DESK_DEFAULT; return last; };
   desk.cached = which => {
     const c = readCache()[which];
     return isObj(c) && isObj(c.doc) ? { doc: DOCS[which].clean(c.doc), at: isInt(c.at) ? c.at : 0 } : null;
@@ -435,7 +438,7 @@ function createDesk(o) {
     const D = DOCS[which], ctl = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), timeout) : 0;
     try {
-      const r = await o.fetch(desk.url() + D.path, Object.assign({ method, cache: 'no-store', credentials: 'omit' }, ctl ? { signal: ctl.signal } : {},
+      const r = await o.fetch((await base()) + D.path, Object.assign({ method, cache: 'no-store', credentials: 'omit' }, ctl ? { signal: ctl.signal } : {},
         body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
       let j = null;
       try { j = await r.json(); } catch (e) { j = null; }

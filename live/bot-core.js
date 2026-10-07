@@ -5,7 +5,10 @@
  *
  * What lives here:
  *   rails       how close the bot is to each of its limits (trades x of 5, losing trades x of 3): amber from 70%, red from
- *               90%; and the page's tighten-only change of them (`botRails`, lead's default in PROTOCOL.md)
+ *               90%; and the page's change of them (`botRails` as ChartBridge 0.4.0 built it: maxTrades 1 to 5, maxLosses
+ *               1 to 3, the root botRoot or its micro or mini, kept by ChartBridge in bot-rails.txt)
+ *   the bot's   which orders and fills are the bot's: ChartBridge 0.4.0 marks none on the page, so those on Sim101 on the
+ *   orders      bot's root (isBotMark)
  *   proposals   a copilot proposal's life on the page: shown (then `botSeen` once), answered once (`botAnswer`), and gone
  *               when ChartBridge says accepted, rejected, withdrawn or not answered (an expired one shows "not answered")
  *   library     the frozen Bot-Lab builds (`GET /bot-library`, docs/BOT_LIBRARY.md): read, checked, shelved
@@ -26,6 +29,11 @@
 const VERSION = '1.0.0';
 /* Rails (PROTOCOL.md "Bot channel"): ChartBridge's defaults; the `bot` message carries the ones in force. */
 const RAILS = Object.freeze({ maxQty: 1, maxTrades: 5, maxLosses: 3 });
+/* The most the page may ask for (ChartBridgeBot.cs MaxTradesLimit, MaxLossesLimit): ChartBridge's own limits. */
+const RAIL_MAX = Object.freeze({ maxTrades: 5, maxLosses: 3 });
+/* The bot's account and the roots it may trade (botRoot, or its micro or mini: ChartBridgeBot.cs Sibling). */
+const BOT_ACCOUNT = 'Sim101';
+const ROOT_SIBLING = Object.freeze({ MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' });
 /* How close to a limit (Anthony, addendum 2): amber at 70% used, red at 90%. */
 const AMBER = 0.7, RED = 0.9;
 /* A conditions cell with fewer trades than this is faded: too few to read. */
@@ -65,24 +73,38 @@ function rails(bot) {
   return { trades, losses, level: worse(trades.level, losses.level) };
 }
 /**
- * The page's change of the rails (`botRails`): tighten only. cur is the rails in force ({ maxTrades, maxLosses } from the
- * `bot` message); want is what Anthony typed. Each must be a whole number from 1 to the rail in force. Returns
- * { msg } (the message to send, with cid) or { error } (said on the page; nothing is sent).
+ * The page's change of the rails (`botRails`, as ChartBridge 0.4.0 built it): maxTrades a whole number from 1 to 5,
+ * maxLosses from 1 to 3 (ChartBridge's own limits: never above), root the bot's root now or its micro or mini sibling. All
+ * three are sent; ChartBridge saves them in bot-rails.txt (they stay over a restart and a new day) and refuses a change
+ * while the bot has a position or a working entry. cur is the `bot` message ({ maxTrades, maxLosses, root }); want is
+ * what Anthony picked. Returns { msg } (the message to send, with cid) or { error } (said on the page; nothing is sent).
  */
 function railsChange(cur, want, cid) {
   const c = cur || {}, w = want || {};
-  if (!isInt(c.maxTrades) || !isInt(c.maxLosses)) return { error: 'The rails in force are not known yet: nothing was sent.' };
+  if (!isInt(c.maxTrades) || !isInt(c.maxLosses) || typeof c.root !== 'string' || !c.root) return { error: 'The rails in force are not known yet: nothing was sent.' };
   const parse = v => (typeof v === 'string' && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : v);
-  const t = parse(w.maxTrades), l = parse(w.maxLosses);
-  for (const [name, v, max] of [['Trades', t, c.maxTrades], ['Losing trades', l, c.maxLosses]]) {
-    if (!isInt(v) || v < 1) return { error: name + ' must be a whole number of 1 or more: nothing was sent.' };
-    if (v > max) return { error: name + ' can only be tightened (it is ' + max + ' now): nothing was sent.' };
+  const t = parse(w.maxTrades), l = parse(w.maxLosses), r = w.root === undefined ? c.root : w.root;
+  for (const [name, v, max] of [['Trades', t, RAIL_MAX.maxTrades], ['Losing trades', l, RAIL_MAX.maxLosses]]) {
+    if (!isInt(v) || v < 1 || v > max) return { error: name + ' must be a whole number from 1 to ' + max + ' (ChartBridge\'s limit): nothing was sent.' };
   }
-  if (t === c.maxTrades && l === c.maxLosses) return { error: 'Nothing to change.' };
+  if (r !== c.root && r !== ROOT_SIBLING[c.root]) return { error: 'The root must be ' + c.root + (ROOT_SIBLING[c.root] ? ' or ' + ROOT_SIBLING[c.root] : '') + ': nothing was sent.' };
+  if (plainObj(c.position) && isNum(c.position.qty) && c.position.qty !== 0) return { error: 'The bot has a position: change its rails when it is flat. Nothing was sent.' };
+  if (t === c.maxTrades && l === c.maxLosses && r === c.root) return { error: 'Nothing to change.' };
   const msg = { type: 'botRails' };
   if (cid) msg.cid = cid;
-  msg.maxTrades = t; msg.maxLosses = l;
+  msg.maxTrades = t; msg.maxLosses = l; msg.root = r;
   return { msg };
+}
+
+/**
+ * Is this order or fill the bot's? ChartBridge 0.4.0 sends the page no mark on either (the names, `CB#1a2b3c4d bot s8 t16`,
+ * stay in NinjaTrader). The bot trades only on Sim101 and only on its root, so a working order or a fill there is taken
+ * as the bot's (Anthony's own Sim101 orders on that root are counted too). bot: the `bot` message (its account and root).
+ */
+function isBotMark(x, bot) {
+  const b = bot || {};
+  const account = typeof b.account === 'string' && b.account ? b.account : BOT_ACCOUNT, r = typeof b.root === 'string' ? b.root : '';
+  return !!x && !!r && x.account === account && x.root === r;
 }
 
 /* ======================================================================== modes */
@@ -523,7 +545,7 @@ function statusText(b) {
 }
 
 return {
-  VERSION, RAILS, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
+  VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
   railLevel, rails, railsChange, worse,
   modesAllowed, simTradable, botSwitchOn,
   createProposals,

@@ -30,7 +30,7 @@
     "botKill": { "type": "botKill", "cid": "c18", "on": true },
     "botSeen": { "type": "botSeen", "id": "demo-0947-1", "at": 1791380820450 },
     "botAnswer": { "type": "botAnswer", "cid": "c19", "id": "demo-0947-1", "answer": "accept", "at": 1791380821200 },
-    "botRails": { "type": "botRails", "cid": "c20", "maxTrades": 3, "maxLosses": 2 }
+    "botRails": { "type": "botRails", "cid": "c20", "maxTrades": 3, "maxLosses": 2, "root": "MNQ" }
   },
   "serverToPage": {
     "hello.v3": { "type": "hello", "version": "0.4.0", "now": 1791380800000,
@@ -86,7 +86,7 @@
     "copierEvent.standDown": { "type": "copierEvent", "at": 1791380900000, "account": null, "action": "standDown", "root": null, "qty": null, "price": null, "slippageTicks": null, "leaderMs": null, "fillMs": null,
       "text": "3 followers left Connected within 10 s: the copier stands down until Re-arm" },
     "bot": { "type": "bot", "enabled": true, "connected": true, "name": "Demo Opening Fade", "mode": "copilot", "account": "Sim101", "root": "MNQ",
-      "position": { "qty": 0, "avgPrice": null }, "pnlToday": 46, "trades": 2, "maxTrades": 5, "losses": 1, "maxLosses": 3, "killed": false, "standDown": null, "lastBeatMs": 420,
+      "position": { "qty": 0, "avgPrice": null }, "pnlToday": 46, "trades": 2, "maxTrades": 5, "losses": 1, "maxLosses": 3, "maxQty": 1, "killed": false, "standDown": null, "lastBeatMs": 420,
       "lastSignal": { "type": "botSignal", "id": "demo-0947-1", "at": 1791380820000, "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice", "result": "proposed" } },
     "botSignal": { "type": "botSignal", "id": "demo-0947-1", "at": 1791380820000, "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice", "result": "proposed" },
     "botSignal.skipped": { "type": "botSignal", "id": "demo-0950-2", "at": 1791380850000, "action": "skipped", "side": null, "kind": null, "price": null, "stopTicks": null, "targetTicks": null, "reason": "Sample: range too small", "result": "skipped" },
@@ -105,7 +105,7 @@
   },
   "serverToBot": {
     "welcome": { "type": "welcome", "version": "0.4.0", "mode": "shadow", "account": "Sim101", "root": "MNQ", "rails": { "maxQty": 1, "maxTrades": 5, "maxLosses": 3 },
-      "instruments": [{ "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false, "priceFormat": "decimal" }] },
+      "instruments": [{ "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false }] },
     "tick": { "type": "tick", "root": "MNQ", "t": 1791366420.137, "u": 1791380820137, "rx": 1791380820141, "p": 25001.25, "v": 2, "s": 1, "sm": 2, "q": 1 },
     "botState": { "type": "botState", "mode": "copilot", "killed": false, "standDown": null, "trades": 2, "losses": 1 },
     "answer": { "type": "answer", "id": "demo-0947-1", "answer": "accepted", "text": "placed as o31 on Sim101" },
