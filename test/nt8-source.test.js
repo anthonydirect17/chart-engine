@@ -160,8 +160,8 @@ test('bracket upkeep runs even with trading off; pages hear only about the accou
   const upd = fnBody('OnOrderUpdate');
   assert.match(upd, /^[^{]*\{\s*if \(account == null \|\| e\.Order == null\) return;/);
   assert.ok(upd.indexOf('KeepBracket(o)') < upd.indexOf('if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))'), 'upkeep before the trading check');
-  assert.ok(upd.indexOf('ChartBridgeAccounts.SendScoped(account.Name, OrderJson(') < upd.indexOf('Forget(o)'), 'OrderJson before Forget (Forget drops the id)');
-  assert.match(fnBody('OnPositionUpdate'), /if \(Enabled && root != null && ChartBridgeAccounts\.Seen\(account\.Name\)\)\s*ChartBridgeAccounts\.SendScoped\(account\.Name, PositionJson\(/);
+  assert.ok(upd.indexOf('ChartBridgeAccounts.SendScoped(account, OrderJson(') < upd.indexOf('Forget(o)'), 'OrderJson before Forget (Forget drops the id)');
+  assert.match(fnBody('OnPositionUpdate'), /if \(Enabled && root != null && ChartBridgeAccounts\.Seen\(account\.Name\)\)\s*ChartBridgeAccounts\.SendScoped\(account, PositionJson\(/);
   // 0.4.0: a v2 page (no client message) keeps v2's scope: the tradable accounts only
   const acc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
   assert.match(acc, /public static bool Seen\(string name\) \{ return ChartBridgeOrders\.AccountTradable\(name\) \|\| \(Listed\(name\) && AnyV3Trader\(\)\); \}/);

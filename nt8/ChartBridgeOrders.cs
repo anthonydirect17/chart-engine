@@ -805,7 +805,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (saveErr != null)
                 PlanSaveAlarm(where + ": the planned stop and target of entry CB#" + br.Tag + " are set (stop " + TicksText(newSt) + " / target " + TicksText(newTt) +
                       " ticks) but could not be saved (" + saveErr + "); after a recompile or restart it would use the ticks it was placed with");
-            if (Enabled && ChartBridgeAccounts.Seen(o.Account.Name)) ChartBridgeAccounts.SendScoped(o.Account.Name, OrderJson(o, null), true);   // the page sees the new planned ticks (0.4.0 accounts: each page its scope)
+            if (Enabled && ChartBridgeAccounts.Seen(o.Account.Name)) ChartBridgeAccounts.SendScoped(o.Account, OrderJson(o, null), true);   // the page sees the new planned ticks (0.4.0 accounts: each page its scope)
             return null;
         }
 
@@ -950,7 +950,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Alarm(where + ": the market EXIT was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + "; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: v2 pages the tradable accounts (as before), v3 pages every watched one
-                ChartBridgeAccounts.SendScoped(account.Name, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true);
+                ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true);
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
         }
 
@@ -1463,7 +1463,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Booked(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);
             string root = ChartBridgeServer.RootFor(inst);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: each page its scope
-                ChartBridgeAccounts.SendScoped(account.Name, PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice), false);
+                ChartBridgeAccounts.SendScoped(account, PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice), false);
             // Flat, and still flat now (a newer fill may already have opened a position whose legs must stay),
             // on a connection that has been steady (not a reconnect still loading positions).
             double now = ChartBridgeTime.NowUtcMs();
@@ -2142,7 +2142,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
-                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a.Name, OrderJson(o, null)));
+                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null)));
             }
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }

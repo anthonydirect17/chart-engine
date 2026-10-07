@@ -1380,6 +1380,56 @@ is an exit action), one order per message, with the v2 OCO rule (a leg takes its
 with `from: "list"` is refused ("Cancel from the Working orders tab is off (cancelFromList in config.txt)"). A `cancel`
 without `from` is v2's.
 
+#### Accounts as built (ChartBridge 0.4.0, `nt8/ChartBridgeAccounts.cs`)
+
+Where the contract above left a detail open, the build chose the safe simple option, marked **(lead's default)**:
+
+- **`accounts.txt` missing after ChartBridge made it** (lead's default): a first start is "no `accounts.txt` and no
+  `accounts.log`". When `accounts.log` is there, the checkmark file went missing: **no account is checked**, `tradeAccounts`
+  is not used, the pages get a `status` `error` ("accounts.txt is missing ...: no account is checked for trading; check them
+  again on the Accounts tab") at sign-in, and a new file is written with every account off.
+- **A file that cannot be read** includes one that reads but is wrong: no header line, a line that is not
+  `<state>\t<ms>\t<name>`, an unknown state, a name twice, or a Backtest or Playback account. The whole file is refused (never
+  half read), every checkmark is off, the file is never rewritten that run, `accountTrade` on and `accountArchive` are refused,
+  and every page gets the `status` `error` as it signs in. Windows line ends are fine.
+- **Writes**: `accounts.txt` and `accounts.log` are written on the 1 s check's thread or the page's connection thread, never
+  NinjaTrader's (the first start's file is written by the first check, about a second after start). A failed save keeps the
+  checkmarks in force, raises one `status` `error`, and is tried again every second.
+- **`plan`** on an entry is an entry action (the checkmark), like `change` on an entry. **`change` on an order placed elsewhere**
+  (`role` `other`) is an entry action too (lead's default); moving a ChartBridge stop or target is an exit.
+- **With `accountChecks` on, every `cancel` is an exit** (watched, Connected, not archived, not Backtest or Playback), with or
+  without `from`. With it off, a `cancel` without `from` is v2's (`tradeAccounts`), and a `cancel` with `from: "list"` (when
+  `cancelFromList` is on) is an exit. Exits never need the checkmark, but always need a Connected account.
+- **With `accountChecks` off** there is no Gone and no file at all (0.3.8 exactly): `state` is always `active`, `trade` is
+  "in `tradeAccounts`", and `accountTrade` / `accountArchive` are refused ("accountTrade is off (accountChecks in config.txt)").
+  The `accounts` list still goes to a v3 page, read only.
+- **Gone**: sampled once a second; the 10 s grace starts at the first bad reading and any healthy reading starts it again. An
+  account `accounts.txt` knows but NinjaTrader no longer lists (its connection is off) is listed `disconnected` and goes Gone
+  like any other. So after a NinjaTrader start, an account whose connection is not up within 10 s of ChartBridge's start loses
+  its checkmark (Anthony checks it again once connected). An archived account that NinjaTrader lists again, Connected and
+  healthy, comes back `active` and unchecked.
+- **`accountTrade` with `on: false`** is accepted for any name (signed in); it changes nothing for an account that is unknown,
+  archived or already off. `on: true` for a name NinjaTrader and `accounts.txt` do not know is refused ("no account ...").
+- **Every account ChartBridge lists is written to `accounts.txt`** (as `off` until checked), so an account that later
+  disappears can still be listed Gone and archived.
+- **`/diag`**: nothing added (account names stay out of new diagnostics).
+
+**What NinjaTrader 8 reports, and what the fields use** (help guide, checked 2026-10-07; never estimated):
+
+| field | from | notes |
+|---|---|---|
+| `balance` | `Account.Get(AccountItem.CashValue)` | documented |
+| `realizedToday` | `AccountItem.RealizedProfitLoss` | documented ("Realized PnL"); NinjaTrader's own reset per connection, not checked to be the trading day on every connection |
+| `unrealized` | `AccountItem.UnrealizedProfitLoss` | documented |
+| `pnlToday` | the two added | null if either is null |
+| `roomDrawdown` | `AccountItem.TrailingMaxDrawdown`, read by name | not in the documented `AccountItem` list; the Accounts tab column "Trailing max drawdown" is documented as "the remaining value of the trailing max drawdown", and NinjaTrader staff read it with `Get` "if your broker provides the information". `Get` answers 0 when nothing is reported, so 0 counts only after a non-zero value for that account this run; until then null, "NinjaTrader does not report a trailing drawdown for this account (it shows 0, as it does when none is set)". A NinjaTrader without the item: null with why |
+| `roomDailyLoss` | always null | NinjaTrader documents its "Daily loss limit" column as "the percentage of the daily loss limit that has been reached", not dollars left; the why says so. The page may show a limit typed on The Desk (`/api/chart-accounts`) |
+| `sim` | the account's `Provider` is `Simulator` (reflection) | unknown is `false`, the safe side for the copier and the bot |
+| disabled | `Account.AccountStatusUpdate` (documented static event; `e.Status` values are not documented) | a last status text of `Disabled` counts; a status from before ChartBridge started is not seen until it changes |
+
+Money is rounded to cents. Every money and room field is null while the account is not Connected (why: "the account is not
+connected").
+
 ### Order types (`orderTypes = on`)
 
 `order.kind` adds `stopLimit` and `mit`. Every existing gate applies to each: tick grid, `maxTicksAway`, the 300 s stale
