@@ -133,7 +133,6 @@ line; recompile or restart NinjaTrader after a change):
 | `strategies` | off | 0.4.0: `on` takes Order Strategies with an entry (stop, up to 3 targets, breakeven, trailing). |
 | `merge` | off | 0.4.0: `on` turns on Merge (one stop and one target set for the whole position at the first leg's prices). |
 | `cancelFromList` | off | 0.4.0: `on` lets the Working orders tab cancel an order on any watched account. |
-| `quoteRoots` | none | 0.4.0: quote-only markets streamed to the page, never traded, e.g. `YM, RTY, GC, SI, CL, 6E, ZN, ZB`. |
 | `copier` | off | 0.4.0: `on` turns on the copier engine (followers must be Sim accounts). |
 | `bot` | off | 0.4.0: `on` opens the bot channel (`/bot`, its own secret in `bot-secret.txt`; auto orders on Sim101 only). |
 | `botRoot` | `MNQ` | 0.4.0: the one root the bot may trade (1 contract). |
