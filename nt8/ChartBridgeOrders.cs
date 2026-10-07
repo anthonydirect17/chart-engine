@@ -280,7 +280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); LateSaid.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); LateSaid.Clear(); LateSeq.Clear(); PosSeq.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -1572,6 +1572,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null || e.Position == null) return;
             Instrument inst = e.Position.Instrument;
             Booked(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);
+            CopierSawPosition(account, inst);   // 0.4.3 third review: a late fill is booked once NinjaTrader's position updates after it
             MergeSawPosition(account, inst);   // 0.4.0 B4: the position is changing (Merge waits 2 s)
             string root = ChartBridgeServer.RootFor(inst);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: each page its scope

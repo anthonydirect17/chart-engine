@@ -535,8 +535,13 @@ public static class CopierHarness
         for (int k = 1; k <= 6; k++) { ChartBridgeCopier.Tick(t + k * 1000); ConfirmCancels(f1, b1); }
         Check(Closes(f1, b1).Count == 2 && Closes(f1, b1)[1].Contains("Sell Market 3 ") && EventSaid("flatten", "SIM-F1", "its close is not done"),
               "second review (1): the rejected close is tried again (the leader is long again; owed closes do not wait for it): " + string.Join(" | ", After(f1, b1)));
-        for (int k = 7; k <= 16; k++) { ChartBridgeCopier.Tick(t + k * 1000); ConfirmCancels(f1, b1); }
+        for (int k = 7; k <= 10; k++) { ChartBridgeCopier.Tick(t + k * 1000); ConfirmCancels(f1, b1); }
         Check(Closes(f1, b1).Count == 2, "second review (1): while that close may still fill, no other close is started: " + string.Join(" | ", After(f1, b1)));
+        // third review (2): that close neither fills nor ends in 10 s: one alarm, it is cancelled, then the close goes again
+        Order x2 = f1.Orders.Last(o => (o.Name ?? "").EndsWith(" copy out"));
+        for (int k = 11; k <= 20; k++) { ChartBridgeCopier.Tick(t + k * 1000); ConfirmCancels(f1, b1); }
+        Check(After(f1, b1).Contains("cancel " + x2.Name) && sent.Count(m => m.Contains("has not filled or ended in 10 s")) == 1 && Closes(f1, b1).Count == 3 && Closes(f1, b1)[2].Contains("Sell Market 3 "),
+              "third review (2): a close not filled or ended in 10 s: one alarm, cancelled, then closed again once confirmed: " + string.Join(" | ", After(f1, b1)));
         Reset();
 
         // (3) a closing fill whose order event never comes (and is not in NinjaTrader's position): past 10 s it no longer blocks,
@@ -555,11 +560,21 @@ public static class CopierHarness
         {
             ChartBridgeCopier.Tick(t + k * 1000); ConfirmCancels(f1, b1);
             Order close = f1.Orders.LastOrDefault(o => (o.Name ?? "").EndsWith(" copy out") && ChartBridgeOrders.IsWorking(o.OrderState));
-            if (close != null) { Fill(f1, close, close.Quantity, 24997.75); Pos(f1, mnq, 3 - close.Quantity); }
+            if (close != null) { Fill(f1, close, close.Quantity, 24997.75); Pos(f1, mnq, 0); }   // NinjaTrader's position: flat (the unseen sell and the close)
         }
         Check(Closes(f1, b1).Count == 1 && Closes(f1, b1)[0].Contains("Sell Market 2 ") && Logged("the copier closes 2 of the 3 this follower shows"),
               "second review (3): past 10 s: the close is 2 of the 3 shown (the unseen 1 taken off; never 3), and an alarm: " + string.Join(" | ", After(f1, b1)));
-        Check(!Closes(f1, b1).Any(c => c.Contains("Sell Market 3 ")) && EventSaid("flatten", "SIM-F1", "less 1 filled on an order whose event never came"), "second review (3): what still shows (the unseen 1) is never sold again");
+        Check(!Closes(f1, b1).Any(c => c.Contains("Sell Market 3 ")), "second review (3): never 3");
+        // third review (1): the next trade: NinjaTrader's position has updated since, so the unseen fill is booked and the close
+        // is the whole 3 (it is not taken off a later trade's close, leaving the follower open with its stops cancelled)
+        Reset();
+        LeaderEntry(1);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        b1 = f1.Calls.Count;
+        Fill(lead, LeaderStop(), 1, 24998);
+        Pos(lead, mnq, 0);
+        ConfirmCancels(f1, b1);
+        Check(Closes(f1, b1).Count == 1 && Closes(f1, b1)[0].Contains("Sell Market 3 "), "third review (1): the next trade after a late fill: the close is the whole 3: " + string.Join(" | ", After(f1, b1)));
         f1.Orders.Remove(unseen);
         Reset();
 

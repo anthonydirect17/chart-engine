@@ -978,7 +978,7 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
 });
 
 test('0.4.0 copier: order calls only in its named functions; every one passes the account gates (no Sim lock, Anthony 2026-10-07)', () => {
-  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'SendClose', 'SubmitOne', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1); SendClose: 0.4.3
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'SendClose', 'SubmitOne', 'CancelStuckClose', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1); SendClose: 0.4.3
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
@@ -1015,6 +1015,15 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   // second review (6): one refused order never stops the rest of the pass
   assert.match(copierBodies('CheckReduces'), /try \{ if \(r\.Close\) SendClose\(r, now\); else SendReduce\(r, now\); \}\s*catch \(Exception ex\)/);
   assert.match(copierBodies('Reconcile'), /try \{ ReconcileOne\(c, la, entries, now\); \}\s*catch \(Exception ex\)/);
+  // third review (3): a leader exit too: each follower on its own
+  assert.match(copierBodies('LeaderExit'), /try\s*\{\s*if \(nowAbs == 0\)[\s\S]*ScaleOut\(c, prevAbs, nowAbs, ts\);\s*\}\s*catch \(Exception ex\)/);
+  // third review (1): a late fill is booked once NinjaTrader's position updates after it went late; followers looked at each second
+  assert.match(ocode, /CopierSawPosition\(account, inst\);/);
+  assert.match(ccode, /else if \(seqNow > seqLate\) \{ NotedFilled\[o\] = o\.Filled;/);
+  assert.match(copierBodies('Tick'), /WatchUnnoted\(now\);/);
+  // third review (2): a close not done in 10 s is said once and cancelled; FlatThrough never clears an owed close beside a live one
+  assert.match(copierBodies('ReconcileOne'), /if \(co != null && !ChartBridgeOrders\.CopierDone\(co\)\)[\s\S]*CancelStuckClose\(c, co\);/);
+  assert.match(copierBodies('FlatThrough'), /\(co == null \|\| ChartBridgeOrders\.CopierDone\(co\)\)/);
   const sc = copierBodies('SendClose');
   // second review (2): what may still fill and the fills not through are read before the positions and again after; then a
   // fill not through waits (or, past the 3 s limit, nothing is sent: owed); an order that may still fill sends nothing
@@ -1029,7 +1038,7 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   assert.match(sc, /int dir = Math\.Sign\(l\), shows = Math\.Min\(Math\.Abs\(l\), Math\.Abs\(e\)\), late = dir > 0 \? lateSells : lateBuys, held = shows - late;/);
   assert.match(sc, /if \(held <= 0\)\s*\{\s*Event\([^\n]*\n\s*return;\s*\}/);
   // second review (1): owed until flat: the close sent is kept, the owed flag is not cleared on sending
-  assert.match(sc, /SubmitOne\(c\.A, x\);[^\n]*\n[^\n]*\n\s*lock \(Lk\) c\.CloseOrder = x;/);
+  assert.match(sc, /SubmitOne\(c\.A, x\);[^\n]*\n[^\n]*\n\s*lock \(Lk\) \{ c\.CloseOrder = x; c\.CloseSentAt = now; c\.CloseStuckSaid = false; \}/);
   assert.ok(!/CloseOwed = false/.test(sc), 'SendClose never clears the owed close itself (only CloseDone, when flat with every fill through)');
   assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
   // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position;

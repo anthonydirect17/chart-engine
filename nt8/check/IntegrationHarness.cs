@@ -274,7 +274,11 @@ public static class IntegrationHarness
 
         lock (lead.Orders) foreach (Order o in lead.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
         lock (f1.Orders) foreach (Order o in f1.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
-        SetPos(lead, 0); SetPos(f1, 0);
+        SetPos(lead, 0);
+        // 0.4.3: the copier's close of SIM-F1 (sent on the leader's flat) ends, then the follower is flat (a close still live on a
+        // flat follower keeps it "closing": it could open the other side)
+        lock (f1.Orders) foreach (Order o in f1.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
+        SetPos(f1, 0);
         Booked();
         ChartBridgeCopier.Tick();
     }

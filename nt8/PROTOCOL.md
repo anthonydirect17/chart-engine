@@ -1820,7 +1820,9 @@ follower's `qty` again; a scale-out reduces it by the same share.)
   through (a close rejected, cancelled or part filled is tried again; while one may still fill, no other starts). What may
   still fill and the fills not yet through are read before the position and again after; anything new sends nothing. A
   fill NinjaTrader shows whose order event never comes stops blocking after 10 s (one `status` `error`), but its contracts
-  are taken off any close or reduce there until its event comes (never more than the position less that fill). Owed while
+  are taken off any close or reduce there until its event comes or NinjaTrader's position there updates after it (never more
+  than the position less that fill); every follower's orders are looked at each second. A close that neither fills nor ends
+  in 10 s: one `status` `error`, it is cancelled, and the close goes again once NinjaTrader confirms. Owed while
   it holds the other side for 10 s: one `status` `error`, and it is left to the user. A copier order NinjaTrader refuses is
   an `error`; the rest of the copier's work goes on, and an owed close is tried again. After a restart, a follower holding a position with a filled copier entry there, no working stop on its
   closing side and no copier record gets one `status` `error`. (0.4.3, from the independent review.) A leader scale-out (a partial
