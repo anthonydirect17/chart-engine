@@ -121,7 +121,7 @@ class Queue(TBase):
         self.assertEqual({it['date'] for it in q['items']}, {D})              # no grading day, holdout or day outside the split
         for it in q['items']:
             self.assertRegex(it['qid'], r'^Q[0-9a-f]{10}$')
-        self.assertEqual(st.trade_counts(), {'total': 3, 'target': 300, 'graded': 0, 'adjusted': 0, 'skipped': 0, 'skipped_days': 0,
+        self.assertEqual(st.trade_counts(), {'total': 3, 'target': None, 'graded': 0, 'adjusted': 0, 'skipped': 0, 'skipped_days': 0,
                                              'refused': 0, 'remaining': 3})
         self.tstudio()                                                       # a restart reads it back, byte for byte the same
         with open(self.qfile()) as f:

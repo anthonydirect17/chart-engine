@@ -33,6 +33,11 @@
 //  12. The Work list (--work, items staged with tools/markup_work.py): offered with counts and no paths, a stopped set listed
 //      but not offered, picking an item opens it, a link (#work=) is refused while a trade is open and says why, then opens
 //      once the grade is saved, and another origin allowed with --allow-origin reads /api/work and nothing else.
+//  13. A question set (--trade-labels-only --trade-question=approach): only the question's choices show (no chip list), T, A
+//      and P stay disabled and the page says what is missing until one choice of each pair is picked (keys H and G), T is
+//      refused before that, and the saved grade carries both answers. Then the Bot tab's Builds panel (a made-up BUILDS.md
+//      beside a copy of the test bot) and two made-up Run all results compared side by side, and the Day tab: a graded day
+//      opened without its date, U saves a call stamped at the clock into the hash-chained day_calls.jsonl.
 //   npm run smoke:markup     (PYTHON=py to pick the interpreter; CHROMIUM_PATH to use a preinstalled browser; SHOTS_DIR)
 import { chromium } from 'playwright';
 import { spawn, execFileSync } from 'node:child_process';
@@ -449,10 +454,14 @@ try {
 
   console.log('5. mutation proof: one tick past the clock must fail check 1');
   const src = fs.readFileSync(path.join(root, 'tools', 'markup_studio.py'), 'utf8');
-  const line = "return int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right'))";
-  check(src.includes(line), 'the no-future choke point is where the mutation expects it');
+  // the choke point, visible_count, is redefined right after itself to give one tick more than the clock allows
+  const line = 'def order_cut_seq(order):';
+  const LATE = "_vc_exact = visible_count\n\n\ndef visible_count(day, clock_utc, exclusive=False, seq=None):  # MUTANT\n" +
+    "    return min(len(day.utc), _vc_exact(day, clock_utc, exclusive, seq) + 1)\n\n\n" + line;
+  check(src.includes(line) && src.includes('def visible_count(day, clock_utc, exclusive=False, seq=None):') && src.indexOf(line) > src.indexOf('def visible_count('),
+    'the no-future choke point is where the mutation expects it');
   const mutant = path.join(root, 'tools', '_mutant_markup_studio.py');
-  fs.writeFileSync(mutant, src.replace(line, "return min(len(day.utc), int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right')) + 1)  # MUTANT"));
+  fs.writeFileSync(mutant, src.replace(line, LATE));
   try {
     const sink = [];
     const m = await noFutureRun(mutant, PORT + 1, 'mutant', sink);
@@ -571,7 +580,7 @@ try {
   const t1 = await tradesCut(TP, tMarks, tr.page, tr.rec, 1, 'trades #1', null);
   const cold = t1.s.trade.open_ms;
   const prog0 = await tr.page.evaluate(() => document.getElementById('tProgress').textContent);
-  check(prog0.startsWith('Graded 0 of 300 (0 adjusted, 0 days skipped)'), 'trades: the progress line (' + prog0 + ')');
+  check(prog0.startsWith('Graded 0 (0 adjusted, 0 days skipped)'), 'trades: the progress line, no "of N" without --trade-target (' + prog0 + ')');
   await shot(tr.page, 'markup-trades-cut.png');
   await tr.page.mouse.move(5, 5);
   await tr.page.keyboard.press('t');
@@ -655,7 +664,7 @@ try {
   const skipped = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_skip_days.json'), 'utf8')).days.map(d => d.date);
   check(JSON.stringify(skipped) === JSON.stringify([BOT_DAY]), 'X X adds the trade\'s day to trade_skip_days.json');
   const prog = await until(() => tr.page.evaluate(() => { const t = document.getElementById('tProgress').textContent; return t.includes('1 days skipped') && t; }), 5000);
-  check(!!prog && prog.startsWith('Graded 2 of 300 (1 adjusted, 1 days skipped); 0 left'), 'the progress line counts only (' + prog + ')');
+  check(!!prog && prog.startsWith('Graded 2 (1 adjusted, 1 days skipped); 0 left'), 'the progress line counts only (' + prog + ')');
   const st9 = await state(TP);
   const flat = JSON.stringify(st9);
   check(!/"(net|usd|win_pct|wins|pf|TAKE|PASS)"\s*:/.test(flat), 'no tally of outcomes by label in the state');
@@ -668,7 +677,7 @@ try {
   console.log('10. mutation proof: a late cut and a leaked second opinion must fail check 9');
   const coreImport = 'import markup_core as core  # noqa: E402\n';
   check(src.includes(coreImport), 'the core import is where the one-trade mutation expects it');
-  const mutants = [['late', src.replace(line, "return min(len(day.utc), int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right')) + 1)  # MUTANT")],
+  const mutants = [['late', src.replace(line, LATE)],
     ['note', src.replace("out = {'qid': it['qid'], 'name': self.bot['name'],", "out = {'leak': self._opinion(it), 'qid': it['qid'], 'name': self.bot['name'],  # MUTANT\n              ")],
     ['others', src.replace(coreImport, coreImport + "_only = core.trade_only\ncore.trade_only = lambda view, res, t, o: dict(_only(view, res, t, o), orders=view.get('orders'))  # MUTANT\n")]];
   check(src.includes("out = {'qid': it['qid'], 'name': self.bot['name'],"), 'the trades view is where the note mutation expects it');
@@ -827,6 +836,111 @@ try {
       check(got[0] === '200:1' && got[1] === 'blocked', 'work: The Desk\'s origin reads /api/work and nothing else (' + got.join(', ') + ')');
       await dp.close();
     } finally { deskSrv.close(); }
+  }
+
+  console.log('13. a question set, the Builds panel, run comparison and the Day tab');
+  {
+    const QP = PORT + 11, qMarks = path.join(tmp, 'marks-question'), lab = path.join(tmp, 'lab');
+    fs.mkdirSync(path.join(lab, 'bots'), { recursive: true });
+    fs.mkdirSync(path.join(lab, '.git'), { recursive: true });
+    fs.copyFileSync(path.join(root, 'test', 'markup_bot_fixture.py'), path.join(lab, 'bots', 'made_up.py'));
+    fs.writeFileSync(path.join(lab, 'BUILDS.md'), '# Builds\n\n## At a glance\n| Name | What | Status | File |\n|---|---|---|---|\n' +
+      '| MX1 | Made-up build one | Frozen | bots/made_up.py |\n| MX1M1 | MX1 judged on its m1 exit | The bench | |\n');
+    const run = (stamp, net) => {
+      fs.mkdirSync(path.join(qMarks, 'botruns', stamp), { recursive: true });
+      fs.writeFileSync(path.join(qMarks, 'botruns', stamp, 'summary.json'), JSON.stringify({ version: 1, bot: 'Test bot', days: ['2026-03-05', '2026-03-09'], failed_days: [],
+        variants: [{ id: 'TM', label: 'made up' }], exit_ids: ['base', 't5'], contract: 'NQ', micro: 'MNQ', rt: 4.5, micro_rt: 1.0,
+        rows: [{ variant: 'TM', exit_id: 'base', group: 'all', trades: 3, net_usd: net }, { variant: 'TM', exit_id: 't5', group: 'all', trades: 3, net_usd: net / 2 },
+          { variant: 'TM', exit_id: 'base', group: 'dir=long', trades: 2, net_usd: 1 }] }));
+    };
+    run('20261001_120000', 10.5);
+    run('20261002_120000', -20.25);
+    fs.mkdirSync(qMarks, { recursive: true });                // a blind grade on the grading day: the Day tab offers that day
+    fs.writeFileSync(path.join(qMarks, 'grade_C1.json'), JSON.stringify({ id: 'C1', mode: 'blind', date: '2026-03-10', setup: 'NONE' }));
+    const child = spawn(PY, [path.join(root, 'tools', 'markup_studio.py'), '--source=npz', '--data=' + dataDir, '--marks=' + qMarks, '--port=' + QP, '--no-browser',
+      '--seen=' + path.join(tmp, 'none.csv'), '--bot=' + path.join(lab, 'bots', 'made_up.py'), '--trade-labels-only', '--trade-question=approach',
+      tFlags[0], '--trade-variant=TM'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    servers.push(child);
+    await new Promise(r => child.stdout.once('data', r));
+    await until(async () => ((await state(QP).catch(() => ({}))).scan || {}).done, 10000);
+    const qp = await openPage(QP);
+    const qs = await tradeOpen(QP, 1);
+    check(!!qs && qs.labels_only, 'question: the label set opens its first trade');
+    await chartsReady(qp.page);
+    await sleep(600);
+    await qp.page.mouse.move(5, 5);
+    const ui = () => qp.page.evaluate(() => ({
+      labels: [...document.querySelectorAll('#tLabelSeg button')].map(b => b.disabled),
+      choices: [...document.querySelectorAll('#tQPairs button')].map(b => b.dataset.choice + (b.classList.contains('on') ? '*' : '')),
+      chips: document.getElementById('tChips').hidden, q: !document.getElementById('tQuestion').hidden,
+      missing: document.getElementById('tQMissing').hidden ? '' : document.getElementById('tQMissing').textContent,
+      keys: Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])) }));
+    const u0 = await until(async () => { const u = await ui(); return u.q && u.choices.length === 4 && u; }, 5000);
+    check(!!u0 && u0.chips && u0.choices.join() === 'light,heavy,fast push,slow grind', 'question: only its four choices show, the chip list is hidden (' + (u0 && u0.choices) + ')');
+    check(!!u0 && u0.labels.every(d => d) && !u0.keys.T && !u0.keys.P && u0.keys.Q, 'question: T, A and P are disabled (buttons and key legend) before any answer');
+    check(!!u0 && /volume into the signal \(light or heavy\) and speed into the signal \(fast push or slow grind\)/.test(u0.missing), 'question: the page says what is missing (' + (u0 && u0.missing) + ')');
+    await qp.page.keyboard.press('t');
+    await sleep(400);
+    const err = await qp.page.evaluate(() => document.getElementById('tErr').textContent);
+    check((await state(QP)).trade.stage === 1 && /Pick volume into the signal and speed into the signal first/.test(err), 'question: T with no answer saves nothing and says why (' + err + ')');
+    const refused = await fetch(`http://127.0.0.1:${QP}/api/trades/save1`, { method: 'POST', headers: { Host: 'localhost:' + QP, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: 'TAKE', answers: { volume: 'heavy' } }) });
+    check(refused.status === 409 && /speed into the signal/.test((await refused.json()).error), 'question: the server refuses a grade with one answer (409)');
+    await qp.page.keyboard.press('h');
+    const u1 = await until(async () => { const u = await ui(); return u.choices.includes('heavy*') && u; }, 3000);
+    check(!!u1 && u1.labels.every(d => d) && /^To save T, A or P, pick speed into the signal \(fast push or slow grind\)\.$/.test(u1.missing), 'question: H picks heavy; T, A and P stay disabled until speed is picked (' + (u1 && u1.missing) + ')');
+    await qp.page.keyboard.press('g');
+    const u2 = await until(async () => { const u = await ui(); return u.choices.includes('slow grind*') && u; }, 3000);
+    check(!!u2 && u2.labels.every(d => !d) && !u2.missing && u2.keys.T && u2.keys.P, 'question: with both answered T, A and P are enabled and nothing is missing');
+    await qp.page.keyboard.press('2');
+    await qp.page.keyboard.press('t');
+    const done = await until(async () => { const s = await state(QP); return s.trade && s.trade.complete && s; }, 8000);
+    const qg = done && JSON.parse(fs.readFileSync(path.join(qMarks, 'trade_grades', done.trade.qid + '.json'), 'utf8'));
+    check(!!qg && qg.label === 'TAKE' && qg.question === 'approach' && qg.answers && qg.answers.volume === 'heavy' && qg.answers.speed === 'slow grind' && Object.keys(qg.answers).length === 2 && qg.confidence === 2 &&
+      !(qg.chips || []).length, 'question: the saved grade carries both answers and the confidence (' + (qg && JSON.stringify(qg.answers)) + ')');
+    const rh = await until(() => qp.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 5000);
+    check(!!rh && rh.includes('no result is shown') && rh.includes('heavy, slow grind') && !rh.includes(BOT_DAY), 'question: the result line names the answers, no result and no date (' + rh + ')');
+    await shot(qp.page, 'markup-question.png');
+
+    // the Bot tab: Builds (the made-up BUILDS.md) and two Run all results side by side
+    await qp.page.click('#tabBot');
+    const bl = await until(() => qp.page.evaluate(() => { const t = document.querySelector('#buildsOut tbody'); return !document.getElementById('secBuilds').hidden && t && [...t.rows].map(r => [...r.cells].map(c => c.textContent)); }), 5000);
+    check(!!bl && JSON.stringify(bl) === JSON.stringify([['MX1', 'bots/made_up.py', 'Made-up build one'], ['MX1M1', '', 'MX1 judged on its m1 exit']]), 'builds: the panel lists the BUILDS.md names, files and notes (' + JSON.stringify(bl) + ')');
+    const rs = await until(() => qp.page.evaluate(() => { const a = document.getElementById('runA'); return a.options.length === 2 && [a.value, document.getElementById('runB').value]; }), 5000);
+    check(!!rs && rs[0] !== rs[1], 'compare: both Run all results are offered, two different ones picked (' + rs + ')');
+    await qp.page.click('#btnCompare');
+    const cmp = await until(() => qp.page.evaluate(() => !document.getElementById('botCompare').hidden && ['cmpA', 'cmpB'].map(id => {
+      const t = document.getElementById(id), cols = [...t.tHead.rows[0].cells].map(c => c.textContent);
+      return [...t.tBodies[0].rows].map(r => r.cells[1].textContent + ' ' + r.cells[cols.indexOf('Net $ NQ')].textContent); }).concat([document.getElementById('cmpHeadA').textContent])), 5000);
+    check(!!cmp && cmp[0].join() === 'base 10.50(3),t5 5.25(3)' && cmp[1].join() === 'base -20.25(3),t5 -10.13(3)' && /2 bot days/.test(cmp[2]),
+      'compare: the two runs side by side, per exit only, with their counts (' + JSON.stringify(cmp) + ')');
+    await shot(qp.page, 'markup-compare.png');
+    await qp.page.click('#btnCmpClose');
+
+    // the Day tab: the graded day, no date; U saves a call at the clock into the chain
+    await qp.page.click('#tabDay');
+    const dopt = await until(() => qp.page.evaluate(() => { const o = document.getElementById('daySel').options; return o.length && o[0].textContent; }), 5000);
+    check(dopt === 'Day 1 (graded)', 'day: the graded day is offered without its date (' + dopt + ')');
+    await qp.page.click('#btnDayLoad');
+    const ds = await until(async () => { const s = await state(QP); return s.mode === 'day' && s.loaded && s; }, 8000);
+    check(!!ds && !('date' in ds) && ds.clock_tod === '09:30:00', 'day: the day opens at 09:30 with no date in the state');
+    await chartsReady(qp.page);
+    await qp.page.click('[data-speed="60"]');
+    await sleep(1500);
+    await qp.page.click('#btnPause');
+    await qp.page.mouse.move(5, 5);
+    await qp.page.keyboard.press('u');
+    const calls = await until(() => qp.page.evaluate(() => { const li = document.querySelector('#dayCalls li'); return li && li.textContent; }), 5000);
+    const rows = fs.existsSync(path.join(qMarks, 'day_calls.jsonl')) ? fs.readFileSync(path.join(qMarks, 'day_calls.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [];
+    const st1 = await state(QP);
+    check(rows.length === 1 && rows[0].call === 'U' && rows[0].seq === 1 && rows[0].prev_hash === '0'.repeat(64) && /^[0-9a-f]{64}$/.test(rows[0].row_hash) &&
+      rows[0].clock_utc_ms <= st1.clock_utc_ms && rows[0].clock_utc_ms > ds.clock_utc_ms, 'day: U saves one chained row stamped at the replay clock (' + (rows[0] && rows[0].clock_tod) + ')');
+    check(!!calls && /UP in force/.test(calls), 'day: the call shows as the one in force (' + calls + ')');
+    const dtext = await qp.page.evaluate(() => document.body.innerText);
+    check(!/2026-03-10|Mar(ch)? 10/.test(dtext), 'day: no date anywhere in the page text');
+    check(!qp.rec.errors.length, 'question, panels, day: no page errors (' + qp.rec.errors.join('; ') + ')');
+    await shot(qp.page, 'markup-day.png');
+    await qp.page.close();
   }
 } catch (e) {
   failures.push('crashed: ' + (e.stack || e.message));

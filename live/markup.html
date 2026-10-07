@@ -16,12 +16,13 @@
 <body>
 <header class="ms-top">
   <div class="ms-brand"><span class="ms-mark"></span><b>Markup Studio</b><span class="ms-sub"><span id="msInst">replay</span>, read only</span></div>
-  <div class="ms-work" id="msWorkBox" hidden><label for="msWork">Work</label><select id="msWork"></select><span class="ms-work-msg" id="msWorkMsg" role="status" hidden></span></div>
+  <div class="ms-work" id="msWorkBox" data-in="panel" hidden><label for="msWork">Work</label><select id="msWork"></select><span class="ms-work-msg" id="msWorkMsg" role="status" hidden></span></div>
   <div class="ms-tabs" role="tablist">
     <button type="button" role="tab" id="tabBlind" class="on" aria-selected="true">Blind</button>
     <button type="button" role="tab" id="tabFree" aria-selected="false">Free</button>
     <button type="button" role="tab" id="tabBot" aria-selected="false">Bot</button>
     <button type="button" role="tab" id="tabTrades" aria-selected="false">Trades</button>
+    <button type="button" role="tab" id="tabDay" aria-selected="false">Day</button>
   </div>
   <div class="ms-clock"><span id="msDate" data-dates></span><span id="msClock">--:--:--</span><span class="ms-et">ET</span><span id="msPlay"></span></div>
   <div class="ms-status" id="msStatus"></div>
@@ -36,6 +37,14 @@
       <div class="ms-h">By level type and by side</div>
       <table class="ms-table ms-grid" id="botSumBy"></table>
     </div>
+    <!-- two Run all results side by side: counts and the per-exit tables only, as the Run all summary shows them -->
+    <div class="ms-summary" id="botCompare" data-in="panel" hidden>
+      <div class="ms-row"><span class="ms-h">Run comparison</span><span class="dim">(n) = trades</span><button type="button" class="ms-btn sm" id="btnCmpClose">Close</button></div>
+      <div class="ms-cmp">
+        <div class="ms-cmp-side"><div class="ms-line" id="cmpHeadA"></div><table class="ms-table ms-grid" id="cmpA"></table></div>
+        <div class="ms-cmp-side"><div class="ms-line" id="cmpHeadB"></div><table class="ms-table ms-grid" id="cmpB"></table></div>
+      </div>
+    </div>
   </section>
   <aside class="ms-panel" id="msPanel">
     <section class="ms-sec ms-keys" id="secKeys" hidden aria-label="Keys">
@@ -43,6 +52,7 @@
       <ul id="tKeys">
         <li data-k="T"><kbd>T</kbd> TAKE</li><li data-k="A"><kbd>A</kbd> ADJUST</li><li data-k="P"><kbd>P</kbd> PASS</li>
         <li data-k="M"><kbd>M</kbd> my trade instead</li>
+        <li data-k="Q" id="tKeyQ" hidden></li>
         <li data-k="C"><kbd>1</kbd>-<kbd>3</kbd> confidence</li>
         <li data-k="E"><kbd>E</kbd> entry</li><li data-k="S"><kbd>S</kbd> stop</li><li data-k="G"><kbd>G</kbd> target</li>
         <li data-k="Y"><kbd>1</kbd>-<kbd>4</kbd> entry type</li><li data-k="R"><kbd>&rarr;</kbd> next candle</li>
@@ -120,6 +130,42 @@
       <div class="ms-line dim" id="runAllMsg"></div>
       <div class="ms-msg" id="botExportMsg"></div>
     </section>
+    <section class="ms-sec" id="secRuns" data-in="panel" hidden>
+      <div class="ms-h">Compare two runs <span class="dim">(Run all results in this marks folder)</span></div>
+      <div class="ms-row">
+        <select id="runA" aria-label="First run"></select>
+        <select id="runB" aria-label="Second run"></select>
+        <button type="button" class="ms-btn sm" id="btnCompare">Compare</button>
+      </div>
+      <div class="ms-msg" id="runsMsg" role="status"></div>
+    </section>
+    <section class="ms-sec" id="secBuilds" data-in="panel" hidden>
+      <div class="ms-h">Builds <span class="dim">(BUILDS.md in the bot's repository, read only)</span></div>
+      <table class="ms-table ms-grid ms-builds" id="buildsOut"></table>
+      <div class="ms-line dim" id="buildsMsg"></div>
+    </section>
+    <section class="ms-sec" id="secDay" data-in="panel" hidden>
+      <div class="ms-line dim">Days you have graded or seen, date hidden. Call the day at the clock: U up, D down, C chop.</div>
+      <div class="ms-row">
+        <select id="daySel" aria-label="Day"></select>
+        <button type="button" class="ms-btn" id="btnDayLoad">Load</button>
+      </div>
+      <div class="ms-line dim" id="dayCounts"></div>
+      <div class="ms-h">Your call <span class="dim">(at the clock; U, D or C saves at once)</span></div>
+      <div class="ms-seg three" id="dayCallSeg">
+        <button type="button" data-call="U">UP <kbd>U</kbd></button>
+        <button type="button" data-call="D">DOWN <kbd>D</kbd></button>
+        <button type="button" data-call="C">CHOP <kbd>C</kbd></button>
+      </div>
+      <div class="ms-h">Confidence <span class="dim">(optional)</span></div>
+      <div class="ms-seg three" id="dayConfSeg">
+        <button type="button" data-conf="1">1 <kbd>1</kbd></button><button type="button" data-conf="2">2 <kbd>2</kbd></button><button type="button" data-conf="3">3 <kbd>3</kbd></button>
+      </div>
+      <textarea id="dayWords" rows="2" placeholder="Your words (optional; Esc leaves the box)"></textarea>
+      <div class="ms-h">Calls on this day <span class="dim">(up to the clock; the last is in force)</span></div>
+      <ul class="ms-dis ms-log" id="dayCalls"></ul>
+      <div class="ms-msg" id="dayErr" role="status"></div>
+    </section>
     <form class="ms-sec" id="gradeForm" autocomplete="off">
       <div class="ms-h">Setup</div>
       <div class="ms-seg" id="setupSeg">
@@ -170,6 +216,11 @@
       <div class="ms-h">Confidence <span class="dim">(optional)</span></div>
       <div class="ms-seg three" id="tConfSeg">
         <button type="button" data-conf="1">1 <kbd>1</kbd></button><button type="button" data-conf="2">2 <kbd>2</kbd></button><button type="button" data-conf="3">3 <kbd>3</kbd></button>
+      </div>
+      <div id="tQuestion" hidden>
+        <div class="ms-h" id="tQTitle"></div>
+        <div id="tQPairs"></div>
+        <div class="ms-line ms-note" id="tQMissing" role="status"></div>
       </div>
       <div class="ms-h">Reason <span class="dim">(optional)</span></div>
       <div class="ms-chips" id="tChips"></div>

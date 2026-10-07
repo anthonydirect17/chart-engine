@@ -25,10 +25,12 @@ Flags (defaults are the HOME PC's folders):
   --trade-queue=PATH                            a Run all trades.csv: the Trades tab grades the bot's own trades blind (with --bot)
   --trade-variant=ID  --trade-seed=11           the variant queued (default the bot's first) and the queue's shuffle seed
   --trade-skip-days=YYYY-MM-DD[,..]             days never queued (already watched)
-  --trade-target=300                            the progress line's target
+  --trade-target=N                              the progress line's target (none: the count only)
   --trade-notes=PATH                            optional CSV (trade_id, variant, note[, score]) shown only after a grade is saved
   --trade-exits=ID[,ID]                         the exits a graded trade's result shows, in that order (default: all, the bot's order)
   --trade-labels-only                           a label set: grades save as usual, but no result or date is shown and the clock stays at the cut
+  --trade-question=ID                           a label set's one question (core.QUESTIONS, e.g. approach): only its choices show,
+                                                one of each pair is required before T, A or P, and the grade carries the answers
   --work=DIR                                    the Work list: staged work items (tools/markup_work.py), one opened at a time from
                                                 the page's Work list or live/markup.html#work=<id>; each item carries the flags above
                                                 (--marks, --symbol, --bot, --trade-*, ...), so they are refused on the command line
@@ -323,8 +325,8 @@ class Studio:
     split, bot_days, grading_days = None, frozenset(), None     # until load_split() (tests build a bare Studio)
 
     def __init__(self, source, marks_dir, rule_path, seen_paths=(), symbol='NQ', include_last_only=False, bot_path=None,
-                 trade_queue=None, trade_variant=None, trade_seed=core.TRADE_SEED, trade_skip_days=(), trade_target=300,
-                 trade_notes=None, trade_exits=(), trade_labels_only=False):
+                 trade_queue=None, trade_variant=None, trade_seed=core.TRADE_SEED, trade_skip_days=(), trade_target=None,
+                 trade_notes=None, trade_exits=(), trade_labels_only=False, trade_question=None):
         self.inst = core.instrument(symbol)                  # an unknown symbol is a ValueError, never NQ by default
         self.source, self.marks, self.rule_path, self.symbol = source, marks_dir, rule_path, self.inst['symbol']
         self.tick = self.inst['tick']
@@ -350,7 +352,7 @@ class Studio:
             if r['rows'] and not r['parsed']:
                 log(f'already-seen file {r["path"]}: {r["rows"]} rows but none had a date and a reclaim time; columns: {", ".join(r["columns"])}')
         self.prior_kept = None
-        self.bot, self.bot_error = None, ''
+        self.bot, self.bot_error, self.bot_path = None, '', bot_path
         if bot_path:
             try:
                 self.bot = load_bot(bot_path)
@@ -363,7 +365,8 @@ class Studio:
         self.runall = {'running': False, 'k': 0, 'n': 0, 'error': '', 'folder': '', 'failed': [], 'rows': None}
         self.load_split()
         # the Trades tab: the queue (written once), the grades (two files per trade, each written once), the skipped days
-        self.tq, self.tq_error, self.tq_rows, self.tq_variant, self.trade_target = None, '', {}, None, int(trade_target)
+        self.tq, self.tq_error, self.tq_rows, self.tq_variant = None, '', {}, None
+        self.trade_target = int(trade_target) if trade_target else None      # no --trade-target: counts without "of N"
         self.tgrades = core.list_trade_grades(os.path.join(marks_dir, 'trade_grades'))
         self.tskip = self._read_skip_days()
         self.trade, self.trade_no, self.t_refused = None, 0, {}
@@ -374,6 +377,25 @@ class Studio:
         # --trade-labels-only: a label set. The grade saves as usual, but no result, date or trade of his is shown, and
         # the clock never leaves the cut while a set trade is open (replaying forward would show the outcome)
         self.trade_labels_only = bool(trade_labels_only)
+        # --trade-question: a label set's one question (core.QUESTIONS): only its choices show, and T, A and P are refused
+        # until every pair is answered; the grade carries the answers
+        self.trade_question = None
+        if trade_question:
+            if not self.trade_labels_only:
+                raise TradeQueueError('--trade-question is for a label set: give --trade-labels-only too')
+            try:
+                self.trade_question = core.question(trade_question)
+            except ValueError as e:
+                raise TradeQueueError(f'--trade-question: {e}') from e
+        # the Day tab: day calls on days already graded or seen, in a hash-chained append-only log (core.read_day_log)
+        self.day_log_path = os.path.join(marks_dir, core.DAY_LOG)
+        self.day_rows, self.day_error, self.day_lock = [], '', threading.Lock()
+        try:
+            self.day_rows = core.read_day_log(self.day_log_path)
+        except core.DayLogError as e:
+            self.day_error = str(e)
+            log('Day tab stopped: ' + self.day_error)
+        self.day_ref = None
         if self.trade_exits and self.bot:
             unknown = [x for x in self.trade_exits if x not in self.bot['exit_ids']]
             if unknown:
@@ -723,6 +745,8 @@ class Studio:
                 s['trade'] = self._tpublic()
             if self.trade_labels_only:
                 s['labels_only'] = True
+            if self.mode == 'day' and self.day is not None:
+                s['day_ref'] = self.day_ref
             if self.tq is not None or self.tq_error:
                 s['trades'] = {'ready': self.tq is not None, 'counts': self.trade_counts() if self.tq is not None else None}
             if self.mode == 'bot' and self.bot_key:
@@ -770,6 +794,8 @@ class Studio:
                 raise Refused('the Bot tab saves no grades: grade in Blind or Free')
             if self.mode == 'trades':
                 raise Refused('the Trades tab saves with its own keys (T, A, P)')
+            if self.mode == 'day':
+                raise Refused('the Day tab saves calls only (U, D or C)')
             if self.mode == 'blind' and self.graded:
                 raise Refused('this candidate is graded already')
             setup = p.get('setup')
@@ -1137,6 +1163,8 @@ class Studio:
                          created_utc=datetime.now(timezone.utc).isoformat(timespec='seconds'))
                 if self.trade_labels_only:
                     q['labels_only'] = True
+                if self.trade_question:
+                    q['question'] = self.trade_question['id']
                 if core.write_once(qpath, q):
                     log(f'trade queue written to {qpath}: {len(items)} trades of {v["id"]} on bot days')
             with open(qpath, encoding='utf-8') as f:
@@ -1146,6 +1174,11 @@ class Studio:
                 raise ValueError('this queue was written ' + ('as a label set (start with --trade-labels-only)'
                                                               if q.get('labels_only') else
                                                               'with results shown (start without --trade-labels-only)'))
+            want_q = self.trade_question and self.trade_question['id']
+            if q.get('question') != want_q:
+                raise ValueError('this queue was written ' + (f'with the question {q["question"]!r} (start with '
+                                                              f'--trade-question={q["question"]})' if q.get('question') else
+                                                              'without a question (start without --trade-question)'))
         except (OSError, ValueError, AttributeError) as e:
             raise TradeQueueError(str(e)) from e
         if q.get('source') != src:
@@ -1233,13 +1266,15 @@ class Studio:
         out = {'n': t['n'], 'qid': t['item']['qid'], 'stage': self._tstage(), 'complete': self._tdone(), 'label': (g or {}).get('label'),
                'cut_tod': cut['cut_tod'], 'dir': cut['dir'], 'level_type': cut['level_type'], 'level_price': cut['level_price'],
                'entry_order': {k: cut['entry_order'].get(k) for k in ('side', 'type', 'price', 'limit')},
-               'stop': cut['stop'], 'target': cut['target'], 'open_ms': t['open_ms'], 'prefetched': t['prefetched']}
+               'stop': cut['stop'], 'target': cut['target'], 'open_ms': t['open_ms'], 'prefetched': t['prefetched'],
+               'cut_seq': t.get('cut_seq')}
         return out
 
     def trades_info(self):
         b = self.bot
         return {'ok': self.tq is not None, 'error': self.tq_error, 'usage': TRADES_USAGE, 'bot': b and b['name'],
                 'variant': self.tq_variant and self.tq_variant['id'], 'target': self.trade_target, 'notes': self.notes is not None,
+                'labels_only': self.trade_labels_only, 'question': self.trade_question,
                 'counts': self.trade_counts() if self.tq is not None else None}
 
     def _tprepare(self, item):
@@ -1394,11 +1429,19 @@ class Studio:
             t, it = self.trade, self.trade['item']
             if self.clock != t['cut_utc']:
                 raise Refused('stage 1 is graded at the cut')
+            answers = None
+            if self.trade_question:
+                try:
+                    answers = core.question_answers(self.trade_question, p.get('answers'))
+                except ValueError as e:
+                    raise Refused(str(e)) from e
             g = {'qid': it['qid'], 'trade_id': it['trade_id'], 'date': it['date'], 'symbol': self.symbol, 'bot': self.bot['name'],
                  'variant': self.tq_variant['id'], 'queue_sha256': self.tq['sha256'], 'stage': 1, 'label': label,
                  'chips': [str(c)[:80] for c in (p.get('chips') or [])][:40], 'reason': str(p.get('reason') or '').strip()[:2000],
                  'confidence': conf, 'cut_utc_ms': t['cut_utc'], 'cut_exclusive': True, 'at_cut': t['at_cut'],
                  'entry_order_link': t['how'], 'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+            if answers is not None:
+                g['question'], g['answers'] = self.trade_question['id'], answers
             if label != 'ADJUST':
                 g['second_opinion'] = self._opinion_record(it)
             if label == 'PASS':
@@ -1543,7 +1586,10 @@ class Studio:
                 raise Refused('the result shows once the grade is saved')
             it, t, g = self.trade['item'], self.trade['trade'], self.tgrades[self.trade['item']['qid']]
             if self.trade_labels_only:                       # a label set: the grade only, nothing about the outcome
-                return {'qid': it['qid'], 'label': g.get('label'), 'hidden': True, 'chips': g.get('chips') or []}
+                out = {'qid': it['qid'], 'label': g.get('label'), 'hidden': True, 'chips': g.get('chips') or []}
+                if g.get('answers'):
+                    out['answers'] = g['answers']
+                return out
             self.t_revealed.add(it['qid'])
         ids = self._trade_exit_ids(t)
         exits = [dict(id=k, reason=e.get('reason'), points=e.get('points'), r=e.get('r'), exit_tod=core.fmt_tod(e['exit_t']))
@@ -1613,6 +1659,145 @@ class Studio:
     def trades_export(self):
         dest, n = core.export_trade_grades(self.marks, self.tgrades)
         return {'file': dest, 'rows': n}
+
+    # ---------------------------------------------------------------- the Day tab
+    # U (up), D (down) or C (chop) called at the replay clock on a day already graded blind here or in the already-seen
+    # files (grading days only, never a day the blind queue still holds unseen), date hidden. Every call is a row of the
+    # hash-chained log <marks>/day_calls.jsonl (core.read_day_log, checked on load and before every append); the server
+    # stamps the clock; a row is never edited. Calls stamped after the clock stay hidden. Counts only: nothing is scored here.
+    def _day_need(self):
+        if self.day_error:
+            raise Refused('the Day tab is stopped: ' + self.day_error)
+
+    def _day_ref(self, d):
+        return 'D' + hashlib.sha1(f'{self.symbol}|{d}'.encode()).hexdigest()[:10]
+
+    def _day_known(self):
+        """{date: (graded, seen)} for the days the Day tab may open."""
+        gd = self.grading_days
+        if gd is None:
+            return {}
+        with self.lock:
+            graded = {g.get('date') for g in self.grades if g.get('mode') == 'blind'}
+        seen = {x[0] for x in self.seen}
+        try:
+            have = set(self.source.days())
+        except Exception:   # noqa: BLE001 - a source that cannot list its days offers none
+            have = set()
+        return {d: (d in graded, d in seen) for d in sorted(graded | seen)
+                if d and d in gd and d in have and core.in_sample(d)}
+
+    def day_days(self):
+        """The days offered, numbered in date order, as opaque refs (no date), with the count of calls on each."""
+        self._day_need()
+        known = self._day_known()
+        rows = self.day_rows
+        out = []
+        for n, (d, (g, sn)) in enumerate(known.items(), 1):
+            out.append({'ref': self._day_ref(d), 'n': n, 'graded': g, 'seen': sn, 'calls': sum(1 for r in rows if r.get('date') == d)})
+        return {'days': out, 'counts': self.day_counts()}
+
+    def day_counts(self):
+        rows = self.day_rows
+        return {'calls': len(rows), 'days': len({r.get('date') for r in rows}), 'scored': sum(1 for r in rows if r.get('scored'))}
+
+    def day_open(self, ref):
+        self._day_need()
+        with self.lock:
+            msg = self.locked_msg('the Day tab')
+            if msg:
+                raise Refused(msg)
+        d = next((x for x in self._day_known() if self._day_ref(x) == ref), None)
+        if d is None:
+            raise Refused('no such day: the Day tab opens days already graded or seen')
+        self._load(d, clock_of(d, '09:30'), 'day')
+        with self.lock:
+            self.cand, self.level, self.day_ref = None, None, ref
+        return self.state()
+
+    def day_view(self):
+        """The open day's calls up to the clock (the one in force last), and the counts."""
+        self._day_need()
+        with self.lock:
+            if self.mode != 'day' or self.day is None:
+                return {'open': False, 'calls': [], 'counts': self.day_counts()}
+            d, wall = self.day.date, core.utc_to_wall(self.clock)
+        calls = [{k: r.get(k) for k in ('seq', 'call', 'confidence', 'words', 'clock_tod', 'scored')}
+                 for r in core.calls_upto(self.day_rows, d, wall)]
+        return {'open': True, 'ref': self.day_ref, 'calls': calls, 'in_force': calls[-1] if calls else None, 'counts': self.day_counts()}
+
+    def day_call(self, p):
+        """One call at the replay clock (the server's, never the page's), appended to the chain."""
+        self._day_need()
+        call = str(p.get('call') or '').strip().upper()
+        if call not in core.DAY_CALLS:
+            raise Refused('call U (up), D (down) or C (chop)')
+        conf = p.get('confidence')
+        if conf in (None, '', 0):
+            conf = None
+        elif str(conf) not in ('1', '2', '3'):
+            raise Refused('confidence is 1, 2 or 3 (or none)')
+        else:
+            conf = int(conf)
+        words = re.sub(r'\s+', ' ', str(p.get('words') or '')).strip()[:500]
+        with self.lock:
+            if self.mode != 'day' or self.day is None:
+                raise Refused('no day open in the Day tab: pick one and press Load')
+            d, clock = self.day.date, self.clock
+            wall = core.utc_to_wall(clock)
+            sod = (wall // 1000) % 86400
+        g, sn = self._day_known().get(d, (False, False))
+        rec = {'version': 1, 'kind': 'day_call', 'symbol': self.symbol, 'date': d, 'call': call, 'confidence': conf, 'words': words,
+               'clock_utc_ms': int(clock), 'clock_wall_ms': int(wall), 'clock_tod': core.fmt_tod(wall),
+               'scored': bool(core.RTH_OPEN <= sod < core.RTH_CLOSE), 'seen_before': bool(g or sn),
+               'saved_utc': datetime.now(timezone.utc).isoformat(timespec='seconds')}
+        with self.day_lock:
+            try:
+                rows = core.read_day_log(self.day_log_path)       # again before every append: a file changed meanwhile stops it
+            except core.DayLogError as e:
+                self.day_error = str(e)
+                log('Day tab stopped: ' + self.day_error)
+                raise Refused('the Day tab is stopped: ' + self.day_error) from e
+            core.append_day_row(self.day_log_path, rows, rec)
+            self.day_rows = rows
+        return self.day_view()
+
+    # ---------------------------------------------------------------- the Builds panel and run comparisons (read only)
+    def builds(self):
+        """The builds BUILDS.md lists in the bot's repository (core.read_builds): name, file and a short note. No path."""
+        if not self.bot_path:
+            return {'ok': False, 'why': 'no bot: start the Studio with --bot=PATH to list the builds of its repository'}
+        f = core.find_builds(self.bot_path)
+        if f is None:
+            return {'ok': False, 'why': 'no BUILDS.md in the bot\'s repository'}
+        try:
+            rows = core.read_builds(f)
+        except (OSError, UnicodeDecodeError) as e:
+            return {'ok': False, 'why': f'cannot read BUILDS.md: {getattr(e, "strerror", None) or type(e).__name__}'}
+        if not rows:
+            return {'ok': False, 'why': 'BUILDS.md has no table of builds by name'}
+        return {'ok': True, 'builds': rows}
+
+    def run_list(self):
+        """The Run all results in this marks folder, newest first (stamp, bot, days, variants): counts only."""
+        return {'runs': core.list_runs(self.marks)}
+
+    def bot_compare(self, a, b):
+        """Two Run all results side by side: each one's counts and its per-exit summary rows, as the Run all summary shows
+        them. Shut while a grade is open (the same lock as the Bot tab)."""
+        with self.lock:
+            msg = self.locked_msg('run comparisons')
+            if msg:
+                raise Refused(msg)
+        out = {}
+        for k, stamp in (('a', a), ('b', b)):
+            try:
+                out[k] = core.read_run(self.marks, stamp)
+            except FileNotFoundError as e:
+                raise Refused(f'no Run all result {stamp}') from e
+            except (OSError, ValueError) as e:
+                raise Refused(f'run {stamp} does not read: {e}') from e
+        return out
 
     def switch_msg(self):
         """Why the Work list cannot leave this item now (a grade open, or Run all writing its files), else None."""
@@ -1993,6 +2178,16 @@ def make_handler(target, port, allow_origins=()):
                     return self._json(200, studio.bot_view())
                 if u.path == '/api/bot/runall':
                     return self._json(200, studio.bot_runall_status())
+                if u.path == '/api/builds':
+                    return self._json(200, studio.builds())
+                if u.path == '/api/bot/runs':
+                    return self._json(200, studio.run_list())
+                if u.path == '/api/bot/compare':
+                    return self._json(200, studio.bot_compare(q.get('a'), q.get('b')))
+                if u.path == '/api/day/days':
+                    return self._json(200, studio.day_days())
+                if u.path == '/api/day/view':
+                    return self._json(200, studio.day_view())
                 if u.path == '/api/trades/info':
                     return self._json(200, studio.trades_info())
                 if u.path == '/api/trades/view':
@@ -2067,6 +2262,10 @@ def make_handler(target, port, allow_origins=()):
                     return self._json(200, studio.bot_runall_start())
                 if path == '/api/bot/export':
                     return self._json(200, studio.bot_export())
+                if path == '/api/day/open':
+                    return self._json(200, studio.day_open(p.get('ref')))
+                if path == '/api/day/call':
+                    return self._json(200, studio.day_call(p))
                 if path == '/api/trades/next':
                     return self._json(200, studio.trades_next())
                 if path == '/api/trades/save1':
@@ -2141,9 +2340,24 @@ def make_handler(target, port, allow_origins=()):
     return H
 
 
+# a client (the page reloading, a tab closed, The Desk's poll) that closes its connection early: one line in the log, not
+# a traceback (Windows: WinError 10054 / 10053 from handle_one_request; elsewhere a reset or a broken pipe)
+QUIET_ERRORS = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+
+
 class Server(ThreadingHTTPServer):
     # Windows lets a second program bind a port that has SO_REUSEADDR; there the Studio must see the port is taken
     allow_reuse_address = os.name != 'nt'
+
+    def handle_error(self, request, client_address):
+        """socketserver calls this from inside the except block of a request that raised. A client that went away is one
+        short line; anything else keeps the full traceback (socketserver's own handle_error)."""
+        e = sys.exc_info()[1]
+        if isinstance(e, QUIET_ERRORS):
+            win = getattr(e, 'winerror', None)
+            log(f'a client closed its connection early ({type(e).__name__}' + (f', WinError {win}' if win else '') + ')')
+            return
+        super().handle_error(request, client_address)
 
 
 def player(target, stop):
@@ -2219,7 +2433,7 @@ def check(source, symbol, day=None, out=print):
 
 # the settings a work item carries (tools/markup_work.py): with --work they come from the items, not the command line
 ITEM_FLAGS = ('marks', 'symbol', 'seen', 'rule', 'include-last-only', 'bot', 'trade-queue', 'trade-variant', 'trade-seed',
-              'trade-skip-days', 'trade-target', 'trade-notes', 'trade-exits', 'trade-labels-only')
+              'trade-skip-days', 'trade-target', 'trade-notes', 'trade-exits', 'trade-labels-only', 'trade-question')
 DEFAULT_RULE = os.path.join(REPO, 'tools', 'markup_rule_v0.json')
 
 
@@ -2243,9 +2457,10 @@ def studio_for_item(it, source_for):
     return Studio(source_for(symbol), it['marks'], it.get('rule') or DEFAULT_RULE, seen, symbol,
                   include_last_only=bool(it.get('include_last_only')), bot_path=it.get('bot'),
                   trade_queue=it.get('trade_queue'), trade_variant=it.get('trade_variant'),
-                  trade_seed=int(it.get('trade_seed', core.TRADE_SEED)), trade_target=int(it.get('trade_target', 300)),
+                  trade_seed=int(it.get('trade_seed', core.TRADE_SEED)), trade_target=it.get('trade_target'),
                   trade_skip_days=list(it.get('trade_skip_days') or []), trade_notes=it.get('trade_notes'),
-                  trade_exits=list(it.get('trade_exits') or []), trade_labels_only=bool(it.get('trade_labels_only')))
+                  trade_exits=list(it.get('trade_exits') or []), trade_labels_only=bool(it.get('trade_labels_only')),
+                  trade_question=it.get('trade_question'))
 
 
 def origins(text):
@@ -2329,11 +2544,12 @@ def main(argv=None):
             target = Studio(source, marks, opt.get('rule', DEFAULT_RULE), seen, symbol,
                             include_last_only='include-last-only' in opt, bot_path=opt.get('bot'),
                             trade_queue=opt.get('trade-queue'), trade_variant=opt.get('trade-variant'),
-                            trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)), trade_target=int(opt.get('trade-target', 300)),
+                            trade_seed=int(opt.get('trade-seed', core.TRADE_SEED)),
+                            trade_target=int(opt['trade-target']) if opt.get('trade-target') else None,
                             trade_skip_days=[x for x in opt.get('trade-skip-days', '').split(',') if x.strip()],
                             trade_notes=opt.get('trade-notes'),
                             trade_exits=[x.strip() for x in opt.get('trade-exits', '').split(',') if x.strip()],
-                            trade_labels_only='trade-labels-only' in opt)
+                            trade_labels_only='trade-labels-only' in opt, trade_question=opt.get('trade-question'))
         except TradeQueueError as e:
             sys.exit(f'Markup Studio: the Trades tab cannot start: {e}')
         except (OSError, ValueError) as e:

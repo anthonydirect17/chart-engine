@@ -77,7 +77,7 @@
   const A = { inst: null, state: null, panes: {}, overlays: {}, tool: null, spanDraft: null, marks: [], spans: [], chips: [], chipOn: new Set(),
     lastMount: '', machineTimer: 0, saved: false, uiMode: 'blind', bot: null, botInfo: null, botAt: 0, botBusy: false, runallWas: false,
     botDrawn: { orders: 0, fills: 0, exits: 0 }, tview: null, tvAt: 0, tvBusy: false, tBusy: false, tres: null, tConf: null, tSeenArm: false,
-    tinfo: null, tMine: false };
+    tinfo: null, tMine: false, tAns: {}, dayConf: null, dayView: null, dayAt: 0, dayBusy: false, dayDays: null };
   window.__markup = A;
 
   async function api(path, body) {
@@ -85,6 +85,13 @@
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     return j;
+  }
+  /* the panels' entrance (Work list, Builds, run comparison, Day tab; never the charts): lane A's motion kit when the page
+     has it (live/motion.js, not loaded yet: the panels carry data-in="panel" for it), else nothing moves */
+  function panelIn(el) {
+    const M = window.ChartMotion;
+    if (!el || el.hidden || !M || typeof M.enter !== 'function') return;
+    try { M.enter(el); } catch (e) { /* motion is decoration only */ }
   }
   const say = (id, text, err) => { const el = $(id); el.textContent = text || ''; el.classList.toggle('err', !!err); };
   const fmtP = p => (p === null || p === undefined || !isFinite(p)) ? '' : (+p).toFixed(2);
@@ -373,7 +380,8 @@
   }
   function resetForm() {
     $('gradeForm').reset(); A.chipOn.clear(); A.marks = []; A.spans = []; A.saved = false;
-    $('tReason').value = ''; A.tConf = null; A.tSeenArm = false; A.tres = null; A.tview = null; A.tMine = false;
+    $('tReason').value = ''; A.tConf = null; A.tSeenArm = false; A.tres = null; A.tview = null; A.tMine = false; A.tAns = {};
+    A.dayConf = null; A.dayView = null; $('dayWords').value = ''; $('dayCalls').textContent = '';
     const st = document.querySelector('input[name=tEntryType][value="stop-limit"]'); if (st) st.checked = true;
     clearResult();
     renderChips(); renderMarks(); setTool(null); say('saveMsg', ''); say('tErr', '');
@@ -385,7 +393,7 @@
     A.state = s;
     if (s.mode === 'none') {                                       // --work and no item open yet: the Work list only
       $('msStatus').textContent = 'No work item is open: pick one from the Work list';
-      for (const id of ['tabBlind', 'tabFree', 'tabBot', 'tabTrades', 'btnNext']) $(id).disabled = true;
+      for (const id of ['tabBlind', 'tabFree', 'tabBot', 'tabTrades', 'tabDay', 'btnNext']) $(id).disabled = true;
       return;
     }
     const free = s.mode === 'free' || s.mode === 'bot';
@@ -400,9 +408,9 @@
     $('msStatus').classList.toggle('warn', !!warn);
     $('btnNext').disabled = !(s.queue && s.queue.remaining > 0);
     // blind dates stay hidden while the server holds a blind candidate, whatever tab is showing
-    BLIND = A.uiMode === 'blind' || s.mode === 'blind' || !!s.trade_open || (A.uiMode === 'trades' && !s.date);
+    BLIND = A.uiMode === 'blind' || s.mode === 'blind' || !!s.trade_open || (A.uiMode === 'trades' && !s.date) || A.uiMode === 'day' || s.mode === 'day';
     const shut = !!(s.blind_open || s.trade_open);
-    for (const id of ['tabFree', 'tabBot']) { $(id).disabled = shut; $(id).title = shut ? 'Save the grade first' : ''; }
+    for (const id of ['tabFree', 'tabBot', 'tabDay']) { $(id).disabled = shut; $(id).title = shut ? 'Save the grade first' : ''; }
     $('tabTrades').disabled = !!s.blind_open; $('tabBlind').disabled = !!s.trade_open;
     if (s.blind_open && A.uiMode !== 'blind') setMode('blind');
     if (s.trade_open && A.uiMode !== 'trades') setMode('trades');
@@ -412,19 +420,20 @@
     const tst = tStage(s);
     $('stepCount').textContent = (s.mode === 'blind' && s.loaded) || tst === 2 || tst === 4 ? 'steps after cut: ' + s.steps : '';
     $('btnStep').disabled = !s.loaded || tst === 1;
-    $('playRow').hidden = $('jumpRow').hidden = !free;
+    $('playRow').hidden = $('jumpRow').hidden = !(free || s.mode === 'day');     // the Day tab plays forward, date hidden
     $('revealRow').hidden = !((s.mode === 'blind' && s.graded) || tst === 3);
     $('btnSave').disabled = !s.loaded || (s.mode === 'blind' && s.graded);
     if (blindLive) $('secMachine').hidden = true;
     const ra = (s.bot && s.bot.runall) || {};
     if (ra.running) { A.runallWas = true; $('runAllMsg').textContent = 'running: day ' + Math.min(ra.k + 1, ra.n) + ' of ' + ra.n; }
-    else if (A.runallWas) { A.runallWas = false; api('/api/bot/runall').then(showSummary).catch(e => say('botExportMsg', e.message, true)); }
+    else if (A.runallWas) { A.runallWas = false; api('/api/bot/runall').then(showSummary).catch(e => say('botExportMsg', e.message, true)); loadRuns(); }
     $('btnRunAll').disabled = !!ra.running || !(s.bot && s.bot.ready);
     const bd = s.bot_day;
     if (A.uiMode === 'bot') $('botProg').textContent = !bd ? '' : bd.status === 'running' ? 'the bot is running on this day: ' + Math.round(100 * bd.progress) + '%' :
       bd.status === 'error' ? 'the bot failed on this day: ' + bd.error : '';
     if (A.uiMode === 'bot' && s.mode === 'bot' && s.loaded) botTick();
     if (A.uiMode === 'trades') showTrades(s, tst);
+    if (A.uiMode === 'day') showDay(s);
   }
   async function refresh() {
     try { showState(await api('/api/state')); } catch (e) { $('msStatus').textContent = 'Studio not reachable: ' + e.message; }
@@ -457,7 +466,9 @@
     }
     sel.value = w.current || '';
     if (w.problems && w.problems.length) sel.title = 'Not offered: ' + w.problems.map(x => x.file + ' (' + x.reason + ')').join('; ');
+    const was = $('msWorkBox').hidden;
     $('msWorkBox').hidden = false;
+    if (was) panelIn($('msWorkBox'));
     return w;
   }
   async function openWork(id) {
@@ -552,29 +563,34 @@
       showState(s);
       if (opts && opts.remount) { if (opts.reset) resetForm(); mount(); }
       return s;
-    } catch (e) { say(A.uiMode === 'bot' ? 'botErr' : A.uiMode === 'trades' ? 'tErr' : 'saveMsg', e.message, true); return null; }
+    } catch (e) { say(A.uiMode === 'bot' ? 'botErr' : A.uiMode === 'trades' ? 'tErr' : A.uiMode === 'day' ? 'dayErr' : 'saveMsg', e.message, true); return null; }
   }
   function setMode(m) {
-    if (m !== 'blind' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use ' + (m === 'bot' ? 'the Bot tab.' : m === 'trades' ? 'the Trades tab.' : 'Free mode.'), true); return; }
+    if (m !== 'blind' && A.state && A.state.blind_open) { say('saveMsg', 'Save the grade first, then use ' + (m === 'bot' ? 'the Bot tab.' : m === 'trades' ? 'the Trades tab.' : m === 'day' ? 'the Day tab.' : 'Free mode.'), true); return; }
     if (m !== 'trades' && A.state && A.state.trade_open) { say('tErr', 'Grade the open trade first.', true); return; }
     A.uiMode = m;
-    const ui = m === 'blind', bot = m === 'bot', tr = m === 'trades';
-    // the scrub stays on while a blind candidate is loaded, and in the Trades tab until the trade's grade is saved
-    BLIND = ui || !A.state || A.state.mode === 'blind' || !!A.state.trade_open || (tr && !A.state.date);
-    for (const [id, k] of [['tabBlind', 'blind'], ['tabFree', 'free'], ['tabBot', 'bot'], ['tabTrades', 'trades']]) { $(id).classList.toggle('on', m === k); $(id).setAttribute('aria-selected', String(m === k)); }
+    const ui = m === 'blind', bot = m === 'bot', tr = m === 'trades', day = m === 'day';
+    // the scrub stays on while a blind candidate is loaded, in the Trades tab until the trade's grade is saved, and in the
+    // Day tab (its days are shown without their date)
+    BLIND = ui || day || !A.state || A.state.mode === 'blind' || A.state.mode === 'day' || !!A.state.trade_open || (tr && !A.state.date);
+    for (const [id, k] of [['tabBlind', 'blind'], ['tabFree', 'free'], ['tabBot', 'bot'], ['tabTrades', 'trades'], ['tabDay', 'day']]) { $(id).classList.toggle('on', m === k); $(id).setAttribute('aria-selected', String(m === k)); }
     $('secBlind').hidden = !ui; $('secFree').hidden = m !== 'free'; $('secBot').hidden = !bot;
+    $('secDay').hidden = !day; $('secRuns').hidden = $('secBuilds').hidden = !bot;
+    if (!bot) $('botCompare').hidden = true;
     $('secKeys').hidden = $('secTrades').hidden = !tr;
     if (!tr) $('secTGrade').hidden = $('secTAdjust').hidden = $('secTResult').hidden = true;
     $('secMachine').hidden = m !== 'free';
-    $('gradeForm').hidden = bot || tr; $('secAgree').hidden = bot || tr;
-    if (bot || tr) $('secDraft').hidden = true;
+    $('gradeForm').hidden = bot || tr || day; $('secAgree').hidden = bot || tr || day;
+    if (bot || tr || day) $('secDraft').hidden = true;
     if (!bot) { $('secBotOut').hidden = true; $('botSummary').hidden = true; }
     $('msPanel').classList.toggle('bot', bot);
     $('msPanel').classList.toggle('trades', tr);
+    $('msPanel').classList.toggle('day', day);
     if (BLIND) scrubNode(document.body);
     if (ui) { if (A.state && A.state.mode !== 'blind') { unmount(); resetForm(); } clearBot(); }
     else if (tr) { if (A.state && A.state.mode !== 'trades') { unmount(); resetForm(); } clearBot(); loadTrades(); }
-    else if (bot) loadBotDays();
+    else if (day) { if (A.state && A.state.mode !== 'day') { unmount(); resetForm(); } clearBot(); loadDayList(); panelIn($('secDay')); }
+    else if (bot) { loadBotDays(); loadBuilds(); loadRuns(); panelIn($('secBuilds')); panelIn($('secRuns')); }
     else loadDays();
   }
 
@@ -586,14 +602,16 @@
   const ownTools = st => st === 2 || (st === 4 && A.tMine);
   function showTrades(s, st) {
     const c = s.trades && s.trades.counts;
-    $('tProgress').textContent = c ? 'Graded ' + c.graded + ' of ' + c.target + ' (' + c.adjusted + ' adjusted, ' + c.skipped_days + ' days skipped); ' +
+    $('tProgress').textContent = c ? 'Graded ' + c.graded + (c.target ? ' of ' + c.target : '') + ' (' + c.adjusted + ' adjusted, ' + c.skipped_days + ' days skipped); ' +
       c.remaining + ' left in the queue' + (c.refused ? ', ' + c.refused + ' passed over' : '') : '';
     const t = st ? s.trade : null;
     if (st !== 4) A.tMine = false;
     $('secTGrade').hidden = st !== 1; $('secTAdjust').hidden = !ownTools(st); $('secTResult').hidden = st !== 3 || !A.tres;
     $('secTPass').hidden = !(st === 4 && !A.tMine);
     $('tOwnHead').textContent = st === 4 ? 'Your trade instead' : 'Your trade';
-    for (const b of document.querySelectorAll('#tLabelSeg button')) { b.disabled = st !== 1; b.classList.toggle('on', !!t && t.label === b.dataset.label); }
+    const miss = st === 1 ? qMissing() : [];
+    showQuestion(st, miss);
+    for (const b of document.querySelectorAll('#tLabelSeg button')) { b.disabled = st !== 1 || miss.length > 0; b.classList.toggle('on', !!t && t.label === b.dataset.label); }
     for (const b of document.querySelectorAll('#tConfSeg button')) b.classList.toggle('on', String(A.tConf) === b.dataset.conf);
     $('btnTNext').disabled = !(st === 0 || st === 3) || !(c && c.remaining > 0);
     $('btnTSeen').disabled = st !== 1;
@@ -602,12 +620,59 @@
       (t.entry_order.limit !== null && t.entry_order.limit !== undefined ? ' limit ' + fmtC(t.entry_order.limit) : '') : 'No trade open';
     $('tOpen').textContent = t ? 'opened in ' + t.open_ms + ' ms' + (t.prefetched ? ' (prefetched)' : '') : '';
     const on = new Set(ownTools(st) ? KEYS_ON[2] : KEYS_ON[st] || []);
+    if (st === 1 && tQuestion()) { on.add('Q'); if (miss.length) { on.delete('T'); on.delete('A'); on.delete('P'); } }
     if (st === 0 && !(c && c.remaining > 0)) on.delete('N');
     for (const li of document.querySelectorAll('#tKeys li')) li.classList.toggle('off', !on.has(li.dataset.k));
     $('tKeyN').textContent = ownTools(st) ? 'save my trade' : st === 4 ? 'no trade, result' : 'next trade';
     sideNote();
     if (st === 3 && !A.tBusy && (!A.tres || A.tres.qid !== t.qid)) fetchResult(t.qid);
     if (st) tTick();
+  }
+  /* a label set's question (--trade-question): only its choices, one of each pair required before T, A or P */
+  const tQuestion = () => (A.tinfo && A.tinfo.question) || null;
+  function qMissing() {
+    const q = tQuestion();
+    return q ? q.pairs.filter(p => !p.choices.some(c => c.id === A.tAns[p.id])) : [];
+  }
+  function qPick(pid, cid) { A.tAns[pid] = A.tAns[pid] === cid ? undefined : cid; if (A.state) showState(A.state); }
+  function buildQuestion() {
+    const q = tQuestion(), box = $('tQPairs');
+    $('tQuestion').hidden = !q; $('tChips').hidden = !!q;
+    const key = $('tKeyQ'); key.hidden = !q; key.textContent = '';
+    if (!q || box.dataset.q === q.id) return;
+    box.dataset.q = q.id; box.textContent = '';
+    $('tQTitle').textContent = q.title + ' (both required)';
+    for (const p of q.pairs) {
+      const row = document.createElement('div'), lab = document.createElement('div'), seg = document.createElement('div');
+      row.className = 'ms-qpair'; row.dataset.pair = p.id; lab.className = 'ms-qlabel'; lab.textContent = p.label;
+      seg.className = 'ms-seg two';
+      for (const c of p.choices) {
+        const b = document.createElement('button'), kb = document.createElement('kbd');
+        b.type = 'button'; b.dataset.pair = p.id; b.dataset.choice = c.id; kb.textContent = c.key;
+        b.append(c.id + ' ', kb);
+        b.addEventListener('click', () => qPick(p.id, c.id));
+        seg.appendChild(b);
+      }
+      row.append(lab, seg); box.appendChild(row);
+    }
+  }
+  function showQuestion(st, miss) {
+    buildQuestion();
+    const q = tQuestion();
+    if (!q) return;
+    const key = $('tKeyQ');
+    if (!key.childNodes.length) for (const p of q.pairs) { for (const c of p.choices) { const kb = document.createElement('kbd'); kb.textContent = c.key; key.appendChild(kb); } key.appendChild(document.createTextNode(' ' + p.id + '  ')); }
+    for (const b of document.querySelectorAll('#tQPairs button')) { b.classList.toggle('on', A.tAns[b.dataset.pair] === b.dataset.choice); b.disabled = st !== 1; }
+    for (const row of document.querySelectorAll('#tQPairs .ms-qpair')) row.classList.toggle('missing', st === 1 && miss.some(p => p.id === row.dataset.pair));
+    const text = st === 1 && miss.length ? 'To save T, A or P, pick ' + miss.map(p => p.label.toLowerCase() + ' (' + p.choices.map(c => c.id).join(' or ') + ')').join(' and ') + '.' : '';
+    const el = $('tQMissing'); if (el.textContent !== text) el.textContent = text;
+    el.hidden = !text;
+  }
+  function qKey(K) {
+    const q = tQuestion();
+    if (!q) return false;
+    for (const p of q.pairs) for (const c of p.choices) if (c.key === K) { qPick(p.id, c.id); return true; }
+    return false;
   }
   async function tTick(force) {
     if (A.tvBusy || (!force && performance.now() - A.tvAt < 400)) return;
@@ -634,7 +699,8 @@
   function showResult(r) {
     A.tres = r;
     if (r.hidden) {                                      // a label set (--trade-labels-only): the grade only, no outcome
-      $('tResHead').textContent = r.label + ' saved.  Label set: no result is shown.' + (r.chips && r.chips.length ? '  Labels: ' + r.chips.join(', ') : '');
+      const ans = r.answers ? Object.values(r.answers) : r.chips || [];
+      $('tResHead').textContent = r.label + ' saved.  Label set: no result is shown.' + (ans.length ? '  Labels: ' + ans.join(', ') : '');
       $('tResult').textContent = '';
       showYours(null);
       $('tOpinionBox').hidden = true;
@@ -694,9 +760,13 @@
   }
   async function tSave1(label) {
     if (A.tBusy) return;
+    const miss = qMissing();
+    if (miss.length) { say('tErr', 'Pick ' + miss.map(p => p.label.toLowerCase()).join(' and ') + ' first.', true); return; }
     A.tBusy = true;
     try {
-      const r = await api('/api/trades/save1', { label, chips: [...A.chipOn], reason: $('tReason').value, confidence: A.tConf });
+      const body = { label, chips: tQuestion() ? [] : [...A.chipOn], reason: $('tReason').value, confidence: A.tConf };
+      if (tQuestion()) body.answers = Object.fromEntries(Object.entries(A.tAns).filter(([, v]) => v));
+      const r = await api('/api/trades/save1', body);
       say('tErr', '');
       await refresh();
       if (r.complete && A.state.trade) fetchResult(A.state.trade.qid);
@@ -746,6 +816,7 @@
       if (K === 'T') { done(); tSave1('TAKE'); } else if (K === 'A') { done(); tSave1('ADJUST'); } else if (K === 'P') { done(); tSave1('PASS'); }
       else if (K >= '1' && K <= '3') { done(); A.tConf = A.tConf === +K ? null : +K; showState(A.state); }
       else if (K === 'X') { done(); tSeen(); }
+      else if (qKey(K)) done();
     } else if (st === 4 && !A.tMine) {
       if (K === 'M') { done(); A.tMine = true; showState(A.state); }
       else if (K === 'ArrowRight') { done(); act('/api/step'); }
@@ -759,6 +830,117 @@
     } else if (K === 'Enter' || K === 'N') { done(); if (st === 0 || st === 3) tNext(); }
     else if (K === ' ' && st === 3) { done(); act('/api/reveal'); }
   }
+  /* ---------------- the Day tab: U, D or C at the replay clock on days already graded or seen, date hidden. The server
+     stamps the clock and appends each call to a hash-chained log; calls stamped after the clock are never sent. */
+  const CALL_WORD = { U: 'UP', D: 'DOWN', C: 'CHOP' };
+  async function loadDayList() {
+    try {
+      const r = A.dayDays = await api('/api/day/days');
+      const sel = $('daySel'), cur = sel.value; sel.textContent = '';
+      for (const d of r.days) {
+        const o = document.createElement('option'); o.value = d.ref;
+        o.textContent = 'Day ' + d.n + ' (' + (d.graded ? 'graded' : 'seen') + ')' + (d.calls ? ', ' + d.calls + ' call' + (d.calls > 1 ? 's' : '') : '');
+        sel.appendChild(o);
+      }
+      if (cur) sel.value = cur;
+      const st = A.state;
+      if (st && st.mode === 'day' && st.day_ref) sel.value = st.day_ref;
+      $('btnDayLoad').disabled = !r.days.length;
+      say('dayErr', r.days.length ? '' : 'No day to call yet: grade a sweep in Blind first (the Day tab offers days already graded or seen).');
+      showDayCounts(r.counts);
+    } catch (e) { $('btnDayLoad').disabled = true; say('dayErr', e.message, true); }
+  }
+  function showDayCounts(c) {
+    $('dayCounts').textContent = c ? 'Calls so far: ' + c.calls + ' on ' + c.days + ' day' + (c.days === 1 ? '' : 's') + ' (' + c.scored + ' in RTH)' : '';
+  }
+  function showDay(s) {
+    const open = s.mode === 'day' && s.loaded;
+    for (const b of document.querySelectorAll('#dayCallSeg button')) b.disabled = !open;
+    for (const b of document.querySelectorAll('#dayConfSeg button')) { b.disabled = !open; b.classList.toggle('on', String(A.dayConf) === b.dataset.conf); }
+    if (open) dayTick();
+  }
+  function renderDay(v) {
+    A.dayView = v;
+    const ul = $('dayCalls'); ul.textContent = '';
+    const calls = (v.calls || []).slice().reverse();
+    for (const c of calls) {
+      const li = document.createElement('li'), b = document.createElement('b');
+      b.textContent = c.clock_tod;
+      li.append(b, document.createTextNode(CALL_WORD[c.call] + (c.confidence ? ' (' + c.confidence + ')' : '') + (c === calls[0] ? ' in force' : '') +
+        (c.scored ? '' : ', outside RTH') + (c.words ? ': ' + c.words : '')));
+      ul.appendChild(li);
+    }
+    for (const b of document.querySelectorAll('#dayCallSeg button')) b.classList.toggle('on', !!(v.in_force && v.in_force.call === b.dataset.call));
+    showDayCounts(v.counts);
+  }
+  async function dayTick(force) {
+    if (A.dayBusy || (!force && performance.now() - A.dayAt < 400)) return;
+    A.dayBusy = true; A.dayAt = performance.now();
+    try { renderDay(await api('/api/day/view')); } catch (e) { say('dayErr', e.message, true); } finally { A.dayBusy = false; }
+  }
+  async function dayCall(call) {
+    if (A.dayBusy) return;
+    A.dayBusy = true;
+    try {
+      const v = await api('/api/day/call', { call, confidence: A.dayConf, words: $('dayWords').value });
+      $('dayWords').value = ''; A.dayConf = null;
+      say('dayErr', 'Saved: ' + CALL_WORD[call] + ' at ' + (v.in_force ? v.in_force.clock_tod : ''));
+      renderDay(v);
+      loadDayList();
+    } catch (e) { say('dayErr', e.message, true); } finally { A.dayBusy = false; }
+  }
+  function dayKey(e) {
+    const K = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    if (!(A.state && A.state.mode === 'day' && A.state.loaded)) return;
+    if (CALL_WORD[K]) { e.preventDefault(); dayCall(K); }
+    else if (K >= '1' && K <= '3') { e.preventDefault(); A.dayConf = A.dayConf === +K ? null : +K; showDay(A.state); }
+    else if (K === 'ArrowRight') { e.preventDefault(); act('/api/step'); }
+  }
+
+  /* ---------------- the Builds panel (BUILDS.md in the bot's repository, read only) and run comparisons */
+  async function loadBuilds() {
+    const t = $('buildsOut');
+    try {
+      const r = await api('/api/builds');
+      t.textContent = '';
+      $('buildsMsg').textContent = r.ok ? '' : r.why;
+      if (!r.ok) return;
+      head(t, ['Name', 'File', 'Note']);
+      const tb = t.createTBody();
+      for (const b of r.builds) { const tr = tb.insertRow(); cell(tr, b.name); cell(tr, b.file || ''); cell(tr, b.note); }
+    } catch (e) { t.textContent = ''; $('buildsMsg').textContent = e.message; }
+  }
+  async function loadRuns() {
+    try {
+      const { runs } = await api('/api/bot/runs');
+      for (const [id, k] of [['runA', 1], ['runB', 0]]) {
+        const sel = $(id), cur = sel.value; sel.textContent = '';
+        for (const r of runs) { const o = document.createElement('option'); o.value = r.stamp; o.textContent = r.stamp + ' ' + r.bot + ', ' + r.days + ' days'; sel.appendChild(o); }
+        if (cur && runs.some(r => r.stamp === cur)) sel.value = cur; else if (runs[k]) sel.value = runs[k].stamp;
+      }
+      $('btnCompare').disabled = runs.length < 2;
+      say('runsMsg', runs.length < 2 ? (runs.length ? 'One Run all result so far: a comparison needs two.' : 'No Run all result yet.') : '');
+    } catch (e) { say('runsMsg', e.message, true); }
+  }
+  function cmpSide(r, headId, tableId) {
+    const labels = Object.fromEntries((r.variants || []).map(v => [v.id, v.id + ' ' + v.label]));
+    const trades = Object.entries(r.trades || {}).map(([v, n]) => v + ' ' + n).join(', ');
+    $(headId).textContent = r.stamp + '  ' + r.bot + '  |  ' + r.days + ' bot days' + (r.failed ? ', ' + r.failed + ' failed' : '') + '  |  trades: ' + (trades || 'none') +
+      (r.rt !== null && r.rt !== undefined ? '  |  round trip ' + r.contract + ' $' + (+r.rt).toFixed(2) + ', ' + r.micro + ' $' + (+r.micro_rt).toFixed(2) : '');
+    sumTable($(tableId), r.rows, labels, false, sumCols(r.contract, r.micro));
+  }
+  async function compareRuns() {
+    const a = $('runA').value, b = $('runB').value;
+    if (!a || !b) return;
+    if (a === b) { say('runsMsg', 'Pick two different runs.', true); return; }
+    try {
+      const r = await api('/api/bot/compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
+      cmpSide(r.a, 'cmpHeadA', 'cmpA'); cmpSide(r.b, 'cmpHeadB', 'cmpB');
+      $('botSummary').hidden = true; $('botCompare').hidden = false; panelIn($('botCompare'));
+      say('runsMsg', '');
+    } catch (e) { say('runsMsg', e.message, true); }
+  }
+
   async function loadDays() {
     try {
       const { days } = await api('/api/days');
@@ -831,6 +1013,7 @@
 
   function onKey(e) {
     if (e.key === 'Escape' && (A.tool || A.spanDraft)) { setTool(null); e.preventDefault(); return; }
+    if (e.key === 'Escape' && document.activeElement === $('dayWords')) { $('dayWords').blur(); return; }
     if (e.key === 'Escape' && A.uiMode === 'trades') {
       if (document.activeElement === $('tReason')) $('tReason').blur();
       if (A.tSeenArm) { disarmSeen(); say('tErr', ''); }
@@ -841,6 +1024,7 @@
     const t = e.target, tag = t && t.tagName;
     if (tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && t.type !== 'radio') || (t && t.isContentEditable)) return;
     if (A.uiMode === 'trades') { tradeKey(e); return; }
+    if (A.uiMode === 'day') { dayKey(e); return; }
     const pick = (name, v) => { const el = document.querySelector('input[name=' + name + '][value=' + v + ']'); if (el) { el.checked = true; e.preventDefault(); } };
     if (e.key >= '1' && e.key <= '4') pick('setup', ['SWEEP', 'RETEST', 'NONE', 'WAIT'][+e.key - 1]);
     else if (e.key === 'l' || e.key === 'L') pick('direction', 'LONG');
@@ -861,6 +1045,15 @@
     $('tabFree').addEventListener('click', () => setMode('free'));
     $('tabBot').addEventListener('click', () => setMode('bot'));
     $('tabTrades').addEventListener('click', () => setMode('trades'));
+    $('tabDay').addEventListener('click', () => setMode('day'));
+    $('btnDayLoad').addEventListener('click', async () => {
+      say('dayErr', '');
+      if (await act('/api/day/open', { ref: $('daySel').value }, { remount: true, reset: true })) dayTick(true);
+    });
+    for (const b of document.querySelectorAll('#dayCallSeg button')) b.addEventListener('click', () => dayCall(b.dataset.call));
+    for (const b of document.querySelectorAll('#dayConfSeg button')) b.addEventListener('click', () => { A.dayConf = A.dayConf === +b.dataset.conf ? null : +b.dataset.conf; showDay(A.state); });
+    $('btnCompare').addEventListener('click', () => compareRuns());
+    $('btnCmpClose').addEventListener('click', () => { $('botCompare').hidden = true; });
     $('btnTNext').addEventListener('click', () => tNext());
     $('btnTSeen').addEventListener('click', () => tSeen());
     $('btnTSave2').addEventListener('click', () => tSave2());
@@ -913,7 +1106,7 @@
     A.machineTimer = setInterval(machine, 2000);
     refresh().then(() => {
       const st = A.state;
-      if (st && st.loaded && (st.mode === 'free' || st.mode === 'bot' || st.mode === 'trades')) { setMode(st.mode); mount(); } else if (st && st.loaded && st.mode === 'blind') mount();
+      if (st && st.loaded && (st.mode === 'free' || st.mode === 'bot' || st.mode === 'trades' || st.mode === 'day')) { setMode(st.mode); mount(); } else if (st && st.loaded && st.mode === 'blind') mount();
       else if (st && st.work && st.work.tab && st.work.tab !== 'blind' && st.mode !== 'none') setMode(st.work.tab);   // the work item's tab
       else if (st && st.trades && st.trades.ready && !st.blind_open) setMode('trades');      // started for the Trades tab: straight to the next trade
     });
