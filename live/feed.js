@@ -17,6 +17,9 @@
  *     exactly as if it had been there from the start, and no other panel is touched.
  *   - else one subscribe goes to ChartBridge asking for the most any panel on the line needs; the panels already on it
  *     get the line's "hello" again, so each loads afresh from the new load (as on a reconnect).
+ *   - 1.16.0: the record of live trades is a rolling window (LIVE_MAX). Once it has rolled, a panel that joins cannot be
+ *     built from it: it gets a load of its own on a new socket for the instrument (later panels join that one), and the
+ *     panels already on the old line keep theirs; the old line closes with the last of them.
  * Subscribes that come in the same task (a layout opening, every panel answering "hello") go out as one.
  * A panel that asks for another instrument moves to that line; a line with no panel left closes its socket. When a
  * line's socket closes, every stand-in on it closes; each panel reconnects as it always has, and the first one back
@@ -36,7 +39,11 @@
 'use strict';
 
 const CONNECTING = 0, OPEN = 1, CLOSED = 3;
-const LIVE_MAX = 1000000;          // live trades a load keeps for a panel that joins later (about 26 MB); past it, a new load
+/* 1.16.0 (Anthony): live trades a load keeps for a panel that joins later (about 26 MB), a rolling window: past it the oldest
+   tenth goes (LIVE_TRIM at a time), never the whole record. Up to 1.15.0 the record dropped itself here, and the next panel
+   to join made a new load that every panel on the line loaded afresh from. */
+const LIVE_MAX = 1000000;
+const LIVE_TRIM = 100000;
 const SLICE = 5000;                // live trades replayed per task
 const BACKFILL_MAX = 8000000;      // backfill trades a load keeps for a panel that joins later (the chart's own hard cap)
 const LOAD_TYPES = ['history', 'ticks', 'ready', 'profile'];
@@ -74,9 +81,17 @@ function covers(have, want, windowed) {
   return windowed ? have.tickHours > 0 : have.tickHours >= want.tickHours;
 }
 
-/* Trades in columns (no object or array per trade): a load's tick backfill, and its live trades since ready. */
+/*
+ * Trades in columns (no object or array per trade): a load's tick backfill, and its live trades since ready.
+ * The backfill (roll 0) drops itself whole past `max` (it is one piece: a part of it is no backfill). The live record
+ * (roll > 0, 1.16.0) is a rolling window: past `max` its oldest `roll` trades go in one move. `base` counts the trades it
+ * dropped, so a trade's place since ready is base + its index; `trimmed` says the record no longer starts at ready.
+ */
 class LiveLog {
-  constructor(max) { this.max = max || LIVE_MAX; this.n = 0; this.cap = 0; this.t = this.p = this.v = null; this.s = this.sm = this.q = null; this.dropped = false; }
+  constructor(max, roll) {
+    this.max = max || LIVE_MAX; this.roll = roll > 0 ? Math.min(Math.floor(roll), this.max) : 0;
+    this.n = 0; this.cap = 0; this.base = 0; this.t = this.p = this.v = null; this.s = this.sm = this.q = null; this.dropped = false; this.trimmed = false;
+  }
   /** One trade as ChartBridge sends it in a "ticks" list: [t, p, v], [t, p, v, s, sm] or (0.3.8) [t, p, v, s, sm, q]. */
   pushRow(x) { this.push({ t: x[0], p: x[1], v: x[2], s: x[3], sm: x[4], q: x[5] }); }
   /* the row as ChartBridge sent it: q (the Time and Sales category, 0.3.8) in the 6th place when known, with null sides
@@ -90,7 +105,12 @@ class LiveLog {
   }
   push(m) {
     if (this.dropped) return;
-    if (this.n >= this.max) { this.dropped = true; this.t = this.p = this.v = this.s = this.sm = this.q = null; return; }
+    if (this.n >= this.max) {
+      if (!this.roll) { this.dropped = true; this.t = this.p = this.v = this.s = this.sm = this.q = null; return; }
+      const k = this.roll;                               // the oldest `roll` trades go, in one move per column (no new arrays)
+      for (const a of [this.t, this.p, this.v, this.s, this.sm, this.q]) a.copyWithin(0, k, this.n);
+      this.n -= k; this.base += k; this.trimmed = true;
+    }
     if (this.n === this.cap) {
       const cap = Math.min(this.max, Math.max(4096, this.cap * 2));
       const grow = (a, T) => { const b = new T(cap); if (a) b.set(a); return b; };
@@ -119,17 +139,25 @@ function create(options) {
   const WS = opt.WebSocket || (typeof WebSocket !== 'undefined' ? WebSocket : null);
   const now = typeof opt.now === 'function' ? opt.now : () => Date.now();
   const later = typeof opt.later === 'function' ? opt.later : (fn => setTimeout(fn, 0));
-  const lines = new Map();                            // root -> line
+  const liveMax = opt.liveMax > 0 ? Math.floor(opt.liveMax) : LIVE_MAX;            // for tests: a smaller record
+  const liveTrim = opt.liveTrim > 0 ? Math.floor(opt.liveTrim) : Math.max(1, Math.min(LIVE_TRIM, Math.ceil(liveMax / 10)));
+  const lines = new Map();                            // root -> the line new panels join (the newest of that instrument)
+  const all = new Set();                              // every line, also one retired while its panels stay on it (1.16.0)
   let subSeq = 0, closedHub = false;
   const counts = { opened: 0, subscribes: 0 };       // real sockets opened, subscribes sent (for tests and perf)
 
   function lineOf(root) {
     let L = lines.get(root);
     if (!L) {
-      L = { root, ws: null, state: 'idle', hello: null, windowed: false, useSub: false, clients: new Set(), pending: new Set(),
-        load: null, fills: new Map(), flushQueued: false, seq: 0 };
+      L = newLine(root);
       lines.set(root, L);
     }
+    return L;
+  }
+  function newLine(root) {
+    const L = { root, ws: null, state: 'idle', hello: null, windowed: false, useSub: false, clients: new Set(), pending: new Set(),
+      load: null, fills: new Map(), flushQueued: false, seq: 0, retired: false };
+    all.add(L);
     return L;
   }
 
@@ -177,7 +205,8 @@ function create(options) {
     const ws = L.ws;
     reset(L);
     if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; try { ws.close(); } catch (e) { /* closed */ } }
-    lines.delete(L.root);
+    if (lines.get(L.root) === L) lines.delete(L.root);
+    all.delete(L);
   }
 
   /* ---------------- ChartBridge to the panels */
@@ -186,7 +215,7 @@ function create(options) {
     if (t === 'tick') {
       const load = L.load;
       if (!load) return;
-      if (m.root === L.root && load.ready) load.live.push(m);
+      if (m.root === L.root && load.ready && !L.retired) load.live.push(m);   // a retired line takes no new panel: no record
       for (const V of L.clients) if (V.load === load && !V.replaying) V._deliver(m);
       return;
     }
@@ -196,7 +225,7 @@ function create(options) {
       const hasSub = m.sub !== undefined && m.sub !== null;
       if (hasSub && load.sub !== null && +m.sub !== load.sub) return;            // an older load's message, still on its way
       if (t === 'profile' && !hasSub && load.ready) {                            // the session table made whole, after ready
-        load.late.push({ at: load.live.n, m });
+        load.late.push({ at: load.live.base + load.live.n, m });
         for (const V of L.clients) if (V.load === load && !V.replaying) V._deliver(m);
         return;
       }
@@ -260,11 +289,15 @@ function create(options) {
     let need = null;
     for (const V of asking) need = merge(need, V.need);
     const cur = L.load;
-    if (cur && !cur.live.dropped && !cur.bf.dropped && covers(cur.need, need, L.windowed)) { for (const V of asking) attach(V, cur); return; }
+    if (cur && !cur.live.trimmed && !cur.bf.dropped && covers(cur.need, need, L.windowed)) { for (const V of asking) attach(V, cur); return; }
+    /* 1.16.0: the load's record no longer starts at ready (a long day: the rolling window), so a panel joining now cannot be
+       built from it. It gets a load of its own on a new socket for the instrument, which every later panel joins; the
+       panels already on this line keep theirs, untouched (up to 1.15.0 they all loaded afresh). */
+    if (cur && (cur.live.trimmed || cur.bf.dropped) && [...L.clients].some(V => V.load === cur && !asking.includes(V))) { splitOff(L, asking); return; }
     // a new load: what the panels on the old one had, and what is asked now
     if (cur) for (const V of L.clients) if (V.load === cur && V.need) need = merge(need, V.need);
     const sub = L.useSub ? ++subSeq : null, at = now();
-    const load = { sub, need, msgs: [], ready: false, readyAt: 0, live: new LiveLog(), bf: new LiveLog(BACKFILL_MAX), late: [],
+    const load = { sub, need, msgs: [], ready: false, readyAt: 0, live: new LiveLog(liveMax, liveTrim), bf: new LiveLog(BACKFILL_MAX), late: [],
       info: { tickHours: need.tickHours, window: L.windowed && need.tickHours > 0, tickFrom: need.tickHours > 0 ? at - need.tickHours * 3600000 : null, days: need.days } };
     L.load = load;
     const msg = { type: 'subscribe', root: L.root, days: need.days, tickHours: need.tickHours };
@@ -277,6 +310,16 @@ function create(options) {
     // the panels on the old load start over from this one, as after a reconnect: "hello" again, and they subscribe
     if (cur) for (const V of [...L.clients]) if (V.load === cur) { V.load = null; V.replaying = false; V._deliver(L.hello); }
   }
+  /* The panels `asking` move to a new line of the same instrument (its own socket and load); the old line is retired: it
+     keeps serving the panels on it and closes with the last of them. */
+  function splitOff(L, asking) {
+    L.retired = true;
+    if (L.load && ![...L.clients].some(V => V.replaying)) L.load.live = new LiveLog(1, 1);   // its record is no use any more
+    const NL = newLine(L.root);
+    lines.set(L.root, NL);
+    for (const V of asking) { L.clients.delete(V); L.pending.delete(V); V.line = NL; V.load = null; V.replaying = false; NL.clients.add(V); NL.pending.add(V); }
+    connect(NL);
+  }
   /* A panel joins a load: what it has sent so far, then (once ready) the live trades since, then live. */
   function attach(V, load) {
     V.load = load; V.replaying = false;
@@ -288,18 +331,21 @@ function create(options) {
     }
     if (!load.ready || (!load.live.n && !load.late.length)) return;
     V.replaying = true;
-    let i = 0, k = 0;
+    let i = load.live.base, k = 0;                     // i: the trade's place since ready (the record's index + base)
     const L = V.line;
     const step = () => {
       if (V.load !== load || !V.replaying) return;
-      if (load.live.dropped) { V.load = null; V.replaying = false; if (L.hello) V._deliver(L.hello); return; }   // past the record's cap: load afresh
-      const end = Math.min(load.live.n, i + SLICE);
+      const live = load.live;
+      // the window rolled past where this panel's replay had got to (it cannot happen at SLICE a task, but never wrong):
+      // it loads afresh on its own (hello again; its subscribe then gets a load of its own), the others untouched
+      if (live.dropped || i < live.base) { V.load = null; V.replaying = false; if (L.hello) V._deliver(L.hello); return; }
+      const end = Math.min(live.base + live.n, i + SLICE);
       for (; i < end; i++) {
         while (k < load.late.length && load.late[k].at <= i) V._deliver(load.late[k++].m);
-        V._deliver(load.live.tick(L.root, i));
+        V._deliver(live.tick(L.root, i - live.base));
         if (V.load !== load) return;
       }
-      if (i < load.live.n && !load.live.dropped) { later(step); return; }
+      if (i < live.base + live.n) { later(step); return; }
       while (k < load.late.length) V._deliver(load.late[k++].m);
       V.replaying = false;
     };
@@ -371,7 +417,7 @@ function create(options) {
     const root = typeof m.root === 'string' ? m.root : '';
     if (!root) return;
     let L = V.line;
-    if (L.root !== root) {                            // another instrument: this panel moves to that line
+    if (L.root !== root || L.retired) {               // another instrument (or a retired line, 1.16.0): this panel moves to that line
       L.clients.delete(V); L.pending.delete(V); release(L);
       L = lineOf(root);
       V.line = L; L.clients.add(V);
@@ -386,13 +432,14 @@ function create(options) {
     open,
     /** For tests and the perf script: the lines (instrument, panels, socket state, load) and the counts. */
     stats() {
-      return { sockets: [...lines.values()].filter(L => L.ws).length, opened: counts.opened, subscribes: counts.subscribes,
-        lines: [...lines.values()].map(L => ({ root: L.root, clients: L.clients.size, state: L.state, load: L.load ? Object.assign({ ready: L.load.ready, live: L.load.live.n }, L.load.need) : null })) };
+      return { sockets: [...all].filter(L => L.ws).length, opened: counts.opened, subscribes: counts.subscribes,
+        lines: [...all].map(L => ({ root: L.root, clients: L.clients.size, state: L.state, retired: L.retired,
+          load: L.load ? Object.assign({ ready: L.load.ready, live: L.load.live.n, liveFrom: L.load.live.base }, L.load.need) : null })) };
     },
     /** Close every line (the page going away). */
-    close() { closedHub = true; for (const L of [...lines.values()]) { for (const V of [...L.clients]) V.close(); release(L); } },
+    close() { closedHub = true; for (const L of [...all]) { for (const V of [...L.clients]) V.close(); release(L); } },
   };
 }
 
-return { create, needOf, merge, covers, htfOf, LIVE_MAX, SLICE };
+return { create, needOf, merge, covers, htfOf, LiveLog, LIVE_MAX, LIVE_TRIM, SLICE };
 });
