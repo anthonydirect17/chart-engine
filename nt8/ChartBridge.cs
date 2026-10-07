@@ -119,6 +119,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   trading = true                (order entry from the chart; OFF by default; see ChartBridgeOrders.cs)
         //   tradeAccounts = Sim101, ...   (exact account names the chart may trade; no wildcard)
         //   maxQty.MNQ = 5                (largest order per instrument root; default 1)
+        //   accountChecks = on            (0.4.0: gate 2 is the page's per-account checkmark, saved in accounts.txt; off by default;
+        //                                  see ChartBridgeAccounts.cs. The other v3 switches: orderTypes, strategies, merge,
+        //                                  cancelFromList, copier, bot, all off by default)
         //   allowOrigins = https://desk.example.com, http://100.88.192.33:8800
         //                                 (web pages besides ChartBridge's own that may open the read-only
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
@@ -131,6 +134,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeOrders.ResetConfig();
             AllowOrigins = new List<string>();
             ChartBridgeBars.ResetConfig();
+            ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all off unless config.txt turns one on
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -141,6 +145,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (eq < 0) continue;
                 string key = line.Substring(0, eq).Trim();
                 string val = line.Substring(eq + 1).Trim();
+                ChartBridgeSwitches.Note(key, val);   // 0.4.0 accounts: records a v3 switch (accountChecks, cancelFromList, ...); never takes the key
                 int n;
                 if (key == "port" && int.TryParse(val, out n)) Port = n;
                 else if (key == "days" && int.TryParse(val, out n)) DefaultDays = Math.Max(1, Math.Min(60, n));
@@ -1437,7 +1442,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
-        private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" };
+        private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts" };   // 0.4.0 accounts: "accounts" in the order lane
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)
@@ -1884,6 +1889,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ResolveInstruments();
                     ChartBridgeOrders.NewToken();
                     ChartBridgeOrders.StartPlans();   // 0.3.7: planned_brackets.txt, read on a pool thread before the accounts are watched
+                    ChartBridgeAccounts.Start();      // 0.4.0 accounts: accounts.txt (the checkmarks) read before the accounts are watched; the 1 s Gone check
                     Log(ChartBridgeOrders.Enabled
                         ? "order entry is ON for " + ChartBridgeOrders.TradeAccounts.Count + " account(s): " + string.Join(", ", ChartBridgeOrders.TradeAccounts)
                         : "order entry is off (read only)");
@@ -1911,6 +1917,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try { if (pollTimer != null) pollTimer.Dispose(); } catch (Exception) { }
                     try { if (htfTimer != null) htfTimer.Dispose(); } catch (Exception) { }
                     accountTimer = null; pollTimer = null; htfTimer = null;
+                    ChartBridgeAccounts.Stop();   // 0.4.0 accounts
                     Unwatch();
                     return false;
                 }
@@ -1939,6 +1946,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 HtfReset();                                // 0.3.7: nothing kept; a start asks again
                 lock (WeekCache) WeekCache.Clear();
                 lock (Settlements) Settlements.Clear();
+                ChartBridgeAccounts.Stop();   // 0.4.0 accounts
                 Unwatch();
                 ChartBridgeOrders.UnwatchConnections();
                 UnwatchFeed();
@@ -2190,6 +2198,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
             else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
+            else if (type == "client" || type == "accountTrade" || type == "accountArchive")
+                ChartBridgeAccounts.OnMessage(client, type, text);   // 0.4.0 accounts: v3 page, the checkmark and Archive (ChartBridgeAccounts.cs; no order calls)
         }
 
         // The order code's lookups (0.4.0): a root that may be traded from the chart and its contract. A quote-only root
@@ -2214,6 +2224,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst;
             return root != null && Instruments.TryGetValue(root, out inst) ? inst : null;
         }
+
+        public static ICollection<ChartBridgeClient> AllClients() { return Clients.Values; }   // 0.4.0 accounts: ChartBridgeAccounts.cs sends per page
 
         public static void SendToTraders(string json)
         {
@@ -2309,7 +2321,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Account a in Watched) { if (!first) b.Append(','); first = false; b.Append(CbJson.Str(a.Name)); }
             }
             b.Append("],\"trading\":").Append(ChartBridgeOrders.TradingJson(false, null));
-            b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\"]}");   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
+            b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\"]}");   // 0.4.0 accounts: "v3", this ChartBridge speaks protocol v3   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
             return b.ToString();
         }
 

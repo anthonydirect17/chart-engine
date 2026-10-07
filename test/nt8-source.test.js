@@ -156,19 +156,24 @@ test('order calls appear only in the gated functions and the bracket upkeep of C
   assert.match(fnBody('OnPositionUpdate'), /MarketPosition\.Flat && SignedPosition\(account, inst\) == 0 && Steady\(/);
 });
 
-test('bracket upkeep runs even with trading off; pages hear only about tradable accounts', () => {
+test('bracket upkeep runs even with trading off; pages hear only about the accounts they may see', () => {
   const upd = fnBody('OnOrderUpdate');
   assert.match(upd, /^[^{]*\{\s*if \(account == null \|\| e\.Order == null\) return;/);
-  assert.ok(upd.indexOf('KeepBracket(o)') < upd.indexOf('if (Enabled && AccountTradable(account.Name) && root != null)'), 'upkeep before the trading check');
-  assert.ok(upd.indexOf('SendToTraders(OrderJson(') < upd.indexOf('Forget(o)'), 'OrderJson before Forget (Forget drops the id)');
-  assert.match(fnBody('OnPositionUpdate'), /if \(Enabled && AccountTradable\(account\.Name\) && root != null\)\s*ChartBridgeServer\.SendToTraders/);
+  assert.ok(upd.indexOf('KeepBracket(o)') < upd.indexOf('if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))'), 'upkeep before the trading check');
+  assert.ok(upd.indexOf('ChartBridgeAccounts.SendScoped(account.Name, OrderJson(') < upd.indexOf('Forget(o)'), 'OrderJson before Forget (Forget drops the id)');
+  assert.match(fnBody('OnPositionUpdate'), /if \(Enabled && root != null && ChartBridgeAccounts\.Seen\(account\.Name\)\)\s*ChartBridgeAccounts\.SendScoped\(account\.Name, PositionJson\(/);
+  // 0.4.0: a v2 page (no client message) keeps v2's scope: the tradable accounts only
+  const acc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
+  assert.match(acc, /public static bool Seen\(string name\) \{ return ChartBridgeOrders\.AccountTradable\(name\) \|\| \(Listed\(name\) && AnyV3Trader\(\)\); \}/);
+  assert.match(acc, /if \(IsV3\(c\)\) \{ if \(listed\) [^\n]*\}\s*else if \(tradable\) c\.Send\(json\);/);
+  assert.match(acc, /return all\.Where\(a => v3 \? Listed\(a\.Name\) : ChartBridgeOrders\.AccountTradable\(a\.Name\)\)\.ToList\(\);/);
 });
 
 test('strict messages: known keys only, bracket must be an object', () => {
   assert.match(ocode, /\{ "order", new\[\] \{ "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" \} \}/);
   assert.match(ocode, /\{ "change", new\[\] \{ "type", "cid", "id", "price" \} \}/);
   assert.match(ocode, /\{ "plan", new\[\] \{ "type", "cid", "id", "stopTicks", "targetTicks" \} \}/);   // 0.3.8: ticks
-  assert.match(ocode, /\{ "cancel", new\[\] \{ "type", "cid", "id" \} \}/);
+  assert.match(ocode, /\{ "cancel", new\[\] \{ "type", "cid", "id", "from" \} \}/);   // 0.4.0: from "list", refused unless cancelFromList is on
   assert.match(ocode, /\{ "flatten", new\[\] \{ "type", "cid", "account", "root" \} \}/);
   assert.match(ocode, /BracketKeys = \{ "stop", "target" \}/);
   const top = fnBody('TopLevel');
@@ -196,15 +201,22 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.match(fnBody('AccountTradable'), /if \(!Enabled \|\| string\.IsNullOrEmpty\(name\) \|\| IsNeverTradable\(name\)\) return false;/);
   assert.match(fnBody('ReadConfig'), /name\.Contains\("\*"\)\) continue;/);
   assert.match(ocode, /DefaultMaxQty = 1\b/);
-  for (const f of ['PlaceOrderLocked', 'Flatten']) assert.match(fnBody(f), /Account account = FindAccount\(accountName, out why\);\s*if \(account == null\) return why;/);
+  assert.match(fnBody('PlaceOrderLocked'), /Account account = FindAccount\(accountName, out why\);\s*if \(account == null\) return why;/);
+  // 0.4.0: with accountChecks on, Flatten is an exit (watched, Connected, not Backtest or Playback); off, v2's FindAccount
+  assert.match(fnBody('Flatten'), /Account account = ChartBridgeAccounts\.On \? ChartBridgeAccounts\.FindForExit\(accountName, out why\) : FindAccount\(accountName, out why\);\s*if \(account == null\) return why;/);
+  assert.match(fnBody('AccountTradable'), /return false;\s*if \(ChartBridgeAccounts\.On\) return ChartBridgeAccounts\.Checked\(name\);/);
   const find = fnBody('FindAccount');
   assert.match(find, /if \(!AccountTradable\(name\)\)/);
   assert.match(find, /if \(status != "Connected"\)/);
   assert.match(find, /if \(!ChartBridgeServer\.EnsureWatched\(found\)\)/);
   for (const f of ['ChangeOrder', 'CancelOrder']) {
-    assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
+    // 0.4.0: an exit (a ChartBridge stop or target moved, any cancel with accountChecks on, a cancel from the list) needs a
+    // watched, Connected account; everything else is v2's gate 2
+    assert.match(fnBody(f), /!\(exit \? ChartBridgeAccounts\.ExitAllowed\(o\.Account, out \w+\) : AccountTradable\(o\.Account\.Name\)\)/);
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
+  assert.match(fnBody('ChangeOrder'), /bool exit = ChartBridgeAccounts\.On && IsChartBridgeLeg\(o\);/);
+  assert.match(fnBody('CancelOrder'), /string why = ChartBridgeAccounts\.CancelFromRefusal\(Has\(top, "from"\), Str\(top, "from"\)\);\s*if \(why != null\) return why;\s*bool exit = Has\(top, "from"\) \|\| ChartBridgeAccounts\.On;/);
   // the cap is on the position: current position (with fills not yet in it) plus orders that may fill on that side plus this order
   assert.match(fnBody('PlaceOrderLocked'), /pos = isBuyOrder\(top\) \? Math\.Max\(posNow, posEff\) : Math\.Min\(posNow, posEff\)/);   // the worse reading
   assert.match(fnBody('PendingOrders'), /MayFill\(o\.OrderState\)/);
@@ -216,7 +228,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
   assert.ok(!/planned stop|PlanLock|BracketFor/.test(fnBody('ChangeOrder')), 'ChangeOrder never looks at the planned bracket');
   assert.match(fnBody('TicksOf'), /if \(Int\(top, key, out v\) != 1 \|\| v < 1\) return -1;/);
   for (const f of ['ChangeOrder', 'PlanOrder']) {
-    assert.match(fnBody(f), /!AccountTradable\(o\.Account\.Name\)/);
+    assert.match(fnBody(f), f === 'PlanOrder' ? /!AccountTradable\(o\.Account\.Name\)/ : /: AccountTradable\(o\.Account\.Name\)\)/);
     assert.match(fnBody(f), /ChartBridgeServer\.RootFor\(o\.Instrument\)/);
   }
   // a plan change that cannot be saved changes nothing
@@ -545,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" \};/);
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts" \};/);   // 0.4.0: accounts in the order lane
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -564,7 +576,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.3\.[5-9]";/);
-  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\"\]/);   // 0.3.7 adds three
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));
@@ -797,4 +809,38 @@ test('0.4.0: the tape counters run after the send, on their own, with no lock an
   assert.ok(!/\bnew\b|lock \(|\.ToString\(|string\.|Sort\(|OrderBy\(|\+ "/.test(onPrint), 'TapeRoot.OnPrint: no allocation, lock, string or sorting');
   assert.match(code, /b\.Append\(",\\"tape\\":"\)\.Append\(ChartBridgeTape\.DiagJson\(\)\);/);
   assert.match(code, /b\.Append\(",\\"health\\":"\)\.Append\(HealthJson\(\)\);/);
+});
+
+// ---- 0.4.0 accounts (behaviour: nt8/check/AccountsHarness.cs under Mono, inside check:orders)
+test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and its switches are off by default', () => {
+  const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
+  const acode = asrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeAccounts.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs ChartBridgeAccounts\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/AccountsHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /AccountsHarness\.Run\(Check\);/);
+  // no order call of any kind: closing goes through ChartBridgeOrders.cs's gated functions
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
+    assert.ok(!re.test(acode), 'ChartBridgeAccounts.cs: ' + re);
+  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5 only');
+  // never turns trading on or off, never changes a switch from inside
+  assert.ok(!/Enabled\s*=/.test(acode) && !/TradeAccounts\.(Add|Clear|Remove)/.test(acode), 'never touches trading or tradeAccounts');
+  // the switches: off by default, on only for on, true or 1
+  assert.match(acode, /private static readonly bool\[\] Values = new bool\[Names\.Length\];/);
+  assert.match(acode, /bool on = v\.Equals\("on", StringComparison\.OrdinalIgnoreCase\) \|\| v\.Equals\("true", StringComparison\.OrdinalIgnoreCase\) \|\| v == "1";/);
+  assert.match(bodyOf(code, 'public static void Load()'), /ChartBridgeSwitches\.Reset\(\);[\s\S]*ChartBridgeSwitches\.Note\(key, val\);/);
+  // the undocumented trailing drawdown is read by name (compiles on every NinjaTrader 8), and a 0 is not trusted until a value was seen
+  assert.match(acode, /ItemNamed\("TrailingMaxDrawdown"\)/);
+  assert.ok(!/AccountItem\.TrailingMaxDrawdown/.test(acode), 'TrailingMaxDrawdown only by name');
+  assert.match(acode, /if \(v != 0\) DrawdownSeen\.Add\(a\.Name\);/);
+  // the daily loss room is never estimated
+  assert.match(acode, /\.Append\(",\\"roomDailyLoss\\":null"\)/);
+  // accounts.txt: written whole via a temp file, never rewritten after a failed read; only from the timer or a page's thread
+  assert.match(acode, /if \(!loaded \|\| readError != null \|\| !dirty\) return;/);
+  assert.match(acode, /if \(File\.Exists\(FilePath\)\) File\.Replace\(tmp, FilePath, null\); else File\.Move\(tmp, FilePath\);/);
+  assert.ok(!/Save\(\)|FlushLog\(\)/.test(bodyOf(acode, 'public static void StartNow(')), 'no write at start (NinjaTrader\'s thread)');
+  assert.match(acode, /public const double GraceMs = 10000;/);
+  // the main file: client, accountTrade and accountArchive go to ChartBridgeAccounts; "accounts" rides the order lane
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  assert.match(code, /ChartBridgeAccounts\.Start\(\);[^\n]*\n[\s\S]*?WatchAccounts\(\);/);
 });
