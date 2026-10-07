@@ -72,8 +72,8 @@ A cell with **fewer than 20 trades is faded** on the page: too few to read.
 
 ## Shelves
 
-* **Ready (L1 or higher):** the panel offers Shadow, Copilot and, when ChartBridge allows it, Sim auto.
-* **Research (shadow only):** while a Research build is the one running, the panel offers Shadow only; Copilot and Sim auto
+* **Ready (L1 or higher):** the panel offers Shadow, Copilot and, when ChartBridge allows it, Auto (on the account chosen on the Bot tab, Sim or LIVE).
+* **Research (shadow only):** while a Research build is the one running, the panel offers Shadow only; Copilot and Auto
   are disabled with the reason. ChartBridge's own rails still apply whatever the page shows.
 
 ## What the page shows

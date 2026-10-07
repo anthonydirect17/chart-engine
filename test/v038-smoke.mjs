@@ -31,7 +31,7 @@ async function until(fn, what, ms) {
   for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() > end) { fail('timed out: ' + what); return null; } await wait(100); }
 }
 /* v3's page messages (nt8/PROTOCOL.md "Protocol v3"), and the keys v3 adds to the old ones */
-const V3_TYPES = ['client', 'accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails'];
+const V3_TYPES = ['client', 'accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'];
 const V3_KEYS = ['from', 'strategy', 'limitOffset', 'limitPrice'];
 
 let bridge = null, port = PORT;

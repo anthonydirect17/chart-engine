@@ -150,17 +150,20 @@ test('The Desk\'s rows (GET /api/chart-accounts): numbers above 0 or null, the o
 });
 
 /* ---------------- the copier's rows */
-test('Copier rows: every Sim account but the leader (a saved follower\'s settings, else off), never a real account to send', () => {
-  const accounts = [{ name: 'EVAL-A', sim: false }, { name: 'SIM-F1', sim: true, connection: 'connected' }, { name: 'SIM-F2', sim: true }, { name: 'Sim101', sim: true }];
+test('Copier rows (Anthony 2026-10-07: no Sim lock): every account but the leader, Sim or LIVE, each marked; a saved follower\'s settings, else off', () => {
+  const accounts = [{ name: 'EVAL-A', sim: false }, { name: 'SIM-F1', sim: true, connection: 'connected' }, { name: 'SIM-F2', sim: true }, { name: 'Sim101', sim: true }, { name: 'FUNDED-B', sim: false, state: 'archived' }];
   const copier = { leader: { account: 'Sim101' }, followers: [{ account: 'SIM-F2', sim: true, on: true, qty: 3, size: 'mini', lossLimit: 500, root: 'NQ', skipped: 'position limit', slippageTicks: 2 },
-    { account: 'EVAL-B', sim: false, on: true, qty: 1, size: 'micro', lossLimit: null }] };
+    { account: 'EVAL-B', sim: false, on: true, qty: 2, size: 'micro', lossLimit: null }] };
   const rows = AC.followerRows(accounts, copier);
-  assert.deepEqual(rows.map(r => r.account), ['EVAL-B', 'SIM-F1', 'SIM-F2']);
-  assert.deepEqual(['on', 'qty', 'size', 'lossLimit'].map(k => rows[1][k]), [false, 1, 'micro', null], 'a Sim account not yet a follower: off, 1, micro, no loss limit');
-  assert.deepEqual(['on', 'qty', 'size', 'lossLimit', 'skipped', 'slippageTicks'].map(k => rows[2][k]), [true, 3, 'mini', 500, 'position limit', 2]);
-  assert.equal(rows[0].sim, false); assert.match(rows[0].skipped, /not a Sim account/);
+  assert.deepEqual(rows.map(r => r.account), ['EVAL-A', 'EVAL-B', 'SIM-F1', 'SIM-F2'], 'a real account is offered; archived and the leader are not');
+  assert.deepEqual(rows.map(r => r.mark), ['LIVE', 'LIVE', 'SIM', 'SIM']);
+  assert.deepEqual(['on', 'qty', 'size', 'lossLimit'].map(k => rows[0][k]), [false, 1, 'micro', null], 'an account not yet a follower: off, 1, micro, no loss limit');
+  assert.deepEqual(['on', 'qty', 'size', 'lossLimit', 'skipped', 'slippageTicks'].map(k => rows[3][k]), [true, 3, 'mini', 500, 'position limit', 2]);
+  assert.equal(rows[1].sim, false); assert.deepEqual([rows[1].on, rows[1].qty, rows[1].skipped], [true, 2, null], 'a saved real follower the list does not name: its own settings, no Sim refusal');
   assert.ok(!rows.some(r => r.account === 'Sim101'), 'the leader is never a follower');
-  assert.ok(!rows.some(r => r.account === 'EVAL-A'), 'a real account is not offered');
+  assert.equal(AC.accountMark(true), 'SIM'); assert.equal(AC.accountMark(false), 'LIVE'); assert.equal(AC.accountMark(undefined), 'LIVE', 'unknown is LIVE (the careful side)');
+  const live = AC.followerMessage(Object.assign({}, rows[0], { on: true }), 'c0');
+  assert.deepEqual(live.msg, { type: 'copierFollower', cid: 'c0', account: 'EVAL-A', on: true, qty: 1, size: 'micro', lossLimit: null }, 'a LIVE follower is sent like any other');
   const ok = AC.followerMessage({ account: 'SIM-F1', on: true, qty: 2, size: 'micro', lossLimit: null }, 'c1');
   assert.deepEqual(ok.msg, { type: 'copierFollower', cid: 'c1', account: 'SIM-F1', on: true, qty: 2, size: 'micro', lossLimit: null });
   assert.deepEqual(AC.followerMessage({ account: 'SIM-F1', on: false, qty: 9, size: 'mini', lossLimit: '750' }).msg.lossLimit, 750);

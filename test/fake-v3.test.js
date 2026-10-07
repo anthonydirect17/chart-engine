@@ -249,9 +249,23 @@ test('cancel from the Working orders tab: off by switch; on, any watched account
   assert.equal(p.state, 'cancelled');
 });
 
-test('copier: Sim followers only; a leader entry gives each follower a market entry and a stop at the leader\'s stop price', async () => {
+test('switches (Anthony 2026-10-07: no switches): every v3 switch on by default; an off line (false) turns just that one off', async () => {
+  const V = await import('./fake-v3.mjs');
+  const base = { config: { trading: true, tradeAccounts: ['Sim101'], maxQty: {}, port: 8765 }, instruments: INSTR, knownAccounts: ['Sim101'], token: 'tok',
+    accountList: [{ name: 'Sim101', sim: true }], send: () => {}, conns: () => [], now: () => 1, barTime: () => 1 };
+  assert.deepEqual(new V.OrderDeskV3(base).sw, ALL_ON, 'no switches named: every one on');
+  const off = new V.OrderDeskV3(Object.assign({}, base, { switches: { merge: false, copier: false } })).sw;
+  assert.deepEqual(off, Object.assign({}, ALL_ON, { merge: false, copier: false }));
+  const d = await makeDesk({ switches: { merge: false } });
+  assert.match(reasonOf(d.act({ type: 'merge', account: 'Sim101', root: 'MNQ' })), /merge = off in config\.txt/);
+});
+
+test('copier: a real (not Sim) follower is copied through every gate; a leader entry gives each follower a market entry and a stop at the leader\'s stop price', async () => {
   const d = await makeDesk({ config: { maxQty: { MNQ: 5, NQ: 2 } } });
-  assert.match(reasonOf(d.act({ type: 'copierFollower', account: 'EVAL-A', on: true, qty: 1, size: 'micro', lossLimit: null })), /not a Sim account/);
+  assert.equal(reasonOf(d.act({ type: 'copierFollower', account: 'EVAL-A', on: false, qty: 1, size: 'micro', lossLimit: null })), null, 'a real account may be a follower (no Sim lock)');
+  assert.equal(d.desk.copierMsg().simOnly, false);
+  assert.equal(d.desk.copierMsg().followers.find(f => f.account === 'EVAL-A').sim, false, 'shown not Sim (the page marks it LIVE)');
+  assert.match(reasonOf(d.act({ type: 'copierFollower', account: 'Sim101', on: true, qty: 1, size: 'micro', lossLimit: null })), /Sim101 is the bot's account/, 'the bot\'s account is never a follower');
   for (const n of ['SIM-F1', 'SIM-F2']) d.act({ type: 'accountTrade', account: n, on: true });
   d.act({ type: 'copierFollower', account: 'SIM-F1', on: true, qty: 3, size: 'micro', lossLimit: null });
   d.act({ type: 'copierFollower', account: 'SIM-F2', on: true, qty: 3, size: 'mini', lossLimit: null });
@@ -276,6 +290,17 @@ test('copier: Sim followers only; a leader entry gives each follower a market en
   assert.equal(d.desk.pos('Sim101', 'NQ').qty, 0);
   assert.equal(d.desk.pos('SIM-F1', 'MNQ').qty, 0);
   assert.equal(d.working('SIM-F1').length, 0);
+  // a real follower that is on and tradable is copied like any other; unchecked (gate 2), it is skipped
+  d.act({ type: 'copierFollower', account: 'EVAL-A', on: true, qty: 1, size: 'micro', lossLimit: null });
+  d.tick(25404, 'MNQ');                                  // the micro at the mini's price (the follower's stop sits at the leader's)
+  d.order({ cid: 'L2', root: 'NQ', bracket: { stop: 8, target: 16 } });
+  assert.equal(d.desk.pos('EVAL-A', 'MNQ').qty, 1, 'EVAL-A (real, checked) copied like any follower');
+  assert.ok(d.working('EVAL-A').some(o => o.role === 'stop' && o.copier), 'and gets its stop at the leader\'s price');
+  d.act({ type: 'flatten', account: 'Sim101', root: 'NQ' });
+  d.act({ type: 'accountTrade', account: 'EVAL-A', on: false });
+  d.order({ cid: 'L3', root: 'NQ', bracket: { stop: 8, target: 16 } });
+  assert.equal(d.desk.copier.followers.get('EVAL-A').skipped, 'not checked for trading', 'unchecked: skipped (the gates still apply)');
+  d.act({ type: 'flatten', account: 'Sim101', root: 'NQ' });
   // mass disconnect: the leader dropping stands it down
   d.desk.setConnection('Sim101', 'lost');
   assert.equal(d.desk.copier.armed, false); assert.match(d.desk.copier.standDownWhy, /leader/);
@@ -317,6 +342,39 @@ test('bot: copilot proposal accepted is placed from its own parameters on Sim101
   assert.equal(d.desk.bot.connected, false);
   assert.ok(!d.working('Sim101').some(o => o.by === 'bot' && o.role === 'entry'), 'heartbeat lost: unfilled entries cancelled');
   assert.equal(d.desk.bot.stats.heartbeatLost, 1);
+});
+
+test('bot: the account Anthony chooses (botAccount): Sim or LIVE, every gate, never a copier follower or leader, only when flat', async () => {
+  const d = await makeDesk();
+  d.desk.botMessage({ type: 'botHello', name: 'Demo' });
+  assert.equal(d.desk.botMsg().account, 'Sim101'); assert.equal(d.desk.botMsg().sim, true);
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'NOPE-1' })), /not in NinjaTrader/);
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'FUNDED-C' })), /FUNDED-C is not checked for trading.*the bot needs it tradable/, 'not tradable: refused');
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'EVAL-A', extra: 1 })), /unknown key|Unknown key/i);
+  d.act({ type: 'copierFollower', account: 'SIM-F1', on: true, qty: 1, size: 'micro', lossLimit: null });
+  d.act({ type: 'accountTrade', account: 'SIM-F1', on: true });
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'SIM-F1' })), /SIM-F1 is a copier follower/, 'a follower that is on: refused');
+  // LIVE allowed
+  d.act({ type: 'botMode', mode: 'copilot' });
+  d.desk.botMessage({ type: 'signal', id: 'q1', action: 'fired', side: 'sell', kind: 'market', stopTicks: 12, targetTicks: 24, reason: 'Sample' });
+  assert.equal(reasonOf(d.act({ type: 'botAccount', account: 'EVAL-A' })), null);
+  assert.equal(d.desk.bot.proposals.get('q1').state, 'not answered', 'an open proposal expires when the account changes');
+  const b = d.desk.botMsg();
+  assert.equal(b.account, 'EVAL-A'); assert.equal(b.sim, false, 'EVAL-A is LIVE');
+  assert.equal(d.desk.welcomeMsg().account, 'EVAL-A'); assert.equal(d.desk.welcomeMsg().sim, false);
+  assert.match(reasonOf(d.act({ type: 'copierFollower', account: 'EVAL-A', on: true, qty: 1, size: 'micro', lossLimit: null })), /EVAL-A is the bot's account/, 'the other way: refused');
+  d.act({ type: 'botMode', mode: 'auto' });
+  assert.equal(d.desk.bot.mode, 'auto', 'auto on a LIVE account');
+  const before = d.desk.pos('EVAL-A', 'MNQ').qty;
+  d.desk.botMessage({ type: 'signal', id: 'a1', action: 'fired', side: 'buy', kind: 'market', stopTicks: 8, targetTicks: 8, reason: 'Sample' });
+  assert.equal(d.desk.pos('EVAL-A', 'MNQ').qty, before + 1, 'auto placed 1 contract on EVAL-A');
+  assert.equal(d.desk.pos('Sim101', 'MNQ').qty, 0, 'nothing on Sim101');
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'Sim101' })), /Sim101 is the copier's leader/, 'the copier\'s leader: refused');
+  assert.match(reasonOf(d.act({ type: 'botAccount', account: 'EVAL-A' })), /choose its account when it is flat/, 'with a position: refused');
+  d.act({ type: 'botMode', mode: 'copilot' });
+  d.desk.botMessage({ type: 'signal', id: 'q2', action: 'fired', side: 'sell', kind: 'market', stopTicks: 12, targetTicks: 24, reason: 'Sample' });
+  const pr = d.desk.bot.proposals.get('q2');
+  assert.equal(pr.account, 'EVAL-A'); assert.equal(pr.sim, false, 'the proposal names the account and its mark');
 });
 
 /* ---------------- the fake server with --v3 */

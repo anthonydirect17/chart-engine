@@ -9,7 +9,9 @@
  *               1 to 3, the root botRoot or its micro or mini, kept by ChartBridge in bot-rails.txt)
  *   the bot's   which orders and fills are the bot's: a v3 page's order message says `by: "bot"` for the bot's entries and
  *   orders      the legs it follows (isBotMark); a fill is claimed for the bot against those orders' filled contracts
- *               (botFillLedger), so Anthony's own Sim101 orders on the bot's root are never taken as the bot's
+ *               (botFillLedger), so Anthony's own orders on the bot's account and root are never taken as the bot's
+ *   account     the account the bot trades (Anthony 2026-10-07: the one he chooses, Sim or LIVE; `botAccount`, kept by ChartBridge
+ *               in bot-account.txt, Sim101 by default): its SIM or LIVE mark, the accounts he may choose, the change
  *   proposals   a copilot proposal's life on the page: shown (then `botSeen` once), answered once (`botAnswer`), and gone
  *               when ChartBridge says accepted, rejected, withdrawn or not answered (an expired one shows "not answered")
  *   library     the frozen Bot-Lab builds (`GET /bot-library`, docs/BOT_LIBRARY.md): read, checked, shelved
@@ -32,7 +34,8 @@ const VERSION = '1.0.0';
 const RAILS = Object.freeze({ maxQty: 1, maxTrades: 5, maxLosses: 3 });
 /* The most the page may ask for (ChartBridgeBot.cs MaxTradesLimit, MaxLossesLimit): ChartBridge's own limits. */
 const RAIL_MAX = Object.freeze({ maxTrades: 5, maxLosses: 3 });
-/* The bot's account and the roots it may trade (botRoot, or its micro or mini: ChartBridgeBot.cs Sibling). */
+/* The bot's account until Anthony chooses another (ChartBridgeBot.cs DefaultAccount), and the roots it may trade (botRoot, or
+   its micro or mini: ChartBridgeBot.cs Sibling). */
 const BOT_ACCOUNT = 'Sim101';
 const ROOT_SIBLING = Object.freeze({ MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' });
 /* How close to a limit (Anthony, addendum 2): amber at 70% used, red at 90%. */
@@ -40,7 +43,7 @@ const AMBER = 0.7, RED = 0.9;
 /* A conditions cell with fewer trades than this is faded: too few to read. */
 const THIN = 20;
 const MODES = ['shadow', 'copilot', 'auto'];
-const MODE_NAME = { shadow: 'Shadow', copilot: 'Copilot', auto: 'Sim auto' };
+const MODE_NAME = { shadow: 'Shadow', copilot: 'Copilot', auto: 'Auto' };
 const DAY_TYPES = ['Trend', 'Range', 'Gap', 'Unsure'];
 const PROPOSAL_END = ['accepted', 'rejected', 'withdrawn', 'not answered'];
 const KEYS = { log: 'live-bot-log-v1', dayType: 'live-bot-daytype-v1', ghost: 'live-bot-ghost-v1', options: 'live-bot-options-v1' };
@@ -99,8 +102,8 @@ function railsChange(cur, want, cid) {
 
 /**
  * Is this order the bot's? ChartBridge 0.4.0 marks it on a v3 page's order message: `by: "bot"` for a bot entry and the legs
- * the bot channel follows (ChartBridgeV3.OrderBy; PROTOCOL.md "Who placed it"). Nothing else counts: Anthony's own Sim101
- * orders on the bot's root are his, not the bot's. bot: the `bot` message; when its account is known the order must be on it.
+ * the bot channel follows (ChartBridgeV3.OrderBy; PROTOCOL.md "Who placed it"). Nothing else counts: Anthony's own orders
+ * on the bot's account and root are his, not the bot's. bot: the `bot` message; when its account is known the order must be on it.
  */
 function isBotMark(x, bot) {
   if (!x || x.by !== 'bot') return false;
@@ -147,11 +150,57 @@ function botFillLedger() {
   };
 }
 
+/* ======================================================================== the bot's account */
+/** SIM or LIVE: an account is SIM only when ChartBridge says `sim: true` (NinjaTrader's own simulator); anything else is LIVE
+ *  (the careful side: an evaluation or funded account is real to NinjaTrader). */
+const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
+/** The bot's account from the `bot` message: { name, sim, mark }. Before ChartBridge says, Sim101 (its default) unmarked. */
+function botAccount(bot) {
+  const b = bot || {};
+  const name = typeof b.account === 'string' && b.account ? b.account : BOT_ACCOUNT;
+  const known = typeof b.sim === 'boolean';
+  return { name, sim: b.sim === true, mark: known ? accountMark(b.sim) : '' };
+}
+/**
+ * The accounts Anthony may choose for the bot (botAccount): every account in the v3 `accounts` list that ChartBridge says is
+ * tradable now (its checkmark, Connected, not Gone), with its SIM or LIVE mark, Sim accounts first, then by name. The bot's
+ * current account is always in the list (current: true), tradable or not, so the picker can show it.
+ */
+function accountChoices(accountsMsg, bot) {
+  const cur = botAccount(bot).name;
+  const list = accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
+  const out = [];
+  for (const a of list) {
+    if (!a || typeof a.name !== 'string' || !a.name) continue;
+    const current = a.name === cur;
+    if (!current && !(a.tradable === true && a.state !== 'gone')) continue;
+    out.push({ name: a.name, sim: a.sim === true, mark: accountMark(a.sim), tradable: a.tradable === true, current });
+  }
+  return out.sort((x, y) => (x.sim !== y.sim ? (x.sim ? -1 : 1) : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+}
+/**
+ * The page's change of the bot's account: { error } (a plain reason) or { msg, live, confirm } where msg is the `botAccount`
+ * message and confirm, for a LIVE account, the one question the page asks first ("The bot will trade LIVE account X.
+ * Continue?"). ChartBridge checks every rule again (the gates, the copier, flat only).
+ */
+function botAccountChange(bot, name, choices, cid) {
+  const cur = botAccount(bot).name, b = bot || {};
+  if (typeof name !== 'string' || !name) return { error: 'Choose an account.' };
+  if (name === cur) return { error: name + ' is already the bot\'s account.' };
+  const c = (choices || []).find(x => x.name === name);
+  if (!c || !c.tradable) return { error: name + ' is not tradable in ChartBridge now (its checkmark on the Accounts tab, Connected).' };
+  if (b.position && isNum(b.position.qty) && b.position.qty !== 0) return { error: 'The bot has a position: choose its account when it is flat.' };
+  const msg = { type: 'botAccount' };
+  if (cid) msg.cid = cid;
+  msg.account = name;
+  return { msg, live: !c.sim, confirm: c.sim ? '' : 'The bot will trade LIVE account ' + name + '. Continue?' };
+}
+
 /* ======================================================================== modes */
 /**
  * Which modes the panel offers: shadow always; copilot unless the loaded build is on the Research shelf; auto only when
- * ChartBridge allows it (Sim101 tradable) and not for a Research build. Returns { shadow, copilot, auto } of
- * { ok, why }.
+ * ChartBridge allows it (the bot's account tradable) and not for a Research build. Returns { shadow, copilot, auto } of
+ * { ok, why }. o: { entry, tradable, account }.
  */
 function modesAllowed(o) {
   const x = o || {};
@@ -160,14 +209,15 @@ function modesAllowed(o) {
   return {
     shadow: { ok: true, why: '' },
     copilot: research ? { ok: false, why: rs } : { ok: true, why: '' },
-    auto: research ? { ok: false, why: rs } : x.simTradable ? { ok: true, why: '' } : { ok: false, why: 'Sim auto needs Sim101 to be tradable in ChartBridge.' },
+    auto: research ? { ok: false, why: rs } : x.tradable ? { ok: true, why: '' } : { ok: false, why: 'Auto needs ' + (x.account || BOT_ACCOUNT) + ' to be tradable in ChartBridge.' },
   };
 }
-/** Whether Sim101 can trade now: the v3 `accounts` list (tradable) or the `trading` answer's accounts. */
-function simTradable(accountsMsg, trading) {
+/** Whether an account (default Sim101) can trade now: the v3 `accounts` list (tradable) or the `trading` answer's accounts. */
+function accountTradable(accountsMsg, trading, name) {
+  const n = name || BOT_ACCOUNT;
   const list = accountsMsg && Array.isArray(accountsMsg.list) ? accountsMsg.list : null;
-  if (list) { const a = list.find(x => x && x.name === 'Sim101'); if (a) return !!a.tradable; }
-  return !!(trading && trading.enabled && Array.isArray(trading.accounts) && trading.accounts.includes('Sim101'));
+  if (list) { const a = list.find(x => x && x.name === n); if (a) return !!a.tradable; }
+  return !!(trading && trading.enabled && Array.isArray(trading.accounts) && trading.accounts.includes(n));
 }
 /** ChartBridge's switch (PROTOCOL.md "Telling the page what is on"): the bot channel is on for this page. */
 const botSwitchOn = trading => !!(trading && trading.enabled && trading.switches && trading.switches.bot === true);
@@ -560,14 +610,14 @@ function positionText(pos, fmtPrice) {
   const px = pos && isNum(pos.avgPrice) ? ' @ ' + (typeof fmtPrice === 'function' ? fmtPrice(pos.avgPrice) : pos.avgPrice) : '';
   return (q > 0 ? 'Long ' : 'Short ') + Math.abs(q) + px;
 }
-/** The bot strip's line (Main tab): { name, mode, position, pnl, pnlTone, last, trades, losses, level, state }. */
+/** The bot strip's line (Main tab): { name, mode, account, accountMark, position, pnl, pnlTone, last, trades, losses, level, state }. */
 function stripModel(bot, fmtPrice) {
   const b = bot || {};
-  const r = rails(b);
+  const r = rails(b), acc = botAccount(b);
   const last = b.lastSignal ? signalLine(b.lastSignal) : null;
   const state = !b.enabled ? 'off' : b.killed ? 'killed' : b.standDown ? 'standDown' : !b.connected ? 'lost' : 'on';
   return {
-    name: typeof b.name === 'string' && b.name ? b.name : 'Bot', mode: MODE_NAME[b.mode] || '-',
+    name: typeof b.name === 'string' && b.name ? b.name : 'Bot', mode: MODE_NAME[b.mode] || '-', account: acc.name, accountMark: acc.mark,
     position: positionText(b.position, fmtPrice), pnl: isNum(b.pnlToday) ? fmtUsd(b.pnlToday) : '-',
     pnlTone: isNum(b.pnlToday) ? (b.pnlToday > 0 ? 'pos' : b.pnlToday < 0 ? 'neg' : '') : '',
     last: last ? 'Last signal ' + last.time + ' ' + last.title.toLowerCase() : 'No signal yet today',
@@ -587,7 +637,7 @@ function statusText(b) {
 return {
   VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
   railLevel, rails, railsChange, worse,
-  modesAllowed, simTradable, botSwitchOn,
+  modesAllowed, accountTradable, botSwitchOn, accountMark, botAccount, accountChoices, botAccountChange,
   createProposals,
   parseLibrary, checkEntry, shelves, slotEntry, thinCell, timeOfDayRow, thinEquity, ruleLines, evidenceLevel,
   etClock, etClockSec, tradeDay,

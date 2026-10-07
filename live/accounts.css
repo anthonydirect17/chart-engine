@@ -57,6 +57,11 @@
 .apg-lbl { display: inline-flex; align-items: center; gap: 5px; color: var(--ws-muted); }
 .apg .apg-sel { height: 22px; padding: 0 4px; border-radius: 4px; font: 11px var(--ws-mono); max-width: 120px; }
 .apg-sim { color: var(--ws-muted); margin-left: auto; }
+/* a follower's SIM or LIVE mark (Anthony 2026-10-07: no Sim lock): LIVE in the house red of the Armed warning, never animated */
+.apg-fol { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.apg-fol > .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apg-mark { flex: none; font: 700 9.5px/1 var(--ws-sans); letter-spacing: .08em; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
+.apg-mark.live { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
 .apg-ll { display: flex; align-items: center; gap: 4px; }
 .apg-ll-in { width: 70px; height: 20px; font: 11px var(--ws-mono); background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 4px; }
 .apg-ll-in:disabled { opacity: .45; }

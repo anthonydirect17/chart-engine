@@ -82,7 +82,8 @@ uncheck, on that board only, saved with the layout), and a new panel, the **Acco
 every account ChartBridge watches: Accounts (connection, balance, today's P&L, position, the room to the trailing
 drawdown and the daily loss limit, amber at 70 percent used and red at 90, also on the charts trading that account; the
 trading checkmark, the Gone list and Archive), Positions, Working orders, Today's trades (gross and net), the Copier and
-a Log. Every control on it shows only when its switch is on in `config.txt` (all off by default); details in
+a Log. Every control on it shows while its switch is on (all on by default since 2026-10-07; an off line in `config.txt`
+turns one off); details in
 `nt8/PROTOCOL.md`, "The page's Account page". Each workspace window opens **one** v3 connection to ChartBridge 0.4.0,
 shared by the Account page, the order ticket's 0.4.0 parts and the Bot tab; the order ticket's own connection stays as
 in 0.3.8 and carries every order (`nt8/PROTOCOL.md`, "The page's v3 connection"). With an older ChartBridge nothing new
@@ -152,13 +153,13 @@ line; recompile or restart NinjaTrader after a change):
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
 | `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
 | `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
-| `accountChecks` | off | ChartBridge 0.4.0: `on` makes each account's trading checkmark on the page's Accounts tab gate 2 in place of `tradeAccounts` (saved by ChartBridge in `accounts.txt`; on the first start the `tradeAccounts` names come pre-checked). `trading = true` stays the master switch. |
-| `orderTypes` | off | 0.4.0: `on` adds stop-limit and MIT orders. |
-| `strategies` | off | 0.4.0: `on` takes Order Strategies with an entry (stop, up to 3 targets, breakeven, trailing). |
-| `merge` | off | 0.4.0: `on` turns on Merge (one stop and one target set for the whole position at the first leg's prices). |
-| `cancelFromList` | off | 0.4.0: `on` lets the Working orders tab cancel an order on any watched account. |
-| `copier` | off | 0.4.0: `on` turns on the copier engine (followers must be Sim accounts). |
-| `bot` | off | 0.4.0: `on` opens the bot channel (`/bot`, its own secret in `bot-secret.txt`; auto orders on Sim101 only). |
+| `accountChecks` | on | ChartBridge 0.4.0 (on with no line; `accountChecks = off` turns it off, Anthony 2026-10-07): each account's trading checkmark on the page's Accounts tab is gate 2 in place of `tradeAccounts` (saved by ChartBridge in `accounts.txt`; on the first start the `tradeAccounts` names come pre-checked). `trading = true` stays the master switch. |
+| `orderTypes` | on | 0.4.0: stop-limit and MIT orders (`orderTypes = off` turns them off). |
+| `strategies` | on | 0.4.0: Order Strategies with an entry: stop, up to 3 targets, breakeven, trailing (`strategies = off` turns them off). |
+| `merge` | on | 0.4.0: Merge, one stop and one target set for the whole position at the first leg's prices (`merge = off` turns it off). |
+| `cancelFromList` | on | 0.4.0: the Working orders tab cancels an order on any watched account (`cancelFromList = off` turns it off). |
+| `copier` | on | 0.4.0: the copier engine; followers may be Sim or real accounts, each through every account gate, marked SIM or LIVE on the page (`copier = off` turns it off). |
+| `bot` | on | 0.4.0: the bot channel (`/bot`, its own secret in `bot-secret.txt`); auto and accepted proposals trade the account chosen on the Bot tab (Sim101 until you choose another, kept in `bot-account.txt`), Sim or LIVE, marked plainly (`bot = off` turns it off). |
 | `botRoot` | `MNQ` | 0.4.0: the one root the bot may trade (1 contract). |
 | `botLibrary` | `bot-library.json` | 0.4.0: the file `GET /bot-library` serves to ChartBridge's own page (next to `config.txt`, or a full path; `.json`, at most 2 MB). |
 
@@ -446,8 +447,8 @@ chart page's order bar (`live/trade.js`), so everything below about the order ba
   the focus, or a box, menu or dialog has it.
 - Chrome or Edge (they keep the one ticket with the Web Locks API).
 
-**With ChartBridge 0.4.0** (1.16.0) the ticket gains what ChartBridge's switches turn on in `config.txt`, each one only
-while its switch is on (all off by default; with every switch off the ticket is as above):
+**With ChartBridge 0.4.0** (1.16.0) the ticket gains these, each while its switch is on (all on by default since Anthony's
+2026-10-07 decision; an off line in `config.txt` turns one off, and with every off line written the ticket is as above):
 
 - **Order Strategies** (`strategies`): a **Strategy** picker on the ticket (None is the bracket). Shift+click, Buy MKT,
   Sell MKT and their keys send the active strategy: a stop (market or limit), up to 3 targets with their shares,
@@ -465,8 +466,8 @@ while its switch is on (all off by default; with every switch off the ticket is 
 
 ## The Bot tab (1.16.0)
 
-With ChartBridge 0.4.0's bot channel switched on (`bot = on` in `config.txt`, off by default), the workspace has a **Bot**
-tab in the top bar (also `?tab=bot`), and **Pop out** opens the same thing in its own window (`bot.html`, for a third
+With ChartBridge 0.4.0 (its bot channel is on by default; `bot = off` in `config.txt` turns it off), the workspace has a
+**Bot** tab in the top bar (also `?tab=bot`), and **Pop out** opens the same thing in its own window (`bot.html`, for a third
 monitor). With the switch off the Bot tab says the bot channel is off on this PC and offers nothing. The bot is a rule
 program on this PC, never AI: **ChartBridge places every bot order**, inside its rails, from the bot's own parameters.
 
@@ -475,9 +476,15 @@ program on this PC, never AI: **ChartBridge places every bot order**, inside its
   card, the settings, the live record and "Conditions it works best in". Read from `GET /bot-library`
   (`docs/BOT_LIBRARY.md`); no file: "No frozen builds on this PC".
 - **The bot's own chart** (MNQ by default) with its working entry, stop and target and its trades. ChartBridge marks the
-  bot's orders (`by: "bot"`), so only the bot's show; your own Sim101 orders on that root do not.
-- **Bot panel:** on or off, Sim101, the size, the status and heartbeat, the position and today's P&L, the mode (Shadow,
-  Copilot, Sim auto when ChartBridge allows it; Sim auto asks once more), the **rails** (trades x of 5, losing trades x of
+  bot's orders (`by: "bot"`), so only the bot's show; your own orders on its account and root do not.
+- **The bot's account** (Anthony 2026-10-07): the bot trades the account you choose, Sim or LIVE (Sim101 until you choose
+  another). It is shown plainly with a **SIM** or **LIVE** mark (LIVE in the Armed red, never animated) next to the mode,
+  in the strip, in the pop-out and on every copilot proposal. **Change account** in the bot panel lists the accounts
+  ChartBridge says are tradable, each marked; a LIVE one is asked once on the page ("The bot will trade LIVE account X.
+  Continue?"). ChartBridge keeps the choice in `bot-account.txt` and refuses it while the bot has a position or a working
+  entry, when the account is not tradable, and when it is a copier follower or the leader.
+- **Bot panel:** on or off, the account, the size, the status and heartbeat, the position and today's P&L, the mode
+  (Shadow, Copilot, Auto when ChartBridge allows it; Auto asks once more), the **rails** (trades x of 5, losing trades x of
   3; amber from 70%, red from 90%; **Change the rails**: 1 to 5 trades, 1 to 3 losing trades, the bot's root or its micro
   or mini, only while the bot is flat; ChartBridge keeps them in `bot-rails.txt`), the **kill switch** (on in one click; release in
   two), the **day type** (every call logged with its time), and Today (signals and trades with each reason), Log and
@@ -768,7 +775,7 @@ npm run smoke:live       # the live page against the fake bridge as ChartBridge 
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:hotkeys    # trading hotkeys: set in Settings, each sends what its button sends, refused combos, typing, reload, mounted
-npm run smoke:strategies # 0.4.0 on the ticket (fake bridge --v3, a fake Desk): switches off show nothing new; strategies, Merge, entry types, shared keys
+npm run smoke:strategies # 0.4.0 on the ticket (fake bridge --v3, a fake Desk): every off line shows nothing new; by default strategies, Merge, entry types, shared keys
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames

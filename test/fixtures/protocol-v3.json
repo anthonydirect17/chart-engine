@@ -3,8 +3,8 @@
   "bridge": "0.4.0",
   "note": "One example of every message protocol v3 adds (nt8/PROTOCOL.md, Protocol v3). Sample values only: made-up accounts (Sim101, EVAL-A, EVAL-B, FUNDED-C, SIM-F1, SIM-F2), a made-up bot, prices are not market data. A key with a dot names a variant of one message type.",
   "config": {
-    "accountChecks": "on", "orderTypes": "on", "strategies": "on", "merge": "on", "cancelFromList": "on",
-    "quoteRoots": "YM, RTY, GC, SI, CL, 6E, ZN, ZB", "copier": "on", "bot": "on", "botRoot": "MNQ"
+    "note": "Anthony 2026-10-07: no switches. Every v3 feature is on with no line in config.txt; a line such as merge = off turns one off.",
+    "quoteRoots": "YM, RTY, GC, SI, CL, 6E, ZN, ZB", "botRoot": "MNQ"
   },
   "pageToServer": {
     "client": { "type": "client", "v": 3 },
@@ -30,7 +30,8 @@
     "botKill": { "type": "botKill", "cid": "c18", "on": true },
     "botSeen": { "type": "botSeen", "id": "demo-0947-1", "at": 1791380820450 },
     "botAnswer": { "type": "botAnswer", "cid": "c19", "id": "demo-0947-1", "answer": "accept", "at": 1791380821200 },
-    "botRails": { "type": "botRails", "cid": "c20", "maxTrades": 3, "maxLosses": 2, "root": "MNQ" }
+    "botRails": { "type": "botRails", "cid": "c20", "maxTrades": 3, "maxLosses": 2, "root": "MNQ" },
+    "botAccount": { "type": "botAccount", "cid": "c21", "account": "EVAL-A" }
   },
   "serverToPage": {
     "hello.v3": { "type": "hello", "version": "0.4.0", "now": 1791380800000,
@@ -75,7 +76,7 @@
       "targets": [{ "price": 24993.25, "qty": 1 }, { "price": 24995.25, "qty": 1 }, { "price": 24999.25, "qty": 1 }], "pairsBefore": 5, "text": "Merged 5 pairs into one stop for 3 contracts at 24,987.25 and 3 targets" },
     "merge.restored": { "type": "merge", "cid": "c11", "account": "EVAL-A", "root": "MNQ", "result": "restored", "stop": null, "targets": [], "pairsBefore": 2,
       "text": "The merge stopped (NinjaTrader did not confirm the stop change within 3 s); the original brackets are back" },
-    "copier": { "type": "copier", "enabled": true, "simOnly": true, "armed": true, "standDownWhy": null,
+    "copier": { "type": "copier", "enabled": true, "simOnly": false, "armed": true, "standDownWhy": null,
       "leader": { "account": "Sim101", "connection": "connected", "position": { "root": "NQ", "qty": 1, "avgPrice": 24990.5 } },
       "mode": "executions",
       "followers": [
@@ -85,12 +86,12 @@
     "copierEvent": { "type": "copierEvent", "at": 1791380821500, "account": "SIM-F1", "action": "enter", "root": "MNQ", "qty": 3, "price": 24991, "slippageTicks": 2, "leaderMs": 14, "fillMs": 61, "text": "entered 3 MNQ at market on the leader's fill" },
     "copierEvent.standDown": { "type": "copierEvent", "at": 1791380900000, "account": null, "action": "standDown", "root": null, "qty": null, "price": null, "slippageTicks": null, "leaderMs": null, "fillMs": null,
       "text": "3 followers left Connected within 10 s: the copier stands down until Re-arm" },
-    "bot": { "type": "bot", "enabled": true, "connected": true, "name": "Demo Opening Fade", "mode": "copilot", "account": "Sim101", "root": "MNQ",
+    "bot": { "type": "bot", "enabled": true, "connected": true, "name": "Demo Opening Fade", "mode": "copilot", "account": "Sim101", "sim": true, "root": "MNQ",
       "position": { "qty": 0, "avgPrice": null }, "pnlToday": 46, "trades": 2, "maxTrades": 5, "losses": 1, "maxLosses": 3, "maxQty": 1, "killed": false, "standDown": null, "lastBeatMs": 420,
       "lastSignal": { "type": "botSignal", "id": "demo-0947-1", "at": 1791380820000, "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice", "result": "proposed" } },
     "botSignal": { "type": "botSignal", "id": "demo-0947-1", "at": 1791380820000, "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice", "result": "proposed" },
     "botSignal.skipped": { "type": "botSignal", "id": "demo-0950-2", "at": 1791380850000, "action": "skipped", "side": null, "kind": null, "price": null, "stopTicks": null, "targetTicks": null, "reason": "Sample: range too small", "result": "skipped" },
-    "botProposal": { "type": "botProposal", "id": "demo-0947-1", "at": 1791380820000, "account": "Sim101", "root": "MNQ", "side": "sell", "kind": "limit", "price": 25001, "qty": 1, "stopTicks": 12, "targetTicks": 24,
+    "botProposal": { "type": "botProposal", "id": "demo-0947-1", "at": 1791380820000, "account": "Sim101", "sim": true, "root": "MNQ", "side": "sell", "kind": "limit", "price": 25001, "qty": 1, "stopTicks": 12, "targetTicks": 24,
       "reason": "Sample: price stalled at the made-up level twice", "state": "open", "seenAt": null, "answeredAt": null },
     "reject.v3": { "type": "reject", "cid": "c11", "reason": "Merge is refused while an entry is working on EVAL-A MNQ." },
     "status.gone": { "type": "status", "level": "warn", "text": "EVAL-B is gone (disconnected for 10 s): trading is off for it" }
@@ -104,7 +105,7 @@
     "flatten": { "type": "flatten" }
   },
   "serverToBot": {
-    "welcome": { "type": "welcome", "version": "0.4.0", "mode": "shadow", "account": "Sim101", "root": "MNQ", "rails": { "maxQty": 1, "maxTrades": 5, "maxLosses": 3 },
+    "welcome": { "type": "welcome", "version": "0.4.0", "mode": "shadow", "account": "Sim101", "sim": true, "root": "MNQ", "rails": { "maxQty": 1, "maxTrades": 5, "maxLosses": 3 },
       "instruments": [{ "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false }] },
     "tick": { "type": "tick", "root": "MNQ", "t": 1791366420.137, "u": 1791380820137, "rx": 1791380820141, "p": 25001.25, "v": 2, "s": 1, "sm": 2, "q": 1 },
     "botState": { "type": "botState", "mode": "copilot", "killed": false, "standDown": null, "trades": 2, "losses": 1 },
@@ -136,7 +137,8 @@
   "refusals": [
     { "send": { "type": "order", "account": "Sim101", "root": "YM", "side": "buy", "kind": "market", "qty": 1 }, "reason": "YM is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)" },
     { "send": { "type": "order", "account": "Sim101", "root": "MNQ", "side": "buy", "kind": "market", "qty": 2, "strategy": { "name": "Bad", "stop": 8, "t1": 8, "t1Share": 60, "t2": 16, "t2Share": 30 } }, "reason": "The target shares add up to 90; they must add up to 100." },
-    { "send": { "type": "copierFollower", "account": "EVAL-A", "on": true, "qty": 1, "size": "micro", "lossLimit": null }, "reason": "EVAL-A is not a Sim account: the copier copies to Sim accounts only." },
+    { "send": { "type": "copierFollower", "account": "Sim101", "on": true, "qty": 1, "size": "micro", "lossLimit": null }, "reason": "Sim101 is the bot's account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first)." },
+    { "send": { "type": "botAccount", "account": "FUNDED-C" }, "reason": "account FUNDED-C is not checked for trading (the Accounts tab): the bot needs it tradable" },
     { "send": { "type": "accountArchive", "account": "EVAL-A", "confirm": true }, "reason": "EVAL-A is not gone; only a gone account can be archived." }
   ]
 }

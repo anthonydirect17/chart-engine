@@ -1260,28 +1260,53 @@ released after `ready`, the order lane is sent first.
 Decided by Anthony for the pre-cruise build (2026-10-07). v3 **only adds**: every v2 rule above (the eight safety gates,
 brackets per fill increment, the legs check, the missing-stop alarm, recovery by order names, Flatten never refused for
 anything new) stays exactly as written, and applies to everything below unless a line here says otherwise. Every new
-order feature, the copier and the bot channel ship **switched off**; `trading = true` stays the master switch above all of
-them; nothing in ChartBridge ever turns `trading` or a switch on by itself. Where Anthony's brief left a detail open, the
-safest simple choice is written and marked **(lead's default)**.
+order feature, the copier and the bot channel are **on as soon as ChartBridge 0.4.0 is installed** (Anthony 2026-10-07: no
+switches, no Sim locks; see the next section); `trading = true` stays the master switch above all of them, its default and
+its reading unchanged; nothing in ChartBridge ever turns `trading` or a switch on or off by itself. Where Anthony's brief
+left a detail open, the safest simple choice is written and marked **(lead's default)**.
+
+### Anthony 2026-10-07: no switches, no Sim locks
+
+Anthony's decision on the morning of 2026-10-07, which overrides every "switched off" and "Sim only" line of the first 0.4.0
+build below: "I do not want another arbitrary block, we have to go in and change before being able to use on live accounts.
+I am capable of only testing on sim until we clear our tests. I dont need a guardrail like that." On the bot's auto mode: "as
+long as it's clear that we have a sim account chosen, I do not need the lock or guardrail."
+
+- **No switches.** `accountChecks`, `orderTypes`, `strategies`, `merge`, `cancelFromList`, `copier` and `bot` are on with no
+  line in `config.txt`. Each key stays only as an optional off line (`merge = off`), so nothing ever needs turning on.
+  `trading.switches` reports the real values. `trading = true` is unchanged: off unless `config.txt` says so, as before.
+- **The copier has no Sim lock.** A real account may be a follower. Every other copier rule stays (never cross zero, the
+  follower's stop at the leader's stop price, the mass disconnect and Re-arm, the sweep, the skips), and every account gate
+  applies to each follower (trading on, its checkmark or `tradeAccounts`, Connected, not Gone, the caps). The `copier`
+  message's `simOnly` is `false`; each follower still carries `sim`, and the page marks it SIM or LIVE.
+- **The bot trades the account Anthony chooses**, Sim or live (`botAccount`, below; Sim101 until he chooses another). Auto mode
+  and accepted copilot proposals go to that account through every gate (its checkmark or `tradeAccounts`, Connected, the caps).
+  `bot`, `welcome` and `botProposal` say `account` and `sim`, and the page shows SIM or LIVE plainly next to the mode, in the
+  strip, the pop-out and on every proposal. The rails are unchanged (1 contract, micro or mini, 5 trades, 3 losing trades, the
+  kill switch, the heartbeat never flattens). One account is never both the bot's account and a copier follower (both
+  directions refused, in plain words).
+- **With every off line written** ChartBridge 0.4.0 is 0.3.8 exactly, as before (the Mono harness's base checks run that way).
 
 Examples of every new message, both directions, are in `test/fixtures/protocol-v3.json`; the fake bridge
 (`test/fake-bridge.mjs --v3`) answers them with simulated state.
 
-### v3 switches (`config.txt`, all off by default)
+### v3 switches (`config.txt`, all ON by default: Anthony 2026-10-07)
 
-| key | off (default) | on |
+| key | `key = off` | on (the default) |
 |---|---|---|
 | `accountChecks` | gate 2 is `tradeAccounts`, as in v2 | gate 2 is the page's per-account checkmark (see Accounts) |
 | `orderTypes` | `kind` is `market`, `limit`, `stop` | also `stopLimit` and `mit` |
 | `strategies` | an `order` with `strategy` is refused | Order Strategies (stop, up to 3 targets, breakeven, trailing) |
 | `merge` | `merge` is refused | Merge stops and targets |
 | `cancelFromList` | a `cancel` with `from: "list"` is refused | cancel from the page's Working orders tab |
-| `copier` | every `copier*` message is refused; nothing is copied | the copier engine (Sim followers only) |
-| `bot` | `/bot` answers 404; every `bot*` page message is refused | the bot channel |
-| `botRoot` | `MNQ` | the one root the bot trades (a micro or a mini of a served root) |
+| `copier` | every `copier*` message is refused; nothing is copied | the copier engine (Sim or real followers, every account gate) |
+| `bot` | `/bot` answers 404; every `bot*` page message is refused | the bot channel, on the account chosen with `botAccount` |
+| `botRoot` | | the one root the bot trades (a micro or a mini of a served root); default `MNQ` |
 
-`on`, `true` and `1` mean on (any case); anything else is off, with one Output line naming the key and the value. The
-switches are read at start like every key (recompile or restart NinjaTrader after a change).
+No line means on. `off`, `false` and `0` (any case) turn a switch off; `on`, `true` and `1` leave it on; any other value is
+read as off, with one Output line naming the key and the value (only an off line has a reason to be there; lead's default).
+The switches are read at start like every key (recompile or restart NinjaTrader after a change). The default is set in one
+place, `ChartBridgeSwitches.Reset` in `ChartBridgeConfig.Load`; no lane's `ResetConfig` touches a switch.
 
 ### Telling the page what is on
 
@@ -1290,9 +1315,9 @@ switches are read at start like every key (recompile or restart NinjaTrader afte
 - **`client`** (page to server, new, the first v3 message): `{"type":"client","v":3}`, sent once right after `hello`. A
   connection that never sends it is a v2 page and gets **no** v3 message at all (the 1.15 page keeps working on 0.4.0
   unchanged; The Desk's relay sends nothing). `v` is a whole number; anything but 3 is refused with a `status` `warn`.
-- `trading` (answer to `auth`) adds `switches`: `{"accountChecks":false,"orderTypes":false,"strategies":false,"merge":false,
-  "cancelFromList":false,"copier":false,"bot":false}`, each the `config.txt` value, sent to a v3 page only. The page shows a
-  feature's controls only when its switch is true; ChartBridge refuses its messages either way when it is false.
+- `trading` (answer to `auth`) adds `switches`: `{"accountChecks":true,"orderTypes":true,"strategies":true,"merge":true,
+  "cancelFromList":true,"copier":true,"bot":true}` with no off line, each the real value, sent to a v3 page only. The page
+  shows a feature's controls only when its switch is true; ChartBridge refuses its messages either way when it is false.
 
 ### Strict messages in v3 (gate 8, extended)
 
@@ -1314,7 +1339,7 @@ Every v3 page message (and every bot message) follows gate 8 as written, with th
 Accounts are picked up automatically: every account the `accounts` watch list in `config.txt` matches (default all, never
 Backtest or Playback). Nothing new to configure.
 
-**The checkmark (with `accountChecks = on`).** Trading is switched on per account by a checkmark on the page's Accounts tab.
+**The checkmark (with `accountChecks` on, the default).** Trading is switched on per account by a checkmark on the page's Accounts tab.
 ChartBridge saves the checkmarks itself in `accounts.txt` next to `config.txt` (Anthony never edits a file): a first line
 `# ChartBridge accounts (written by ChartBridge; do not edit)`, then one line per account,
 `<state>\t<changed UTC ms>\t<account name>` with `<state>` `trade`, `off` or `archived`; written whole to a temp file and
@@ -1383,7 +1408,7 @@ watched, non-archived account on the served contracts (gate 6 unchanged), not on
 **Cancel from the Working orders tab** (`cancelFromList = on`): `cancel` takes an optional `from` (`"list"`). With it, any
 working order on a watched, Connected, non-archived account on a served contract may be cancelled (checkmark or not; it
 is an exit action), one order per message, with the v2 OCO rule (a leg takes its partner). With the switch off, a `cancel`
-with `from: "list"` is refused ("Cancel from the Working orders tab is off (cancelFromList in config.txt)"). A `cancel`
+with `from: "list"` is refused ("Cancel from the Working orders tab is off (cancelFromList = off in config.txt)"). A `cancel`
 without `from` is v2's.
 
 #### Accounts as built (ChartBridge 0.4.0, `nt8/ChartBridgeAccounts.cs`)
@@ -1415,7 +1440,7 @@ Where the contract above left a detail open, the build chose the safe simple opt
   without `from`. With it off, a `cancel` without `from` is v2's (`tradeAccounts`), and a `cancel` with `from: "list"` (when
   `cancelFromList` is on) is an exit. Exits never need the checkmark, but always need a Connected account.
 - **With `accountChecks` off** there is no Gone and no file at all (0.3.8 exactly): `state` is always `active`, `trade` is
-  "in `tradeAccounts`", and `accountTrade` / `accountArchive` are refused ("accountTrade is off (accountChecks in config.txt)").
+  "in `tradeAccounts`", and `accountTrade` / `accountArchive` are refused ("accountTrade is off (accountChecks = off in config.txt)").
   The `accounts` list still goes to a v3 page, read only.
 - **Gone only after a first connect** (lead's default, 2026-10-07: Anthony signs the prop accounts in by hand after
   NinjaTrader opens). Being disconnected makes an account Gone only if it has been Connected at least once in this ChartBridge
@@ -1744,14 +1769,13 @@ front-month roll, and the `hello` instrument fields `quoteOnly` and `priceFormat
 ZB; the page shows half 32nds when the tick is 1/64, so ZN `104.109375` is `104'035` and ZB `118.46875` is `118'15`).
 Copier and bot orders on a quote-only root are refused by the same check. Prices on the wire stay plain decimals.
 
-### Copier engine (`copier = on`)
+### Copier engine (`copier`, on by default)
 
-**Sim only.** Every follower must be an account with `sim` true (NinjaTrader's simulator). A real account as a follower is
-refused at `copierFollower` and, should one ever be listed (the file edited, an account that changed), refused again
-before every order and logged ("copier: EVAL-A is not a Sim account; nothing copied to it"). The unlock for real accounts is
-a separate step Anthony takes later; 0.4.0 has no key for it (lead's default). The leader and every follower also need gate
-2 for entries (the checkmark, or `tradeAccounts`), and every gate applies to each follower order on its own account (caps
-on the follower's root, the rate of the copier itself is not counted against the page).
+**Sim or real followers (Anthony 2026-10-07: no Sim lock).** A follower may be any watched account, Sim or real. The leader
+and every follower need gate 2 for entries (the checkmark, or `tradeAccounts`), and every gate applies to each follower order
+on its own account (trading on, Connected, not Gone, caps on the follower's root; the rate of the copier itself is not
+counted against the page). Each follower carries `sim` (NinjaTrader's simulator or not), and the page marks it SIM or LIVE.
+The bot's account is never a follower that is on (see the review 2 notes below).
 
 **The leader** is one account, and only entries placed **from ChartBridge's own page** on it are copied (not entries placed
 in NinjaTrader, the phone or the bot). **Exits on the leader are always copied, whatever caused them**: a stop or target at
@@ -1799,7 +1823,7 @@ follower 3 MNQ.
 
 | server to page | fields | when |
 |---|---|---|
-| `copier` | `enabled` (the switch), `simOnly` (true), `armed` (*bool*), `standDownWhy` (null or plain words), `leader` (`{account, connection, position}` or null), `mode`, `followers`: `[{account, sim, on, qty, size, root, position, lastAction, lastAt, slippageTicks, skipped, lossLimit, pnlToday, connection}]` | after `auth` and `copierGet`, and on every change |
+| `copier` | `enabled` (the switch), `simOnly` (`false` since Anthony's 2026-10-07 decision; kept for older pages), `armed` (*bool*), `standDownWhy` (null or plain words), `leader` (`{account, connection, position}` or null), `mode`, `followers`: `[{account, sim, on, qty, size, root, position, lastAction, lastAt, slippageTicks, skipped, lossLimit, pnlToday, connection}]` | after `auth` and `copierGet`, and on every change |
 | `copierEvent` | `at` (UTC ms), `account`, `action` (`enter`, `stop`, `move`, `reduce`, `flatten`, `skip`, `sweep`, `standDown`, `rearm`, `refused`, `recovered`), `root`, `qty`, `price`, `slippageTicks`, `leaderMs`, `fillMs`, `text` | each copy decision |
 
 #### Copier engine: as built (0.4.0, `nt8/ChartBridgeCopier.cs`)
@@ -1807,15 +1831,15 @@ follower 3 MNQ.
 Built to the rules above. Where they left a detail open, the choice below was made and is marked **(lead's default)**.
 The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) runs Anthony's Sim test list against it.
 
-- **Switch.** `copier = on` (or `true`, `1`); anything else is off with one Output line. Off: every `copier*` message is
-  refused ("The copier is off (copier in config.txt).") and every hook returns at once, so ChartBridge behaves as 0.3.8.
+- **Switch.** On by default; `copier = off` (or `false`, `0`) turns it off. Off: every `copier*` message is
+  refused ("The copier is off (copier = off in config.txt).") and every hook returns at once, so ChartBridge behaves as 0.3.8.
   `trading = true` stays above it; the copier never changes either switch.
 - **v3 pages only.** Copier messages need a v3 page (`ChartBridgeV3.IsV3`, after lane B2's `client` handshake). Such a page gets `copier` after `auth`, with
   `enabled: false` when the switch is off. `copier` is sent again on every decision and within a second of a position change.
 - **Sim** is read from NinjaTrader: the account's `Provider` (`Account.Provider`, else `Account.Connection.Options.Provider`)
-  must read exactly `Simulator`; anything else, or nothing readable, is not Sim; Backtest and Playback never (lead's default;
-  the accounts lane's `sim` can replace it through `ChartBridgeCopier.IsSim`). Every follower order (entry, stop, move,
-  reduce, flatten, cancel) checks it again first.
+  reads exactly `Simulator`; anything else, or nothing readable, is not Sim; Backtest and Playback never. Since Anthony's
+  2026-10-07 decision it only marks a follower (`sim` in `copier`; the page's SIM or LIVE): it refuses nothing. Every
+  follower entry passes `Eligible` (the account gates) and every exit `ExitAllowed` (Connected, watched).
 - **Which leader entries.** Only an entry sent from the page on the leader while the copier is armed with a follower on,
   and (executions mode) still armed when it fills (lead's default). A leader fill with no stop at the broker (its plan
   removed the stop, or its stop level had traded and it exited at once) is not copied.
@@ -1828,9 +1852,9 @@ The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) ru
   gate 3 from the moment it is sent.
 - **Skips** (`skipped` on the page): `position limit`, `not connected`, `not checked for trading`, `gone`, `loss limit`,
   `opposite position` (never cross zero), `no contract` (the micro or mini is not served), `busy` (the follower already
-  holds a copy of the leader's other contract on that one; lead's default), `not a Sim account` (action `refused`). In orders
+  holds a copy of the leader's other contract on that one; lead's default), `bot account` (the bot's account). In orders
   mode also `price` (the leader's price fails gate 5 on the follower's contract) and `kind` (only market, limit and stop are
-  copied; lead's default). The next entry the follower takes clears it.
+  copied; lead's default). The next entry the follower takes clears it. (`not a Sim account` went with the Sim lock, 2026-10-07.)
 - **Loss limit.** P&L today is realized plus unrealized as NinjaTrader reports it (`Account.Get`, US dollars). With a limit
   set and no reading, the follower is skipped (never guessed). Once at or past the limit it stays skipped until the next
   18:00 ET session, even if its P&L comes back (lead's default).
@@ -1896,11 +1920,12 @@ fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `Integration
   follower's own contracts and its own stops are never touched. When the copier's whole share closes while the follower
   also holds its own contracts, it is a reduce of the share (its copier stops cancelled first), not NinjaTrader's Flatten.
   A copier with no share there sends nothing. After a restart the share is what the recovered copier stops cover.
-- **Sim101 and the bot** (finding 3, lead's default): while `bot = on`, Sim101 (the bot's account) cannot be turned on as a
-  copier follower ("Sim101 is the bot's account: it cannot be a copier follower while the bot is on (bot in config.txt).");
-  one already listed is skipped before every copy (`skipped` `bot account`); and the bot refuses entries while Sim101 is a
+- **The bot's account and the copier** (finding 3; since 2026-10-07 the bot's account is the one Anthony chose, Sim101 by
+  default): while the bot is on, the bot's account cannot be turned on as a copier follower ("Sim101 is the bot's account: it
+  cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first)."); one
+  already listed is skipped before every copy (`skipped` `bot account`); the bot refuses entries while its account is a
   follower that is on ("Sim101 is a copier follower: the bot does not trade while the copier copies to its account (turn
-  that follower off on the page)."). Both refusals are logged. Turning that follower off is always allowed.
+  that follower off on the page)."); and `botAccount` refuses an account that is a follower that is on, or the leader. Both refusals are logged. Turning that follower off is always allowed.
 - **Stop prices in step** (finding 4): each follower stop records the price the copier placed it at or last moved it to.
   Every leader stop event re-syncs any follower stop mapped to it whose recorded price differs, not only when the leader's
   price changed; a follower stop placed while the leader's stop was already elsewhere follows it at once.
@@ -1917,7 +1942,7 @@ fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `Integration
   mode then places no follower order for it).
 - **`by`** (finding 9): copier orders carry `"by": "copier"` on v3 pages only (see "Who placed it" under Orders).
 
-### Bot channel (`bot = on`)
+### Bot channel (`bot`, on by default)
 
 A local bot program on the trading PC (a rule program, never AI; the bot in this repository's tests is made up)
 connects on its own WebSocket path **`ws://localhost:<port>/bot`** with its own permission level. **AI is never in the
@@ -1937,16 +1962,27 @@ default):
   with one key (see Shared settings); the page sends `botSeen` the moment it shows it and `botAnswer` with
   the moment he answered; both times are recorded. On accept, **ChartBridge places the order from the proposal's
   parameters** (never from the page's, never anything else). An unanswered proposal is **never sent**: it expires when the
-  bot withdraws it (`withdraw`: its entry is no longer valid) and is logged as "not answered". Accepted orders go to
-  Sim101 only in 0.4.0 (lead's default).
-- `auto`: ChartBridge places the bot's fired signals itself, **on Sim101 only** (exact name and `sim` true; anything else
-  refused), locked there by ChartBridge whatever the bot sends.
+  bot withdraws it (`withdraw`: its entry is no longer valid) and is logged as "not answered". Accepted orders go to the
+  bot's account (below), and only if it is still the account the proposal named.
+- `auto`: ChartBridge places the bot's fired signals itself, **on the bot's account** (below), whatever the bot sends.
+
+**The bot's account (Anthony 2026-10-07: no Sim lock).** The bot trades the one account Anthony chooses on the page
+(`botAccount`), Sim or live; Sim101 until he chooses another. The bot itself never names an account. ChartBridge saves the
+choice in `bot-account.txt` next to `config.txt` (two `#` lines, then `account<TAB><name>`, written whole through a temp file;
+no file: Sim101). A file that cannot be understood is never written over and stands the bot down (no new entries) until the
+page chooses the account again or the file is deleted. `botAccount` is refused, in plain words, unless the account is in
+NinjaTrader under that exact name, never Backtest or Playback, and passes the account gates now (trading on, its checkmark or
+`tradeAccounts`, Connected); while the copier uses it (a follower that is on, or the leader); and while the bot has a position
+or a working entry ("the bot has a position or a working entry: choose its account when it is flat"). A change expires the
+open proposals as `not answered` (they were for the old account), is logged with SIM or LIVE, and the bot gets `welcome`
+again. `bot`, `welcome` and `botProposal` carry `account` and `sim` (NinjaTrader's simulator or not: the page's SIM or LIVE
+mark; unknown is `false`, shown LIVE).
 
 **Rails** (enforced in ChartBridge, whatever the bot sends; reset at 18:00 ET): at most **1 contract**, on `botRoot` only
 (default MNQ); at most **5 trades a day** (an entry that filled, even partly, is a trade); **stand down after 3 losing
 trades** (a closed bot trade with realized P&L below 0; no new entries until the next session); no dollar limit on Sim; every
 bot entry needs a stop (`stopTicks` 1 or more, lead's default); the **kill switch** on the page (`botKill`); all v2 gates
-(trading, Sim101's gate 2, caps, grid, side of market, rate) on top. **Heartbeat**: any bot message counts; 5 s of silence
+(trading, the bot account's gate 2, caps, grid, side of market, rate) on top. **Heartbeat**: any bot message counts; 5 s of silence
 and ChartBridge cancels the bot's unfilled entries, keeps any bot position's stop and target, marks the bot lost and tells
 the page (`bot` and a `status` `warn`). The kill switch does the same and refuses every bot order until it is released.
 **ChartBridge never flattens the bot's position by itself**; Flatten on the page works as always.
@@ -1960,11 +1996,11 @@ recovery cover them.
 | `beat` | none | at least every 2 s when nothing else is sent |
 | `signal` | `id` (1 to 40 characters, unique today), `action` (`fired` or `skipped`), `side`, `kind` (`market`, `limit`, `stop`), `price` (limit or stop only), `stopTicks`, `targetTicks` (whole ticks, or `null` for none), `reason` (1 to 200 characters) | `skipped` carries only `id`, `action`, `reason` (and optionally `side`); by mode: logged, proposed, or placed |
 | `withdraw` | `id`, `reason` | the entry is no longer valid: a proposal expires ("not answered"), an unfilled auto entry is cancelled |
-| `flatten` | none | auto mode only: close the bot's position on Sim101 (cancel its legs, then market) |
+| `flatten` | none | auto mode only: close the bot's position on its account (cancel its legs, then market) |
 
 | server to bot | fields | when |
 |---|---|---|
-| `welcome` | `version`, `mode`, `account` (`Sim101`), `root`, `rails` (`{maxQty, maxTrades, maxLosses}`), `instruments` (as `hello`) | answer to `botHello` |
+| `welcome` | `version`, `mode`, `account` (the bot's account), `sim` (*bool*), `root`, `rails` (`{maxQty, maxTrades, maxLosses}`), `instruments` (as `hello`) | answer to `botHello` |
 | `tick` | as the page's `tick` | every live trade on every served root |
 | `order`, `position`, `exec` | as the page's, for the bot's own orders and position only | on every change |
 | `botState` | `mode`, `killed`, `standDown` (null or why), `trades`, `losses` | on every change |
@@ -1973,16 +2009,17 @@ recovery cover them.
 
 | page to server | fields (no others) | notes |
 |---|---|---|
-| `botMode` | `cid` (optional), `mode` (`shadow`, `copilot`, `auto`) | `auto` refused unless Sim101 is tradable |
+| `botMode` | `cid` (optional), `mode` (`shadow`, `copilot`, `auto`) | `auto` refused unless the bot's account is tradable (its checkmark or `tradeAccounts`, Connected) |
 | `botKill` | `cid` (optional), `on` (*bool*) | on: as the heartbeat loss, and no bot order until off |
 | `botSeen` | `id`, `at` (page UTC ms, whole number) | the moment the proposal showed; not rate counted |
 | `botAnswer` | `cid` (optional), `id`, `answer` (`accept` or `reject`), `at` (page UTC ms) | an expired or already answered proposal is refused |
+| `botAccount` | `cid` (optional), `account` | the bot's account (Anthony 2026-10-07); refused as above; saved in `bot-account.txt` |
 
 | server to page | fields | when |
 |---|---|---|
-| `bot` | `enabled`, `connected`, `name`, `mode`, `account`, `root`, `position` (`{qty, avgPrice}`), `pnlToday`, `trades`, `maxTrades`, `losses`, `maxLosses`, `killed`, `standDown`, `lastBeatMs` (ms since the last bot message), `lastSignal` (the last `botSignal` or null) | after `auth`, on every change, and once a second while the bot is connected |
+| `bot` | `enabled`, `connected`, `name`, `mode`, `account`, `sim` (*bool*), `root`, `position` (`{qty, avgPrice}`), `pnlToday`, `trades`, `maxTrades`, `losses`, `maxLosses`, `killed`, `standDown`, `lastBeatMs` (ms since the last bot message), `lastSignal` (the last `botSignal` or null) | after `auth`, on every change, and once a second while the bot is connected |
 | `botSignal` | `id`, `at`, `action`, `side`, `kind`, `price`, `stopTicks`, `targetTicks`, `reason`, `result` (`shadow`, `proposed`, `placed`, `refused: <why>`, `skipped`) | each signal |
-| `botProposal` | `id`, `at`, `account`, `root`, `side`, `kind`, `price`, `qty` (1), `stopTicks`, `targetTicks`, `reason`, `state` (`open`, `accepted`, `rejected`, `withdrawn`, `not answered`), `seenAt`, `answeredAt` | when proposed and at each change |
+| `botProposal` | `id`, `at`, `account`, `sim` (*bool*), `root`, `side`, `kind`, `price`, `qty` (1), `stopTicks`, `targetTicks`, `reason`, `state` (`open`, `accepted`, `rejected`, `withdrawn`, `not answered`), `seenAt`, `answeredAt` | when proposed and at each change |
 
 #### Bot channel as built (ChartBridge 0.4.0, `nt8/ChartBridgeBot.cs`)
 
@@ -1990,7 +2027,7 @@ Built exactly to the section above. Where it left a detail open, the safest simp
 **(lead's default)**. Tests: `nt8/check/BotHarness.cs` (Mono, inside `npm run check:orders`) and `test/fake-bot.test.js` with
 the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this repository).
 
-- **`config.txt`**: `bot` (off by default; `on`, `true`, `1` in any case are on, anything else off with an Output line),
+- **`config.txt`**: `bot` (on by default since 2026-10-07; `bot = off` turns it off),
   `botRoot` (default `MNQ`), `botLibrary` (default `bot-library.json`, see below) (lead's default).
 - **The upgrade to `/bot`** answers, in this order: **404** while `bot` is off (any request to `/bot` or `/bot-library`);
   **403** for any `Origin` header (even an empty one or ChartBridge's own); **403** for a missing or wrong
@@ -2004,11 +2041,11 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
 - **`signal`**: `stopTicks` (1 or more) and `targetTicks` (1 or more, or `null`) are both required on `fired`; the bot never
   names an account, a root or a quantity (unknown keys, refused in every mode). An `id` used once today is refused.
 - **One trade at a time, 1 contract** (lead's default): a new bot entry is refused while a bot entry is working or a bot trade
-  is open, and gate 3's cap for a bot entry is 1 whatever `maxQty` says, counted with the Sim101 position and its working
-  orders on that root as gate 3 always does (so a manual Sim101 position blocks a bot entry on the same side, and a bot entry
+  is open, and gate 3's cap for a bot entry is 1 whatever `maxQty` says, counted with the bot account's position and its working
+  orders on that root as gate 3 always does (so a manual position there blocks a bot entry on the same side, and a bot entry
   never reduces a position: it always carries a stop, and v2 refuses a bracket on a reducing order).
 - **A bot trade** (lead's default) opens with the first fill of a bot entry (counted as a trade then, even if part filled) and
-  closes when Sim101's position on the bot's root, followed from every execution on it since that fill, is flat again,
+  closes when the bot account's position on the bot's root, followed from every execution on it since that fill, is flat again,
   whatever closed it (its stop or target, the page's Flatten, an order in NinjaTrader). Its realized dollars are those
   executions' cash flow times the point value; below 0 is a losing trade. `pnlToday` is the sum of today's closed bot trades.
 - **`bot-day.txt`** next to `config.txt` (lead's default) keeps the trading day's trades so a restart forgets nothing:
@@ -2022,14 +2059,14 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   `warn`; `/diag` counts `heartbeatLost`. The same when the bot disconnects, and whenever no bot has been connected for 5 s
   (after a restart a bot entry left working at the broker is cancelled then) (lead's default). Never a flatten.
 - **Modes**: leaving `copilot` expires the open proposals as `not answered`; leaving `auto` cancels the bot's unfilled
-  entries (lead's default). `auto` needs Sim101 to be NinjaTrader's simulator (its `Provider` is `Simulator`, read by name;
-  when NinjaTrader does not say, it is refused), in `tradeAccounts` (gate 2) and Connected. The kill switch on also expires
+  entries (lead's default). `auto` needs the bot's account to be tradable (gate 2: its checkmark or `tradeAccounts`) and
+  Connected; since 2026-10-07 it need not be NinjaTrader's simulator (shown LIVE when it is not). The kill switch on also expires
   open proposals and refuses the bot's own `flatten` (the page's Flatten works as always).
 - **Proposals**: `botAnswer` takes no order field (a `price` or anything else is an unknown key, refused). An accepted
   proposal that a rail or a gate refuses at that moment ends `rejected`, the bot gets `answer` `refused` with the reason and
   the page a `reject` naming it. A `withdraw` after an accept cancels the entry if it has not filled (`state` `withdrawn`).
 - **Bot orders** are named `CB#1a2b3c4d bot s8 t16` for every kind (a resting one too); recovery reads them as v2 entries
-  (ticks from each fill). The bot gets `order`, `exec` and `position` for its own orders and Sim101's position on its root;
+  (ticks from each fill). The bot gets `order`, `exec` and `position` for its own orders and its account's position on its root;
   `tick` for every live trade on every served root.
 - **`botRails`** (page to server, lead's default; Anthony: the rails can be changed in the Bot tab): `{type, cid (optional),
   maxTrades, maxLosses, root}`, all but `cid` required: `maxTrades` 1 to 5, `maxLosses` 1 to 3 (tighten only: never above the
@@ -2054,8 +2091,9 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
 - **Review 2: a `withdraw` while an accept is being placed** (finding 7): it is noted, and the entry is cancelled as soon as
   it is placed if it has not filled (`state` `withdrawn`, the bot's `answer` says so, `bot.log` "withdrawn during
   placement"). If it had already filled, nothing is cancelled (its stop and target stay) and the log says so.
-- **Review 2: Sim101 as a copier follower** (finding 3): the bot refuses entries while Sim101 is a copier follower that is
-  on, and the copier refuses Sim101 as a follower while the bot is on (see the copier's review 2 notes).
+- **Review 2: the bot's account as a copier follower** (finding 3): the bot refuses entries while its account is a copier
+  follower that is on, the copier refuses the bot's account as a follower while the bot is on, and `botAccount` refuses a
+  follower that is on or the leader (see the copier's review 2 notes).
 - **Review 2: `by`** (finding 9): bot orders carry `"by": "bot"` on v3 pages only (see "Who placed it" under Orders).
 
 ### The order lanes together (0.4.0 integration)
@@ -2107,7 +2145,7 @@ tab (`live/bot.js`, lane C4) does with it. The page follows the C#; `test/fake-v
   follower orders). The Bot tab takes as the bot's only the orders marked `by: "bot"` (its lines, its working entry, stop and
   target). A fill (`exec`) carries no `by`, and its `order` is NinjaTrader's id, not the page's, so the page claims a fill for
   the bot only against the contracts its marked orders are seen to fill (account, root, side and quantity, at the
-  increment's price when known; `BotCore.botFillLedger`) (lead's default). Anthony's own Sim101 orders on the bot's root are
+  increment's price when known; `BotCore.botFillLedger`) (lead's default). Anthony's own orders on the bot's account and root are
   his, not the bot's. `test/fake-v3.mjs` sends `by` as the C# does.
 - **`welcome.instruments`** is the bot's own root only: `{root, name, tick, pointValue, quoteOnly}`.
 - **`GET /bot-library`** (lead's default): the frozen Bot-Lab builds for the Bot tab's Library, one local JSON file
@@ -2120,6 +2158,13 @@ tab (`live/bot.js`, lane C4) does with it. The page follows the C#; `test/fake-v
   the workspace's Settings with the other trading keys. The workspace's hotkey handler fires a cancelable
   `chart-copilot-key` DOM event (`detail.answer` `accept` or `reject`); the Bot tab is its one handler (the oldest open
   proposal). The buttons always work, and `botAnswer` is the same either way; `bot.html` has the buttons only.
+- **The bot's account on the page** (Anthony 2026-10-07): the Bot tab shows the account from `bot` (`account`, `sim`) plainly,
+  with a SIM or LIVE mark (LIVE in the house red of the Armed warning, never animated) next to the mode, in the strip, in the
+  pop-out (`bot.html`) and on every copilot proposal (the proposal's own `account` and `sim`). The bot panel's Change account
+  lists the accounts the v3 `accounts` message says are tradable now (`BotCore.accountChoices`), each marked; choosing a LIVE
+  one asks once in the page ("The bot will trade LIVE account X. Continue?"), never a browser `confirm()`, then sends
+  `botAccount` (`BotCore.botAccountChange`). ChartBridge's refusal is shown under the button. The mode button reads Auto (not
+  "Sim auto"). The Copier tab marks every follower SIM or LIVE and offers real accounts too.
 
 ### Tape timing and new `/diag` counters
 

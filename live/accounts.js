@@ -8,7 +8,8 @@
  *   Positions        every open position on every account: average price, unrealized P&L, the attached stop and target
  *   Working orders   every working order on every account (Cancel only with `cancelFromList` on)
  *   Today's trades   per account, the fills and the flat-to-flat round trips, gross and net (The Desk's commission)
- *   Copier           only with `copier` on: the leader, the mode, a row per Sim follower, Re-arm after a stand-down
+ *   Copier           only with `copier` on: the leader, the mode, a row per follower marked SIM or LIVE (Anthony 2026-10-07:
+ *                    no Sim lock; ChartBridge's account gates apply to every follower), Re-arm after a stand-down
  *   Log              what ChartBridge said on this page's connection (account changes, refusals, copier decisions)
  *
  * The page asks; ChartBridge decides. Every control shows only when its switch is true (`trading.switches`, PROTOCOL.md
@@ -256,27 +257,32 @@ function reviewUrl(deskUrl, day) {
   return base + '/#/futures/review/' + encodeURIComponent(day);
 }
 
-/* ---------------- the copier (PROTOCOL.md "Copier engine"): a row per Sim account but the leader */
+/* ---------------- the copier (PROTOCOL.md "Copier engine"): a row per account but the leader, each marked SIM or LIVE */
 const FOLLOWER_DEFAULT = { on: false, qty: 1, size: 'micro', lossLimit: null };
+/** SIM or LIVE (Anthony 2026-10-07): SIM only when ChartBridge says sim true; anything else is LIVE (the careful side). */
+const accountMark = sim => (sim === true ? 'SIM' : 'LIVE');
 /**
- * The Copier tab's rows: every watched Sim account but the leader (a saved follower's settings, else off, 1, micro, no loss
- * limit), then any saved follower that is not a Sim account (shown, never sent: ChartBridge refuses it). By name.
+ * The Copier tab's rows: every watched account but the leader, Sim or LIVE (Anthony 2026-10-07: no Sim lock; ChartBridge's
+ * account gates decide), each with a saved follower's settings, else off, 1, micro, no loss limit; then any saved follower
+ * the accounts list does not name (shown with ChartBridge's own words). Each row carries sim and its mark. By name.
  */
 function followerRows(accounts, copier) {
   const leader = copier && copier.leader ? copier.leader.account : null;
   const saved = new Map(((copier && copier.followers) || []).filter(f => f && typeof f.account === 'string').map(f => [f.account, f]));
   const rows = [];
   for (const a of accounts || []) {
-    if (!a || !a.sim || a.name === leader || a.state === 'archived') continue;
+    if (!a || typeof a.name !== 'string' || a.name === leader || a.state === 'archived') continue;
     const f = saved.get(a.name);
-    rows.push(Object.assign({ account: a.name, sim: true, saved: !!f, connection: a.connection }, FOLLOWER_DEFAULT, f ? {
+    rows.push(Object.assign({ account: a.name, sim: a.sim === true, mark: accountMark(a.sim), saved: !!f, connection: a.connection }, FOLLOWER_DEFAULT, f ? {
       on: !!f.on, qty: Number.isInteger(f.qty) && f.qty >= 1 && f.qty <= 9 ? f.qty : 1, size: f.size === 'mini' ? 'mini' : 'micro',
       lossLimit: Number.isInteger(f.lossLimit) && f.lossLimit >= 1 ? f.lossLimit : null, root: f.root || null, position: f.position || null,
       lastAction: f.lastAction || null, lastAt: f.lastAt || null, slippageTicks: isNum(f.slippageTicks) ? f.slippageTicks : null,
       skipped: typeof f.skipped === 'string' && f.skipped ? f.skipped : null, pnlToday: isNum(f.pnlToday) ? f.pnlToday : null } : {}));
   }
-  for (const f of saved.values()) if (!rows.some(r => r.account === f.account) && f.account !== leader && f.sim !== true)
-    rows.push(Object.assign({ account: f.account, sim: false, saved: true }, FOLLOWER_DEFAULT, { on: !!f.on, skipped: 'not a Sim account' }));
+  for (const f of saved.values()) if (!rows.some(r => r.account === f.account) && f.account !== leader)
+    rows.push(Object.assign({ account: f.account, sim: f.sim === true, mark: accountMark(f.sim), saved: true }, FOLLOWER_DEFAULT, { on: !!f.on,
+      qty: Number.isInteger(f.qty) && f.qty >= 1 && f.qty <= 9 ? f.qty : 1, size: f.size === 'mini' ? 'mini' : 'micro',
+      lossLimit: Number.isInteger(f.lossLimit) && f.lossLimit >= 1 ? f.lossLimit : null, skipped: typeof f.skipped === 'string' && f.skipped ? f.skipped : null }));
   return rows.sort((a, b) => (a.account < b.account ? -1 : a.account > b.account ? 1 : 0));
 }
 /** The `copierFollower` message for a row (every key, as the contract requires), or a plain reason it cannot be sent. */
@@ -332,8 +338,8 @@ const WORKING = new Set(['working', 'partFilled', 'cancelling']);
 const isWorking = o => !!o && WORKING.has(o.state);
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
-  tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, followerRows, followerMessage,
-  accountChange, logText, orderName, attachedLegs, isWorking };
+  tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, accountMark, followerRows, followerMessage,
+  accountMark, accountChange, logText, orderName, attachedLegs, isWorking };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -613,7 +619,7 @@ function mount(v, host) {
     if (a === 'f-on' || a === 'f-qty' || a === 'f-size' || a === 'f-ll-on' || a === 'f-ll') {
       const tr = el.closest('[data-follower]'); if (!tr) return;
       const name = tr.dataset.follower, row = AC.followerRows(S.accounts, S.copier).find(r => r.account === name);
-      if (!row || !row.sim) return;
+      if (!row) return;
       const val = k => tr.querySelector(`[data-act="${k}"]`);
       const llOn = val('f-ll-on').checked, llText = val('f-ll').value.trim();
       if (a === 'f-ll-on' && llOn && !llText) { P.llPending.add(name); val('f-ll').disabled = false; val('f-ll').focus(); return; }   // type the amount first
@@ -634,6 +640,7 @@ function mount(v, host) {
   function render() {
     const vals = [], props = [];
     const c = (text, cls, tip) => `<span role="cell" data-c="${vals.push({ text: text === null || text === undefined ? '' : String(text), cls: cls || '', tip: tip || '' }) - 1}"></span>`;
+    const ci = (text, cls, tip) => `<span data-c="${vals.push({ text: text === null || text === undefined ? '' : String(text), cls: cls || '', tip: tip || '' }) - 1}"></span>`;   // a value inside a cell
     const pr = (p) => { props.push(p); return `data-p="${props.length - 1}"`; };
     const h = (text, cls) => `<span class="${cls || ''}" role="columnheader">${text}</span>`;
     const row = (k, cells, cls, extra) => `<div class="gr-row${cls ? ' ' + cls : ''}" role="row" data-k="${esc(k)}"${extra || ''}>${cells}</div>`;
@@ -741,16 +748,16 @@ function mount(v, host) {
         (C.armed ? '' : `<span class="apg-why">${esc(C.standDownWhy || 'Nothing is copied until Re-arm.')}</span><button type="button" class="ac-btn apg-rearm" data-act="rearm" title="Copy again: needs the leader Connected and fewer than 3 followers not Connected">Re-arm</button>`) +
         `<label class="apg-lbl">Leader <select class="ws-sel apg-sel" data-act="leader" ${pr({ value: leader })} aria-label="Leader account"><option value="">none</option>${pick.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></label>` +
         `<span class="ws-seg apg-seg" role="group" aria-label="Copy mode"><button type="button" data-act="mode" data-v="executions" aria-pressed="${C.mode === 'executions'}" title="Each leader fill: a market order on every follower">Executions</button><button type="button" data-act="mode" data-v="orders" aria-pressed="${C.mode === 'orders'}" title="Each leader entry order placed on every follower">Orders</button></span>` +
-        `<span class="apg-sim">Sim accounts only</span></div>` +
-        (!rows.length ? '<p class="ac-empty">No Sim account to copy to.</p>' : '<div class="gr apg-g apg-cop-g" role="table" aria-label="Copier followers">' +
+        `<span class="apg-sim">Sim or LIVE followers; every account gate applies</span></div>` +
+        (!rows.length ? '<p class="ac-empty">No account to copy to.</p>' : '<div class="gr apg-g apg-cop-g" role="table" aria-label="Copier followers">' +
         row('h', h('Follower') + h('On') + h('Qty') + h('Size') + h('Daily loss') + h('Pos', 'r') + h('Slip', 'r') + h('Last'), 'gr-h') +
         rows.map(r => {
-          const dis = !r.sim;
+          const dis = false;   // Anthony 2026-10-07: no Sim lock (ChartBridge's account gates decide each copy)
           const qtyOpts = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<option value="${n}">${n}</option>`).join('');
           const llOn = r.lossLimit !== null || P.llPending.has(r.account);
           const pos = r.position && r.position.qty ? (r.position.qty > 0 ? '+' : '') + r.position.qty + ' ' + (r.root || '') : '';
           const last = r.skipped ? 'Skipped: ' + r.skipped : r.lastAction ? r.lastAction + (r.lastAt ? ' ' + hms(r.lastAt) : '') : '';
-          return row('f|' + r.account + '|' + r.sim, c(r.account, 'b', r.sim ? '' : 'Not a Sim account: the copier refuses it') +
+          return row('f|' + r.account + '|' + r.mark, `<span role="cell" class="apg-fol">${ci(r.account, 'b', r.mark === 'LIVE' ? 'A LIVE account: copies to it are real orders' : 'NinjaTrader Sim account')}<span class="apg-mark ${r.mark === 'LIVE' ? 'live' : 'sim'}">${r.mark}</span></span>` +
             `<span role="cell"><input type="checkbox" data-act="f-on" ${pr({ checked: r.on, disabled: dis })} aria-label="Copy to ${esc(r.account)}"></span>` +
             `<span role="cell"><select class="ws-sel apg-sel" data-act="f-qty" ${pr({ value: String(r.qty), disabled: dis })} aria-label="Contracts per leader contract">${qtyOpts}</select></span>` +
             `<span role="cell"><select class="ws-sel apg-sel" data-act="f-size" ${pr({ value: r.size, disabled: dis })} aria-label="Micro or mini"><option value="micro">micro</option><option value="mini">mini</option></select></span>` +
@@ -758,7 +765,7 @@ function mount(v, host) {
             c(pos, 'r') + c(r.slippageTicks === null || r.slippageTicks === undefined ? '' : (r.slippageTicks > 0 ? '+' : '') + r.slippageTicks + ' t', 'r' + (r.slippageTicks > 0 ? ' dn' : ''), 'Slippage against the leader, ticks (worse is positive)') +
             c(last, r.skipped ? 'apg-skip' : 'mut'), r.skipped ? 'apg-skipped' : '', ` data-follower="${esc(r.account)}"`);
         }).join('') + '</div>');
-      foot = 'Sim followers only. A follower exits by flattening, never by an opposite order. The daily loss limit is off unless set.';
+      foot = 'Each follower is marked SIM or LIVE; a LIVE follower gets real orders. A follower exits by flattening, never by an opposite order. The daily loss limit is off unless set.';
     } else {
       html = !S.log.length ? '<p class="ac-empty">Nothing yet.</p>' : '<div class="apg-log" role="log" aria-label="ChartBridge log">' +
         S.log.map((l, i) => `<p class="apg-ln${l.level ? ' ' + l.level : ''}" data-k="${l.at}-${i}"><span class="mut">${hms(l.at)}</span> ${esc(l.text)}</p>`).join('') + '</div>';

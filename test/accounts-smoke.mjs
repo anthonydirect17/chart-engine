@@ -7,7 +7,7 @@
 //      archived through the in-page confirm (Keep first), FUNDED-C amber from The Desk's trailing drawdown and the chart's
 //      warning on it, Positions, Working orders with Cancel, Today's trades (gross and net), the Copier tab (Re-arm, a
 //      follower's quantity), the Log; the Quote board's rows NQ, ES, then YM to ZB with ZN and ZB in 32nds
-//   2. every switch off (--v3-off=...): no checkbox, no Archive, no Cancel, no Copier tab, no box or list at all on the page
+//   2. every off line written (--v3-off=...; the switches are on by default since 2026-10-07): no checkbox, no Archive, no Cancel, no Copier tab, no box or list at all on the page
 //   3. ChartBridge 0.3.8 (no v3): the page says what it needs, opens no connection of its own; the Quote board NQ and ES only
 // Screenshots in test/out/accounts-*.png.
 import { chromium } from 'playwright';
@@ -151,7 +151,11 @@ try {
   // Copier
   await tab(page, 'cop');
   const cop = await rows(page, '.apg-cop-g');
-  check(cop.some(r => /SIM-F1/.test(r.k)) && cop.some(r => /SIM-F2/.test(r.k)) && !cop.some(r => /EVAL-A|FUNDED-C|Sim101/.test(r.k)), 'Copier: a row per Sim follower, never a real account or the leader (' + cop.map(r => r.k).join(', ') + ')');
+  check(cop.map(r => r.k).join() === 'f|EVAL-A|LIVE,f|FUNDED-C|LIVE,f|SIM-F1|SIM,f|SIM-F2|SIM', 'Copier (Anthony 2026-10-07: no Sim lock): a row per account but the leader, Sim or LIVE (' + cop.map(r => r.k).join(', ') + ')');
+  const marks0 = await page.$$eval(`${AP} .apg-cop-g .apg-mark`, els => els.map(e => e.textContent + (e.classList.contains('live') ? ':' + getComputedStyle(e).backgroundColor : '')));
+  check(marks0.join() === 'LIVE:rgb(159, 18, 57),LIVE:rgb(159, 18, 57),SIM,SIM', 'each follower marked SIM or LIVE, LIVE in the house red: ' + marks0.join(', '));
+  check(/Sim or LIVE followers/.test(await page.$eval(`${AP} .apg-sim`, e => e.textContent)), 'the Copier tab no longer says Sim accounts only');
+  check(!(await page.$eval(`${AP} [data-follower="EVAL-A"] input[data-act="f-on"]`, e => e.disabled)), 'a LIVE account can be turned on as a follower');
   check(/STOOD DOWN/.test(await page.$eval(`${AP} .apg-arm`, e => e.textContent)), 'the copier starts stood down');
   await page.click(`${AP} button[data-act="rearm"]`);
   await until(async () => (await v3(PORT)).copier.armed === true, 'Re-arm through ChartBridge');
@@ -167,6 +171,9 @@ try {
   await page.press(`${AP} [data-follower="SIM-F1"] input[data-act="f-ll"]`, 'Tab');
   await until(async () => (await v3(PORT)).copier.followers.find(x => x.account === 'SIM-F1').lossLimit === 400, 'SIM-F1 daily loss 400');
   check(true, 'a follower\'s daily loss limit: a flat dollar amount');
+  await page.click(`${AP} [data-follower="EVAL-A"] input[data-act="f-on"]`);
+  await until(async () => { const f = (await v3(PORT)).copier.followers.find(x => x.account === 'EVAL-A'); return f && f.on === true && f.sim === false; }, 'EVAL-A (LIVE) on as a follower through copierFollower');
+  check(true, 'a LIVE follower turned on from its checkbox (ChartBridge\'s gates decide each copy)');
   await page.screenshot({ path: path.join(out, 'accounts-3-copier.png') });
   // Log
   await tab(page, 'log');
@@ -199,7 +206,7 @@ try {
   await tab(p2, 'acc');
   const marks = await rows(p2, '.apg-acc-g');
   check(marks.some(r => r.k === 'Sim101' && /✓/.test(r.text)), 'the checkmark shows read only (gate 2 is tradeAccounts)');
-  check(/read only \(accountChecks is off/.test(await p2.$eval(`${AP} .apg-foot`, e => e.textContent)), 'the foot says why');
+  check(/read only \(accountChecks = off in config\.txt/.test(await p2.$eval(`${AP} .apg-foot`, e => e.textContent)), 'the foot says why');
   await tab(p2, 'ord');
   check((await rows(p2, '.apg-ord-g')).length >= 1 && !(await p2.$(`${AP} button[data-act="cancel"]`)), 'Working orders listed with no Cancel');
   await p2.screenshot({ path: path.join(out, 'accounts-5-switches-off.png') });

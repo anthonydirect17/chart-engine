@@ -1,6 +1,25 @@
 # Changelog
 
-## 1.16.0 (2026-10-07): the pre-cruise release with ChartBridge 0.4.0 (every new order feature switched off)
+## 1.16.0 (2026-10-07): the pre-cruise release with ChartBridge 0.4.0 (every new feature on, no Sim locks)
+
+- **No switches, no Sim locks** (Anthony 2026-10-07: "I do not want another arbitrary block ... I am capable of only
+  testing on sim until we clear our tests"). ChartBridge 0.4.0's new features are on as soon as it is installed:
+  `accountChecks`, `orderTypes`, `strategies`, `merge`, `cancelFromList`, `copier` and `bot`. Each `config.txt` key stays
+  only as an optional off line (`merge = off`); `trading.switches` reports the real values; `trading = true` is unchanged
+  (off unless `config.txt` says so). The default is set in one place (`ChartBridgeSwitches.Reset`).
+- **The copier takes real followers** through every account gate (trading on, its checkmark, Connected, not Gone, the caps);
+  every other copier rule stays (never cross zero, the follower's stop at the leader's price, the mass disconnect and
+  Re-arm). `copier.simOnly` is `false`. The Copier tab offers every account but the leader, each marked **SIM** or **LIVE**.
+- **The bot trades the account Anthony chooses** (`botAccount`, kept by ChartBridge in `bot-account.txt`, Sim101 by
+  default), Sim or LIVE, through every gate; refused while the bot has a position or a working entry, when the account is
+  not tradable, and when it is a copier follower or the leader. `bot`, `welcome` and `botProposal` carry `account` and
+  `sim`. The rails are unchanged. The Bot tab shows the account with a SIM or LIVE mark (LIVE in the Armed red, never
+  animated) next to the mode, in the strip, the pop-out and on every proposal; **Change account** lists the tradable
+  accounts, each marked, and asks once in the page before a LIVE one. The mode reads **Auto** (not "Sim auto").
+- Tests: the Mono harness checks "on by default; the off line turns it off" for every switch (its 0.3.8 base runs with every
+  off line written), a real follower copied with every gate, the bot on a chosen LIVE account (auto, proposals, refusals,
+  `bot-account.txt` and a restart), the bot's account never a follower or the leader; the fake bridge defaults to every
+  switch on and models `botAccount`; `smoke:bot` and `smoke:accounts` check the marks, the picker and the in-page question.
 
 - **No text inside a chart** (Anthony 2026-10-07): a mounted chart (every workspace chart, a host's) has no legend and no
   **Aa** toggle any more (`live-legend-v1` is read by the single chart page only; `legendToggle` is an empty hidden element

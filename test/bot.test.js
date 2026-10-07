@@ -85,25 +85,53 @@ test('the bot\'s fills: claimed only against the contracts its own orders fill (
   assert.equal(L.claim(fill('e5', 'buy', 25001)), false, 'cleared');
 });
 
-test('modes: Research builds run in shadow only; auto only when Sim101 is tradable; the bot switch', () => {
+test('modes: Research builds run in shadow only; auto only when the bot\'s account is tradable (Sim or LIVE); the bot switch', () => {
   const ready = LIB.bots.find(b => b.shelf === 'ready'), research = LIB.bots.find(b => b.shelf === 'research');
-  let m = BC.modesAllowed({ entry: ready, simTradable: true });
-  assert.ok(m.shadow.ok && m.copilot.ok && m.auto.ok);
-  m = BC.modesAllowed({ entry: ready, simTradable: false });
-  assert.ok(m.copilot.ok); assert.equal(m.auto.ok, false); assert.match(m.auto.why, /Sim101/);
-  m = BC.modesAllowed({ entry: research, simTradable: true });
+  let m = BC.modesAllowed({ entry: ready, tradable: true, account: 'EVAL-A' });
+  assert.ok(m.shadow.ok && m.copilot.ok && m.auto.ok, 'auto on a LIVE account: allowed when ChartBridge says it is tradable');
+  m = BC.modesAllowed({ entry: ready, tradable: false, account: 'EVAL-A' });
+  assert.ok(m.copilot.ok); assert.equal(m.auto.ok, false); assert.match(m.auto.why, /Auto needs EVAL-A to be tradable/);
+  assert.match(BC.modesAllowed({ entry: ready, tradable: false }).auto.why, /Sim101/, 'the default account');
+  m = BC.modesAllowed({ entry: research, tradable: true });
   assert.ok(m.shadow.ok); assert.equal(m.copilot.ok, false); assert.equal(m.auto.ok, false); assert.match(m.copilot.why, /Shadow only/);
-  m = BC.modesAllowed({ entry: null, simTradable: true });
+  m = BC.modesAllowed({ entry: null, tradable: true });
   assert.ok(m.copilot.ok && m.auto.ok, 'a bot not in the library: ChartBridge decides');
-  assert.equal(BC.simTradable({ list: [{ name: 'Sim101', tradable: true }] }, null), true);
-  assert.equal(BC.simTradable({ list: [{ name: 'Sim101', tradable: false }] }, { enabled: true, accounts: ['Sim101'] }), false, 'the accounts list wins');
-  assert.equal(BC.simTradable(null, { enabled: true, accounts: ['Sim101'] }), true);
-  assert.equal(BC.simTradable(null, { enabled: false, accounts: ['Sim101'] }), false);
+  assert.equal(BC.MODE_NAME.auto, 'Auto', 'not "Sim auto": the bot trades the account Anthony chose');
+  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null), true);
+  assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: false }] }, { enabled: true, accounts: ['Sim101'] }), false, 'the accounts list wins');
+  assert.equal(BC.accountTradable(null, { enabled: true, accounts: ['Sim101'] }), true);
+  assert.equal(BC.accountTradable(null, { enabled: false, accounts: ['Sim101'] }), false);
+  assert.equal(BC.accountTradable({ list: [{ name: 'EVAL-A', tradable: true }] }, null, 'EVAL-A'), true);
   assert.equal(BC.botSwitchOn({ enabled: true, switches: { bot: true } }), true);
   assert.equal(BC.botSwitchOn({ enabled: true, switches: { bot: false } }), false);
   assert.equal(BC.botSwitchOn({ enabled: true }), false, 'a v2 answer has no switches: off');
   assert.equal(BC.botSwitchOn({ enabled: false, switches: { bot: true } }), false);
   assert.equal(BC.botSwitchOn({ enabled: true, switches: { bot: 'true' } }), false, 'only true is on');
+});
+
+test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to choose, the change and its one LIVE question', () => {
+  assert.deepEqual(BC.botAccount(null), { name: 'Sim101', sim: false, mark: '' }, 'before ChartBridge says: Sim101, unmarked');
+  assert.deepEqual(BC.botAccount({ account: 'Sim101', sim: true }), { name: 'Sim101', sim: true, mark: 'SIM' });
+  assert.deepEqual(BC.botAccount({ account: 'EVAL-A', sim: false }), { name: 'EVAL-A', sim: false, mark: 'LIVE' });
+  const accounts = { list: [
+    { name: 'Sim101', sim: true, tradable: true, state: 'active' }, { name: 'EVAL-A', sim: false, tradable: true, state: 'active' },
+    { name: 'FUNDED-B', sim: false, tradable: false, state: 'active' }, { name: 'EVAL-B', sim: false, tradable: false, state: 'gone' }, { name: 'SIM-F1', sim: true, tradable: true, state: 'active' }] };
+  const bot = { account: 'Sim101', sim: true, position: { qty: 0, avgPrice: null } };
+  const ch = BC.accountChoices(accounts, bot);
+  assert.deepEqual(ch.map(c => c.name + ' ' + c.mark), ['SIM-F1 SIM', 'Sim101 SIM', 'EVAL-A LIVE'], 'tradable accounts only, each marked, Sim first');
+  assert.equal(ch.find(c => c.name === 'Sim101').current, true);
+  assert.ok(BC.accountChoices(accounts, { account: 'FUNDED-B', sim: false }).some(c => c.name === 'FUNDED-B' && c.current && !c.tradable), 'the current account is always listed');
+  const live = BC.botAccountChange(bot, 'EVAL-A', ch, 'c9');
+  assert.deepEqual(live.msg, { type: 'botAccount', cid: 'c9', account: 'EVAL-A' });
+  assert.equal(live.live, true); assert.equal(live.confirm, 'The bot will trade LIVE account EVAL-A. Continue?', 'a LIVE account: asked once, in the page');
+  const sim = BC.botAccountChange(bot, 'SIM-F1', ch);
+  assert.equal(sim.live, false); assert.equal(sim.confirm, ''); assert.deepEqual(sim.msg, { type: 'botAccount', account: 'SIM-F1' });
+  assert.match(BC.botAccountChange(bot, 'FUNDED-B', ch).error, /not tradable/);
+  assert.match(BC.botAccountChange(bot, 'Sim101', ch).error, /already the bot's account/);
+  assert.match(BC.botAccountChange(Object.assign({}, bot, { position: { qty: 1, avgPrice: 25000 } }), 'EVAL-A', ch).error, /flat/);
+  assert.match(BC.botAccountChange(bot, '', ch).error, /Choose an account/);
+  const st = BC.stripModel({ enabled: true, connected: true, name: 'Demo', mode: 'auto', account: 'EVAL-A', sim: false, trades: 0, maxTrades: 5, losses: 0, maxLosses: 3 });
+  assert.equal(st.account, 'EVAL-A'); assert.equal(st.accountMark, 'LIVE'); assert.equal(st.mode, 'Auto');
 });
 
 test('proposals: show, botSeen once, answer once while open, end; an expired one is "not answered"', () => {

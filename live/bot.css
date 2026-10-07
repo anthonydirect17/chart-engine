@@ -238,3 +238,17 @@ body.ws-tight .bt-strip { padding: 2px 2px 0; }
   .bt-cond { grid-template-columns: minmax(0, 1fr); }
   .bt-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* the bot's account (Anthony 2026-10-07: the account he chooses, Sim or LIVE): a plain SIM or LIVE word next to the mode, in the
+   strip, the pop-out and on every copilot proposal. LIVE in the house red of the Armed warning (live.css .pill.armed: the
+   crimson with its light ink); never animated (no transition, no motion attribute reaches it). */
+.bt-acct { display: inline-flex; align-items: center; height: 17px; padding: 0 6px; border-radius: 4px; font: 700 10px/1 var(--bt-cond); letter-spacing: .1em;
+  text-transform: uppercase; vertical-align: middle; border: 1px solid var(--ws-line2); color: var(--ws-text2); background: var(--bt-panel3); box-sizing: border-box; transition: none; animation: none; }
+.bt-acct[hidden] { display: none; }
+.bt-acct.live { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+.bt-acct-ask { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 6px 8px; border: 1px solid #E0445E; border-radius: 6px;
+  background: color-mix(in srgb, #9F1239 18%, transparent); font-size: 12px; color: var(--ws-text); }
+.bt-acct-ask[hidden] { display: none; }
+.bt-acct-ask .ws-btn { height: 24px; padding: 0 9px; }
+.bt-acct-ask .bt-live-go { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+.bt-sline .bt-sacct { color: var(--ws-text2); }

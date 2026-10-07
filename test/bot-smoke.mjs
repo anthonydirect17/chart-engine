@@ -8,7 +8,10 @@
 //     never animated;
 //   - the panel: the kill switch (on in one click, release in two), the rails as ChartBridge built them (1 to 5 trades, 1 to
 //     3 losing trades, the root or its micro or mini; never above ChartBridge's limits), the modes
-//     (Sim auto asks once more; a Research build offers Shadow only), the day type calls logged with their times;
+//     (Auto asks once more; a Research build offers Shadow only), the day type calls logged with their times;
+//   - the bot's account (Anthony 2026-10-07: no Sim lock): SIM or LIVE next to the mode, in the strip, the pop-out and on every
+//     proposal (LIVE in the house red, never animated); Change account lists the tradable accounts, each marked; a LIVE one
+//     is asked once in the page, never with a browser dialog; ChartBridge's refusal is shown under the button;
 //   - one v3 connection per window: the Bot tab opens none of its own (the workspace's, shared with the Account page and
 //     the ticket's 0.4.0 parts);
 //   - copilot proposals on the Main tab: botSeen the moment one shows, Accept with The Desk's accept key (the workspace's
@@ -18,8 +21,9 @@
 //   - the pop-out window (bot.html) on its own one v3 connection;
 //   - with the bot switch off: the Bot tab says the bot channel is off and offers nothing (no strip, no ghost choice);
 //     with no library file: "No frozen builds on this PC".
-//   npm run smoke:bot        (CHROMIUM_PATH=/path/to/chrome; BOT_SMOKE_PORT, and the next two ports; SHOTS=dir)
-// Screenshots: bot-strip, bot-tab, bot-detail, bot-proposal, bot-ghost, bot-popout, bot-off, bot-nolib (.png in test/out).
+//   npm run smoke:bot        (CHROMIUM_PATH=/path/to/chrome; BOT_SMOKE_PORT, and the next three ports; SHOTS=dir)
+// Screenshots: bot-strip, bot-tab, bot-detail, bot-proposal, bot-ghost, bot-popout, bot-off, bot-nolib, bot-live-ask,
+// bot-live, bot-live-popout (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -89,8 +93,8 @@ try {
   await control('bot-connect', { name: 'Sample Lantern Fade' });
   await until(() => page.isVisible('#btStrip .bt-sline'), 'the strip shows');
   const strip = await page.textContent('#btStrip');
-  check(/Sample Lantern Fade/.test(strip) && /Shadow/.test(strip) && /Flat/.test(strip) && /\$0\.00/.test(strip) && /0 of 5/.test(strip) && /0 of 3/.test(strip),
-    'one line: name, mode, position, P&L, the rails: "' + strip.replace(/\s+/g, ' ').trim() + '"');
+  check(/Sample Lantern Fade/.test(strip) && /Shadow/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip) && /\$0\.00/.test(strip) && /0 of 5/.test(strip) && /0 of 3/.test(strip),
+    'one line: name, mode, the account with its SIM mark, position, P&L, the rails: "' + strip.replace(/\s+/g, ' ').trim() + '"');
   await page.screenshot({ path: path.join(SHOTS, 'bot-strip.png'), clip: { x: 0, y: 0, width: 1600, height: 120 } });
 
   /* ---------------------------------------------------------------- the Bot tab, mid-entrance: R4 and R3 */
@@ -178,9 +182,12 @@ try {
   await until(async () => (await v3()).bot.mode === 'copilot', 'Copilot');
   await page.click('.bt-modes [data-mode="auto"]');
   await sleep(300);
-  check((await v3()).bot.mode === 'copilot' && (await page.textContent('.bt-modes [data-mode="auto"]')) === 'Confirm', 'Sim auto asks once more');
+  check((await v3()).bot.mode === 'copilot' && (await page.textContent('.bt-modes [data-mode="auto"]')) === 'Confirm', 'Auto asks once more');
   await page.click('.bt-modes [data-mode="auto"]');
-  await until(async () => (await v3()).bot.mode === 'auto', 'Sim auto on Sim101 (ChartBridge allows it: Sim101 is tradable)');
+  await until(async () => (await v3()).bot.mode === 'auto', 'Auto on Sim101 (ChartBridge allows it: Sim101 is tradable)');
+  const acct0 = await page.evaluate(() => ({ name: document.querySelector('[data-k="account"]').textContent, mark: document.querySelector('[data-k="accountMark"]').textContent,
+    byMode: document.querySelector('[data-k="modeAcct"]').textContent, live: document.querySelector('[data-k="modeAcct"]').classList.contains('live') }));
+  check(acct0.name === 'Sim101' && acct0.mark === 'SIM' && acct0.byMode === 'SIM' && !acct0.live, 'the panel: Sim101 with its SIM mark, and SIM next to the mode: ' + JSON.stringify(acct0));
   await page.click('.bt-modes [data-mode="shadow"]');
   await until(async () => (await v3()).bot.mode === 'shadow', 'back to Shadow');
 
@@ -301,6 +308,74 @@ try {
   check(/No frozen builds on this PC/.test(none), 'the Library says so plainly: ' + none.trim());
   check((await B()).shown, '?tab=bot opens on the Bot tab');
   await page.screenshot({ path: path.join(SHOTS, 'bot-nolib.png') });
+  bridge.kill();
+
+  /* ---------------------------------------------------------------- the bot's account: Sim or LIVE (Anthony 2026-10-07) */
+  console.log('the bot\'s account: the one Anthony chooses, Sim or LIVE');
+  bridge = await startBridge(PORT + 3);
+  let dialogs = 0;
+  page.on('dialog', d => { dialogs++; d.dismiss().catch(() => {}); });
+  await open('?layout=Main&tab=bot');
+  await until(async () => (await B()).on, 'the bot switch on');
+  await control('bot-connect', { name: 'Sample Lantern Fade' });
+  await until(async () => (await page.textContent('[data-k="accountMark"]')) === 'SIM', 'Sim101, marked SIM');
+  await page.click('[data-act="acctOpen"]');
+  const opts = await page.$$eval('[data-k="acctSel"] option', o => o.map(x => x.textContent + (x.disabled ? ' [off]' : '')));
+  check(opts.includes('EVAL-A (LIVE)') && opts.includes('Sim101 (SIM), now') && opts.some(x => /^SIM-F1 \(SIM\)/.test(x)) && !opts.some(x => /FUNDED-C|EVAL-B/.test(x)),
+    'Change account lists the tradable accounts, each marked SIM or LIVE (not FUNDED-C, not checked; not EVAL-B): ' + opts.join(', '));
+  await page.selectOption('[data-k="acctSel"]', 'EVAL-A');
+  await page.click('[data-act="acctSave"]');
+  await until(() => page.isVisible('[data-k="acctAsk"]'), 'a LIVE account: the page asks once');
+  const ask = await page.textContent('[data-k="acctAsk"]');
+  check(/The bot will trade LIVE account EVAL-A\. Continue\?/.test(ask) && dialogs === 0, 'the question is in the page, never a browser dialog: ' + ask.trim());
+  check((await v3()).bot.account === 'Sim101', 'nothing sent before the answer');
+  await page.screenshot({ path: path.join(SHOTS, 'bot-live-ask.png') });
+  await page.click('[data-act="acctNo"]');
+  await sleep(300);
+  check((await v3()).bot.account === 'Sim101' && await page.isHidden('[data-k="acctAsk"]'), 'Cancel: nothing sent, still Sim101');
+  await page.click('[data-act="acctOpen"]');
+  await page.selectOption('[data-k="acctSel"]', 'EVAL-A');
+  await page.click('[data-act="acctSave"]');
+  await page.click('[data-act="acctYes"]');
+  await until(async () => (await v3()).bot.account === 'EVAL-A', 'Continue: botAccount reached ChartBridge');
+  await until(async () => (await page.textContent('[data-k="accountMark"]')) === 'LIVE', 'the panel marks it LIVE');
+  const live = await page.evaluate(() => {
+    const m = document.querySelector('[data-k="modeAcct"]'), cs = getComputedStyle(m);
+    return { name: document.querySelector('[data-k="account"]').textContent, byMode: m.textContent, cls: m.className, bg: cs.backgroundColor, tr: cs.transitionDuration, anim: cs.animationName,
+      noMotion: !!m.closest('[data-no-motion]') };
+  });
+  check(live.name === 'EVAL-A' && live.byMode === 'LIVE' && /live/.test(live.cls) && live.bg === 'rgb(159, 18, 57)', 'LIVE next to the mode, in the house red: ' + JSON.stringify(live));
+  check(/^0s(, 0s)*$/.test(live.tr) && live.anim === 'none' && live.noMotion, 'the LIVE mark is never animated');
+  await page.click('.bt-modes [data-mode="auto"]');
+  await page.click('.bt-modes [data-mode="auto"]');
+  await until(async () => (await v3()).bot.mode === 'auto', 'Auto on the LIVE account (no Sim lock; ChartBridge says EVAL-A is tradable)');
+  check(/EVAL-A \(LIVE\)/.test(await page.getAttribute('.bt-modes [data-mode="auto"]', 'title') || ''), 'the Auto button names the account and its mark');
+  await page.screenshot({ path: path.join(SHOTS, 'bot-live.png') });
+  await page.click('.bt-modes [data-mode="shadow"]');
+  await until(async () => (await v3()).bot.mode === 'shadow', 'back to Shadow');
+  await page.click('#wsBotTab');
+  await until(() => page.isVisible('#btStrip .bt-sline'), 'the strip on Main');
+  const strip2 = await page.evaluate(() => ({ text: document.querySelector('#btStrip').textContent, live: !!document.querySelector('#btStrip .bt-acct.live') }));
+  check(/EVAL-A\s*LIVE/.test(strip2.text) && strip2.live, 'the strip: EVAL-A, LIVE in red: "' + strip2.text.replace(/\s+/g, ' ').trim() + '"');
+  await control('bot-proposal', { id: 'pl1', side: 'sell', kind: 'market', stop: 12, target: 24 });
+  await until(() => page.isVisible('.bt-prop[data-id="pl1"]'), 'a proposal');
+  const pl = await page.evaluate(() => { const el = document.querySelector('.bt-prop[data-id="pl1"]'); return { text: el.textContent, live: !!el.querySelector('.bt-acct.live') }; });
+  check(/EVAL-A/.test(pl.text) && /LIVE/.test(pl.text) && pl.live, 'the proposal names EVAL-A and marks it LIVE');
+  await page.click('.bt-prop[data-id="pl1"] .bt-rej');
+  await until(async () => (await v3()).proposals.find(x => x.id === 'pl1').state === 'rejected', 'rejected');
+  await page.click('#wsBotTab');
+  await page.click('[data-act="acctOpen"]');
+  await page.selectOption('[data-k="acctSel"]', 'Sim101');
+  await page.click('[data-act="acctSave"]');
+  await until(async () => /copier's leader/.test(await page.textContent('[data-k="acctWhy"]')), 'ChartBridge\'s refusal shown under the button (the fake\'s copier leader is Sim101)');
+  check(await page.isHidden('[data-k="acctAsk"]') && (await v3()).bot.account === 'EVAL-A', 'a Sim account is not asked about; refused, nothing changed');
+  const [pop2] = await Promise.all([ctx.waitForEvent('page'), page.click('.bt-pop')]);
+  await pop2.waitForSelector('.cb-pin-key', { timeout: 15000 });
+  await enterPin(pop2, TEST_PIN);
+  await until(() => pop2.evaluate(() => window.botDesk && window.botDesk.state().on && document.querySelector('[data-k="accountMark"]').textContent === 'LIVE'), 'the pop-out marks the account LIVE too', 20000);
+  check(await pop2.evaluate(() => document.querySelector('[data-k="account"]').textContent === 'EVAL-A' && document.querySelector('[data-k="modeAcct"]').classList.contains('live')), 'the pop-out: EVAL-A, LIVE next to the mode');
+  await pop2.screenshot({ path: path.join(SHOTS, 'bot-live-popout.png') });
+  await pop2.close();
 } catch (e) {
   fail('smoke stopped: ' + (e && e.stack || e));
 } finally {

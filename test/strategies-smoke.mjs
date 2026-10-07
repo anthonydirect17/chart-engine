@@ -1,9 +1,10 @@
 // Order Strategies, entry types, Merge and the shared hotkeys smoke test (chart 1.16.0, ChartBridge 0.4.0, protocol v3):
 // the workspace (live/index.html) in Chromium against the fake bridge with --v3 and a fake Desk (test/fake-desk.mjs).
 // Sample data and made-up accounts only; nothing reaches a broker.
-//   Part A, every v3 switch off: no new control anywhere (ticket, Settings), The Desk never asked, the hotkeys stay this
+//   Part A, every v3 off line written in config.txt (the switches are on by default since Anthony's 2026-10-07 decision; the
+//     off lines give 0.3.8): no new control anywhere (ticket, Settings), The Desk never asked, the hotkeys stay this
 //     browser's, and an order is the 1.15 order (a bracket, no strategy).
-//   Part B, every switch on: The Desk's hotkeys and strategies used (this browser's replaced, said so); the Strategies screen
+//   Part B, no off line (the default, every switch on): The Desk's hotkeys and strategies used (this browser's replaced, said so); the Strategies screen
 //     (validation as The Desk and ChartBridge check it, a save, a strategy's key, an unsaved edit kept); the strategy picked
 //     by its key and sent with Buy MKT in ChartBridge's flat form; the managed state (resumed, NOT MANAGED); Merge by its
 //     button and by its key with the result shown; the entry types by a modifier held with Buy's key and with a click;
@@ -75,8 +76,8 @@ function spies() {
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let desk = null;
 try {
-  /* ================ Part A: every v3 switch off ================ */
-  console.log('Part A: every v3 switch off');
+  /* ================ Part A: every v3 off line written ================ */
+  console.log('Part A: every v3 off line written (config.txt)');
   desk = await startDesk(DESK_PORT, { hotkeys: { rev: 5, keys: { buy: 'F2', sell: 'F8', be: '', close: 'F9', flattenAll: '', merge: 'Num1', maximize: 'Num0', accept: '', reject: '' }, modifiers: { limit: 'Alt', stop: '' } },
     strategies: { rev: 1, strategies: [{ id: 'scalp-2', name: 'Scalp 2', stop: { ticks: 16, type: 'limit', limitOffsetTicks: 2 }, targets: [{ ticks: 8, sharePct: 50 }, { ticks: 20, sharePct: 50 }], breakeven: { afterTicks: 8, plusTicks: 1 }, trail: null, hotkey: 'Num9' }] } });
   await startBridge(['--v3-off=' + SWITCHES.join(',')]);
@@ -142,8 +143,8 @@ try {
   await tk(A, 'flattenBtn').click(); await wait(600);
   await ctx.close(); await stopBridge(); await desk.close();
 
-  /* ================ Part B: every switch on, with The Desk ================ */
-  console.log('Part B: every switch on, The Desk shared');
+  /* ================ Part B: no off line (the default: every switch on), with The Desk ================ */
+  console.log('Part B: no off line, every switch on by default, The Desk shared');
   const SEED_HK = { rev: 2, keys: { buy: 'F2', sell: 'F8', be: '', close: 'F9', flattenAll: '', merge: '', maximize: 'Num0', accept: '', reject: '' }, modifiers: { limit: '', stop: '' } };
   const SCALP = { id: 'scalp-2', name: 'Scalp 2', stop: { ticks: 16, type: 'limit', limitOffsetTicks: 2 }, targets: [{ ticks: 8, sharePct: 50 }, { ticks: 20, sharePct: 50 }], breakeven: { afterTicks: 8, plusTicks: 1 }, trail: null, hotkey: 'Num9' };
   desk = await startDesk(DESK_PORT, { hotkeys: SEED_HK, strategies: { rev: 1, strategies: [SCALP] } });
@@ -156,6 +157,7 @@ try {
   A = await open(ctx, `http://localhost:${PORT}/live/`, true);
   await A.waitForFunction(() => window.workspace.ticket().enabled && window.workspace.ticket().held, null, { timeout: 30000 });
   await until(async () => (await v3(A)).desk.mode === 'desk', 'The Desk read');
+  check(Object.keys((await v3(A)).switches).length === 7 && Object.values((await v3(A)).switches).every(x => x === true), 'no off line in config.txt: ChartBridge says every switch on, the page shows every 0.4.0 control');
   await wait(800);
   check(desk.log.filter(x => x.method === 'GET').length >= 2, 'both documents read from The Desk');
   check((await notes(A)).some(t => /Hotkeys now come from The Desk, shared by every PC\. This browser had Sell MKT Alt\+X/.test(t)), 'this browser\'s different keys replaced, and said so: ' + (await notes(A)).slice(-1)[0]);

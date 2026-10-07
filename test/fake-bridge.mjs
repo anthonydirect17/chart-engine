@@ -129,8 +129,10 @@
 //   EVAL-B, FUNDED-C, SIM-F1, SIM-F2 and Sim101 (tradeAccounts Sim101, EVAL-A pre-checked unless --trade-accounts says
 //   otherwise); EVAL-A holds 2 MNQ and a working sell limit, FUNDED-C a working NQ buy limit, EVAL-B loses its connection
 //   and goes Gone after the grace; SIM-F1 (3 micro) and SIM-F2 (1 mini) are copier followers of Sim101, stood down until
-//   Re-arm. Sample data and made-up names only.
-//   --v3-off=copier,bot             those v3 switches off (to test a page against a switch that is off)
+//   Re-arm; the bot trades Sim101 until the page chooses another account (botAccount; EVAL-A is a LIVE one). Sample data and
+//   made-up names only.
+//   --v3-off=copier,bot             those v3 switches off, as config.txt's off lines (every switch is on by default since
+//                                   Anthony's 2026-10-07 decision: no switches, no Sim locks)
 //   --gone-grace-ms=10000           the Gone grace (PROTOCOL.md: 10 s); shorter for tests
 //   --quote-roots                   only the quote-only roots (YM, RTY, GC, SI, CL, 6E, ZN, ZB), without the rest of v3
 //   --no-v3-seed                    no seeded positions, orders or followers
@@ -480,7 +482,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */

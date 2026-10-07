@@ -14,7 +14,12 @@
  * As ChartBridge 0.4.0 built it (nt8/ChartBridgeBot.cs; PROTOCOL.md "The bot channel as built"):
  *   - The bot's orders: a v3 page's order message says `by: "bot"` for the bot's entries and the legs it follows
  *     (ChartBridge 0.4.0 review 2). Only those are the bot's lines; a fill is the bot's only when one of those orders is
- *     seen to fill it (BotCore.botFillLedger). Anthony's own Sim101 orders on the bot's root stay his.
+ *     seen to fill it (BotCore.botFillLedger). Anthony's own orders on the bot's account and root stay his.
+ *   - The bot's account (Anthony 2026-10-07: no Sim lock): the account he chooses (`botAccount`, kept by ChartBridge in
+ *     bot-account.txt, Sim101 by default), Sim or LIVE. The tab shows it plainly with a SIM or LIVE mark (LIVE in the house red
+ *     of the Armed warning, never animated) next to the mode, in the strip, the pop-out and on every copilot proposal. The
+ *     panel's Change account lists the accounts ChartBridge says are tradable, each marked; a LIVE one is asked once in the
+ *     page ("The bot will trade LIVE account X. Continue?"), never with a browser dialog.
  *   - The rails (`botRails`): maxTrades 1 to 5, maxLosses 1 to 3 and the root (botRoot or its micro or mini), all three
  *     sent; ChartBridge keeps them in bot-rails.txt (a restart and a new day keep them) and refuses a change while the
  *     bot has a position or a working entry.
@@ -63,10 +68,10 @@ function create(o) {
     destroyed: false,
     v3: null, version: '', instruments: {}, trading: null, signedIn: false, on: false,
     accounts: null, bot: null, layout: '', shown: popout, cidSeq: 0,
-    orders: new Map(), pending: new Map(),    // orders: Sim101's working orders by id; pending: cid -> { kind, id }
+    orders: new Map(), pending: new Map(),    // orders: the bot's working orders by id; pending: cid -> { kind, id }
     library: { state: 'idle', bots: [], problems: [], text: '' }, libAt: 0,
     keys: { accept: '', reject: '', notes: [], from: '' },
-    killConfirm: 0, autoConfirm: 0, railsEdit: false, panelTab: 'today', detail: null,
+    killConfirm: 0, autoConfirm: 0, railsEdit: false, acctEdit: false, acctAsk: '', panelTab: 'today', detail: null,
     chart: null, chartRoot: '', chartTf: 'm1', contract: '',
   };
   let opts = BC.readOptions(storage);
@@ -97,7 +102,7 @@ function create(o) {
         '<div class="bt-ph" data-in=".02,.3"><span class="bt-t" data-k="chartName">Chart</span>' +
           '<select class="ws-sel bt-tf" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
           '<span class="chart-live ws-lv" data-k="ind"></span>' +
-          '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the bot\'s orders, so your own Sim101 orders do not show here.">Bot trades</span>' +
+          '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the bot\'s orders, so your own orders on its account do not show here.">Bot trades</span>' +
           (popout ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
         '<div class="bt-chart" data-k="chart" data-no-motion></div>' +
       '</section>' +
@@ -105,15 +110,22 @@ function create(o) {
       '<aside class="bt-piece bt-panel" aria-label="Bot panel">' +
         '<div class="bt-ph" data-in=".04,.32"><span class="bt-t">Bot panel</span><span class="bt-r"><span class="bt-onoff" data-k="onoff"></span><span class="bt-badge" data-k="ev" hidden></span></span></div>' +
         '<div class="bt-pb bt-panelb">' +
-          '<div class="bt-sec" data-no-motion><span class="bt-cap">Mode</span>' +
+          '<div class="bt-sec" data-no-motion><span class="bt-cap">Mode <span class="bt-acct" data-k="modeAcct"></span></span>' +
             '<div class="bt-modes" role="group" aria-label="Bot mode" data-k="modes">' + BC.MODES.map(m => '<button type="button" data-mode="' + m + '" aria-pressed="false">' + BC.MODE_NAME[m] + '</button>').join('') + '</div>' +
             '<p class="bt-why" data-k="modeWhy" hidden></p></div>' +
           '<div class="bt-kv" data-in=".1,.38">' +
             '<span class="k">Bot</span><span class="v" data-k="name">-</span>' +
-            '<span class="k">Account</span><span class="v mono" data-k="account">Sim101</span>' +
             '<span class="k">Size</span><span class="v" data-k="size" title="ChartBridge\'s botRoot in config.txt; at most 1 contract (a rail)">-</span>' +
             '<span class="k">Status</span><span class="v" data-k="status">-</span>' +
             '<span class="k">Heartbeat</span><span class="v mono" data-k="beat">-</span>' +
+          '</div>' +
+          '<div class="bt-sec bt-acct-sec" data-no-motion>' +
+            '<div class="bt-kv"><span class="k">Account</span><span class="v"><span class="mono" data-k="account">Sim101</span> <span class="bt-acct" data-k="accountMark"></span></span></div>' +
+            '<div class="bt-rails-edit" data-k="acctEdit" hidden><label>Account <select class="ws-sel" data-k="acctSel" aria-label="The bot\'s account"></select></label>' +
+              '<button type="button" class="ws-btn primary" data-act="acctSave">Set</button><button type="button" class="ws-btn" data-act="acctCancel">Cancel</button></div>' +
+            '<div class="bt-acct-ask" data-k="acctAsk" role="alertdialog" aria-label="Trade a LIVE account" hidden><span data-k="acctAskText"></span>' +
+              '<button type="button" class="ws-btn bt-live-go" data-act="acctYes">Continue</button><button type="button" class="ws-btn" data-act="acctNo">Cancel</button></div>' +
+            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="acctOpen" data-k="acctOpen" title="The account the bot trades: Sim or LIVE, any account ChartBridge says is tradable; only while the bot is flat">Change account</button><span class="bt-why" data-k="acctWhy"></span></div>' +
           '</div>' +
           '<div class="bt-kv bt-money" data-no-motion>' +
             '<span class="k">Position</span><span class="v mono" data-k="pos">-</span>' +
@@ -213,6 +225,11 @@ function create(o) {
     if (!prev || prev.root !== m.root || prev.account !== m.account) renderTrips();
     if (S.on && prev) for (const n of BC.noticesFrom(prev, m, BC.fmtUsd, v => fmtPx(v))) { notice(n); log.add({ k: 'n:' + n.kind + ':' + Date.now(), kind: 'notice', text: n.text, level: n.level }); }
     if (prev && prev.mode !== m.mode) log.add({ k: 'mode:' + Date.now(), kind: 'mode', text: 'Mode: ' + (BC.MODE_NAME[m.mode] || m.mode) });
+    if (prev && prev.account !== m.account) {
+      const a = BC.botAccount(m), text = 'The bot now trades ' + a.name + (a.mark ? ' (' + a.mark + ')' : '');
+      log.add({ k: 'acct:' + Date.now(), kind: 'account', text, level: a.mark === 'LIVE' ? 'amber' : '' });
+      notice({ kind: 'account', level: a.mark === 'LIVE' ? 'amber' : '', text });
+    }
     if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses || prev.root !== m.root)) log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: ' + m.maxTrades + ' trades, ' + m.maxLosses + ' losing trades, ' + m.root });
     render();
   }
@@ -250,13 +267,23 @@ function create(o) {
     const stop = isNum(p.stopTicks) ? (px !== null ? fmtPx(px - dir * p.stopTicks * t, r) + ' (' + p.stopTicks + ' ticks)' : p.stopTicks + ' ticks') : 'none';
     const tgt = isNum(p.targetTicks) ? (px !== null ? fmtPx(px + dir * p.targetTicks * t, r) + ' (' + p.targetTicks + ' ticks)' : p.targetTicks + ' ticks') : 'none';
     const kc = k => (k ? ' <span class="bt-keycap">' + esc(k) + '</span>' : '');
-    return '<div class="bt-prop-h"><span class="bt-cap">Copilot · ' + esc((S.bot && S.bot.name) || 'Bot') + '</span><span class="mono bt-age" data-k="age"></span></div>' +
+    const acc = propAccount(p);
+    return '<div class="bt-prop-h"><span class="bt-cap">Copilot · ' + esc((S.bot && S.bot.name) || 'Bot') + ' ' + markHtml(acc.mark) + '</span><span class="mono bt-age" data-k="age"></span></div>' +
       '<div class="bt-prop-big mono"><span class="' + (p.side === 'buy' ? 'pos' : 'neg') + '">' + sideWord(p.side) + '</span> ' + esc(p.qty || 1) + ' ' + esc(r) + ' ' + esc(p.kind || '') + (px !== null ? ' ' + fmtPx(px, r) : '') + '</div>' +
       '<div class="bt-prop-why">' + esc(p.reason || '') + '</div>' +
       '<div class="bt-prop-legs mono">Stop ' + esc(stop) + ' · Target ' + esc(tgt) + '</div>' +
-      '<div class="bt-prop-note">' + esc(p.account || 'Sim101') + '. ChartBridge places it from these numbers if you accept. Unanswered, it is never sent: it ends as not answered when the bot withdraws it.</div>' +
+      '<div class="bt-prop-note"><b class="mono">' + esc(acc.name) + '</b> ' + markHtml(acc.mark) + '. ChartBridge places it on this account from these numbers if you accept. Unanswered, it is never sent: it ends as not answered when the bot withdraws it.</div>' +
       '<div class="bt-prop-btns"><button type="button" class="bt-acc" data-ans="accept">Accept' + kc(S.keys.accept) + '</button><button type="button" class="bt-rej" data-ans="reject">Reject' + kc(S.keys.reject) + '</button></div>' +
       '<div class="bt-prop-msg" data-k="msg" role="status"></div>';
+  }
+  /* the SIM or LIVE mark: a plain word, LIVE in the house red (bot.css .bt-acct.live), never animated */
+  const markHtml = m => (m ? '<span class="bt-acct ' + (m === 'LIVE' ? 'live' : 'sim') + '" data-no-motion>' + esc(m) + '</span>' : '');
+  /** a proposal's account and its mark: ChartBridge's own words on the proposal, else the bot's account */
+  function propAccount(p) {
+    const b = BC.botAccount(S.bot);
+    const name = p && typeof p.account === 'string' && p.account ? p.account : b.name;
+    const mark = p && typeof p.sim === 'boolean' ? BC.accountMark(p.sim) : name === b.name ? b.mark : '';
+    return { name, mark };
   }
   function showProposal(p) {
     if (propEls.has(p.id)) return;
@@ -288,7 +315,7 @@ function create(o) {
   function updateProposal(p) { const x = propEls.get(p.id); if (x) x.p = p; else showProposal(p); }
   function endProposal(p, why) {
     const x = propEls.get(p.id);
-    const text = why === 'accepted' ? 'Accepted: ChartBridge placed it on ' + (p.account || 'Sim101') + '.' : why === 'rejected' ? 'Rejected.' : 'Not answered: the bot withdrew it; nothing was sent.';
+    const text = why === 'accepted' ? 'Accepted: ChartBridge placed it on ' + propAccount(p).name + (propAccount(p).mark ? ' (' + propAccount(p).mark + ')' : '') + '.' : why === 'rejected' ? 'Rejected.' : 'Not answered: the bot withdrew it; nothing was sent.';
     if (!x) { if (why === 'not answered') notice({ kind: 'proposal', level: '', text: 'Copilot proposal ' + sideWord(p.side).toLowerCase() + ' ' + (p.root || '') + ': not answered' }); return; }
     // an expired proposal disappears and says "not answered" (Anthony, addendum 3); the others say how they ended
     x.el.classList.add('bt-ended');
@@ -327,6 +354,7 @@ function create(o) {
       const pe = propEls.get(x.id);
       if (pe && !pe.ended) { for (const b of pe.el.querySelectorAll('button')) b.disabled = false; put(pe.el.querySelector('[data-k="msg"]'), 'textContent', why); }
     } else if (x.kind === 'rails') { railsWhy(why); }
+    else if (x.kind === 'account') { acctWhy(why); }
     else if (x.kind === 'mode') { modeWhy(why); }
     else notice({ kind: 'refused', level: 'amber', text: why });
     log.add({ k: 'ref:' + m.cid, kind: 'notice', text: why, level: 'amber' });
@@ -367,7 +395,7 @@ function create(o) {
     const d = document.createElement('div');
     d.className = 'bt-note' + (n.level ? ' ' + n.level : '');
     d.setAttribute('role', n.level === 'red' ? 'alert' : 'status');
-    d.innerHTML = '<span class="bt-cap">' + esc({ signal: 'Signal', entry: 'Entry', exit: 'Exit', limit: 'Limit', standDown: 'Stand-down', heartbeat: 'Heartbeat', kill: 'Kill switch', proposal: 'Copilot', status: 'ChartBridge', refused: 'Refused' }[n.kind] || 'Bot') + '</span><span>' + esc(n.text) + '</span>';
+    d.innerHTML = '<span class="bt-cap">' + esc({ signal: 'Signal', entry: 'Entry', exit: 'Exit', limit: 'Limit', standDown: 'Stand-down', heartbeat: 'Heartbeat', kill: 'Kill switch', proposal: 'Copilot', status: 'ChartBridge', refused: 'Refused', account: 'Account' }[n.kind] || 'Bot') + '</span><span>' + esc(n.text) + '</span>';
     d.addEventListener('click', () => d.remove());
     notes.prepend(d);
     while (notes.children.length > 3) notes.lastChild.remove();
@@ -518,7 +546,7 @@ function create(o) {
     const bot = S.bot || {}, sigs = log.list().filter(e => e.kind === 'signal').length;
     return '<span class="k">In the slot</span><span class="v">Yes, in ' + esc(BC.MODE_NAME[bot.mode] || '-') + '</span>' +
       '<span class="k">Signals today</span><span class="v mono">' + sigs + '</span>' +
-      '<span class="k">Trades today</span><span class="v mono">' + (isNum(bot.trades) ? bot.trades : '-') + ' (Sim101)</span>' +
+      '<span class="k">Trades today</span><span class="v mono">' + (isNum(bot.trades) ? bot.trades : '-') + ' (' + esc(BC.botAccount(bot).name) + ')</span>' +
       '<span class="k">Result today</span><span class="v mono ' + (bot.pnlToday > 0 ? 'pos' : bot.pnlToday < 0 ? 'neg' : '') + '">' + esc(BC.fmtUsd(bot.pnlToday) || '-') + '</span>';
   }
   function condHtml(b) {
@@ -627,7 +655,8 @@ function create(o) {
   }
   function renderPanel() {
     if (!view || !S.on) return;
-    const b = S.bot || {}, e = loadedEntry(), allowed = BC.modesAllowed({ entry: e, simTradable: BC.simTradable(S.accounts, S.trading) });
+    const b = S.bot || {}, e = loadedEntry(), acc = BC.botAccount(b);
+    const allowed = BC.modesAllowed({ entry: e, tradable: BC.accountTradable(S.accounts, S.trading, acc.name), account: acc.name });
     const on = !!(b.enabled && b.connected);
     const oo = q('[data-k="onoff"]');
     put(oo, 'textContent', !b.enabled ? 'Off' : b.killed ? 'Killed' : b.connected ? 'On' : 'Lost');
@@ -639,14 +668,20 @@ function create(o) {
       const m = btn.dataset.mode, a = allowed[m];
       attr(btn, 'aria-pressed', String(b.mode === m));
       put(btn, 'disabled', !a.ok || !S.signedIn);
-      attr(btn, 'title', a.ok ? (m === 'auto' ? 'ChartBridge places the bot\'s signals on Sim101 by itself' : m === 'copilot' ? 'Each signal is a proposal: you accept or reject it' : 'Signals are shown and logged; no orders') : a.why);
+      attr(btn, 'title', a.ok ? (m === 'auto' ? 'ChartBridge places the bot\'s signals on ' + acc.name + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself' : m === 'copilot' ? 'Each signal is a proposal for ' + acc.name + ': you accept or reject it' : 'Signals are shown and logged; no orders') : a.why);
       put(btn, 'textContent', m === 'auto' && S.autoConfirm > Date.now() ? 'Confirm' : BC.MODE_NAME[m]);
     }
     const research = e && e.shelf === 'research';
     const why = q('[data-k="modeWhy"]');
     if (!why.dataset.refused) { put(why, 'hidden', !research); put(why, 'textContent', research ? 'A Research build runs in Shadow only.' : ''); }
     put(q('[data-k="name"]'), 'textContent', b.name || (b.enabled ? 'No bot program connected' : '-'));
-    put(q('[data-k="account"]'), 'textContent', b.account || 'Sim101');
+    put(q('[data-k="account"]'), 'textContent', acc.name);
+    for (const k of ['accountMark', 'modeAcct']) { const el = q('[data-k="' + k + '"]'); put(el, 'textContent', acc.mark); put(el, 'className', 'bt-acct' + (acc.mark === 'LIVE' ? ' live' : acc.mark ? ' sim' : '')); put(el, 'hidden', !acc.mark); }
+    attr(q('[data-k="modeAcct"]'), 'title', acc.mark ? 'The bot trades ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account' : ', a Sim account') : null);
+    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
+    put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
+    put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', 'The bot will trade LIVE account ' + S.acctAsk + '. Continue?');
     put(q('[data-k="size"]'), 'textContent', (b.root || botRoot()) + ' (' + (MICRO[b.root || botRoot()] || 'contract') + '), 1 contract');
     put(q('[data-k="status"]'), 'textContent', BC.statusText(b));
     const beat = q('[data-k="beat"]');
@@ -751,6 +786,18 @@ function create(o) {
   }
   function modeWhy(t) { const w = q('[data-k="modeWhy"]'); if (!w) return; w.dataset.refused = '1'; put(w, 'hidden', false); put(w, 'textContent', t); setTimeout(() => { delete w.dataset.refused; renderPanel(); }, 6000); }
   function railsWhy(t) { put(q('[data-k="railsWhy"]'), 'textContent', t); }
+  function acctWhy(t) { put(q('[data-k="acctWhy"]'), 'textContent', t); }
+  /** send the botAccount message (after the LIVE question, when it was one) */
+  function sendAccount(name) {
+    const r = BC.botAccountChange(S.bot, name, BC.accountChoices(S.accounts, S.bot), null);
+    if (r.error) { acctWhy(r.error); return; }
+    if (sendBot(r.msg, 'account')) {
+      S.acctEdit = false; S.acctAsk = '';
+      acctWhy('Sent. ChartBridge keeps it (bot-account.txt) until you change it again.');
+      log.add({ k: 'askacct:' + Date.now(), kind: 'account', text: 'Asked for the bot to trade ' + name + (r.live ? ' (LIVE)' : ' (SIM)') });
+    }
+    renderPanel();
+  }
   function onViewClick(e) {
     const t = e.target;
     const mode = t.closest('[data-mode]'), dt = t.closest('[data-dt]'), act = t.closest('[data-act]'), ent = t.closest('.bt-entry'), pt = t.closest('[data-ptab]'), op = t.closest('[data-opt]');
@@ -797,6 +844,22 @@ function create(o) {
       renderPanel();
       q('[data-k="railTIn"]').focus();
     } else if (a === 'railsCancel') { S.railsEdit = false; railsWhy(''); renderPanel(); }
+    else if (a === 'acctOpen') {
+      S.acctEdit = true; S.acctAsk = ''; acctWhy('');
+      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = BC.accountChoices(S.accounts, S.bot);
+      sel.replaceChildren(...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
+      sel.value = cur;
+      if (!list.some(c => !c.current)) acctWhy('No other account is tradable in ChartBridge now: check one on the Accounts tab.');
+      renderPanel();
+      sel.focus();
+    } else if (a === 'acctCancel' || a === 'acctNo') { S.acctEdit = false; S.acctAsk = ''; acctWhy(''); renderPanel(); }
+    else if (a === 'acctSave') {
+      const name = q('[data-k="acctSel"]').value;
+      const r = BC.botAccountChange(S.bot, name, BC.accountChoices(S.accounts, S.bot), null);
+      if (r.error) { acctWhy(r.error); return; }
+      if (r.live) { S.acctAsk = name; renderPanel(); const y = q('[data-act="acctYes"]'); if (y) y.focus(); return; }   // asked once, in the page
+      sendAccount(name);
+    } else if (a === 'acctYes') { if (S.acctAsk) sendAccount(S.acctAsk); }
     else if (a === 'railsSave') {
       const r = BC.railsChange(S.bot, { maxTrades: q('[data-k="railTIn"]').value, maxLosses: q('[data-k="railLIn"]').value, root: q('[data-k="railRoot"]').value });
       if (r.error) { railsWhy(r.error); return; }
@@ -892,7 +955,7 @@ function create(o) {
     const meter = r => '<span class="bt-smeter"><i class="' + (r.level === 'ok' ? '' : r.level) + '" style="width:' + (r.pct * 100).toFixed(1) + '%"></i></span>';
     const html = '<button type="button" class="bt-sline ' + m.level + ' st-' + m.state + '" data-act="strip" title="Open the Bot tab">' +
       '<span class="bt-dot' + (m.state === 'on' ? '' : m.state === 'off' ? ' off' : ' bad') + '"></span><span class="nm">' + esc(m.name) + '</span>' +
-      '<span class="bt-mode">' + esc(m.mode) + '</span><span class="mono">' + esc(m.position) + '</span>' +
+      '<span class="bt-mode">' + esc(m.mode) + '</span><span class="mono bt-sacct">' + esc(m.account) + '</span>' + markHtml(m.accountMark) + '<span class="mono">' + esc(m.position) + '</span>' +
       '<span class="mono ' + m.pnlTone + '">' + esc(m.pnl) + '</span><span class="bt-last">' + esc(m.last) + '</span>' +
       '<span class="lim ' + m.trades.level + '">Trades ' + meter(m.trades) + '<span class="mono">' + esc(m.trades.text) + '</span></span>' +
       '<span class="lim ' + m.losses.level + '">Losses ' + meter(m.losses) + '<span class="mono">' + esc(m.losses.text) + '</span></span>' +
