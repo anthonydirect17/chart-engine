@@ -201,6 +201,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly HashSet<Order> Settled = new HashSet<Order>();   // entries done and covered: the scan skips them
         private static readonly HashSet<Order> Ours = new HashSet<Order>();      // orders ChartBridge submitted, until done
         private static readonly Dictionary<Order, int> SeenFilled = new Dictionary<Order, int>();   // fills already booked in Moves
+        // 0.4.3: each order's filled count as it last came through OnOrderUpdate (NoteFill done), kept after the order is done
+        // (SeenFilled is not), so the copier can tell a fill NinjaTrader already shows on the order from one both position
+        // readings already include. Seeded when an account is first watched; cleared with the rest.
+        private static readonly Dictionary<Order, int> NotedFilled = new Dictionary<Order, int>();
         private static readonly object PlaceLock = new object();   // one order check and submit at a time
         private static int nextId;
 
@@ -276,7 +280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); LateSaid.Clear(); ExecSeq.Clear(); PosSeq.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -563,6 +567,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // 0.4.3: an account just watched: its orders' fills so far count as come through (they are in its position already).
+        public static void SeedNoted(Account a)
+        {
+            if (a == null) return;
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in orders) if (!NotedFilled.ContainsKey(o)) NotedFilled[o] = o.Filled;
+        }
+
         private static int EffectivePosition(Account a, Instrument i)
         {
             int moved = 0;
@@ -749,7 +762,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (strat != null) { string unsaved = SaveNewManaged(tag, order); if (unsaved != null) return unsaved; }   // 0.4.0 fix1 (F5): accepted only once its managed.txt line is written
             if (!bot) ChartBridgeCopier.LeaderEntryRegister(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is); review 2: registered before Submit, so a fill inside Submit is copied
             try { account.Submit(new[] { order }); }
-            catch (Exception) { if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied
+            catch (Exception) { lock (Sync) Ours.Remove(order); if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied; 0.4.3 review (4): never sent, so never "may still fill"
             placed = order;
             if (!bot) ChartBridgeCopier.LeaderEntrySent(order);   // 0.4.0 copier: orders mode places the followers' orders now (a rejected entry is dropped)
             ChartBridgeServer.Log((bot ? "bot " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
@@ -1019,6 +1032,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null || e.Order == null) return;
             Order o = e.Order;
             NoteFill(o);
+            lock (Sync) NotedFilled[o] = o.Filled;   // 0.4.3: this fill count has come through (the copier's close waits for it)
             string root = ChartBridgeServer.RootFor(o.Instrument);
             string role = RoleFor(o);
             string where = Where(account, o.Instrument);
@@ -1558,6 +1572,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null || e.Position == null) return;
             Instrument inst = e.Position.Instrument;
             Booked(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);
+            CopierSawPosition(account, inst);   // 0.4.3 third review: a late fill is booked once NinjaTrader's position updates after it
             MergeSawPosition(account, inst);   // 0.4.0 B4: the position is changing (Merge waits 2 s)
             string root = ChartBridgeServer.RootFor(inst);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: each page its scope

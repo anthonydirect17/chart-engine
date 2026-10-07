@@ -1857,7 +1857,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.4.2";
+        public const string Version = "0.4.3";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -4760,6 +4760,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log("watching fills on account " + a.Name);
                 }
             }
+            foreach (Account a in added) ChartBridgeOrders.SeedNoted(a);   // 0.4.3: fills from before the watch are in its position already (outside the Watched lock: review 10)
             // Fills that happened before this account was watched (earlier this session) go to The Desk too;
             // The Desk ignores ones it already has.
             int n = 0;
@@ -4769,6 +4770,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Order code calls this before trading an account: an account that just connected may not be watched yet,
         // and an unwatched account's fills and order updates would never reach the page.
+        // 0.4.3: watched already (no watch attempt): the copier's every-second order look skips the rest
+        public static bool IsWatched(Account a) { if (a == null) return false; lock (Watched) return Watched.Contains(a); }
+
         public static bool EnsureWatched(Account a)
         {
             if (a == null) return false;

@@ -1,5 +1,59 @@
 # Changelog
 
+## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
+
+Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of 2026-10-07 15:01 ET:
+
+- **The copier closed a follower into the other side (short 1).** Sim101 (leader) and Sim102 (follower) each held 5 with
+  stops at the same price. The market hit both: Sim102's own stop sold 1, and in the same instant the copier called
+  NinjaTrader's Flatten, which closed the 5 Sim102 still showed. The copier now **never uses NinjaTrader's Flatten** on a
+  follower. It cancels every order there that may still fill, waits until NinjaTrader confirms each one cancelled or filled,
+  until every fill there has come through ChartBridge's order events, and until both position readings agree, then closes
+  only what the follower still holds, at market. Not confirmed in 3 s: nothing is sent, an alarm, and the missed-exit check
+  tries again. A scale-out's reduce waits for the same fills. ChartBridge keeps each order's last filled count from its order
+  events (seeded when an account is first watched) to know when a fill has come through.
+- **A fixed quantity per follower** (Anthony: "I thought we were going with an absolute number"; the old copier moved from a
+  multiplier to a fixed quantity in August). A follower's Qty is what it trades for each leader entry, whatever the leader's
+  size; a leader add copies it again; a scale-out leaves it the same share, rounded to the nearest contract with no
+  minimum cut (Anthony 2026-10-07: under a leader of 5 scaling out one at a time, Qty 3 holds 3, 2, 2, 1, 1 and Qty 1 keeps
+  its 1 until the leader is flat; "at least 1" had taken a small follower out early). 0.4.0 to 0.4.2 multiplied it by the leader's
+  contracts (Sim102 at Qty 1 took 5).
+- **No leader.** `copierSet` with `"leader": null` clears the leader and stands the copier down. 0.4.2 had no way to clear
+  it, so the page's "none" did nothing and the bot could not trade the old leader's account. The page's Leader dropdown
+  sends it with the single Account page release; until then pick another account for the bot.
+- **From the independent review** (no blocker; the race is closed and its test guards it): when a close does not go out
+  (NinjaTrader slow to confirm, a disconnect, readings on opposite sides), the follower's stops are already cancelled, so
+  the close is now **owed** and tried again every 4 s whatever the leader does, until it goes out or the follower is flat;
+  a leader entry meanwhile skips that follower ("closing"); a scale-out reduce never replaces a close; the leader cannot be
+  cleared while a close is owed. A fill NinjaTrader shows whose order event never comes stops blocking closes after 10 s
+  (a warning); one that lands in the moment between the last check and the close also stops it (the close waits, or stays
+  owed). A copier order whose Submit throws leaves the just-sent list. After a restart, a follower holding a copied
+  position with no working stop and no record raises one alarm. The account seeding runs outside the watch lock.
+- **From the second independent review** (no blocker; four should-fix, all fixed): a close stays owed until the follower is
+  flat by both readings with every fill through, not just until it is sent, so a close that is rejected, cancelled or part
+  filled is tried again; while a close may still fill, no second one starts. The close reads what may still fill and the
+  fills not yet through both before and after it reads the position, and sends nothing if anything changed. A fill whose
+  order event never comes no longer counts as booked after 10 s: its contracts are taken off the close (and a reduce), so
+  the copier can only close too little, never too much, and an alarm says so. A follower owed a close that now holds the
+  other side is left to the user after 10 s (one alarm). Clearing or changing the leader is blocked only while a close is
+  running (3 s at most). One refused order no longer stops the rest of that second's work. An owed copy record is never
+  replaced.
+- **From the third independent review** (no blocker; three should-fix, all fixed): a fill whose order event never comes is
+  taken off a close only until NinjaTrader's position there updates after it (then it is booked), so it is never taken off a
+  later trade's close; the copier looks at every follower's orders each second, so a lost event is known at once. A close
+  that neither fills nor ends in 10 s raises one alarm, is cancelled, and the close goes again once NinjaTrader confirms;
+  the owed close is never cleared beside a live close. Fourth review: a late fill is booked only once its executions add
+  up to its filled count and a position update came after them (a position update alone is not enough); a stuck close's
+  cancel is tried each second until it goes out, with one alarm per close. One refused order during a leader exit no longer stops the other
+  followers' exits.
+- ChartBridge only; the page is unchanged (each PC keeps its page rollback to 1.15.0). Page wording left for the Account
+  page release: the Qty dropdown's hidden label and its error text still say "per leader contract".
+- Tests: the copier harness reproduces WORK's short 1 first (it fails on 0.4.2: Flatten called; a Qty 3 follower adds 6),
+  then checks the close waits for every confirmation, fill and position update, never sends more than either reading shows,
+  a part-filled stop, a late copy fill during the close, and a fixed quantity over two fills and an add. Every older copier
+  check is updated from "NinjaTrader's Flatten" to the close; the stand-in bridge copies a fixed quantity and takes a null
+  leader.
+
 ## ChartBridge 0.4.2 (2026-10-07): ChartBridge never clears a checkmark
 
 - Anthony, after seeing NinjaTrader's trailing drawdown drift on a prop account past its drawdown lock: "I will manage the

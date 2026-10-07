@@ -642,13 +642,18 @@ export class OrderDeskV3 extends OrderDesk {
   check_copierSet(m) {
     if (m.leader === undefined && m.mode === undefined) return 'copierSet needs leader or mode.';
     if (m.mode !== undefined && m.mode !== 'executions' && m.mode !== 'orders') return 'mode must be executions or orders.';
-    if (m.leader !== undefined && !this.watched(m.leader)) return 'No account ' + m.leader + '.';
-    if (m.leader !== undefined && this.copier.followers.has(m.leader)) return m.leader + ' is a follower; the leader cannot be one.';
+    if (m.leader !== undefined && m.leader !== null && !this.watched(m.leader)) return 'No account ' + m.leader + '.';   // 0.4.3: null is no leader
+    if (m.leader !== undefined && m.leader !== null && this.copier.followers.has(m.leader)) return m.leader + ' is a follower; the leader cannot be one.';
     const L = this.copier.leader;
     if (L && [...this.positions].some(([k, p]) => k.startsWith(L + '|') && p.qty)) return 'The copier cannot change while the leader ' + L + ' has a position.';
     return null;
   }
-  do_copierSet(m) { if (m.leader !== undefined) this.copier.leader = m.leader; if (m.mode !== undefined) this.copier.mode = m.mode; this.broadcastV3(this.copierMsg()); }
+  do_copierSet(m) {
+    if (m.leader !== undefined) this.copier.leader = m.leader;
+    if (m.leader === null) { this.copier.armed = false; this.copier.standDownWhy = 'No leader is set.'; }   // 0.4.3: no leader: stood down
+    if (m.mode !== undefined) this.copier.mode = m.mode;
+    this.broadcastV3(this.copierMsg());
+  }
   check_copierFollower(m) {
     for (const k of ['account', 'on', 'qty', 'size', 'lossLimit']) if (m[k] === undefined) return 'copierFollower needs ' + k + '.';
     const a = this.acct.get(m.account);
@@ -695,7 +700,11 @@ export class OrderDeskV3 extends OrderDesk {
       if (!c.armed) { this.copierEvent({ action: 'skip', root: o.root, text: 'the copier is stood down: entry not copied' }); return; }
       for (const f of c.followers.values()) {
         if (!f.on) continue;
-        const a = this.acct.get(f.account), root = this.followerRoot(o.root, f.size), fq = f.qty * qty;
+        // 0.4.3 (Anthony 2026-10-07): a fixed quantity, once per leader entry, on its first fill (never per leader contract)
+        o.copiedTo = o.copiedTo || new Set();
+        if (o.copiedTo.has(f.account)) continue;
+        o.copiedTo.add(f.account);
+        const a = this.acct.get(f.account), root = this.followerRoot(o.root, f.size), fq = f.qty;
         f.root = root;
         let why = !a ? 'not connected' : this.sw.bot && f.account === this.botAccount ? 'bot account' : !this.connected(f.account) ? 'not connected' : a.state !== 'active' ? 'gone' : !this.accounts.includes(f.account) ? 'not checked for trading'
           : f.lossLimit !== null && this.pnl(f.account).today <= -f.lossLimit ? 'loss limit' : this.exposure(f.account, root, o.side, fq) > this.capFor(root) ? 'position limit' : null;
@@ -715,8 +724,11 @@ export class OrderDeskV3 extends OrderDesk {
         const root = f.root || this.followerRoot(o.root, f.size), p = this.pos(f.account, root);
         if (!p.qty) continue;                             // a flat follower gets nothing
         if (now === 0) { this.followerFlatten(f, root, 'the leader is flat'); continue; }
-        const red = Math.min(Math.abs(p.qty), Math.max(1, Math.round(Math.abs(p.qty) * (Math.abs(was) - Math.abs(now)) / Math.abs(was))));
-        if (red >= Math.abs(p.qty)) { this.followerFlatten(f, root, 'the leader scaled out'); continue; }
+        // 0.4.3 (Anthony 2026-10-07): the same share, nearest contract (half up), no minimum cut
+        const keep = Math.min(Math.abs(p.qty), Math.round(Math.abs(p.qty) * Math.abs(now) / Math.abs(was)));
+        const red = Math.abs(p.qty) - keep;
+        if (red <= 0) continue;                           // less than half a contract of its share: it keeps what it holds
+        if (keep <= 0) { this.followerFlatten(f, root, 'the leader scaled out'); continue; }
         const xo = this.newOrder({ cid: null, account: f.account, root, side: p.qty > 0 ? 'sell' : 'buy', kind: 'market', qty: red, price: null, role: 'other', by: 'copier', copier: true });
         this.emitOrder(xo); this.matchOne(xo, this.last[root], true);
         for (const s of this.orders.values()) if (isWorking(s) && s.copier && s.role === 'stop' && s.account === f.account && s.root === root && s.qty - s.filled > Math.abs(this.pos(f.account, root).qty)) { s.qty = s.filled + Math.abs(this.pos(f.account, root).qty); this.emitOrder(s); }

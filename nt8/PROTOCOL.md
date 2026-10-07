@@ -1749,8 +1749,8 @@ Where the text above leaves a detail open, the build does this. Each is **(lead'
   its own gates (the account Connected and allowed, the root served), and in one step with the flatten call, under the swap's
   send lock, so nothing the swap sends can follow it. A Flatten that is refused (a reject) leaves the swap alone: it goes on, or
   restores, exactly as without it, and its answer never mentions Flatten. If the flatten call itself throws, the swap is let go
-  again and restores. The bot's Flatten goes through the same Flatten; the copier's own "flatten this follower" calls
-  NinjaTrader directly (`ChartBridgeCopier.cs`) and does not end a swap.
+  again and restores. The bot's Flatten goes through the same Flatten; the copier's own "flatten this follower" (0.4.3: its
+  cancel-confirm-close, never NinjaTrader's Flatten) is in `ChartBridgeCopier.cs` and does not end a swap.
 - **The answer** (`merge`) goes to the page that sent the merge, until a v3 `client` flag exists to send it to every v3 page.
 - **After a multi-target merge** (upkeep, even with trading off): a merged target fill shrinks the merged stop by those contracts
   (from the size last asked for, so two fills in a row never leave it larger); a part fill of the merged stop trims the targets
@@ -1793,22 +1793,42 @@ in NinjaTrader, the phone or the bot). **Exits on the leader are always copied, 
 the broker, the phone, NinjaTrader, Flatten. While the copier is armed with a follower on, a leader entry with no stop
 (no bracket stop, no strategy) is refused ("the copier needs a stop on every leader entry") (lead's default).
 
-**Followers**, saved per account: `on`, `qty` (1 to 9, contracts per leader contract), `size` (`micro` or `mini`: the
-leader's NQ or MNQ maps to MNQ or NQ, ES or MES to MES or ES). So a leader at 1 NQ with a follower at 3 `micro` gives that
-follower 3 MNQ.
+**Followers**, saved per account: `on`, `qty` (1 to 9: a **fixed quantity**, 0.4.3), `size` (`micro` or `mini`: the
+leader's NQ or MNQ maps to MNQ or NQ, ES or MES to MES or ES). So a follower at 3 `micro` gets 3 MNQ for each leader entry,
+whether the leader buys 1 NQ or 5 MNQ. (0.4.0 to 0.4.2 copied `qty` per leader contract, the multiplier Anthony had moved
+away from in August; on WORK 2026-10-07 a qty 1 follower took 5. Anthony 2026-10-07: fixed; an add on the leader copies the
+follower's `qty` again; a scale-out reduces it by the same share.)
 
-- **Executions mode** (`mode` `executions`): on each leader fill increment, every follower gets a **market** order for
-  `qty` per leader contract filled; followers always enter (no price check). Slippage per follower (its fill minus the
+- **Executions mode** (`mode` `executions`): on the first fill of each leader entry (from flat, or an add), every follower
+  gets a **market** order for its `qty`, once; a later fill of the same entry copies nothing more. Followers always enter
+  (no price check). Slippage per follower (its fill minus the
   leader's, in ticks of the follower's root, signed so worse is positive) is logged and shown. The moment it fills, the
   follower gets its own protective stop at the broker at the **same price** as the leader's stop for that increment (the
   stop-already-traded rule applies: a market exit). When the leader's stop moves (a drag, breakeven, trailing, a merge),
   each follower stop mapped to it moves to the same price.
 - **Orders mode** (`mode` `orders`): every leader entry order is placed for each follower as a real order (same kind and
-  prices, its own quantity); moved and cancelled with the leader's; on its fill the follower gets its stop as above.
-- **Never cross zero.** A follower exit is always "flatten this account" on that root (its own stop and targets cancelled
-  first, then the rest closed at market), never an opposite order sized from the leader. A leader scale-out (a partial
-  exit) reduces each follower by the same share, rounded to the nearest contract, at least 1, capped at what it holds; the
-  leader flat means every follower flat. A flat follower gets nothing.
+  prices, its fixed `qty`); moved and cancelled with the leader's; on its fill the follower gets its stop as above.
+- **Never cross zero.** A follower exit is always "close this account" on that root, never an opposite order sized from
+  the leader, and **never NinjaTrader's Flatten** (0.4.3: on WORK 2026-10-07 the follower's own stop, at the leader's stop
+  price, sold 1 of 5 in the same instant as Flatten closed the 5 it still showed: short 1). Every order on that contract that
+  may still fill is cancelled first; once NinjaTrader confirms each one cancelled or filled, every fill there has come
+  through ChartBridge's order events (so both position readings can include it), and both readings agree, what it still
+  holds is closed at market. Not confirmed within 3 s: nothing is sent, a `status` `error`, and the close is owed: it is tried
+  again every 4 s, whatever the leader does, until it goes out or the follower is flat (its stops are already cancelled), and
+  no new copy goes to that follower contract meanwhile (skipped "closing"); readings still apart at 3 s: the smaller is closed
+  (never more than either shows). The close stays owed until the follower is flat by both readings with every fill there
+  through (a close rejected, cancelled or part filled is tried again; while one may still fill, no other starts). What may
+  still fill and the fills not yet through are read before the position and again after; anything new sends nothing. A
+  fill NinjaTrader shows whose order event never comes stops blocking after 10 s (one `status` `error`), but its contracts
+  are taken off any close or reduce there until its event comes, or its executions are all in and a position update came after them (never more
+  than the position less that fill); every follower's orders are looked at each second. A close that neither fills nor ends
+  in 10 s: one `status` `error`, it is cancelled, and the close goes again once NinjaTrader confirms. Owed while
+  it holds the other side for 10 s: one `status` `error`, and it is left to the user. A copier order NinjaTrader refuses is
+  an `error`; the rest of the copier's work goes on, and an owed close is tried again. After a restart, a follower holding a position with a filled copier entry there, no working stop on its
+  closing side and no copier record gets one `status` `error`. (0.4.3, from the independent review.) A leader scale-out (a partial
+  exit) leaves each follower the same share of what the copier gave it, rounded to the nearest contract (half up), with no
+  minimum cut (0.4.3, Anthony 2026-10-07: a Qty 3 follower under a leader of 5 holds 3, 2, 2, 1, 1 as the leader scales out
+  one at a time, and a Qty 1 follower keeps its 1 until the leader is flat); the leader flat means every follower flat. A flat follower gets nothing.
 - **The sweep**: every second, any working order the copier placed on a follower with no position on that root is
   cancelled, unless it is an orders-mode entry whose leader entry is still working.
 - **Skipped** (never partly): a follower at its position limit (gate 3 on its root) is skipped for that entry and
@@ -1828,7 +1848,7 @@ follower 3 MNQ.
 | page to server | fields (no others) | notes |
 |---|---|---|
 | `copierGet` | `cid` (optional) | answer: `copier` |
-| `copierSet` | `cid` (optional), `leader` (an account name), `mode` (`executions` or `orders`) | at least one of the two; refused while the leader has a position or working entry |
+| `copierSet` | `cid` (optional), `leader` (an account name, or `null` for none, 0.4.3), `mode` (`executions` or `orders`) | at least one of the two; refused while the leader has a position or working entry. `null`: no leader, the copier stands down ("No leader is set.") and copies nothing until a leader is set and Re-arm is pressed |
 | `copierFollower` | `cid` (optional), `account`, `on` (*bool*), `qty` (1 to 9), `size` (`micro` or `mini`), `lossLimit` (whole dollars, 1 or more, or `null` for off) | all keys required; saved at once; the leader cannot be a follower |
 | `copierRearm` | `cid` (optional) | refused while the leader is not Connected or 3 or more followers are not |
 
@@ -1871,8 +1891,8 @@ The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) ru
   18:00 ET session, even if its P&L comes back (lead's default).
 - **Exits.** The leader's exits are read from its position updates (NinjaTrader's own position), acting only on a leader
   connection that has been Connected for 30 s (v2's steady rule; lead's default). Flat, or turned to the other side in one
-  update: every follower copy on the old side gets NinjaTrader's Flatten on its contract. A scale-out: the share is taken of
-  the contracts the copier gave that follower, rounded half away from zero, at least 1, so a follower whose own stop already
+  update: every follower copy on the old side is closed on its contract (the close above, 0.4.3). A scale-out: the share is taken of
+  the contracts the copier gave that follower, rounded half away from zero, no minimum cut (0.4.3), so a follower whose own stop already
   took some is not reduced twice (lead's default). The follower's stops are shrunk to the new size first (stops whose leader
   stop is gone first, then the newest), and the market reduce, sized from the follower's position read again, is sent only
   once NinjaTrader shows the stops shrunk or cancelled; not confirmed within 3 s: no reduce at all, and a `status` `error`.
@@ -1910,10 +1930,10 @@ fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `Integration
 - **A late fill after the copier flattened a follower** (finding 1). When the copier flattens a follower, every copier
   entry there that could still fill is marked. A fill of a marked entry (its order event late) is never protected as a new
   position: no market exit, no lone stop. If the leader is flat (both readings) it is "flatten this follower": the copier's
-  own working orders there are cancelled first, then NinjaTrader's Flatten closes what it holds, only when it holds something
-  by both readings; when it holds nothing, nothing else is sent and the missed exit check (4 s) flattens it if a position
-  shows later. If the leader is not flat, what it holds gets a stop sized as below. Always a `status` `error` and a log line.
-  Fills that waited for a stop on that follower get none once it is flattened (NinjaTrader's Flatten closes them).
+  own working orders there are cancelled first, then the close (above) takes what it holds, only when it holds something
+  by both readings (a close already under way takes it; 0.4.3); when it holds nothing, nothing else is sent and the missed
+  exit check (4 s) closes it if a position shows later. If the leader is not flat, what it holds gets a stop sized as below.
+  Always a `status` `error` and a log line. Fills that waited for a stop on that follower get none once it is closed.
 - **Every protective stop or exit is sized to what the follower holds** (finding 1, changed by review 3): it goes AT ONCE,
   on the fill's own event, sized to the fill capped by the LARGER of the follower's two position readings on the copy's side
   (the fill's position update is usually still on its way) minus the copier's stops and exits that may still fill there.
@@ -1931,15 +1951,15 @@ fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `Integration
   forgets a fill after 10 s; a copy fill still not booked then holds the trim on that contract, with one `status` `warn`
   ("a copied fill's position update has not come in 10 s; its copier stops are not shrunk until NinjaTrader updates the
   position"), until a fresh position update arrives for it. Fills are marked as copy fills when NinjaTrader reports them.
-- **A fill handled while the copier's Flatten runs** (review 3): each follower contract keeps a count of the copier's
-  flattens, raised before NinjaTrader's Flatten is sent. A fill is recorded with the count of its moment; if the count moved
-  before its stop is placed, the fill is late (as above), so no stop or exit is sent after the Flatten. A copier stop or
+- **A fill handled while the copier's close runs** (review 3): each follower contract keeps a count of the copier's
+  closes, raised before the close's cancels are sent. A fill is recorded with the count of its moment; if the count moved
+  before its stop is placed, the fill is late (as above), so no stop or exit is sent after the close starts. A copier stop or
   exit whose cancel is still pending counts as cover (it may still fill), for the stop size and for the reduce.
 - **A scale-out reduces only the copier's own share** (finding 2): the share is of the contracts the copier gave that
   follower, and the reduce is never more than the copier still holds there above its new size, and never so much that the
   stops left working on that side (the copier's, shrunk first, and the follower's own) would exceed the position. A
   follower's own contracts and its own stops are never touched. When the copier's whole share closes while the follower
-  also holds its own contracts, it is a reduce of the share (its copier stops cancelled first), not NinjaTrader's Flatten.
+  also holds its own contracts, it is a reduce of the share (its copier stops cancelled first), not a close of everything.
   A copier with no share there sends nothing. After a restart the share is what the recovered copier stops cover.
 - **The bot's account and the copier** (finding 3; since 2026-10-07 the bot's account is the one Anthony chose, Sim101 by
   default): while the bot is on, the bot's account cannot be turned on as a copier follower ("Sim101 is the bot's account: it
