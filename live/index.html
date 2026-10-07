@@ -9,6 +9,9 @@
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
 <link rel="stylesheet" href="workspace.css">
+<!-- 1.16.0: the motion kit (the Bot tab and its Library only, docs/MOTION.md) and the Bot tab (live/bot.js) -->
+<link rel="stylesheet" href="motion.css">
+<link rel="stylesheet" href="bot.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -34,11 +37,16 @@
   <span class="chart-live ws-lv ws-colors" id="wsColors"></span>
   <!-- the laptop preset's two layout tabs (1.16.0), shown when it is on in this browser -->
   <span class="ws-tabs" id="wsTabs" role="tablist" aria-label="Layouts" hidden></span>
+  <!-- the Bot tab (1.16.0, live/bot.js): shown with a ChartBridge that speaks protocol v3; it works only when ChartBridge's bot switch is on -->
+  <button type="button" class="ws-btn bt-tabbtn" id="wsBotTab" aria-pressed="false" hidden>Bot</button>
   <label class="ws-lbl" for="wsLayout">Layout</label>
   <select class="ws-sel" id="wsLayout"></select>
   <button type="button" class="ws-btn add" id="wsAdd" aria-haspopup="menu" aria-expanded="false" aria-controls="wsAddMenu">+ Add panel</button>
   <button type="button" class="ws-btn ws-gear" id="wsSet" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="wsSettings">⚙</button>
 </header>
+
+<!-- the bot strip (1.16.0): one thin line per bot, on the Main tab only; a click opens the Bot tab -->
+<div class="bt-strip" id="btStrip" hidden></div>
 
 <!-- ChartBridge's errors about orders (a bracket leg rejected: check the stop now), and orders or Flattens that were not
      sent: they stay until dismissed -->
@@ -50,6 +58,8 @@
 <main class="ws-grid" id="wsGrid" aria-label="Workspace panels">
   <div class="ws-ghost" id="wsGhost" hidden></div>
 </main>
+<!-- the Bot tab's own layout: Library, its chart, the bot panel (live/bot.js builds it) -->
+<section class="bt-view bt-in-ws" id="btView" aria-label="Bot tab"></section>
 
 <div class="ws-pop ws-menu" id="wsAddMenu" role="menu" aria-label="Add panel" hidden>
   <button type="button" role="menuitem" data-add="chart">Chart</button>
@@ -65,6 +75,8 @@
 <!-- 1.15.0: the drawing tools moved to the ring (middle-click a chart: Trend line, Price line, Clear this chart, Zone) -->
 <div class="ws-pop ws-menu" id="wsMore" role="menu" aria-label="View" hidden>
   <button type="button" role="menuitem" data-do="reset">Reset view</button>
+  <!-- 1.16.0: the bot's trades, faint, on this chart (off by default; shown when ChartBridge's bot switch is on) -->
+  <button type="button" role="menuitem" data-do="ghost" hidden>Bot trades: off</button>
   <p class="ws-menu-note">Drawing tools: middle-click the chart.</p>
 </div>
 
@@ -91,6 +103,8 @@
       <span class="ws-seg" id="wsGridLines" role="group" aria-labelledby="wsGridLinesLbl"><button type="button" data-v="off">Off</button><button type="button" data-v="on">On</button></span></div>
     <div class="ws-field"><span class="ws-flabel" id="wsRoomLbl" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>
       <span class="ws-seg" id="wsRoom" role="group" aria-labelledby="wsRoomLbl"><button type="button" data-v="80">80 px</button><button type="button" data-v="120">120 px</button><button type="button" data-v="160">160 px</button></span></div>
+    <div class="ws-field"><span class="ws-flabel" id="wsMotionLbl" title="The Bot tab and its Library. Less shows every scene in its final state. Charts, orders, the kill switch and P&amp;L never move either way.">Motion</span>
+      <span class="ws-seg" id="wsMotion" role="group" aria-labelledby="wsMotionLbl"><button type="button" data-v="full">Full</button><button type="button" data-v="less">Less</button></span></div>
     <div class="ws-field"><label class="ws-flabel" for="wsAtr" title="The ATR in every chart's corner readout: NinjaTrader's ATR of this many closed bars">ATR period</label>
       <input class="ws-num" id="wsAtr" type="number" min="2" max="100" step="1" inputmode="numeric" aria-label="ATR period, bars"></div>
   </section>
@@ -141,6 +155,10 @@
 <script src="feed.js"></script>
 <!-- one order ticket across this browser's windows (BroadcastChannel and the Web Locks API, 1.12.0) -->
 <script src="ticket-link.js"></script>
+<!-- 1.16.0: the motion kit, then the Bot tab's logic and page (before workspace.js, which creates the Bot tab) -->
+<script src="motion.js"></script>
+<script src="bot-core.js"></script>
+<script src="bot.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

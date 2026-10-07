@@ -1264,6 +1264,7 @@ function viewChanged(v, nv) {
   if (nv.tf === 'range') p.range = nv.range; else delete p.range;
   headChart(v); save();
   if (v.pane) v.pane.setTrade(chartTrade(v));
+  if (botDesk) botDesk.chartsChanged();                     // 1.16.0: ghost marks follow the chart's instrument
 }
 /* The first chart of a new default layout starts with the single chart page's indicators (its main pane's defaults);
    any other new pane starts with none (Anthony's rule for new panes). */
@@ -1282,6 +1283,7 @@ function closePanel(id) {
   v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); views.delete(id);
   panels = panels.filter(p => p.id !== id);
   save(); syncConn(); placeColors(); syncAddMenu();
+  if (botDesk) botDesk.chartsChanged();
 }
 
 function addPanel(type) {
@@ -1297,7 +1299,7 @@ function addPanel(type) {
   addView(p);
   save(); syncConn(); placeColors(); syncAddMenu();
   if (type === 'ticket') takeTicket(ok => { if (!ok && views.has(p.id) && !holds()) closePanel(p.id); });
-  else if (type === 'chart') renderCharts();
+  else if (type === 'chart') { renderCharts(); if (botDesk) botDesk.chartsChanged(); }
 }
 
 /* ---------------- drag and resize: the ghost shows the snapped cells; a place that overlaps is refused */
@@ -1866,12 +1868,20 @@ $('wsView').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target
 
 /* A chart's small menu: Reset view (1.15.0: the drawing tools moved to the ring, a middle-click on the chart). */
 function openMore(v, anchor) {
-  toggle($('wsMore'), anchor, () => { $('wsMore').dataset.id = v.panel.id; openPop($('wsMore'), anchor); });
+  toggle($('wsMore'), anchor, () => {
+    $('wsMore').dataset.id = v.panel.id;
+    // 1.16.0: the bot's trades, faint, on this chart (live/bot.js); only while ChartBridge's bot switch is on
+    const g = $('wsMore').querySelector('[data-do="ghost"]');
+    g.hidden = !(botDesk && botDesk.ghostOffered());
+    if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
+    openPop($('wsMore'), anchor);
+  });
 }
 $('wsMore').addEventListener('click', e => {
   const b = e.target.closest('button'), v = views.get($('wsMore').dataset.id);
   if (!b || !v || !v.pane) return;
   if (b.dataset.do === 'reset') v.pane.chart.reset();
+  else if (b.dataset.do === 'ghost' && botDesk) botDesk.setGhost(v.panel.id, !botDesk.ghostOn(v.panel.id));
   closePops();
 });
 
@@ -1994,7 +2004,13 @@ function renderGeneral() {
   for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === room));
   if (document.activeElement !== $('wsAtr')) $('wsAtr').value = s.atr;
   $('wsRangeMode').value = s.rangeMode;
+  const less = !!(window.ChartMotion && window.ChartMotion.reduced());   // 1.16.0: Less motion (the motion kit's own setting)
+  for (const b of $('wsMotion').children) b.setAttribute('aria-pressed', String((b.dataset.v === 'less') === less));
 }
+$('wsMotion').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b || !window.ChartMotion) return;
+  window.ChartMotion.setReducedMotion(b.dataset.v === 'less'); renderGeneral();
+});
 /* 1.14.0: grid lines (off by default) and the room right of price, for every chart and the single chart page */
 $('wsGridLines').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
@@ -2158,7 +2174,9 @@ function syncLaptop() {
   $('wsLaptop').textContent = on ? 'Laptop tabs: on (turn off)' : 'Laptop: two blank tabs, Main and Second';
 }
 $('wsTabs').addEventListener('click', e => {
-  const b = e.target.closest('[data-tab]'); if (!b || b.dataset.tab === layout) return;
+  const b = e.target.closest('[data-tab]');
+  if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
+  if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
 $('wsLaptop').addEventListener('click', () => {
@@ -2279,6 +2297,7 @@ function openLayout(name) {
   setUrl(); syncSelect(); syncConn(); placeColors(); syncAddMenu();
   if (holds() && !panels.some(p => p.type === 'ticket')) releaseTicket();   // a layout without the ticket lets it go
   renderOrders();
+  if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
 }
 
 /* Another window or the single chart page changed something this page uses. Its open layouts stay its own. */
@@ -2304,9 +2323,31 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   feed: () => hub.stats(),
   /* 1.12.0: the ticket as this window knows it, and a chart's engine (read it; orders still go through the checks) */
   ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
-  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; } };
+  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; },
+  /* 1.16.0: the Bot tab (read it; its actions go through ChartBridge's checks) */
+  bot: () => (botDesk ? botDesk.state() : null) };
 
-const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake(); };
+/* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on a connection of their own; everything bot shows
+   only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */
+let botDesk = null;
+function startBot() {
+  if (!window.BotDesk) return;
+  botDesk = window.BotDesk.create({ wsUrl, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK,
+    charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
+    onTab: on => {
+      document.body.classList.toggle('bt-on', on);
+      if (on) { closePops(); restoreMax(); }
+      const u = new URL(location.href);
+      if (on) u.searchParams.set('tab', 'bot'); else u.searchParams.delete('tab');
+      history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
+    } });
+}
+const start = () => {
+  startBot();
+  openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
+  if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
+};
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
    window that finds another holding it never asks, it shows "Ticket is in the other window". */

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bot</title>
+<!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
+<link rel="stylesheet" href="fonts/plex.css">
+<link rel="stylesheet" href="live.css">
+<link rel="stylesheet" href="pin.css">
+<link rel="stylesheet" href="workspace.css">
+<link rel="stylesheet" href="motion.css">
+<link rel="stylesheet" href="bot.css">
+</head>
+<body>
+<!-- The Bot tab in its own window (1.16.0): the Bot tab's Pop out, or http://localhost:8765/bot.html, for a third monitor.
+     The same Library, chart and bot panel as the workspace's Bot tab, on a connection of its own; copilot proposals pop up
+     here too. Shown only when ChartBridge's bot switch is on. -->
+<header class="ws-top">
+  <span class="ws-title">BOT</span>
+  <span class="ws-clock"><span id="btClock">--:--:--</span> <span class="ws-et">ET</span></span>
+  <span class="ws-fill"></span>
+  <span class="ws-note">ChartBridge places every bot order inside its rails. This window takes no orders of its own.</span>
+</header>
+<section class="bt-view" id="btView" aria-label="Bot"></section>
+
+<script src="../src/chart-engine.js"></script>
+<script src="bar-builder.js"></script>
+<script src="order-ticket.js"></script>
+<script src="pin.js"></script>
+<script src="live.js"></script>
+<script src="feed.js"></script>
+<script src="motion.js"></script>
+<script src="bot-core.js"></script>
+<script src="bot.js"></script>
+<script>
+(function () {
+  'use strict';
+  const PIN = window.ChartBridgePin || null;
+  const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+  const store = { getItem: k => { try { return LS ? LS.getItem(k) : null; } catch (e) { return null; } }, setItem: (k, v) => { try { if (LS) LS.setItem(k, v); } catch (e) { /* blocked */ } } };
+  const onBridge = location.protocol.startsWith('http') && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(location.host);
+  const BASE_WS = onBridge ? 'ws://' + location.host + '/ws' : 'ws://localhost:8765/ws';
+  const wsUrl = () => (PIN ? PIN.wsUrl(BASE_WS) : BASE_WS);
+  const clock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const tick = () => { document.getElementById('btClock').textContent = clock.format(new Date()); };
+  tick(); setInterval(tick, 1000);
+  const readKeys = () => { try { return window.OrderTicket.cleanHotkeys(JSON.parse(store.getItem('live-hotkeys-v1'))); } catch (e) { return {}; } };
+  const start = () => {
+    const hub = window.ChartFeed.create({ wsUrl });
+    window.botDesk = window.BotDesk.create({ popout: true, wsUrl, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, els: { view: document.getElementById('btView') }, tradingKeys: readKeys });
+    window.botDesk.showTab(true);
+  };
+  if (PIN) PIN.gate().then(start); else start();
+})();
+</script>
+</body>
+</html>

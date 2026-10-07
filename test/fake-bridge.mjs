@@ -137,6 +137,8 @@
 //   &stop=12&target=24&reason= (a signal, handled by the mode), /test/bot-proposal?... (the same, always proposed: a
 //   proposal on demand), /test/bot-withdraw?id=, /test/account?name=EVAL-A&connection=lost|connected|disabled,
 //   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
+//   GET /bot-library (lane C4, docs/BOT_LIBRARY.md): with --v3 and the bot switch on, the made-up example
+//   test/fixtures/bot-library.json, or the file --bot-library=path names; --no-bot-library answers 404 (no file on this PC).
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -469,7 +471,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
-    'botMode', 'botKill', 'botSeen', 'botAnswer'].includes(m.type)) desk.handle(c, m, text);
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
@@ -795,6 +797,12 @@ const server = http.createServer((req, res) => {
         memory: { managedMb: +(process.memoryUsage().heapUsed / 1048576).toFixed(1), gen0: 0, gen1: 0, gen2: 0, trims: 0, lastTrimUtcMs: null },
         threads: { workerAvailable: 32767, workerMax: 32767, ioAvailable: 1000, ioMax: 1000, minWorkerAvailableToday: 32767 },
         send: {}, reconnects: { pages: received.urls.length, lagCloses: 0, feedDrops: dropAt === null ? 0 : 1, accountReconnects: 0 } }, desk.diag(), tapeStats ? { tape: tapeStats.diag() } : {}) : {}) }));
+  }
+  if (p === '/bot-library') {   // lane C4: the frozen Bot-Lab builds (docs/BOT_LIBRARY.md); a made-up example file here
+    const file = flagValue('bot-library') ? path.resolve(flagValue('bot-library')) : path.join(root, 'test', 'fixtures', 'bot-library.json');
+    if (!V3 || V3_OFF.includes('bot') || flag('no-bot-library') || !fs.existsSync(file)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(fs.readFileSync(file));
   }
   if (p.endsWith('/')) p += 'index.html';
   const full = path.join(root, p);
