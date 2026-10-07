@@ -1006,21 +1006,41 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   // may still fill, and SendClose sends only after NinjaTrader confirms, every fill there has come through, and both readings
   // agree (or, at the time limit, the smaller); a reduce is sent only after the stops are confirmed shrunk
   assert.ok(!/\.Flatten\s*\(/.test(ccode), 'the copier never calls NinjaTrader\'s Flatten');
-  assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) \{ lock \(Lk\) c\.CloseOwed = false; return; \}\s*lock \(Lk\) c\.CloseOwed = true;[\s\S]*List<Order> working = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);[\s\S]*c\.A\.Cancel\(working\.ToArray\(\)\);[\s\S]*CheckReduces\(now\);/);
-  assert.ok(!/\.Submit\(/.test(copierBodies('Flatten')), 'Flatten only cancels; the close is SendClose, after confirmation');
+  const fl = copierBodies('Flatten');
+  assert.match(fl, /if \(FlatThrough\(c, ChartBridgeTime\.NowUtcMs\(\)\)\) \{ CloseDone\(c\); return; \}\s*if \(Flat\(c\.A, c\.Inst\)\) return;[^\n]*\n\s*lock \(Lk\) c\.CloseOwed = true;[\s\S]*List<Order> working = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);[\s\S]*c\.A\.Cancel\(working\.ToArray\(\)\);[\s\S]*CheckReduces\(now\);/);
+  // second review (1): a close sent that may still fill counts as under way (never a second close on top of it)
+  assert.match(fl, /running = Reduces\.Any\(x => x\.C == c && x\.Close\) \|\| \(c\.CloseOrder != null && !ChartBridgeOrders\.CopierDone\(c\.CloseOrder\)\);/);
+  assert.ok(!/\.Submit\(/.test(fl), 'Flatten only cancels; the close is SendClose, after confirmation');
   assert.match(copierBodies('CheckReduces'), /string unnoted = done \? ChartBridgeOrders\.CopierUnnotedFill\(r\.C\.A, r\.C\.Inst, now\) : null;/);
-  assert.match(copierBodies('CheckReduces'), /if \(r\.Close\) SendClose\(r\); else SendReduce\(r\);/);
-  assert.match(copierBodies('SendClose'), /int dir = Math\.Sign\(l\), held = Math\.Min\(Math\.Abs\(l\), Math\.Abs\(e\)\);/);
-  assert.match(copierBodies('SendClose'), /List<Order> still = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);\s*if \(still\.Count > 0\)/);
-  // 0.4.3 review (9): a fill not yet through its order event stops the close even past the time limit (it waits, or stays owed
-  // for Reconcile), and the positions are read only after that check
+  // second review (6): one refused order never stops the rest of the pass
+  assert.match(copierBodies('CheckReduces'), /try \{ if \(r\.Close\) SendClose\(r, now\); else SendReduce\(r, now\); \}\s*catch \(Exception ex\)/);
+  assert.match(copierBodies('Reconcile'), /try \{ ReconcileOne\(c, la, entries, now\); \}\s*catch \(Exception ex\)/);
   const sc = copierBodies('SendClose');
+  // second review (2): what may still fill and the fills not through are read before the positions and again after; then a
+  // fill not through waits (or, past the 3 s limit, nothing is sent: owed); an order that may still fill sends nothing
+  const i1 = sc.indexOf('List<Order> still = ChartBridgeOrders.CopierMayFill('), i2 = sc.indexOf('string unnoted = ChartBridgeOrders.CopierUnnotedFill('),
+        i3 = sc.indexOf('int l = ChartBridgeOrders.CopierListed('), i4 = sc.indexOf('List<Order> still2 = ChartBridgeOrders.CopierMayFill('),
+        i5 = sc.indexOf('string unnoted2 = ChartBridgeOrders.CopierUnnotedFill('), i6 = sc.indexOf('SubmitOne(');
+  assert.ok(i1 >= 0 && i1 < i2 && i2 < i3 && i3 < i4 && i4 < i5 && i5 < i6, 'SendClose: checks, positions, checks again, then the send');
+  assert.match(sc, /if \(unnoted == null\) unnoted = unnoted2;\s*foreach \(Order o in still2\) if \(!still\.Contains\(o\)\) still\.Add\(o\);/);
   assert.match(sc, /if \(unnoted != null\)\s*\{\s*if \(now - r\.Since < ReduceConfirmMs\) \{[^}]*Reduces\.Add\(r\); return; \}\s*ChartBridgeOrders\.CopierAlarm\([^\n]*nothing was sent[^\n]*\n\s*Event\([^\n]*not closed: the fill of " \+ unnoted[^\n]*\n\s*return;\s*\}/);
-  assert.ok(sc.indexOf('CopierUnnotedFill(') < sc.indexOf('CopierListed('), 'SendClose reads the positions after the unnoted check');
+  assert.match(sc, /if \(still\.Count > 0\)\s*\{\s*ChartBridgeOrders\.CopierAlarm\([^\n]*\n\s*Event\([^\n]*\n\s*return;\s*\}/);
+  // second review (3): a late closing fill is taken off (never more than the readings less it); nothing when that leaves none
+  assert.match(sc, /int dir = Math\.Sign\(l\), shows = Math\.Min\(Math\.Abs\(l\), Math\.Abs\(e\)\), late = dir > 0 \? lateSells : lateBuys, held = shows - late;/);
+  assert.match(sc, /if \(held <= 0\)\s*\{\s*Event\([^\n]*\n\s*return;\s*\}/);
+  // second review (1): owed until flat: the close sent is kept, the owed flag is not cleared on sending
+  assert.match(sc, /SubmitOne\(c\.A, x\);[^\n]*\n[^\n]*\n\s*lock \(Lk\) c\.CloseOrder = x;/);
+  assert.ok(!/CloseOwed = false/.test(sc), 'SendClose never clears the owed close itself (only CloseDone, when flat with every fill through)');
   assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
-  assert.match(copierBodies('CheckReduces'), /SendReduce\(r\);/);
-  // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position
-  assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), stops = StopsWorking\(c\.A, c\.Inst, c\.Dir\), k = Math\.Min\(r\.Cut, held - stops\);/);
+  // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position;
+  // second review (3): less any late closing fill
+  assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\) - \(c\.Dir > 0 \? lateSells : lateBuys\), stops = StopsWorking\(c\.A, c\.Inst, c\.Dir\), k = Math\.Min\(r\.Cut, held - stops\);/);
+  // second review (7): an owed copy record is never replaced
+  assert.match(copierBodies('CopyFor'), /\(!c\.CloseOwed && c\.Intended <= 0/);
+  // second review (4) and (5): the leader is blocked only while a close runs (both ways); owed but on the other side: handed over
+  assert.match(copierBodies('ClearLeader'), /closing = Reduces\.Any\(r => r\.Close\); \}/);
+  assert.match(copierBodies('SetLeader'), /if \(Reduces\.Any\(r => r\.Close\)\) return "a follower is still being closed; try again in a moment";/);
+  assert.match(copierBodies('ReconcileOne'), /if \(owed && !Flat\(c\.A, c\.Inst\) && Held\(c\.A, c\.Inst, c\.Dir\) == 0\)[\s\S]*CloseDone\(c\);\s*ChartBridgeOrders\.CopierAlarm\([^\n]*on the other side/);
   assert.match(copierBodies('ScaleOut'), /basis = c\.Intended;\s*if \(basis <= 0\) return;/);
   // 0.4.3, Anthony 2026-10-07: the same share, nearest contract, no minimum cut (a small fixed follower is not taken out early)
   assert.match(copierBodies('ScaleOut'), /target = Math\.Min\(basis, Math\.Max\(0, \(int\)Math\.Round\(basis \* \(double\)nowAbs \/ prevAbs, MidpointRounding\.AwayFromZero\)\)\);/);

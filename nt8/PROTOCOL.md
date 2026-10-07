@@ -1816,8 +1816,13 @@ follower's `qty` again; a scale-out reduces it by the same share.)
   holds is closed at market. Not confirmed within 3 s: nothing is sent, a `status` `error`, and the close is owed: it is tried
   again every 4 s, whatever the leader does, until it goes out or the follower is flat (its stops are already cancelled), and
   no new copy goes to that follower contract meanwhile (skipped "closing"); readings still apart at 3 s: the smaller is closed
-  (never more than either shows). A fill NinjaTrader shows whose order event never comes stops blocking after 10 s (a
-  `status` `warn`). After a restart, a follower holding a position with a filled copier entry there, no working stop on its
+  (never more than either shows). The close stays owed until the follower is flat by both readings with every fill there
+  through (a close rejected, cancelled or part filled is tried again; while one may still fill, no other starts). What may
+  still fill and the fills not yet through are read before the position and again after; anything new sends nothing. A
+  fill NinjaTrader shows whose order event never comes stops blocking after 10 s (one `status` `error`), but its contracts
+  are taken off any close or reduce there until its event comes (never more than the position less that fill). Owed while
+  it holds the other side for 10 s: one `status` `error`, and it is left to the user. A copier order NinjaTrader refuses is
+  an `error`; the rest of the copier's work goes on, and an owed close is tried again. After a restart, a follower holding a position with a filled copier entry there, no working stop on its
   closing side and no copier record gets one `status` `error`. (0.4.3, from the independent review.) A leader scale-out (a partial
   exit) leaves each follower the same share of what the copier gave it, rounded to the nearest contract (half up), with no
   minimum cut (0.4.3, Anthony 2026-10-07: a Qty 3 follower under a leader of 5 holds 3, 2, 2, 1, 1 as the leader scales out

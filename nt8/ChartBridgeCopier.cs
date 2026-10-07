@@ -70,14 +70,20 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.4.3: the name of an order on that account and contract whose fill NinjaTrader shows but whose order event has not come
         // through yet (so a position reading may not include it), or null when every fill there has.
         // 0.4.3 review (3): a fill whose event never comes (NinjaTrader re-listing orders after a reconnect, say) would block every
-        // close there: after MoveTtlMs (10 s) it counts as come through, logged once; by then the second reading has dropped any
-        // unbooked fill too, so both readings are NinjaTrader's position alone.
+        // close there: after MoveTtlMs (10 s) it no longer blocks, logged once. Second review (3): it is not taken as booked either
+        // (NinjaTrader's position may still be without it, and both readings with it): its contracts come back in lateBuys and
+        // lateSells until its order event comes, and a close or reduce takes the closing side's off what it sends, so it can only
+        // send too little (the copier tries again, and says so), never too much.
         private static readonly Dictionary<Order, double> UnnotedSince = new Dictionary<Order, double>();
-        internal static string CopierUnnotedFill(Account a, Instrument i, double now)
+        private static readonly HashSet<Order> LateSaid = new HashSet<Order>();
+        internal static string CopierUnnotedFill(Account a, Instrument i, double now) { int b, s; return CopierUnnotedFill(a, i, now, out b, out s); }
+        internal static string CopierUnnotedFill(Account a, Instrument i, double now, out int lateBuys, out int lateSells)
         {
+            lateBuys = 0; lateSells = 0;
             List<Order> orders;
             lock (a.Orders) orders = a.Orders.ToList();
-            string late = null, waiting = null;
+            List<string> late = new List<string>();
+            string waiting = null;
             lock (Sync)
             {
                 foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
@@ -85,14 +91,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (!SameInstrument(o.Instrument, i) || o.Filled <= 0) continue;
                     int had;
-                    if (NotedFilled.TryGetValue(o, out had) && had >= o.Filled) { UnnotedSince.Remove(o); continue; }
+                    bool noted = NotedFilled.TryGetValue(o, out had);
+                    if (noted && had >= o.Filled) { UnnotedSince.Remove(o); LateSaid.Remove(o); continue; }
                     double since;
                     if (!UnnotedSince.TryGetValue(o, out since)) UnnotedSince[o] = since = now;
-                    if (now - since > MoveTtlMs) { NotedFilled[o] = o.Filled; UnnotedSince.Remove(o); late = o.Name ?? "an order"; continue; }
+                    if (now - since > MoveTtlMs)
+                    {
+                        int more = o.Filled - (noted ? had : 0);
+                        if (o.OrderAction == OrderAction.Buy || o.OrderAction == OrderAction.BuyToCover) lateBuys += more; else lateSells += more;
+                        if (LateSaid.Add(o)) late.Add(o.Name ?? "an order");
+                        continue;
+                    }
                     if (waiting == null) waiting = o.Name ?? "an order";
                 }
             }
-            if (late != null) Warn(a.Name + " " + (ChartBridgeServer.RootFor(i) ?? i.FullName) + ": the fill of " + late + " never came through its order event in " + (MoveTtlMs / 1000) + " s; the copier now takes NinjaTrader's position as it is");
+            foreach (string n in late)
+                Alarm(a.Name + " " + (ChartBridgeServer.RootFor(i) ?? i.FullName) + ": the fill of " + n + " never came through its order event in " + (MoveTtlMs / 1000) +
+                      " s; the copier no longer waits for it, and closes or reduces there at most what the position shows less that fill (never more); check NinjaTrader");
             return waiting;
         }
         // 0.4.3 review (4): an order whose Submit threw is taken out of the just-sent list.
@@ -261,8 +276,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int Dir, Intended;
             public double FlatSince;
             public bool TrimHeld;        // minors (2): an expired unbooked copy fill: no trim until a fresh position update
-            public bool CloseOwed;       // 0.4.3 review: a close was started and has not gone out yet: Reconcile retries it whatever the
-                                         // leader does, and nothing new is copied there, until the close goes out or it is flat
+            public bool CloseOwed;       // 0.4.3 review: a close was started and the follower is not flat yet: Reconcile retries it
+                                         // whatever the leader does, and nothing new is copied there, until it is flat (second
+                                         // review (1): not cleared when the close is sent: one rejected or part filled is retried)
+            public Order CloseOrder;     // the close last sent: while it may still fill, no other close is started
+            public double OppSince;      // second review (4): owed while it holds the other side, since (the user's to sort out)
+            public bool ShortSaid;       // second review (3): "closed less than it shows" said once for this close
             public double BookedAfter;   // minors (2): expired fills from before this position update are no longer counted
             public readonly List<FStop> Stops = new List<FStop>();
         }
@@ -481,6 +500,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool Flat(Account a, Instrument inst) { return ChartBridgeOrders.CopierListed(a, inst) == 0 && ChartBridgeOrders.CopierEffective(a, inst) == 0; }
 
+        // 0.4.3 second review: a close is owed until the follower is flat by both readings with every fill there through its order
+        // event (a fill not through yet could still be a position); then the owed close and what goes with it are cleared.
+        private static bool FlatThrough(Copy c, double now) { return Flat(c.A, c.Inst) && ChartBridgeOrders.CopierUnnotedFill(c.A, c.Inst, now) == null; }
+        private static void CloseDone(Copy c) { lock (Lk) { c.CloseOwed = false; c.CloseOrder = null; c.OppSince = 0; c.ShortSaid = false; } }
+
         // ---------------------------------------------------------- pages (protocol v3 only)
         // The pages the copier talks to: every signed-in v3 page (the shared v3 send). A v2 page gets no copier message at all.
         private static void Broadcast(string json) { ChartBridgeV3.SendToV3Traders(json); }
@@ -551,6 +575,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Lk)
             {
                 if (hasLeader && FollowerNamed(name) != null) return name + " is a follower; the leader cannot be one.";
+                if (Reduces.Any(r => r.Close)) return "a follower is still being closed; try again in a moment";   // second review (5): as ClearLeader
                 old = leader;
             }
             foreach (string l in new[] { old, hasLeader ? a.Name : null })
@@ -576,7 +601,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
             string old;
             bool closing;
-            lock (Lk) { old = leader; closing = Reduces.Any(r => r.Close) || Copies.Values.Any(x => x.CloseOwed); }
+            // second review (4): only while a close is running (3 s at most); an owed close is retried without a leader anyway
+            lock (Lk) { old = leader; closing = Reduces.Any(r => r.Close); }
             if (closing) return "a follower is still being closed; try again in a moment";
             string busyWhy = LeaderBusy(old);
             if (busyWhy != null) return busyWhy;
@@ -911,7 +937,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bool owed, closing;
                 lock (Lk) { owed = c.CloseOwed; closing = Reduces.Any(r => r.C == c && r.Close); }
-                if (owed && !closing && Flat(a, inst)) { lock (Lk) c.CloseOwed = false; owed = false; }
+                if (owed && !closing && FlatThrough(c, ChartBridgeTime.NowUtcMs())) { CloseDone(c); owed = false; }
                 if (owed || closing) { label = "closing"; why = a.Name + " is still being closed on " + fRoot + "; nothing new is copied until it is flat"; return null; }
             }
             if (c != null && c.LInst != null && c.LInst.FullName != le.Inst.FullName && Held(a, inst, c.Dir) > 0)
@@ -1257,7 +1283,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Copy c;
                 string key = a.Name + "|" + inst.FullName;
-                if (!Copies.TryGetValue(key, out c) || (c.Intended <= 0 && c.Stops.All(s => !Working(s.Stop)) && (c.Dir != dir || (linst != null && c.LInst != null && c.LInst.FullName != linst.FullName))))
+                if (!Copies.TryGetValue(key, out c) || (!c.CloseOwed && c.Intended <= 0 && c.Stops.All(s => !Working(s.Stop)) && (c.Dir != dir || (linst != null && c.LInst != null && c.LInst.FullName != linst.FullName))))
                 {
                     c = new Copy { A = a, F = f, Inst = inst, Root = root, LInst = linst, Dir = dir, Tag = NewTag() };
                     Copies[key] = c;
@@ -1495,17 +1521,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Event(r.C.A.Name, r.Close ? "flatten" : "reduce", r.C.Root, 0, double.NaN, null, null, null, (r.Close ? "not closed: " : "not reduced: ") + why);
                     continue;
                 }
-                if (r.Close) SendClose(r); else SendReduce(r);
+                try { if (r.Close) SendClose(r, now); else SendReduce(r, now); }
+                catch (Exception ex)   // second review (6): one refused order never stops the rest (a close stays owed and is retried)
+                {
+                    ChartBridgeOrders.CopierAlarm(r.C.Root + " " + r.C.A.Name + ": NinjaTrader refused the copier's " + (r.Close ? "close" : "reduce") + " (" + ex.Message + ")" + (r.Close ? "; it tries again" : "; check its stops") + "; check NinjaTrader");
+                }
             }
         }
 
-        private static void SendReduce(Reduce r)
+        private static void SendReduce(Reduce r, double now)
         {
             Copy c = r.C;
             if (!ExitAllowed(c, "reduce")) return;
             // Review 2 finding 2: only the copier's own share (r.Cut), and never so much that the stops left working on that side
             // (the copier's, shrunk first, and the follower's own) would exceed the position: both filling would cross zero.
-            int held = Held(c.A, c.Inst, c.Dir), stops = StopsWorking(c.A, c.Inst, c.Dir), k = Math.Min(r.Cut, held - stops);   // read again now
+            // Second review (3): contracts filled on the closing side on an order whose event never came may not be in the reading:
+            // taken off, so the reduce can only be too small.
+            int lateBuys, lateSells;
+            ChartBridgeOrders.CopierUnnotedFill(c.A, c.Inst, now, out lateBuys, out lateSells);
+            int held = Held(c.A, c.Inst, c.Dir) - (c.Dir > 0 ? lateSells : lateBuys), stops = StopsWorking(c.A, c.Inst, c.Dir), k = Math.Min(r.Cut, held - stops);   // read again now
             if (held <= 0) { Decision(c.A.Name, "reduce", c.Root, "holds nothing now: nothing sent"); return; }
             if (k <= 0)
             {
@@ -1542,7 +1576,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Lk)
             {
                 c.Intended = 0;
-                running = Reduces.Any(x => x.C == c && x.Close);
+                // second review (1): a close sent that may still fill is under way too (another would close it twice)
+                running = Reduces.Any(x => x.C == c && x.Close) || (c.CloseOrder != null && !ChartBridgeOrders.CopierDone(c.CloseOrder));
                 if (!running) Reduces.RemoveAll(x => x.C == c);
                 int seq;
                 string key = SeqKey(c.A, c.Inst);
@@ -1553,9 +1588,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (FEntry fe in FEntries.Values) if (fe.A == c.A && fe.Inst.FullName == c.Inst.FullName && fe.Covered < fe.Order.Quantity) fe.Exited = why;
                 Waits.RemoveAll(w => w.Fe.A == c.A && w.Fe.Inst.FullName == c.Inst.FullName);
             }
-            if (running) return;   // the close under way reads the position again before it sends anything
-            if (Flat(c.A, c.Inst)) { lock (Lk) c.CloseOwed = false; return; }
-            lock (Lk) c.CloseOwed = true;   // 0.4.3 review: owed until the close goes out (its stops are about to be cancelled)
+            if (running) return;   // the close under way reads the position again before it sends anything; Reconcile takes any rest
+            if (FlatThrough(c, ChartBridgeTime.NowUtcMs())) { CloseDone(c); return; }
+            if (Flat(c.A, c.Inst)) return;   // flat by both readings, a fill not through yet: owed stays as it is (Reconcile looks again)
+            lock (Lk) c.CloseOwed = true;   // 0.4.3 review: owed until it is flat (its stops are about to be cancelled)
             if (!ExitAllowed(c, "flatten")) return;
             List<Order> working = ChartBridgeOrders.CopierMayFill(c.A, c.Inst);
             double now = ChartBridgeTime.NowUtcMs();
@@ -1574,15 +1610,37 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.4.3: the close, once every order there is cancelled or filled and every fill has come through: what the follower still
         // holds by both readings (the smaller), at market. Nothing when it is flat by either reading; never when a reading shows the
         // other side, or when an order there may still fill (both could fill).
-        private static void SendClose(Reduce r)
+        private static void SendClose(Reduce r, double now)
         {
             Copy c = r.C;
             if (!ExitAllowed(c, "flatten")) return;
-            // 0.4.3 review (9): a fill that landed after CheckReduces looked: wait for it to come through (the same time limit); past
-            // it, nothing is sent (the reading could be without that fill and close too much): the close stays owed and Reconcile
-            // tries again. Read before the positions, so the readings below include every fill this check saw.
-            double now = ChartBridgeTime.NowUtcMs();
-            string unnoted = ChartBridgeOrders.CopierUnnotedFill(c.A, c.Inst, now);
+            // Second review (2): the orders that may still fill and the fills not yet through their order events are checked
+            // before the positions are read and again after: one that filled in between would make the reading too large (a close
+            // of 2 into a position of 1 crosses zero), so anything new there sends nothing. 0.4.3 review (9): a fill not yet
+            // through waits within the time limit; past it, nothing is sent: the close stays owed and Reconcile tries again.
+            int lateBuys, lateSells, lateBuys2, lateSells2;
+            List<Order> still = ChartBridgeOrders.CopierMayFill(c.A, c.Inst);
+            string unnoted = ChartBridgeOrders.CopierUnnotedFill(c.A, c.Inst, now, out lateBuys, out lateSells);
+            int l = ChartBridgeOrders.CopierListed(c.A, c.Inst), e = ChartBridgeOrders.CopierEffective(c.A, c.Inst);
+            List<Order> still2 = ChartBridgeOrders.CopierMayFill(c.A, c.Inst);
+            string unnoted2 = ChartBridgeOrders.CopierUnnotedFill(c.A, c.Inst, now, out lateBuys2, out lateSells2);
+            if (unnoted == null) unnoted = unnoted2;
+            foreach (Order o in still2) if (!still.Contains(o)) still.Add(o);
+            lateBuys = Math.Max(lateBuys, lateBuys2); lateSells = Math.Max(lateSells, lateSells2);
+            if (l != 0 && e != 0 && Math.Sign(l) != Math.Sign(e))
+            {
+                ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier did not close this follower: its two position readings show opposite sides (" + l + " and " + e + "); the copier tries again in " + (ChartBridgeOrders.SettleMs / 1000) + " s; check NinjaTrader");
+                Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "not closed: its readings are " + l + " and " + e + " (" + r.Why + ")");
+                return;
+            }
+            if (l == 0 || e == 0)
+            {
+                // Flat by both readings, or by one (a position update still on its way): the smaller holds nothing. Owed until both
+                // readings show flat with every fill there through; Reconcile closes what still shows once they agree.
+                if (l == 0 && e == 0 && unnoted == null) CloseDone(c);
+                Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "flat now" + (l != e ? " (by one reading: " + l + " and " + e + ")" : "") + ": nothing sent (" + r.Why + ")");
+                return;
+            }
             if (unnoted != null)
             {
                 if (now - r.Since < ReduceConfirmMs) { lock (Lk) if (!Reduces.Any(q => q.C == c)) Reduces.Add(r); return; }
@@ -1590,27 +1648,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "not closed: the fill of " + unnoted + " has not come through ChartBridge's order events");
                 return;
             }
-            int l = ChartBridgeOrders.CopierListed(c.A, c.Inst), e = ChartBridgeOrders.CopierEffective(c.A, c.Inst);
-            if (l != 0 && e != 0 && Math.Sign(l) != Math.Sign(e))
-            {
-                ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier did not close this follower: its two position readings show opposite sides (" + l + " and " + e + "); the copier tries again in " + (ChartBridgeOrders.SettleMs / 1000) + " s; check NinjaTrader");
-                Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "not closed: its readings are " + l + " and " + e + " (" + r.Why + ")");
-                return;
-            }
-            if (l == 0 && e == 0) lock (Lk) c.CloseOwed = false;
-            if (l == 0 || e == 0)
-            {
-                // Flat by both readings, or by one (a position update still on its way): the smaller holds nothing. The missed-exit
-                // check (Reconcile) closes it if a position still shows once the readings agree.
-                Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "flat now" + (l != e ? " (by one reading: " + l + " and " + e + ")" : "") + ": nothing sent (" + r.Why + ")");
-                return;
-            }
-            int dir = Math.Sign(l), held = Math.Min(Math.Abs(l), Math.Abs(e));
-            List<Order> still = ChartBridgeOrders.CopierMayFill(c.A, c.Inst);
             if (still.Count > 0)
             {
                 ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier did not close this follower: " + still.Count + " order(s) there may still fill (" + string.Join(", ", still.Select(o => o.Name ?? "an order")) + "); the copier tries again in " + (ChartBridgeOrders.SettleMs / 1000) + " s; check NinjaTrader");
                 Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "not closed: " + still.Count + " order(s) there may still fill");
+                return;
+            }
+            int dir = Math.Sign(l), shows = Math.Min(Math.Abs(l), Math.Abs(e)), late = dir > 0 ? lateSells : lateBuys, held = shows - late;
+            if (late > 0)
+            {
+                bool said;
+                lock (Lk) { said = c.ShortSaid; c.ShortSaid = true; }
+                if (!said)
+                    ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier closes " + Math.Max(0, held) + " of the " + shows + " this follower shows: " + late +
+                                                  " filled on an order whose event never came may not be in the reading; what is left stays open with its stops cancelled: close it in NinjaTrader");
+            }
+            if (held <= 0)
+            {
+                Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "not closed: it shows " + shows + ", less " + late + " filled on an order whose event never came");
                 return;
             }
             Order x = c.A.CreateOrder(c.Inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, held, 0, 0, "",
@@ -1619,7 +1674,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeOrders.CopierSent(x, false);
             long sent = Stopwatch.GetTimestamp();
             SubmitOne(c.A, x);
-            lock (Lk) c.CloseOwed = false;   // the close is out; a fill short of it shows as a position and the missed-exit check takes it
+            // Second review (1): still owed until it is flat: a close rejected, cancelled or part filled is tried again once it is done
+            lock (Lk) c.CloseOrder = x;
             Event(c.A.Name, "flatten", c.Root, held, double.NaN, null, Ms(r.Ts, sent), null, "flattened: " + r.Why + " (closed the " + held + " it still held, at market)");
         }
 
@@ -1783,23 +1839,45 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account la = Find(l);
             foreach (Copy c in copies)
             {
-                // 0.4.3 review (1): a close that did not go out (its stops already cancelled) is retried whatever the leader does
-                bool owed;
-                lock (Lk) owed = c.CloseOwed;
-                if (owed && Flat(c.A, c.Inst)) { lock (Lk) c.CloseOwed = false; owed = false; }
-                if (la == null && !owed) continue;
-                // Review 2 finding 6: a copy recovered without its leader's contract is checked by root (the leader flat on every
-                // contract of that market).
-                bool leaderFlat = la != null && (c.LInst != null ? Flat(la, c.LInst) && !entries.Any(e => e.Inst.FullName == c.LInst.FullName && Working(e.Entry)) : LeaderFlatOnRoot(la, c.Root, entries));
-                bool mismatch = Held(c.A, c.Inst, c.Dir) > 0 && Up(c.A) && (owed || (ChartBridgeOrders.CopierSteady(la) && leaderFlat));
-                bool pending;
-                lock (Lk) pending = Reduces.Any(r => r.C == c) || Waits.Any(w => w.Fe.Inst == c.Inst && w.Fe.A == c.A);
-                if (!mismatch || pending) { c.FlatSince = 0; continue; }
-                if (c.FlatSince == 0) { c.FlatSince = now; continue; }
-                if (now - c.FlatSince < ChartBridgeOrders.SettleMs) continue;
-                c.FlatSince = 0;
-                Flatten(c, owed ? "its close did not go out; tried again" : "the leader has been flat for " + (ChartBridgeOrders.SettleMs / 1000) + " s (its exit was not copied when it happened)", Stopwatch.GetTimestamp());
+                try { ReconcileOne(c, la, entries, now); }
+                catch (Exception ex)   // second review (6): one follower's refused order never stops the rest
+                {
+                    ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier's order there was refused (" + ex.Message + "); it tries again; check NinjaTrader");
+                }
             }
+        }
+
+        private static void ReconcileOne(Copy c, Account la, List<LeaderEntry> entries, double now)
+        {
+            // 0.4.3 review (1): a close owed (its stops already cancelled) is retried whatever the leader does, until it is flat
+            bool owed;
+            lock (Lk) owed = c.CloseOwed;
+            if (owed && FlatThrough(c, now)) { CloseDone(c); owed = false; }
+            if (la == null && !owed) return;
+            if (owed && !Flat(c.A, c.Inst) && Held(c.A, c.Inst, c.Dir) == 0)
+            {
+                // Second review (4): owed, but it holds the other side (both readings agreeing for 10 s: a hand reversal, say): not
+                // the copier's to close; said once and left to the user, and new copies there are allowed again.
+                int l = ChartBridgeOrders.CopierListed(c.A, c.Inst), e = ChartBridgeOrders.CopierEffective(c.A, c.Inst);
+                if (l != e || l * c.Dir > 0) { c.OppSince = 0; return; }
+                if (c.OppSince == 0) { c.OppSince = now; return; }
+                if (now - c.OppSince < ChartBridgeOrders.MoveTtlMs) return;
+                CloseDone(c);
+                ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier was closing this follower and it now holds " + Math.Abs(l) + " on the other side; the copier leaves it to you (its stops there are yours to set); check NinjaTrader");
+                Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "not closed: it holds " + l + " on the other side; left to the user");
+                return;
+            }
+            // Review 2 finding 6: a copy recovered without its leader's contract is checked by root (the leader flat on every
+            // contract of that market).
+            bool leaderFlat = la != null && (c.LInst != null ? Flat(la, c.LInst) && !entries.Any(e => e.Inst.FullName == c.LInst.FullName && Working(e.Entry)) : LeaderFlatOnRoot(la, c.Root, entries));
+            bool mismatch = Held(c.A, c.Inst, c.Dir) > 0 && Up(c.A) && (owed || (ChartBridgeOrders.CopierSteady(la) && leaderFlat));
+            bool pending;
+            lock (Lk) pending = Reduces.Any(r => r.C == c) || Waits.Any(w => w.Fe.Inst == c.Inst && w.Fe.A == c.A) || (c.CloseOrder != null && !ChartBridgeOrders.CopierDone(c.CloseOrder));
+            if (!mismatch || pending) { c.FlatSince = 0; return; }
+            if (c.FlatSince == 0) { c.FlatSince = now; return; }
+            if (now - c.FlatSince < ChartBridgeOrders.SettleMs) return;
+            c.FlatSince = 0;
+            Flatten(c, owed ? "its close is not done (not sent, or not filled in full); tried again" : "the leader has been flat for " + (ChartBridgeOrders.SettleMs / 1000) + " s (its exit was not copied when it happened)", Stopwatch.GetTimestamp());
         }
 
         // Review 2 finding 6: the leader is flat on every contract of the follower root's market (NQ and MNQ, or ES and MES): both
@@ -1925,7 +2003,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (Copy c in copies)
             {
                 bool idle;
-                lock (Lk) idle = c.Stops.Count == 0 && !Reduces.Any(r => r.C == c) && !FEntries.Values.Any(fe => fe.A == c.A && fe.Inst == c.Inst);
+                lock (Lk) idle = c.Stops.Count == 0 && !c.CloseOwed && !Reduces.Any(r => r.C == c) && !FEntries.Values.Any(fe => fe.A == c.A && fe.Inst == c.Inst);   // second review: an owed close keeps its record
                 if (idle && Flat(c.A, c.Inst)) lock (Lk) { Copies.Remove(c.A.Name + "|" + c.Inst.FullName); }
             }
         }

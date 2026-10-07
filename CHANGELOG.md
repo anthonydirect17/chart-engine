@@ -29,6 +29,15 @@ Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of
   (a warning); one that lands in the moment between the last check and the close also stops it (the close waits, or stays
   owed). A copier order whose Submit throws leaves the just-sent list. After a restart, a follower holding a copied
   position with no working stop and no record raises one alarm. The account seeding runs outside the watch lock.
+- **From the second independent review** (no blocker; four should-fix, all fixed): a close stays owed until the follower is
+  flat by both readings with every fill through, not just until it is sent, so a close that is rejected, cancelled or part
+  filled is tried again; while a close may still fill, no second one starts. The close reads what may still fill and the
+  fills not yet through both before and after it reads the position, and sends nothing if anything changed. A fill whose
+  order event never comes no longer counts as booked after 10 s: its contracts are taken off the close (and a reduce), so
+  the copier can only close too little, never too much, and an alarm says so. A follower owed a close that now holds the
+  other side is left to the user after 10 s (one alarm). Clearing or changing the leader is blocked only while a close is
+  running (3 s at most). One refused order no longer stops the rest of that second's work. An owed copy record is never
+  replaced.
 - ChartBridge only; the page is unchanged (each PC keeps its page rollback to 1.15.0). Page wording left for the Account
   page release: the Qty dropdown's hidden label and its error text still say "per leader contract".
 - Tests: the copier harness reproduces WORK's short 1 first (it fails on 0.4.2: Flatten called; a Qty 3 follower adds 6),
