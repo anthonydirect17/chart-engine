@@ -347,6 +347,12 @@
    #7B5CFF); only the order bar is deep red */
 .chart-live.is-armed .stage { border-color: var(--armed-ring); box-shadow: 0 0 0 1px var(--armed-ring), 0 0 8px 1px color-mix(in srgb, var(--armed-ring) 45%, transparent); }
 .chart-live .pill.armed { color: #FFE4EA; background: var(--crimson); border-color: var(--crimson-word); }
+/* 1.16.0 (Anthony): a mounted chart has no text on it; its badge (in the chart's top left corner, unless the host places it in
+   its own header) says ARMED while its orders are live, and the connection when it is not LIVE or the feed has gone quiet */
+.chart-live .ch-badge { position: absolute; left: 8px; top: 8px; z-index: 4; display: flex; gap: 4px; pointer-events: none; }
+.chart-live .ch-badge .pill { pointer-events: auto; cursor: default; white-space: nowrap; }
+/* the stale feed (1.16.0): a thin amber edge inside the chart, over the candles, never taking a pixel of room */
+.chart-live.is-stale .stage::after { content: ""; position: absolute; inset: 0; z-index: 5; border: 2px solid color-mix(in srgb, var(--warn) 75%, transparent); border-radius: inherit; pointer-events: none; }
 /* NO STOP (1.13.0, Anthony): the stop box is 0; and the one question before the first order with no stop */
 .chart-live .nostop { display: inline-flex; align-items: center; font: 700 10px var(--cond); letter-spacing: .1em; color: var(--loss); border: 1px solid var(--loss); border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
 /* the NO STOP question (F2 review): a strip over the top of the chart (1.14.0: just under the legend, so the LIVE and

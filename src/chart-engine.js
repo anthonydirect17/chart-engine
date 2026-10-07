@@ -891,12 +891,26 @@ function roomBars(roomPx, spacing, bars) {
     `extra` (working orders, bracket legs, planned stop and target lines: they stay on screen), at least 8 ticks, with
     8% free at the top and 8% at the bottom (20% with the volume bars under the candles). `topPx` (1.14.0, Anthony: the
     high ran into the legend on the smaller panels): at least this many px free at the top (the legend's height and a
-    few px; at most 45% of the plot). null when there is nothing. */
-function fitRange(mn, mx, extra, plotH, tick, volume, topPx) {
+    few px; at most 45% of the plot). null when there is nothing.
+    `bub` (1.16.0, Anthony: a large-order bubble never crosses the top of the plot): { n, p, r }, the bubbles in view, each
+    centred at price p[k] with a radius of r[k] px; the top margin grows until each one's top is inside the plot (at most
+    45% of the plot, as above). */
+function fitRange(mn, mx, extra, plotH, tick, volume, topPx, bub) {
   if (extra) for (let i = 0; i < extra.length; i++) { const p = extra[i]; if (isFinite(p) && p !== null) { if (p > mx) mx = p; if (p < mn) mn = p; } }
   if (!(mx >= mn) || !(plotH > 0)) return null;
   const minRange = (tick || Math.abs(mx) * 1e-4 || 1) * 8;
-  const range = Math.max(mx - mn, minRange), mt = Math.min(0.45, Math.max(0.08, (topPx > 0 ? topPx : 0) / plotH)), mb = volume ? 0.2 : 0.08;
+  const range = Math.max(mx - mn, minRange), mb = volume ? 0.2 : 0.08;
+  let mt = Math.min(0.45, Math.max(0.08, (topPx > 0 ? topPx : 0) / plotH));
+  if (bub && bub.n > 0) {
+    /* a bubble at price p is (mx - p) / range = d of the candles' span below their top, so its centre is
+       plotH * (mt + d * (1 - mt - mb)) px from the plot's top; that is at least its radius when
+       mt >= (r / plotH - d * (1 - mb)) / (1 - d) */
+    for (let k = 0; k < bub.n; k++) {
+      const d = (mx - bub.p[k]) / range, need = bub.r[k] / plotH;
+      if (d < 1 && isFinite(d) && isFinite(need)) { const m = (need - d * (1 - mb)) / (1 - d); if (m > mt) mt = m; }
+    }
+    mt = Math.min(0.45, mt);
+  }
   const ppp = plotH * (1 - mt - mb) / range;
   return { hi: mx + plotH * mt / ppp, lo: mn - plotH * mb / ppp };
 }
@@ -1151,7 +1165,7 @@ function create(container, options) {
   let orders = [], position = null, orderEditing = false, orderPreview = null, shiftHeld = false;
   let od = null, xDown = null, addDown = null, orderHits = [];
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1354,7 +1368,21 @@ function create(container, options) {
     // 1.14.0 (Anthony, "zoom to brackets"): working orders, the position's stop and target and the planned stop and
     // target lines are always on screen, eased in with the axis re-fit like any other change of the range
     if (o.fitOrders && orders.length) for (let k = 0; k < orders.length; k++) { const p = fitPrice(orders[k]); if (p > mx) mx = p; if (p < mn) mn = p; }
-    return fitRange(mn, mx, null, plotH, o.tick, o.layers.volume, o.fitTop);
+    return fitRange(mn, mx, null, plotH, o.tick, o.layers.volume, o.fitTop, fitBubbles(from, to, n));
+  }
+  /* 1.16.0 (Anthony): the bubbles in view (only those: a search to the first, then the bars' span), with their radius as
+     drawn, for the auto-fit; kept columns, no allocation per frame. null when none is shown. */
+  const fitBub = { n: 0, p: [], r: [] };
+  function fitBubbles(from, to, n) {
+    fitBub.n = 0;
+    const list = signals && o.layers.bubbles && signals.bubbles ? signals.bubbles.list : null;
+    if (!list || !list.length) return null;
+    const t0 = bars[from].t, t1 = to < n ? bars[to + 1].t : Infinity;
+    for (let k = firstAt(list, t0); k < list.length && list[k].t < t1; k++) {
+      const b = list[k];
+      fitBub.p[fitBub.n] = b.p; fitBub.r[fitBub.n] = bubbleR(b); fitBub.n++;
+    }
+    return fitBub.n ? fitBub : null;
   }
   /* An order's price for the auto-fit: as confirmed, or as asked for while a move waits for its answer; a planned line
      from its entry's. Never the price under a drag in progress, so the scale holds still under the pointer. */
@@ -2752,6 +2780,7 @@ function create(container, options) {
         if (gap < 40) { emaInt = emaInt * 0.9 + gap * 0.1; streak++; } else streak = 0;
         lastDraw = now;
         emitLegend();
+        if (listeners.drawn.length) emit('drawn', now);   // 1.16.0: a frame was drawn (the page's tape timing; no arrays)
       }
       const live = V.follow;
       if (live !== wasLive) {
@@ -2912,6 +2941,8 @@ function create(container, options) {
     },
     /** The VWAP's edge marker as last drawn ({ up, x, y, w, h, price }), or null when the VWAP is on the scale. */
     vwapMarker() { return vwapMark ? Object.assign({}, vwapMark) : null; },
+    /** The VWAP the chart draws at bar i (1.16.0, for reading: a host's own readout, the tests), or null where it has none. */
+    vwapAt(i) { const n = last(); if (!(i >= 0 && i <= n)) return null; const v = vwapOf(i); return typeof v === 'number' && isFinite(v) ? v : null; },
     /** The corner readout (1.15.0): a short quiet text at the plot's bottom right ('' for none), placed clear of the order
         labels and the VWAP's marker, `short` instead on a plot too narrow for it; the page sets it once a second.
         corner() says where it was last drawn and which text, or null. */
@@ -3459,7 +3490,7 @@ class CumulativeDelta {
   }
   /** Forget every trade. */
   reset() {
-    this.bars = [];            // { t, o, h, l, c, buy, sell, unknown, n, s (index into sessions) }, oldest first
+    this.bars = [];            // { t, o, h, l, c, buy, sell, unknown, n, big, s (index into sessions) }, oldest first; big: the largest trade (1.16.0)
     this.sessions = [];        // { day, start, from, partial, buy, sell, unknown, unknownTrades, missing, byRule, trades, first, last }
     this.skipped = 0; this.uncovered = 0; this.trades = 0;
     this._cum = 0; this._ver = (this._ver || 0) + 1;
@@ -3496,7 +3527,7 @@ class CumulativeDelta {
         this.sessions.push(ses);
         this._cum = 0;
       }
-      bar = { t: bt, o: this._cum, h: this._cum, l: this._cum, c: this._cum, buy: 0, sell: 0, unknown: 0, n: 0, s: this.sessions.length - 1 };
+      bar = { t: bt, o: this._cum, h: this._cum, l: this._cum, c: this._cum, buy: 0, sell: 0, unknown: 0, n: 0, big: 0, s: this.sessions.length - 1 };
       this.bars.push(bar);
       ses.last = this.bars.length - 1;
     }
@@ -3509,6 +3540,7 @@ class CumulativeDelta {
     if (c > bar.h) bar.h = c;
     if (c < bar.l) bar.l = c;
     bar.c = c; bar.n++; ses.trades++; this.trades++;
+    if (v > bar.big) bar.big = v;                         // 1.16.0: the bar's largest single trade (the Data Box)
     this._ver++;
     return true;
   }

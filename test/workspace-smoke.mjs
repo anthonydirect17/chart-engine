@@ -212,7 +212,8 @@ try {
   check(st.range === 'NinjaTrader|Traded prices only', 'Settings: Range style');
   check(st.pin === 'Change PIN', 'Settings: Change PIN (ChartBridge has a PIN)');
   check(st.floors === 8, 'Settings: the large-print floors, RTH and overnight for 4 instruments');
-  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all', 'Settings: the hotkeys of the single chart page (' + st.hk + ')');
+  // 1.16.0: and the workspace's own Maximize panel (never a trading key)
+  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all|Maximize panel', 'Settings: the hotkeys of the single chart page, and Maximize panel (' + st.hk + ')');
   check(st.reset && st.fits, 'Settings: Reset layout, and the panel fits the window (it scrolls inside)');
   await shot(page, 'workspace-settings.png');
   await page.click('#wsGlide [data-v="fast"]');
@@ -424,6 +425,7 @@ try {
   await page.click('#wsDialog [type="submit"]');
   await page.waitForFunction(() => window.workspace.layout === 'Third');
   check((await state()).search === '?layout=Third', 'New layout opens it and puts it in the URL');
+  check((await state()).panels.length === 0 && (await page.$$('.ws-panel')).length === 0, 'a new layout starts with no panels (1.16.0)');
   await page.selectOption('#wsLayout', '\u0001rename');
   await page.fill('#wsName', 'Second');
   await page.click('#wsDialog [type="submit"]');
@@ -471,18 +473,15 @@ try {
   check(lst.open && lst.n === ch.listed && lst.inside, '"' + ch.more + '" opens a small list of them');
   await shot(page, 'workspace-1366x768-chips.png');
   const esP = s.panels.find(p => p.type === 'chart' && p.root === 'ES');
+  // 1.16.0 (Anthony): no text inside a chart: no legend and no Aa toggle; the ARMED and connection badge sits in the header
   const lg = await page.evaluate(id => {
-    const el = document.querySelector(`.ws-panel[data-id="${id}"] .legend`), r = el.getBoundingClientRect();
-    const hidden = sel => { const e = el.querySelector(sel); return !e || getComputedStyle(e).display === 'none'; };
-    const inside = sel => { const e = el.querySelector(sel); const q = e.getBoundingClientRect(); return q.height > 0 && q.bottom <= r.bottom + 0.5; };
-    const tops = new Set([...el.querySelectorAll('.lg1 > *, .lg2 > *, .lg3 > *')].filter(e => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().top < r.bottom - 1).map(e => Math.round(e.getBoundingClientRect().top)));
-    const short = el.closest('.ws-panel').querySelector('.chart-live.compact').classList.contains('short'), w = Math.round(r.width);
-    return { short, w, src: hidden('[id$="lgSrc"]'), pill: hidden('[id$="connPill"]'), h: r.height, rows: tops.size, close: inside('.lg2 > :nth-child(5)') && (short && w < 400 || inside('[id$="lgChg"]')) && inside('[id$="lgName"]'), text: el.innerText.replace(/\s+/g, ' ').slice(0, 80) };
+    const pn = document.querySelector(`.ws-panel[data-id="${id}"]`), b = pn.querySelector('.ws-head .ws-badge .ch-badge');
+    return { legend: pn.querySelectorAll('.legend, [id$="lgName"], [id$="connPill"]').length, tog: pn.querySelectorAll('.lg-tog').length, badge: !!b, conn: b ? b.dataset.conn : '',
+      shown: b ? [...b.children].filter(x => !x.hidden).map(x => x.textContent) : null, corner: window.workspace.chart(id).corner() };
   }, esP.id);
-  check(lg.src && lg.pill, 'the panel legend has no source and version line and no LIVE pill (the top bar says LIVE · ChartBridge)');
-  // 1.14.0: a panel under 700 x 400 px has the short header, one line (the name and the last price; the change too when
-  // the panel has the room), the rest while the crosshair is over it
-  check(lg.short ? lg.rows === 1 && lg.h <= 22 && lg.close : lg.rows <= 2 && lg.h <= 40 && lg.close, 'ES 1 min at 1366x768: the legend fits in ' + (lg.short ? 'one line (the short header, ' + lg.w + ' px wide' : '2 lines (') + ', ' + lg.rows + ' rows, ' + Math.round(lg.h) + ' px: ' + lg.text + ')');
+  check(lg.legend === 0 && lg.tog === 0, 'ES 1 min: no legend and no header text toggle on the chart');
+  check(lg.badge && lg.conn === 'live' && lg.shown.length === 0, 'its badge is in the panel header, empty while LIVE and not Armed (' + JSON.stringify(lg.shown) + ')');
+  check(!!lg.corner && /ATR|Bar/.test(lg.corner.text), 'the corner readout stays: "' + (lg.corner && lg.corner.text) + '"');
   await control('status?level=warn&text=' + encodeURIComponent('Test note for the chart'));
   await page.waitForTimeout(400);
   const nt = await page.evaluate(id => { const c = document.querySelector(`.ws-panel[data-id="${id}"] .ws-body > .chart-live`), st = c.querySelector(':scope > .status'), m = st.querySelector('.msg'), r = st.getBoundingClientRect(), b = c.getBoundingClientRect();

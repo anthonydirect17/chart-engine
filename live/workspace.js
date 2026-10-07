@@ -20,6 +20,9 @@
  *   live-tape-floors-v1   { <root>: { rth, eth } } the large-print floors (Time and Sales), only those set by hand; the same
  *                         key as the charts' bubbles (LivePrefs.largeFloors, read through it since 1.14.0)
  *   live-tape-colors-v1   { above, ask, mid, bid, below } the Time and Sales category colors (1.14.0), only those set by hand
+ *   live-ws-keys-v1       { maximize } the workspace's own hotkeys (1.16.0): Maximize panel, a combo or ''; none by default,
+ *                         never one of the trading hotkeys (live-hotkeys-v1 wins)
+ *   live-ws-laptop-v1     true: this browser shows the layouts as two tabs, Main and Second, with tight margins (1.16.0)
  * Every write reads the key fresh and changes one layout (or one floor), so two windows never undo each other.
  */
 (function (root, factory) {
@@ -39,7 +42,11 @@ const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
    what they need */
 const HTF_TFS = ['h4', 'd1', 'w1'];
 const RANGE_MIN = 1, RANGE_MAX = 400;
-const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1' };
+const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1', viewKeys: 'live-ws-keys-v1', laptop: 'live-ws-laptop-v1' };
+/* 1.16.0 (Anthony): the laptop preset: two layout tabs, both blank to start, arranged by hand; tight margins (the grid's gap
+   and padding, px) */
+const LAPTOP_TABS = ['Main', 'Second'];
+const GAP = 6, GAP_TIGHT = 2;
 const DEFAULT_NAME = 'Main';
 /* Large prints on the tape: RTH 09:30 to 16:15 ET, overnight the rest (Anthony, 2026-10-01). */
 const RTH_START = 9 * 3600 + 30 * 60, RTH_END = 16 * 3600 + 15 * 60;
@@ -61,8 +68,9 @@ function layoutName(v) {
 /** A range size in ticks (a whole number 1 to 400), else null. */
 function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null; }
 
-/* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes'];
+/* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
+   Data Box (1.16.0: the bar under the cursor on any chart) */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox'];
 /** One panel, or null when its shape is bad. Position and size are whole cells; re-flow puts them inside the grid. */
 function cleanPanel(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
@@ -347,6 +355,34 @@ const decimalsOf = tick => { const s = String(tick); const i = s.indexOf('.'); r
 /** The header text of a chart's timeframe: "5 min", "1 hour", "Range 40". */
 function tfLabel(tf, range) { return tf === 'range' ? 'Range' + (range ? ' ' + range : '') : TF_LABEL[tf] || tf; }
 
+/* ---------------- the workspace's own hotkeys (1.16.0): Maximize panel */
+const VIEW_KEYS = [{ id: 'maximize', name: 'Maximize panel' }];
+/** The workspace's hotkeys as kept: { maximize } each a combo or ''. `trading` are the trading hotkeys in use (they win: a
+    combo one of them has is dropped here), `refused(combo)` the trading hotkeys' own rule ('' when a combo can be a hotkey,
+    OrderTicket.hotkeyRefused). Never throws. */
+function cleanViewKeys(v, trading, refused) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  const used = new Set(Object.values(trading || {}).filter(Boolean)), out = {};
+  for (const k of VIEW_KEYS) {
+    let c = own(v, k.id) && typeof v[k.id] === 'string' ? v[k.id] : '';
+    if (c && (c.length > 32 || (typeof refused === 'function' && refused(c)) || used.has(c))) c = '';
+    if (c) used.add(c);
+    out[k.id] = c;
+  }
+  return out;
+}
+
+/* ---------------- the Data Box (1.16.0) */
+/** How long a bar lasted, or has lasted so far, from whole seconds: "12 s", "4:05", "1:02:03", "2d 04h". */
+function fmtSpan(sec) {
+  if (!(sec >= 0) || !isFinite(sec)) return '';
+  const s = Math.round(sec);
+  if (s < 60) return s + ' s';
+  if (s >= 86400) return Math.floor(s / 86400) + 'd ' + p2(Math.floor(s % 86400 / 3600)) + 'h';
+  if (s >= 3600) return Math.floor(s / 3600) + ':' + p2(Math.floor(s % 3600 / 60)) + ':' + p2(s % 60);
+  return Math.floor(s / 60) + ':' + p2(s % 60);
+}
+
 /* ---------------- layouts */
 let idSeq = 0;
 /** A new panel id (also the chart's paneId): stable once saved. */
@@ -413,7 +449,7 @@ function setFloor(storage, root, which, value) {
 
 return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
-  isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
+  isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
   roundTrips, fillsToday, QUOTE_ROOTS, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
@@ -517,10 +553,12 @@ function note(text, warn, ms) {
 function fmtDelay(v) { return v === null || v === undefined ? '-' : (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms' + (v < 0 ? ' (PC clock behind)' : ''); }
 function syncStats() {
   const per = new Map();
-  let fps = 0, busy = false;
+  let fps = 0, busy = false, frame = null, frameMax = null;
   for (const v of chartViews()) {
     const s = v.pane.stats();
     if (s.chart && !s.chart.idle) { busy = true; fps = Math.max(fps, s.chart.fps || 0); }
+    // 1.16.0: tape timing, ChartBridge's receipt of a trade to the frame that drew it: the worst chart's, last second
+    if (typeof s.drawMax === 'number' && (frameMax === null || s.drawMax > frameMax)) { frameMax = s.drawMax; frame = s.draw; }
     if (!s.root) continue;
     const r = per.get(s.root) || { feed: null, local: null };
     if (s.feed !== null && (r.feed === null || s.feed > r.feed)) r.feed = s.feed;
@@ -540,7 +578,8 @@ function syncStats() {
   const lt = fmtDelay(local) + (local !== null && l95 !== null ? ' (p95 ' + fmtDelay(l95) + ')' : '');
   if ($('wsLocal').textContent !== lt) $('wsLocal').textContent = lt;
   $('wsFps').textContent = !chartViews().length ? '-' : busy ? Math.round(fps) + ' fps' : 'idle';
-  $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown:\n' +
+  $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown. Frame: a trade\'s receipt by ChartBridge to the chart frame that drew it, ' +
+    (frameMax === null ? 'no trade drawn in the last second' : fmtDelay(frameMax) + ' at worst in the last second (latest ' + fmtDelay(frame) + ')') + '; each chart\'s in the Data Box.\n' +
     ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
 }
 setInterval(syncStats, 1000);
@@ -1047,6 +1086,23 @@ document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
   ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
 }));
+/* 1.16.0: the workspace's own hotkeys (Maximize panel), kept apart from the trading ones (live-ws-keys-v1) and never one
+   of them: a trading key always wins (cleanViewKeys drops a combo they have, and the trading handler above takes the
+   press first). Never while a box has the focus (HOTKEY_IN_BOX), a menu or dialog is open, or on a key the chart reads. */
+const viewKeys = () => W.cleanViewKeys(store.getItem(W.KEYS.viewKeys), HK, OT.hotkeyRefused);
+document.addEventListener('keydown', e => {
+  if (e.defaultPrevented || e.isComposing) return;
+  const combo = OT.hotkeyCombo(e), k = combo ? viewKeys().maximize : '';
+  if (!k || combo !== k || OT.hotkeyAction(HK, combo)) return;
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) { if (!e.repeat) note(window.ChartLive.HOTKEY_IN_BOX, true); return; }
+  if (busy() || OT.isChartKey(e)) return;
+  e.preventDefault();
+  if (e.repeat) return;
+  if (maxId) { toggleMax(maxId); return; }
+  if (pointerPanel && views.has(pointerPanel)) toggleMax(pointerPanel);
+  else note('Point at a panel, then press ' + k + ' to maximize it', true);
+});
 /* KEYS ON / KEYS OFF: whether a key pressed now would fire a hotkey here */
 function keysOn() {
   if (!document.hasFocus() || busy()) return false;
@@ -1079,6 +1135,39 @@ const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(list => 
 /* A panel whose header menu is open sits above its neighbours (workspace.css .ws-up). */
 const raise = (el, on) => { const p = el && el.closest && el.closest('.ws-panel'); if (p) p.classList.toggle('ws-up', on); };
 
+/* ---------------- maximize and restore (1.16.0, Anthony): a panel fills the grid (the others stay as they are, hidden
+   behind it, and keep running), from the square beside its x or the Maximize panel hotkey (Settings > Hotkeys, none by
+   default): the panel under the mouse, or back again. Not saved: a reload shows the layout as arranged. */
+const MAX_ICON = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" rx=".5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+const RESTORE_ICON = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><rect x="1.5" y="3.5" width="7" height="7" rx=".5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 3.5v-2h7v7h-2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+let maxId = null, pointerPanel = null;
+function setMaxButton(v, on) {
+  const b = v.head.querySelector('[data-act="max"]');
+  if (!b) return;
+  b.innerHTML = on ? RESTORE_ICON : MAX_ICON;
+  b.setAttribute('aria-pressed', String(on));
+  const t = on ? 'Restore panel' : 'Maximize panel', k = viewKeys().maximize;
+  b.setAttribute('aria-label', t); b.title = t + (k ? ' (' + k + ')' : '');
+}
+function toggleMax(id) {
+  closePops();
+  const was = maxId;
+  if (was) restoreMax();
+  if (!id || was === id) return;
+  const v = views.get(id); if (!v) return;
+  maxId = id;
+  grid.classList.add('ws-maxed'); v.el.classList.add('ws-max-on');
+  v.el.style.gridColumn = '1 / -1'; v.el.style.gridRow = '1 / -1';
+  setMaxButton(v, true);
+}
+function restoreMax() {
+  const v = maxId ? views.get(maxId) : null;
+  maxId = null;
+  grid.classList.remove('ws-maxed');
+  if (v) { v.el.classList.remove('ws-max-on'); place(v.el, v.panel); setMaxButton(v, false); }
+}
+grid.addEventListener('pointerover', e => { const el = e.target.closest && e.target.closest('.ws-panel'); if (el && el.dataset.id) pointerPanel = el.dataset.id; });
+
 /* The slim header (Anthony, 2026-10-01): the handle, instrument and bars (a click changes them), the chart's own
    Indicators button, a small menu with the drawing tools and Reset view, and the x. */
 function headChart(v) {
@@ -1093,10 +1182,13 @@ function addView(p) {
   const el = document.createElement('section');
   el.className = 'ws-panel ' + p.type;
   el.dataset.id = p.id; el.dataset.type = p.type;
-  const close = '<button type="button" class="ws-x" data-act="close" aria-label="Close panel" title="Close panel">✕</button>';
+  /* 1.16.0 (Anthony): maximize and restore, the Windows way (a square; two squares while maximized), beside the x */
+  const close = '<button type="button" class="ws-ic ws-max" data-act="max" aria-pressed="false" aria-label="Maximize panel" title="Maximize panel">' + MAX_ICON + '</button>' +
+    '<button type="button" class="ws-x" data-act="close" aria-label="Close panel" title="Close panel">✕</button>';
   let mid = '';
   if (p.type === 'chart') {
     mid = '<button type="button" class="ws-view" data-act="view" aria-haspopup="dialog" aria-expanded="false"><span class="ws-name"></span><span class="ws-tf"></span><span class="ws-caret" aria-hidden="true"></span></button>' +
+      '<span class="chart-live ws-lv ws-badge"></span>' +    // 1.16.0: ARMED and the connection (the chart has no text on it)
       '<span class="chart-live ws-lv ws-ind"></span>' +
       '<button type="button" class="ws-ic ws-more" data-act="more" aria-haspopup="menu" aria-expanded="false" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>';
   } else if (p.type === 'tape') {
@@ -1105,6 +1197,7 @@ function addView(p) {
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
   } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
   else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>';
+  else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1119,6 +1212,7 @@ function addView(p) {
   else if (p.type === 'tape') mountTape(v);
   else if (p.type === 'account') mountAccount(v);        // 1.15.0
   else if (p.type === 'quotes') mountQuotes(v);
+  else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -1126,6 +1220,7 @@ function addView(p) {
   v.head.addEventListener('click', e => {
     const b = e.target.closest('[data-act]'); if (!b || !v.head.contains(b) || b.closest('.ws-lv')) return;
     if (b.dataset.act === 'close') closePanel(p.id);
+    else if (b.dataset.act === 'max') toggleMax(p.id);
     else if (b.dataset.act === 'gear') openTapeGear(v, b);
     else if (b.dataset.act === 'view') openViewPop(v, b);
     else if (b.dataset.act === 'more') openMore(v, b);
@@ -1147,16 +1242,20 @@ function mountChart(v) {
     onColors: () => { for (const o of chartViews()) if (o !== v) o.pane.refreshColors(); },
     onStatus: s => {
       v.state = s.state; syncConn();
-      if (s.state === 'live' && v.pane) { const n = v.pane.element.querySelector('[id$="lgName"]'); v.contract = n ? n.textContent : ''; headChart(v); }
+      if (s.state === 'live' && v.pane) { v.contract = typeof s.contract === 'string' ? s.contract : ''; headChart(v); }   // 1.16.0: from the status (no legend)
     },
   });
   v.pane = pane;
   pane.setTrade(chartTrade(v));                             // its instrument's orders, position and fills on the ticket's account
-  v.head.querySelector('.ws-ind').append(pane.indicators, pane.legendToggle, pane.chips);   // the chart's own Indicators button and menu, its header text toggle (1.14.0), its chips
+  // the chart's own Indicators button and menu, its chips; 1.16.0: no header text toggle (no text on the chart), and its
+  // ARMED and connection badge in the header
+  v.head.querySelector('.ws-ind').append(pane.indicators, pane.chips);
+  if (pane.badge) v.head.querySelector('.ws-badge').append(pane.badge);
+  followBars(v);                                            // the Data Box (1.16.0), when the layout has one
   const indBtn = pane.indicators.querySelector('.ind-btn');
   const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
   if (mo) mo.observe(indBtn, { attributes: true, attributeFilter: ['aria-expanded'] });
-  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.legendToggle.remove(); pane.chips.remove(); };
+  v.destroy = () => { if (v.offBar) v.offBar(); if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.chips.remove(); if (pane.badge) pane.badge.remove(); };
 }
 function viewChanged(v, nv) {
   const p = v.panel;
@@ -1178,6 +1277,7 @@ function seedMainIndicators(l) {
 function closePanel(id) {
   const v = views.get(id); if (!v) return;
   closePops();
+  if (maxId === id) restoreMax();
   if (v.panel.type === 'ticket') releaseTicket();           // no window has the ticket until one adds it
   v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); views.delete(id);
   panels = panels.filter(p => p.id !== id);
@@ -1186,11 +1286,12 @@ function closePanel(id) {
 
 function addPanel(type) {
   closePops();
+  if (maxId) restoreMax();                                  // the new panel is seen where it goes
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -1203,9 +1304,10 @@ function addPanel(type) {
 let dragging = null;
 function startDrag(e, v, mode, edge) {
   if (e.button !== 0 || dragging) return;
+  if (maxId) { if (mode === 'size') note('Restore the panel to resize it', true); return; }   // 1.16.0: a maximized panel stays put
   e.preventDefault();
   closePops();
-  const p = v.panel, m = W.metrics(grid.clientWidth, grid.clientHeight), sx = e.clientX, sy = e.clientY;
+  const p = v.panel, m = W.metrics(grid.clientWidth, grid.clientHeight, gridGap(), gridGap()), sx = e.clientX, sy = e.clientY;
   const target = e.currentTarget;
   try { target.setPointerCapture(e.pointerId); } catch (err) { /* fine without */ }
   let r = { x: p.x, y: p.y, w: p.w, h: p.h }, ok = true;
@@ -1463,6 +1565,97 @@ function mountQuotes(v) {
   const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
   v.destroy = () => { unfit(); quoteSubs.delete(render); for (const f of offs) f(); };
 }
+/* ---------------- the Data Box (1.16.0, Anthony): the bar under the cursor on any chart (its open, high, low, close, range,
+   volume, buys and sells, delta, the largest trade and the bubbles, its open time and how long it lasted); the newest bar of
+   the last chart hovered when the mouse is on none. Read only. The charts tell it when their bar may have changed (ChartLive
+   onBar, only while a Data Box is open: no cost otherwise); a cell is written only when its text changes. */
+const dataBoxes = () => [...views.values()].filter(v => v.dataBox);
+let dbChart = null;                                       // the chart view the Data Box follows
+const DB_ROWS = [
+  ['time', 'Opened'], ['dur', 'Lasted'], ['o', 'Open'], ['h', 'High'], ['l', 'Low'], ['c', 'Close'], ['rng', 'Range'], ['v', 'Volume'],
+  ['buy', 'Buy vol'], ['sell', 'Sell vol'], ['dlt', 'Delta'], ['big', 'Largest print'], ['bub', 'Bubbles'], ['hov', 'Bubble'],
+  ['tape', 'Tape to frame'],            // 1.16.0 debug: ChartBridge's receipt of a trade to the frame that drew it
+];
+function mountDataBox(v) {
+  v.body.innerHTML = '<div class="db gr" role="table" aria-label="Data Box: the bar under the cursor">' +
+    '<div class="db-head" data-db="head" role="row"></div>' +
+    DB_ROWS.map(([k, name]) => `<div class="db-row" role="row" data-row="${k}"><span class="db-k" role="rowheader">${esc(name)}</span><span class="db-v" role="cell" data-db="${k}"></span></div>`).join('') +
+    '<p class="db-note" data-db="note"></p></div>';
+  const cells = {};
+  for (const el of v.body.querySelectorAll('[data-db]')) cells[el.dataset.db] = el;
+  const rows = {};
+  for (const el of v.body.querySelectorAll('[data-row]')) rows[el.dataset.row] = el;
+  const src = v.head.querySelector('.ws-db-src');
+  const txt = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+  const set = (el, text, cls) => { txt(el, text); const k = 'db-v' + (cls ? ' ' + cls : ''); if (el.className !== k) el.className = k; };
+  const show = (k, on) => { const r = rows[k]; if (r && r.hidden === on) r.hidden = !on; };
+  const render = (c, x, second) => {
+    const name = c ? c.panel.root + ' ' + W.tfLabel(c.panel.tf, c.panel.tf === 'range' ? c.panel.range : 0) : '';
+    if (src.textContent !== name) src.textContent = name;
+    if (!x) {
+      txt(cells.head, c ? 'Waiting for ' + c.panel.root : 'Add a chart: the Data Box shows the bar under the cursor on any chart.');
+      for (const [k] of DB_ROWS) { set(cells[k], ''); show(k, k !== 'hov'); }
+      txt(cells.note, ''); cells.note.hidden = true;
+      return;
+    }
+    const dp = x.dp, px = p => U.fmtPrice(p, dp), tick = x.tick > 0 ? x.tick : 0.25;
+    txt(cells.head, (x.hovering ? 'Under the cursor' : 'Newest bar') + (x.forming ? ' · forming' : ''));
+    cells.head.classList.toggle('live', !x.hovering);
+    set(cells.time, U.fmtDay(x.t) + ' ' + W.fmtClock(x.t) + (Math.abs(x.t - Math.round(x.t)) > 1e-6 ? '.' + Math.floor((x.t % 1) * 10 + 1e-6) : ''));
+    set(cells.dur, W.fmtSpan(Math.max(0, x.end - x.t)) + (x.forming ? ' so far' : ''));   // never below 0 (the data's clock a little ahead of the PC's)
+    set(cells.o, px(x.o)); set(cells.h, px(x.h)); set(cells.l, px(x.l)); set(cells.c, px(x.c), x.c > x.o ? 'up' : x.c < x.o ? 'dn' : '');
+    set(cells.rng, px(x.h - x.l) + ' (' + Math.round((x.h - x.l) / tick) + ' t)');
+    set(cells.v, U.fmtPrice(x.v, 0));
+    const d = x.delta;
+    set(cells.buy, d ? U.fmtPrice(d.buy, 0) : '-', d ? 'up' : 'mut');
+    set(cells.sell, d ? U.fmtPrice(d.sell, 0) : '-', d ? 'dn' : 'mut');
+    const dl = d ? d.buy - d.sell : null;
+    set(cells.dlt, dl === null ? '-' : W.fmtSignedNum(dl, 0) || '0', dl > 0 ? 'up' : dl < 0 ? 'dn' : d ? '' : 'mut');
+    set(cells.big, d && d.big > 0 ? U.fmtPrice(d.big, 0) + ' contracts' : '-', d ? '' : 'mut');
+    const why = { off: 'Buy and sell volume, delta and the largest print come from the chart\'s Cumulative delta: turn it on in Indicators.',
+      old: 'This ChartBridge sends no trade sides: no buy and sell volume.', htf: 'No buy and sell volume on 4h, 1D and 1W bars.',
+      building: 'Counting the trades: buy and sell volume shortly.', before: 'Buy and sell volume count from ' + (x.deltaFrom !== null ? W.fmtClock(x.deltaFrom) + ' ET' : 'the page\'s opening') + ': none for this bar.' }[x.deltaWhy] || '';
+    txt(cells.note, why); if (cells.note.hidden !== !why) cells.note.hidden = !why;
+    const b = x.bubbles;
+    set(cells.bub, !b ? 'Off on this chart' : !b.n ? 'None' : b.n + (b.n > 1 ? ', largest ' : ': ') + (b.side > 0 ? 'Buy ' : 'Sell ') + U.fmtPrice(Math.round(b.max), 0),
+      !b ? 'mut' : b.n ? (b.side > 0 ? 'up' : 'dn') : '');
+    const h = x.bubble;
+    show('hov', !!h);
+    if (h) set(cells.hov, (h.side > 0 ? 'Buy ' : 'Sell ') + U.fmtPrice(Math.round(h.v), 0) + ' @ ' + px(h.p) + ' ' + W.fmtClock(h.t), h.side > 0 ? 'up' : 'dn');
+    if (second || !cells.tape.textContent) {          // once a second (the stamp is one number per frame, kept by the chart)
+      const st = typeof c.pane.timing === 'function' ? c.pane.timing() : {};
+      set(cells.tape, typeof st.drawMax === 'number' ? fmtDelay(st.draw) + ' (worst ' + fmtDelay(st.drawMax) + ')' : '-', 'mut');
+    }
+  };
+  v.state = 'live';
+  v.dataBox = { render };
+  const unfit = fitPanel(v, (w, h) => ({ 'db-wide': w >= 360 && h < 15 * 19 + 40, 'db-short': h < 8 * 19 + 40 }));
+  v.destroy = () => { unfit(); delete v.dataBox; followAll(); };
+  followAll();
+  renderDataBoxes();
+}
+/* The charts' bar changes, while a Data Box is open: the chart hovered becomes the one followed. */
+function followBars(v) {
+  if (v.offBar) { v.offBar(); v.offBar = null; }
+  if (!dataBoxes().length || !v.pane || typeof v.pane.onBar !== 'function') return;
+  v.offBar = v.pane.onBar(hovering => {
+    if (hovering && dbChart !== v) dbChart = v;
+    if (dbChart === v) renderDataBoxes();
+  });
+}
+function followAll() {
+  for (const v of chartViews()) followBars(v);
+  if (dbChart && (!views.has(dbChart.panel.id) || views.get(dbChart.panel.id) !== dbChart)) dbChart = null;
+}
+function renderDataBoxes(second) {
+  const boxes = dataBoxes();
+  if (!boxes.length) return;
+  if (!dbChart || views.get(dbChart.panel.id) !== dbChart) dbChart = chartViews()[0] || null;
+  const x = dbChart && typeof dbChart.pane.barInfo === 'function' ? dbChart.pane.barInfo() : null;
+  for (const b of boxes) b.dataBox.render(dbChart, x, second === true);
+}
+setInterval(() => renderDataBoxes(true), 1000);                      // the forming bar's "so far", and a chart closed or reloaded
+
 /* The Account panel's and the Quote board's classes from their size (`classes(width, height)` -> { class: on }), from a
    ResizeObserver (container queries cost every chart frame, perf:workspace). Returns the undo. */
 function fitPanel(v, classes) {
@@ -1843,14 +2036,38 @@ $('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="w
     <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
     <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
     <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
+  </div>`).join('')}${W.VIEW_KEYS.map(a => `
+  <div class="hk-row hk-view" data-hk="${a.id}">
+    <label class="hk-name" for="wsHk-${a.id}">${esc(a.name)}</label>
+    <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
+    <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
+    <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
   </div>`).join('')}</div>`;
 const hkNote = (id, text, level) => { const el = $('wsHkNote-' + id); el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
-function renderHotkeys() { const HK = readHotkeys(); for (const a of OT.HOTKEY_ACTIONS) $('wsHk-' + a.id).value = HK[a.id]; }
+function renderHotkeys() {
+  const HK = readHotkeys(), VK = viewKeys();
+  for (const a of OT.HOTKEY_ACTIONS) $('wsHk-' + a.id).value = HK[a.id];
+  for (const a of W.VIEW_KEYS) $('wsHk-' + a.id).value = VK[a.id];
+  for (const v of views.values()) setMaxButton(v, maxId === v.panel.id);   // the key in the square's tooltip
+}
+const isViewKey = id => W.VIEW_KEYS.some(a => a.id === id);
+/* a workspace hotkey (1.16.0): never a trading one (checked by the trading hotkeys' own rule, hotkeyFromEvent) */
+function saveViewKey(id, combo) {
+  const next = viewKeys();
+  next[id] = combo;
+  try { store.setItem(W.KEYS.viewKeys, JSON.stringify(next)); } catch (e) { /* blocked */ }
+  if (viewKeys()[id] !== combo) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
+  renderHotkeys();
+  hkNote(id, combo ? 'Saved.' : 'Cleared.', '');
+}
 function saveHotkey(id, combo) {
+  if (isViewKey(id)) { saveViewKey(id, combo); return; }
   const next = Object.assign({}, readHotkeys());
   if (combo) {
     const other = OT.HOTKEY_ACTIONS.find(a => a.id !== id && next[a.id] === combo);
     if (other) { renderHotkeys(); hkNote(id, combo + ' is already ' + other.name + '. Clear it there first.', 'warn'); return; }
+    const view = W.VIEW_KEYS.find(a => viewKeys()[a.id] === combo);    // 1.16.0: nor the workspace's own key
+    if (view) { renderHotkeys(); hkNote(id, combo + ' is already ' + view.name + '. Clear it there first.', 'warn'); return; }
   }
   next[id] = combo;
   if (!prefs.raw.set(HKKEY, next)) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
@@ -1906,9 +2123,10 @@ function syncSelect() {
 $('wsLayout').addEventListener('change', e => {
   const v = e.target.value;
   e.target.value = layout;
+  // 1.16.0 (Anthony): a new layout starts with no panels (Add panel fills it); Reset still gives the default one
   if (v === '\u0001new') askName('New layout', '', name => {
     if (names().includes(name)) return 'A layout with that name exists';
-    if (!W.saveLayout(store, name, seedMainIndicators(W.defaultLayout()))) return 'Could not save it in this browser';
+    if (!W.saveLayout(store, name, { panels: [] })) return 'Could not save it in this browser';
     openLayout(name); return '';
   });
   else if (v === '\u0001rename') askName('Rename "' + layout + '"', layout, name => {
@@ -1924,11 +2142,42 @@ $('wsLayout').addEventListener('change', e => {
   });
   else if (v && v !== layout) { save(); openLayout(v); }
 });
+/* ---------------- the laptop preset (1.16.0, Anthony): this browser shows two layout tabs, Main and Second, in the top bar,
+   with tight margins (2 px between panels); both start blank and Anthony arranges them. Kept in this browser
+   (live-ws-laptop-v1); the layout list still works. */
+const laptopOn = () => { try { return JSON.parse(store.getItem(W.KEYS.laptop)) === true; } catch (e) { return false; } };
+const gridGap = () => (laptopOn() ? W.GAP_TIGHT : W.GAP);
+function syncLaptop() {
+  const on = laptopOn(), tabs = $('wsTabs');
+  document.body.classList.toggle('ws-tight', on);
+  tabs.hidden = !on;
+  if (on) {
+    const html = W.LAPTOP_TABS.map(n => `<button type="button" role="tab" class="ws-tab" data-tab="${esc(n)}" aria-selected="${n === layout}">${esc(n)}</button>`).join('');
+    if (tabs.dataset.html !== html) { tabs.dataset.html = html; tabs.innerHTML = html; }
+  }
+  $('wsLaptop').textContent = on ? 'Laptop tabs: on (turn off)' : 'Laptop: two blank tabs, Main and Second';
+}
+$('wsTabs').addEventListener('click', e => {
+  const b = e.target.closest('[data-tab]'); if (!b || b.dataset.tab === layout) return;
+  save(); openLayout(b.dataset.tab);
+});
+$('wsLaptop').addEventListener('click', () => {
+  closePops();
+  if (laptopOn()) { try { store.setItem(W.KEYS.laptop, 'false'); } catch (e) { /* blocked */ } syncLaptop(); return; }
+  const used = W.LAPTOP_TABS.filter(n => { const l = W.readStore(store).layouts[n]; return l && l.panels.length; });
+  confirmBox('Make this browser a laptop: two layout tabs, ' + W.LAPTOP_TABS.join(' and ') + ', both blank, with tight margins. ' +
+    (used.length ? used.join(' and ') + ' lose' + (used.length > 1 ? '' : 's') + ' ' + (used.length > 1 ? 'their' : 'its') + ' panels in this browser. ' : '') + 'Arrange them with Add panel.', 'Make the tabs', () => {
+    for (const n of W.LAPTOP_TABS) W.saveLayout(store, n, { panels: [] });
+    try { store.setItem(W.KEYS.laptop, 'true'); } catch (e) { /* blocked */ }
+    openLayout(W.LAPTOP_TABS[0]);
+  });
+});
+
 function setUrl() {
   const u = new URL(location.href);
   u.searchParams.set('layout', layout);
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
-  syncTitle();
+  syncTitle(); syncLaptop();
 }
 
 /* A small dialog for a name, and one to confirm. */
@@ -2017,6 +2266,7 @@ function teardown() {
   if (core.TR.armed) core.setArmed(false);                 // the ticket is built again: Armed off
   for (const v of views.values()) { v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); }
   views.clear(); panels = []; colorsOwner = null; TK.el = null; TK.bar = null; TK.view = null;
+  maxId = null; grid.classList.remove('ws-maxed'); dbChart = null;
 }
 function openLayout(name) {
   teardown();
@@ -2040,7 +2290,8 @@ window.addEventListener('storage', e => {
   else if (k === W.KEYS.tapeColors) { tapeColors = W.readTapeColors(store); applyTapeColors(); if (pop && pop.el === $('wsGear')) renderTapeColors(); }
   else if (k === LP.KEYS.settings) { for (const v of chartViews()) v.pane.refreshSettings(); if (pop && pop.el === $('wsSettings')) renderGeneral(); }
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
-  else if (k === HKKEY) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
+  else if (k === HKKEY || k === W.KEYS.viewKeys) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
+  else if (k === W.KEYS.laptop) syncLaptop();
   else if (k === LP.KEYS.bracketPresets && TK.bar) { core.readPresets(); TK.bar.render(); }
   else if (k === TICKET_KEY && !holds()) { const r = readTicket().root; if (W.ROOTS.includes(r)) TK.root = r; renderOrders(); }
   else if (k === 'live-account-v1' && !holds() && !holder()) { noTicketAccount(); renderOrders(); }

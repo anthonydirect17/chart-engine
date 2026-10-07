@@ -343,7 +343,9 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-panel.gr-narrow .gr-pos .gr-row { grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) 44px; }
 .ws-panel.gr-narrow .gr-ord .gr-row { grid-template-columns: 36px minmax(0, 1fr) 26px; }
 .ws-panel.gr-narrow .gr-fil .gr-row { grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr); }
-.ws-panel.gr-narrow .gr-qb { font-size: 10px; }
+/* 10 px on a narrow board (1.16.0: the doubled class outranks the narrow panels' 10.5 px below; with IBM Plex Mono served
+   from the PC a 9-figure price at 10.5 px no longer fit a 2-column board at 1366 px) */
+.ws-panel.gr-narrow .gr.gr-qb { font-size: 10px; }
 .ws-panel.gr-narrow .gr-qb .gr-row { grid-template-columns: 30px minmax(0, 9fr) minmax(0, 7fr) minmax(0, 9fr); }
 .ws-panel.gr-narrow .gr-qb .pr > :last-child { font-size: 10px; }
 /* a 2 x 1 board: one line, the last, the change and the percent (the high and low in the row's tooltip); at 1366 px only
@@ -406,3 +408,36 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ac-sum .lb-short { display: none; }
 .ws-panel.gr-narrow .ac-sum .lb-full { display: none; }
 .ws-panel.gr-narrow .ac-sum .lb-short { display: inline; }
+
+/* ---------------- 1.16.0 (Anthony's display round) */
+/* a chart's ARMED and connection badge (live.js), in its header: only what is not normal shows */
+.ws-head .ws-badge .ch-badge { position: static; flex: none; display: inline-flex; gap: 4px; }
+.ws-head .ws-badge .pill { font-size: 9px; line-height: 16px; padding: 0 6px; }
+/* maximize and restore: the square beside the x; a maximized panel spans the grid, the others wait behind it, unchanged */
+.ws-max { display: inline-flex; align-items: center; padding: 3px 5px; }
+.ws-max svg { display: block; }
+.ws-grid.ws-maxed > .ws-panel:not(.ws-max-on) { visibility: hidden; }
+.ws-grid.ws-maxed > .ws-panel.ws-max-on { z-index: 7; }
+.ws-panel.ws-max-on .ws-edge { display: none; }
+.ws-panel.ws-max-on .ws-head { cursor: default; }
+/* the laptop preset: the two layout tabs, and tight margins (W.GAP_TIGHT, the drag snaps to the same) */
+.ws-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--ws-line2); border-radius: 7px; background: var(--ws-field); flex: none; }
+.ws-tab { height: 22px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--ws-text2); font: inherit; cursor: pointer; }
+.ws-tab[aria-selected="true"] { background: var(--ws-tint); color: var(--ws-soft); font-weight: 600; }
+.ws-tab:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+body.ws-tight .ws-grid { gap: 2px; padding: 2px; }
+body.ws-tight .ws-panel { border-radius: 5px; }
+body.ws-tight .ws-body { border-radius: 0 0 4px 4px; }
+body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
+/* the Data Box: a name and a value per row, mono numbers; two pairs a row on a wide, short panel (fitPanel) */
+.db { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-content: start; column-gap: 12px; padding: 4px 8px; font: 12px var(--ws-mono); font-variant-numeric: tabular-nums; overflow: hidden; }
+.db-head { grid-column: 1 / -1; font: 500 10px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); padding: 2px 0 4px; }
+.db-head.live { color: var(--ws-text2); }
+.db-row { display: contents; }
+.db-k { font: 500 11px var(--ws-sans); color: var(--ws-muted); line-height: 19px; white-space: nowrap; }
+.db-v { text-align: right; line-height: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ws-text); }
+.db-v.up { color: var(--ws-buy); } .db-v.dn { color: var(--ws-sell); } .db-v.mut { color: var(--ws-muted); }
+.db-note { grid-column: 1 / -1; margin: 4px 0 0; font: 11px var(--ws-sans); color: var(--ws-muted); white-space: normal; }
+.ws-db-src { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ws-panel.db-wide .db { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); }
+.ws-panel.db-short .db-note { display: none; }

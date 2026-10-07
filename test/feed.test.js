@@ -284,3 +284,72 @@ test('one panel throwing never stops the others', async () => {
   assert.deepStrictEqual(thrown, ['panel a']);
   assert.strictEqual(b.got.filter(m => m.type === 'tick').length, 1);
 });
+
+/* 1.16.0 (Anthony): the live record is a rolling window, never dropped whole; a panel joining a record that no longer starts at
+   ready gets a load of its own on a new socket, and no panel already on the line loads afresh. */
+test('the live record at its cap (LIVE_MAX): the oldest tenth goes, the newest stay, nothing is dropped whole', () => {
+  const L = new F.LiveLog(F.LIVE_MAX, F.LIVE_TRIM);
+  for (let i = 0; i < F.LIVE_MAX; i++) L.push({ t: i, p: 1, v: 1, s: 1, sm: 1 });
+  assert.deepStrictEqual([L.n, L.base, L.trimmed, L.dropped], [F.LIVE_MAX, 0, false, false], 'full, not trimmed yet');
+  L.push({ t: F.LIVE_MAX, p: 2, v: 3, s: -1, sm: 2, q: -1 });
+  assert.deepStrictEqual([L.n, L.base, L.trimmed, L.dropped], [F.LIVE_MAX - F.LIVE_TRIM + 1, F.LIVE_TRIM, true, false], 'a rolling window: one tenth gone');
+  assert.strictEqual(L.cap, F.LIVE_MAX, 'no new arrays: the columns stay at the cap');
+  assert.deepStrictEqual(L.tick('MNQ', 0), { type: 'tick', root: 'MNQ', t: F.LIVE_TRIM, p: 1, v: 1, s: 1, sm: 1 }, 'the oldest kept');
+  assert.deepStrictEqual(L.tick('MNQ', L.n - 1), { type: 'tick', root: 'MNQ', t: F.LIVE_MAX, p: 2, v: 3, s: -1, sm: 2, q: -1 }, 'the newest, side and category kept');
+  for (let i = 1; i < F.LIVE_TRIM; i++) L.push({ t: F.LIVE_MAX + i, p: 1, v: 1 });
+  assert.strictEqual(L.n, F.LIVE_MAX, 'full again');
+  L.push({ t: F.LIVE_MAX + F.LIVE_TRIM, p: 1, v: 1 });
+  assert.deepStrictEqual([L.n, L.base], [F.LIVE_MAX - F.LIVE_TRIM + 1, 2 * F.LIVE_TRIM], 'and rolls on');
+  assert.strictEqual(L.t[0], 2 * F.LIVE_TRIM);
+  const bf = new F.LiveLog(3);                                         // the backfill: one piece, dropped whole as before
+  for (let i = 0; i < 4; i++) bf.pushRow([i, 1, 1]);
+  assert.ok(bf.dropped && !bf.trimmed);
+});
+
+test('a panel joining past the cap gets its own load on a new socket; the panels on the line never load afresh', async () => {
+  const h = hub({ liveMax: 50, liveTrim: 10 });
+  const a = panel(h, 'MNQ', { tickHours: 2, liveFirst: true, profile: true, sub: 1 });
+  const t = panel(h, 'MNQ', { days: 1, tickHours: 0 });
+  await wait();
+  const ws = FakeWS.all[0]; ws.open(); ws.msg(HELLO); await wait();
+  const sub = ws.sent[0].sub;
+  ws.msg({ type: 'history', root: 'MNQ', sub, bars: [[60, 1, 2, 0.5, 1.5, 10]], done: true });
+  ws.msg({ type: 'ready', root: 'MNQ', sub });
+  for (let i = 0; i < 49; i++) ws.msg({ type: 'tick', root: 'MNQ', t: 100 + i, p: 1, v: 1, s: 1, sm: 1 });
+  // under the cap a panel still joins the load, its trades replayed from ready
+  const early = panel(h, 'MNQ', { days: 1, tickHours: 0 });
+  await wait(20);
+  assert.strictEqual(FakeWS.all.length, 1, 'no new socket under the cap');
+  assert.strictEqual(early.got.filter(m => m.type === 'tick').length, 49, 'every trade since ready');
+  for (let i = 49; i < 75; i++) ws.msg({ type: 'tick', root: 'MNQ', t: 100 + i, p: 1, v: 1, s: 1, sm: 1 });
+  let st = h.stats().lines[0].load;
+  assert.ok(st.live <= 50 && st.liveFrom > 0, 'the record rolled: ' + JSON.stringify(st));
+  const before = [a, t, early].map(p => p.got.filter(m => m.type === 'hello').length);
+  const c = panel(h, 'MNQ', { tickHours: 2, liveFirst: true, profile: true, sub: 9 });
+  await wait(20);
+  assert.strictEqual(FakeWS.all.length, 2, 'the joining panel gets a socket of its own');
+  assert.strictEqual(ws.sent.length, 1, 'no new subscribe on the old socket');
+  const ws2 = FakeWS.all[1]; ws2.open(); ws2.msg(HELLO); await wait();
+  assert.strictEqual(ws2.sent.length, 1);
+  const s2 = ws2.sent[0];
+  assert.deepStrictEqual({ root: s2.root, tickHours: s2.tickHours, liveFirst: s2.liveFirst, profile: s2.profile }, { root: 'MNQ', tickHours: 2, liveFirst: true, profile: true });
+  ws2.msg({ type: 'history', root: 'MNQ', sub: s2.sub, bars: [[60, 1, 2, 0.5, 1.5, 10]], done: true });
+  ws2.msg({ type: 'ready', root: 'MNQ', sub: s2.sub });
+  assert.deepStrictEqual(types(c).filter(x => x !== 'tick'), ['hello', 'history', 'ready'], 'it loads from its own load');
+  assert.deepStrictEqual([a, t, early].map(p => p.got.filter(m => m.type === 'hello').length), before, 'no hello again for the panels already on the line');
+  // live trades go on on each socket to its own panels
+  const n0 = a.got.length, c0 = c.got.length;
+  ws.msg({ type: 'tick', root: 'MNQ', t: 500, p: 1, v: 1, s: 1, sm: 1 });
+  ws2.msg({ type: 'tick', root: 'MNQ', t: 500, p: 1, v: 1, s: 1, sm: 1 });
+  assert.deepStrictEqual([a.got.length - n0, c.got.length - c0], [1, 1], 'one trade each, never twice');
+  // a later panel joins the new line, no third socket
+  const d = panel(h, 'MNQ', { days: 1, tickHours: 0 });
+  await wait(20);
+  assert.strictEqual(FakeWS.all.length, 2);
+  assert.ok(types(d).includes('ready'), 'it joins the new load');
+  // the old line closes with the last of its panels
+  for (const p of [a, t, early]) { p.sock.onclose = null; p.sock.close(); }
+  assert.ok(ws.closed && !ws2.closed);
+  st = h.stats();
+  assert.deepStrictEqual([st.sockets, st.lines.length, st.lines[0].retired], [1, 1, false]);
+});

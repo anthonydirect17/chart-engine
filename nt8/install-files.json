@@ -24,6 +24,17 @@
     { "from": "live/workspace.css", "to": "workspace.css" },
     { "from": "live/motion.js", "to": "motion.js" },
     { "from": "live/motion.css", "to": "motion.css" },
-    { "from": "src/chart-engine.js", "to": "src/chart-engine.js" }
+    { "from": "src/chart-engine.js", "to": "src/chart-engine.js" },
+    { "from": "live/fonts/plex.css", "to": "fonts/plex.css" },
+    { "from": "live/fonts/OFL.txt", "to": "fonts/OFL.txt" },
+    { "from": "live/fonts/IBMPlexMono-Regular.woff2", "to": "fonts/IBMPlexMono-Regular.woff2" },
+    { "from": "live/fonts/IBMPlexMono-Medium.woff2", "to": "fonts/IBMPlexMono-Medium.woff2" },
+    { "from": "live/fonts/IBMPlexMono-SemiBold.woff2", "to": "fonts/IBMPlexMono-SemiBold.woff2" },
+    { "from": "live/fonts/IBMPlexSans-Regular.woff2", "to": "fonts/IBMPlexSans-Regular.woff2" },
+    { "from": "live/fonts/IBMPlexSans-Medium.woff2", "to": "fonts/IBMPlexSans-Medium.woff2" },
+    { "from": "live/fonts/IBMPlexSans-SemiBold.woff2", "to": "fonts/IBMPlexSans-SemiBold.woff2" },
+    { "from": "live/fonts/IBMPlexSansCondensed-Medium.woff2", "to": "fonts/IBMPlexSansCondensed-Medium.woff2" },
+    { "from": "live/fonts/IBMPlexSansCondensed-SemiBold.woff2", "to": "fonts/IBMPlexSansCondensed-SemiBold.woff2" },
+    { "from": "live/fonts/IBMPlexSansCondensed-Bold.woff2", "to": "fonts/IBMPlexSansCondensed-Bold.woff2" }
   ]
 }

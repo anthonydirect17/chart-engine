@@ -1,0 +1,15 @@
+/*
+ * IBM Plex, served by this PC (1.16.0, Anthony): the page loads nothing from the internet. The weights the pages use only:
+ * Mono 400 500 600, Sans 400 500 600, Sans Condensed 500 600 700. The woff2 files are IBM's own release (npm @ibm/plex-mono
+ * 2.5.0, @ibm/plex-sans 1.1.0, @ibm/plex-sans-condensed 2.0.0, fonts/complete/woff2), unchanged. Licence: SIL Open Font
+ * License 1.1, in OFL.txt beside them. Listed in nt8/install-files.json, so the installer and the updater copy them.
+ */
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap; src: url("IBMPlexMono-Regular.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap; src: url("IBMPlexMono-Medium.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: swap; src: url("IBMPlexMono-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 400; font-display: swap; src: url("IBMPlexSans-Regular.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 500; font-display: swap; src: url("IBMPlexSans-Medium.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 600; font-display: swap; src: url("IBMPlexSans-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-weight: 500; font-display: swap; src: url("IBMPlexSansCondensed-Medium.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-weight: 600; font-display: swap; src: url("IBMPlexSansCondensed-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans Condensed"; font-style: normal; font-weight: 700; font-display: swap; src: url("IBMPlexSansCondensed-Bold.woff2") format("woff2"); }

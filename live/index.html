@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Workspace</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
+<link rel="stylesheet" href="fonts/plex.css">
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
 <link rel="stylesheet" href="workspace.css">
@@ -33,6 +32,8 @@
   <button type="button" class="ws-btn ws-flat" id="wsFlat" title="Flatten all">Flatten all</button>
   <!-- Colors for every chart (one chart's Colors panel, placed here by workspace.js) -->
   <span class="chart-live ws-lv ws-colors" id="wsColors"></span>
+  <!-- the laptop preset's two layout tabs (1.16.0), shown when it is on in this browser -->
+  <span class="ws-tabs" id="wsTabs" role="tablist" aria-label="Layouts" hidden></span>
   <label class="ws-lbl" for="wsLayout">Layout</label>
   <select class="ws-sel" id="wsLayout"></select>
   <button type="button" class="ws-btn add" id="wsAdd" aria-haspopup="menu" aria-expanded="false" aria-controls="wsAddMenu">+ Add panel</button>
@@ -56,6 +57,7 @@
   <button type="button" role="menuitem" data-add="ticket">Order ticket</button>
   <button type="button" role="menuitem" data-add="account">Account</button>
   <button type="button" role="menuitem" data-add="quotes">Quote board</button>
+  <button type="button" role="menuitem" data-add="databox">Data Box</button>
 </div>
 
 <div class="ws-pop ws-viewpop" id="wsView" role="dialog" aria-label="Instrument and bars" hidden></div>
@@ -95,7 +97,7 @@
   <section class="ws-sec">
     <h2 id="wsHkCap">Hotkeys <span>the same keys as the single chart page</span></h2>
     <div class="chart-live ws-lv" id="wsHotkeys"></div>
-    <p class="ws-help">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Saved in this browser.</p>
+    <p class="ws-help">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
   </section>
   </div><div class="ws-col">
   <section class="ws-sec">
@@ -110,6 +112,7 @@
   <section class="ws-sec">
     <h2>Layout</h2>
     <button type="button" class="ws-btn" id="wsReset">Reset "<span id="wsResetName"></span>" to the default</button>
+    <button type="button" class="ws-btn" id="wsLaptop">Laptop: two blank tabs, Main and Second</button>
   </section>
   <p class="ws-ver" id="wsVersion"></p>
   </div></div>

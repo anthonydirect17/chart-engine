@@ -2,6 +2,37 @@
 
 ## Unreleased: 1.16.0 (in progress)
 
+- **No text inside a chart** (Anthony 2026-10-07): a mounted chart (every workspace chart, a host's) has no legend and no
+  **Aa** toggle any more (`live-legend-v1` is read by the single chart page only; `legendToggle` is an empty hidden element
+  for hosts that place it). Its badge (`badge`, placed in the workspace's panel header) shows **ARMED · account** while the
+  chart takes orders and the connection when it is not LIVE. The single chart page keeps its 1.14.0 legend.
+- **Stale feed**: no trade for 10 s in RTH (09:30 to 16:00 ET) or 60 s outside it, while the line is live and CME Globex
+  open (not in the 17:00 to 18:00 ET break or the weekend; holidays are not known): a thin amber edge on the chart and
+  "Feed stale 12 s" in its badge (the LIVE pill on the single chart page: "STALE 12 s"); it clears with the next trade.
+  `LivePrefs.staleSeconds`.
+- **The bubble under the mouse** in the corner readout: "Buy 142 · Bar 0:54 · ATR(14) 5.58", set on the bubble event.
+- **Auto-fit and bubbles**: the price scale counts the bubbles in view (only those, their drawn radius, up to 27 px at the
+  default zoom) so none crosses the top of the plot (`util.fitRange`'s `bub`).
+- **Data Box** panel (Add panel > Data Box): the bar under the cursor on any chart, else the newest bar of the last chart
+  hovered: open time, how long it lasted, open, high, low, close, range (points and ticks), volume, buy and sell volume and
+  delta (from the chart's Cumulative delta; says so when it is off), the largest print (the delta core's new `big`), the
+  bubbles on the bar and the one under the mouse, and the tape timing (ChartBridge's receipt of a trade to the frame that
+  drew it, one stamp per frame; the top bar's tooltip has the worst chart's). Cells are written only when they change; the
+  charts tell it only while one is open (`ChartLive.mount`'s `barInfo()`, `onBar(fn)`, `timing()`).
+- **Maximize and restore** a panel: the square beside its x, or the **Maximize panel** hotkey (Settings > Hotkeys, none by
+  default, `live-ws-keys-v1`): never a trading key (both ways refused), never while a box has the focus. Not saved.
+- **Laptop preset** (Settings > Layout): two blank layout tabs, Main and Second, in the top bar, with 2 px margins
+  (`live-ws-laptop-v1`, this browser).
+- **New layout...** starts with no panels (Reset still gives the default layout).
+- **Fonts from the PC**: IBM Plex Mono, Sans and Sans Condensed (the weights in use) in `live/fonts` with `plex.css` and the
+  SIL OFL licence; no Google Fonts link in `index.html` or `single.html`; in the install list; `*.woff2 binary`. A unit
+  test checks that no installed file refers to an http(s) address other than this PC. A narrow Quote board keeps 10 px
+  figures (a 9-figure price was cut at 10.5 px with the real font).
+- **Shared feed**: the live record keeps a rolling window (`LIVE_MAX`, the oldest tenth goes) instead of dropping itself; a
+  panel joining after it rolled gets a load of its own on a new socket and the panels already on the line never reload.
+- Engine: `on('drawn')`, `vwapAt(i)`. Tests: `test/display116.test.js`, `test/offline.test.js`, `test/feed.test.js`,
+  `smoke:display116`; the smokes that read a mounted chart's legend or LIVE pill read its badge (`data-conn`).
+
 - **Quote board: NQ and ES only** (Anthony 2026-10-05): the MNQ and MES rows are gone (`QUOTE_ROOTS` in
   `live/workspace.js`). Display only: the charts and the order ticket still trade every configured root.
 - **The F5 note clears itself**: "ChartBridge x copied: press F5 when flat" (`live/update-notice.js`) goes as soon as the

@@ -45,7 +45,8 @@
  *                       floor per instrument; only what was set by hand
  *   live-tape-floors-v1 { <root>: { rth, eth } } the large-print floors (the workspace's Time and Sales floors, 1.12.0), also
  *                       the bubbles' and the absorption bars' large trade (G1c); only those set by hand
- *   live-legend-v1      { <paneId>: false } a chart's header text switched off (1.14.0, Anthony); on unless set off
+ *   live-legend-v1      { <paneId>: false } a chart's header text switched off (1.14.0, Anthony); on unless set off. Since
+ *                       1.16.0 only the single chart page has header text (a mounted chart has none and never reads it)
  *   live-scale-lock-v1  { <paneId>: true } a chart's price scale locked (1.14.0, review D2); unlocked unless set
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
@@ -804,6 +805,31 @@ function localPresetStore(storage) {
 }
 
 /*
+ * The stale feed (1.16.0, Anthony): a chart whose line is live but has had no trade for 10 s in RTH (09:30 to 16:00 ET) or
+ * 60 s outside it says so. Times are bar time (New York wall clock stored as if UTC). Never while CME Globex is shut (its
+ * daily break 17:00 to 18:00 ET, and Friday 17:00 to Sunday 18:00 ET), when no trade is due. Holidays are not known here.
+ */
+const STALE_RTH_S = 10, STALE_ETH_S = 60, RTH_FROM = 34200, RTH_TO = 57600;
+const todOf = t => ((Math.floor(t) % 86400) + 86400) % 86400;
+const weekdayOf = t => new Date(Math.floor(t) * 1000).getUTCDay();          // 0 Sunday ... 6 Saturday
+/** RTH, 09:30 to 16:00 ET, Monday to Friday, at bar time t. */
+function isRthEt(t) { const d = weekdayOf(t), s = todOf(t); return d >= 1 && d <= 5 && s >= RTH_FROM && s < RTH_TO; }
+/** Whether CME Globex trades the index futures at bar time t (Sunday 18:00 to Friday 17:00 ET, less the 17:00 to 18:00 break). */
+function globexOpen(t) {
+  const d = weekdayOf(t), s = todOf(t);
+  if (d === 6) return false;
+  if (d === 0) return s >= 18 * 3600;
+  if (s >= 17 * 3600 && s < 18 * 3600) return false;
+  return !(d === 5 && s >= 17 * 3600);
+}
+/** The seconds a live line has been quiet when that is stale (quietMs since its last trade, at bar time t), else 0. */
+function staleSeconds(quietMs, t) {
+  if (!(quietMs > 0) || !isFinite(t) || !globexOpen(t)) return 0;
+  const sec = Math.floor(quietMs / 1000);
+  return sec >= (isRthEt(t) ? STALE_RTH_S : STALE_ETH_S) ? sec : 0;
+}
+
+/*
  * The page's clock (1.14.0, Anthony's item 9): the browser's monotonic clock (performance.now()) on a wall-clock base. The
  * base starts at performance.timeOrigin (the page load), and check() moves it to the PC's clock (Date.now()) whenever the
  * two differ by more than 50 ms, as ChartBridge re-anchors its own every 5 s: after Windows time sync steps the PC clock
@@ -844,7 +870,7 @@ function debounce(fn, ms) {
   return d;
 }
 
-api = { pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
+api = { staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
   DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
 return api;
 });
@@ -929,7 +955,11 @@ const HOTKEY_IN_BOX = 'Hotkey ignored: a box has the focus.';
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /* The chart's markup. `p` prefixes every id ('' on the standalone page, so its ids are the ones it always had).
-   Read-only mounts get no order bar and no ARMED pill at all. */
+   Read-only mounts get no order bar and no ARMED pill at all.
+   1.16.0 (Anthony): no text inside a mounted chart (the workspace's, a host's): no legend and no Aa toggle (o.legend is the
+   single chart page's alone, which keeps its 1.14.0 legend). A mounted chart has a small badge instead (the corner of the
+   chart, or wherever its host puts it): ARMED while its orders are live, and the connection when it is not LIVE or the
+   feed has gone quiet. */
 function markup(p, o) {
   const brand = !o.brand ? '' : `
     <div class="brand">
@@ -1056,8 +1086,8 @@ function markup(p, o) {
         </div>
       </div>
       <div class="ind-chips${o.trading ? ' codes' : ''}" id="${p}indChips" role="group" aria-label="Pinned indicators: click one for its settings and switch"></div>
-      <button type="button" class="btn lg-tog" id="${p}lgTog" aria-pressed="true" title="Header text on this chart: on (click to turn it off)" aria-label="Header text on this chart">Aa</button>
-    </div>
+${o.legend ? `      <button type="button" class="btn lg-tog" id="${p}lgTog" aria-pressed="true" title="Header text on this chart: on (click to turn it off)" aria-label="Header text on this chart">Aa</button>
+` : ''}    </div>
 ${o.trading ? more : `
     <div class="group" role="group" aria-label="Drawing tools">
       <button type="button" class="btn" id="${p}toolTrend" aria-pressed="false" title="Trend line: click two points or drag">Trend line</button>
@@ -1094,11 +1124,11 @@ ${obar}
     <span class="nostop-btns"><button type="button" class="btn" id="${p}noStopCancel">Cancel</button><button type="button" class="btn nostop-send" id="${p}noStopSend">Send</button></span>
   </div>` : ''}
     <div class="chart-box" id="${p}chart" aria-label="Live candlestick chart. Arrow keys pan, plus and minus zoom, End jumps to live, A fits the price axis, Delete removes the selected drawing."></div>
-    <div class="legend" id="${p}legend">
+${o.legend ? `    <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-bub" id="${p}lgBub" hidden></span><span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span class="lg-br" aria-hidden="true"></span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgDelta" hidden><span id="${p}lgDl">Delta</span> <span class="dv" id="${p}lgDv">-</span><span class="dunk" id="${p}lgDu" hidden></span></span><span id="${p}lgFill"></span></div>
-    </div>
+    </div>` : `    <div class="ch-badge" id="${p}badge" role="status" aria-live="polite">${o.hosted ? `<span class="pill armed" id="${p}bArmed" hidden>ARMED</span>` : ''}<span class="pill" id="${p}bConn" hidden></span></div>`}
     <div class="notice" id="${p}notice" hidden>
       <h2 id="${p}noticeTitle">Waiting for ChartBridge</h2>
       <p id="${p}noticeText">Start NinjaTrader with the ChartBridge add-on compiled, then this page connects on its own.</p>
@@ -1180,7 +1210,9 @@ function start(container, opt, PAGE) {
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
   rootEl.className = 'chart-live' + (SLIM ? ' slim' : '') + (COMPACT ? ' compact' : '');
-  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN, sideGears: TRADING || SLIM });
+  // hosted: a host that trades through the chart (the workspace) gets the ARMED pill in the badge; a read-only mount none
+  const hostTrades = !TRADING && !!opt.trade && ['place', 'move', 'cancel'].every(k => typeof opt.trade[k] === 'function');
+  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN, sideGears: TRADING || SLIM, legend: PAGE, hosted: hostTrades });
   container.appendChild(rootEl);
   const els = {};
   for (const el of rootEl.querySelectorAll('[id]')) if (el.id.startsWith(p)) els[el.id.slice(p.length)] = el;
@@ -1909,7 +1941,7 @@ function start(container, opt, PAGE) {
      when the session counts from later than 18:00, and the unknown sides (they add nothing) when there are any. */
   let legendBarT = null, deltaLegendKey = '';
   /* Written only when it changes (a trade changes the value, rarely the rest), so the legend lays out no more than before. */
-  const put = (el, k, v) => { if (el[k] !== v) el[k] = v; };
+  const put = (el, k, v) => { if (el && el[k] !== v) el[k] = v; };   // 1.16.0: a mounted chart has no legend (el null)
   function deltaLegend(force) {
     const el = $('lgDelta'); if (!el) return;
     const cd = S.layers.delta ? D.delta : null, old = S.layers.delta && D.ready && bridgeSides() === false;
@@ -2177,6 +2209,8 @@ function start(container, opt, PAGE) {
     const now = nowMs();
     pushDelay(delays.feed, m.rx - m.u);
     pushDelay(delays.local, now - m.rx);
+    if (pendRx === null && typeof m.rx === 'number') pendRx = m.rx;   // 1.16.0: tape timing (the oldest trade not drawn)
+    lastTradeAt = now; if (staleSec) syncStale();       // 1.16.0: the stale feed clears with this trade
     if (r1.isNew && U.tradeDay(t, SESSION) !== D.day) updateLevels();
     else if (D.ib && t >= D.ib.start && t < D.ib.end && (D.ib.high === null || p > D.ib.high || p < D.ib.low)) updateIB(false);
   }
@@ -2263,6 +2297,7 @@ function start(container, opt, PAGE) {
     chart.setMarkers(list);
     const lastFill = list.slice().sort((a, b) => a.t - b.t)[list.length - 1];
     const el = $('lgFill');
+    if (!el) return;                                   // 1.16.0: no legend on a mounted chart
     if (lastFill) {
       el.className = lastFill.side === 'buy' ? 'buy' : 'sell';
       el.textContent = 'Last fill ' + lastFill.side.toUpperCase() + ' ' + lastFill.qty + ' @ ' + U.fmtPrice(lastFill.price, precisionOf()) + ' ' + U.fmtHM(lastFill.t) + (lastFill.account ? ' · ' + lastFill.account : '');
@@ -2412,7 +2447,7 @@ function start(container, opt, PAGE) {
     H.bars = list.filter(b => Array.isArray(b) && b.length >= 5 && [0, 1, 2, 3, 4].every(k => isFinite(b[k])))
       .map(b => ({ t: +b[0], o: +b[1], h: +b[2], l: +b[3], c: +b[4], v: +b[5] || 0 })).sort((a, b) => a.t - b.t);
     H.state = 'ok'; H.error = ''; H.pending = false; H.stale = '';
-    if (m.name && D.root === m.root) { D.name = m.name; $('lgName').textContent = m.name; }
+    if (m.name && D.root === m.root) { D.name = m.name; put($('lgName'), 'textContent', m.name); }
     htfShow();
   }
   function onHtfBar(m) {
@@ -2487,7 +2522,7 @@ function start(container, opt, PAGE) {
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         readSettlements(m.instruments); readouts();
-        $('lgSrc').textContent = 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION;
+        put($('lgSrc'), 'textContent', 'NinjaTrader via ChartBridge ' + (m.version ? m.version + ' ' : '') + '· chart ' + CE.VERSION);
         bridgeVersion = typeof m.version === 'string' ? m.version : '';
         syncVersion();
         syncAccounts(m.accounts || []);
@@ -2500,7 +2535,7 @@ function start(container, opt, PAGE) {
       case 'history':
         if (m.root !== D.root || stale(m)) return;
         if (m.load) adoptLoad(m.load);
-        if (m.name) { D.name = m.name; $('lgName').textContent = m.name; }
+        if (m.name) { D.name = m.name; put($('lgName'), 'textContent', m.name); }
         for (const b of m.bars) D.hist.push({ t: b[0], o: b[1], h: b[2], l: b[3], c: b[4], v: b[5] });
         setStatus('Loading ' + D.root + ' history: ' + D.hist.length.toLocaleString() + ' minutes', '');
         break;
@@ -2722,7 +2757,7 @@ function start(container, opt, PAGE) {
   function renderHost() {
     const mine = !!HT.root && HT.root === D.root;
     const live = mine && HT.live;
-    if (live !== hostLive) { hostLive = live; rootEl.classList.toggle('is-armed', live); chart.setOrderEditing(live); }
+    if (live !== hostLive) { hostLive = live; rootEl.classList.toggle('is-armed', live); chart.setOrderEditing(live); syncBadge(); }
     chart.setOrders(mine ? HT.orders : []);
     chart.setPosition(mine && HT.position && HT.position.qty ? HT.position : null, { pointValue: HT.pointValue });
   }
@@ -2753,19 +2788,59 @@ function start(container, opt, PAGE) {
   }
 
   /* ---------------- UI */
+  const CONN = { connecting: ['CONNECTING', ''], loading: ['LOADING', ''], live: ['LIVE', 'live'], offline: ['OFFLINE', 'bad'] };
+  let connState = 'connecting';
   function setConn(state) {
-    const pill = $('connPill');
-    const map = { connecting: ['CONNECTING', ''], loading: ['LOADING', ''], live: ['LIVE', 'live'], offline: ['OFFLINE', 'bad'] };
-    const [text, cls] = map[state] || map.connecting;
-    pill.textContent = text; pill.className = 'pill' + (cls ? ' ' + cls : '');
+    connState = CONN[state] ? state : 'connecting';
+    if (state === 'live') lastTradeAt = nowMs();          // 1.16.0: the stale count starts when the load goes live
+    syncConnPill();
     syncVersion();
-    if (onStatus) { try { onStatus({ state: map[state] ? state : 'connecting', paneId: PANE, root: D.root || S.root, attempt: wsTries }); } catch (e) { setTimeout(() => { throw e; }); } }
+    // contract (1.16.0): the contract's name for a host's header (the legend that showed it is gone from a mounted chart)
+    if (onStatus) { try { onStatus({ state: connState, paneId: PANE, root: D.root || S.root, attempt: wsTries, contract: D.name || '' }); } catch (e) { setTimeout(() => { throw e; }); } }
+  }
+  /*
+   * The connection on the chart (1.16.0): the single chart page's LIVE pill as 1.14.0; a mounted chart's badge says only
+   * what is not normal (CONNECTING, LOADING, OFFLINE) and ARMED while its orders are live (the host's ticket armed on its
+   * instrument). Stale feed (Anthony): no trade for 10 s in RTH (09:30 to 16:00 ET) or 60 s outside it while the line is
+   * live and the market open: a thin amber edge on the chart and "Feed stale 12 s", gone with the next trade.
+   */
+  let lastTradeAt = 0, staleSec = 0;
+  function staleNow() {
+    if (connState !== 'live' || !D.ready || !lastTradeAt) return 0;
+    return LP.staleSeconds(nowMs() - lastTradeAt, etNow());
+  }
+  function syncStale() {
+    const sec = staleNow();
+    if (sec === staleSec) return;
+    const was = staleSec > 0;
+    staleSec = sec;
+    if (was !== sec > 0) rootEl.classList.toggle('is-stale', sec > 0);
+    syncConnPill();
+  }
+  function syncConnPill() {
+    const [text, cls] = staleSec > 0 ? ['STALE ' + staleSec + ' s', 'warn'] : CONN[connState];
+    const pill = $('connPill');
+    if (pill) { put(pill, 'textContent', text); put(pill, 'className', 'pill' + (cls ? ' ' + cls : '')); }
+    syncBadge();
+  }
+  function syncBadge() {
+    const c = $('bConn'), a = $('bArmed'), bd = $('badge');
+    if (!c) return;
+    if (bd.dataset.conn !== connState) bd.dataset.conn = connState;   // for a host and the tests: the state, also while LIVE
+    if (bd.dataset.stale !== String(staleSec)) bd.dataset.stale = String(staleSec);
+    const text = staleSec > 0 ? 'Feed stale ' + staleSec + ' s' : connState === 'live' ? '' : CONN[connState][0];
+    put(c, 'textContent', text); put(c, 'hidden', !text);
+    put(c, 'className', 'pill' + (staleSec > 0 ? ' warn' : connState === 'offline' ? ' bad' : ''));
+    put(c, 'title', staleSec > 0 ? 'No trade from ChartBridge for ' + staleSec + ' s (' + (LP.isRthEt(etNow()) ? 'RTH: 10 s' : 'outside RTH: 60 s') + '). It clears with the next trade.' : versionText());
+    put(a, 'hidden', !hostLive);
+    put(a, 'textContent', 'ARMED' + (hostLive && HT.account ? ' · ' + HT.account : ''));
   }
   /* 1.14.0 (Anthony): the versions, quietly: the LIVE pill's tooltip and the foot of Settings */
   const versionText = () => 'chart ' + CE.VERSION + ' · ChartBridge ' + (bridgeVersion || '-');
   function syncVersion() {
     const t = versionText();
     put($('connPill'), 'title', t);
+    put($('bConn'), 'title', t);
     if ($('setVer')) put($('setVer'), 'textContent', t);
   }
   function setStatus(text, level) { clearTimeout(flashTimer); const el = $('statusMsg'); el.textContent = text || ''; el.className = 'msg' + (level ? ' ' + level : ''); syncNote(); }
@@ -2794,6 +2869,9 @@ function start(container, opt, PAGE) {
 
   let legendKey = '';
   chart.on('legend', e => {
+    legendAt = e;                                         // the bar under the crosshair (else the newest), for the Data Box
+    if (barSubs.size) barChanged();
+    if (!$('legend')) return;                             // 1.16.0: a mounted chart has no text on it
     if (!!e.hovering !== lgHover) { lgHover = !!e.hovering; rootEl.classList.toggle('lg-hover', lgHover); }   // the short header's hover line (1.14.0)
     vpLegend();
     legendBarT = e.hovering ? e.bar.t : null; deltaLegend();
@@ -2819,12 +2897,64 @@ function start(container, opt, PAGE) {
   });
   chart.on('drawings', list => store.set(drawingsKey(D.root), list));
 
+  /* ---------------- the Data Box (1.16.0, Anthony: the workspace's panel): what a host shows of the bar under the crosshair,
+     else the newest. Nothing is worked out unless a host listens (onBar); then once per change of the legend (after a draw
+     that changed it) or of the bubble under the mouse, and barInfo() reads it: a search in the delta core and in the
+     bubbles, no loop over history. */
+  let legendAt = null, hoverBub = null;
+  const barSubs = new Set();
+  function barChanged() { const h = !!(legendAt && legendAt.hovering); for (const fn of barSubs) { try { fn(h); } catch (e) { setTimeout(() => { throw e; }); } } }
+  /* the large-order bubbles on the bar starting at t (the next bar starts at t1): how many, the largest and its side */
+  function bubblesOn(t, t1) {
+    const list = SIG.bubbles && S.layers.bubbles && !masked('bubbles') ? SIG.bubbles.list : null;
+    if (!list) return null;
+    let lo = 0, hi = list.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (list[m].t < t) lo = m + 1; else hi = m; }
+    const out = { n: 0, max: 0, side: 0 };
+    for (let k = lo; k < list.length && list[k].t < t1; k++) {
+      const x = list[k];
+      if (x.b !== undefined && x.b !== t) continue;
+      out.n++;
+      if (x.v > out.max) { out.max = x.v; out.side = x.side; }
+    }
+    return out;
+  }
+  function barInfo() {
+    const e = legendAt;
+    if (!e || !e.bar || destroyed) return null;
+    const b = e.bar, i = e.index, bs = chart.bars(), next = i + 1 < bs.length ? bs[i + 1].t : Infinity;
+    const cd = S.layers.delta && !masked('delta') ? D.delta : null, db = cd ? cd.at(b.t) : null;
+    const old = !!S.layers.delta && D.ready && bridgeSides() === false;
+    return {
+      root: D.root || S.root, name: D.name || D.root || S.root, tf: S.tf, range: S.tf === 'range' ? ranges[D.root || S.root] : null, tick: D.tick, dp: precisionOf(),
+      index: i, t: b.t, end: barEnd(b, i), forming: !!e.forming, hovering: !!e.hovering,
+      o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0,
+      // buys, sells, unknown and the largest trade from the delta pane's core (null: not counted there); why not
+      delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.big || 0 } : null,
+      deltaWhy: db ? '' : old ? 'old' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
+      deltaFrom: cd && cd.session && cd.session.partial ? cd.session.from : null,
+      bubbles: bubblesOn(b.t, next),
+      bubble: hoverBub ? { side: hoverBub.side, v: hoverBub.v, p: hoverBub.p, t: hoverBub.t } : null,
+    };
+  }
+
+  /* ---------------- tape timing (1.16.0, a debug readout): the time from ChartBridge's receipt of a trade (its rx) to the
+     first frame drawn after it. One stamp (the oldest trade not drawn yet), one number per frame, no list. */
+  let pendRx = null, drawDelay = null, drawMax = 0, drawN = 0, drawMaxShown = null;
+  chart.on('drawn', () => {
+    if (pendRx === null) return;
+    const d = nowMs() - pendRx;
+    pendRx = null; drawDelay = d; drawN++;
+    if (d > drawMax) drawMax = d;
+  });
+
   /* ---------------- readouts (1.14.0, Anthony's item 5), in the legend: the time left in the bar (Range bars: the ticks
      left up and down), the ATR of the chart's own closed bars (ATR_PERIOD, NinjaTrader's ATR) and the last price's change
      from the prior settlement (ChartBridge 0.3.7: hello and "settlement"; blank when ChartBridge gives none, never
      estimated). Once a second, on the second, and when the view or ChartBridge's settlement changes; never on the tick path. */
   const settlements = {};                                // root -> { p, date } from ChartBridge
   function readSettlements(list) { for (const i of list || []) if (i && typeof i.root === 'string') settlements[i.root] = { p: typeof i.settlement === 'number' ? i.settlement : null, date: i.settlementDate || '' }; }
+  let cornerBar = '', cornerAtr = '', cornerAtrShort = '', cornerBub = '';   // the corner readout's parts (syncCorner)
   function readouts() {
     if (destroyed) return;
     const b = D.ready ? chart.lastBar() : null, dp = precisionOf();
@@ -2839,7 +2969,9 @@ function start(container, opt, PAGE) {
        readout in the chart's corner (shown on small panels and with the header text off too), and the change from the
        settlement is the Quote board's; the single chart page keeps its 1.14.0 legend */
     const inLegend = PAGE;
-    if (!inLegend) chart.setCorner([bar, at].filter(Boolean).join(' · '), [bar.replace(/^Bar /, ''), a === null ? '' : 'ATR ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp)].filter(Boolean).join(' · '));
+    if (!inLegend) { cornerBar = bar; cornerAtr = at; cornerAtrShort = a === null ? '' : 'ATR ' + U.fmtPrice(U.roundTo(a, Math.pow(10, -dp)), dp); syncCorner(); }
+    syncStale();                                          // 1.16.0: the stale feed, once a second as the countdown
+    drawMaxShown = drawN ? drawMax : null; drawMax = 0; drawN = 0;   // 1.16.0: the tape timing's worst of the last second
     put($('lgBar'), 'textContent', inLegend ? bar : ''); put($('lgBar'), 'hidden', !inLegend || !bar);
     put($('lgAtr'), 'textContent', inLegend ? at : ''); put($('lgAtr'), 'hidden', !inLegend || !at);
     const st = settlements[D.root], pct = b && st && inLegend ? U.pctFrom(b.c, st.p) : null, el = $('lgSet');
@@ -2848,6 +2980,12 @@ function start(container, opt, PAGE) {
     put(el, 'className', 'lg-ro' + (pct > 0 ? ' up' : pct < 0 ? ' down' : ''));
   }
   later(() => { readouts(); every(readouts, 1000); }, 1000 - Date.now() % 1000 + 5);   // on the second, as the price tag's countdown
+  /* The corner readout (1.15.0) and, on a mounted chart (1.16.0, Anthony), the bubble under the mouse in front of it:
+     "Buy 142 · Bar 0:54 · ATR(14) 5.58", set when the bubble changes (the bubble event), the rest once a second. */
+  function syncCorner() {
+    chart.setCorner([cornerBub, cornerBar, cornerAtr].filter(Boolean).join(' · '),
+      [cornerBub, cornerBar.replace(/^Bar /, ''), cornerAtrShort].filter(Boolean).join(' · '));
+  }
 
   /* The VWAP gear's hours (1.14.0, Anthony): the session's from 18:00 ET (each bar's own vw, as always) or RTH only, from
      09:30 to 16:00 ET, worked out from the 1-minute bars (every view holds them) as the session's is from history, and
@@ -2883,21 +3021,26 @@ function start(container, opt, PAGE) {
      all, not even on hover, and the price scale takes the room back. A small panel (a compact chart under 700 px wide or
      400 px tall) shows a short header: one quiet line (the name, bars, last price and change, the indicators' values),
      the bar's open, high, low and volume (and the hovered bubble) on a second line only while the crosshair is over it. */
-  let lgHover = false, lgOn = prefs.legendShown(PANE);
+  /* 1.16.0: only the single chart page has a legend and its Aa toggle; a mounted chart has neither (legendToggle is then an
+     empty element, hidden, so a host that places it shows nothing) and never reads live-legend-v1. */
+  const LEGEND = !!$('legend');
+  let lgHover = false, lgOn = LEGEND && prefs.legendShown(PANE);
   function applyLegendShown() {
+    if (!LEGEND) return;
     rootEl.classList.toggle('lg-off', !lgOn);
     const b = $('lgTog');
     b.setAttribute('aria-pressed', String(lgOn));
     b.title = 'Header text on this chart: ' + (lgOn ? 'on (click to turn it off)' : 'off (click to turn it on)');
     fitTop();
   }
-  function setLegendShown(on) { lgOn = !!on; prefs.setLegendShown(PANE, lgOn); applyLegendShown(); }
-  $('lgTog').addEventListener('click', () => setLegendShown(!lgOn));
+  function setLegendShown(on) { if (!LEGEND) return; lgOn = !!on; prefs.setLegendShown(PANE, lgOn); applyLegendShown(); }
+  if (LEGEND) $('lgTog').addEventListener('click', () => setLegendShown(!lgOn));
+  const legendToggle = $('lgTog') || Object.assign(document.createElement('span'), { hidden: true });
   /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
   chart.setScaleLock(prefs.scaleLocked(PANE));
   chart.on('scaleLock', v => prefs.setScaleLocked(PANE, v));
   listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE)); });
-  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.legend) { const v = prefs.legendShown(PANE); if (v !== lgOn) { lgOn = v; applyLegendShown(); } } });
+  if (LEGEND) listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.legend) { const v = prefs.legendShown(PANE); if (v !== lgOn) { lgOn = v; applyLegendShown(); } } });
   function shortHeader() {
     if (!COMPACT) return;
     const r = rootEl.getBoundingClientRect(), sh = r.width < 700 || r.height < 400;
@@ -2910,7 +3053,14 @@ function start(container, opt, PAGE) {
   const two = n => (n < 10 ? '0' : '') + n;
   const fmtTenths = t => { const sec = U.tod(t), w = Math.floor(sec); return two(Math.floor(w / 3600)) + ':' + two(Math.floor(w / 60) % 60) + ':' + two(w % 60) + '.' + Math.floor((sec - w) * 10 + 1e-6); };
   chart.on('bubble', b => {
+    hoverBub = b;
+    if (barSubs.size) barChanged();
     const el = $('lgBub');
+    if (!el) {                                            // 1.16.0: a mounted chart: the size in the corner readout
+      const t = b ? (b.side > 0 ? 'Buy ' : 'Sell ') + U.fmtVolume(Math.round(b.v)) : '';
+      if (t !== cornerBub) { cornerBub = t; syncCorner(); }
+      return;
+    }
     if (!b) { el.hidden = true; el.textContent = ''; return; }
     el.textContent = 'Bubble ' + (b.side > 0 ? 'Buy ' : 'Sell ') + U.fmtVolume(Math.round(b.v)) + ' @ ' + U.fmtPrice(U.roundTo(b.p, D.tick), precisionOf()) + ' ' + fmtTenths(b.t);
     el.className = 'lg-bub ' + (b.side > 0 ? 'up' : 'down');
@@ -2921,7 +3071,7 @@ function start(container, opt, PAGE) {
   /* (the hover line of a short header is left out: the scale does not jump as the mouse comes and goes; with the header
      text off there is nothing to keep free) */
   const fitTop = () => { const lg = $('legend'); if (!lg || destroyed || lgHover) return; chart.setFitTop(lgOn && lg.offsetHeight ? lg.offsetTop + lg.offsetHeight + 8 : 0); };   // 8 px: the eased re-fit never brings a new high into the header
-  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fitTop); ro.observe($('legend')); cleanups.push(() => ro.disconnect()); }
+  if (LEGEND && typeof ResizeObserver === 'function') { const ro = new ResizeObserver(fitTop); ro.observe($('legend')); cleanups.push(() => ro.disconnect()); }
   applyLegendShown(); shortHeader();
   /* A drawing error (1.5.1): the chart keeps running; say so on the status line until a clean frame clears it. */
   const DRAW_ERR = 'Chart drawing error: ';
@@ -4026,9 +4176,16 @@ function start(container, opt, PAGE) {
     setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors, setTrade,
     indicators: $('indWrap'), chips: $('indChips'), colors: themePanel.element,
     /** The header text toggle (1.14.0), for a host to place beside Indicators; legendShown() / setLegendShown(on). */
-    legendToggle: $('lgTog'), legendShown: () => lgOn, setLegendShown,
+    legendToggle, legendShown: () => lgOn, setLegendShown,
     /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
-    stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), localP95: pct95(delays.local), chart: chart.stats() }) };
+    stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), localP95: pct95(delays.local), chart: chart.stats(),
+      draw: drawDelay, drawMax: drawMaxShown, stale: staleSec }),
+    /** The Data Box (1.16.0): barInfo() is the bar under the crosshair (else the newest) with its buys, sells, largest trade
+        and bubbles; onBar(fn) calls fn(hovering) when it may have changed (returns the undo). badge: the ARMED and connection badge,
+        for a host to place in its own header (it stays in the chart's corner otherwise). */
+    timing: () => ({ draw: drawDelay, drawMax: drawMaxShown }),
+    barInfo, onBar: fn => { if (typeof fn !== 'function') return () => {}; barSubs.add(fn); return () => barSubs.delete(fn); },
+    badge: $('badge') };
 }
 
 window.ChartLive = { mount, EMBED_PREFIX, hotkeyHandler, HOTKEY_IN_BOX };
