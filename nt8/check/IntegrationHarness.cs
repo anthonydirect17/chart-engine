@@ -61,6 +61,7 @@ public static class IntegrationHarness
         ChartBridgeOrders.OnPositionUpdate(a, new PositionEventArgs { Position = pos, MarketPosition = pos.MarketPosition, Quantity = pos.Quantity, AveragePrice = 25000 });
     }
     // Positions closed by hand here have no closing fill: every fill counts as booked (as CopierHarness).
+    static bool Logged(string has) { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Any(x => x.Contains(has)); }
     static void Booked() { ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear(); }
     static List<Order> LiveStops(Account a) { lock (a.Orders) return a.Orders.Where(o => o.Instrument == mnq && IsLive(o) && (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit)).ToList(); }
     static int CopyEntries(Account a) { lock (a.Orders) return a.Orders.Count(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} copy [0-9a-f]{8}$")); }
@@ -172,6 +173,7 @@ public static class IntegrationHarness
             MergeOnTheLeader();
             GoneIsOneRule();
             BotNeverCopied();
+            SyncFillCopied();   // X9: review 2 finding 8
             LateHandshake();
             ChartBridgeOrders.StrategyInline = true;   // breakeven and trailing moves on this thread (as StrategiesHarness)
             ChartBridgeOrders.StrategyClock = () => clock;
@@ -179,6 +181,7 @@ public static class IntegrationHarness
             StrategyOnTheLeader();
             MergeStrategyLegs();
             BotNoStrategy();
+            Sim101NeverAFollowerWithTheBot();   // X10, X11: review 2 findings 3 and 9 (last: Sim101 stays listed as a follower)
         }
         catch (Exception ex) { Check(false, "integration harness threw: " + ex); }
         finally
@@ -470,5 +473,134 @@ public static class IntegrationHarness
                   "X8: with strategies and orderTypes on, a bot order with a strategy or an MIT is refused, nothing sent: " + why1 + " / " + why2);
         }
         finally { ChartBridgeSwitches.Note("orderTypes", "off"); }
+    }
+
+    // ------------------------------------------------------------ X9 (review 2 finding 8): the leader entry is registered before Submit
+    static void SyncFillCopied()
+    {
+        lock (sent) sent.Clear();
+        Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r9\"}");
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        int copies = CopyEntries(f1);
+        // NinjaTrader fills the leader's market entry inside Submit (its order event before Submit returns)
+        lead.OnCall = (kind, o) =>
+        {
+            Broker(lead, kind, o);
+            if (kind == "submit" && Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} s8 t16$")) { o.Filled = o.Quantity; o.AverageFillPrice = 25000; o.OrderState = OrderState.Filled; Update(lead, o); }
+        };
+        try { Msg("order", "{\"type\":\"order\",\"cid\":\"e\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}"); }
+        finally { lead.OnCall = (kind, o) => Broker(lead, kind, o); }
+        SetPos(lead, 1);
+        Check(CopyEntries(f1) == copies + 1, "X9 (review 2 finding 8): a leader entry that fills inside Submit is copied (registered before Submit): " + Last());
+        Clean(lead, f1);
+
+        // orders mode: a leader entry NinjaTrader rejects inside Submit is dropped; no follower order is placed for it
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"s9\",\"mode\":\"orders\"}");
+        copies = CopyEntries(f1);
+        lead.OnCall = (kind, o) =>
+        {
+            if (kind == "submit" && Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} atm s8 t16$")) { o.OrderState = OrderState.Rejected; Update(lead, o); return; }
+            Broker(lead, kind, o);
+        };
+        try { Msg("order", "{\"type\":\"order\",\"cid\":\"e2\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":16}}"); }
+        finally { lead.OnCall = (kind, o) => Broker(lead, kind, o); }
+        Check(CopyEntries(f1) == copies, "X9 (review 2 finding 8): orders mode: a leader entry rejected inside Submit is dropped; no follower order is placed for it");
+        Clean(lead, f1);
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"s10\",\"mode\":\"executions\"}");
+        Check(!Rejected(""), "X9: back to executions mode: " + Last());
+    }
+
+    // ------------------------------------------------------------ X10 (review 2 finding 3): Sim101, the bot's account, is never a copier follower while the bot is on
+    // X11 (review 2 finding 9): bot and copier orders are marked "by" on a v3 page only.
+    static void Sim101NeverAFollowerWithTheBot()
+    {
+        List<string> v2got = new List<string>();
+        ChartBridgeClient v2 = new ChartBridgeClient(null, 73) { Origin = "http://localhost:8765" };
+        v2.Tap = s => { lock (v2got) v2got.Add(s); };
+        Clients()[73] = v2;
+        try
+        {
+            ChartBridgeOrders.OnMessage(v2, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+            lock (sent) sent.Clear();
+            Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"s11\",\"leader\":\"SIM-L\"}");
+            Check(!Rejected(""), "X10: the copier's leader is SIM-L: " + Last());
+            ChartBridgeSwitches.Note("bot", "on");
+            int leadCalls = lead.Calls.Count;
+            Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"f9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+            Check(Rejected("Sim101 is the bot's account: it cannot be a copier follower while the bot is on (bot in config.txt).") && Logged("copier refused Sim101"),
+                  "X10 (review 2 finding 3): bot on: Sim101 as a copier follower is refused, in plain words, and logged: " + Last());
+
+            // the other way: Sim101 listed as a follower while the bot was off; with the bot on, the bot refuses entries
+            ChartBridgeSwitches.Note("bot", "off");
+            lock (sent) sent.Clear();
+            Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"f10\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+            Check(!Rejected(""), "X10: bot off: Sim101 may be a follower: " + Last());
+            ChartBridgeSwitches.Note("bot", "on");
+            ChartBridgeOrders.NoteLast("MNQ", 25000);
+            Order placed;
+            string why = ChartBridgeOrders.PlaceBotEntry(BotEntry(), out placed);
+            Check(why == "Sim101 is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page)." && placed == null && lead.Calls.Count == leadCalls && Logged("bot entry refused: Sim101 is a copier follower"),
+                  "X10 (review 2 finding 3): Sim101 is a copier follower: a bot entry is refused, in plain words, nothing sent, logged: " + why);
+
+            // and the copier copies nothing to Sim101 while the bot is on
+            Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r10\"}");
+            lock (sent) sent.Clear();
+            int fCopies = CopyEntries(f1);
+            Msg("order", "{\"type\":\"order\",\"cid\":\"e3\",\"account\":\"SIM-L\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}");
+            Order le;
+            lock (other.Orders) le = other.Orders.Last();
+            string leId = IdOf(le);   // before the fill (a done order's id is forgotten)
+            le.Filled = 1; le.AverageFillPrice = 25000; le.OrderState = OrderState.Filled;
+            Update(other, le);
+            SetPos(other, 1);
+            bool skipped;
+            lock (sent) skipped = sent.Any(m => m.Contains("\"type\":\"copierEvent\"") && m.Contains("\"account\":\"Sim101\"") && m.Contains("Sim101 is the bot's account"));
+            Check(lead.Calls.Count == leadCalls && skipped && CopyEntries(f1) == fCopies + 1, "X10 (review 2 finding 3): bot on: the copier skips Sim101 (nothing copied to it) while SIM-F1 is copied");
+
+            // X11: a copier order: "by":"copier" on the v3 page, no "by" on the v2 page (the 0.3.8 order message)
+            Order copy;
+            lock (f1.Orders) copy = f1.Orders.Last(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} copy [0-9a-f]{8}$"));
+            string copyId = IdOf(copy);
+            List<string> v3copy, v2copy, v3page;
+            lock (sent) { v3copy = sent.Where(m => m.StartsWith("{\"type\":\"order\"") && m.Contains("\"id\":\"" + copyId + "\"")).ToList(); v3page = sent.Where(m => m.StartsWith("{\"type\":\"order\"") && m.Contains("\"id\":\"" + leId + "\"")).ToList(); }
+            lock (v2got) v2copy = v2got.Where(m => m.StartsWith("{\"type\":\"order\"") && m.Contains("\"id\":\"" + copyId + "\"")).ToList();
+            Check(v3copy.Count > 0 && v3copy.All(m => m.Contains(",\"by\":\"copier\"")) && v2copy.Count > 0 && v2copy.All(m => !m.Contains("\"by\"")),
+                  "X11 (review 2 finding 9): a copier order: \"by\":\"copier\" to a v3 page, no \"by\" to a v2 page: " + (v3copy.FirstOrDefault() ?? "(none)") + " / " + (v2copy.FirstOrDefault() ?? "(none)"));
+            Check(v3page.Count > 0 && v3page.All(m => !m.Contains("\"by\"")), "X11: the page's own order carries no \"by\"");
+            Clean(other, f1, lead);
+
+            // X11: a bot order: "by":"bot" on the v3 page, no "by" on the v2 page
+            Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"f11\",\"account\":\"Sim101\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+            Check(!Rejected(""), "X10: turning the Sim101 follower off is always allowed: " + Last());
+            lock (sent) sent.Clear();
+            lock (v2got) v2got.Clear();
+            why = ChartBridgeOrders.PlaceBotEntry(BotEntry(), out placed);
+            Check(why == null && placed != null, "X10: the Sim101 follower off: a bot entry goes: " + why);
+            if (placed != null)
+            {
+                string id = IdOf(placed);
+                List<string> v3bot, v2bot;
+                lock (sent) v3bot = sent.Where(m => m.StartsWith("{\"type\":\"order\"") && m.Contains("\"id\":\"" + id + "\"")).ToList();
+                lock (v2got) v2bot = v2got.Where(m => m.StartsWith("{\"type\":\"order\"") && m.Contains("\"id\":\"" + id + "\"")).ToList();
+                Check(v3bot.Count > 0 && v3bot.All(m => m.Contains(",\"by\":\"bot\"")) && v2bot.Count > 0 && v2bot.All(m => !m.Contains("\"by\"")),
+                      "X11 (review 2 finding 9): a bot order: \"by\":\"bot\" to a v3 page, no \"by\" to a v2 page: " + (v3bot.FirstOrDefault() ?? "(none)") + " / " + (v2bot.FirstOrDefault() ?? "(none)"));
+                List<string> snap = new List<string>();
+                ChartBridgeClient v3b = new ChartBridgeClient(null, 74) { Origin = "http://localhost:8765" };
+                v3b.Tap = s => { lock (snap) snap.Add(s); };
+                Clients()[74] = v3b;
+                ChartBridgeAccounts.OnMessage(v3b, "client", "{\"type\":\"client\",\"v\":3}");
+                ChartBridgeOrders.OnMessage(v3b, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+                ChartBridgeClient gone74; Clients().TryRemove(74, out gone74);
+                bool inSnap;
+                lock (snap) inSnap = snap.Any(m => m.StartsWith("{\"type\":\"orders\"") && m.Contains("\"id\":\"" + id + "\"") && m.Contains(",\"by\":\"bot\""));
+                Check(inSnap, "X11: the orders list a v3 page gets after its sign-in marks the bot order too");
+            }
+            Clean(lead);
+        }
+        finally
+        {
+            ChartBridgeSwitches.Note("bot", "off");
+            ChartBridgeClient gone; Clients().TryRemove(73, out gone);
+        }
     }
 }
