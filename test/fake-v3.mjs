@@ -257,7 +257,9 @@ export class OrderDeskV3 extends OrderDesk {
     if (!this.instruments[o.root] || this.instruments[o.root].quoteOnly) return;
     const msg = this.orderMsg(o);
     for (const c of this.conns()) if (c.authed && this.visible(o.account, c)) this.send(c, msg);
+    if (this.bot.conn && this.isBotOrder(o)) this.send(this.bot.conn, msg);     // the bot sees its own orders only
   }
+  isBotOrder(o) { return o.by === 'bot' || (o.parent && (this.orders.get(o.parent) || {}).by === 'bot'); }
 
   /* ---------------- page to server */
   handle(conn, m, text) {
@@ -411,6 +413,10 @@ export class OrderDeskV3 extends OrderDesk {
     this.lastFillAt = this.now(); this.lastFillKey = o.account + '|' + o.root;
     if (!this.accounts.includes(o.account) && this.watched(o.account))
       for (const c of this.conns()) if (c.authed && c.v3) this.send(c, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });
+    if (this.bot.conn && this.isBotOrder(o)) {
+      this.send(this.bot.conn, { type: 'exec', account: o.account, name: o.name, root: o.root, side: o.side, qty, p: price, t: +this.barTime().toFixed(3), u: this.now(), id: 'X' + this.execSeq, order: o.id });
+      this.send(this.bot.conn, { type: 'position', account: o.account, root: o.root, qty: p.qty, avgPrice: p.qty ? p.avgPrice : null });
+    }
     const ms = this.mergedSets.get(o.account + '|' + o.root);
     if (ms) this.mergedUpkeep(o, ms);
     if (o.role === 'entry' && o.by === 'bot' && o.filled === qty) this.bot.trades++;

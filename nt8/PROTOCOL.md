@@ -1273,7 +1273,7 @@ Account names appear only in these local files and the local page, never in `/di
 
 | page to server | fields (no others) | notes |
 |---|---|---|
-| `accountTrade` | `cid` (optional), `account`, `on` (*bool*) | set the checkmark. On is refused for an account that is Gone, archived, not Connected, Backtest or Playback, or with `accountChecks` off; off is always accepted (signed in) |
+| `accountTrade` | `cid` (optional), `account`, `on` (*bool*) | set the checkmark. On is refused for an account that is Gone, archived, not Connected, Backtest or Playback, or with `accountChecks` off; off is always accepted (signed in). After any checkmark change every signed-in page gets `accounts` and `trading` again (its `accounts` list is gate 2 now) |
 | `accountArchive` | `cid` (optional), `account`, `confirm` (*bool*, must be `true`) | refused unless the account is Gone |
 
 | server to page | fields | when |
