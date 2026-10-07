@@ -2,9 +2,7 @@
 // See nt8/PROTOCOL.md, "Protocol v3 (ChartBridge 0.4.0)" and its "Accounts" section.
 //
 // This file never places, changes or cancels an order (no Submit, Change, Cancel or Flatten here). It holds:
-//   - ChartBridgeSwitches: the v3 switches read from config.txt (accountChecks, orderTypes, strategies, merge,
-//     cancelFromList, copier, bot), all OFF by default. It only records them; it never takes a key from another reader.
-//   - which pages speak v3 (the page's "client" message, sent once right after hello);
+//   (the v3 switches, which pages speak v3, and v3's strict messages are in ChartBridgeV3.cs, shared by every v3 lane);
 //   - gate 2 with accountChecks = on: the page's per-account checkmark, which ChartBridge saves itself in accounts.txt
 //     next to config.txt. First start (no accounts.txt) pre-checks tradeAccounts; afterwards only the checkmarks count.
 //     trading = true stays the master switch above every checkmark (ChartBridgeOrders.AccountTradable checks it first);
@@ -39,7 +37,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using NinjaTrader.Cbi;
@@ -47,44 +44,6 @@ using NinjaTrader.Cbi;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    // ------------------------------------------------------------------ the v3 switches (PROTOCOL.md "v3 switches")
-    public static class ChartBridgeSwitches
-    {
-        public static readonly string[] Names = { "accountChecks", "orderTypes", "strategies", "merge", "cancelFromList", "copier", "bot" };
-        private static readonly bool[] Values = new bool[Names.Length];
-
-        public static void Reset() { lock (Values) for (int i = 0; i < Values.Length; i++) Values[i] = false; }
-
-        // Called by ChartBridgeConfig.Load for every key. on, true and 1 mean on (any case); anything else is off, and a value
-        // that is not plainly off (off, false, 0) gets one Output line naming the key and the value.
-        public static void Note(string key, string val)
-        {
-            int i = Array.IndexOf(Names, key);
-            if (i < 0) return;
-            string v = (val ?? "").Trim();
-            bool on = v.Equals("on", StringComparison.OrdinalIgnoreCase) || v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1";
-            bool plainOff = v.Equals("off", StringComparison.OrdinalIgnoreCase) || v.Equals("false", StringComparison.OrdinalIgnoreCase) || v == "0";
-            if (!on && !plainOff) ChartBridgeServer.Log("config.txt: " + key + " = " + v + " is not on, true or 1, so " + key + " is OFF");
-            lock (Values) Values[i] = on;
-        }
-
-        public static bool Get(string name)
-        {
-            int i = Array.IndexOf(Names, name);
-            if (i < 0) return false;
-            lock (Values) return Values[i];
-        }
-
-        // {"accountChecks":false,...}: the trading message's "switches" for a v3 page.
-        public static string Json()
-        {
-            StringBuilder b = new StringBuilder("{");
-            lock (Values)
-                for (int i = 0; i < Names.Length; i++) b.Append(i > 0 ? "," : "").Append(CbJson.Str(Names[i])).Append(':').Append(Values[i] ? "true" : "false");
-            return b.Append('}').ToString();
-        }
-    }
-
     // ------------------------------------------------------------------ accounts, the checkmark and Gone
     public static class ChartBridgeAccounts
     {
@@ -93,8 +52,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const string Header = "# ChartBridge accounts (written by ChartBridge; do not edit)";
         public const string ReadFailedText = "accounts.txt could not be read: trading is off for every account until it can";
 
-        public static bool On { get { return ChartBridgeSwitches.Get("accountChecks"); } }
-        public static bool CancelFromListOn { get { return ChartBridgeSwitches.Get("cancelFromList"); } }
+        public static bool On { get { return ChartBridgeV3.AccountChecks; } }
+        public static bool CancelFromListOn { get { return ChartBridgeV3.CancelFromList; } }
 
         private static string FilePath { get { return Path.Combine(ChartBridgeConfig.Folder, "accounts.txt"); } }
         private static string LogPath { get { return Path.Combine(ChartBridgeConfig.Folder, "accounts.log"); } }
@@ -118,11 +77,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string saveError;     // the last save failed (an alarm was raised once)
         private static string lastAccountsJson;
 
-        private static readonly ConditionalWeakTable<ChartBridgeClient, object> V3 = new ConditionalWeakTable<ChartBridgeClient, object>();
         private static Timer timer;
         private static int ticking;
 
-        public static bool IsV3(ChartBridgeClient c) { object o; return c != null && V3.TryGetValue(c, out o); }
+        private static bool IsV3(ChartBridgeClient c) { return ChartBridgeV3.IsV3(c); }
 
         // ---------------------------------------------------------- start and stop
         // ChartBridgeServer.Start, before the accounts are watched (their watch list reads the checkmarks). Reads accounts.txt
@@ -366,7 +324,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string TradingFor(ChartBridgeClient c, string tradingJson)
         {
             if (!IsV3(c) || !c.Trader || !tradingJson.EndsWith("}", StringComparison.Ordinal)) return tradingJson;
-            return tradingJson.Substring(0, tradingJson.Length - 1) + ",\"switches\":" + ChartBridgeSwitches.Json() + "}";
+            return tradingJson.Substring(0, tradingJson.Length - 1) + ",\"switches\":" + ChartBridgeV3.SwitchesJson() + "}";
         }
 
         // After a page signs in: the accounts.txt alarm, if there is one.
@@ -385,11 +343,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 if (type == "client") { OnClient(client, text); return; }
-                string why = ChartBridgeOrders.Gate(client);
+                string why = ChartBridgeV3.Gate(client);
                 Dictionary<string, string> m = null;
                 string[] keys = type == "accountTrade" ? new[] { "type", "cid", "account", "on" } : new[] { "type", "cid", "account", "confirm" };
-                if (why == null) m = Flat(text, type, keys, out why);
-                if (m != null) cid = StrOf(m, "cid");
+                if (why == null) m = ChartBridgeV3.Flat(text, type, keys, out why);
+                if (m != null) cid = ChartBridgeV3.Str(m, "cid");
                 if (why == null && m.ContainsKey("cid") && cid == null) why = "cid must be a plain string";
                 if (why == null && !On) why = type + " is off (accountChecks in config.txt)";
                 if (why == null) why = type == "accountTrade" ? AccountTrade(m) : AccountArchive(m);
@@ -402,20 +360,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // {"type":"client","v":3}: this page speaks v3. Anything else is refused with a status warn (the page stays v2).
+        // {"type":"client","v":3} (ChartBridgeV3.OnClient marks the page); then the accounts list, to ChartBridge's own page only.
         private static void OnClient(ChartBridgeClient client, string text)
         {
-            string why;
-            Dictionary<string, string> m = Flat(text, "client", new[] { "type", "v" }, out why);
-            if (why == null && (!m.ContainsKey("v") || m["v"] != "3")) why = "v must be 3";
-            if (why != null) { client.Send(Status("warn", "ChartBridge refused a client message: " + why)); return; }
-            if (!IsV3(client)) V3.Add(client, true);
-            if (ChartBridgeOrders.OriginAllowed(client.Origin)) client.Send(AccountsJson(Snapshot(), ChartBridgeTime.NowUtcMs()));   // own page only, signed in or not
+            if (!ChartBridgeV3.OnClient(client, text)) return;
+            if (ChartBridgeOrders.OriginAllowed(client.Origin)) client.Send(AccountsJson(Snapshot(), ChartBridgeTime.NowUtcMs()));   // signed in or not
         }
 
         private static string AccountTrade(Dictionary<string, string> m)
         {
-            string name = StrOf(m, "account"), on = m.ContainsKey("on") ? m["on"] : null;
+            string name = ChartBridgeV3.Str(m, "account"), on = m.ContainsKey("on") ? m["on"] : null;
             if (name == null) return "accountTrade needs account (a plain string)";
             if (on != "true" && on != "false") return "on must be true or false";
             double now = ChartBridgeTime.NowUtcMs();
@@ -456,7 +410,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static string AccountArchive(Dictionary<string, string> m)
         {
-            string name = StrOf(m, "account"), confirm = m.ContainsKey("confirm") ? m["confirm"] : null;
+            string name = ChartBridgeV3.Str(m, "account"), confirm = m.ContainsKey("confirm") ? m["confirm"] : null;
             if (name == null) return "accountArchive needs account (a plain string)";
             if (confirm != "true") return "Archive needs confirm: true (the page asks Anthony first)";
             lock (Mem) if (readError != null) return ReadFailedText + "; nothing was changed";
@@ -855,72 +809,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                     lock (Mem) PendingLog.InsertRange(0, lines);
                 }
             }
-        }
-
-        // ---------------------------------------------------------- strict messages (gate 8 as extended for v3)
-        // One flat JSON object: plain keys, each once and each allowed; values a plain string (printable, at most 200
-        // characters), true, false, null or a plain number; no escape, no nested object, no list. Returns key -> raw value.
-        private static readonly System.Text.RegularExpressions.Regex Bare = new System.Text.RegularExpressions.Regex("^(?:true|false|null|-?(?:0|[1-9][0-9]{0,8})(?:\\.[0-9]{1,10})?)$");
-
-        public static Dictionary<string, string> Flat(string text, string type, string[] allowed, out string why)
-        {
-            why = null;
-            Dictionary<string, string> d = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (text == null) { why = "empty message"; return null; }
-            if (text.IndexOf('\\') >= 0) { why = "message has an escape sequence; ChartBridge's page never sends one"; return null; }
-            string t = text.Trim();
-            if (t.Length < 2 || t[0] != '{' || t[t.Length - 1] != '}') { why = "message is not one JSON object"; return null; }
-            int i = 1;
-            while (true)
-            {
-                i = SkipWs(t, i);
-                if (i == t.Length - 1 && d.Count == 0) break;   // {}
-                if (t[i] != '"') { why = "message is not one flat JSON object"; return null; }
-                int ke = t.IndexOf('"', i + 1);
-                if (ke < 0) { why = "message is not one flat JSON object"; return null; }
-                string key = t.Substring(i + 1, ke - i - 1);
-                i = SkipWs(t, ke + 1);
-                if (i >= t.Length || t[i] != ':') { why = "message is not one flat JSON object"; return null; }
-                i = SkipWs(t, i + 1);
-                if (i >= t.Length - 1) { why = "message is not one flat JSON object"; return null; }
-                string raw;
-                if (t[i] == '{' || t[i] == '[') { why = "message has an unexpected nested object or list"; return null; }
-                if (t[i] == '"')
-                {
-                    int ve = t.IndexOf('"', i + 1);
-                    if (ve < 0) { why = "message is not one flat JSON object"; return null; }
-                    raw = t.Substring(i, ve - i + 1);
-                    if (raw.Length - 2 > 200 || raw.Any(ch => ch < 0x20 || ch == 0x7f)) { why = "a string value must be plain text of at most 200 characters"; return null; }
-                    i = ve + 1;
-                }
-                else
-                {
-                    int ve = i;
-                    while (ve < t.Length - 1 && t[ve] != ',' && !char.IsWhiteSpace(t[ve])) ve++;
-                    raw = t.Substring(i, ve - i);
-                    if (!Bare.IsMatch(raw)) { why = "value of \"" + key + "\" is not a plain value"; return null; }
-                    i = ve;
-                }
-                if (Array.IndexOf(allowed, key) < 0) { why = "unknown key \"" + key + "\" in " + type; return null; }
-                if (d.ContainsKey(key)) { why = "message has a key twice"; return null; }
-                d[key] = raw;
-                i = SkipWs(t, i);
-                if (i == t.Length - 1) break;
-                if (t[i] != ',') { why = "message is not one flat JSON object"; return null; }
-                i++;
-            }
-            if (!d.ContainsKey("type") || d["type"] != "\"" + type + "\"") { why = "type must be \"" + type + "\""; return null; }
-            return d;
-        }
-
-        private static int SkipWs(string t, int i) { while (i < t.Length && char.IsWhiteSpace(t[i])) i++; return i; }
-
-        // A plain string value, or null when absent or not a string.
-        private static string StrOf(Dictionary<string, string> m, string key)
-        {
-            string raw;
-            if (m == null || !m.TryGetValue(key, out raw) || raw.Length < 2 || raw[0] != '"') return null;
-            return raw.Substring(1, raw.Length - 2);
         }
 
         // ---------------------------------------------------------- telling the pages

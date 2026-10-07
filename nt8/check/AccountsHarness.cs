@@ -73,6 +73,7 @@ public static class AccountsHarness
         try
         {
             Setup();
+            V3Plumbing();
             SwitchOff();
             FirstStart();
             Checkmarks();
@@ -131,6 +132,52 @@ public static class AccountsHarness
         AccountsCall("WatchStatus");
     }
 
+    // ------------------------------------------------------------ the shared v3 plumbing (ChartBridgeV3.cs): a v2 page gets nothing new
+    static void V3Plumbing()
+    {
+        ChartBridgeSwitches.Reset();
+        Restart();
+        ChartBridgeClient p3 = new ChartBridgeClient(null, 46); p3.Origin = "http://localhost:8765"; List<string> g3 = new List<string>(); p3.Tap = x => g3.Add(x);
+        ChartBridgeClient p2 = new ChartBridgeClient(null, 47); p2.Origin = "http://localhost:8765"; List<string> g2 = new List<string>(); p2.Tap = x => g2.Add(x);
+        Clients()[46] = p3; Clients()[47] = p2;
+        try
+        {
+            Check(!ChartBridgeV3.IsV3(p3) && !ChartBridgeV3.IsV3(p2) && !ChartBridgeV3.IsV3(null), "v3: no page is v3 before its client message");
+            Check(!ChartBridgeV3.AccountChecks && !ChartBridgeV3.OrderTypes && !ChartBridgeV3.Strategies && !ChartBridgeV3.Merge && !ChartBridgeV3.CancelFromList && !ChartBridgeV3.Copier && !ChartBridgeV3.Bot, "v3: every switch off by default");
+            Send(p3, "{\"type\":\"client\",\"v\":3}");
+            Check(ChartBridgeV3.IsV3(p3) && !ChartBridgeV3.IsV3(p2), "v3: the client message marks that page only");
+            SignIn(p3); SignIn(p2);
+            string t2 = g2.First(x => x.StartsWith("{\"type\":\"trading\""));
+            Check(t2 == ChartBridgeOrders.TradingJson(true, null) && !t2.Contains("switches"), "v2 page: the trading message is exactly v2's (no switches)");
+            Check(g3.Any(x => x.StartsWith("{\"type\":\"trading\"") && x.Contains(",\"switches\":{\"accountChecks\":false,\"orderTypes\":false,\"strategies\":false,\"merge\":false,\"cancelFromList\":false,\"copier\":false,\"bot\":false}}")), "v3 page: trading carries the seven switches");
+            ChartBridgeSwitches.Note("orderTypes", "ON"); ChartBridgeSwitches.Note("bot", "1"); ChartBridgeSwitches.Note("merge", "yes");
+            Check(ChartBridgeV3.OrderTypes && ChartBridgeV3.Bot && !ChartBridgeV3.Merge && NinjaTrader.Code.Output.Lines.Any(x => x.Contains("config.txt: merge = yes is not on, true or 1, so merge is OFF")), "switches: ON and 1 are on; anything else off, with an Output line");
+            g3.Clear(); SignIn(p3);
+            Check(g3.Any(x => x.StartsWith("{\"type\":\"trading\"") && x.Contains("\"orderTypes\":true") && x.Contains("\"bot\":true") && x.Contains("\"merge\":false")), "v3 page: the switches are config.txt's values");
+            ChartBridgeSwitches.Reset();
+            Check(!g2.Any(x => x.StartsWith("{\"type\":\"accounts\"")) && !g2.Any(x => x.Contains("\"tradable\"")) && !g2.Any(x => x.Contains("switches")), "v2 page: no accounts, no tradable, no switches");
+            Check(ChartBridgeV3.Flat("{\"type\":\"x\",\"a\":1}", "x", new[] { "type", "a" }, out why0) != null && why0 == null, "Flat: a flat message is read");
+            Dictionary<string, string> m = ChartBridgeV3.Flat("{ \"type\" : \"x\" , \"n\" : 12 , \"b\" : true , \"s\" : \"hi\" , \"z\" : null }", "x", new[] { "type", "n", "b", "s", "z" }, out why0);
+            Check(m != null && ChartBridgeV3.Whole(m, "n") == 12 && ChartBridgeV3.Bool(m, "b") == true && ChartBridgeV3.Str(m, "s") == "hi" && ChartBridgeV3.Str(m, "z") == null && ChartBridgeV3.Whole(m, "s") == null && ChartBridgeV3.Bool(m, "n") == null, "Flat: whole number, bool, string and null read by kind");
+            string[] bad = { "{\"type\":\"x\",\"n\":012}", "{\"type\":\"x\",\"n\":1e3}", "{\"type\":\"y\"}", "{\"type\":\"x\",}", "{\"type\":\"x\"} {}", "[{\"type\":\"x\"}]", "{\"type\":\"x\",\"n\":\"" + new string('a', 201) + "\"}", "{\"type\":\"x\",\"n\":tru}" };
+            foreach (string b in bad) { string w; Check(ChartBridgeV3.Flat(b, "x", new[] { "type", "n" }, out w) == null && w != null, "Flat refuses " + (b.Length > 40 ? b.Substring(0, 40) + "..." : b) + " (" + w + ")"); }
+            // the rate: v3 actions count in gate 7's 10 a second per connection
+            ChartBridgeSwitches.Note("accountChecks", "on");
+            Restart();
+            lock (p3.Actions) p3.Actions.Clear();
+            for (int i = 0; i < 11; i++) typeof(ChartBridgeServer).GetMethod("OnClientMessage", PS).Invoke(null, new object[] { p3, "{\"type\":\"accountTrade\",\"account\":\"FUNDED-B\",\"on\":false}" });
+            Check(Last(g3).Contains("too many order actions"), "v3 actions count in the 10 a second");
+            ChartBridgeSwitches.Reset();
+        }
+        finally
+        {
+            ChartBridgeClient gone; Clients().TryRemove(46, out gone); Clients().TryRemove(47, out gone);
+            ChartBridgeSwitches.Reset(); ChartBridgeAccounts.Clear();
+            foreach (string f in new[] { "accounts.txt", "accounts.log" }) File.Delete(Path.Combine(folder, f));   // the rest starts from a first start
+        }
+    }
+    static string why0;
+
     // ------------------------------------------------------------ every switch off: 0.3.8 exactly
     static void SwitchOff()
     {
@@ -138,7 +185,7 @@ public static class AccountsHarness
         Restart();
         sent.Clear();
         Send(page, "{\"type\":\"client\",\"v\":3}");
-        Check(ChartBridgeAccounts.IsV3(page) && Accounts().Length > 0, "off: a v3 page still gets the accounts list (read only) right after client");
+        Check(ChartBridgeV3.IsV3(page) && Accounts().Length > 0, "off: a v3 page still gets the accounts list (read only) right after client");
         Check(Entry(Accounts(), "EVAL-A").Contains("\"trade\":true") && Entry(Accounts(), "FUNDED-B").Contains("\"trade\":false"), "off: trade is tradeAccounts");
         Check(!Accounts().Contains("Playback101"), "off: Playback is never listed");
         SignIn(page); SignIn(old);
@@ -297,11 +344,11 @@ public static class AccountsHarness
         Check(!gotDesk.Any(x => x.StartsWith("{\"type\":\"accounts\"")), "another origin never gets accounts");
         ChartBridgeClient v2 = new ChartBridgeClient(null, 45); v2.Origin = "http://localhost:8765"; List<string> gotV2 = new List<string>(); v2.Tap = s => gotV2.Add(s);
         Send(v2, "{\"type\":\"client\",\"v\":2}");
-        Check(!ChartBridgeAccounts.IsV3(v2) && Last(gotV2).Contains("\"level\":\"warn\"") && Last(gotV2).Contains("v must be 3"), "client with v 2: a status warn, the page stays v2");
+        Check(!ChartBridgeV3.IsV3(v2) && Last(gotV2).Contains("\"level\":\"warn\"") && Last(gotV2).Contains("v must be 3"), "client with v 2: a status warn, the page stays v2");
         Send(v2, "{\"type\":\"client\",\"v\":3,\"x\":1}");
-        Check(!ChartBridgeAccounts.IsV3(v2) && Last(gotV2).Contains("unknown key"), "client with another key: refused");
+        Check(!ChartBridgeV3.IsV3(v2) && Last(gotV2).Contains("unknown key"), "client with another key: refused");
         Send(v2, "{\"type\":\"client\",\"v\":\"3\"}");
-        Check(!ChartBridgeAccounts.IsV3(v2), "client with v as a string: refused");
+        Check(!ChartBridgeV3.IsV3(v2), "client with v as a string: refused");
     }
 
     // ------------------------------------------------------------ a restart reads the checkmarks; tradeAccounts is not read again

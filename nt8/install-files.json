@@ -6,6 +6,7 @@
     "nt8/ChartBridgePin.cs",
     "nt8/ChartBridgeBars.cs",
     "nt8/ChartBridgeTape.cs",
+    "nt8/ChartBridgeV3.cs",
     "nt8/ChartBridgeAccounts.cs"
   ],
   "www": [

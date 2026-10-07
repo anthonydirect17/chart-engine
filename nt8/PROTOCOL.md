@@ -1382,6 +1382,14 @@ without `from` is v2's.
 
 #### Accounts as built (ChartBridge 0.4.0, `nt8/ChartBridgeAccounts.cs`)
 
+**The shared v3 plumbing** is in `nt8/ChartBridgeV3.cs`, for every v3 feature: the switch table (`ChartBridgeSwitches`, read
+from `config.txt` without taking any key from another reader) and `ChartBridgeV3`: `IsV3(client)` (the page sent `client`),
+`AccountChecks`, `OrderTypes`, `Strategies`, `Merge`, `CancelFromList`, `Copier`, `Bot`, `SwitchesJson()`, `Gate(client)`
+(gates 1, 4 and 7: a v3 action counts in the 10 a second), `Flat(text, type, keys, out why)` (gate 8 as extended for v3, for a
+flat message; `strategy`'s nested object is the strategies lane's), `Str`, `Bool`, `Whole`, and `SendToV3Traders(json)`. A
+`client` with anything but `{"type":"client","v":3}` gets a `status` `warn` and the page stays v2. A v2 page's `trading`
+message is byte for byte v2's.
+
 Where the contract above left a detail open, the build chose the safe simple option, marked **(lead's default)**:
 
 - **`accounts.txt` missing after ChartBridge made it** (lead's default): a first start is "no `accounts.txt` and no

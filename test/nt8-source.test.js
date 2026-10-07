@@ -815,19 +815,28 @@ test('0.4.0: the tape counters run after the send, on their own, with no lock an
 test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and its switches are off by default', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
   const acode = asrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
-  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeAccounts.cs'));
-  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs ChartBridgeAccounts\.cs/);
+  const vsrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeV3.cs'), 'utf8');
+  const vcode = vsrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+  const addons = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons;
+  assert.ok(addons.includes('nt8/ChartBridgeAccounts.cs') && addons.includes('nt8/ChartBridgeV3.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs ChartBridgeV3\.cs ChartBridgeAccounts\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/AccountsHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /AccountsHarness\.Run\(Check\);/);
   // no order call of any kind: closing goes through ChartBridgeOrders.cs's gated functions
-  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
-    assert.ok(!re.test(acode), 'ChartBridgeAccounts.cs: ' + re);
-  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5 only');
+  for (const [name, c] of [['ChartBridgeAccounts.cs', acode], ['ChartBridgeV3.cs', vcode]]) {
+    for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
+      assert.ok(!re.test(c), name + ': ' + re);
+    assert.ok(!/(^|[\s(=,+:?])\$"/m.test(c) && !/\?\.\w/.test(c) && !/\bnameof\(/.test(c), name + ': C# 5 only');
+  }
+  // the shared v3 helper the other lanes call (lead, 2026-10-07)
+  for (const re of [/public static bool IsV3\(ChartBridgeClient c\)/, /public static string SwitchesJson\(\)/, /public static string Gate\(ChartBridgeClient client\) \{ return ChartBridgeOrders\.Gate\(client\); \}/,
+    /public static Dictionary<string, string> Flat\(string text, string type, string\[\] allowed, out string why\)/, /public static bool OrderTypes \{ get/, /public static bool Bot \{ get/])
+    assert.match(vcode, re);
   // never turns trading on or off, never changes a switch from inside
   assert.ok(!/Enabled\s*=/.test(acode) && !/TradeAccounts\.(Add|Clear|Remove)/.test(acode), 'never touches trading or tradeAccounts');
   // the switches: off by default, on only for on, true or 1
-  assert.match(acode, /private static readonly bool\[\] Values = new bool\[Names\.Length\];/);
-  assert.match(acode, /bool on = v\.Equals\("on", StringComparison\.OrdinalIgnoreCase\) \|\| v\.Equals\("true", StringComparison\.OrdinalIgnoreCase\) \|\| v == "1";/);
+  assert.match(vcode, /private static readonly bool\[\] Values = new bool\[Names\.Length\];/);
+  assert.match(vcode, /bool on = v\.Equals\("on", StringComparison\.OrdinalIgnoreCase\) \|\| v\.Equals\("true", StringComparison\.OrdinalIgnoreCase\) \|\| v == "1";/);
   assert.match(bodyOf(code, 'public static void Load()'), /ChartBridgeSwitches\.Reset\(\);[\s\S]*ChartBridgeSwitches\.Note\(key, val\);/);
   // the undocumented trailing drawdown is read by name (compiles on every NinjaTrader 8), and a 0 is not trusted until a value was seen
   assert.match(acode, /ItemNamed\("TrailingMaxDrawdown"\)/);
