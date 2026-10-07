@@ -923,12 +923,16 @@ const signalPeers = new Set();
  * open, while the focus is outside this chart (a host's own fields), on a key the chart reads as its own, or after
  * another handler took the key. A hotkey that matches calls preventDefault, so the browser does not act on it too;
  * a held key's repeats (e.repeat) never fire an action.
+ * 1.16.0: `o.resolve(combo)` and `o.run(id)` in place of keys and actions give a page its other keys (the workspace's Merge,
+ * Order Strategy and entry-type keys) under these very rules.
  */
 function hotkeyHandler(o) {
   return e => {
     if (e.defaultPrevented || e.isComposing) return;
-    const id = OT.hotkeyAction(o.keys(), OT.hotkeyCombo(e));
-    if (!id || typeof o.actions[id] !== 'function') return;
+    const combo = OT.hotkeyCombo(e);
+    const id = typeof o.resolve === 'function' ? o.resolve(combo) : OT.hotkeyAction(o.keys(), combo);
+    const act = !id ? null : typeof o.run === 'function' ? () => o.run(id) : o.actions[id];
+    if (!id || typeof act !== 'function') return;
     const a = document.activeElement;
     /* Close and Flatten all always work while a menu or popover is open (review D2), even from one of its boxes when the
        combo types nothing there (Ctrl or Alt, or an F-key); never while the PIN pad asks */
@@ -945,12 +949,15 @@ function hotkeyHandler(o) {
     if ((!urgent && o.busy()) || OT.isChartKey(e)) return;
     e.preventDefault();
     if (e.repeat) return;
-    o.actions[id]();
+    act();
   };
 }
 
 /* A Close or Flatten all key pressed while a box has the focus fires nothing and says so (1.12.0). */
 const HOTKEY_IN_BOX = 'Hotkey ignored: a box has the focus.';
+/* 1.16.0: the workspace says here whether its hotkeys are kept in The Desk (true while ChartBridge's switches need them) */
+const DESK_SYNC_KEY = 'live-desk-sync-v1';
+const DESK_SYNC_NOTE = 'The hotkeys are shared by every PC through The Desk now: set them in the workspace\'s Settings.';
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -2682,7 +2689,7 @@ function start(container, opt, PAGE) {
       if (press && e.pointerId === press.id && Math.abs(e.clientX - press.x) + Math.abs(e.clientY - press.y) > 2) press.moved = true;
     }, true);
     const up = e => {
-      if (e.target === cv) lastUp = { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, button: e.button };
+      if (e.target === cv) lastUp = { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, button: e.button };
       if (!press || e.pointerId !== press.id) return;
       const pr = press; press = null;
       e.stopPropagation();
@@ -2692,7 +2699,7 @@ function start(container, opt, PAGE) {
       if (!(pr.button === 0 ? e.ctrlKey : e.shiftKey)) return;    // let go of the key first: nothing, like Shift+click
       if (e.ctrlKey && e.shiftKey) { flash(BOTH_KEYS, 'warn'); return; }
       if (!armedHere()) return;
-      sell(U.roundTo(chart.yToPrice(pt.y), D.tick));
+      sell(U.roundTo(chart.yToPrice(pt.y), D.tick), { ctrl: e.ctrlKey, alt: e.altKey, shift: e.shiftKey });   // 1.16.0: the keys held, for a host's entry types
     };
     host.addEventListener('pointerup', up, true);
     host.addEventListener('pointercancel', up, true);
@@ -3987,17 +3994,24 @@ function start(container, opt, PAGE) {
     const hkNote = (id, text, level) => { const el = $('hkNote-' + id); el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
     const renderHotkeys = () => { for (const a of OT.HOTKEY_ACTIONS) $('hk-' + a.id).value = HK[a.id]; };
     const openSettings = v => {
-      if (v) { readHotkeys(); renderHotkeys(); for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', ''); }
+      if (v) { readHotkeys(); renderHotkeys(); for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', deskSynced() ? 'warn' : ''); if (deskSynced()) hkNote(OT.HOTKEY_ACTIONS[0].id, DESK_SYNC_NOTE, 'warn'); }
       setPanel.hidden = !v; $('setBtn').setAttribute('aria-expanded', String(v));
       if (v) fitPop(setPanel, setWrap);
     };
     /* Save one action's hotkey (or '' to clear it): read fresh, so another tab's keys are kept; a combo another action
        took meanwhile is refused. Never saved when storage is blocked. */
+    /* 1.16.0: while the workspace keeps the hotkeys in The Desk (shared by every PC; live-desk-sync-v1, written by the
+       workspace), they are set there only: here they are shown, never changed, so no PC's edit is lost */
+    const deskSynced = () => prefs.raw.get(DESK_SYNC_KEY) === true;
     const saveHotkey = (id, combo) => {
+      if (deskSynced()) { renderHotkeys(); hkNote(id, DESK_SYNC_NOTE, 'warn'); return; }
       const next = Object.assign({}, readHotkeys());
       if (combo) {
         const other = OT.HOTKEY_ACTIONS.find(a => a.id !== id && next[a.id] === combo);
         if (other) { renderHotkeys(); hkNote(id, combo + ' is already ' + other.name + '. Clear it there first.', 'warn'); return; }
+        /* 1.16.0: nor the workspace's Maximize panel key (the one conflict check covers every key) */
+        const vk = prefs.raw.get('live-ws-keys-v1'), mx = vk && typeof vk === 'object' && typeof vk.maximize === 'string' ? vk.maximize : '';
+        if (mx && mx === combo) { renderHotkeys(); hkNote(id, combo + ' is already Maximize panel. Clear it there first.', 'warn'); return; }
       }
       next[id] = combo;
       if (!prefs.raw.set(HKKEY, next)) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
@@ -4058,11 +4072,12 @@ function start(container, opt, PAGE) {
     const call = (fn, a) => { try { fn.apply(HOST, a); } catch (e) { setTimeout(() => { throw e; }); } };
     const kindAt = (side, price) => { const last = lastPrice(); return last > 0 ? OT.placeKind(side, price, last) : null; };
     chart.setOrderPreview(previewAt);
+    /* 1.16.0: the keys held on the click go to the host too (an entry-type modifier, ChartBridge 0.4.0's orderTypes) */
     chart.on('orderPlace', e => {
       if (lastUp && lastUp.ctrlKey) { flash(BOTH_KEYS, 'warn'); return; }
-      if (armedHere()) call(HOST.place, ['buy', e.price, D.root, kindAt('buy', e.price)]);
+      if (armedHere()) call(HOST.place, ['buy', e.price, D.root, kindAt('buy', e.price), { ctrl: false, alt: !!(lastUp && lastUp.altKey), shift: true }]);
     });
-    setupSellClicks(price => call(HOST.place, ['sell', price, D.root, kindAt('sell', price)]));
+    setupSellClicks((price, mods) => call(HOST.place, ['sell', price, D.root, kindAt('sell', price), mods]));
     chart.on('orderMove', e => { if (armedHere()) call(HOST.move, [e.id, e.price, D.root, e.from]); else renderHost(); });
     chart.on('orderCancel', e => { if (armedHere()) call(HOST.cancel, [e.id, D.root]); });
     chart.on('orderPlanAdd', e => { if (armedHere() && typeof HOST.planAdd === 'function') call(HOST.planAdd, [e.id, e.which, D.root]); });

@@ -441,3 +441,44 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-db-src { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ws-panel.db-wide .db { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); }
 .ws-panel.db-short .db-note { display: none; }
+
+/* ---------------- 1.16.0 (ChartBridge 0.4.0): Order Strategies, Merge, entry types and The Desk's shared settings. Shown
+   only while ChartBridge's switches say on. No motion here: nothing moves or fades (rule R3). */
+.chart-live .tk-strat .tk-ssel { flex: 1 1 0; width: 0; min-width: 0; }
+.chart-live .tk-sdesc { flex: none; font: 500 11px var(--mono); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a strategy active: the bracket boxes and its presets step aside (the strategy carries its own stop and targets) */
+.chart-live .tk-has-strat .tk-bk, .chart-live .tk-has-strat .bpre, .chart-live .tk-has-strat .bsave { display: none !important; }
+.chart-live .tk-v3 { font-size: 11px; color: var(--text2); }
+.chart-live .tk-v3:empty { display: none; }
+.chart-live .tk-v3.warn { color: var(--warn); }
+.chart-live .tk-v3.error { color: var(--loss); font-weight: 600; }
+.chart-live .hk-in.hk-ro, .chart-live .hk-clear.hk-ro { opacity: .55; cursor: not-allowed; }
+.ws-in { flex: 1 1 auto; min-width: 0; height: 26px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 0 8px; font: 12px var(--ws-mono); }
+.ws-in[aria-invalid="true"] { border-color: var(--ws-sell); }
+.ws-help.ws-warn, .ws-err.ws-warn, .sg-sum.ws-warn { color: var(--ws-warn); }
+.ws-err.ws-ok { color: var(--ws-buy); }
+.ws-mod { width: 90px; }
+#wsStratSec .ws-field .ws-help { margin: 0; }
+/* the Order Strategies dialog: the list on the left, the form on the right; fits 1366x768 whole */
+.ws-dialog.ws-dialog-wide { width: min(780px, calc(100vw - 32px)); }
+.ws-sg h2 span { color: var(--ws-muted); font-weight: 400; margin-left: 6px; }
+.sg-cols { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; }
+.sg-list { display: flex; flex-direction: column; gap: 4px; max-height: 420px; overflow-y: auto; }
+.sg-item { height: auto; text-align: left; padding: 5px 8px; display: flex; flex-direction: column; gap: 2px; }
+.sg-item b { color: var(--ws-text); font-weight: 600; }
+.sg-item span { color: var(--ws-muted); font: 10.5px var(--ws-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sg-item[aria-pressed="true"] { border-color: var(--ws-accent); background: var(--ws-tint); }
+.sg-new { color: var(--ws-soft); }
+.sg-form { display: flex; flex-direction: column; gap: 6px; }
+.sg-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 28px; }
+.sg-lbl { width: 92px; flex: none; color: var(--ws-muted); display: inline-flex; align-items: center; gap: 4px; }
+.sg-u { color: var(--ws-muted); }
+.sg-u.sg-dim { opacity: .45; }
+.ws-sg .sg-name { flex: 1 1 auto; }
+.ws-sg .ws-num { width: 64px; }
+.ws-sg .ws-num:disabled, .ws-sg select:disabled { opacity: .45; }
+.ws-sg .ws-num[aria-invalid="true"], .ws-sg input[aria-invalid="true"] { border-color: var(--ws-sell); }
+.sg-hk { width: 130px; font: 600 12px var(--ws-mono) !important; caret-color: transparent; cursor: pointer; }
+.sg-sum { color: var(--ws-muted); min-height: 0; }
+.sg-fill { flex: 1 1 auto; }
+.ws-sg input[type="checkbox"] { height: auto; margin: 0; }

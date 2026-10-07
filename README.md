@@ -441,6 +441,23 @@ chart page's order bar (`live/trade.js`), so everything below about the order ba
   the focus, or a box, menu or dialog has it.
 - Chrome or Edge (they keep the one ticket with the Web Locks API).
 
+**With ChartBridge 0.4.0** (1.16.0) the ticket gains what ChartBridge's switches turn on in `config.txt`, each one only
+while its switch is on (all off by default; with every switch off the ticket is as above):
+
+- **Order Strategies** (`strategies`): a **Strategy** picker on the ticket (None is the bracket). Shift+click, Buy MKT,
+  Sell MKT and their keys send the active strategy: a stop (market or limit), up to 3 targets with their shares,
+  breakeven and trailing. Build them in **Settings > Order Strategies...**; each can have a key that picks it. The
+  ticket shows plainly when ChartBridge manages it, resumed it after a restart, or could not (NOT MANAGED: manage the
+  stop by hand).
+- **Merge** (`merge`): a Merge button on the ticket and a Merge key. ChartBridge joins the stops and targets of the
+  position into one set at the first leg's prices; the ticket shows the result (merged, restored or failed).
+- **Entry types** (`orderTypes`): in Settings pick a Limit key and a Stop key (Shift, Ctrl or Alt). Hold one with Buy
+  MKT's or Sell MKT's key (at the price under the mouse) or with a chart click (Alt only): Limit gives a limit, or a
+  stop-limit past the market; Stop gives a stop, or an MIT.
+- **Shared by every PC**: the strategies and the hotkeys are kept in The Desk (its address in Settings,
+  `http://localhost:8800` until you type another). When The Desk does not answer, the last copy read is used and shown
+  read only; nothing you change is lost silently (it says it was not saved).
+
 ## Trading from the chart
 
 Decided by Anthony on 2026-09-29: market buy and sell, limit and stop by clicking a price, brackets (stop
@@ -717,6 +734,7 @@ npm run smoke:live       # the live page against the fake bridge as ChartBridge 
 npm run smoke:orders     # order entry against the fake bridge (protocol v2)
 npm run smoke:settings   # saved choices survive a reload and a second chart tab
 npm run smoke:hotkeys    # trading hotkeys: set in Settings, each sends what its button sends, refused combos, typing, reload, mounted
+npm run smoke:strategies # 0.4.0 on the ticket (fake bridge --v3, a fake Desk): switches off show nothing new; strategies, Merge, entry types, shared keys
 npm run smoke:embed      # ChartLive.mount in a plain host page: read only, reconnects, destroy, two panes
 npm run smoke:pin        # the PIN on ChartBridge's page: set, unlock, reload, a restart mid-session, change, forgotten PIN
 npm run smoke:perf       # Range 40 with 33 hours of sample ticks and a busy feed: the chart keeps drawing, no long frames

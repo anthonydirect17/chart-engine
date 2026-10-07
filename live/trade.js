@@ -40,6 +40,11 @@
  *   dropNoStop()         F2 review: close an open NO STOP question, its order not sent (Close, Flatten all and Armed
  *                        going off call it; the answer is also bound to the instrument, account and Armed it was asked in)
  *   flattened(root)      a Close or Flatten (root) or Flatten all (null) was pressed here, for other windows (optional)
+ *   v3                   1.16.0: true on a page that speaks protocol v3 (the workspace): after a `hello` naming "v3" it
+ *                        sends `client` v3, so ChartBridge 0.4.0 tells it its `switches` (nt8/PROTOCOL.md "Protocol v3")
+ *   strategy()           1.16.0 (optional): the active Order Strategy, { name, wire } (wire: The Desk's strategy as
+ *                        OrderStrategies.toWire gives it), or null for the bracket; used only while `switches.strategies`
+ *   merged(m)            1.16.0 (optional): ChartBridge's `merge` result arrived (the host shows it)
  *   destroyed()          the host went away
  *   prefs, LP            LivePrefs (the saved bracket, qty and presets) and its module
  *   pin, fetch, framed, framedReason, now
@@ -51,7 +56,9 @@
 'use strict';
 
 const OT = typeof self !== 'undefined' && self.OrderTicket ? self.OrderTicket : require('./order-ticket.js');
-const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan'];   // what ChartBridge counts, 10 a second at most (plan: 0.3.8)
+/* 1.16.0: Order Strategies, entry types and Merge (live/order-strategies.js); a page that does not load it has none */
+const OS = typeof self !== 'undefined' && self.OrderStrategies ? self.OrderStrategies : typeof require === 'function' ? require('./order-strategies.js') : null;
+const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge'];   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
 const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
 const RATE_REFUSAL = /order actions/i;
@@ -78,7 +85,11 @@ function create(env) {
     account: '',
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
+    /* 1.16.0 (protocol v3): ChartBridge's switches (all off unless a v3 `trading` says on), its managed strategies by entry
+       id (`managed`), and the last Merge result per 'account|root' (`merge`) */
+    switches: OS ? OS.cleanSwitches(null) : {}, managed: new Map(), merges: new Map(),
   };
+  const sw = k => !!OS && TR.switches[k] === true;
   /* The bracket's cap (1.13.0): 200 ticks for ChartBridge before 0.3.7, none for 0.3.7 and newer unless config.txt sets
      maxBracketTicks. Read as saved (up to OT.NO_CAP) and cut to the cap once ChartBridge says which it is. */
   const cap = () => OT.bracketCap(TR.version, TR.maxBracketTicks);
@@ -137,6 +148,7 @@ function create(env) {
     TR.accounts = Array.isArray(t.accounts) ? t.accounts.slice() : [];
     TR.maxQty = t.maxQty || {};
     TR.maxBracketTicks = Number.isInteger(t.maxBracketTicks) && t.maxBracketTicks > 0 ? t.maxBracketTicks : 0;   // 0.3.7: only when config.txt sets it
+    if (OS) TR.switches = OS.cleanSwitches(TR.enabled ? t.switches : null);   // 1.16.0: a v3 page's switches; off with trading off
     recap();
     // a Cancel all under way stops for what ChartBridge would refuse: all of it while trading is off, and the orders of
     // an account no longer on its list (review 2 S1; they cannot be cancelled from the page then)
@@ -154,6 +166,8 @@ function create(env) {
     if (!TR.v2) return;
     batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
     TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
+    if (OS) TR.switches = OS.cleanSwitches(null);
+    TR.managed.clear(); TR.merges.clear();                         // ChartBridge sends the managed ones again after auth
     const was = TR.account;
     TR.account = '';                                               // the tab's account stays with the host (syncAccounts)
     env.lost(was);
@@ -172,6 +186,8 @@ function create(env) {
   function hello(m) {
     TR.version = m && typeof m.version === 'string' ? m.version : '';   // 0.3.7 and newer: no 200-tick cap on the page
     recap();
+    /* 1.16.0: a v3 page says so right after `hello` (PROTOCOL.md "Telling the page what is on"), before it signs in */
+    if (env.v3 === true && OS && m && Array.isArray(m.features) && m.features.includes('v3')) send({ type: 'client', v: 3 });
     if (m && m.trading) { applyTrading(m.trading); signIn(); }
   }
   /** A message from ChartBridge about trading; true when it was one. */
@@ -182,6 +198,15 @@ function create(env) {
       case 'order': onOrder(m); return true;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); env.changed(); if (env.positionChanged) env.positionChanged(); return true;
       case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;
+      /* 1.16.0 (protocol v3): a managed strategy's state, and a Merge's result (each shown plainly by the host) */
+      case 'managed': if (!OS || typeof m.id !== 'string') return true;
+        if (m.state === 'done') TR.managed.delete(m.id); else TR.managed.set(m.id, m);
+        env.changed(); return true;
+      case 'merge': if (!OS || typeof m.account !== 'string' || typeof m.root !== 'string') return true;
+        TR.merges.set(m.account + '|' + m.root, m);
+        { const l = OS.mergeLine(m); flash(l.text, l.level); }
+        if (typeof env.merged === 'function') env.merged(m);
+        env.changed(); return true;
     }
     return false;
   }
@@ -212,12 +237,23 @@ function create(env) {
     const R = root();
     // a price order needs the last price to be a limit or a stop (OT.placeKind): until one is known, only market orders
     if (kind !== 'market' && !(lastPrice() > 0)) { flash('No price yet: nothing was sent. Market orders and Flatten work.', 'warn'); return; }
+    // 1.16.0: a stop-limit or an MIT entry only while ChartBridge says orderTypes is on (it refuses them otherwise)
+    if ((kind === 'stopLimit' || kind === 'mit') && !sw('orderTypes')) { flash('Not sent: stop-limit and MIT orders are off in ChartBridge (orderTypes in config.txt).', 'warn'); return; }
     const qty = qtyNow(), bad = OT.checkQty(qty, capNow(), R);
     if (bad) { flash('Not sent: ' + bad, 'error'); return; }
     const b = OT.cleanBracket(brackets[R], cap()), pos = TR.positions.get(TR.account + '|' + R);
     const reduces = !OT.bracketAllowed(side, pos && pos.qty);          // ChartBridge refuses a bracket on a reducing order
+    /* 1.16.0: the active Order Strategy goes with the entry in place of the bracket (only while ChartBridge says strategies
+       is on); never on an order that reduces (ChartBridge refuses it there, as a bracket). Checked here by ChartBridge's own
+       rules first (OS.checkWire), so a strategy it would refuse is not sent. */
+    const strat = sw('strategies') && typeof env.strategy === 'function' ? env.strategy() : null;
+    if (strat && !reduces) {
+      const why = OS.checkWire(strat.wire, TR.maxBracketTicks);
+      if (why) { flash('Not sent: strategy ' + strat.name + ': ' + why, 'error'); return; }
+    }
+    const hasStop = strat ? true : b.stop > 0;                         // a strategy always has its stop
     // a reversal (sell 3 while long 1) opens a position too: asked as an entry (F2 review); it still takes no bracket
-    if (OT.opensPosition(side, pos && pos.qty, qty) && !(b.stop > 0) && !noStopOk && typeof env.confirmNoStop === 'function') {
+    if (OT.opensPosition(side, pos && pos.qty, qty) && !hasStop && !noStopOk && typeof env.confirmNoStop === 'function') {
       const go = again || (() => sendOrder(side, kind, price));
       /* the answer is for this instrument and account while Armed (the F2 re-review): a Send after the instrument or the
          account changed, or after Armed went off (even if armed again), sends nothing */
@@ -235,11 +271,17 @@ function create(env) {
     if (!sameAction.call(null, [side, kind, price, qty].join('|'), now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
     const msg = { type: 'order', cid: newCid(), account: TR.account, root: R, side, kind, qty };
     if (kind !== 'market') msg.price = price;
-    if ((b.stop > 0 || b.target > 0) && !reduces) msg.bracket = { stop: b.stop, target: b.target };   // JSON numbers, 0 = none
+    /* 1.16.0 (lead's default): a stop-limit entry's limit is at its stop (limitOffset 0): it never fills worse than the
+       stop price */
+    if (kind === 'stopLimit') msg.limitOffset = 0;
+    if (strat && !reduces) msg.strategy = Object.assign({}, strat.wire);
+    else if ((b.stop > 0 || b.target > 0) && !reduces) msg.bracket = { stop: b.stop, target: b.target };   // JSON numbers, 0 = none
     send(msg);
     sentCid = msg.cid;
-    flash('Sent ' + side.toUpperCase() + ' ' + (kind === 'market' ? 'MKT' : kind === 'limit' ? 'LMT' : 'STP') + ' ' + qty + ' ' + R +
-      (kind === 'market' ? '' : ' @ ' + fmt(price)) + (msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
+    const kt = OS ? OS.KIND_TEXT[kind] || kind : kind === 'market' ? 'MKT' : kind === 'limit' ? 'LMT' : 'STP';
+    flash('Sent ' + side.toUpperCase() + ' ' + kt + ' ' + qty + ' ' + R +
+      (kind === 'market' ? '' : ' @ ' + fmt(price)) + (msg.strategy ? ' with strategy ' + strat.name : msg.bracket ? ' with bracket ' + b.stop + ' / ' + b.target + ' ticks'
+        : reduces && strat ? ' (no strategy: it reduces the position)' : reduces && (b.stop > 0 || b.target > 0) ? ' (no bracket: it reduces the position)' : '') + ' · ' + TR.account, '');
   }
   /** A click on a chart at a price (Shift+click buys, Shift+right click and Ctrl+click sell): a limit or a stop by the
       last price, as the order bar's chart has always placed it. */
@@ -256,10 +298,14 @@ function create(env) {
     sentCid = '';
     if (!ready()) return '';
     const R = root(), last = lastPrice();
-    if (kind !== 'limit' && kind !== 'stop') { flash('No price on that chart yet: nothing was sent. Market orders and Flatten work.', 'warn'); return ''; }
+    /* 1.16.0: a stop-limit or an MIT (an entry-type modifier held, orderTypes on) is checked by the side of the market it
+       rests on, as a limit (MIT) or a stop (stop-limit) */
+    const typed = OS && (kind === 'stopLimit' || kind === 'mit');
+    if (kind !== 'limit' && kind !== 'stop' && !typed) { flash('No price on that chart yet: nothing was sent. Market orders and Flatten work.', 'warn'); return ''; }
     if (!(last > 0)) { flash('Not sent: the order ticket has no recent ' + R + ' price to check the click against. Click again in a moment.', 'warn'); return ''; }
-    const mine = OT.placeKind(side, price, last);
-    if (mine !== kind) { flash('Not sent: the chart and the order ticket see ' + R + ' differently (the chart: ' + side.toUpperCase() + ' ' + (kind === 'limit' ? 'LMT' : 'STP') + ', the ticket: ' + (mine === 'limit' ? 'LMT' : 'STP') + ' by ' + fmt(last) + '). Click again.', 'warn'); return ''; }
+    const mine = OT.placeKind(side, price, last), want = typed ? OS.baseKind(kind) : kind;
+    if (typed && kind === 'mit' && Math.abs(price - last) < 1e-9) { flash('Not sent: at the last price an MIT would trigger at once. Use ' + (side === 'sell' ? 'Sell' : 'Buy') + ' MKT.', 'warn'); return ''; }
+    if (mine !== want) { flash('Not sent: the chart and the order ticket see ' + R + ' differently (the chart: ' + side.toUpperCase() + ' ' + (typed ? OS.KIND_TEXT[kind] : kind === 'limit' ? 'LMT' : 'STP') + ', the ticket: ' + (typed ? OS.KIND_TEXT[OS.kindFor(mine, kind === 'stopLimit' ? 'limit' : 'stop')] : mine === 'limit' ? 'LMT' : 'STP') + ' by ' + fmt(last) + '). Click again.', 'warn'); return ''; }
     sendOrder(side, kind, price, () => placeChecked(side, kind, price));
     return sentCid;
   }
@@ -650,12 +696,33 @@ function create(env) {
   function chartOrders(account, r) {
     const out = [];
     for (const o of working(account, r)) {
-      const pl = OT.plannedLines(o, tickOf(r));
+      // 1.16.0: a strategy's entry has no planned lines to drag (ChartBridge refuses `plan` on it: cancel and place again)
+      const pl = o.by === 'strategy' ? { lines: [], adds: [] } : OT.plannedLines(o, tickOf(r));
       out.push(pl.adds.length && o.planned ? Object.assign({}, o, { adds: pl.adds }) : o);
       for (const l of pl.lines) out.push(l);
     }
     return out;
   }
+
+  /*
+   * Merge (1.16.0, ChartBridge 0.4.0 with merge = on; PROTOCOL.md "Merge stops and targets"): the stops and targets of this
+   * account's position on this instrument become one stop and one target set at the first leg's prices. ChartBridge does
+   * the swap and decides every refusal (an entry working, the position changing, ...); the page sends one `merge` with
+   * what B/E needs (Armed, connected, the account shown) and shows the result (`merge`: merged, restored or failed).
+   */
+  function merge() {
+    if (!sw('merge')) { flash('Merge is off in ChartBridge (merge in config.txt). Nothing was sent.', 'warn'); return; }
+    if (!ready()) return;
+    const account = TR.account, R = root(), pos = TR.positions.get(account + '|' + R);
+    if (!pos || !pos.qty) { flash('Merge: no open position on ' + account + ' ' + R + '. Nothing was sent.', 'warn'); return; }
+    if (!sameAction('merge|' + account + '|' + R, now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
+    TR.merges.delete(account + '|' + R);                           // the line shows this merge's answer when it comes
+    send({ type: 'merge', cid: newCid(), account, root: R });
+    flash('Merge sent for ' + account + ' ' + R + ': ChartBridge joins the stops and targets into one set at the first leg\'s prices.', '');
+    env.changed();
+  }
+  /** The managed strategies of one account and instrument (1.16.0), oldest entry first. */
+  function managedOf(account, r) { return [...TR.managed.values()].filter(m => m.account === account && m.root === r); }
 
   function setArmed(on) {
     const v = !!on && TR.enabled && !(on && env.armBlocked && env.armBlocked());
@@ -768,6 +835,7 @@ function create(env) {
     planMove, planRemove, planAdd, chartOrders, framedReason: FRAMED_REASON, tradeMode,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAll, moveOrder, cancelOrder, setArmed, pickAccount,
+    merge, managedOf, switchOn: sw,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
     /** for tests (test/order-account.test.js): the inner steps, run on their own */
