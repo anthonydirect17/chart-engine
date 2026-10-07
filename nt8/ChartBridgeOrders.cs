@@ -48,7 +48,7 @@ using NinjaTrader.Cbi;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    public static class ChartBridgeOrders
+    public static partial class ChartBridgeOrders   // 0.4.0 B1: partial; ChartBridgeStrategies.cs is the rest (order types, Order Strategies)
     {
         public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;
         public const double MaxPriceAgeMs = 300000;
@@ -66,12 +66,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // whenever a page signs in, not only the Output window.
         private static readonly List<string> ConfigWarnings = new List<string>();
 
-        public static void ResetConfig() { Enabled = false; TradeAccounts.Clear(); MaxQty.Clear(); MaxTicksAway = 0; MaxBracketTicks = 0; lock (ConfigWarnings) ConfigWarnings.Clear(); }
+        public static void ResetConfig() { Enabled = false; TradeAccounts.Clear(); MaxQty.Clear(); MaxTicksAway = 0; MaxBracketTicks = 0; lock (ConfigWarnings) ConfigWarnings.Clear(); ResetV3Config(); }   // 0.4.0 B1: orderTypes, strategies
 
         // Called by ChartBridgeConfig.Load for each key it does not know itself.
         public static bool ReadConfig(string key, string val)
         {
             int n;
+            if (ReadV3Config(key, val)) return true;   // 0.4.0 B1: orderTypes, strategies (off by default)
             if (key == "trading") { Enabled = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1"; return true; }
             if (key == "tradeAccounts")
             {
@@ -156,7 +157,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- last price per root (gate 5)
         private static readonly Dictionary<string, double[]> Last = new Dictionary<string, double[]>();   // root -> { price, time ms }
-        public static void NoteLast(string root, double price) { lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() }; }
+        public static void NoteLast(string root, double price)
+        {
+            lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() };
+            if (StrategiesOn) StrategyTrade(root, price);   // 0.4.0 B1: breakeven and trailing (cheap; a move is sent off this thread)
+        }
 
         // A last price no older than maxAgeMs. The market exit needs a tick this fresh, so a lagging price feed
         // cannot trigger a false exit.
@@ -208,12 +213,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         //         fill increment that brought the entry to 2 filled, for 2 contracts, filled at 24990.25
         //   exit  "CB#1a2b3c4d exit f2 q2 p24990.25": a market exit sent when the stop level had already traded
         private static readonly Regex EntryNameRx = new Regex("^CB#([0-9a-f]{8}) s([0-9]{1,9}) t([0-9]{1,9})$");
-        private static readonly Regex RestingNameRx = new Regex("^CB#([0-9a-f]{8}) atm s([0-9]{1,9}) t([0-9]{1,9})$");
+        private static readonly Regex RestingNameRx = new Regex("^CB#([0-9a-f]{8}) atm s([0-9]{1,9}) t([0-9]{1,9})(?: (?:sl|mit)){0,1}$");   // 0.4.0 B1: " sl" stop-limit, " mit" MIT
         private static readonly Regex PlanNameRx = new Regex("^CB#([0-9a-f]{8}) plan s([0-9]{1,9}(?:\\.[0-9]{1,8})?) t([0-9]{1,9}(?:\\.[0-9]{1,8})?)$");
 
-        private static bool IsEntryName(string name) { return name != null && (EntryNameRx.IsMatch(name) || RestingNameRx.IsMatch(name) || PlanNameRx.IsMatch(name)); }
-        private static bool IsResting(Order o) { return o.OrderType == OrderType.Limit || o.OrderType == OrderType.StopMarket; }
-        private static readonly Regex LegNameRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f([0-9]{1,6}) q([0-9]{1,6}) p([0-9]{1,9}(?:\\.[0-9]{1,8})?)$");
+        private static bool IsEntryName(string name) { return name != null && (EntryNameRx.IsMatch(name) || RestingNameRx.IsMatch(name) || PlanNameRx.IsMatch(name) || IsStrategyName(name)); }   // 0.4.0 B1: "CB#1a2b3c4d sg"
+        private static bool IsResting(Order o) { return o.OrderType == OrderType.Limit || o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit || o.OrderType == OrderType.MIT; }   // 0.4.0 B1: stop-limit and MIT entries rest too
+        private static readonly Regex LegNameRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f([0-9]{1,6}) q([0-9]{1,6}) p([0-9]{1,9}(?:\\.[0-9]{1,8})?)(?: k([1-3])){0,1}$");   // 0.4.0 B1: " k2", a strategy's target bucket
 
         private class Bracket
         {
@@ -276,6 +281,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConnectedSince) ConnectedSince.Clear();
             lock (PlanMemLock) { Plans.Clear(); LegacyPlans.Clear(); plansLoaded = false; plansReadFailed = false; writeWaiting = false; writeFailed = null; planGeneration++; }
             lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }
+            ClearStrategies();   // 0.4.0 B1
         }
 
         // ---------------------------------------------------------- strict message reading (gate 8)
@@ -308,6 +314,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Duplicate(top) || (bracketBody != null && Duplicate(bracketBody))) { why = "message has a key twice"; return null; }
             string[] allowed;
             if (!Keys.TryGetValue(type, out allowed)) { why = "unknown message type " + type; return null; }
+            allowed = WithV3Keys(type, allowed);   // 0.4.0 B1: limitOffset and limitPrice on order, with orderTypes on
             string odd = Unknown(top, allowed) ?? (bracketBody != null ? Unknown(bracketBody, BracketKeys) : null);
             if (odd != null) { why = "unknown key \"" + odd + "\" in " + type; return null; }
             return top;
@@ -366,10 +373,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (type == "auth") { Auth(client, text); return; }
                 string why = Gate(client);
+                string strategyBody = null;   // 0.4.0 B1: the strategy object, cut out as the bracket is (strategies on only)
+                if (why == null && type == "order" && StrategiesOn) why = CutStrategy(ref text, out strategyBody);
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
                 if (why != null) { Reject(client, cid, id, why); return; }
-                if (type == "order") why = PlaceOrder(top, bracketBody, cid);
+                if (type == "order") why = PlaceOrder(top, bracketBody, cid, strategyBody);
                 else if (type == "change") why = ChangeOrder(top, id);
                 else if (type == "plan") why = PlanOrder(top, id);
                 else if (type == "cancel") why = CancelOrder(id);
@@ -407,11 +416,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (!OriginAllowed(client.Origin)) reason = "orders are only accepted from ChartBridge's own page";
             else if (string.IsNullOrEmpty(given) || token.Length == 0 || !SlowEquals(given, token)) reason = "session token does not match; reload the page";
             client.Trader = reason == null;
-            client.Send(TradingJson(client.Trader, reason));
+            client.Send(WithSwitches(client, TradingJson(client.Trader, reason)));   // 0.4.0 B1: switches, to a v3 page
             List<string> warnings;
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
             if (client.Trader) { client.Send(OrdersJson()); foreach (string p in PositionJsons()) client.Send(p); }
+            SendManagedTo(client);   // 0.4.0 B1: every live managed entry, to a signed-in v3 page
         }
 
         private static bool SlowEquals(string a, string b)
@@ -463,6 +473,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (stale != null) return stale;
             if (MaxTicksAway > 0 && Math.Abs(price - last) > MaxTicksAway * tick + 1e-9)
                 return "price is more than " + MaxTicksAway + " ticks from the last price " + CbJson.Num(last) + " (maxTicksAway in config.txt)";
+            if (kind == "mit") return MitSide(isBuy, price, last);   // 0.4.0 B1: an MIT, a buy below the last price, a sell above
+            if (kind == "stopLimit") kind = "stop";                  // 0.4.0 B1: a stop-limit's trigger follows the stop's rules
             if (kind == "stop" && isBuy && !(price > last)) return "a buy stop must be above the last price " + CbJson.Num(last);
             if (kind == "stop" && !isBuy && !(price < last)) return "a sell stop must be below the last price " + CbJson.Num(last);
             // A limit through the market fills at once: that is a market order in disguise, usually a click
@@ -584,10 +596,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool isBuyOrder(string top) { return Str(top, "side") == "buy"; }
 
-        private static string PlaceOrder(string top, string bracketBody, string cid)
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, out planTag);   // two pages or tabs cannot both pass the cap check
+            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, out planTag);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -599,7 +611,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why;
         }
 
-        private static string PlaceOrderLocked(string top, string bracketBody, string cid, out string planTag)
+        private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, out string planTag)
         {
             planTag = null;
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
@@ -609,7 +621,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
             if (side != "buy" && side != "sell") return "side must be buy or sell";
-            if (kind != "market" && kind != "limit" && kind != "stop") return "kind must be market, limit or stop";
+            if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
             int qty;
             if (Int(top, "qty", out qty) != 1 || qty < 1) return "qty must be a whole number of 1 or more";
             bool isBuy = side == "buy";
@@ -623,7 +635,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (worst > cap)
                 return "this order could make the " + root + " position " + worst + " contracts (position " + pos + ", working " +
                        (isBuy ? pendBuy : pendSell) + ", this order " + qty + "); the cap is " + cap + " (maxQty." + root + " in config.txt)";
-            double tick = inst.MasterInstrument.TickSize, price = 0;
+            double tick = inst.MasterInstrument.TickSize, price = 0, limitPx = 0;
             if (kind != "market")
             {
                 if (Dec(top, "price", out price) != 1) return "a " + kind + " order needs a plain price";
@@ -631,6 +643,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (bad != null) return bad;
             }
             else if (Has(top, "price")) return "a market order takes no price";
+            string newKind = OrderTypesOn ? NewKindProblem(top, kind, root, tick, isBuy, price, out limitPx) : null;   // 0.4.0 B1: a stop-limit's limit
+            if (newKind != null) return newKind;
             int stopTicks = 0, targetTicks = 0;
             if (bracketBody != null)
             {
@@ -639,6 +653,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (stopTicks < 0 || targetTicks < 0) return "bracket ticks must be whole numbers of 0 or more";
                 if (MaxBracketTicks > 0 && (stopTicks > MaxBracketTicks || targetTicks > MaxBracketTicks))
                     return "bracket ticks must be from 0 to " + MaxBracketTicks + " (maxBracketTicks in config.txt)";
+            }
+            StratParams strat = null;   // 0.4.0 B1: an Order Strategy (strategyBody is cut out only with strategies on)
+            if (strategyBody != null)
+            {
+                string bad = ParseStrategy(strategyBody, out strat);
+                if (bad != null) return bad;
+                stopTicks = strat.Stop + Math.Max(0, strat.StopLimit); targetTicks = strat.MaxTarget;   // for the leg-at-or-below-zero check
             }
             if (stopTicks > 0 || targetTicks > 0)
             {
@@ -653,27 +674,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Refused only when both readings agree the order reduces the position (legs on a reducing order
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
-            if (wantsLegs && reduces) return "a bracket can only go on an order that opens or adds; this order reduces the position";
+            if (wantsLegs && reduces) return (strat != null ? "a strategy" : "a bracket") + " can only go on an order that opens or adds; this order reduces the position";
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
-            string name = "CB#" + tag + (kind == "market" ? "" : " atm") + " s" + stopTicks + " t" + targetTicks;
-            if (kind != "market") { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
-            OrderType type = kind == "market" ? OrderType.Market : kind == "limit" ? OrderType.Limit : OrderType.StopMarket;
+            string name = "CB#" + tag + (kind == "market" ? "" : " atm") + (strat != null ? " sg" : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 B1: sg, sl, mit
+            if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
+            OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
-                kind == "limit" ? price : 0, kind == "stop" ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
+                kind == "limit" ? price : kind == "stopLimit" ? limitPx : 0, kind == "stop" || NewKind(kind) ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
             lock (Sync)
             {
                 IdFor(order);
                 Ours.Add(order);
                 if (!string.IsNullOrEmpty(cid)) CidOf[order] = cid;
-                if (kind != "market")
+                if (strat != null) { BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = strat.Stop }; NewManaged(tag, order, account, inst, isBuy, root, strat); }   // 0.4.0 B1
+                else if (kind != "market")
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, Resting = true, StopTicks = stopTicks, TargetTicks = targetTicks };
                 else if (stopTicks > 0 || targetTicks > 0)
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = stopTicks, TargetTicks = targetTicks };
             }
             account.Submit(new[] { order });
             ChartBridgeServer.Log("order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
-                (wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
+                (strat != null ? " with strategy " + strat.Json : wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
         }
 
@@ -692,6 +714,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Dec(top, "price", out price) != 1) return "change needs a plain price";
             string root = ChartBridgeServer.RootFor(o.Instrument);
             if (root == null) return "instrument is not served by ChartBridge";
+            if (MovesNewKind(o)) return MoveNewKind(o, root, price);   // 0.4.0 B1: a ChartBridge stop-limit (keeps its offset) or MIT
             if (o.OrderType == OrderType.StopLimit) return "stop-limit orders can only be moved in NinjaTrader";
             string kind = o.OrderType == OrderType.Limit ? "limit" : o.OrderType == OrderType.StopMarket ? "stop" : null;
             if (kind == null) return "only limit and stop orders can be moved";
@@ -744,6 +767,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (root == null) return "instrument is not served by ChartBridge";
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             if (RoleFor(o) != "entry") return "only a ChartBridge entry has a planned stop and target; a working leg moves with change";
+            if (IsStrategyName(o.Name)) return "a plan on an Order Strategy entry is refused: cancel it and place it again with the strategy you want";   // 0.4.0 B1 (lead's default)
             if (!IsResting(o)) return "only a resting limit or stop entry has a planned stop and target";
             int st, tt, hs = TicksOf(top, "stopTicks", out st), ht = TicksOf(top, "targetTicks", out tt);
             if (hs == 0 && ht == 0) return "plan needs stopTicks or targetTicks (a whole number of ticks to set it, null to remove it)";
@@ -829,6 +853,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
                 foreach (Bracket br in BracketOfEntry.Values)
                     if (br.Account == account && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;   // a late fill raises an alarm
+            StopManaging(account, inst);   // 0.4.0 B1: no breakeven or trailing move races the flatten
             NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
             account.Flatten(new[] { inst });   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
@@ -877,6 +902,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (t == OrderType.Limit) return "limit";
             if (t == OrderType.StopMarket) return "stop";
             if (t == OrderType.StopLimit) return "stopLimit";
+            if (t == OrderType.MIT && OrderTypesOn) return "mit";   // 0.4.0 B1
             return "other";
         }
 
@@ -885,6 +911,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string id = IdFor(o), cid;
             lock (Sync) CidOf.TryGetValue(o, out cid);
             double px = o.OrderType == OrderType.Limit ? o.LimitPrice : (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit) ? o.StopPrice : 0;
+            if (o.OrderType == OrderType.MIT && OrderTypesOn) px = o.StopPrice;   // 0.4.0 B1: an MIT's trigger
             StringBuilder b = new StringBuilder("{\"type\":\"order\",\"id\":").Append(CbJson.Str(id));
             if (cid != null) b.Append(",\"cid\":").Append(CbJson.Str(cid));
             b.Append(",\"account\":").Append(CbJson.Str(o.Account != null ? o.Account.Name : ""))
@@ -910,6 +937,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 b.Append(",\"planned\":{\"stopTicks\":").Append(st > 0 ? st.ToString(CultureInfo.InvariantCulture) : "null")
                  .Append(",\"targetTicks\":").Append(tt > 0 ? tt.ToString(CultureInfo.InvariantCulture) : "null").Append('}');
             }
+            b.Append(V3OrderFields(o));   // 0.4.0 B1: a stop-limit's limitPrice; by "strategy" and bucket
             return b.Append('}').ToString();
         }
 
@@ -930,6 +958,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (role == "stop" || role == "target") KeepPartner(o, role, where);
             }
             catch (Exception ex) { Alarm(where + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
+            try { StrategyOrderUpdate(o, e); } catch (Exception ex) { Alarm(where + ": strategy error (" + ex.Message + "); check the stop in NinjaTrader"); }   // 0.4.0 B1
             if ((role == "stop" || role == "target") && (o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Rejected))
             {
                 try { NoteLostPair(account, o); } catch (Exception ex) { ChartBridgeServer.Log("OCO check error: " + ex.Message); }
@@ -989,6 +1018,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // account's orders, so it is called without holding Sync.
         private static Bracket Recover(Order entry, out List<Pair> pairs, out bool deferred)
         {
+            if (IsStrategyName(entry.Name)) return RecoverStrategy(entry, out pairs, out deferred);   // 0.4.0 B1: legs by fill mark and bucket, managed.txt
             pairs = new List<Pair>();
             deferred = false;
             Match m = EntryNameRx.Match(entry.Name ?? ""), am = RestingNameRx.Match(entry.Name ?? ""), pm = PlanNameRx.Match(entry.Name ?? "");
@@ -1373,6 +1403,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void PlaceLegs(Bracket br, int filled, int qty, double incPrice, string where)
         {
+            if (PlaceStrategyLegs(br, filled, qty, incPrice, where)) return;   // 0.4.0 B1: an Order Strategy entry, one pair per target bucket
             double tick = br.Instrument.MasterInstrument.TickSize;
             OrderAction exit = br.EntryIsBuy ? OrderAction.Sell : OrderAction.Buy;
             string mark = " f" + filled.ToString(CultureInfo.InvariantCulture) + " q" + qty.ToString(CultureInfo.InvariantCulture) +
@@ -1580,7 +1611,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     bool skip;
                     lock (Sync) skip = Settled.Contains(o);
                     if (skip) continue;
-                    if (!PlansLoaded() && IsResting(o))
+                    if (!PlansLoaded() && (IsResting(o) || IsStrategyName(o.Name)))   // 0.4.0 B1: a strategy entry waits for managed.txt too
                     {
                         // S1: planned_brackets.txt not read yet: its legs wait (never guessed); loud once it has lasted PlanReadAlarmMs.
                         bool known, alarm = false;
@@ -1803,6 +1834,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ScanEntries(now);
             try { CheckStops(now); } catch (Exception ex) { ChartBridgeServer.Log("stop check error: " + ex.Message); }
             try { KeepPlansSaved(); } catch (Exception ex) { ChartBridgeServer.Log("planned brackets check error: " + ex.Message); }   // 0.3.8
+            try { KeepStrategies(now); } catch (Exception ex) { ChartBridgeServer.Log("strategies check error: " + ex.Message); }   // 0.4.0 B1
             List<Account> accounts = new List<Account>();
             lock (Account.All) foreach (Account a in Account.All) if (!IsNeverTradable(a.Name ?? "")) accounts.Add(a);
             HashSet<string> seen = new HashSet<string>();
@@ -1923,6 +1955,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void LoadPlans(int gen)
         {
+            LoadManaged(gen);   // 0.4.0 B1: managed.txt, read here before planned_brackets.txt counts as read
             Dictionary<string, PlanRecord> read = new Dictionary<string, PlanRecord>();
             Dictionary<string, LegacyRecord> legacy = new Dictionary<string, LegacyRecord>();
             int bad = 0, old = 0;

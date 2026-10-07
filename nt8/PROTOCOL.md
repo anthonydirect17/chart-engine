@@ -1461,6 +1461,47 @@ trailing could not be resumed after the restart; the stop stays at 24,980.25. Ma
 
 A `plan` on a strategy entry is refused in 0.4.0 (lead's default: cancel and place it again).
 
+### Order types and Order Strategies: build notes (0.4.0, lane B1)
+
+Built in `nt8/ChartBridgeStrategies.cs` (the rest of the `ChartBridgeOrders` class, so every v2 gate and the per-fill
+bracket code are the same code). Checked by `nt8/check/StrategiesHarness.cs` inside `npm run check:orders`. Where the
+contract left a detail open:
+
+- **A v3 page.** `hello.features` has `"v3"`; `client` is strict (only `type` and `v`); a v3 page's `trading` carries
+  `switches` (this lane sets `orderTypes` and `strategies`; the other keys read false until their lanes set them);
+  `managed` goes to signed-in v3 pages only, in the order lane. (lead's default)
+- **Switched off is 0.3.8 exactly:** `kind` `stopLimit` or `mit` is "kind must be market, limit or stop", `limitOffset` and
+  `limitPrice` are unknown keys, an order with `strategy` is refused as a nested object, a stop-limit moves only in
+  NinjaTrader, order messages carry no `limitPrice`, `by` or `bucket`, and an MIT placed elsewhere is `kind` `other`.
+  (lead's default)
+- **Names:** a stop-limit or MIT strategy entry is `CB#1a2b3c4d atm sg sl` / `CB#1a2b3c4d atm sg mit`. A strategy with no
+  target has one stop per increment named `k1`, no OCO id. A bucket's OCO id is `cb-<tag>-f<filled>-<bucket>`
+  (`cb-1a2b3c4d-f3-2`). A stop already traded gets one market exit per bucket, `CB#1a2b3c4d exit f3 q1 p24990.25 k2`,
+  and one `status` `error`. (lead's default)
+- **A ChartBridge stop-limit moved by the page** (an entry, or a strategy's stop leg) passes gate 5 as a stop, and its new
+  limit (the same offset) passes `maxTicksAway`. (lead's default)
+- **Moves:** a stop level is put on the tick grid on the loose side (a long's stop down, a short's up), so it is never
+  past the level the rule names. Breakeven and trailing move only while `trading` and `strategies` are on. A move is
+  confirmed when NinjaTrader reports the stop working at the new price; one not confirmed in 5 s is let go (the stop's
+  real price counts, and a later trade may move it again). A move NinjaTrader rejects leaves the stop where it is,
+  raises the `status` `error`, and that stop is **not moved again** (no new try every 500 ms into a rejection; Anthony
+  manages it by hand). Flatten stops breakeven and trailing on that account and root at once, so no move races its
+  cancels. (lead's default)
+- **`managed`:** `pairs` lists working pairs only; `best` is the best price over them; `id` is null when NinjaTrader no
+  longer lists the entry (after a NinjaTrader restart the legs are recovered from their names alone). (lead's default)
+- **`managed.txt` best prices:** `f2k1:24995.25,f2k3:24995.25` per pair (fill mark and bucket), `-` for none. Lines older
+  than 7 days are dropped when the file is read. A file that cannot be read is never rewritten that run (one `status`
+  `error` at start). (lead's default)
+- **Restart, unmanaged also when:** `strategies` or `trading` is off at the restart; a working leg is on the entry's side,
+  in a bucket the strategy does not have, a target with a strategy that has none, a target not at the strategy's distance
+  from its fill, a stop of the other type (stop-market or stop-limit), or a pair with a working target and no working
+  stop. The text names the reason. A strategy entry still resting whose line is lost cannot get legs from a guess: the
+  error says it gets NO STOP if it fills (cancel it and place it again), and a fill then raises the NO STOP error and
+  the missing-stop alarm watches it. A finished strategy entry the names still list is recovered quietly (no message).
+  (lead's default)
+- **For Merge (lane B4):** `ChartBridgeOrders.Allocate(q, shares)` is the allocation rule; strategy legs match
+  `LegNameRx` with the bucket in group 6.
+
 ### Merge stops and targets (`merge = on`)
 
 A Merge action (a page button and a hotkey) joins the per-leg stops and targets of one account's position on one root into

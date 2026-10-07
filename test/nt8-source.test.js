@@ -179,7 +179,7 @@ test('strict messages: known keys only, bracket must be an object', () => {
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string strategyBody = null;\s*if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; B1: a strategy is cut out only after the gate passed
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -545,7 +545,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" \};/);
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "managed" \};/);   // 0.4.0 B1: managed
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -564,7 +564,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.3\.[5-9]";/);
-  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\"\]/);   // 0.3.7 adds three
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));
@@ -797,4 +797,78 @@ test('0.4.0: the tape counters run after the send, on their own, with no lock an
   assert.ok(!/\bnew\b|lock \(|\.ToString\(|string\.|Sort\(|OrderBy\(|\+ "/.test(onPrint), 'TapeRoot.OnPrint: no allocation, lock, string or sorting');
   assert.match(code, /b\.Append\(",\\"tape\\":"\)\.Append\(ChartBridgeTape\.DiagJson\(\)\);/);
   assert.match(code, /b\.Append\(",\\"health\\":"\)\.Append\(HealthJson\(\)\);/);
+});
+
+// ---- 0.4.0 lane B1: stop-limit and MIT entries, Order Strategies (behaviour: nt8/check/StrategiesHarness.cs under Mono, inside check:orders)
+const ssrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+const scode = ssrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+const sBodies = name => {
+  const out = [], re = new RegExp('\\bstatic [\\w<>, ]+ ' + name + '\\(', 'g');
+  let m;
+  while ((m = re.exec(scode))) {
+    const i = scode.indexOf('{', m.index);
+    let depth = 0, end = scode.length;
+    for (let j = i; j < scode.length; j++) { if (scode[j] === '{') depth++; else if (scode[j] === '}' && --depth === 0) { end = j + 1; break; } }
+    out.push(scode.slice(m.index, end));
+  }
+  assert.ok(out.length > 0, name + ' not found');
+  return out.join('\n');
+};
+
+test('0.4.0 B1: ChartBridgeStrategies.cs ships, is checked, is C# 5 and the rest of ChartBridgeOrders', () => {
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeStrategies.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs ChartBridgeStrategies\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/StrategiesHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /StrategiesHarness\.Run\(Check\);/);
+  assert.match(osrc, /public static partial class ChartBridgeOrders/);
+  assert.match(ssrc, /public static partial class ChartBridgeOrders/);
+  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(scode) && !/\?\.\w/.test(scode) && !/\bnameof\(/.test(scode), 'C# 5');
+});
+
+test('0.4.0 B1: switches off by default; off is 0.3.8 (every hook is behind a switch)', () => {
+  assert.match(sBodies('ResetV3Config'), /OrderTypesOn = false; StrategiesOn = false;/);
+  assert.match(fnBody('ResetConfig'), /ResetV3Config\(\);/);
+  assert.match(sBodies('ReadV3Config'), /bool on = v\.Equals\("on", StringComparison\.OrdinalIgnoreCase\) \|\| v\.Equals\("true", StringComparison\.OrdinalIgnoreCase\) \|\| v == "1";/);
+  const on = fnBody('OnMessage');
+  assert.match(on, /if \(why == null && type == "order" && StrategiesOn\) why = CutStrategy\(ref text, out strategyBody\);/);
+  assert.match(fnBody('PlaceOrderLocked'), /!\(OrderTypesOn && NewKind\(kind\)\)\) return "kind must be market, limit or stop";/);
+  assert.match(fnBody('PlaceOrderLocked'), /string newKind = OrderTypesOn \? NewKindProblem\(/);
+  assert.match(scode, /private static string\[\] WithV3Keys\(string type, string\[\] allowed\)\s*\{\s*if \(type == "order" && OrderTypesOn\)/);
+  assert.match(sBodies('MovesNewKind'), /\(OrderTypesOn && IsEntryName\(o\.Name\)\) \|\| \(StrategiesOn && IsStrategyLeg\(o\.Name\)\)/);
+  assert.match(fnBody('NoteLast'), /if \(StrategiesOn\) StrategyTrade\(root, price\);/);
+  // the v3 message goes to v3 pages only
+  assert.match(code, /public static void SendToV3Traders\(string json\)\s*\{\s*foreach \(ChartBridgeClient c in Clients\.Values\) if \(c\.Trader && c\.V3\) c\.Send\(json\);/);
+  assert.ok(!/SendToTraders\(ManagedJson/.test(scode), 'managed never goes to a v2 page');
+});
+
+test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; never loosens', () => {
+  let rest = scode;
+  for (const f of ['PlaceStrategyLegs', 'SendMoves', 'MoveNewKind']) rest = rest.replace(sBodies(f), '');
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
+    assert.ok(!re.test(rest), 'order call outside PlaceStrategyLegs, SendMoves, MoveNewKind: ' + re);
+  assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(|\.Cancel\s*\(|\.Flatten\s*\(/.test(sBodies('SendMoves') + sBodies('MoveNewKind')), 'moves only change');
+  assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(scode), 'no ATM or cancel-all calls');
+  const legs = sBodies('PlaceStrategyLegs');
+  assert.equal((legs.match(/TimeInForce\.Gtc/g) || []).length, 2);
+  assert.match(legs, /\(br\.EntryIsBuy \? sp >= last : sp <= last\)/, 'the stop-already-traded market exit');
+  assert.match(legs, /"CB#" \+ br\.Tag \+ " stop" \+ mark/);
+  assert.match(legs, /"cb-" \+ br\.Tag \+ "-f" \+ filled/);
+  assert.match(fnBody('PlaceLegs'), /if \(PlaceStrategyLegs\(br, filled, qty, incPrice, where\)\) return;/);
+  const due = sBodies('MoveDue');
+  assert.match(due, /now - p\.LastMoveMs < MoveGapMs/);
+  assert.match(due, /if \(m\.Buy \? !\(level < last - 1e-9\) : !\(level > last \+ 1e-9\)\) return false;/, 'never at or through the last trade');
+  assert.match(due, /return Tighter\(m\.Buy, level, stopNow\);/, 'never loosens');
+  assert.match(scode, /public const double MoveGapMs = 500/);
+  // NinjaTrader's threads (the market data, the order events) never touch a file and never send an order on the data thread
+  for (const f of ['StrategyTrade', 'MoveDue', 'PlaceStrategyLegs', 'StrategyOrderUpdate', 'RecoverStrategy', 'RecoverManaged', 'ManagedJson'])
+    assert.ok(!/File\.|WriteManaged\(|LoadManaged\(/.test(sBodies(f)), f + ' does file I/O');
+  assert.match(sBodies('StrategyTrade'), /else ThreadPool\.QueueUserWorkItem\(delegate \{ SendMoves\(due\); \}\);/);
+  assert.ok(!/\.Change\s*\(/.test(sBodies('StrategyTrade')), 'no order call on the market data thread');
+  // a plan on a strategy entry is refused; Flatten stops the moves first
+  assert.match(fnBody('PlanOrder'), /if \(IsStrategyName\(o\.Name\)\) return "a plan on an Order Strategy entry is refused/);
+  assert.ok(fnBody('Flatten').indexOf('StopManaging(account, inst);') < fnBody('Flatten').indexOf('account.Flatten('));
+  // managed.txt: whole, through a temp file; never rewritten when it could not be read
+  const w = sBodies('WriteManagedOnce');
+  assert.match(w, /string tmp = ManagedFile \+ "\.tmp";\s*File\.WriteAllLines\(tmp, lines\.ToArray\(\)\);\s*if \(File\.Exists\(ManagedFile\)\) File\.Replace\(tmp, ManagedFile, null\); else File\.Move\(tmp, ManagedFile\);/);
+  assert.match(w, /if \(managedReadFailed\)/);
 });
