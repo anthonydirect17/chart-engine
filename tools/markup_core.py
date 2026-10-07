@@ -1489,8 +1489,8 @@ def _plain(text):
 
 def read_builds(path, note_chars=160):
     """The builds a BUILDS.md lists by name: the first markdown table whose first column is Name (else Build). Each row:
-    name, file (the table's File column, else the first .py path in the row, else ''), note (the What column, else the
-    row's second cell, cut to note_chars). Read only; any other text is ignored."""
+    name, file (the table's File column, '-' for none; an empty cell or no column: the first .py path in the row, else
+    ''), note (the What column, else the row's second cell, cut to note_chars). Read only; any other text is ignored."""
     with open(path, encoding='utf-8') as f:
         lines = f.read().splitlines()
     tables, cur = [], None
@@ -1522,7 +1522,9 @@ def read_builds(path, note_chars=160):
         if not name:
             continue
         f = _plain(r[fc]) if fc is not None else ''
-        if not f:
+        if f in ('-', 'none', 'n/a'):
+            f = ''
+        elif not f:
             m = PY_PATH.search(' '.join(r))
             f = m.group(1) if m else ''
         note = _plain(r[wc] if wc is not None else (r[1] if len(r) > 1 else ''))

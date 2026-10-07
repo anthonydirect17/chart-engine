@@ -86,12 +86,16 @@
     if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
     return j;
   }
-  /* the panels' entrance (Work list, Builds, run comparison, Day tab; never the charts): lane A's motion kit when the page
-     has it (live/motion.js, not loaded yet: the panels carry data-in="panel" for it), else nothing moves */
-  function panelIn(el) {
+  /* the panels' entrance (the Work list, Builds, the run comparison, the Day tab; never the charts): a scene of the motion
+     kit (live/motion.js, window.ChartMotion, docs/MOTION.md) on the panel's root (data-in in markup.html), its rows or
+     sides staggered in after it. Motion is decoration only: without the kit, or with reduced motion, the panel just shows. */
+  function panelIn(el, pieces) {
     const M = window.ChartMotion;
-    if (!el || el.hidden || !M || typeof M.enter !== 'function') return;
-    try { M.enter(el); } catch (e) { /* motion is decoration only */ }
+    if (!el || el.hidden || !M || typeof M.scene !== 'function') return null;
+    try {
+      if (pieces && pieces.length) M.stagger(pieces, { attr: 'in', start: 0.2, step: 0.05, span: 0.4 });
+      return M.scene(el, { ms: M.MS.slow });
+    } catch (e) { return null; }
   }
   const say = (id, text, err) => { const el = $(id); el.textContent = text || ''; el.classList.toggle('err', !!err); };
   const fmtP = p => (p === null || p === undefined || !isFinite(p)) ? '' : (+p).toFixed(2);
@@ -590,7 +594,7 @@
     if (ui) { if (A.state && A.state.mode !== 'blind') { unmount(); resetForm(); } clearBot(); }
     else if (tr) { if (A.state && A.state.mode !== 'trades') { unmount(); resetForm(); } clearBot(); loadTrades(); }
     else if (day) { if (A.state && A.state.mode !== 'day') { unmount(); resetForm(); } clearBot(); loadDayList(); panelIn($('secDay')); }
-    else if (bot) { loadBotDays(); loadBuilds(); loadRuns(); panelIn($('secBuilds')); panelIn($('secRuns')); }
+    else if (bot) { loadBotDays(); loadBuilds(); loadRuns(); panelIn($('secRuns')); }
     else loadDays();
   }
 
@@ -756,7 +760,7 @@
     try {
       const s = await act('/api/trades/next', {}, { remount: true, reset: true });
       if (s) { tTick(true); if (s.passed_over && s.passed_over.length) say('tErr', s.passed_over.length + ' trade(s) passed over: ' + s.passed_over.join('; '), true); }
-    } finally { A.tBusy = false; }
+    } finally { A.tBusy = false; tFlush(); }
   }
   async function tSave1(label) {
     if (A.tBusy) return;
@@ -770,7 +774,7 @@
       say('tErr', '');
       await refresh();
       if (r.complete && A.state.trade) fetchResult(A.state.trade.qid);
-    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
+    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; tFlush(); }
   }
   async function tSave2() {
     if (A.tBusy) return;
@@ -784,7 +788,7 @@
       say('tErr', ''); setTool(null);
       await refresh();
       if (A.state.trade) fetchResult(A.state.trade.qid);
-    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
+    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; tFlush(); }
   }
   // after a PASS, no trade of his own (N, Enter or Esc): recorded, then the result shows
   async function tSkipMine() {
@@ -795,7 +799,7 @@
       A.marks = A.marks.filter(m => !OWN_ROLES.includes(m.role)); A.tMine = false; setTool(null); renderMarks(); say('tErr', '');
       await refresh();
       if (A.state.trade) fetchResult(A.state.trade.qid);
-    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; }
+    } catch (e) { say('tErr', e.message, true); } finally { A.tBusy = false; tFlush(); }
   }
   function disarmSeen() { A.tSeenArm = false; $('btnTSeen').firstChild.textContent = 'Seen this day before '; }
   async function tSeen() {
@@ -808,9 +812,17 @@
     try { showState(await api('/api/trades/skip_day', {})); unmount(); resetForm(); } catch (e) { say('tErr', e.message, true); return; }
     tNext();
   }
+  // a key that saves or moves on, pressed while a Trades request is still in flight, waits for it (the last one wins)
+  const QUEUED_KEYS = new Set(['T', 'A', 'P', 'N', 'Enter', 'X', 'M']);
+  function tFlush() {
+    const k = A.tQueued;
+    A.tQueued = null;
+    if (k && A.uiMode === 'trades') setTimeout(() => tradeKey({ key: k, preventDefault() {} }), 0);
+  }
   function tradeKey(e) {
     const st = tStage(A.state), K = e.key.length === 1 ? e.key.toUpperCase() : e.key;
     const done = () => e.preventDefault();
+    if (A.tBusy && QUEUED_KEYS.has(K)) { done(); A.tQueued = e.key; return; }
     if (K !== 'X' && A.tSeenArm) { disarmSeen(); say('tErr', ''); }
     if (st === 1) {
       if (K === 'T') { done(); tSave1('TAKE'); } else if (K === 'A') { done(); tSave1('ADJUST'); } else if (K === 'P') { done(); tSave1('PASS'); }
@@ -874,12 +886,12 @@
     showDayCounts(v.counts);
   }
   async function dayTick(force) {
-    if (A.dayBusy || (!force && performance.now() - A.dayAt < 400)) return;
-    A.dayBusy = true; A.dayAt = performance.now();
-    try { renderDay(await api('/api/day/view')); } catch (e) { say('dayErr', e.message, true); } finally { A.dayBusy = false; }
+    if (A.dayPoll || A.dayBusy || (!force && performance.now() - A.dayAt < 400)) return;
+    A.dayPoll = true; A.dayAt = performance.now();
+    try { const v = await api('/api/day/view'); if (!A.dayBusy) renderDay(v); } catch (e) { say('dayErr', e.message, true); } finally { A.dayPoll = false; }
   }
   async function dayCall(call) {
-    if (A.dayBusy) return;
+    if (A.dayBusy) { say('dayErr', 'Saving the last call: press it again in a moment.', true); return; }
     A.dayBusy = true;
     try {
       const v = await api('/api/day/call', { call, confidence: A.dayConf, words: $('dayWords').value });
@@ -908,6 +920,7 @@
       head(t, ['Name', 'File', 'Note']);
       const tb = t.createTBody();
       for (const b of r.builds) { const tr = tb.insertRow(); cell(tr, b.name); cell(tr, b.file || ''); cell(tr, b.note); }
+      if (A.uiMode === 'bot') panelIn($('secBuilds'), [...tb.rows]);
     } catch (e) { t.textContent = ''; $('buildsMsg').textContent = e.message; }
   }
   async function loadRuns() {
@@ -936,7 +949,7 @@
     try {
       const r = await api('/api/bot/compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
       cmpSide(r.a, 'cmpHeadA', 'cmpA'); cmpSide(r.b, 'cmpHeadB', 'cmpB');
-      $('botSummary').hidden = true; $('botCompare').hidden = false; panelIn($('botCompare'));
+      $('botSummary').hidden = true; $('botCompare').hidden = false; panelIn($('botCompare'), [...document.querySelectorAll('#botCompare .ms-cmp-side')]);
       say('runsMsg', '');
     } catch (e) { say('runsMsg', e.message, true); }
   }

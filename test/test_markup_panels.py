@@ -38,6 +38,7 @@ BUILDS = """# Builds
 | X1 | Made-up **X1** code (abc1234) | Frozen | bots/made_up.py |
 | X1M1 | X1, judged on its m1 exit; a long note that goes on and on so that it has to be cut short by the reader, because a panel row is one short line and not a page of text at all | The bench | |
 | ES:X1M1 | X1M1 on ES, see `bots/made_up_es.py` | A look only | |
+| X2 | Planned, see bots/elsewhere.py | Planned | - |
 """
 
 
@@ -59,8 +60,8 @@ class Builds(unittest.TestCase):
         self.write(BUILDS)
         self.assertEqual(core.find_builds(self.bot), os.path.join(self.repo, 'BUILDS.md'))
         rows = core.read_builds(core.find_builds(self.bot))
-        self.assertEqual([r['name'] for r in rows], ['X1', 'X1M1', 'ES:X1M1'])
-        self.assertEqual([r['file'] for r in rows], ['bots/made_up.py', '', 'bots/made_up_es.py'])
+        self.assertEqual([r['name'] for r in rows], ['X1', 'X1M1', 'ES:X1M1', 'X2'])
+        self.assertEqual([r['file'] for r in rows], ['bots/made_up.py', '', 'bots/made_up_es.py', ''])   # '-': none
         self.assertEqual(rows[0]['note'], 'Made-up X1 code (abc1234)')
         self.assertTrue(rows[1]['note'].endswith('...') and len(rows[1]['note']) == 160)
 

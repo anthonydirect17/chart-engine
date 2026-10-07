@@ -9,14 +9,18 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="markup.css">
+<!-- the motion kit (live/motion.js, docs/MOTION.md) for the panels' entrances only: never the charts. Without it the panels
+     simply show. -->
+<link rel="stylesheet" href="motion.css">
 <!-- Markup Studio (tools/markup_studio.py serves it): two read-only charts on a replay clock, and the grade panel.
      markup.js loads first: it puts the page's clock on the replay clock and guards blind mode against dates. -->
+<script src="motion.js"></script>
 <script src="markup.js"></script>
 </head>
 <body>
 <header class="ms-top">
   <div class="ms-brand"><span class="ms-mark"></span><b>Markup Studio</b><span class="ms-sub"><span id="msInst">replay</span>, read only</span></div>
-  <div class="ms-work" id="msWorkBox" data-in="panel" hidden><label for="msWork">Work</label><select id="msWork"></select><span class="ms-work-msg" id="msWorkMsg" role="status" hidden></span></div>
+  <div class="ms-work" id="msWorkBox" data-in="0,.7" hidden><label for="msWork">Work</label><select id="msWork"></select><span class="ms-work-msg" id="msWorkMsg" role="status" hidden></span></div>
   <div class="ms-tabs" role="tablist">
     <button type="button" role="tab" id="tabBlind" class="on" aria-selected="true">Blind</button>
     <button type="button" role="tab" id="tabFree" aria-selected="false">Free</button>
@@ -38,7 +42,7 @@
       <table class="ms-table ms-grid" id="botSumBy"></table>
     </div>
     <!-- two Run all results side by side: counts and the per-exit tables only, as the Run all summary shows them -->
-    <div class="ms-summary" id="botCompare" data-in="panel" hidden>
+    <div class="ms-summary" id="botCompare" data-in="0,.7" hidden>
       <div class="ms-row"><span class="ms-h">Run comparison</span><span class="dim">(n) = trades</span><button type="button" class="ms-btn sm" id="btnCmpClose">Close</button></div>
       <div class="ms-cmp">
         <div class="ms-cmp-side"><div class="ms-line" id="cmpHeadA"></div><table class="ms-table ms-grid" id="cmpA"></table></div>
@@ -130,7 +134,7 @@
       <div class="ms-line dim" id="runAllMsg"></div>
       <div class="ms-msg" id="botExportMsg"></div>
     </section>
-    <section class="ms-sec" id="secRuns" data-in="panel" hidden>
+    <section class="ms-sec" id="secRuns" data-in="0,.7" hidden>
       <div class="ms-h">Compare two runs <span class="dim">(Run all results in this marks folder)</span></div>
       <div class="ms-row">
         <select id="runA" aria-label="First run"></select>
@@ -139,12 +143,12 @@
       </div>
       <div class="ms-msg" id="runsMsg" role="status"></div>
     </section>
-    <section class="ms-sec" id="secBuilds" data-in="panel" hidden>
+    <section class="ms-sec" id="secBuilds" data-in="0,.7" hidden>
       <div class="ms-h">Builds <span class="dim">(BUILDS.md in the bot's repository, read only)</span></div>
       <table class="ms-table ms-grid ms-builds" id="buildsOut"></table>
       <div class="ms-line dim" id="buildsMsg"></div>
     </section>
-    <section class="ms-sec" id="secDay" data-in="panel" hidden>
+    <section class="ms-sec" id="secDay" data-in="0,.7" hidden>
       <div class="ms-line dim">Days you have graded or seen, date hidden. Call the day at the clock: U up, D down, C chop.</div>
       <div class="ms-row">
         <select id="daySel" aria-label="Day"></select>

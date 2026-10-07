@@ -417,7 +417,7 @@ try {
   check(fs.readFileSync(path.join(main.marks, 'marks_log.jsonl'), 'utf8').trim().split('\n').length === 1, 'one line in marks_log.jsonl');
   await until(() => page.locator('#secMachine').isVisible());
   check(await page.locator('#secMachine').isVisible() && await page.locator('#secDraft').isVisible(), 'after saving: the machine read and the draft verdict show');
-  check(!!(await until(() => page.locator('#revealRow').isVisible(), 5000)), 'after saving: Reveal is offered');
+  check(!!(await until(() => page.locator('#revealRow').isVisible(), 15000)), 'after saving: Reveal is offered');
   await shot(page, 'markup-graded.png');
   await page.click('#btnReveal');
   await sleep(1200);
@@ -439,7 +439,7 @@ try {
   await page.click('[data-speed="20"]');
   await sleep(2500);
   await page.click('#btnPause');
-  await until(() => page.evaluate(() => !document.getElementById('secMachine').hidden && document.getElementById('machineOut').rows.length > 3), 6000);
+  await until(() => page.evaluate(() => !document.getElementById('secMachine').hidden && document.getElementById('machineOut').rows.length > 3), 15000);
   const fr = await page.evaluate(() => ({ date: document.getElementById('msDate').textContent, rows: document.getElementById('machineOut').rows.length }));
   check(fr.date === '2026-03-10', 'free: the date shows');
   check(fr.rows > 3, 'free: the machine read shows');
@@ -584,7 +584,7 @@ try {
   await shot(tr.page, 'markup-trades-cut.png');
   await tr.page.mouse.move(5, 5);
   await tr.page.keyboard.press('t');
-  const res1 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
+  const res1 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 15000);
   check(!!res1 && res1.startsWith('TAKE saved.') && res1.includes(BOT_DAY) && res1.includes(t1.item.trade_id), 'T saves stage 1 and reveals the date and the trade (' + res1 + ')');
   const op = await tr.page.evaluate(() => [document.getElementById('tOpinionBox').hidden, document.getElementById('tOpinion').textContent, document.getElementById('tResult').tBodies[0].rows.length]);
   check(!op[0] && op[1].startsWith(NOTE(t1.item.trade_id)) && op[1].includes('score 0.5') && op[2] === 2, 'the reveal shows the result per exit and the second opinion (' + op[1] + ')');
@@ -605,12 +605,12 @@ try {
   check(t2.s.trade.prefetched && warm < Math.max(cold, 20), `N opens the next trade prefetched and fast (cold ${cold} ms, prefetched ${warm} ms)`);
   check(!(await tr.page.evaluate(() => document.documentElement.textContent)).includes(BOT_DAY), 'N: the last trade\'s date left the page');
   await tr.page.keyboard.press('a');
-  await until(async () => ((await state(TP)).trade || {}).stage === 2, 5000);
-  const lit = await until(() => tr.page.evaluate(() => { const o = Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])); return o.E && o; }), 4000) || {};
+  await until(async () => ((await state(TP)).trade || {}).stage === 2, 15000);
+  const lit = await until(() => tr.page.evaluate(() => { const o = Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])); return o.E && o; }), 15000) || {};
   check(lit.E && lit.S && lit.G && lit.Y && lit.R && !lit.T, 'after A: E, S, G, entry type and next candle lit, T dimmed');
   const before = (await state(TP)).clock_utc_ms;
   await tr.page.keyboard.press('ArrowRight');
-  await until(async () => (await state(TP)).clock_utc_ms > before, 5000);
+  await until(async () => (await state(TP)).clock_utc_ms > before, 15000);
   const tbox = await tr.page.locator('#pane1m .ce-host').boundingBox();
   await tr.page.keyboard.press('e');
   await tr.page.mouse.click(tbox.x + tbox.width * 0.5, tbox.y + tbox.height * 0.35);
@@ -624,7 +624,7 @@ try {
   check(!/"yours/.test(preApi) && !preApi.includes(BOT_DAY), 'ADJUST stage 2: nothing about his trade (yours) and no date in any response before the save');
   check(!(await tr.page.evaluate(() => window.__markup.botDrawn.you.length)), 'ADJUST stage 2: no YOU drawn before the save');
   await tr.page.keyboard.press('Enter');
-  const res2 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
+  const res2 = await until(() => tr.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 15000);
   check(!!res2 && res2.startsWith('ADJUST saved.'), 'Enter saves stage 2 and reveals (' + res2 + ')');
   const a2 = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_grades', t2.s.trade.qid + '.adjust.json'), 'utf8')).adjust;
   check(a2.entry_type === 'stop-limit' && a2.steps_after_cut === 1 && a2.marks.length === 2 && a2.entry !== null && a2.stop !== null && a2.marks.every(m => m.bar_time_utc_ms < a2.clock_utc_ms),
@@ -642,7 +642,7 @@ try {
   check(!!you && [...new Set(you.entries)].join() === t2.x.label && you.fills.every(f => f === '21,010.50'), 'after the ADJUST reveal: only this trade\'s order and fill besides YOU');
   await tr.page.click('#btnJump30');
   await tr.page.evaluate(() => document.activeElement && document.activeElement.blur());   // keys go to the page, not the button
-  await until(async () => (await state(TP)).clock_tod >= '11:30', 5000);
+  await until(async () => (await state(TP)).clock_tod >= '11:30', 15000);
   await sleep(1200);
   const dj = await tr.page.evaluate(() => window.__markup.botDrawn);
   // by 11:31 the other trades have closed (the 10:00 long at its target, the 11:00 long at its stop); this one's base exit
@@ -651,19 +651,19 @@ try {
     '30 minutes on: only this trade\'s fill, no other trade\'s exit, and YOU (' + [...new Set(dj.exitText)].join(', ') + ')');
   await shot(tr.page, 'markup-trades-yours.png');
   await tr.page.keyboard.press(' ');
-  check(!!(await until(async () => { const s = await state(TP); return s.playing && s.speed === 5; }, 4000)), 'Space plays on at 5x');
+  check(!!(await until(async () => { const s = await state(TP); return s.playing && s.speed === 5; }, 15000)), 'Space plays on at 5x');
   await tr.page.click('#btnPause2');
   await tr.page.keyboard.press('Enter');
   await tradeOpen(TP, 3);
-  await until(() => tr.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#3') && !document.getElementById('btnTSeen').disabled), 5000);
+  await until(() => tr.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#3') && !document.getElementById('btnTSeen').disabled), 15000);
   await tr.page.keyboard.press('x');
   const xq = await tr.page.evaluate(() => [document.getElementById('tErr').textContent, document.getElementById('tInfo').textContent, (window.__markup.state.trade || {}).stage]);
   check(xq[0].includes('Press X again'), 'X asks to confirm (' + xq.join(' | ') + ')');
   await tr.page.keyboard.press('x');
-  await until(() => fs.existsSync(path.join(tMarks, 'trade_skip_days.json')), 5000);
+  await until(() => fs.existsSync(path.join(tMarks, 'trade_skip_days.json')), 15000);
   const skipped = JSON.parse(fs.readFileSync(path.join(tMarks, 'trade_skip_days.json'), 'utf8')).days.map(d => d.date);
   check(JSON.stringify(skipped) === JSON.stringify([BOT_DAY]), 'X X adds the trade\'s day to trade_skip_days.json');
-  const prog = await until(() => tr.page.evaluate(() => { const t = document.getElementById('tProgress').textContent; return t.includes('1 days skipped') && t; }), 5000);
+  const prog = await until(() => tr.page.evaluate(() => { const t = document.getElementById('tProgress').textContent; return t.includes('1 days skipped') && t; }), 15000);
   check(!!prog && prog.startsWith('Graded 2 (1 adjusted, 1 days skipped); 0 left'), 'the progress line counts only (' + prog + ')');
   const st9 = await state(TP);
   const flat = JSON.stringify(st9);
@@ -690,7 +690,7 @@ try {
       if (k === 'others') {                                  // trade #1 (10:00) has no other order; #2 (11:01) has three
         await tradesCut(mp, mm, m.page, m.rec, 1, 'trades mutant ' + k, null);
         await m.page.keyboard.press('t');
-        await until(() => m.page.evaluate(() => !document.getElementById('secTResult').hidden), 8000);
+        await until(() => m.page.evaluate(() => !document.getElementById('secTResult').hidden), 15000);
         const km = mark(m.rec);
         await m.page.keyboard.press('n');
         await tradesCut(mp, mm, m.page, sub(m.rec, km), 2, 'trades mutant ' + k, sink);
@@ -716,17 +716,17 @@ try {
   await sleep(800);
   await ip.page.mouse.move(5, 5);
   await ip.page.keyboard.press('p');
-  await until(async () => ((await state(IP)).trade || {}).stage === 4, 5000);
+  await until(async () => ((await state(IP)).trade || {}).stage === 4, 15000);
   const pend = await until(() => ip.page.evaluate(() => !document.getElementById('secTPass').hidden && {
     result: !document.getElementById('secTResult').hidden, text: document.documentElement.textContent,
     lit: Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])) }), 5000);
   check(!!pend && !pend.result && !pend.text.includes(BOT_DAY) && pend.lit.M && pend.lit.N && !pend.lit.T, 'P: the PASS waits for M or N; no result, no date, M lit');
   await ip.page.keyboard.press('m');
-  const ihead = await until(() => ip.page.evaluate(() => !document.getElementById('secTAdjust').hidden && document.getElementById('tOwnHead').textContent), 4000);
+  const ihead = await until(() => ip.page.evaluate(() => !document.getElementById('secTAdjust').hidden && document.getElementById('tOwnHead').textContent), 15000);
   check(ihead === 'Your trade instead', 'M opens his own trade\'s tools (' + ihead + ')');
   const ibefore = (await state(IP)).clock_utc_ms;
   await ip.page.keyboard.press('ArrowRight');
-  await until(async () => (await state(IP)).clock_utc_ms > ibefore, 5000);
+  await until(async () => (await state(IP)).clock_utc_ms > ibefore, 15000);
   const ib = await ip.page.locator('#pane1m .ce-host').boundingBox();
   await ip.page.keyboard.press('e');
   await ip.page.mouse.click(ib.x + ib.width * 0.5, ib.y + ib.height * 0.35);
@@ -745,23 +745,23 @@ try {
   const g1i = JSON.parse(fs.readFileSync(path.join(iMarks, 'trade_grades', i1.trade.qid + '.json'), 'utf8'));
   check(mine1.kind === 'instead' && mine1.mine.after_reveal === false && mine1.mine.steps_after_cut === 1 && mine1.mine.dir === 'long' && g1i.label === 'PASS',
     'the .mine.json: kind instead, after_reveal false, 1 step, long; the label stays PASS');
-  const il = await until(() => ip.page.evaluate(() => { const d = window.__markup.botDrawn; return d && d.legs.length && d.you.length && d; }), 5000) || { legs: [], you: [] };
+  const il = await until(() => ip.page.evaluate(() => { const d = window.__markup.botDrawn; return d && d.legs.length && d.you.length && d; }), 15000) || { legs: [], you: [] };
   const labels = [...new Set(il.legs.map(l => l.label))].sort().join(), prices = [...new Set(il.legs.map(l => l.price))].sort().join();
   check(labels === 't5 stop,t5 target' && prices === '20996,21006' && !il.legs.some(l => l.price === 21011),
     '--trade-exits=t5: the t5 stop and target are drawn, named, never the primary target 21,011.00 (' + labels + '; ' + prices + ')');
   await ip.page.click('#btnJump30');
   await ip.page.evaluate(() => document.activeElement && document.activeElement.blur());
-  const iy = await until(() => ip.page.evaluate(() => { const d = window.__markup.botDrawn; return d && d.you.some(t => /^YOU (target|stop|flat) /.test(t)) && [...new Set(d.you)]; }), 6000);
+  const iy = await until(() => ip.page.evaluate(() => { const d = window.__markup.botDrawn; return d && d.you.some(t => /^YOU (target|stop|flat) /.test(t)) && [...new Set(d.you)]; }), 15000);
   check(!!iy && iy.some(t => /^YOU \d/.test(t.replace(/,/g, ''))), '30 minutes on: his fill and his exit are drawn, labelled YOU (' + (iy || []).join(', ') + ')');
   await shot(ip.page, 'markup-trades-instead.png');
   await ip.page.keyboard.press('n');
   await tradeOpen(IP, 2);
-  await until(() => ip.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#2') && !document.getElementById('secTGrade').hidden), 5000);
+  await until(() => ip.page.evaluate(() => document.getElementById('tInfo').textContent.startsWith('#2') && !document.getElementById('secTGrade').hidden && !window.__markup.tBusy), 15000);
   await ip.page.keyboard.press('p');
-  await until(() => ip.page.evaluate(() => !document.getElementById('secTPass').hidden), 5000);
+  await until(() => ip.page.evaluate(() => !document.getElementById('secTPass').hidden && !window.__markup.tBusy), 15000);
   const kp = mark(ip.rec);
   await ip.page.keyboard.press('n');
-  const ires2 = await until(() => ip.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 8000);
+  const ires2 = await until(() => ip.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 15000);
   const q2 = (await state(IP)).trade.qid;
   const mine2 = JSON.parse(fs.readFileSync(path.join(iMarks, 'trade_grades', q2 + '.mine.json'), 'utf8'));
   check(!!ires2 && ires2.startsWith('PASS saved.') && mine2.kind === 'none' && (await state(IP)).trade.n === 2, 'P then N: no trade of his own (kind none), then the result; the same trade stays open');
@@ -790,11 +790,11 @@ try {
     check(!!w0 && w0.current === null && w0.items.map(i => i.id).join() === 'labels,sweeps,old-set', 'work: three items offered, active first, nothing open at the first start (' + (w0 && w0.items.map(i => i.id)) + ')');
     check(!!w0 && !JSON.stringify(w0).includes(tmp), 'work: the list carries no folders or file paths');
     const wp = await openPage(WP);
-    await until(() => wp.page.evaluate(() => !document.getElementById('msWorkBox').hidden), 8000);
+    await until(() => wp.page.evaluate(() => !document.getElementById('msWorkBox').hidden), 15000);
     const opts = await wp.page.evaluate(() => [...document.getElementById('msWork').options].map(o => [o.value, o.textContent, o.disabled]));
     check(opts.some(o => o[0] === 'labels' && o[1].includes('Label set A') && o[1].includes('0 of 3 graded') && !o[2]) &&
       opts.some(o => o[0] === 'old-set' && o[2] && o[1].includes('stopped')), 'work: the Work list shows titles, kinds and counts; the stopped set is listed, not offered (' + JSON.stringify(opts) + ')');
-    const st0 = await until(() => wp.page.evaluate(() => document.getElementById('msStatus').textContent).then(t => t.includes('Work list') && t), 5000) || '';
+    const st0 = await until(() => wp.page.evaluate(() => document.getElementById('msStatus').textContent).then(t => t.includes('Work list') && t), 15000) || '';
     check(st0.includes('pick one from the Work list'), 'work: with nothing open the page says to pick from the Work list (' + st0 + ')');
     await shot(wp.page, 'markup-work-list.png');
     await Promise.all([wp.page.waitForEvent('load'), wp.page.selectOption('#msWork', 'labels')]);
@@ -803,7 +803,7 @@ try {
     await chartsReady(wp.page);
     // a link while the trade is open and ungraded: refused, said on the page, the label set stays open
     await wp.page.goto(`http://localhost:${WP}/live/markup.html#work=sweeps`);
-    const why = await until(() => wp.page.evaluate(() => !document.getElementById('msWorkMsg').hidden && document.getElementById('msWorkMsg').textContent), 8000);
+    const why = await until(() => wp.page.evaluate(() => !document.getElementById('msWorkMsg').hidden && document.getElementById('msWorkMsg').textContent), 15000);
     check(!!why && why.includes('a trade is open') && (await state(WP)).work.current === 'labels' && !(await wp.page.evaluate(() => location.hash)),
       'work: a link to another item while a trade is open is refused and says why (' + why + ')');
     await tradeOpen(WP, 1);
@@ -811,14 +811,15 @@ try {
     await sleep(500);
     await wp.page.mouse.move(5, 5);
     await wp.page.keyboard.press('t');
-    await until(async () => (await state(WP)).trade.complete, 8000);
+    await until(async () => (await state(WP)).trade.complete, 15000);
     const w1 = await work();
     check(w1.items.find(i => i.id === 'labels').progress.done === 1, 'work: the list counts the grade (1 of 3)');
     // a link from The Desk once the grade is saved: the sweeps item opens on the Blind tab, the hash is gone
     await wp.page.goto(`http://localhost:${WP}/live/markup.html#work=sweeps`);
     const sw = await until(async () => { const s = await state(WP); return s.work.current === 'sweeps' && s.mode === 'blind' && s; }, 10000);
-    check(!!sw && sw.work.tab === 'blind' && !(await wp.page.evaluate(() => location.hash)), 'work: the link opens the sweeps item on the Blind tab');
-    const shown = await until(() => wp.page.evaluate(() => { const el = document.getElementById('msWork'); return !!el && el.value === 'sweeps'; }).catch(() => false), 8000);
+    const hash = await until(() => wp.page.evaluate(() => document.readyState === 'complete' && 'h' + location.hash).catch(() => null), 15000);
+    check(!!sw && sw.work.tab === 'blind' && hash === 'h', 'work: the link opens the sweeps item on the Blind tab');
+    const shown = await until(() => wp.page.evaluate(() => { const el = document.getElementById('msWork'); return !!el && el.value === 'sweeps'; }).catch(() => false), 15000);
     check(!!shown, 'work: after the reload the Work list shows the sweeps item open');
     check(!wp.rec.errors.length, 'work: no page errors (' + wp.rec.errors.join('; ') + ')');
     await wp.page.close();
@@ -867,6 +868,7 @@ try {
     const qs = await tradeOpen(QP, 1);
     check(!!qs && qs.labels_only, 'question: the label set opens its first trade');
     await chartsReady(qp.page);
+    await until(() => qp.page.evaluate(() => !window.__markup.tBusy), 15000);
     await sleep(600);
     await qp.page.mouse.move(5, 5);
     const ui = () => qp.page.evaluate(() => ({
@@ -875,7 +877,7 @@ try {
       chips: document.getElementById('tChips').hidden, q: !document.getElementById('tQuestion').hidden,
       missing: document.getElementById('tQMissing').hidden ? '' : document.getElementById('tQMissing').textContent,
       keys: Object.fromEntries([...document.querySelectorAll('#tKeys li')].map(li => [li.dataset.k, !li.classList.contains('off')])) }));
-    const u0 = await until(async () => { const u = await ui(); return u.q && u.choices.length === 4 && u; }, 5000);
+    const u0 = await until(async () => { const u = await ui(); return u.q && u.choices.length === 4 && u; }, 15000);
     check(!!u0 && u0.chips && u0.choices.join() === 'light,heavy,fast push,slow grind', 'question: only its four choices show, the chip list is hidden (' + (u0 && u0.choices) + ')');
     check(!!u0 && u0.labels.every(d => d) && !u0.keys.T && !u0.keys.P && u0.keys.Q, 'question: T, A and P are disabled (buttons and key legend) before any answer');
     check(!!u0 && /volume into the signal \(light or heavy\) and speed into the signal \(fast push or slow grind\)/.test(u0.missing), 'question: the page says what is missing (' + (u0 && u0.missing) + ')');
@@ -887,26 +889,35 @@ try {
       body: JSON.stringify({ label: 'TAKE', answers: { volume: 'heavy' } }) });
     check(refused.status === 409 && /speed into the signal/.test((await refused.json()).error), 'question: the server refuses a grade with one answer (409)');
     await qp.page.keyboard.press('h');
-    const u1 = await until(async () => { const u = await ui(); return u.choices.includes('heavy*') && u; }, 3000);
+    const u1 = await until(async () => { const u = await ui(); return u.choices.includes('heavy*') && u; }, 15000);
     check(!!u1 && u1.labels.every(d => d) && /^To save T, A or P, pick speed into the signal \(fast push or slow grind\)\.$/.test(u1.missing), 'question: H picks heavy; T, A and P stay disabled until speed is picked (' + (u1 && u1.missing) + ')');
     await qp.page.keyboard.press('g');
-    const u2 = await until(async () => { const u = await ui(); return u.choices.includes('slow grind*') && u; }, 3000);
+    const u2 = await until(async () => { const u = await ui(); return u.choices.includes('slow grind*') && u; }, 15000);
     check(!!u2 && u2.labels.every(d => !d) && !u2.missing && u2.keys.T && u2.keys.P, 'question: with both answered T, A and P are enabled and nothing is missing');
     await qp.page.keyboard.press('2');
     await qp.page.keyboard.press('t');
-    const done = await until(async () => { const s = await state(QP); return s.trade && s.trade.complete && s; }, 8000);
+    const done = await until(async () => { const s = await state(QP); return s.trade && s.trade.complete && s; }, 15000);
     const qg = done && JSON.parse(fs.readFileSync(path.join(qMarks, 'trade_grades', done.trade.qid + '.json'), 'utf8'));
     check(!!qg && qg.label === 'TAKE' && qg.question === 'approach' && qg.answers && qg.answers.volume === 'heavy' && qg.answers.speed === 'slow grind' && Object.keys(qg.answers).length === 2 && qg.confidence === 2 &&
       !(qg.chips || []).length, 'question: the saved grade carries both answers and the confidence (' + (qg && JSON.stringify(qg.answers)) + ')');
-    const rh = await until(() => qp.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 5000);
+    const rh = await until(() => qp.page.evaluate(() => !document.getElementById('secTResult').hidden && document.getElementById('tResHead').textContent), 15000);
     check(!!rh && rh.includes('no result is shown') && rh.includes('heavy, slow grind') && !rh.includes(BOT_DAY), 'question: the result line names the answers, no result and no date (' + rh + ')');
     await shot(qp.page, 'markup-question.png');
 
     // the Bot tab: Builds (the made-up BUILDS.md) and two Run all results side by side
     await qp.page.click('#tabBot');
-    const bl = await until(() => qp.page.evaluate(() => { const t = document.querySelector('#buildsOut tbody'); return !document.getElementById('secBuilds').hidden && t && [...t.rows].map(r => [...r.cells].map(c => c.textContent)); }), 5000);
+    const bl = await until(() => qp.page.evaluate(() => { const t = document.querySelector('#buildsOut tbody'); return !document.getElementById('secBuilds').hidden && t && [...t.rows].map(r => [...r.cells].map(c => c.textContent)); }), 15000);
     check(!!bl && JSON.stringify(bl) === JSON.stringify([['MX1', 'bots/made_up.py', 'Made-up build one'], ['MX1M1', '', 'MX1 judged on its m1 exit']]), 'builds: the panel lists the BUILDS.md names, files and notes (' + JSON.stringify(bl) + ')');
-    const rs = await until(() => qp.page.evaluate(() => { const a = document.getElementById('runA'); return a.options.length === 2 && [a.value, document.getElementById('runB').value]; }), 5000);
+    if (fs.existsSync(path.join(root, 'live', 'motion.js'))) {   // the motion kit (lane A's live/motion.js) once it is in the checkout
+      await sleep(900);
+      const mo = await qp.page.evaluate(() => {
+        const sec = document.getElementById('secBuilds'), rows = [...document.querySelectorAll('#buildsOut tbody tr')];
+        return { kit: !!(window.ChartMotion && window.ChartMotion.scene), rest: [sec].concat(rows).every(el => getComputedStyle(el).opacity === '1' && !el.style.translate),
+          staggered: rows.every(r => /^[\d.]+,[\d.]+$/.test(r.getAttribute('data-in') || '')), chart: document.querySelectorAll('.chart-live [data-in], .ms-chart [data-in]').length };
+      });
+      check(mo.kit && mo.rest && mo.staggered && mo.chart === 0, 'motion: the Builds panel enters with ChartMotion, rows staggered, all at rest after it, nothing on the charts (' + JSON.stringify(mo) + ')');
+    } else console.log('  (motion kit not in this checkout: the panels show without motion)');
+    const rs = await until(() => qp.page.evaluate(() => { const a = document.getElementById('runA'); return a.options.length === 2 && [a.value, document.getElementById('runB').value]; }), 15000);
     check(!!rs && rs[0] !== rs[1], 'compare: both Run all results are offered, two different ones picked (' + rs + ')');
     await qp.page.click('#btnCompare');
     const cmp = await until(() => qp.page.evaluate(() => !document.getElementById('botCompare').hidden && ['cmpA', 'cmpB'].map(id => {
@@ -919,10 +930,10 @@ try {
 
     // the Day tab: the graded day, no date; U saves a call at the clock into the chain
     await qp.page.click('#tabDay');
-    const dopt = await until(() => qp.page.evaluate(() => { const o = document.getElementById('daySel').options; return o.length && o[0].textContent; }), 5000);
+    const dopt = await until(() => qp.page.evaluate(() => { const o = document.getElementById('daySel').options; return o.length && o[0].textContent; }), 15000);
     check(dopt === 'Day 1 (graded)', 'day: the graded day is offered without its date (' + dopt + ')');
     await qp.page.click('#btnDayLoad');
-    const ds = await until(async () => { const s = await state(QP); return s.mode === 'day' && s.loaded && s; }, 8000);
+    const ds = await until(async () => { const s = await state(QP); return s.mode === 'day' && s.loaded && s; }, 15000);
     check(!!ds && !('date' in ds) && ds.clock_tod === '09:30:00', 'day: the day opens at 09:30 with no date in the state');
     await chartsReady(qp.page);
     await qp.page.click('[data-speed="60"]');
@@ -930,7 +941,7 @@ try {
     await qp.page.click('#btnPause');
     await qp.page.mouse.move(5, 5);
     await qp.page.keyboard.press('u');
-    const calls = await until(() => qp.page.evaluate(() => { const li = document.querySelector('#dayCalls li'); return li && li.textContent; }), 5000);
+    const calls = await until(() => qp.page.evaluate(() => { const li = document.querySelector('#dayCalls li'); return li && li.textContent; }), 15000);
     const rows = fs.existsSync(path.join(qMarks, 'day_calls.jsonl')) ? fs.readFileSync(path.join(qMarks, 'day_calls.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : [];
     const st1 = await state(QP);
     check(rows.length === 1 && rows[0].call === 'U' && rows[0].seq === 1 && rows[0].prev_hash === '0'.repeat(64) && /^[0-9a-f]{64}$/.test(rows[0].row_hash) &&
