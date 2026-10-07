@@ -973,12 +973,12 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
   assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0)') < place.indexOf('account.Submit('), 'the stop rule is checked before the leader entry is sent');
   // review 2 finding 8: registered before Submit (a fill inside Submit is copied); dropped if Submit throws; orders-mode copies after
   assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntryRegister(order, kind, price)') < place.indexOf('account.Submit('), 'the leader entry is registered before it is sent');
-  assert.match(place, /try \{ account\.Submit\(new\[\] \{ order \}\); \}\s*catch \(Exception\) \{ if \(!bot\) ChartBridgeCopier\.LeaderEntryDropped\(order\); throw; \}/);
+  assert.match(place, /try \{ account\.Submit\(new\[\] \{ order \}\); \}\s*catch \(Exception\) \{ lock \(Sync\) Ours\.Remove\(order\); if \(!bot\) ChartBridgeCopier\.LeaderEntryDropped\(order\); throw; \}/);
   assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntrySent(order)') > place.indexOf('account.Submit('), 'the orders-mode copies go after it is sent');
 });
 
 test('0.4.0 copier: order calls only in its named functions; every one passes the account gates (no Sim lock, Anthony 2026-10-07)', () => {
-  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'SendClose', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1); SendClose: 0.4.3
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'SendClose', 'SubmitOne', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1); SendClose: 0.4.3
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
@@ -1006,12 +1006,17 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   // may still fill, and SendClose sends only after NinjaTrader confirms, every fill there has come through, and both readings
   // agree (or, at the time limit, the smaller); a reduce is sent only after the stops are confirmed shrunk
   assert.ok(!/\.Flatten\s*\(/.test(ccode), 'the copier never calls NinjaTrader\'s Flatten');
-  assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) return;[\s\S]*List<Order> working = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);[\s\S]*c\.A\.Cancel\(working\.ToArray\(\)\);[\s\S]*CheckReduces\(now\);/);
+  assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) \{ lock \(Lk\) c\.CloseOwed = false; return; \}\s*lock \(Lk\) c\.CloseOwed = true;[\s\S]*List<Order> working = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);[\s\S]*c\.A\.Cancel\(working\.ToArray\(\)\);[\s\S]*CheckReduces\(now\);/);
   assert.ok(!/\.Submit\(/.test(copierBodies('Flatten')), 'Flatten only cancels; the close is SendClose, after confirmation');
-  assert.match(copierBodies('CheckReduces'), /string unnoted = done \? ChartBridgeOrders\.CopierUnnotedFill\(r\.C\.A, r\.C\.Inst\) : null;/);
+  assert.match(copierBodies('CheckReduces'), /string unnoted = done \? ChartBridgeOrders\.CopierUnnotedFill\(r\.C\.A, r\.C\.Inst, now\) : null;/);
   assert.match(copierBodies('CheckReduces'), /if \(r\.Close\) SendClose\(r\); else SendReduce\(r\);/);
   assert.match(copierBodies('SendClose'), /int dir = Math\.Sign\(l\), held = Math\.Min\(Math\.Abs\(l\), Math\.Abs\(e\)\);/);
   assert.match(copierBodies('SendClose'), /List<Order> still = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);\s*if \(still\.Count > 0\)/);
+  // 0.4.3 review (9): a fill not yet through its order event stops the close even past the time limit (it waits, or stays owed
+  // for Reconcile), and the positions are read only after that check
+  const sc = copierBodies('SendClose');
+  assert.match(sc, /if \(unnoted != null\)\s*\{\s*if \(now - r\.Since < ReduceConfirmMs\) \{[^}]*Reduces\.Add\(r\); return; \}\s*ChartBridgeOrders\.CopierAlarm\([^\n]*nothing was sent[^\n]*\n\s*Event\([^\n]*not closed: the fill of " \+ unnoted[^\n]*\n\s*return;\s*\}/);
+  assert.ok(sc.indexOf('CopierUnnotedFill(') < sc.indexOf('CopierListed('), 'SendClose reads the positions after the unnoted check');
   assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
   assert.match(copierBodies('CheckReduces'), /SendReduce\(r\);/);
   // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position

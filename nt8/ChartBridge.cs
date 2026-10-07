@@ -4755,12 +4755,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     a.ExecutionUpdate += OnExecutionUpdate;
                     a.OrderUpdate += OnOrderUpdate;
                     a.PositionUpdate += OnPositionUpdate;
-                    ChartBridgeOrders.SeedNoted(a);   // 0.4.3: fills from before the watch are in its position already
                     Watched.Add(a);
                     added.Add(a);
                     Log("watching fills on account " + a.Name);
                 }
             }
+            foreach (Account a in added) ChartBridgeOrders.SeedNoted(a);   // 0.4.3: fills from before the watch are in its position already (outside the Watched lock: review 10)
             // Fills that happened before this account was watched (earlier this session) go to The Desk too;
             // The Desk ignores ones it already has.
             int n = 0;

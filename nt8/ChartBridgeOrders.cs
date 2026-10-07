@@ -280,7 +280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -762,7 +762,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (strat != null) { string unsaved = SaveNewManaged(tag, order); if (unsaved != null) return unsaved; }   // 0.4.0 fix1 (F5): accepted only once its managed.txt line is written
             if (!bot) ChartBridgeCopier.LeaderEntryRegister(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is); review 2: registered before Submit, so a fill inside Submit is copied
             try { account.Submit(new[] { order }); }
-            catch (Exception) { if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied
+            catch (Exception) { lock (Sync) Ours.Remove(order); if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied; 0.4.3 review (4): never sent, so never "may still fill"
             placed = order;
             if (!bot) ChartBridgeCopier.LeaderEntrySent(order);   // 0.4.0 copier: orders mode places the followers' orders now (a rejected entry is dropped)
             ChartBridgeServer.Log((bot ? "bot " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +

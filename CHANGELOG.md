@@ -19,6 +19,14 @@ Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of
 - **No leader.** `copierSet` with `"leader": null` clears the leader and stands the copier down. 0.4.2 had no way to clear
   it, so the page's "none" did nothing and the bot could not trade the old leader's account. The page's Leader dropdown
   sends it with the single Account page release; until then pick another account for the bot.
+- **From the independent review** (no blocker; the race is closed and its test guards it): when a close does not go out
+  (NinjaTrader slow to confirm, a disconnect, readings on opposite sides), the follower's stops are already cancelled, so
+  the close is now **owed** and tried again every 4 s whatever the leader does, until it goes out or the follower is flat;
+  a leader entry meanwhile skips that follower ("closing"); a scale-out reduce never replaces a close; the leader cannot be
+  cleared while a close is owed. A fill NinjaTrader shows whose order event never comes stops blocking closes after 10 s
+  (a warning); one that lands in the moment between the last check and the close also stops it (the close waits, or stays
+  owed). A copier order whose Submit throws leaves the just-sent list. After a restart, a follower holding a copied
+  position with no working stop and no record raises one alarm. The account seeding runs outside the watch lock.
 - ChartBridge only; the page is unchanged (each PC keeps its page rollback to 1.15.0). Page wording left for the Account
   page release: the Qty dropdown's hidden label and its error text still say "per leader contract".
 - Tests: the copier harness reproduces WORK's short 1 first (it fails on 0.4.2: Flatten called; a Qty 3 follower adds 6),

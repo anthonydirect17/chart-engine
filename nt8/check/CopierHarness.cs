@@ -145,6 +145,7 @@ public static class CopierHarness
             FollowerStopsFirst();
             BothAtOnce();
             WorkShortOne();    // 0.4.3: WORK 2026-10-07, a follower's own stop filled while NinjaTrader's Flatten closed it: short 1
+            CloseNotOut();     // 0.4.3 review: a close that does not go out is retried; nothing new copied meanwhile; a fill never noted
             FixedQuantity();   // 0.4.3: Anthony 2026-10-07, a fixed quantity per leader entry
             ScaleOut();
             StopAlreadyTraded();
@@ -436,6 +437,79 @@ public static class CopierHarness
         Reset();
     }
 
+    // ------------------------------------------------------------ 0.4.3 review: when a close does not go out
+    static void CloseNotOut()
+    {
+        // (1) a scale-out to zero (SIM-F3, Qty 1) whose stop cancel NinjaTrader confirms only after the 3 s limit: the close is
+        // retried while the leader still holds, never left without its stop and without a close
+        LeaderEntry(2);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        int b3 = f3.Calls.Count;
+        Fill(lead, lead.Orders.Last(o => Regex.IsMatch(o.Name ?? "", " target ")), 1, 25004);
+        Pos(lead, mnq, 1);
+        Check(After(f3, b3).Count == 1 && After(f3, b3)[0].StartsWith("cancel "), "review (1): the leader scales out 2 to 1: SIM-F3 (1) closes, its stop cancelled first");
+        double t = Now();
+        ChartBridgeCopier.Tick(t + ChartBridgeCopier.ReduceConfirmMs + 100);
+        Check(Closes(f3, b3).Count == 0 && Logged("could not close this follower"), "review (1): not confirmed in 3 s: nothing sent, an alarm");
+        ConfirmCancels(f3, b3);   // the cancel lands late
+        for (int k = 1; k <= 6; k++) ChartBridgeCopier.Tick(t + ChartBridgeCopier.ReduceConfirmMs + 100 + k * 2000);
+        Check(Closes(f3, b3).Count == 1 && Closes(f3, b3)[0].Contains("Sell Market 1 ") && EventSaid("flatten", "SIM-F3", "its close did not go out; tried again"),
+              "review (1): the owed close is tried again and closes the 1, while the leader still holds 1: " + string.Join(" | ", After(f3, b3)));
+        Reset();
+
+        // (2) a leader entry while a follower's close is still waiting: that follower is skipped (never a new copy into a close)
+        LeaderEntry(1);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        int b1 = f1.Calls.Count;
+        Fill(lead, LeaderStop(), 1, 24998);
+        Pos(lead, mnq, 0);
+        sent.Clear();
+        LeaderEntry(1);   // the leader enters again before NinjaTrader confirms SIM-F1's stop cancel
+        Check(!After(f1, b1).Any(x => x.Contains(" copy ") && !x.Contains(" copy out ")) && EventSaid("skip", "SIM-F1", "still being closed"), "review (2): a new leader entry during SIM-F1's close: skipped (closing), nothing copied: " + string.Join(" | ", After(f1, b1)));
+        ConfirmCancels(f1, b1);
+        Check(Closes(f1, b1).Count == 1 && Closes(f1, b1)[0].Contains("Sell Market 3 "), "review (2): then the close takes its 3: " + string.Join(" | ", After(f1, b1)));
+        Reset();
+
+        // (3) an order NinjaTrader lists filled whose order event never came: after 10 s it no longer blocks the close
+        LeaderEntry(1);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        Order ghost = new Order { Name = "old fill", Instrument = mnq, Account = f3, OrderAction = OrderAction.Buy, OrderType = OrderType.Market, Quantity = 1, Filled = 1, OrderState = OrderState.Filled };
+        f3.Orders.Add(ghost);
+        b3 = f3.Calls.Count;
+        Fill(lead, LeaderStop(), 1, 24998);
+        Pos(lead, mnq, 0);
+        ConfirmCancels(f3, b3);
+        Check(Closes(f3, b3).Count == 0, "review (3): a fill never come through: the close waits");
+        t = Now();
+        for (int k = 1; k <= 20; k++)
+        {
+            ChartBridgeCopier.Tick(t + k * 1000); ConfirmCancels(f3, b3);
+            Order close = f3.Orders.LastOrDefault(o => (o.Name ?? "").EndsWith(" copy out") && ChartBridgeOrders.IsWorking(o.OrderState));
+            if (close != null) { Fill(f3, close, close.Quantity, 24997.75); Pos(f3, mnq, 0); }   // the close fills at market
+        }
+        Check(Closes(f3, b3).Count == 1 && Closes(f3, b3)[0].Contains("Sell Market 1 ") && Logged("never came through its order event"),
+              "review (3): after 10 s it counts as come through (logged); the close goes out once, for what NinjaTrader's position shows: " + string.Join(" | ", After(f3, b3)));
+        f3.Orders.Remove(ghost);
+        Reset();
+
+        // (5) after a restart: a follower holding a copied position with no working stop and no record: said loudly, once
+        ChartBridgeCopier.Stop();
+        Order cent = new Order { Account = f1, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Market, Quantity = 1, Filled = 1, AverageFillPrice = 25000, Name = "CB#eeee5555 copy ffff6666", OrderState = OrderState.Filled };
+        f1.Orders.Add(cent);
+        ChartBridgeOrders.SeedNoted(f1);
+        Pos(f1, mnq, 1); Booked();
+        ChartBridgeCopier.Start();
+        Msg("client", "{\"type\":\"client\",\"v\":3}");
+        sent.Clear();
+        ChartBridgeCopier.Tick(Now()); ChartBridgeCopier.Tick(Now() + 1000);
+        Check(sent.Count(m => m.Contains("\"level\":\"error\"") && m.Contains("SIM-F1: it holds 1 with a copier entry filled there and NO working stop")) == 1, "review (5): a copied position with no stop and no record after a restart: one alarm");
+        Pos(f1, mnq, 0); Booked();
+        f1.Orders.Remove(cent);
+        Msg("copierSet", "{\"type\":\"copierSet\",\"leader\":\"Sim101\"}");
+        Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r\"}");
+        ChartBridgeCopier.Tick(Now());
+    }
+
     // ------------------------------------------------------------ 0.4.3: a fixed quantity per leader entry (Anthony 2026-10-07)
     static void FixedQuantity()
     {
@@ -697,7 +771,7 @@ public static class CopierHarness
         ChartBridgeCopier.Tick(t);
         Check(f1.Calls.Count == c1, "back: not flattened at once (the leader must stay flat for 4 s)");
         ChartBridgeCopier.Tick(t + ChartBridgeOrders.SettleMs + 100);
-        Check(After(f1, c1).Count == 1 && After(f1, c1)[0].StartsWith("cancel ") && EventSaid("flatten", "SIM-F1", "its exit was not copied when it happened"), "back, and the leader still flat 4 s later: its stop cancelled first (the exit rule): " + string.Join(" | ", After(f1, c1)));
+        Check(After(f1, c1).Count == 1 && After(f1, c1)[0].StartsWith("cancel ") && EventSaid("flatten", "SIM-F1", "its close did not go out; tried again"), "back, 4 s later: the close owed since the leader's exit is tried again, its stop cancelled first (0.4.3 review: owed closes are retried): " + string.Join(" | ", After(f1, c1)));
         Check(ClosedAfterConfirm(f1, c1, "Sell Market 3 "), "...then the 3 it holds are closed");
         Reset();
         ChartBridgeCopier.Tick(Now());

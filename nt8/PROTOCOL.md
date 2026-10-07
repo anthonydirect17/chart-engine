@@ -1813,8 +1813,12 @@ follower's `qty` again; a scale-out reduces it by the same share.)
   price, sold 1 of 5 in the same instant as Flatten closed the 5 it still showed: short 1). Every order on that contract that
   may still fill is cancelled first; once NinjaTrader confirms each one cancelled or filled, every fill there has come
   through ChartBridge's order events (so both position readings can include it), and both readings agree, what it still
-  holds is closed at market. Not confirmed within 3 s: nothing is sent, a `status` `error`, and the missed-exit check tries
-  again; readings still apart at 3 s: the smaller is closed (never more than either shows). A leader scale-out (a partial
+  holds is closed at market. Not confirmed within 3 s: nothing is sent, a `status` `error`, and the close is owed: it is tried
+  again every 4 s, whatever the leader does, until it goes out or the follower is flat (its stops are already cancelled), and
+  no new copy goes to that follower contract meanwhile (skipped "closing"); readings still apart at 3 s: the smaller is closed
+  (never more than either shows). A fill NinjaTrader shows whose order event never comes stops blocking after 10 s (a
+  `status` `warn`). After a restart, a follower holding a position with a filled copier entry there, no working stop on its
+  closing side and no copier record gets one `status` `error`. (0.4.3, from the independent review.) A leader scale-out (a partial
   exit) reduces each follower by the same share, rounded to the nearest contract, at least 1, capped at what it holds; the
   leader flat means every follower flat. A flat follower gets nothing.
 - **The sweep**: every second, any working order the copier placed on a follower with no position on that root is
