@@ -33,6 +33,9 @@ public static class MergeHarness
     static Action<string, Order> After;
     static volatile bool watching;
     static int stepsChecked, overProtected;
+    // Fix1 (F3): the fewest contracts the working stops covered after any simulated step of a merge, while a position was held.
+    static int minCover = int.MaxValue;
+    static string minCoverAt = "";
     static string overText = "";
 
     public static void Run(Action<bool, string> check)
@@ -49,7 +52,7 @@ public static class MergeHarness
             named["MNQ"] = mnq;
             ChartBridgeOrders.ResetConfig();
             ChartBridgeOrders.ReadConfig("trading", "true");
-            ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, EVAL-B, EVAL-C, EVAL-D, EVAL-E, EVAL-F, EVAL-G, EVAL-H, EVAL-J, EVAL-K, EVAL-L, EVAL-N, EVAL-P, EVAL-Q");
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, EVAL-B, EVAL-C, EVAL-D, EVAL-E, EVAL-F, EVAL-G, EVAL-H, EVAL-J, EVAL-K, EVAL-L, EVAL-N, EVAL-P, EVAL-Q, EVAL-R, EVAL-S, EVAL-T, EVAL-U");
             ChartBridgeOrders.ReadConfig("maxQty.MNQ", "20");
             ChartBridgeOrders.MergeConfirmMs = 400; ChartBridgeOrders.MergeQuietMs = 100; ChartBridgeOrders.MergePollMs = 5;
             ChartBridgeOrders.NewToken();
@@ -69,7 +72,11 @@ public static class MergeHarness
             NotConfirmed();
             FillDuringSwap();
             RestoreFails();
+            FallbackRejected();      // fix1 (F3)
             FlattenDuringSwap();
+            FlattenRefusedMidSwap(); // fix1 (F1)
+            FlippedMidSwap();        // fix1
+            MergedTargetAfterRestart();   // fix1
             Restarted();
             Check(stepsChecked > 40 && overProtected == 0, "merge: after every simulated step of every merge the working stops never covered more than the position (" +
                   stepsChecked + " steps checked)" + overText);
@@ -132,6 +139,7 @@ public static class MergeHarness
             Interlocked.Increment(ref stepsChecked);
             int pos = Math.Abs(Pos(a)), cover = StopCover(a);
             if (cover > pos) { Interlocked.Increment(ref overProtected); overText += "; " + a.Name + " after " + kind + " " + o.Name + ": stops " + cover + " > position " + pos; }
+            if (pos > 0 && cover < minCover) { minCover = cover; minCoverAt = a.Name + " after " + kind + " " + o.Name + ": stops " + cover + " of " + pos; }
         }
         Action<string, Order> after = After;
         if (after != null) after(kind, o);
@@ -183,12 +191,14 @@ public static class MergeHarness
     }
 
     // Send merge and wait for its answer (or a reject). Returns the merge message, or "" when it was refused.
-    static string DoMerge(Account a, string cid)
+    static string DoMerge(Account a, string cid) { return DoMerge(a, cid, true); }
+
+    static string DoMerge(Account a, string cid, bool watch)
     {
         Thread.Sleep(ChartBridgeOrders.MergeQuietMs + 50);   // past the 2 s (here 0.1 s) after the last position change
         int before;
         lock (sent) before = sent.Count;
-        watching = true;
+        watching = watch;
         Msg("merge", MergeMsg(a, cid));
         string got = WaitFor(before, "\"type\":\"merge\",\"cid\":\"" + cid + "\"", 10000);
         Stopwatch sw = Stopwatch.StartNew();
@@ -464,7 +474,7 @@ public static class MergeHarness
         Check(before.SequenceEqual(after) && StopCover(a) == 4 && stop1.Quantity == 1, "every pair is back at its own prices and size: " + string.Join(" | ", after));
         Order again = Live(a).First(o => (o.Name ?? "").Contains(" stop f1 q1 p25008"));
         Order againT = Live(a).First(o => (o.Name ?? "").Contains(" target f1 q1 p25008"));
-        Check(!string.IsNullOrEmpty(again.Oco) && again.Oco == againT.Oco && again.Oco.Contains("-r"), "the pair placed again is an OCO pair (a new OCO id): " + again.Oco);
+        Check(!string.IsNullOrEmpty(again.Oco) && again.Oco == againT.Oco && Regex.IsMatch(again.Oco, "^cb-[0-9a-f]{8}-1-r[0-9a-f]{8}-[0-9]+$"), "the pair placed again is an OCO pair (a new OCO id, unique per run: the run's start in it): " + again.Oco);
         Check(Diag().Contains("\"restored\":1"), "/diag merges counts it: " + Diag());
         Done(a);
     }
@@ -499,17 +509,48 @@ public static class MergeHarness
         int changes = 0, submits = 0;
         Hold = (kind, o) => kind == "change" && ++changes == 1;
         Reject = (kind, o) => kind == "submit" && (o.Name ?? "").Contains(" stop f1 q1 p25008") && ++submits == 1;   // putting the pair back is rejected
-        int alarmsBefore;
-        lock (sent) alarmsBefore = sent.Count;
+        Order s1 = Named(a, "CB#"); s1 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25000")); Order s2 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25004"));
+        minCover = int.MaxValue; minCoverAt = "";
         string m = DoMerge(a, "rf");
         Hold = null; Reject = null;
-        Check(m.Contains("\"result\":\"failed\"") && m.Contains("\"stop\":{\"price\":24998,\"qty\":3}"), "the restore fails: result failed, one stop for the whole position: " + m);
-        Check(m.Contains("MNQ EVAL-H: the merge failed and the original brackets could not be put back; ONE STOP at 24,998 covers 3 contracts; NO TARGET; check NinjaTrader"),
-              "with the contract's text: " + m);
-        Check(Sent("\"level\":\"error\",\"text\":\"MNQ EVAL-H: the merge failed and the original brackets could not be put back; ONE STOP at 24,998 covers 3 contracts"),
+        // Fix1 (F3): the fallback never cancels a working stop before something covers its contracts. The two pairs still working
+        // stay (each with its OCO target); the one contract no stop covered gets ONE STOP at the first leg's stop price.
+        Check(minCover > 0 && minCover >= 2, "F3: the restore fails with a one-target merge: the stop cover never fell to 0 at any step (lowest " + minCover + ", " + minCoverAt + ")");
+        Check(m.Contains("\"result\":\"failed\"") && m.Contains("\"stop\":{\"price\":24998,\"qty\":2}"), "the restore fails: result failed; stop: the first leg's price and what the stops there cover: " + m);
+        Check(m.Contains("MNQ EVAL-H: the merge failed and the original brackets could not be put back; nothing working was cancelled, and ONE STOP at 24,998 now covers the 1 contract(s) no stop covered; the working stops cover 3 of 3 contract(s) (2 at 24,998, 1 at 25,002); targets 1 at 25,004, 1 at 25,008; check NinjaTrader"),
+              "with a text naming what covers what: " + m);
+        Check(Sent("\"level\":\"error\",\"text\":\"MNQ EVAL-H: the merge failed and the original brackets could not be put back; nothing working was cancelled"),
               "and a status error to the pages");
-        Check(LiveStops(a).Count == 1 && StopCover(a) == 3 && Live(a).Count == 1 && LiveStops(a)[0].StopPrice == 24998, "one working stop covers the whole position, no target: " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
+        Order ms = Named(a, "CB#" + s1.Name.Substring(3, 8) + " mstop q1 p24998");
+        Check(StopCover(a) == 3 && IsLive(s1) && IsLive(s2) && ms != null && IsLive(ms) && ms.Quantity == 1 && string.IsNullOrEmpty(ms.Oco) && s1.Quantity == 1,
+              "the original stops still work, and one new stop (no OCO) covers the rest: " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
         Check(Diag().Contains("\"failed\":1"), "/diag merges counts it: " + Diag());
+        Done(a);
+    }
+
+    // Fix1 (F3): the restore fails AND the fallback's own stop is rejected: every stop still working stays, and the status error
+    // says what covers what and how many contracts have no stop.
+    static void FallbackRejected()
+    {
+        Account a = NewAccount("EVAL-R");
+        Entry(a, true, 1, 25000); Entry(a, true, 1, 25004); Entry(a, true, 1, 25008);
+        int changes = 0, submits = 0;
+        Hold = (kind, o) => kind == "change" && ++changes == 1;
+        Reject = (kind, o) => kind == "submit" && (((o.Name ?? "").Contains(" stop f1 q1 p25008") && ++submits == 1) || (o.Name ?? "").Contains(" mstop "));
+        Order s1 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25000")), s2 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25004"));
+        int n = a.Calls.Count;
+        minCover = int.MaxValue;
+        string m = DoMerge(a, "fr");
+        Hold = null; Reject = null;
+        List<string> calls = CallsFrom(a, n);
+        Check(m.Contains("\"result\":\"failed\"") && IsLive(s1) && IsLive(s2) && s1.Quantity == 1 && s2.Quantity == 1 && StopCover(a) == 2,
+              "F3: the fallback's stop is rejected: the original stops still work, untouched: " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
+        Check(!calls.Any(x => x == "cancel " + s1.Name || x == "cancel " + s2.Name), "no working stop was ever cancelled: " + string.Join(" | ", calls));
+        Check(minCover >= 2, "the stop cover never fell below the two pairs still working (lowest " + minCover + ")");
+        Check(m.Contains("could not be placed (NinjaTrader rejected CB#") && m.Contains("every stop still working stays where it is and 1 contract(s) may have NO STOP; act in NinjaTrader now") &&
+              m.Contains("the working stops cover 2 of 3 contract(s) (1 at 24,998, 1 at 25,002): 1 contract(s) have NO STOP"),
+              "and the text says what covers what: " + m);
+        Check(Sent("\"level\":\"error\",\"text\":\"MNQ EVAL-R: the merge failed"), "a status error");
         Done(a);
     }
 
@@ -553,6 +594,94 @@ public static class MergeHarness
         Check(m.Contains("\"result\":\"failed\"") && m.Contains("Flatten ended the merge") && m.Contains("\"stop\":null"), "the merge answer says Flatten ended it: " + m);
         Check(!ChartBridgeOrders.MergeFrozen(a, mnq), "the freeze ends");
         Done(a); Done(b);
+    }
+
+    // Fix1 (F1): a Flatten that is REFUSED (here the account's connection drops while a step waits) does not end the swap: it goes
+    // on to its own check, finds the reconnect, and restores; the merge answer never says Flatten ended it, and the stops cover
+    // the position at the end.
+    static void FlattenRefusedMidSwap()
+    {
+        Account a = NewAccount("EVAL-S");
+        Entry(a, true, 1, 25000); Entry(a, true, 1, 25004); Entry(a, true, 1, 25008);
+        Order stop1 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25000"));
+        List<string> before = Live(a).Select(o => o.Name + " x" + o.Quantity).OrderBy(x => x).ToList();
+        int changes = 0;
+        Hold = (kind, o) => kind == "change" && ++changes == 1;   // the grow of S is not confirmed yet (a slow broker)
+        Thread.Sleep(ChartBridgeOrders.MergeQuietMs + 50);
+        int from;
+        lock (sent) from = sent.Count;
+        ChartBridgeOrders.MergeConfirmMs = 1500;
+        watching = true;
+        Msg("merge", MergeMsg(a, "fr1"));
+        WaitCall(a, "change " + stop1.Name, 3000);
+        a.Connection.Status = ConnectionStatus.ConnectionLost;   // the connection drops; Anthony hits Flatten
+        int n = a.Calls.Count;
+        Msg("flatten", "{\"type\":\"flatten\",\"cid\":\"fl1\",\"account\":\"EVAL-S\",\"root\":\"MNQ\"}");
+        string flat = Last();
+        Check(flat.Contains("\"type\":\"reject\"") && flat.Contains("not connected") && !CallsFrom(a, n).Any(x => x.StartsWith("flatten")), "F1: Flatten refused (not connected), nothing flattened: " + flat);
+        Check(ChartBridgeOrders.MergeFrozen(a, mnq), "the refused Flatten did not end the swap");
+        a.Connection.Status = ConnectionStatus.Connected;
+        string m = WaitFor(from, "\"type\":\"merge\",\"cid\":\"fr1\"", 8000);
+        Stopwatch sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(a, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        watching = false;
+        Hold = null;
+        ChartBridgeOrders.MergeConfirmMs = 400;
+        List<string> after = Live(a).Select(o => o.Name + " x" + o.Quantity).OrderBy(x => x).ToList();
+        Check(m.Contains("\"result\":\"restored\"") && !m.Contains("Flatten"), "the swap went on and restored; the answer says nothing about Flatten: " + m);
+        Check(StopCover(a) == Pos(a) && Pos(a) == 3 && before.SequenceEqual(after), "every pair is back; the stops cover the position: " + string.Join(" | ", after));
+        Done(a);
+    }
+
+    // Fix1: the position turns to the other side during the swap (long 3, then short 1). Nothing is put back (a sell stop of the
+    // long would add to the short); every leg of the old position is cancelled, and a status error says the short has no stop.
+    static void FlippedMidSwap()
+    {
+        Account a = NewAccount("EVAL-T");
+        Entry(a, true, 1, 25000); Entry(a, true, 1, 25004); Entry(a, true, 1, 25008);
+        int cancels = 0;
+        After = (kind, o) =>
+        {
+            if (kind != "cancel" || ++cancels != 1) return;
+            After = null;
+            SetPos(a, -1);   // a sell of 4 elsewhere: long 3 is now short 1
+        };
+        int n = a.Calls.Count;
+        string m = DoMerge(a, "fp", false);   // not watched: the old long's stops are on the short's adding side until cancelled
+        After = null;
+        List<string> calls = CallsFrom(a, n);
+        Check(m.Contains("\"result\":\"failed\"") && m.Contains("the position turned from 3 to -1 during the merge; nothing was put back (it would add to the new position)") &&
+              m.Contains("1 contract(s) have NO STOP"), "a flip mid-swap: no restore, and the text says so: " + m);
+        Check(!calls.Any(x => x.StartsWith("submit ")) && Live(a).Count == 0, "nothing placed, every leg of the old long cancelled: " + string.Join(" | ", calls));
+        Check(Sent("\"level\":\"error\",\"text\":\"MNQ EVAL-T: the position turned from 3 to -1"), "a status error naming the account and root");
+        Done(a);
+    }
+
+    // Fix1: after a restart (ChartBridge has never seen the merged set's events), a merged target's fill shrinks the merged stop
+    // at once, from the position read both ways, not only at the legs check.
+    static void MergedTargetAfterRestart()
+    {
+        Account a = NewAccount("EVAL-U");
+        Order S, t1, t2;
+        lock (a.Orders)
+        {
+            S = new Order { Account = a, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.StopMarket, Quantity = 3, StopPrice = 24998, Name = "CB#7c7c7c7c mstop q3 p24998", OrderState = OrderState.Working };
+            t1 = new Order { Account = a, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.Limit, Quantity = 2, LimitPrice = 25001, Name = "CB#7c7c7c7c mtarget q2 p25001 k1", OrderState = OrderState.Working };
+            t2 = new Order { Account = a, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 25004, Name = "CB#7c7c7c7c mtarget q1 p25004 k2", OrderState = OrderState.Working };
+            a.Orders.Add(S); a.Orders.Add(t1); a.Orders.Add(t2);
+        }
+        SetPos(a, 3);
+        Update(a, t2);   // an event with no fill (NinjaTrader reports it working): from here on its fills are counted
+        int n = a.Calls.Count;
+        t1.Filled = 2; t1.OrderState = OrderState.Filled; Update(a, t1);   // the first event ChartBridge sees for it; the position not updated yet
+        Check(CallsFrom(a, n).Count == 0, "a merged target first seen with fills after a restart, NinjaTrader's position not updated yet: nothing guessed");
+        SetPos(a, 1);   // NinjaTrader's position update follows
+        Check(CallsFrom(a, n).Count == 1 && CallsFrom(a, n)[0] == "change " + S.Name + " L0 S0 Q1" && S.Quantity == 1,
+              "the position update: the merged stop shrinks to the position at once (not only at the legs check): " + string.Join(" | ", CallsFrom(a, n)));
+        n = a.Calls.Count;
+        t2.Filled = 1; t2.OrderState = OrderState.Filled; Update(a, t2);
+        Check(CallsFrom(a, n).Count == 1 && CallsFrom(a, n)[0] == "cancel " + S.Name, "the next fill of a target seen before (a counted delta) cancels the stop: " + string.Join(" | ", CallsFrom(a, n)));
+        Done(a);
     }
 
     // ------------------------------------------------------------ a restart in the middle of a swap

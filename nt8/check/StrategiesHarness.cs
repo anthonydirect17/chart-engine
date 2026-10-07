@@ -35,6 +35,7 @@ public static class StrategiesHarness
     static void Tick(double ms) { clock += ms; }
     static string ManagedFile { get { return Path.Combine(ChartBridgeConfig.Folder, "managed.txt"); } }
     static List<string> Managed() { return sent.Where(m => m.StartsWith("{\"type\":\"managed\"")).ToList(); }
+    static bool WarnSaid(string has) { return sent.Any(m => m.Contains("\"type\":\"status\"") && m.Contains("\"level\":\"warn\"") && m.Contains(has)); }
     static bool Error(string has) { return sent.Any(m => m.Contains("\"type\":\"status\"") && m.Contains("\"level\":\"error\"") && m.Contains(has)); }
     // NinjaTrader confirms a stop move: the new price, working again.
     static void Confirm(Account a, Order stop, double price) { stop.StopPrice = price; stop.OrderState = OrderState.Working; Update(a, stop); }
@@ -64,7 +65,7 @@ public static class StrategiesHarness
     {
         ChartBridgeOrders.ResetConfig();
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "6");
         ChartBridgeSwitches.Note("orderTypes", orderTypes ? "on" : "off");   // integration: ChartBridgeConfig.Load records every v3 switch in ChartBridgeSwitches
         ChartBridgeSwitches.Note("strategies", strategies ? "On" : "off");
@@ -108,6 +109,8 @@ public static class StrategiesHarness
             FlattenStopsMoves();
             Restarts();
             RestartFills();
+            SavedBeforeSent();   // fix1 (F5)
+            DoneRace();          // fix1
             Done();
             Check(!sentV2.Any(m => m.Contains("\"type\":\"managed\"")), "a v2 page never gets a managed message");
         }
@@ -320,10 +323,10 @@ public static class StrategiesHarness
         Check(Rejected("over the MNQ cap") && a.Calls.Count == 0, "a strategy order over the cap: refused (every v2 gate applies)");
         Msg("order", Ord("SIM-S3", "\"side\":\"buy\",\"kind\":\"stopLimit\",\"qty\":1,\"price\":25010,\"strategy\":{\"name\":\"S\",\"stop\":8}"));
         Check(Rejected("kind must be market, limit or stop") && a.Calls.Count == 0, "strategies on, orderTypes off: a stopLimit is still refused: " + Last());
-        // accepted: the full strategy, as the fixture's; the entry is named sg (market) or atm sg (resting)
+        // accepted: the full strategy, as the fixture's; the entry is named sg (market) or atm sg (resting), with the stop ticks (fix1, F5)
         sent.Clear();
         Msg("order", Ord("SIM-S3", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{" + Full + "}"));
-        Check(a.Calls.Count == 1 && Regex.IsMatch(a.Calls[0], "^submit CB#[0-9a-f]{8} atm sg Buy Limit 1 L24990 S0 oco:$"), "a limit entry with the strategy: named atm sg: " + string.Join(" | ", a.Calls));
+        Check(a.Calls.Count == 1 && Regex.IsMatch(a.Calls[0], "^submit CB#[0-9a-f]{8} atm sg s16 Buy Limit 1 L24990 S0 oco:$"), "a limit entry with the strategy: named atm sg s16 (fix1: the stop ticks in the name): " + string.Join(" | ", a.Calls));
         Order e = a.Orders[0];
         List<string> mg = Managed();
         Check(mg.Count == 1 && mg[0].Contains("\"state\":\"waiting\"") && mg[0].Contains("\"name\":\"Scalp 3T\"") && mg[0].Contains("\"strategy\":{" + Full + "}") && mg[0].Contains("\"pairs\":[]") && mg[0].Contains("\"id\":\"" + IdOf(e) + "\""),
@@ -418,7 +421,7 @@ public static class StrategiesHarness
         // no targets: one stop for the whole increment, no OCO; a stop-limit stop; the stop already traded: exits per bucket
         Account b = NewAccount("SIM-S5");
         Msg("order", Ord("SIM-S5", "\"side\":\"sell\",\"kind\":\"market\",\"qty\":2,\"strategy\":{\"name\":\"Stop only\",\"stop\":12,\"stopLimit\":2}"));
-        Check(Regex.IsMatch(b.Calls[0], "^submit CB#[0-9a-f]{8} sg Sell Market 2 "), "a market entry with a strategy: named sg: " + b.Calls[0]);
+        Check(Regex.IsMatch(b.Calls[0], "^submit CB#[0-9a-f]{8} sg s12 Sell Market 2 "), "a market entry with a strategy: named sg s12: " + b.Calls[0]);
         Fill(b, b.Orders[0], 2, 25000);
         Check(b.Calls.Count == 2 && b.Calls[1] == "submit CB#" + Tag(b.Orders[0]) + " stop f2 q2 p25000 k1 Buy StopLimit 2 L25003.5 S25003 oco:", "no targets: one buy stop-limit for 2, 12 ticks above, its limit 2 beyond, no OCO: " + b.Calls.Last());
         b.Orders[1].OrderState = OrderState.Cancelled;
@@ -519,10 +522,17 @@ public static class StrategiesHarness
         Check(a.Calls.Count == n + 1 && a.Calls.Last().StartsWith("change ") && a.Calls.Last().Contains(" S25000.25 "), "breakeven move sent");
         sent.Clear();
         ChartBridgeOrders.OnOrderUpdate(a, new OrderEventArgs { Order = stop, Error = ErrorCode.UnableToChangeOrder });   // NinjaTrader: the change was not taken, the stop is where it was
-        Check(Error("did not take the move of the strategy stop") && Error("the stop stays at 24,996") && Error("manage it by hand"), "a rejected move: the stop stays, and an error says so: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
+        Check(WarnSaid("did not take the move of the strategy stop") && WarnSaid("the stop stays at 24,996") && WarnSaid("ChartBridge tries once more on the next move"),
+              "fix1: a rejected move: the stop stays, and a warn says it is tried once more: " + string.Join(" | ", sent.Where(x => x.Contains("status"))));
         Check(stop.StopPrice == 24996, "the stop is where it was");
-        Tick(600); Trade(25004); Tick(600); Trade(25005);
-        Check(a.Calls.Count == n + 1, "that stop is not moved again (no move every 500 ms into a rejection)");
+        Tick(600); Trade(25004);
+        Check(a.Calls.Count == n + 2 && a.Calls.Last() == "change " + stop.Name + " L0 S25002 Q0", "fix1: the next eligible move tries once more (trailing now wins: 25002, tighter than 24,996, never looser): " + a.Calls.Last());
+        sent.Clear();
+        ChartBridgeOrders.OnOrderUpdate(a, new OrderEventArgs { Order = stop, Error = ErrorCode.UnableToChangeOrder });
+        Check(WarnSaid("did not take the move of the strategy stop (bucket 1) to 25,002") && WarnSaid("refused twice") && WarnSaid("manage it by hand"),
+              "fix1: refused a second time: halted, with a warn to manage it by hand: " + string.Join(" | ", sent.Where(x => x.Contains("status"))));
+        Tick(600); Trade(25005); Tick(600); Trade(25006);
+        Check(a.Calls.Count == n + 2 && stop.StopPrice == 24996, "after the second rejection that stop is not moved again (it stays at 24,996)");
         foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
         SetPos(a, 0, 0);
         Trade(25000);
@@ -657,7 +667,15 @@ public static class StrategiesHarness
         sent.Clear();
         Restart();
         ChartBridgeOrders.ManagedReadFault = null;
-        Check(Error("managed.txt could not be read (held by another program)"), "managed.txt unreadable: an error at start");
+        Check(Error("managed.txt could not be read (held by another program)") && Error("Order Strategies are off for this run: new strategy entries are refused; fix the file and restart"),
+              "managed.txt unreadable: an error at start, saying new strategy entries are refused (fix1, F5)");
+        Account fx = NewAccount("SIM-U3");
+        Msg("order", Ord("SIM-U3", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"strategy\":{\"name\":\"S\",\"stop\":8}"));
+        Check(Rejected("Order Strategies are off for this run: managed.txt could not be read; fix the file and restart") && fx.Calls.Count == 0,
+              "F5: managed.txt unreadable at the start: a NEW strategy entry is refused for the run, nothing sent: " + Last());
+        Msg("order", Ord("SIM-U3", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Check(fx.Calls.Count == 1 && fx.Calls[0].Contains(" s8 t16 Buy Market 1 "), "an order with a plain bracket still goes (only Order Strategies are off): " + string.Join(" | ", fx.Calls));
+        foreach (Order o in fx.Orders) o.OrderState = OrderState.Cancelled;
         ChartBridgeOrders.CheckLegs(clock);
         Check(Managed().Any(m => m.Contains("\"state\":\"unmanaged\"") && m.Contains("managed.txt could not be read")) && Error("MNQ SIM-T7: breakeven and trailing could not be resumed"), "unreadable: unmanaged and said");
         ChartBridgeOrders.SaveManagedNow();
@@ -703,23 +721,108 @@ public static class StrategiesHarness
         foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
         SetPos(a, 0, 0);
 
-        // a resting strategy entry whose line is lost: never legs from a guess; said at recovery and at the fill
+        // Fix1 (F5): a resting strategy entry whose line is lost (a recompile before it was saved): its name carries the stop
+        // ticks, so its fill still gets its protective stop (no target, never moved); said at recovery and at the fill
         Account b = NewAccount("SIM-U2");
-        Msg("order", Ord("SIM-U2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Lost\",\"stop\":8}"));
+        Msg("order", Ord("SIM-U2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Lost\",\"stop\":8,\"t1\":16,\"t1Share\":100,\"beAfter\":4,\"bePlus\":0}"));
         Order le = b.Orders[0];
+        Check(le.Name == "CB#" + Tag(le) + " atm sg s8", "the entry's name carries the stop ticks: " + le.Name);
         File.Delete(ManagedFile);
         Restart();
         sent.Clear();
         ChartBridgeOrders.CheckLegs(clock);
-        Check(Error("MNQ SIM-U2: Order Strategy entry CB#" + Tag(le) + " could not be resumed after the restart (managed.txt has no line for it); if it fills it gets NO STOP: cancel it and place it again"),
+        Check(Error("MNQ SIM-U2: Order Strategy entry CB#" + Tag(le) + " could not be resumed after the restart (managed.txt has no line for it); if it fills, ChartBridge places its stop from the order's name (8 ticks from the fill)"),
               "a resting strategy entry with no line: said at recovery: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
         n = b.Calls.Count;
         sent.Clear();
         Fill(b, le, 1, 24990);
-        Check(b.Calls.Count == n, "its fill gets no legs from a guess");
-        Check(Error("NO STOP: 1 contract(s) of Order Strategy entry CB#" + Tag(le) + " filled"), "and an error says NO STOP");
-        le.OrderState = OrderState.Filled;
+        SetPos(b, 1, 24990);
+        Check(b.Calls.Count == n + 1 && b.Calls[n] == "submit CB#" + Tag(le) + " stop f1 q1 p24990 k1 Sell StopMarket 1 L0 S24988 oco:",
+              "F5: its fill gets the protective stop from the order's name (8 ticks), no target: " + string.Join(" | ", After(b, n)));
+        Check(Error("MNQ SIM-U2: Order Strategy entry CB#" + Tag(le) + " filled 1 and its strategy could not be read after the restart") && Error("placed its protective stop from the order's name, 8 ticks from the fill; NO TARGET"),
+              "and a status error names the account and root: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
+        int k = b.Calls.Count;
+        Tick(600); Trade(24995); Tick(600); Trade(24996);
+        Check(b.Calls.Count == k, "that stop is never moved (no breakeven from a guess)");
+        foreach (Order o in b.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
         SetPos(b, 0, 0);
+
+        // a name from before fix1 ("atm sg", no stop ticks) and no line: never legs from a guess; NO STOP, naming the account and root
+        Account c = NewAccount("SIM-U4");
+        Order old = new Order { Account = c, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24990, Name = "CB#0a0b0c0d atm sg", OrderState = OrderState.Working };
+        c.Orders.Add(old);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(Error("MNQ SIM-U4: Order Strategy entry CB#0a0b0c0d could not be resumed after the restart (managed.txt has no line for it); if it fills it gets NO STOP"), "an old name with no line: said at recovery: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
+        n = c.Calls.Count;
+        sent.Clear();
+        Fill(c, old, 1, 24990);
+        Check(c.Calls.Count == n, "its fill gets no legs from a guess");
+        Check(Error("MNQ SIM-U4: NO STOP: 1 contract(s) of Order Strategy entry CB#0a0b0c0d filled"), "and a status error naming the account and root says NO STOP");
+        old.OrderState = OrderState.Filled;
+        SetPos(c, 0, 0);
+    }
+
+    // Fix1 (F5): a strategy entry is accepted only once its managed.txt line is written (not later, off the order path); a write
+    // that fails refuses it and nothing is sent.
+    static void SavedBeforeSent()
+    {
+        Config(false, true);
+        Trade(25000);
+        Account a = NewAccount("SIM-U5");
+        ChartBridgeOrders.StrategyInline = false;   // as in NinjaTrader: the page and the best price off the order path
+        try
+        {
+            Msg("order", Ord("SIM-U5", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Saved\",\"stop\":8}"));
+            Check(a.Calls.Count == 1 && File.Exists(ManagedFile) && File.ReadAllLines(ManagedFile).Any(l => l.StartsWith(Tag(a.Orders[0]) + "\t")),
+                  "F5: the entry's managed.txt line is on disk by the time the order is sent (no async gap): " + string.Join(" | ", a.Calls));
+        }
+        finally { ChartBridgeOrders.StrategyInline = true; }
+        ChartBridgeOrders.ManagedWriteFault = () => "the disk is full";
+        int n = a.Calls.Count;
+        try
+        {
+            Msg("order", Ord("SIM-U5", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Unsaved\",\"stop\":8}"));
+            Check(Rejected("Order Strategy entry not sent: managed.txt could not be saved (the disk is full)") && a.Calls.Count == n,
+                  "F5: managed.txt cannot be written: the strategy entry is refused, nothing sent: " + Last());
+        }
+        finally { ChartBridgeOrders.ManagedWriteFault = null; }
+        ChartBridgeOrders.SaveManagedNow();
+        Check(File.ReadAllLines(ManagedFile).Count(l => l.Contains("\"name\":\"Saved\"")) == 1 && !File.ReadAllText(ManagedFile).Contains("Unsaved"), "the refused entry left no record");
+        foreach (Order o in a.Orders) o.OrderState = OrderState.Cancelled;
+        ChartBridgeOrders.CheckLegs(clock);
+    }
+
+    // Fix1: the 2 s check calls a record done just as its entry's last fill comes (the fill counted as covered, its legs not yet
+    // placed): the legs still go on, the record comes back, the page is told it is active again, and it is still managed.
+    static void DoneRace()
+    {
+        Config(false, true);
+        Trade(25000);
+        Account a = NewAccount("SIM-U6");
+        Msg("order", Ord("SIM-U6", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Race\",\"stop\":8,\"beAfter\":4,\"bePlus\":0}"));
+        Order e = a.Orders[0];
+        // the first half of the fill (KeepBracket): the entry filled and its contracts counted as covered
+        System.Collections.IDictionary brackets = (System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("BracketOfEntry", PS).GetValue(null);
+        object br = brackets[e];
+        e.Filled = 1; e.AverageFillPrice = 24990; e.OrderState = OrderState.Filled;
+        br.GetType().GetField("Covered", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).SetValue(br, 1);
+        SetPos(a, 1, 24990);
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(clock);   // the 2 s check, in between
+        Check(Managed().Any(m => m.Contains("\"state\":\"done\"")), "the check calls it done (no leg works yet)");
+        // the second half (PlaceLegs): the legs for that fill
+        int n = a.Calls.Count;
+        typeof(ChartBridgeOrders).GetMethod("PlaceStrategyLegs", PS).Invoke(null, new object[] { br, 1, 1, 24990.0, "MNQ SIM-U6" });
+        Check(a.Calls.Count == n + 1 && a.Calls[n].StartsWith("submit CB#" + Tag(e) + " stop f1 q1 p24990 k1 Sell StopMarket 1 L0 S24988"), "the fill still gets its stop: " + string.Join(" | ", After(a, n)));
+        Check(Managed().Last().Contains("\"state\":\"active\"") && Managed().Last().Contains("\"bucket\":1"), "the record is back and the page is told it is active: " + Managed().Last());
+        Order stop = a.Orders[1];
+        int k = a.Calls.Count;
+        Tick(600); Trade(24992); Tick(600); Trade(24992.25);
+        Check(a.Calls.Count == k + 1 && a.Calls.Last() == "change " + stop.Name + " L0 S24990 Q0", "and still managed: breakeven moves its stop: " + a.Calls.Last());
+        foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
+        SetPos(a, 0, 0);
+        Trade(25000);
     }
 
     // ------------------------------------------------------------ done: the legs gone, the page told, the line removed

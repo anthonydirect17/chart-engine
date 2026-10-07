@@ -383,7 +383,6 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
                 if (why == null && type != "flatten" && type != "merge") why = MergeFreezeWhy(type, top, id);   // 0.4.0 B4: a Merge swap freezes its account and root
                 if (why != null) { Reject(client, cid, id, why); return; }
-                if (type == "flatten") MergeOnFlatten(top);   // 0.4.0 B4: Flatten ends a Merge swap at once (then flattens as always)
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid, strategyBody);
                 else if (type == "change") why = ChangeOrder(top, id);
                 else if (type == "plan") why = PlanOrder(top, id);
@@ -686,6 +685,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             StratParams strat = null;   // 0.4.0 B1: an Order Strategy (strategyBody is cut out only with strategies on)
             if (strategyBody != null)
             {
+                string off = StrategiesRunRefusal();   // 0.4.0 fix1 (F5): managed.txt unreadable at the start (or not read yet): no new strategy entry
+                if (off != null) return off;
                 string bad = ParseStrategy(strategyBody, out strat);
                 if (bad != null) return bad;
                 stopTicks = strat.Stop + Math.Max(0, strat.StopLimit); targetTicks = strat.MaxTarget;   // for the leg-at-or-below-zero check
@@ -708,7 +709,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
-            string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? " sg" : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit
+            string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
             if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
@@ -724,6 +725,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (stopTicks > 0 || targetTicks > 0)
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = stopTicks, TargetTicks = targetTicks };
             }
+            if (strat != null) { string unsaved = SaveNewManaged(tag, order); if (unsaved != null) return unsaved; }   // 0.4.0 fix1 (F5): accepted only once its managed.txt line is written
             account.Submit(new[] { order });
             placed = order;
             if (!bot) ChartBridgeCopier.LeaderEntrySent(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is)
@@ -898,7 +900,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (br.Account == account && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;   // a late fill raises an alarm
             StopManaging(account, inst);   // 0.4.0 B1: no breakeven or trailing move races the flatten
             NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
-            account.Flatten(new[] { inst });   // cancels working orders for the instrument, then closes the position
+            // 0.4.0 fix1 (F1): a Merge swap on this account and root ends only here, once Flatten passed its gates, in one step with
+            // the flatten call (MergeFlattenSend); a refused Flatten leaves the swap to go on or restore as before.
+            MergeFlattenSend(account, inst, () => account.Flatten(new[] { inst }));   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
             return null;
         }
