@@ -55,6 +55,19 @@ public static class CopierHarness
         return a;
     }
 
+    // NinjaTrader confirms every cancel the copier sent to a since call n (each cancelled order's event, in order).
+    static void ConfirmCancels(Account a, int n)
+    {
+        foreach (string c in After(a, n).Where(x => x.StartsWith("cancel ")).ToList())
+        {
+            string name = c.Substring(7);
+            foreach (Order o in a.Orders.Where(o => o.Name == name && ChartBridgeOrders.IsWorking(o.OrderState)).ToList()) { o.OrderState = OrderState.Cancelled; Update(a, o); }
+        }
+    }
+    // 0.4.3: the copier's close of a follower: NinjaTrader confirms the cancels since call n, then exactly one close was sent, of what.
+    static bool ClosedAfterConfirm(Account a, int n, string sideAndQty) { ConfirmCancels(a, n); List<string> c = Closes(a, n); return c.Count == 1 && c[0].Contains(sideAndQty) && !After(a, n).Any(x => x.StartsWith("flatten")); }
+    static List<string> Closes(Account a, int n) { return After(a, n).Where(x => x.StartsWith("submit ") && x.Contains(" copy out ")).ToList(); }
+
     static void Done(Account a) { foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled; }
 
     // Positions closed by hand here have no closing fill: every fill counts as booked (as NinjaTrader's position updates do).
@@ -131,6 +144,8 @@ public static class CopierHarness
             LeaderStopsFirst();
             FollowerStopsFirst();
             BothAtOnce();
+            WorkShortOne();    // 0.4.3: WORK 2026-10-07, a follower's own stop filled while NinjaTrader's Flatten closed it: short 1
+            FixedQuantity();   // 0.4.3: Anthony 2026-10-07, a fixed quantity per leader entry
             ScaleOut();
             StopAlreadyTraded();
             ShortsAndContracts();
@@ -140,6 +155,7 @@ public static class CopierHarness
             ConnectionDrop();
             MassDisconnect();
             OrdersModeAndSweep();
+            NoLeader();   // 0.4.3: "leader": null (the page's "none")
             DiagAndPages();
             Review2();   // review 2 (0.4.0): late fills, the scale-out share, stops in step, the sweep, a copy recovered without its leader
             FilesAndRestart();
@@ -314,13 +330,18 @@ public static class CopierHarness
         Update(lead, ls);
         Check(f1.Calls.Count == m3, "the same leader stop price again: nothing sent");
 
-        // the leader's stop fills: the leader is flat: every follower is flattened (NinjaTrader's Flatten: cancel, then close)
+        // the leader's stop fills: the leader is flat: every follower is closed (0.4.3: its working orders cancelled first, then,
+        // once NinjaTrader confirms, what it still holds at market; never NinjaTrader's Flatten)
         int b1 = f1.Calls.Count, b2 = f2.Calls.Count, b3 = f3.Calls.Count;
         Fill(lead, ls, 1, 24999.5);
         Pos(lead, mnq, 0);
-        Check(After(f1, b1).SequenceEqual(new[] { "flatten MNQ 12-26" }) && After(f2, b2).SequenceEqual(new[] { "flatten NQ 12-26" }) && After(f3, b3).SequenceEqual(new[] { "flatten MNQ 12-26" }),
-              "the leader stops first: each follower gets Flatten on its contract, never an opposite order sized from the leader");
-        Check(EventSaid("flatten", "SIM-F1", "the leader is flat"), "flatten logged");
+        Func<Account, int, bool> oneCancel = (a, n) => After(a, n).Count == 1 && Regex.IsMatch(After(a, n)[0], "^cancel CB#[0-9a-f]{8} stop ");
+        Check(oneCancel(f1, b1) && oneCancel(f2, b2) && oneCancel(f3, b3),
+              "the leader stops first: each follower's own copier stop is cancelled first; nothing is closed before NinjaTrader confirms: " + string.Join(" | ", After(f1, b1)));
+        ConfirmCancels(f1, b1); ConfirmCancels(f2, b2); ConfirmCancels(f3, b3);
+        Check(Closes(f1, b1).Count == 1 && Closes(f1, b1)[0].Contains("Sell Market 3 ") && Closes(f2, b2).Count == 1 && Closes(f2, b2)[0].Contains("Sell Market 1 ") && f2.Orders.Last().Instrument == nq &&
+              Closes(f3, b3).Count == 1 && Closes(f3, b3)[0].Contains("Sell Market 1 "), "...then each closes what it holds at market on its own contract (3 MNQ, 1 NQ, 1 MNQ), never an order sized from the leader");
+        Check(EventSaid("flatten", "SIM-F1", "the leader is flat") && EventSaid("flatten", "SIM-F1", "closed the 3 it still held"), "flatten logged, with what it closed");
         Reset();
     }
 
@@ -337,7 +358,9 @@ public static class CopierHarness
         Fill(lead, LeaderStop(), 1, 24998);
         Pos(lead, mnq, 0);
         Check(After(f1, b1).Count == 0, "a follower stops first: the leader's exit sends it nothing (a flat follower gets nothing)");
-        Check(After(f2, b2).SequenceEqual(new[] { "flatten NQ 12-26" }), "...while the followers still in are flattened");
+        Check(After(f2, b2).Count == 1 && After(f2, b2)[0].StartsWith("cancel "), "...while a follower still in has its stop cancelled first");
+        ConfirmCancels(f2, b2);
+        Check(Closes(f2, b2).Count == 1 && Closes(f2, b2)[0].Contains("Sell Market 1 "), "...and is then closed (1 NQ)");
         Reset();
     }
 
@@ -354,15 +377,122 @@ public static class CopierHarness
         Fill(f1, s1, 3, 24998);
         Pos(f1, mnq, 0);
         List<string> c1 = After(f1, b1);
-        Check(c1.Count == 1 && c1[0] == "flatten MNQ 12-26", "both at once: SIM-F1 gets only NinjaTrader's Flatten (which closes what is left, nothing once its stop filled), never a market order sized from the leader: " + string.Join(" | ", c1));
+        Check(c1.Count == 1 && c1[0].StartsWith("cancel ") && Closes(f1, b1).Count == 0, "both at once: SIM-F1's stop is cancelled first; its own stop fill lands; the close reads both positions again and sends nothing (0.4.3: never NinjaTrader's Flatten, never an order sized from the leader): " + string.Join(" | ", c1));
         ChartBridgeCopier.Tick(Now()); ChartBridgeCopier.Tick(Now() + 5000);
-        Check(f1.Calls.Count == b1 + 1, "both at once: nothing more is sent to the flat follower (no second flatten, no sweep of a done stop)");
+        Check(f1.Calls.Count == b1 + 1, "both at once: nothing more is sent to the flat follower (no second close, no sweep of a done stop)");
         Reset();
+    }
+
+    // ------------------------------------------------------------ 0.4.3: WORK 2026-10-07 15:01 ET, short 1
+    // The follower's stop sits at the leader's stop price, so both fill in the same instant. On WORK, NinjaTrader showed the
+    // follower's stop filled a moment before its order event, the copier read the position (still the old one) and NinjaTrader's
+    // Flatten closed 5 into what was by then a 4 lot: short 1. The copier never uses Flatten now; it closes only once every fill
+    // there has come through, from both readings.
+    static void WorkShortOne()
+    {
+        LeaderEntry(1);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        Order s1 = f1.Orders.Last(o => o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState));
+        Order s3 = f3.Orders.Last(o => o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState));
+        int b1 = f1.Calls.Count, b2 = f2.Calls.Count, b3 = f3.Calls.Count;
+        // SIM-F1's own stop (3) fills: NinjaTrader shows it on the order, its event and position update are still on their way
+        s1.Filled = 3; s1.AverageFillPrice = 24998; s1.OrderState = OrderState.Filled;
+        // SIM-F3's stop fills 1 of 1 too, same moment; SIM-F2's does not (it is still working when the leader is flat)
+        s3.Filled = 1; s3.AverageFillPrice = 24998; s3.OrderState = OrderState.Filled;
+        Fill(lead, LeaderStop(), 1, 24998);
+        Pos(lead, mnq, 0);
+        ChartBridgeCopier.Tick(Now());
+        Check(!After(f1, b1).Concat(After(f2, b2)).Concat(After(f3, b3)).Any(x => x.StartsWith("flatten")), "0.4.3: never NinjaTrader's Flatten on a follower: " + string.Join(" | ", After(f1, b1).Concat(After(f2, b2))));
+        Check(Closes(f1, b1).Count == 0 && Closes(f3, b3).Count == 0, "0.4.3: nothing is closed while a stop fill there has not come through its order event: " + string.Join(" | ", After(f1, b1)));
+        Check(After(f2, b2).Count(x => x.StartsWith("cancel ")) == 1 && Closes(f2, b2).Count == 0, "0.4.3: SIM-F2: its working stop is cancelled first; the close waits for NinjaTrader to confirm: " + string.Join(" | ", After(f2, b2)));
+        // the stop events arrive; their position updates are still on their way (the readings disagree: 3 and 0)
+        Update(f1, s1); Update(f3, s3);
+        Check(Closes(f1, b1).Count == 0 && Closes(f3, b3).Count == 0, "0.4.3: the fills have come through but the position updates have not: still nothing sent: " + string.Join(" | ", After(f1, b1)));
+        Pos(f1, mnq, 0); Pos(f3, mnq, 0);
+        Check(Closes(f1, b1).Count == 0 && Closes(f3, b3).Count == 0, "0.4.3: SIM-F1 and SIM-F3: their own stops took everything; the close reads both positions again and sends nothing (WORK: Flatten sold 5 into a 4 lot): " + string.Join(" | ", After(f1, b1)));
+        Check(EventSaid("flatten", "SIM-F1", "flat now") && EventSaid("flatten", "SIM-F1", "nothing sent") && !Logged("opposite sides"), "0.4.3: logged: flat now (by one reading, its position update still on its way), nothing sent, no alarm");
+        ConfirmCancels(f2, b2);
+        List<string> c2 = Closes(f2, b2);
+        Check(c2.Count == 1 && c2[0].Contains("Sell Market 1 "), "0.4.3: SIM-F2: once its stop cancel is confirmed, it closes the 1 it holds at market: " + string.Join(" | ", After(f2, b2)));
+        Check(EventSaid("flatten", "SIM-F2", "closed the 1 it still held"), "0.4.3: the close is logged with its size");
+        ChartBridgeCopier.Tick(Now()); ChartBridgeCopier.Tick(Now() + 5000);
+        Check(Closes(f1, b1).Count == 0 && Closes(f2, b2).Count == 1, "0.4.3: nothing more afterwards");
+        Reset();
+
+        // a part of the stop: 2 of SIM-F1's 3 fill in the same instant; the close takes only the 1 left
+        LeaderEntry(1);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        s1 = f1.Orders.Last(o => o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState));
+        b1 = f1.Calls.Count;
+        s1.Filled = 2; s1.AverageFillPrice = 24998; s1.OrderState = OrderState.PartFilled;   // still working: the copier cancels the rest
+        Fill(lead, LeaderStop(), 1, 24998);
+        Pos(lead, mnq, 0);
+        Check(Closes(f1, b1).Count == 0 && After(f1, b1).Any(x => x.StartsWith("cancel ")), "0.4.3: a part-filled stop is cancelled first, nothing closed yet");
+        s1.OrderState = OrderState.Cancelled; Update(f1, s1);   // the cancel lands; the event carries the 2 filled
+        Check(Closes(f1, b1).Count == 0, "0.4.3: its position update (3 to 1) is still on its way: nothing yet");
+        Pos(f1, mnq, 1);
+        List<string> c1 = Closes(f1, b1);
+        Check(c1.Count == 1 && c1[0].Contains("Sell Market 1 "), "0.4.3: then it closes the 1 left, never the 3 the old position showed: " + string.Join(" | ", After(f1, b1)));
+        Reset();
+    }
+
+    // ------------------------------------------------------------ 0.4.3: a fixed quantity per leader entry (Anthony 2026-10-07)
+    static void FixedQuantity()
+    {
+        int a1 = f1.Calls.Count, a2 = f2.Calls.Count;
+        sent.Clear();
+        // the leader buys 5, filled in two parts (1, then 4): SIM-F1 (qty 3) gets 3, once; SIM-F2 (qty 1 mini) gets 1 NQ, once
+        ChartBridgeOrders.NoteLast("MNQ", 25000); ChartBridgeOrders.NoteLast("NQ", 25000);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":5,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e = lead.Orders.Last();
+        Fill(lead, e, 1, 25000);
+        Pos(lead, mnq, 1);
+        Fill(lead, e, 5, 25000.25);
+        Pos(lead, mnq, 5);
+        List<string> c1 = After(f1, a1).Where(x => x.Contains(" copy ")).ToList(), c2 = After(f2, a2).Where(x => x.Contains(" copy ")).ToList();
+        Check(c1.Count == 1 && c1[0].Contains("Buy Market 3 "), "0.4.3: the leader buys 5 in two fills: SIM-F1 (qty 3) gets exactly 3, once (WORK: a qty 1 follower took 5): " + string.Join(" | ", c1));
+        Check(c2.Count == 1 && c2[0].Contains("Buy Market 1 "), "0.4.3: SIM-F2 (qty 1 mini) gets exactly 1 NQ, once: " + string.Join(" | ", c2));
+        Check(!EventSaid("skip", "SIM-F1", null) && !EventSaid("skip", "SIM-F2", null), "0.4.3: and nothing about the second fill (no copy sized from it, so no cap skip either)");
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        // an add: a second leader entry copies each follower's quantity again (Anthony: "add its Qty again")
+        int d1 = f1.Calls.Count;
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e2 = lead.Orders.Last(o => (o.Name ?? "").Contains(" s8 t16") && ChartBridgeOrders.IsWorking(o.OrderState));
+        Fill(lead, e2, 2, 25001);
+        Pos(lead, mnq, 7);
+        List<string> d = After(f1, d1).Where(x => x.Contains(" copy ")).ToList();
+        Check(d.Count == 1 && d[0].Contains("Buy Market 3 "), "0.4.3: the leader adds 2: SIM-F1 adds its 3 again: " + string.Join(" | ", d));
+        FollowerFill(f1, mnq, 25001); FollowerFill(f2, nq, 25001); FollowerFill(f3, mnq, 25001);
+        Check(f1.Positions.Single(p => p.Instrument == mnq).Quantity == 6, "0.4.3: SIM-F1 holds 6 (3 per leader entry)");
+        Reset();
+    }
+
+    // ------------------------------------------------------------ 0.4.3: no leader (WORK 2026-10-07: the page's "none" could not be set)
+    static void NoLeader()
+    {
+        bool wasArmed = State().Contains("\"armed\":true");
+        sent.Clear();
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"n\",\"leader\":null}");
+        Check(!Rejected("") && State().Contains("\"armed\":false,\"standDownWhy\":\"No leader is set.\"") && State().Contains("\"leader\":null"), "0.4.3: leader null: no leader, the copier stands down: " + State());
+        Check(!File.ReadAllText(Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "ChartBridge", "copier.txt")).Contains("leader\t"), "0.4.3: copier.txt keeps no leader line");
+        int b1 = f1.Calls.Count;
+        LeaderEntry(1);
+        Check(f1.Calls.Count == b1, "0.4.3: no leader: Sim101's entry is not copied");
+        Reset();
+        sent.Clear();
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"n\",\"leader\":\"\"}");
+        Check(Rejected("leader must be an account name, or null for none."), "0.4.3: an empty leader name is refused (null is none)");
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"n\",\"leader\":\"Sim101\"}");
+        if (wasArmed) Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r\"}");
+        Check(State().Contains("\"leader\":{\"account\":\"Sim101\"") && (!wasArmed || State().Contains("\"armed\":true")), "0.4.3: the leader set again (and Re-armed as before)");
     }
 
     // ------------------------------------------------------------ a scale-out: the stops shrink first, then the reduce
     static void ScaleOut()
     {
+        // 0.4.3: a fixed quantity per follower: SIM-F1 6, SIM-F2 2 (mini), SIM-F3 2 for this test (the sizes 0.4.2's tests had
+        // from 2 leader contracts), set back at the end
+        Msg("copierFollower", Follower("SIM-F1", "true", "6", "micro", "null")); Msg("copierFollower", Follower("SIM-F2", "true", "2", "mini", "500")); Msg("copierFollower", Follower("SIM-F3", "true", "2", "micro", "null"));
         LeaderEntry(2);
         FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
         Check(f1.Positions.Single().Quantity == 6 && f2.Positions.Single().Quantity == 2, "scale-out: the followers hold 6 MNQ and 2 NQ");
@@ -383,11 +513,13 @@ public static class CopierHarness
         Check(After(f3, b3).Count == 1 && After(f3, b3)[0].Contains(" Q1") && Logged("could not reduce this follower"), "a stop change not confirmed in 3 s: no reduce sent, and an alarm");
         Pos(f1, mnq, 3); Pos(f2, nq, 1);
         Fill(f1, f1.Orders.Last(), 3, 25003.75);
-        // the leader's flat: everything left is flattened
+        // the leader's flat: everything left is closed (its stop cancelled first, then the 3 it holds)
         int d1 = f1.Calls.Count;
         Fill(lead, LeaderStop(), 1, 24998);
         Pos(lead, mnq, 0);
-        Check(After(f1, d1).SequenceEqual(new[] { "flatten MNQ 12-26" }), "after the scale-out, the leader flat: the rest is flattened");
+        Check(After(f1, d1).Count == 1 && After(f1, d1)[0] == "cancel " + s1.Name, "after the scale-out, the leader flat: its stop is cancelled first: " + string.Join(" | ", After(f1, d1)));
+        ConfirmCancels(f1, d1);
+        Check(Closes(f1, d1).Count == 1 && Closes(f1, d1)[0].Contains("Sell Market 3 "), "...then the 3 left are closed: " + string.Join(" | ", After(f1, d1)));
         Reset();
 
         // a follower whose own stop already took part is not reduced twice (the share is of what the copier gave it)
@@ -400,6 +532,7 @@ public static class CopierHarness
         Pos(lead, mnq, 1);
         Check(After(f1, e1).Count == 0, "scale-out after the follower's own stop took 3 of 6: it already holds the target 3; nothing sent");
         Reset();
+        Msg("copierFollower", Follower("SIM-F1", "true", "3", "micro", "null")); Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "500")); Msg("copierFollower", Follower("SIM-F3", "true", "1", "micro", "null"));
     }
 
     // ------------------------------------------------------------ the stop level already traded on the follower's contract
@@ -425,8 +558,9 @@ public static class CopierHarness
         Check(After(f1, b1).Count == 1 && After(f1, b1)[0].Contains("Sell Market 3"), "a leader short: SIM-F1 sells 3 at market");
         FollowerFill(f1, mnq, 24999.5);
         Check(After(f1, b1).Last().Contains("Buy StopMarket 3 L0 S25002") && EventSaid("stop", "SIM-F1", "\"slippageTicks\":2"), "the short's stop: a buy stop at the leader's 25002; selling lower is 2 ticks worse");
+        int x1 = f1.Calls.Count;
         Fill(lead, LeaderStop(), 1, 25002); Pos(lead, mnq, 0);
-        Check(f1.Calls.Last() == "flatten MNQ 12-26", "the short's exit is copied");
+        Check(ClosedAfterConfirm(f1, x1, "Buy Market 3 "), "the short's exit is copied: its stop cancelled, then the 3 bought back: " + string.Join(" | ", After(f1, x1)));
         Reset();
 
         // the leader on NQ: SIM-F1 (micro) trades MNQ, SIM-F2 (mini) NQ; the exit maps back
@@ -442,8 +576,8 @@ public static class CopierHarness
         // the leader turns to the other side in one go (an order placed elsewhere): every copy on the old side closes, none opens
         int d1 = f1.Calls.Count, d2 = f2.Calls.Count;
         Pos(lead, nq, -1);
-        Check(After(f1, d1).SequenceEqual(new[] { "flatten MNQ 12-26" }) && After(f2, d2).SequenceEqual(new[] { "flatten NQ 12-26" }) && EventSaid("flatten", "SIM-F1", "the leader turned to the other side"),
-              "the leader turned short: the followers are flattened, nothing opposite is sent");
+        Check(ClosedAfterConfirm(f1, d1, "Sell Market 3 ") && ClosedAfterConfirm(f2, d2, "Sell Market 1 ") && EventSaid("flatten", "SIM-F1", "the leader turned to the other side") && !After(f1, d1).Concat(After(f2, d2)).Any(x => x.Contains(" copy ") && !x.Contains(" copy out ")),
+              "the leader turned short: the followers' longs close, nothing opposite is opened: " + string.Join(" | ", After(f1, d1)));
         Reset();
         Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "500"));
     }
@@ -464,7 +598,7 @@ public static class CopierHarness
         Check(State().Contains("{\"account\":\"SIM-F3\",\"sim\":false") && !State().Contains("not a Sim account"), "the copier message marks it not Sim (the page shows LIVE); nothing says refused");
         int x3 = f3.Calls.Count;
         Pos(lead, mnq, 0); Booked();
-        Check(After(f3, x3).Contains("flatten MNQ 12-26"), "a real follower: the leader flat means it is flattened (never an opposite order)");
+        Check(ClosedAfterConfirm(f3, x3, "Sell Market 1 "), "a real follower: the leader flat means it is closed like any follower (never an opposite order): " + string.Join(" | ", After(f3, x3)));
         Reset();
         // the gates still apply: unchecked (not in tradeAccounts), it is skipped and nothing is sent
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-F2, SIM-F4, EVAL-A");
@@ -483,10 +617,14 @@ public static class CopierHarness
     {
         int b1 = f1.Calls.Count, b2 = f2.Calls.Count, b3 = f3.Calls.Count;
         sent.Clear();
-        LeaderEntry(4);   // SIM-F1: 12 MNQ over the cap of 10; SIM-F2: 4 NQ over the cap of 3; SIM-F3: 4 MNQ
-        Check(After(f1, b1).Count == 0 && EventSaid("skip", "SIM-F1", "skipped: SIM-F1: qty 12 is over the MNQ cap of 10"), "SIM-F1 at its position limit: skipped, nothing sent (never part of it)");
+        // 0.4.3: fixed quantities: SIM-F1 holds 8 MNQ already (+3 = 11, over the cap of 10); SIM-F2 is set to 4 NQ (over the cap of 3)
+        Pos(f1, mnq, 8);
+        Msg("copierFollower", Follower("SIM-F2", "true", "4", "mini", "500"));
+        LeaderEntry(4);
+        Check(After(f1, b1).Count == 0 && EventSaid("skip", "SIM-F1", "could make the MNQ position 11 contracts; the cap is 10"), "SIM-F1 at its position limit: skipped, nothing sent (never part of it)");
         Check(After(f2, b2).Count == 0 && EventSaid("skip", "SIM-F2", "NQ cap of 3"), "SIM-F2 at its limit: skipped");
-        Check(After(f3, b3).Count == 1 && After(f3, b3)[0].Contains("Buy Market 4"), "SIM-F3 within its limit: copied");
+        Check(After(f3, b3).Count == 1 && After(f3, b3)[0].Contains("Buy Market 1 "), "SIM-F3 within its limit: copied (its fixed 1, whatever the leader's 4)");
+        Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "500"));
         Check(Regex.IsMatch(State(), "\"account\":\"SIM-F1\"[^}]*\\}[^}]*\"skipped\":\"position limit\""), "the page sees SIM-F1 highlighted: skipped position limit");
         Reset();
         // a position already held counts in the limit too
@@ -559,7 +697,8 @@ public static class CopierHarness
         ChartBridgeCopier.Tick(t);
         Check(f1.Calls.Count == c1, "back: not flattened at once (the leader must stay flat for 4 s)");
         ChartBridgeCopier.Tick(t + ChartBridgeOrders.SettleMs + 100);
-        Check(After(f1, c1).SequenceEqual(new[] { "flatten MNQ 12-26" }) && EventSaid("flatten", "SIM-F1", "its exit was not copied when it happened"), "back, and the leader still flat 4 s later: flattened (the exit rule)");
+        Check(After(f1, c1).Count == 1 && After(f1, c1)[0].StartsWith("cancel ") && EventSaid("flatten", "SIM-F1", "its exit was not copied when it happened"), "back, and the leader still flat 4 s later: its stop cancelled first (the exit rule): " + string.Join(" | ", After(f1, c1)));
+        Check(ClosedAfterConfirm(f1, c1, "Sell Market 3 "), "...then the 3 it holds are closed");
         Reset();
         ChartBridgeCopier.Tick(Now());
     }
@@ -587,7 +726,7 @@ public static class CopierHarness
         Check(After(f1, b1).Any(x => x.StartsWith("change ") && x.Contains("S24999")), "stood down: SIM-F1's stop still follows the leader's");
         Fill(lead, ls, 1, 24999);
         Pos(lead, mnq, 0);
-        Check(After(f1, b1).Last() == "flatten MNQ 12-26", "stood down: the leader's exit is still copied to a connected follower holding a copier position");
+        Check(After(f1, b1).Last().StartsWith("cancel ") && ClosedAfterConfirm(f1, b1, "Sell Market 3 "), "stood down: the leader's exit is still copied to a connected follower holding a copier position: " + string.Join(" | ", After(f1, b1)));
         Reset();
         int c1 = f1.Calls.Count;
         sent.Clear();
@@ -656,9 +795,10 @@ public static class CopierHarness
         ChartBridgeCopier.Tick(Now() + ChartBridgeOrders.YoungMs + 1200);
         Check(After(f3, d3).SequenceEqual(new[] { "cancel " + fo3.Name }) && EventSaid("sweep", "SIM-F3", "left on a flat follower"), "the sweep: a copier order on a flat follower is cancelled (flat twice, a steady connection)");
         fo3.OrderState = OrderState.Cancelled;
+        int z1 = f1.Calls.Count;
         Fill(lead, LeaderStop(), 1, 24987.75);
         Pos(lead, mnq, 0);
-        Check(f1.Calls.Last() == "flatten MNQ 12-26", "orders mode: the leader's exit is copied the same way");
+        Check(ClosedAfterConfirm(f1, z1, "Sell Market 3 "), "orders mode: the leader's exit is copied the same way: " + string.Join(" | ", After(f1, z1)));
         Reset();
         Msg("copierSet", "{\"type\":\"copierSet\",\"mode\":\"executions\"}");
         Check(State().Contains("\"mode\":\"executions\""), "back to executions mode");
@@ -718,26 +858,32 @@ public static class CopierHarness
         Msg("copierFollower", Follower("SIM-F3", "true", "1", "micro", "null"));
     }
 
-    // The leader fills 1 then 2 (SIM-F1 gets a copy for each); SIM-F1's first copy fills and gets its stop; its second copy's
-    // fill is still on its way when the leader's stops fill. Returns the second copy entry (null when the setup failed).
+    // Two leader entries of 1 (0.4.3: a fixed quantity; the second, an add, copies SIM-F1's 1 again); SIM-F1's first copy fills
+    // and gets its stop; its second copy's fill is still on its way when the leader's stops fill. The copier's close cancels
+    // everything working there first (its stop and the second copy) and waits. Returns the second copy (null: setup failed).
     static Order TwoIncrementsThenLeaderFlat()
     {
         ChartBridgeOrders.NoteLast("MNQ", 25000); ChartBridgeOrders.NoteLast("NQ", 25000);
-        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
         Order e = lead.Orders.Last();
         Fill(lead, e, 1, 25000); Pos(lead, mnq, 1);
         Order fe1 = CopyEntry(f1);
         if (fe1 == null) { Check(false, "review 2: SIM-F1 got the first copy"); return null; }
         Fill(f1, fe1, 1, 25000); Pos(f1, mnq, 1);
-        Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e2 = lead.Orders.Last(o => (o.Name ?? "").Contains(" s8 t16") && ChartBridgeOrders.IsWorking(o.OrderState));
+        Fill(lead, e2, 1, 25000); Pos(lead, mnq, 2);
         Order fe2 = CopyEntry(f1);
         Check(fe2 != null && fe2 != fe1, "review 2: SIM-F1 has a second copy entry working (its fill on its way)");
         int b = f1.Calls.Count;
         foreach (Order s in lead.Orders.Where(o => (o.Name ?? "").Contains(" stop ") && ChartBridgeOrders.IsWorking(o.OrderState)).ToList()) Fill(lead, s, s.Quantity, 24998);
         Pos(lead, mnq, 0);
-        Check(After(f1, b).SequenceEqual(new[] { "flatten MNQ 12-26" }), "review 2: the leader is flat: SIM-F1 gets NinjaTrader's Flatten: " + string.Join(" | ", After(f1, b)));
-        // NinjaTrader's Flatten closed what SIM-F1 held and cancelled its stop
-        foreach (Order o in f1.Orders.Where(o => ChartBridgeOrders.IsWorking(o.OrderState) && o != fe2)) o.OrderState = OrderState.Cancelled;
+        List<string> c = After(f1, b);
+        Check(c.Count == 2 && c.All(x => x.StartsWith("cancel ")) && c.Contains("cancel " + fe2.Name) && Closes(f1, b).Count == 0,
+              "review 2 (0.4.3): the leader is flat: SIM-F1's stop and its working second copy are cancelled first; nothing is closed yet: " + string.Join(" | ", c));
+        // NinjaTrader confirms the stop's cancel; the second copy's fill is still on its way (its cancel loses the race)
+        foreach (Order o in f1.Orders.Where(o => ChartBridgeOrders.IsWorking(o.OrderState) && o != fe2).ToList()) { o.OrderState = OrderState.Cancelled; Update(f1, o); }
+        Check(Closes(f1, b).Count == 0, "review 2 (0.4.3): no close while the second copy may still fill");
         return fe2;
     }
 
@@ -746,15 +892,18 @@ public static class CopierHarness
     {
         Order fe2 = TwoIncrementsThenLeaderFlat();
         if (fe2 == null) { Reset(); return; }
-        Pos(f1, mnq, 0);
         ChartBridgeOrders.NoteLast("MNQ", levelTraded ? 24997 : 24999);
         int b = f1.Calls.Count;
         sent.Clear();
-        Fill(f1, fe2, 1, 25000);   // the second copy's order event arrives late
+        Fill(f1, fe2, 1, 25000);   // the second copy's fill arrives late (its cancel lost the race)
         ChartBridgeCopier.Tick(Now());
         List<string> late = After(f1, b);
-        Check(late.Count == 0, "review 2 finding 1 (" + (levelTraded ? "stop level traded" : "stop level not traded") + "): a late fill on a follower the copier already flattened sends nothing to the flat follower (no market exit, no lone stop): " + string.Join(" | ", late));
-        Check(Logged("arrived after the copier had flattened this follower") && EventSaid("flatten", "SIM-F1", "holds nothing by both readings"), "review 2 finding 1: the late fill is logged, and the page is told nothing was sent");
+        Check(late.Count == 0, "review 2 finding 1 (" + (levelTraded ? "stop level traded" : "stop level not traded") + "): a late fill on a follower being closed gets no stop and no exit of its own; nothing is sent while its position update is on its way: " + string.Join(" | ", late));
+        Check(Logged("arrived after the copier had flattened this follower"), "review 2 finding 1: the late fill is logged");
+        Pos(f1, mnq, 2);   // its position update lands: both readings agree on 2
+        ChartBridgeCopier.Tick(Now());
+        List<string> c = Closes(f1, b);
+        Check(c.Count == 1 && c[0].Contains("Sell Market 2 ") && !After(f1, b).Any(x => x.Contains(" stop ") || x.Contains(" exit ")), "0.4.3: then the close takes all it holds, the late contract too (2), and nothing else: " + string.Join(" | ", After(f1, b)));
         Reset();
     }
 
@@ -763,12 +912,14 @@ public static class CopierHarness
     {
         Order fe2 = TwoIncrementsThenLeaderFlat();
         if (fe2 == null) { Reset(); return; }
-        Pos(f1, mnq, 0);
-        Pos(f1, mnq, 1);   // the late contract reaches the position before its order event
+        Pos(f1, mnq, 2);   // the late contract reaches the position before its order event
         ChartBridgeOrders.NoteLast("MNQ", 24999);
         int b = f1.Calls.Count;
+        Check(Closes(f1, b).Count == 0, "0.4.3: the position shows it, but its fill has not come through: nothing closed yet");
         Fill(f1, fe2, 1, 25000);
-        Check(After(f1, b).SequenceEqual(new[] { "flatten MNQ 12-26" }), "review 2 finding 1: a late fill that shows in the position, the leader flat: NinjaTrader's Flatten (closes only what it holds), never a stop or an exit sized from the fill: " + string.Join(" | ", After(f1, b)));
+        List<string> c = Closes(f1, b);
+        Check(c.Count == 1 && c[0].Contains("Sell Market 2 ") && !After(f1, b).Any(x => x.Contains(" stop ") || x.Contains(" exit ") || x.StartsWith("flatten")),
+              "review 2 finding 1: a late fill that shows in the position, the leader flat: closed with what it holds (2), never a stop or an exit sized from the fill: " + string.Join(" | ", After(f1, b)));
         Reset();
     }
 
@@ -776,6 +927,7 @@ public static class CopierHarness
     // its stop shrinks first, and SIM-F1's sell stops never exceed its position.
     static void ReduceOnlyTheCopierShare()
     {
+        Msg("copierFollower", Follower("SIM-F1", "true", "2", "micro", "null"));   // 0.4.3: its fixed 2 for this test
         Pos(f1, mnq, 1); Booked();
         Order own = OwnStop(f1, mnq, 1, 24990);
         ChartBridgeOrders.NoteLast("MNQ", 25000);
@@ -803,6 +955,7 @@ public static class CopierHarness
         Check(SellStops(f1, mnq) <= left && own.Quantity == 1 && ChartBridgeOrders.IsWorking(own.OrderState) && !c.Any(x => x.Contains("own stop")),
               "review 2 finding 2: SIM-F1's sell stops (" + SellStops(f1, mnq) + ") never exceed its position (" + left + "); its own stop is never touched");
         Reset();
+        Msg("copierFollower", Follower("SIM-F1", "true", "1", "micro", "null"));
     }
 
     // Finding 2: the copier's whole share closes on a scale-out while SIM-F1 also holds its own contract: a reduce of the share
@@ -811,18 +964,14 @@ public static class CopierHarness
     {
         Pos(f1, mnq, 1); Booked();
         Order own = OwnStop(f1, mnq, 1, 24990);
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "2");   // SIM-F1 can take only one copy: the leader's second contract is skipped
+        // 0.4.3: a fixed quantity: the leader buys 2, SIM-F1 (qty 1) gets its 1
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
         Order e = lead.Orders.Last();
-        Fill(lead, e, 1, 25000); Pos(lead, mnq, 1);
-        Order fe = CopyEntry(f1);
-        if (fe == null) { Check(false, "review 2 finding 2: SIM-F1 got a copy of 1"); ChartBridgeOrders.ReadConfig("maxQty.MNQ", "10"); Reset(); return; }
-        Fill(f1, fe, 1, 25000); Pos(f1, mnq, 2);
-        sent.Clear();
         Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
-        Check(EventSaid("skip", "SIM-F1", "could make the MNQ position 3"), "review 2 finding 2: the leader's second contract is skipped on SIM-F1 (its limit)");
-        ChartBridgeOrders.ReadConfig("maxQty.MNQ", "10");
+        Order fe = CopyEntry(f1);
+        if (fe == null || fe.Quantity != 1) { Check(false, "review 2 finding 2: SIM-F1 got a copy of 1"); Reset(); return; }
+        Fill(f1, fe, 1, 25000); Pos(f1, mnq, 2);
         Order cs = CopierStop(f1);
         Booked();
         int b = f1.Calls.Count;
@@ -887,29 +1036,43 @@ public static class CopierHarness
         Reset();
     }
 
+    // 0.4.3: two leader entries of 1 (an add copies SIM-F1's 1 again): SIM-F1's first copy filled (with its stop), its second
+    // copy working. False (with a failed check) when the setup failed.
+    static bool TwoEntries(out Order fe1, out Order fe2, string what)
+    {
+        fe2 = null;
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(lead, lead.Orders.Last(), 1, 25000); Pos(lead, mnq, 1);
+        fe1 = CopyEntry(f1);
+        if (fe1 == null) { Check(false, what + ": SIM-F1 got the first copy"); return false; }
+        Fill(f1, fe1, 1, 25000); Pos(f1, mnq, 1);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e2 = lead.Orders.Last(o => (o.Name ?? "").Contains(" s8 t16") && ChartBridgeOrders.IsWorking(o.OrderState));
+        Fill(lead, e2, 1, 25000); Pos(lead, mnq, 2);
+        fe2 = CopyEntry(f1);
+        if (fe2 == null || fe2 == fe1) { Check(false, what + ": SIM-F1 got the second copy (the leader's add)"); return false; }
+        return true;
+    }
+
     // Review 3 A: a fill event handled while the copier's Flatten runs (recorded before it, protected after it) is late: no stop
     // after NinjaTrader's Flatten.
     static void FillDuringFlatten()
     {
-        ChartBridgeOrders.NoteLast("MNQ", 25000);
-        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
-        Order e = lead.Orders.Last();
-        Fill(lead, e, 1, 25000); Pos(lead, mnq, 1);
-        Order fe1 = CopyEntry(f1);
-        if (fe1 == null) { Check(false, "review 3 A: SIM-F1 got the first copy"); Reset(); return; }
-        Fill(f1, fe1, 1, 25000); Pos(f1, mnq, 1);
-        Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
-        Order fe2 = CopyEntry(f1);
-        if (fe2 == null || fe2 == fe1) { Check(false, "review 3 A: SIM-F1 got the second copy"); Reset(); return; }
+        Order fe1, fe2;
+        if (!TwoEntries(out fe1, out fe2, "review 3 A")) { Reset(); return; }
         ChartBridgeCopier.HarnessQueued = new List<Action>();   // the copier thread is busy: work waits, in order
         foreach (Order s in lead.Orders.Where(o => (o.Name ?? "").Contains(" stop ") && ChartBridgeOrders.IsWorking(o.OrderState)).ToList()) Fill(lead, s, s.Quantity, 24998);
         Pos(lead, mnq, 0);                 // queued: the leader's exit, which flattens SIM-F1
         Fill(f1, fe2, 1, 25000);           // SIM-F1's second fill is handled now: queued after the exit
         int b = f1.Calls.Count;
-        ChartBridgeCopier.HarnessRunQueued();   // the Flatten runs, then that fill's protection
+        ChartBridgeCopier.HarnessRunQueued();   // the close starts, then that fill's protection
         List<string> c = After(f1, b);
-        Check(c.Count > 0 && c[0] == "flatten MNQ 12-26" && !SendsExitOrStop(c) && Logged("flattened while its fill was being handled"),
-              "review 3 A: a fill handled while the Flatten ran is late: no stop or exit after NinjaTrader's Flatten (it is flattened again if it holds): " + string.Join(" | ", c));
+        Check(c.Count > 0 && c[0].StartsWith("cancel ") && !c.Any(x => x.StartsWith("flatten")) && !SendsExitOrStop(c) && Logged("flattened while its fill was being handled"),
+              "review 3 A: a fill handled while the close started is late: no stop or exit of its own (0.4.3: the close takes it): " + string.Join(" | ", c));
+        ConfirmCancels(f1, b); Pos(f1, mnq, 2);
+        ChartBridgeCopier.Tick(Now());
+        Check(Closes(f1, b).Count == 1 && Closes(f1, b)[0].Contains("Sell Market 2 "), "0.4.3: the close then sells the 2 it holds: " + string.Join(" | ", After(f1, b)));
         Reset();
     }
 
@@ -1006,16 +1169,8 @@ public static class CopierHarness
     // holds the trim until a fresh position update arrives.
     static void ExpiredFillHoldsTrim()
     {
-        ChartBridgeOrders.NoteLast("MNQ", 25000);
-        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
-        Order e = lead.Orders.Last();
-        Fill(lead, e, 1, 25000); Pos(lead, mnq, 1);
-        Order fe1 = CopyEntry(f1);
-        if (fe1 == null) { Check(false, "minors (2): SIM-F1 got the first copy"); Reset(); return; }
-        Fill(f1, fe1, 1, 25000); Pos(f1, mnq, 1);
-        Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
-        Order fe2 = CopyEntry(f1);
-        if (fe2 == null || fe2 == fe1) { Check(false, "minors (2): SIM-F1 got the second copy"); Reset(); return; }
+        Order fe1, fe2;
+        if (!TwoEntries(out fe1, out fe2, "minors (2)")) { Reset(); return; }
         int b = f1.Calls.Count;
         Fill(f1, fe2, 1, 25000);   // its position update does not come
         Check(SellStops(f1, mnq) == 2, "minors (2): set up: two copier stops for the two fills (" + SellStops(f1, mnq) + ")");
@@ -1040,6 +1195,7 @@ public static class CopierHarness
         Order fent = new Order { Account = f1, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Market, Quantity = 1, Filled = 1, AverageFillPrice = 25000, Name = "CB#aaaa1111 copy bbbb2222", OrderState = OrderState.Filled };
         Order fstop = new Order { Account = f1, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.StopMarket, Quantity = 1, StopPrice = 24990, Name = "CB#aaaa1111 stop f1 q1 p25000", OrderState = OrderState.Working };
         f1.Orders.Add(fent); f1.Orders.Add(fstop);
+        ChartBridgeOrders.SeedNoted(f1);   // 0.4.3: as when ChartBridge starts watching the account: fills from before are in its position
         Pos(f1, mnq, 1); Pos(lead, nq, 1); Booked();   // the leader holds NQ, the same market
         ChartBridgeCopier.Start();
         Msg("client", "{\"type\":\"client\",\"v\":3}");
@@ -1055,8 +1211,9 @@ public static class CopierHarness
         Pos(lead, nq, 0); Booked();
         double t2 = t + 2 * ChartBridgeOrders.SettleMs;
         ChartBridgeCopier.Tick(t2); ChartBridgeCopier.Tick(t2 + ChartBridgeOrders.SettleMs + 100);
-        Check(After(f1, b).SequenceEqual(new[] { "flatten MNQ 12-26" }) && EventSaid("flatten", "SIM-F1", "the leader has been flat"),
-              "review 2 finding 6: in the missed-exit check by root: the leader flat on MNQ and NQ for 4 s: flattened (the zero rule): " + string.Join(" | ", After(f1, b)));
+        Check(After(f1, b).SequenceEqual(new[] { "cancel " + fstop.Name }) && EventSaid("flatten", "SIM-F1", "the leader has been flat"),
+              "review 2 finding 6: in the missed-exit check by root: the leader flat on MNQ and NQ for 4 s: closed (the zero rule), its stop cancelled first: " + string.Join(" | ", After(f1, b)));
+        Check(ClosedAfterConfirm(f1, b, "Sell Market 1 "), "review 2 finding 6: ...then the 1 it holds is sold");
         fstop.OrderState = OrderState.Cancelled;
         Pos(f1, mnq, 0); Booked();
         ChartBridgeCopier.Stop();
@@ -1068,6 +1225,7 @@ public static class CopierHarness
         Order fent2 = new Order { Account = f1, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Market, Quantity = 1, Filled = 1, AverageFillPrice = 25000, Name = "CB#cccc3333 copy dddd4444", OrderState = OrderState.Filled };
         Order fstop2 = new Order { Account = f1, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.StopMarket, Quantity = 1, StopPrice = 24990, Name = "CB#cccc3333 stop f1 q1 p25000", OrderState = OrderState.Working };
         f1.Orders.Add(fent2); f1.Orders.Add(fstop2);
+        ChartBridgeOrders.SeedNoted(f1); ChartBridgeOrders.SeedNoted(lead);   // 0.4.3: as when ChartBridge starts watching the accounts
         Pos(lead, mnq, 1); Pos(f1, mnq, 1); Booked();
         ChartBridgeCopier.Start();
         Msg("client", "{\"type\":\"client\",\"v\":3}");
@@ -1102,7 +1260,7 @@ public static class CopierHarness
         ls.StopPrice = 24999; Update(lead, ls);
         Check(After(f1, b1).Any(x => x == "change " + fstop.Name + " L0 S0 Q0" || (x.StartsWith("change " + fstop.Name) && x.Contains("S24999"))), "after a restart: it follows the leader's stop again (stood down or not)");
         Fill(lead, ls, 1, 24999); Pos(lead, mnq, 0);
-        Check(f1.Calls.Last() == "flatten MNQ 12-26", "after a restart: the leader's exit is copied to it");
+        Check(ClosedAfterConfirm(f1, b1, "Sell Market 3 "), "after a restart: the leader's exit is copied to it (its stop cancelled, then the 3 sold): " + string.Join(" | ", After(f1, b1)));
         Reset();
         // a working copier entry from before the restart is cancelled (it could not be linked to the leader's, and would get no stop)
         Order stale = new Order { Account = f3, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24900, Name = "CB#0badc0de copy 12345678", OrderState = OrderState.Working };
@@ -1152,8 +1310,11 @@ public static class CopierHarness
         Check(ChartBridgeCopier.WaitIdle(5000) && After(f1, b1).Count == 1 && After(f1, b1)[0].Contains("Buy Market 3"), "on the copier thread: the leader's fill is copied");
         FollowerFill(f1, mnq, 25000);
         Check(ChartBridgeCopier.WaitIdle(5000) && After(f1, b1).Count == 2 && After(f1, b1)[1].Contains("Sell StopMarket 3 L0 S24998"), "on the copier thread: the follower's stop follows its fill");
+        int x1 = f1.Calls.Count;
         Fill(lead, LeaderStop(), 1, 24998); Pos(lead, mnq, 0);
-        Check(ChartBridgeCopier.WaitIdle(5000) && f1.Calls.Last() == "flatten MNQ 12-26", "on the copier thread: the leader's exit is copied");
+        Check(ChartBridgeCopier.WaitIdle(5000) && f1.Calls.Last().StartsWith("cancel "), "on the copier thread: the leader's exit is copied (its stop cancelled first)");
+        ConfirmCancels(f1, x1);
+        Check(ChartBridgeCopier.WaitIdle(5000) && Closes(f1, x1).Count == 1 && Closes(f1, x1)[0].Contains("Sell Market 3 "), "on the copier thread: ...then the 3 sold: " + string.Join(" | ", After(f1, x1)));
         foreach (Account a in new[] { lead, f1, f2, f3, f4 }) { Done(a); foreach (Instrument i in new[] { mnq, nq }) Pos(a, i, 0); }
         ChartBridgeCopier.Stop();
         Check(ChartBridgeCopier.WaitIdle(1000), "stop: the copier thread ends");

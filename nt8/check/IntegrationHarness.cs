@@ -13,8 +13,8 @@
 //   X6 Merge and Order Strategies: Merge reads B1's own legs (B1's LegNameRx), its shares from B1's state and B1's allocation
 //      rule; breakeven and trailing are paused through the swap; after it the merged position is no longer managed (lead's
 //      default), every stop stays where it is and managed says so.
-//   X7 the copier and Order Strategies: a strategy entry's stop counts for the copier's stop rule, each fill increment is
-//      copied once with its full quantity, and breakeven moves the followers' stops to the leader's new stop price.
+//   X7 the copier and Order Strategies: a strategy entry's stop counts for the copier's stop rule, the entry is copied once
+//      with each follower's fixed quantity (0.4.3), and breakeven moves the followers' stops to the leader's new stop price.
 //   X8 the bot and the new lanes: a bot order never carries an Order Strategy and never uses the new order kinds.
 //   X9-X11 the review fixes (fix1: a merged entry after a restart; fix2: Sim101 never both the bot's account and a follower).
 //   X12 the copier and Merge never act on one account (lead's default): Merge is refused on a copier follower while the copier
@@ -378,14 +378,14 @@ public static class IntegrationHarness
         Check(lstops.Count == 2 && lstops.All(o => o.StopPrice == 24998 && Regex.IsMatch(o.Name, " k[12]$")), "X7: a strategy entry on the leader (the copier armed): its stop counts for the copier's stop rule; one pair per bucket, stops at 24998");
         List<Order> newCopies;
         lock (f1.Orders) newCopies = f1.Orders.Where(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} copy [0-9a-f]{8}$")).Skip(copies).ToList();
-        Check(newCopies.Count == 1 && newCopies[0].Quantity == 2, "X7: the fill increment of 2 is copied once with its full quantity (not once per bucket): " + string.Join(" | ", newCopies.Select(o => o.Name + " x" + o.Quantity)));
+        Check(newCopies.Count == 1 && newCopies[0].Quantity == 1, "X7: the leader's strategy entry of 2 is copied once with SIM-F1's fixed quantity, 1 (0.4.3; never once per bucket): " + string.Join(" | ", newCopies.Select(o => o.Name + " x" + o.Quantity)));
         if (newCopies.Count != 1) return;
         Order copy = newCopies[0];
-        copy.Filled = 2; copy.AverageFillPrice = 25000; copy.OrderState = OrderState.Filled;
+        copy.Filled = 1; copy.AverageFillPrice = 25000; copy.OrderState = OrderState.Filled;
         Update(f1, copy);
-        SetPos(f1, PosOf(f1) + 2);
+        SetPos(f1, PosOf(f1) + 1);
         List<Order> fstops = LiveStops(f1);
-        Check(fstops.Count == 1 && fstops[0].StopPrice == 24998 && fstops[0].Quantity == 2, "X7: the follower's stop for 2 at the leader's stop price 24998");
+        Check(fstops.Count == 1 && fstops[0].StopPrice == 24998 && fstops[0].Quantity == 1, "X7: the follower's stop for its 1 at the leader's stop price 24998");
         Trade(25001);   // 4 ticks in profit: breakeven plus 1 tick
         lstops = LiveStops(lead);
         fstops = LiveStops(f1);

@@ -1857,7 +1857,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.4.2";
+        public const string Version = "0.4.3";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -4755,6 +4755,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     a.ExecutionUpdate += OnExecutionUpdate;
                     a.OrderUpdate += OnOrderUpdate;
                     a.PositionUpdate += OnPositionUpdate;
+                    ChartBridgeOrders.SeedNoted(a);   // 0.4.3: fills from before the watch are in its position already
                     Watched.Add(a);
                     added.Add(a);
                     Log("watching fills on account " + a.Name);

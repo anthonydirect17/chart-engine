@@ -1,5 +1,32 @@
 # Changelog
 
+## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
+
+Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of 2026-10-07 15:01 ET:
+
+- **The copier closed a follower into the other side (short 1).** Sim101 (leader) and Sim102 (follower) each held 5 with
+  stops at the same price. The market hit both: Sim102's own stop sold 1, and in the same instant the copier called
+  NinjaTrader's Flatten, which closed the 5 Sim102 still showed. The copier now **never uses NinjaTrader's Flatten** on a
+  follower. It cancels every order there that may still fill, waits until NinjaTrader confirms each one cancelled or filled,
+  until every fill there has come through ChartBridge's order events, and until both position readings agree, then closes
+  only what the follower still holds, at market. Not confirmed in 3 s: nothing is sent, an alarm, and the missed-exit check
+  tries again. A scale-out's reduce waits for the same fills. ChartBridge keeps each order's last filled count from its order
+  events (seeded when an account is first watched) to know when a fill has come through.
+- **A fixed quantity per follower** (Anthony: "I thought we were going with an absolute number"; the old copier moved from a
+  multiplier to a fixed quantity in August). A follower's Qty is what it trades for each leader entry, whatever the leader's
+  size; a leader add copies it again; a scale-out reduces it by the same share. 0.4.0 to 0.4.2 multiplied it by the leader's
+  contracts (Sim102 at Qty 1 took 5).
+- **No leader.** `copierSet` with `"leader": null` clears the leader and stands the copier down. 0.4.2 had no way to clear
+  it, so the page's "none" did nothing and the bot could not trade the old leader's account. The page's Leader dropdown
+  sends it with the single Account page release; until then pick another account for the bot.
+- ChartBridge only; the page is unchanged (each PC keeps its page rollback to 1.15.0). Page wording left for the Account
+  page release: the Qty dropdown's hidden label and its error text still say "per leader contract".
+- Tests: the copier harness reproduces WORK's short 1 first (it fails on 0.4.2: Flatten called; a Qty 3 follower adds 6),
+  then checks the close waits for every confirmation, fill and position update, never sends more than either reading shows,
+  a part-filled stop, a late copy fill during the close, and a fixed quantity over two fills and an add. Every older copier
+  check is updated from "NinjaTrader's Flatten" to the close; the stand-in bridge copies a fixed quantity and takes a null
+  leader.
+
 ## ChartBridge 0.4.2 (2026-10-07): ChartBridge never clears a checkmark
 
 - Anthony, after seeing NinjaTrader's trailing drawdown drift on a prop account past its drawdown lock: "I will manage the

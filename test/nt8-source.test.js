@@ -978,7 +978,7 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
 });
 
 test('0.4.0 copier: order calls only in its named functions; every one passes the account gates (no Sim lock, Anthony 2026-10-07)', () => {
-  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1)
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'SendClose', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1); SendClose: 0.4.3
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
@@ -993,7 +993,7 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
     assert.match(elig, re, 'Eligible: ' + re);
   assert.match(copierBodies('ExitAllowed'), /if \(!Up\(c\.A\) \|\| !ChartBridgeServer\.EnsureWatched\(c\.A\)\)/);
   for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /Eligible\(/, f + ' checks the follower');
-  for (const f of ['StartReduce', 'SendReduce', 'Flatten', 'FlattenLate']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
+  for (const f of ['StartReduce', 'SendReduce', 'Flatten', 'SendClose', 'FlattenLate']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
   // the bot's account is never a follower that is on (both directions)
   assert.match(ccode, /if \(on\.Groups\[1\]\.Value == "true" && IsBotAccount\(a\)\)/);
   assert.match(copierBodies('BotEntryCheck'), /if \(isFollower\)/);
@@ -1002,18 +1002,30 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   // entries are sent under PlaceLock (one order check and send at a time across all pages); legs are GTC stops, entries Day
   for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /lock \(ChartBridgeOrders\.CopierPlaceLock\)/);
   assert.match(copierBodies('PlaceStop'), /OrderType\.StopMarket, OrderEntry\.Manual, TimeInForce\.Gtc, qty, 0, sp, ""/);
-  // never cross zero: exits are NinjaTrader's Flatten, or a reduce sent only after the stops are confirmed shrunk
-  assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) return;[\s\S]*c\.A\.Flatten\(new\[\] \{ c\.Inst \}\);/);
+  // never cross zero (0.4.3, WORK 2026-10-07): never NinjaTrader's Flatten on a follower; a close cancels every order there that
+  // may still fill, and SendClose sends only after NinjaTrader confirms, every fill there has come through, and both readings
+  // agree (or, at the time limit, the smaller); a reduce is sent only after the stops are confirmed shrunk
+  assert.ok(!/\.Flatten\s*\(/.test(ccode), 'the copier never calls NinjaTrader\'s Flatten');
+  assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) return;[\s\S]*List<Order> working = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);[\s\S]*c\.A\.Cancel\(working\.ToArray\(\)\);[\s\S]*CheckReduces\(now\);/);
+  assert.ok(!/\.Submit\(/.test(copierBodies('Flatten')), 'Flatten only cancels; the close is SendClose, after confirmation');
+  assert.match(copierBodies('CheckReduces'), /string unnoted = done \? ChartBridgeOrders\.CopierUnnotedFill\(r\.C\.A, r\.C\.Inst\) : null;/);
+  assert.match(copierBodies('CheckReduces'), /if \(r\.Close\) SendClose\(r\); else SendReduce\(r\);/);
+  assert.match(copierBodies('SendClose'), /int dir = Math\.Sign\(l\), held = Math\.Min\(Math\.Abs\(l\), Math\.Abs\(e\)\);/);
+  assert.match(copierBodies('SendClose'), /List<Order> still = ChartBridgeOrders\.CopierMayFill\(c\.A, c\.Inst\);\s*if \(still\.Count > 0\)/);
   assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
   assert.match(copierBodies('CheckReduces'), /SendReduce\(r\);/);
   // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position
   assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), stops = StopsWorking\(c\.A, c\.Inst, c\.Dir\), k = Math\.Min\(r\.Cut, held - stops\);/);
   assert.match(copierBodies('ScaleOut'), /int basis = c\.Intended;\s*if \(basis <= 0\) return;/);
+  // 0.4.3 (Anthony 2026-10-07): a FIXED quantity per follower, once per leader entry (never per leader contract)
+  assert.match(copierBodies('CopyIncrement'), /lock \(Lk\) first = le\.Handled\.Add\(f\.Name\);\s*if \(!first\) continue;[\s\S]*int fq = f\.Qty;/);
+  assert.match(copierBodies('PlaceOrdersCopies'), /int fq = f\.Qty;/);
+  assert.ok(!/f\.Qty \*/.test(ccode), 'no quantity per leader contract left');
   // review 2 finding 1: a late fill on a follower the copier flattened is never protected as a new position; stops sized to what is held
   assert.match(copierBodies('ProtectFill'), /if \(exited != null\) \{ LateFill\(fe, mark, qty, price, fillTs, exited\); return; \}/);
   assert.match(copierBodies('PlaceStop'), /int room = Room\(c, late, out roomWhy\);/);
   // review 3: late judged by the per-contract flatten count (set before Flatten is sent); the stop at once, no wait list
-  assert.match(copierBodies('Flatten'), /FlattenSeq\[key\] = seq \+ 1;[\s\S]*c\.A\.Flatten\(/);
+  assert.match(copierBodies('Flatten'), /FlattenSeq\[key\] = seq \+ 1;[\s\S]*c\.A\.Cancel\(/);
   assert.match(copierBodies('ProtectFill'), /exited = fe\.Exited \?\? \(now != seq \?/);
   assert.ok(!/Settles|Unsettled/.test(ccode), 'no wait list for a follower stop');
   assert.match(copierBodies('Flatten'), /fe\.Exited = why;/);

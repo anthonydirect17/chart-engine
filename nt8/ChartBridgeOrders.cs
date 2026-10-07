@@ -201,6 +201,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly HashSet<Order> Settled = new HashSet<Order>();   // entries done and covered: the scan skips them
         private static readonly HashSet<Order> Ours = new HashSet<Order>();      // orders ChartBridge submitted, until done
         private static readonly Dictionary<Order, int> SeenFilled = new Dictionary<Order, int>();   // fills already booked in Moves
+        // 0.4.3: each order's filled count as it last came through OnOrderUpdate (NoteFill done), kept after the order is done
+        // (SeenFilled is not), so the copier can tell a fill NinjaTrader already shows on the order from one both position
+        // readings already include. Seeded when an account is first watched; cleared with the rest.
+        private static readonly Dictionary<Order, int> NotedFilled = new Dictionary<Order, int>();
         private static readonly object PlaceLock = new object();   // one order check and submit at a time
         private static int nextId;
 
@@ -276,7 +280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
+            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -561,6 +565,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 list.RemoveAll(m => m[0] == 0);
                 if (delta != 0) list.Add(new double[] { -delta, ChartBridgeTime.NowUtcMs() });   // explained later by the fill
             }
+        }
+
+        // 0.4.3: an account just watched: its orders' fills so far count as come through (they are in its position already).
+        public static void SeedNoted(Account a)
+        {
+            if (a == null) return;
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in orders) if (!NotedFilled.ContainsKey(o)) NotedFilled[o] = o.Filled;
         }
 
         private static int EffectivePosition(Account a, Instrument i)
@@ -1019,6 +1032,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null || e.Order == null) return;
             Order o = e.Order;
             NoteFill(o);
+            lock (Sync) NotedFilled[o] = o.Filled;   // 0.4.3: this fill count has come through (the copier's close waits for it)
             string root = ChartBridgeServer.RootFor(o.Instrument);
             string role = RoleFor(o);
             string where = Where(account, o.Instrument);
