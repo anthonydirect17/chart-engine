@@ -9,6 +9,8 @@
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
 <link rel="stylesheet" href="workspace.css">
+<!-- the Account page (1.16.0): every account, its limits, Working orders, Today's trades, the copier -->
+<link rel="stylesheet" href="accounts.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -58,6 +60,7 @@
   <button type="button" role="menuitem" data-add="account">Account</button>
   <button type="button" role="menuitem" data-add="quotes">Quote board</button>
   <button type="button" role="menuitem" data-add="databox">Data Box</button>
+  <button type="button" role="menuitem" data-add="accounts">Account page</button>
 </div>
 
 <div class="ws-pop ws-viewpop" id="wsView" role="dialog" aria-label="Instrument and bars" hidden></div>
@@ -141,6 +144,8 @@
 <script src="feed.js"></script>
 <!-- one order ticket across this browser's windows (BroadcastChannel and the Web Locks API, 1.12.0) -->
 <script src="ticket-link.js"></script>
+<!-- the Account page (1.16.0): its own connection to ChartBridge 0.4.0 (protocol v3), opened only when ChartBridge speaks v3 -->
+<script src="accounts.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>

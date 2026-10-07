@@ -122,7 +122,8 @@
 //   GET /test/scene says how far it got ({ started, sent, total, done }). Sample data, never market data.
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
 // --v3 (ChartBridge 0.4.0, protocol v3, nt8/PROTOCOL.md "Protocol v3"; test/fake-v3.mjs): every v3 switch on (accountChecks,
-//   orderTypes, strategies, merge, cancelFromList, copier, bot, tapeStats) and the quote-only roots; made-up accounts EVAL-A,
+//   orderTypes, strategies, merge, cancelFromList, copier, bot), the quote-only roots (hello's quoteOnly and priceFormat) and
+//   0.4.0's /diag (health, pages[].sendMs, markets, tape: always on, there is no switch for them); made-up accounts EVAL-A,
 //   EVAL-B, FUNDED-C, SIM-F1, SIM-F2 and Sim101 (tradeAccounts Sim101, EVAL-A pre-checked unless --trade-accounts says
 //   otherwise); EVAL-A holds 2 MNQ and a working sell limit, FUNDED-C a working NQ buy limit, EVAL-B loses its connection
 //   and goes Gone after the grace; SIM-F1 (3 micro) and SIM-F2 (1 mini) are copier followers of Sim101, stood down until
@@ -165,7 +166,6 @@ const DEEP = !!flag('deep-history');
 const V3 = !!flag('v3') && !flag('v1');
 const V3_OFF = flagValue('v3-off').split(',').map(x => x.trim()).filter(Boolean);
 const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') && !flag('v1'));
-const TAPE_STATS = V3 && !V3_OFF.includes('tapeStats');
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
@@ -243,6 +243,13 @@ const INSTR = {
 };
 if (QUOTE) Object.assign(INSTR, QUOTE_INSTR);       // v3: quote-only markets (sample prices), never traded
 const rq = (p, t) => Math.round(p / t) * t;
+/* hello's instrument as ChartBridge 0.4.0 builds it: root, name, tick, pointValue, then (0.4.0) quoteOnly and priceFormat
+   ("decimal", or "32nds" for ZN and ZB), then (0.3.7, --data-037) the prior settlement */
+function helloInstrument(r, i) {
+  const o = { root: r, name: i.name, tick: i.tick, pointValue: i.pointValue };
+  if (V3 || QUOTE) { o.quoteOnly = !!i.quoteOnly; o.priceFormat = i.priceFormat || 'decimal'; }
+  return o;
+}
 /* a price on root r's grid; the quote-only roots' small ticks are rounded to their decimals (float noise) */
 const rqr = (p, r) => { const i = INSTR[r]; return i.quoteOnly ? +(Math.round(p / i.tick) * i.tick).toFixed(i.decimals) : rq(p, i.tick); };
 
@@ -454,7 +461,7 @@ const deskOpts = {
 // --v3: ChartBridge 0.4.0's desk (test/fake-v3.mjs) with every switch on but those in --v3-off
 const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS,
   graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ' })) : new OrderDesk(deskOpts);
-const tapeStats = TAPE_STATS ? new TapeStats() : null;
+const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
 
 function onMessage(c, text) {
@@ -791,10 +798,7 @@ const server = http.createServer((req, res) => {
       ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
         pin: { set: pin.isSet() } }),
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),
-      ...(V3 ? Object.assign({   // 0.4.0 (PROTOCOL.md "Tape timing and new /diag counters"); sample values where the fake has no real number
-        memory: { managedMb: +(process.memoryUsage().heapUsed / 1048576).toFixed(1), gen0: 0, gen1: 0, gen2: 0, trims: 0, lastTrimUtcMs: null },
-        threads: { workerAvailable: 32767, workerMax: 32767, ioAvailable: 1000, ioMax: 1000, minWorkerAvailableToday: 32767 },
-        send: {}, reconnects: { pages: received.urls.length, lagCloses: 0, feedDrops: dropAt === null ? 0 : 1, accountReconnects: 0 } }, desk.diag(), tapeStats ? { tape: tapeStats.diag() } : {}) : {}) }));
+      ...(V3 ? Object.assign(v3Diag(), desk.diag()) : {}) }));
   }
   if (p.endsWith('/')) p += 'index.html';
   const full = path.join(root, p);
@@ -820,17 +824,14 @@ server.on('upgrade', (req, sock) => {
   const c = { sock, root: null, ready: false, buf: Buffer.alloc(0), origin: req.headers.origin || null, authed: false, actions: [] };
   clients.add(c);
   // the version as the real add-on names it in hello: 0.3.4 sends trade sides, 0.3.3 (--no-sides) does not; --version sets it
-  const hello = { type: 'hello', version: flagValue('version') || (V1 ? 'fake-0.2.1' : SIDES ? 'fake-0.3.4' : 'fake-0.3.3'), now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => ({ root: r, name: i.name, tick: i.tick, pointValue: i.pointValue })), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
+  const hello = { type: 'hello', version: flagValue('version') || (V1 ? 'fake-0.2.1' : SIDES ? 'fake-0.3.4' : 'fake-0.3.3'), now: Date.now(), instruments: Object.entries(INSTR).map(([r, i]) => helloInstrument(r, i)), accounts: NO_HELLO_ACCOUNTS ? [] : ACCOUNTS };
   if (!V1) hello.trading = desk.helloTrading(c);
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
   if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
-  if (V3 || QUOTE) {                                // 0.4.0: every instrument says whether it is quote only, and its price format
-    for (const i of hello.instruments) { const x = INSTR[i.root]; i.quoteOnly = !!x.quoteOnly; i.format = x.format || 'dec'; i.decimals = x.decimals === undefined ? 2 : x.decimals; }
-    hello.features = (hello.features || []).concat(V3 ? ['v3'] : [], QUOTE ? ['quoteOnly'] : []); if (V3) hello.version = 'fake-0.4.0';
-  }
+  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = 'fake-0.4.0'; }   // protocol v3 (quote-only markets are told per instrument)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
@@ -840,6 +841,28 @@ server.on('upgrade', (req, sock) => {
   sock.on('close', () => clients.delete(c));
   sock.on('error', () => clients.delete(c));
 });
+/* --v3: /diag's 0.4.0 blocks as ChartBridge builds them (PROTOCOL.md "/diag additions"); sample values where the fake has no
+   real number (thread pool, GC) */
+const sendMsSample = () => ({ n: 0, p50: null, p95: null, max: null });
+function v3Diag() {
+  const mem = process.memoryUsage().heapUsed;
+  return {
+    pages: [...clients].map((c, i) => ({ id: i + 1, root: c.root, ready: !!c.ready, queued: 0, orderLaneQueued: 0, oldestDataMs: 0, sendMs: sendMsSample() })),
+    health: {
+      memory: { seenFills: 0, books: Object.keys(books).length, pastSessions: 0, profileRows: 0, windowTrades: 0, liveTradesHeld: 0, sideTaggers: Object.keys(INSTR).length,
+        htfSeries: 0, weekProfiles: 0, settlementRoots: Object.keys(INSTR).length, seamsKept: 0, windowsKept: 0, lastSweepUtcMs: Date.now(), windowsDroppedAfterSession: 0,
+        lastWindowDropUtcMs: null, heapBytes: mem, gcGen0: 0, gcGen1: 0, gcGen2: 0 },
+      threads: { poolWorkersFree: 32763, poolWorkersMin: 4, poolWorkersMax: 32767, poolWorkersBusy: 4, poolIoFree: 1000, poolIoMin: 4, poolIoMax: 1000, processThreads: 60, pageSendThreads: clients.size },
+      pages: { connects: received.urls.length, closes: Math.max(0, received.urls.length - clients.size), notKeepingUp: 0, sendErrors: 0, lastConnectUtcMs: null, lastNotKeepingUpUtcMs: null, sendMs: sendMsSample() },
+      errors: {},
+    },
+    markets: Object.fromEntries(Object.entries(INSTR).map(([r, i]) => [r, { contract: i.name, quoteOnly: !!i.quoteOnly, tick: i.tick, tableTick: i.quoteOnly ? i.tick : null,
+      priceFormat: i.priceFormat || 'decimal', settlesBy: { CL: '14:30 ET', GC: '13:30 ET', SI: '13:25 ET', ZN: '15:00 ET', ZB: '15:00 ET', '6E': '15:00 ET' }[r] || '16:00 ET (equity index rule)',
+      resolvedBy: 'the roll rule (' + i.name.split(' ')[1] + ')' }])),
+    tape: tapeStats.diag(),
+  };
+}
+
 /* --v3: the bot channel (PROTOCOL.md "Bot channel"): no Origin, the secret in X-ChartBridge-Bot, one bot at a time */
 function botUpgrade(req, sock) {
   const no = code => sock.end('HTTP/1.1 ' + code + '\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');

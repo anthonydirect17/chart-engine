@@ -69,8 +69,8 @@ function layoutName(v) {
 function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null; }
 
 /* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
-   Data Box (1.16.0: the bar under the cursor on any chart) */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox'];
+   Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts'];
 /** One panel, or null when its shape is bad. Position and size are whole cells; re-flow puts them inside the grid. */
 function cleanPanel(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
@@ -468,7 +468,9 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.C
   const stop = () => { const d = document.createElement('div'); d.className = 'ws-reload'; d.setAttribute('role', 'alert'); d.textContent = 'The page files were being updated as this window opened. Reload it (when flat) to trade from it.'; document.body.prepend(d); };
   if (ok()) { page(); return; }
   const load = f => new Promise(res => { const sc = document.createElement('script'); sc.src = new URL(f, me ? me.src : location.href).href; sc.onload = sc.onerror = res; document.head.appendChild(sc); });
-  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js']].filter(([g]) => !window[g]).map(([, f]) => load(f))).then(() => { if (ok()) page(); else stop(); });
+  // 1.16.0: the Account page (accounts.js and its styles) is optional: a window without it works as before
+  if (!document.querySelector('link[href$="accounts.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = new URL('accounts.css', me ? me.src : location.href).href; document.head.appendChild(l); }
+  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js'], ['AccountsPage', 'accounts.js']].filter(([g]) => !window[g]).map(([, f]) => load(f))).then(() => { if (ok()) page(); else stop(); });
 })(() => {
 'use strict';
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
@@ -653,6 +655,12 @@ function tnote(text, level) {
 const tTimers = new Set();
 const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); fn(); }, ms); tTimers.add(id); return id; };
 
+/* 1.16.0: the Account page's connection (live/accounts.js): its own WebSocket, `client` v3 and signed in like the ticket; the
+   ticket's connection above stays a v2 page as in 0.3.8. Opened only when ChartBridge's hello lists "v3". */
+const AF = window.AccountsPage ? window.AccountsPage.createFeed({
+  wsUrl, pin: PIN, framed: FRAMED, fetch: (u, o) => fetch(u, o), note: (text, warn) => note(text, !!warn, warn ? 8000 : 4000),
+  changed: () => { renderLimits(); renderAccountPages(); },
+}) : null;
 const core = TC.create({
   LP, prefs, pin: PIN, framed: FRAMED, framedReason: 'This page is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own window.',
   fetch: (u, o) => fetch(u, o),
@@ -710,6 +718,8 @@ function tmessage(m) {
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
+      if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the Account page's own v3 connection (only when ChartBridge speaks v3)
+      for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
@@ -750,6 +760,7 @@ function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTra
 function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
   renderCharts();
+  renderLimits();                                        // 1.16.0: the ticket's account may have changed
   renderAccounts();                                      // 1.15.0: the Account panels
   renderFlat();
   syncTitle();
@@ -1189,6 +1200,7 @@ function addView(p) {
   if (p.type === 'chart') {
     mid = '<button type="button" class="ws-view" data-act="view" aria-haspopup="dialog" aria-expanded="false"><span class="ws-name"></span><span class="ws-tf"></span><span class="ws-caret" aria-hidden="true"></span></button>' +
       '<span class="chart-live ws-lv ws-badge"></span>' +    // 1.16.0: ARMED and the connection (the chart has no text on it)
+      '<span class="ws-limit" role="status"></span>' +       // 1.16.0: the ticket's account near its limit (the Account page's warning)
       '<span class="chart-live ws-lv ws-ind"></span>' +
       '<button type="button" class="ws-ic ws-more" data-act="more" aria-haspopup="menu" aria-expanded="false" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>';
   } else if (p.type === 'tape') {
@@ -1198,6 +1210,7 @@ function addView(p) {
   } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
   else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>';
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
+  else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1213,6 +1226,7 @@ function addView(p) {
   else if (p.type === 'account') mountAccount(v);        // 1.15.0
   else if (p.type === 'quotes') mountQuotes(v);
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
+  else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -1291,7 +1305,7 @@ function addPanel(type) {
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -1520,46 +1534,65 @@ function quoteOpen(q) {
 }
 const quoteOf = r => QT.get(r) || null;
 
-/* ---------------- the Quote board: NQ and ES (1.16.0, Anthony 2026-10-05; the micros' rows are gone); read only */
+/* ---------------- the Quote board: NQ and ES (1.16.0, Anthony 2026-10-05; the micros' rows are gone); read only.
+   1.16.0 (item 20): then the quote-only markets ChartBridge 0.4.0 serves (hello's quoteOnly: YM, RTY, GC, SI, CL, 6E, ZN,
+   ZB by default), compact rows after NQ and ES, bonds in NinjaTrader's 32nds (priceFormat "32nds": ZB 118'15, ZN 104'035).
+   Display only: a quote-only market never gets an order control (the ticket and the charts keep W.ROOTS). */
 const QUOTE_ROOTS = W.QUOTE_ROOTS;
+const AQ = window.AccountsCore || null;
+const quoteRootsNow = () => (AQ ? AQ.quoteRoots(instruments, QUOTE_ROOTS) : QUOTE_ROOTS.slice());
+/* a price, a change, in the instrument's own format (32nds for ZN and ZB) */
+const qPx = (r, p) => (AQ && instruments[r] && instruments[r].quoteOnly ? AQ.priceText(p, instruments[r]) : U.fmtPrice(p, precisionOf(r)));
+const qChg = (r, x) => (AQ && instruments[r] && instruments[r].quoteOnly ? AQ.changeText(x, instruments[r]) : W.fmtSignedNum(x, precisionOf(r)));
 /* Rows are small grids (ws-grid-rows, workspace.css): on a narrow panel the change and percent, and the high and low, stack
-   in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel). */
+   in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel); the
+   quote-only rows scroll inside the board when it is short. */
 function mountQuotes(v) {
-  v.body.innerHTML = '<div class="qb-wrap gr gr-qb" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
-    '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
-    QUOTE_ROOTS.map(r => `<div class="gr-row" role="row" data-root="${r}"><span class="b" role="cell">${r}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
-    '<p class="qb-foot" data-q="foot"></p></div>';
-  const offs = QUOTE_ROOTS.map(watchQuote);
-  const cells = {};
-  for (const tr of v.body.querySelectorAll('[data-root]')) { const c = cells[tr.dataset.root] = {}; for (const td of tr.querySelectorAll('[data-q]')) c[td.dataset.q] = td; }
+  let roots = [], offs = [], cells = {};
+  const build = () => {
+    for (const f of offs) f();
+    roots = quoteRootsNow();
+    const qo = r => !QUOTE_ROOTS.includes(r);
+    v.body.innerHTML = '<div class="qb-wrap gr gr-qb' + (roots.some(qo) ? ' qb-more' : '') + '" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
+      '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
+      roots.map((r, i) => `<div class="gr-row${qo(r) ? ' qb-q' + (i && !qo(roots[i - 1]) ? ' qb-first' : '') : ''}" role="row" data-root="${esc(r)}"><span class="b" role="cell">${esc(r)}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
+      '<p class="qb-foot" data-q="foot"></p></div>';
+    offs = roots.map(watchQuote);
+    cells = {};
+    for (const tr of v.body.querySelectorAll('[data-root]')) { const c = cells[tr.dataset.root] = {}; for (const td of tr.querySelectorAll('[data-q]')) c[td.dataset.q] = td; }
+  };
   const set = (el, text, cls) => { if (el.textContent !== text) el.textContent = text; const k = cls || ''; if (el.className !== k) el.className = k; };
   const render = () => {
     let noSettle = 0;
-    for (const r of QUOTE_ROOTS) {
-      const q = quoteOf(r), c = cells[r], dec = precisionOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null, pct: null };
+    for (const r of roots) {
+      const q = quoteOf(r), c = cells[r], x = q ? W.quoteChange(q.last, q.settle) : { chg: null, pct: null };
+      if (!c) continue;
       const cls = x.chg > 0 ? 'up' : x.chg < 0 ? 'dn' : '';
-      set(c.last, q && q.last !== null ? U.fmtPrice(q.last, dec) : '-', 'r');
-      set(c.chg, W.fmtSignedNum(x.chg, dec), cls);
+      set(c.last, q && q.last !== null ? qPx(r, q.last) : '-', 'r');
+      set(c.chg, qChg(r, x.chg), cls);
       set(c.pct, x.pct === null ? '' : W.fmtSignedNum(x.pct, 2) + '%', cls);
-      set(c.high, q && q.high !== null ? U.fmtPrice(q.high, dec) : '');
-      set(c.low, q && q.low !== null ? U.fmtPrice(q.low, dec) : '');
+      set(c.high, q && q.high !== null ? qPx(r, q.high) : '');
+      set(c.low, q && q.low !== null ? qPx(r, q.low) : '');
       if (q && q.last !== null && q.settle === null) noSettle++;
     }
     const foot = noSettle ? 'Change from the prior settlement: blank until ChartBridge 0.3.7 or newer gives one.' : '';
-    for (const r of QUOTE_ROOTS) {                         // a tight board shows the last and percent: the rest in the row's tooltip
-      const q = quoteOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null }, dec = precisionOf(r);
-      const tip = r + (q && q.last !== null ? ' ' + U.fmtPrice(q.last, dec) : '') + (x.chg !== null ? ', ' + W.fmtSignedNum(x.chg, dec) + ' from the prior settlement' : '') +
-        (q && q.high !== null ? ', high ' + U.fmtPrice(q.high, dec) + ', low ' + U.fmtPrice(q.low, dec) : '');
+    for (const r of roots) {                               // a tight board shows the last and percent: the rest in the row's tooltip
+      const q = quoteOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null };
+      if (!cells[r]) continue;
+      const tip = r + (q && q.last !== null ? ' ' + qPx(r, q.last) : '') + (x.chg !== null ? ', ' + qChg(r, x.chg) + ' from the prior settlement' : '') +
+        (q && q.high !== null ? ', high ' + qPx(r, q.high) + ', low ' + qPx(r, q.low) : '') + (instruments[r] && instruments[r].quoteOnly ? ' (quote only: ChartBridge takes no order for it)' : '');
       const tr = cells[r].last.parentElement;
       if (tr.title !== tip) tr.title = tip;
     }
     const f = v.body.querySelector('[data-q="foot"]');
     if (f.textContent !== foot) { f.textContent = foot; f.hidden = !foot; }
   };
+  build();
   quoteSubs.add(render);
   render();
   v.state = 'live';
-  v.quotes = { render };
+  /* sync: hello again (another ChartBridge, or its quoteRoots changed): the rows follow when the list changed */
+  v.quotes = { render, sync: () => { if (quoteRootsNow().join() !== roots.join()) { build(); render(); } }, roots: () => roots.slice() };
   /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
      with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
   const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
@@ -1788,6 +1821,37 @@ function mountAccount(v) {
 let accountRaf = 0;
 function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
 setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
+
+/* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on its own connection (AF).
+   Its figures follow the feed (accounts at most once a second) and the prices (quoteSubs, at most 4 times a second). */
+const accountPages = () => [...views.values()].filter(v => v.accountPage);
+function mountAccountsPage(v) {
+  v.state = 'live';
+  if (!AF) { v.body.innerHTML = '<p class="ac-empty">The Account page could not load (accounts.js): reload the window.</p>'; return; }
+  const ap = window.AccountsPage.mount(v, { feed: AF, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
+  v.accountPage = ap;
+  v.destroy = () => { ap.destroy(); delete v.accountPage; };
+}
+let accountPageRaf = 0;
+function renderAccountPages() { if (!accountPageRaf && accountPages().length) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); }); }
+setInterval(renderAccountPages, 1000);                   // the clock (Gone's since, a new trading day)
+/* Item 15: a chart trading an account near its limit says so in its header (amber at 70 percent of the room used to the
+   closer of the daily loss and the trailing drawdown, red at 90). Every chart here shows the ticket's account. Written only
+   when the text changes; nothing in the chart's draw loop. */
+function renderLimits() {
+  const acct = ticketAccount(), s = AF && acct ? AF.limit(acct) : null, lvl = s ? s.level : '';
+  const word = lvl === 'red' ? 'LIMIT ' : 'Limit ', pct = lvl ? Math.round(s.pct * 100) + '%' : '';
+  const text = lvl ? word + pct : '';                  // a narrow chart shows the percent only (accounts.css)
+  const tip = lvl ? acct + ': ' + Math.round(s.pct * 100) + '% of the room used to its ' + (s.closer === 'dd' ? 'trailing drawdown' : 'daily loss limit') + (AQ ? ' (' + AQ.limitText(s) + ')' : '') + '. The Account page has the detail.' : '';
+  for (const v of chartViews()) {
+    const el = v.limitEl || (v.limitEl = v.head.querySelector('.ws-limit'));
+    if (!el) continue;
+    if (el.textContent !== text) el.innerHTML = lvl ? '<span class="ws-limit-w">' + word + '</span>' + pct : '';
+    const cls = 'ws-limit' + (lvl ? ' ' + lvl : '');
+    if (el.className !== cls) el.className = cls;
+    if (el.title !== tip) el.title = tip;
+  }
+}
 
 /* ---------------- popovers (Add panel, Settings, a chart's instrument and bars or its menu, a tape's gear): one open at a
    time; an outside click or Esc closes */
@@ -2304,7 +2368,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   feed: () => hub.stats(),
   /* 1.12.0: the ticket as this window knows it, and a chart's engine (read it; orders still go through the checks) */
   ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
-  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; } };
+  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; },
+  /* 1.16.0: the Account page's connection as this window knows it (read only) */
+  accountFeed: () => (AF ? { v3: AF.S.v3, open: AF.S.open, enabled: AF.S.enabled, switches: Object.assign({}, AF.S.switches), accounts: AF.S.accounts.map(x => x.name), deskState: AF.S.deskState } : null) };
 
 const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake(); };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony

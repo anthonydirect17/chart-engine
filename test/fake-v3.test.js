@@ -11,7 +11,7 @@ const { spawn } = require('node:child_process');
 
 const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'protocol-v3.json'), 'utf8'));
 const INSTR = { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 },
-  YM: { name: 'YM 12-26', tick: 1, pointValue: 5, quoteOnly: true, format: 'dec', decimals: 0 } };
+  YM: { name: 'YM 12-26', tick: 1, pointValue: 5, quoteOnly: true, priceFormat: 'decimal', decimals: 0 } };
 const ALL_ON = { accountChecks: true, orderTypes: true, strategies: true, merge: true, cancelFromList: true, copier: true, bot: true };
 
 async function makeDesk(o) {
@@ -47,9 +47,10 @@ test('allocation: largest remainder, a tie to the later target, never more than 
   assert.deepEqual(allocate(5, [50, 30, 20]), [2, 2, 1]);
   assert.deepEqual(allocate(2, [34, 33, 33]), [1, 0, 1]);
   for (let q = 1; q <= 20; q++) assert.equal(allocate(q, [20, 30, 50]).reduce((a, b) => a + b, 0), q);
-  assert.equal(formatPrice(104.109375, '64'), "104'035");
-  assert.equal(formatPrice(118.46875, '32'), "118'15");
-  assert.equal(formatPrice(1.17255, 'dec', 5), '1.17255');
+  assert.equal(formatPrice(104.109375, '32nds', 1 / 64), "104'035");    // ZN: half 32nds with a 1/64 tick
+  assert.equal(formatPrice(104.125, '32nds', 1 / 64), "104'040");
+  assert.equal(formatPrice(118.46875, '32nds', 1 / 32), "118'15");      // ZB
+  assert.equal(formatPrice(1.17255, 'decimal', 0.00005), '1.17255');
 });
 
 test('fixtures: every page message passes the strict v3 keys; every strategy passes its rules; both directions present', async () => {
@@ -64,6 +65,15 @@ test('fixtures: every page message passes the strict v3 keys; every strategy pas
   for (const t of ['welcome', 'tick', 'botState', 'answer', 'reject']) assert.ok(Object.values(FIX.serverToBot).some(m => m.type === t), 'serverToBot has ' + t);
   const text = JSON.stringify(FIX);
   assert.doesNotMatch(text, /[–—]/, 'no en or em dashes');
+  // as ChartBridge 0.4.0 built it ("0.4.0 hardening and markets" wins): quoteOnly and priceFormat after pointValue, before
+  // the settlement; no tapeStats switch; /diag's health, pages, markets and tape
+  for (const i of FIX.serverToPage['hello.v3'].instruments.concat(FIX.serverToBot.welcome.instruments)) {
+    assert.deepEqual(Object.keys(i).slice(0, 6), ['root', 'name', 'tick', 'pointValue', 'quoteOnly', 'priceFormat'], i.root);
+    assert.ok(['decimal', '32nds'].includes(i.priceFormat) && !('format' in i) && !('decimals' in i), i.root);
+    assert.equal(i.priceFormat === '32nds', i.root === 'ZN' || i.root === 'ZB', i.root);
+  }
+  assert.ok(!('tapeStats' in FIX.config) && !FIX.serverToPage['hello.v3'].features.includes('quoteOnly'));
+  assert.deepEqual(Object.keys(FIX.diag).slice(0, 4), ['health', 'pages', 'markets', 'tape']);
 });
 
 test('strict v3 keys: unknown keys, a list, booleans where none belong and bracket with strategy are refused', async () => {
@@ -143,9 +153,9 @@ test('order types: stop-limit (offset or price) and MIT, each on the grid and th
 
 test('quote-only roots: every order is refused with the plain reason', async () => {
   const d = await makeDesk();
-  assert.equal(reasonOf(d.order({ root: 'YM' })), 'YM is quote only: ChartBridge does not trade it.');
-  assert.equal(reasonOf(d.act({ type: 'flatten', account: 'Sim101', root: 'YM' })), 'YM is quote only: ChartBridge does not trade it.');
-  assert.equal(reasonOf(d.act({ type: 'merge', account: 'Sim101', root: 'YM' })), 'YM is quote only: ChartBridge does not trade it.');
+  assert.equal(reasonOf(d.order({ root: 'YM' })), 'YM is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)');
+  assert.equal(reasonOf(d.act({ type: 'flatten', account: 'Sim101', root: 'YM' })), 'YM is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)');
+  assert.equal(reasonOf(d.act({ type: 'merge', account: 'Sim101', root: 'YM' })), 'YM is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)');
 });
 
 test('strategies: a pair per target bucket per fill, breakeven then trailing, never back; plan refused', async () => {
@@ -366,10 +376,13 @@ test('server --v3: hello lists v3 and quote-only roots; client gets accounts; au
     const token = JSON.parse((await get(port, '/session', unlock)).body).token;
     const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
     const hello = await a.next('hello');
-    assert.ok(hello.features.includes('v3') && hello.features.includes('quoteOnly'));
+    assert.ok(hello.features.includes('v3') && !hello.features.includes('quoteOnly'), 'quote-only markets are told per instrument, not as a feature');
     const zn = hello.instruments.find(i => i.root === 'ZN');
-    assert.equal(zn.quoteOnly, true); assert.equal(zn.format, '64'); assert.equal(zn.tick, 0.015625);
+    assert.equal(zn.quoteOnly, true); assert.equal(zn.priceFormat, '32nds'); assert.equal(zn.tick, 0.015625);
+    assert.deepEqual(Object.keys(zn).slice(0, 6), ['root', 'name', 'tick', 'pointValue', 'quoteOnly', 'priceFormat'], 'ChartBridge 0.4.0\'s field order');
+    assert.ok(!('format' in zn) && !('decimals' in zn));
     assert.equal(hello.instruments.find(i => i.root === 'MNQ').quoteOnly, false);
+    assert.equal(hello.instruments.find(i => i.root === 'MNQ').priceFormat, 'decimal');
     a.send({ type: 'client', v: 3 });
     const acc = await a.next('accounts');
     assert.deepEqual(acc.list.map(x => x.name), ['EVAL-A', 'EVAL-B', 'FUNDED-C', 'SIM-F1', 'SIM-F2', 'Sim101']);
@@ -380,7 +393,7 @@ test('server --v3: hello lists v3 and quote-only roots; client gets accounts; au
     assert.ok(orders.list.some(o => o.account === 'FUNDED-C'), 'a v3 page sees every watched account\'s working orders');
     assert.ok(await a.next('copier')); assert.ok(await a.next('bot'));
     a.send({ type: 'order', cid: 'q1', account: 'Sim101', root: 'GC', side: 'buy', kind: 'market', qty: 1 });
-    assert.equal((await a.next('reject')).reason, 'GC is quote only: ChartBridge does not trade it.');
+    assert.equal((await a.next('reject')).reason, 'GC is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)');
     // a proposal on demand, answered from the page
     const id = (await post(port, '/test/bot-proposal?side=buy&kind=market&stop=12&target=24', undefined)).json.id;
     const pr = await a.next('botProposal');
@@ -393,7 +406,22 @@ test('server --v3: hello lists v3 and quote-only roots; client gets accounts; au
     const v3 = (await post(port, '/test/v3')).json;
     assert.equal(v3.accounts.list.find(x => x.name === 'EVAL-B').state, 'gone');
     const diag = JSON.parse((await get(port, '/diag')).body);
-    for (const k of ['tape', 'memory', 'threads', 'send', 'reconnects', 'merges', 'copier', 'bot']) assert.ok(k in diag, 'diag ' + k);
+    // /diag as ChartBridge 0.4.0 built it ("0.4.0 hardening and markets", "/diag additions"); no tapeStats switch
+    for (const k of ['health', 'pages', 'markets', 'tape', 'merges', 'copier', 'bot']) assert.ok(k in diag, 'diag ' + k);
+    for (const k of ['memory', 'threads', 'pages', 'errors']) assert.ok(k in diag.health, 'diag health.' + k);
+    for (const k of ['seenFills', 'books', 'heapBytes', 'gcGen0', 'lastSweepUtcMs']) assert.ok(k in diag.health.memory, 'health.memory.' + k);
+    for (const k of ['poolWorkersFree', 'poolIoMax', 'pageSendThreads']) assert.ok(k in diag.health.threads, 'health.threads.' + k);
+    for (const k of ['connects', 'closes', 'notKeepingUp', 'sendErrors', 'sendMs']) assert.ok(k in diag.health.pages, 'health.pages.' + k);
+    assert.ok(diag.pages.length >= 1 && diag.pages.every(p => p.sendMs && 'p95' in p.sendMs));
+    assert.deepEqual(Object.keys(diag.markets.ZN), ['contract', 'quoteOnly', 'tick', 'tableTick', 'priceFormat', 'settlesBy', 'resolvedBy']);
+    assert.equal(diag.markets.ZB.priceFormat, '32nds'); assert.equal(diag.markets.MNQ.quoteOnly, false);
+    assert.equal(typeof diag.tape.failed, 'number');
+    const mnq = diag.tape.roots.MNQ;
+    assert.ok(mnq && 'late' in mnq && 'last' in mnq && mnq.session && /^\d{4}-\d\d-\d\d 18:00$/.test(mnq.session.from), JSON.stringify(mnq && mnq.session));
+    const slot = mnq.session.slots[0];
+    for (const k of ['at', 'prints', 'perSec', 'peakPerSec', 'gapMs', 'sameMsU', 'sameMsRx', 'jumpTicks', 'delayMs']) assert.ok(k in slot, 'tape slot ' + k);
+    assert.deepEqual(Object.keys(slot.jumpTicks), ['0', '1', '2', '3+']); assert.deepEqual(Object.keys(slot.delayMs), ['p50', 'p95', 'below0']);
+    assert.ok(!('tapeStats' in diag) && !('memory' in diag) && !('send' in diag));
     // the bot channel: no Origin, the secret, one at a time
     const secret = (await post(port, '/test/bot-secret')).json.secret;
     await assert.rejects(wsConnect(port, '/bot', {}), /403/);

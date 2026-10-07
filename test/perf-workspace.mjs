@@ -3,7 +3,7 @@
 // Not part of `npm test`: it takes about 2 minutes per page.
 //
 //   node test/perf-workspace.mjs [--mode=both|workspace|single] [--secs=120] [--warm=10] [--live-rate=300]
-//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape|panels|databox] [--ticket]
+//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape|panels|databox|accounts] [--ticket]
 //
 // --live-rate is trades a second per instrument while a page is subscribed to it (with the fake's bursts of 3 times
 // that for 1.5 s in every 10 s), so the workspace's MNQ, NQ and ES each trade at that rate. The single page shows the
@@ -18,7 +18,8 @@
 // panels (1.15.0): every panel of the default layout plus the Account panel and the Quote board (the ES chart and the tape
 // a row shorter for them; the board watches MES too, a fourth instrument at --live-rate); databox (1.16.0): the default
 // layout with a Data Box in the tape's cells, following the main chart (its newest bar changes with every trade: the most
-// the Data Box can cost).
+// the Data Box can cost); accounts (1.16.0): the default layout with the Account page in the tape's cells, against the fake's
+// protocol v3 (--v3 --trading: its own connection, every account, the copier; the made-up accounts and orders).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -71,7 +72,7 @@ const r2 = v => Math.round(v * 100) / 100, r3 = v => Math.round(v * 1000) / 1000
 
 async function run(mode) {
   const bridge = spawn(process.execPath, [path.join(here, 'test', 'fake-bridge.mjs'), String(PORT), '--tick-rate=' + TICK_RATE, '--live-rate=' + LIVE_RATE, '--test-pin=' + TEST_PIN]
-    .concat(TICKET ? ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9'] : []), { stdio: ['ignore', 'pipe', 'inherit'] });
+    .concat(TICKET ? ['--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9'] : []).concat(VARIANT === 'accounts' ? ['--v3'].concat(TICKET ? [] : ['--trading']) : []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
   const browser = await chromium.launch(Object.assign({ args: ['--enable-precise-memory-info', '--js-flags=--expose-gc'] }, process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));
   try {
@@ -82,13 +83,14 @@ async function run(mode) {
     if (mode === 'workspace' && VARIANT !== 'default') {
       const W = (await import('../live/workspace.js')).default;
       const main = (p, i) => i === 0;
-      const keep = { 'no-tape': p => p.type === 'chart', 'main-only': main, 'main-tape': (p, i) => main(p, i) || p.type === 'tape', panels: () => true, databox: () => true }[VARIANT];
+      const keep = { 'no-tape': p => p.type === 'chart', 'main-only': main, 'main-tape': (p, i) => main(p, i) || p.type === 'tape', panels: () => true, databox: () => true, accounts: () => true }[VARIANT];
       if (!keep) throw new Error('unknown --variant ' + VARIANT);
       let panels = W.defaultLayout().panels.filter(keep);
       if (VARIANT === 'panels') {
         panels = panels.map(p => (p.type === 'tape' ? Object.assign({}, p, { h: 1 }) : p.root === 'ES' ? Object.assign({}, p, { h: 2 }) : p));
         panels.push({ id: 'perfAcct', type: 'account', x: 10, y: 4, w: 2, h: 2 }, { id: 'perfQuotes', type: 'quotes', x: 7, y: 5, w: 3, h: 1 });
       }
+      if (VARIANT === 'accounts') panels = panels.map(p => (p.type === 'tape' ? { id: 'perfAp', type: 'accounts', x: p.x, y: p.y, w: p.w, h: p.h } : p));
       if (VARIANT === 'databox') {
         panels = panels.map(p => (p.type === 'tape' ? { id: 'perfDb', type: 'databox', x: p.x, y: p.y, w: p.w, h: p.h } : p));
         // the main chart with the single chart page's indicators (the delta pane on: the Data Box's buys and sells) and bubbles
