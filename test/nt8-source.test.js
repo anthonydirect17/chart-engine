@@ -978,7 +978,7 @@ test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one
 });
 
 test('0.4.0 copier: order calls only in its named functions; every one passes the account gates (no Sim lock, Anthony 2026-10-07)', () => {
-  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'FlattenLate', 'TrimStops', 'Sweep', 'Recover', 'CancelOnFlat'];   // FlattenLate: review 2 finding 1; TrimStops: review 3 B; CancelOnFlat: minors (1)
   let rest = ccode;
   for (const f of placing) rest = rest.split(copierBodies(f)).join('');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])

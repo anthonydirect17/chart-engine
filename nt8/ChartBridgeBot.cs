@@ -1032,6 +1032,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // Minors (3): a position or a working order (any, not only the bot's) on root, any contract month, on this account. Read
+        // with the order code's own readings (ChartBridgeOrders.BotHoldsOnRoot: both position readings, and orders just sent).
+        private static bool HoldsOnRoot(Account a, string root) { return a != null && ChartBridgeOrders.BotHoldsOnRoot(a, root); }
+
         // Is the bot's account on NinjaTrader's simulator now (for the SIM or LIVE mark; it refuses nothing).
         private static bool SimNow() { Account a = FindAccount(); return a != null && IsSim(a); }
 
@@ -1434,6 +1438,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool broken;
             lock (Sync) broken = accountBroken != null;
             if (name == old && !broken) return null;   // already the bot's account
+            // Minors (3): any position or working order on the bot's root, the bot's or not, on the account chosen or on the bot's
+            // account now, refuses the change (a trade there would sit beside the bot's or under its rails).
+            string root = EffectiveRoot();
+            if (HoldsOnRoot(FindAccount(name), root)) return name + " holds a position or a working order on " + root + ": choose the bot's account when both accounts are flat on " + root;
+            if (name != old && HoldsOnRoot(FindAccount(old), root)) return "the bot's account " + old + " holds a position or a working order on " + root + ": choose the bot's account when both accounts are flat on " + root;
             string err = SaveAccount(name);
             if (err != null) return "bot-account.txt could not be saved (" + err + "); nothing changed";
             List<Proposal> expired;

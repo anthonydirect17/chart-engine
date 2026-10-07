@@ -109,6 +109,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             string odd = Unknown(text, allowed);
             return odd != null ? "unknown key \"" + odd + "\" in " + type : null;
         }
+        // Minors (2): a follower's copy entry fills on side dir not yet in its position (the second reading's fills, marked by
+        // NoteFill): live, within MoveTtlMs (10 s); expired, older and still not booked by a position update, counting only those
+        // after `after` (the last fresh position update the copier saw while it held the trim).
+        internal static void CopierUnbooked(Account a, Instrument i, int dir, double after, out int live, out int expired)
+        {
+            live = 0; expired = 0;
+            double now = ChartBridgeTime.NowUtcMs();
+            lock (Moves)
+            {
+                List<double[]> list;
+                if (!Moves.TryGetValue(PosKey(a, i), out list)) return;
+                foreach (double[] m in list)
+                {
+                    if (m.Length < 3 || m[2] != 1 || m[0] * dir <= 0) continue;
+                    int q = (int)Math.Abs(m[0]);
+                    if (now - m[1] <= MoveTtlMs) live += q;
+                    else if (m[1] > after) expired += q;
+                }
+            }
+        }
         internal static bool CopierHas(string text, string key) { return Has(text, key); }
         internal static string CopierStr(string text, string key) { return Str(text, key); }
         internal static int CopierInt(string text, string key, out int v) { return Int(text, key, out v); }
@@ -196,6 +216,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Root, Tag;
             public int Dir, Intended;
             public double FlatSince;
+            public bool TrimHeld;        // minors (2): an expired unbooked copy fill: no trim until a fresh position update
+            public double BookedAfter;   // minors (2): expired fills from before this position update are no longer counted
             public readonly List<FStop> Stops = new List<FStop>();
         }
 
@@ -395,6 +417,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static readonly Regex TagRx = new Regex("^CB#([0-9a-f]{8}) ");
         private static readonly Regex CopyEntryRx = new Regex("^CB#([0-9a-f]{8}) copy ([0-9a-f]{8})$");   // a copier entry on a follower: its tag, the leader entry's tag
+        // Minors (2): a copier entry on a follower, by its name (read by ChartBridgeOrders.NoteFill to mark a copy's fill).
+        public static bool IsCopyEntry(Order o) { return o != null && CopyEntryRx.IsMatch(o.Name ?? ""); }
         private static string TagOf(string name) { Match m = TagRx.Match(name ?? ""); return m.Success ? m.Groups[1].Value : null; }
         private static string NewTag() { return Guid.NewGuid().ToString("N").Substring(0, 8); }
         private static double Ms(long from, long to) { return (to - from) * 1000.0 / Stopwatch.Frequency; }
@@ -972,16 +996,37 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Review 3 B: once a follower's two readings agree, its copier stops are shrunk to what it holds (a stop placed at once from
         // the larger reading may cover a fill that never reached the position). Flat or the other way is the sweep's. Never while a
         // reduce runs (it shrinks the stops itself).
+        // Minors (2): never below the larger reading while a copy fill there is unbooked (the readings must agree, so both are the
+        // larger); a copy fill unbooked past 10 s (it no longer counts in the second reading) holds the trim, with a status warn,
+        // until a fresh position update arrives (OnPositionUpdate).
         private static void TrimStops(Copy c)
         {
             int l = ChartBridgeOrders.CopierListed(c.A, c.Inst) * c.Dir, e = ChartBridgeOrders.CopierEffective(c.A, c.Inst) * c.Dir;
+            int live, expired;
+            bool held, warn = false;
+            double after;
+            lock (Lk) { held = c.TrimHeld; after = c.BookedAfter; }
+            if (held) return;
+            ChartBridgeOrders.CopierUnbooked(c.A, c.Inst, c.Dir, after, out live, out expired);
+            if (expired > 0)
+            {
+                lock (Lk) { warn = !c.TrimHeld; c.TrimHeld = true; }
+                if (warn)
+                {
+                    string text = c.Root + " " + c.A.Name + ": a copied fill's position update has not come in 10 s; its copier stops are not shrunk until NinjaTrader updates the position (check its position in NinjaTrader)";
+                    ChartBridgeOrders.CopierWarn(text);
+                    Decision(c.A.Name, "stop", c.Root, text);
+                }
+                return;
+            }
             if (l != e || l <= 0) return;
+            int floor = live > 0 ? Math.Max(l, e) : l;   // the larger reading while a copy fill is unbooked
             List<FStop> stops;
             bool busy;
             lock (Lk) { busy = Reduces.Any(r => r.C == c); stops = c.Stops.Where(s => !ChartBridgeOrders.CopierDone(s.Stop)).OrderByDescending(s => s.Born).ToList(); }
             if (busy || stops.Count == 0 || !Up(c.A)) return;
             int exits = CopierOrdersOn(c.A, c.Inst, true, c.Dir).Where(o => stops.All(s => s.Stop != o)).Sum(o => o.Quantity - o.Filled);
-            int excess = stops.Sum(s => Left(s)) + exits - l;
+            int excess = stops.Sum(s => Left(s)) + exits - floor;
             if (excess <= 0) return;
             List<Order> cancel = new List<Order>(), change = new List<Order>();
             lock (Lk)
@@ -995,7 +1040,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             if (cancel.Count > 0) c.A.Cancel(cancel.ToArray());
             if (change.Count > 0) c.A.Change(change.ToArray());
-            Event(c.A.Name, "stop", c.Root, l, double.NaN, null, null, null, "its copier stops shrunk to what it holds, " + l + ", now that both readings agree (" + cancel.Count + " cancelled, " + change.Count + " changed)");
+            Event(c.A.Name, "stop", c.Root, floor, double.NaN, null, null, null, "its copier stops shrunk to what it holds, " + floor + ", now that both readings agree (" + cancel.Count + " cancelled, " + change.Count + " changed)");
         }
 
         // A copier stop's open quantity as last asked for (a shrink or cancel not yet confirmed counts as done for the trim).
@@ -1251,7 +1296,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                         LeaderPos[inst.FullName] = signed;
                     }
                 }
-                if (trim != null) Work(() => TrimStops(trim));   // review 3 B: a follower's position: its copier stops never above it once the readings agree
+                if (trim != null)
+                {
+                    double at = ChartBridgeTime.NowUtcMs();
+                    lock (Lk) if (trim.TrimHeld) { trim.TrimHeld = false; trim.BookedAfter = at; }   // minors (2): a fresh position update
+                    Work(() => TrimStops(trim));   // review 3 B: a follower's position: its copier stops never above it once the readings agree
+                }
+                if (!isLeader && signed == 0) Work(() => CancelOnFlat(account, inst));   // minors (1): flat by both readings: its copier stops and exits at once
                 if (!isLeader) return;
                 if (known && prev == signed) return;
                 long ts = Stopwatch.GetTimestamp();
@@ -1497,6 +1548,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Lk) { Placed.Remove(o); SweepFlat.Remove(o); }
                 Event(o.Account.Name, "sweep", ChartBridgeServer.RootFor(o.Instrument), o.Quantity - o.Filled, double.NaN, null, null, null, "cancelled a copier order left on a flat follower");
             }
+        }
+
+        // Minors (1): a follower's position update says flat. When both readings agree it is flat on a steady connection (closed
+        // outside ChartBridge: by hand, or a prop firm's liquidation), its copier stops and exits on that contract are cancelled at
+        // once, young or not (the sweep would take 3 to 5 s, TrimStops does nothing when flat), and logged. Its copier entries are
+        // the sweep's (an orders-mode entry may still be waiting for the leader's).
+        private static void CancelOnFlat(Account a, Instrument inst)
+        {
+            if (!Flat(a, inst) || !Up(a) || !ChartBridgeOrders.CopierSteady(a)) return;
+            List<Order> mine = CopierOrdersOn(a, inst, false).Where(o => Working(o) && !CopyEntryRx.IsMatch(o.Name ?? "")).ToList();
+            if (mine.Count == 0) return;
+            lock (Lk) foreach (Order o in mine) { FStop fs; if (FStops.TryGetValue(o, out fs)) fs.Asked = o.Filled; }
+            a.Cancel(mine.ToArray());
+            Event(a.Name, "sweep", ChartBridgeServer.RootFor(inst), mine.Sum(o => o.Quantity - o.Filled), double.NaN, null, null, null,
+                  "flat by both readings (closed outside ChartBridge): its copier stops and exits cancelled at once (" + mine.Count + ")");
         }
 
         // A follower stop whose leader stop went away (a merge cancels pairs and keeps or makes one stop) while the leader still

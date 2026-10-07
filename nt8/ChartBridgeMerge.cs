@@ -168,6 +168,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public volatile bool Restoring;                    // the restore or fallback runs: a fill no longer stops a step
             public volatile string Trouble;                    // a fill, an order error: the next check stops the swap
             public readonly HashSet<Order> CancelSent = new HashSet<Order>();   // fix4 (G1): every order this swap asked NinjaTrader to cancel (under MergeLock)
+            public int PlacedAgain;                            // minors (4): contracts MergePlaceAgain placed again (counted and sent under MergeSendLock)
         }
 
         private static readonly object MergeLock = new object();       // the swaps, the counters, the fill times; never held while sending
@@ -465,6 +466,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (MergeLock)
                 {
                     if (MergeSwaps.ContainsKey(s.Key)) why = "a Merge is already running on " + s.Where;
+                    else if (MergeLateRunning.Any(x => x.Key == s.Key)) why = MergeLateBusy;   // minors (4): checked with the freeze, under one lock
                     else MergeSwaps[s.Key] = s;                                         // the freeze (step 1)
                 }
             if (why != null) { if (!MergeFrozen(account, inst)) PauseStrategies(account, inst, false); return MergeRefuse(why); }
@@ -480,7 +482,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             Account a = s.Account; Instrument i = s.Instrument;
             double now = ChartBridgeTime.NowUtcMs();
-            lock (MergeLock) if (MergeSwaps.ContainsKey(s.Key)) return "a Merge is already running on " + s.Where;
+            lock (MergeLock)
+            {
+                if (MergeSwaps.ContainsKey(s.Key)) return "a Merge is already running on " + s.Where;
+                // Minors (4): a late cancel's pair is being placed again on this account and root (MergeLateRun): refused until it ends.
+                if (MergeLateRunning.Any(x => x.Key == s.Key)) return MergeLateBusy;
+            }
             // "the position is flat"
             int posNow = SignedPosition(a, i), posEff = EffectivePosition(a, i);
             if (posNow == 0 && posEff == 0) return "Nothing to merge: " + a.Name + " is flat on " + s.Root + ".";
@@ -803,7 +810,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (orders.Count == 0) return null;
             string why = MergeAct(s, "submit", orders, pair);
-            if (why != null) return why;
+            return why ?? MergeConfirm(s, orders);
+        }
+
+        // After a submit: logged, then wait until NinjaTrader has accepted every one (a market exit: or filled it).
+        private static string MergeConfirm(MergeSwapState s, List<Order> orders)
+        {
             ChartBridgeServer.Log("merge step on " + s.Where + ": placed " + string.Join(", ", orders.Select(o => (o.Name ?? "") + " for " + o.Quantity)));
             return MergeWait(s, () => orders.All(MergeConfirmed), () => orders.Any(o => o.OrderState == OrderState.Rejected) ? "NinjaTrader rejected " + orders.First(o => o.OrderState == OrderState.Rejected).Name : null,
                              "the order " + (orders[0].Name ?? ""));
@@ -944,6 +956,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly List<MergeSwapState> MergeLateRunning = new List<MergeSwapState>();   // Flatten aborts these too
         private static readonly Dictionary<string, double> MergeFlattenAt = new Dictionary<string, double>();   // account|contract -> last Flatten sent
         public static double MergeLateWatchMs = 600000;
+        private const string MergeLateBusy = "a restore is finishing: try Merge again in a moment";   // minors (4): MergeStart's refusal while MergeLateRun runs
 
         private static void MergeWatchLate(MergeSwapState s, MergeUnit u)
         {
@@ -987,10 +1000,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else MergeLateRunning.Add(s);
                 }
                 if (s.Aborted) { ChartBridgeServer.Log("merge on " + s.Where + ": the late cancel of " + l.U.Name() + " landed after a Flatten or during another Merge; nothing placed"); return; }
-                int before = MergeStopCover(s), pos = Math.Abs(SignedPosition(s.Account, s.Instrument));
-                string why = before >= pos ? null : MergePlaceAgain(s, l.U);
+                // Minors (4): the count and the send happen in MergePlaceAgain, under MergeSendLock (the swap's send lock), never here.
+                string why = MergePlaceAgain(s, l.U);
                 string text = s.Where + ": the cancel of " + l.U.Name() + " landed late, after the merge ended; " +
-                              (before >= pos ? "the stops already cover the position, nothing placed" : why == null ? "ChartBridge placed the pair again" : "the pair could not be placed again (" + why + ")") +
+                              (why != null ? "the pair could not be placed again (" + why + ")" : s.PlacedAgain > 0 ? "ChartBridge placed the pair again" : "the stops already cover the position, nothing placed") +
                               "; " + MergeCoverText(s) + "; check NinjaTrader";
                 if (MergeStopCover(s) < Math.Abs(SignedPosition(s.Account, s.Instrument))) Alarm(text); else Warn(text);
             }
@@ -1029,20 +1042,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             else if (MayFill(u.Stop.OrderState)) return null;   // never asked to cancel (or its cancel was refused): it is still there
             if (MergeFlipped(s)) return "the position turned to the other side";   // fix1: the fallback then cancels the old side (MergeOnFlip)
-            int pos = Math.Abs(SignedPosition(s.Account, s.Instrument)), qty = Math.Min(u.Qty, pos - MergeStopCover(s));
-            if (qty <= 0) { ChartBridgeServer.Log("merge restore on " + s.Where + ": " + u.Name() + " not placed again; the position no longer needs it"); return null; }
-            List<MergeSpec> specs = u.Specs.Where(sp => sp.Role == "stop" || !u.Merged).ToList();
-            bool oco = specs.Count > 1 && specs.All(sp => sp.Oco);
-            string ocoId = oco ? "cb-" + u.Tag + "-" + u.Fill + (u.Bucket > 0 ? "k" + u.Bucket : "") + "-r" + MergeRunId + "-" + Interlocked.Increment(ref mergeOcoSeq).ToString(CultureInfo.InvariantCulture) : "";
-            List<Order> place = specs.Select(sp => MergeCreate(s, sp, Math.Min(qty, sp.Qty), ocoId)).ToList();
+            // Minors (4): the count and the send under MergeSendLock, the lock every swap's order call and Flatten's abort take, so
+            // no other swap's order call and no Flatten comes between them (MergeLateRun counts nowhere else). The wait for
+            // NinjaTrader's confirmation is after the lock, so a Flatten is never held up by it.
+            int qty;
+            List<Order> place;
             Pair pair = null;
-            if (!u.Merged)
+            lock (MergeSendLock)
             {
-                pair = new Pair { Bracket = u.OldPair != null ? u.OldPair.Bracket : null, Qty = qty };
-                pair.Stop = place.FirstOrDefault(o => MergeParse(o).Role == "stop");
-                pair.Target = place.FirstOrDefault(o => MergeParse(o).Role == "target");
+                if (s.Aborted) return "Flatten";
+                int pos = Math.Abs(SignedPosition(s.Account, s.Instrument));
+                qty = Math.Min(u.Qty, pos - MergeStopCover(s));
+                if (qty <= 0) { ChartBridgeServer.Log("merge restore on " + s.Where + ": " + u.Name() + " not placed again; the position no longer needs it"); return null; }
+                List<MergeSpec> specs = u.Specs.Where(sp => sp.Role == "stop" || !u.Merged).ToList();
+                bool oco = specs.Count > 1 && specs.All(sp => sp.Oco);
+                string ocoId = oco ? "cb-" + u.Tag + "-" + u.Fill + (u.Bucket > 0 ? "k" + u.Bucket : "") + "-r" + MergeRunId + "-" + Interlocked.Increment(ref mergeOcoSeq).ToString(CultureInfo.InvariantCulture) : "";
+                place = specs.Select(sp => MergeCreate(s, sp, Math.Min(qty, sp.Qty), ocoId)).ToList();
+                if (!u.Merged)
+                {
+                    pair = new Pair { Bracket = u.OldPair != null ? u.OldPair.Bracket : null, Qty = qty };
+                    pair.Stop = place.FirstOrDefault(o => MergeParse(o).Role == "stop");
+                    pair.Target = place.FirstOrDefault(o => MergeParse(o).Role == "target");
+                }
+                string sendWhy = MergeAct(s, "submit", place, pair);   // MergeSendLock again (the same thread): Flatten checked there too
+                if (sendWhy != null) return sendWhy;
+                s.PlacedAgain += qty;
             }
-            string why = MergeSubmit(s, place, pair);
+            string why = MergeConfirm(s, place);
             if (why != null) return why;
             if (u.Merged)
             {

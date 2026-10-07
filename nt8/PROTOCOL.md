@@ -1729,6 +1729,12 @@ Where the text above leaves a detail open, the build does this. Each is **(lead'
   placed again at its own prices for what the position still needs, never over it, with a `status` message saying so (an
   `error` if the stops still do not cover the position). A Flatten since then, or another Merge running, drops it. `restored`
   is answered only when the stops, none of them waiting on a cancel, cover exactly the position.
+- **A late placement and Merge (minors, 4).** While a late cancel's pair is being placed again on an account and root, `merge`
+  there is refused: "a restore is finishing: try Merge again in a moment". The check is made with the freeze, under the same
+  lock, so a Merge and a late placement never run together on one account and root. The placement counts the stops and sends
+  the pair under MergeSendLock, the lock every swap's order call and Flatten's abort take, so no other order call of a swap
+  and no Flatten comes between the count and the send; the wait for NinjaTrader's confirmation comes after that lock, so a
+  Flatten is never held up by it. The restore inside a swap counts and sends the same way.
 - **A flip during a swap (fix1).** If the position turns to the other side (a long that is now short), nothing is put back (a
   stop or target of the old position is on the side that adds to the new one): every ChartBridge leg of the old position is
   cancelled, the new position's own legs stay, and a `status` `error` says how many contracts held now have no stop. `result`
@@ -1910,6 +1916,16 @@ fix has a check in `nt8/check/CopierHarness.cs` ("review 2 ...") or `Integration
   whose leader is not flat is sized from the smaller reading. There is no wait. Once both readings agree, the copier's stops
   there are shrunk to what it holds (newest first; never while a reduce runs; flat or the other way is left to the sweep),
   so they never stay above the position. This also covers the orders mode stop that waited for the leader's (CheckWaits).
+- **Flat by both readings: at once** (minors, 1). When a follower's position update says flat, both readings agree it is flat,
+  and its connection is steady (30 s), the copier's stops and exits on that contract are cancelled at once, young or not, and
+  logged (`copierEvent` `sweep`: "flat by both readings (closed outside ChartBridge)"). This covers a follower flattened
+  outside ChartBridge (by hand, or a prop firm's liquidation) while a copy's fill was in flight; the sweep (3 to 5 s) is
+  no longer needed for that. Its copier entries are left to the sweep (an orders mode entry may be waiting for the leader's).
+- **A position update that lags** (minors, 2). The copier's stops are never shrunk below the larger reading while a copy's
+  fill there is not yet in the position (the readings must agree, so both are the larger). NinjaTrader's second reading
+  forgets a fill after 10 s; a copy fill still not booked then holds the trim on that contract, with one `status` `warn`
+  ("a copied fill's position update has not come in 10 s; its copier stops are not shrunk until NinjaTrader updates the
+  position"), until a fresh position update arrives for it. Fills are marked as copy fills when NinjaTrader reports them.
 - **A fill handled while the copier's Flatten runs** (review 3): each follower contract keeps a count of the copier's
   flattens, raised before NinjaTrader's Flatten is sent. A fill is recorded with the count of its moment; if the count moved
   before its stop is placed, the fill is late (as above), so no stop or exit is sent after the Flatten. A copier stop or
@@ -1972,8 +1988,11 @@ choice in `bot-account.txt` next to `config.txt` (two `#` lines, then `account<T
 no file: Sim101). A file that cannot be understood is never written over and stands the bot down (no new entries) until the
 page chooses the account again or the file is deleted. `botAccount` is refused, in plain words, unless the account is in
 NinjaTrader under that exact name, never Backtest or Playback, and passes the account gates now (trading on, its checkmark or
-`tradeAccounts`, Connected); while the copier uses it (a follower that is on, or the leader); and while the bot has a position
-or a working entry ("the bot has a position or a working entry: choose its account when it is flat"). A change expires the
+`tradeAccounts`, Connected); while the copier uses it (a follower that is on, or the leader); while the bot has a position
+or a working entry ("the bot has a position or a working entry: choose its account when it is flat"); and (minors, 3) while
+the account chosen, or the bot's account now, holds any position or any working order on the bot's root, the bot's or not,
+any contract month, by either position reading ("EVAL-A holds a position or a working order on MNQ: choose the bot's account
+when both accounts are flat on MNQ", or "the bot's account Sim101 holds ..."). A change expires the
 open proposals as `not answered` (they were for the old account), is logged with SIM or LIVE, and the bot gets `welcome`
 again. `bot`, `welcome` and `botProposal` carry `account` and `sim` (NinjaTrader's simulator or not: the page's SIM or LIVE
 mark; unknown is `false`, shown LIVE).

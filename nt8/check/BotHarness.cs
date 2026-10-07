@@ -759,7 +759,29 @@ public static class BotHarness
             Deliver("EVAL-A", mnq, MarketPosition.Long, 1, 24999, "EXIT" + Guid.NewGuid().ToString("N").Substring(0, 6));
             foreach (Order o in eval.Orders.ToList()) if (ChartBridgeOrders.IsWorking(o.OrderState)) { o.OrderState = OrderState.Cancelled; Update(o); }
             eval.Positions.Clear();
+            ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear();   // every fill booked (as NinjaTrader's position updates do)
         }
+        // Minors (3): any position or working order on the bot's root, not only the bot's own, on the account chosen or on the
+        // bot's account now, refuses the change, with a plain reason; nothing changes. Another root does not count.
+        Position handPos = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+        sim.Positions.Add(handPos);
+        Page(AccountMsg("Sim101"));
+        Check(PageReject().Contains("Sim101 holds a position or a working order on MNQ: choose the bot's account when both accounts are flat on MNQ") && ChartBridgeBot.BotAccount == "EVAL-A",
+              "minors (3): botAccount refused while the account chosen holds a position on the bot's root (not the bot's): " + PageReject());
+        sim.Positions.Remove(handPos);
+        Order handOrder = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24900, Name = "by hand", OrderState = OrderState.Working };
+        sim.Orders.Add(handOrder);
+        Page(AccountMsg("Sim101"));
+        Check(PageReject().Contains("Sim101 holds a position or a working order on MNQ") && ChartBridgeBot.BotAccount == "EVAL-A",
+              "minors (3): botAccount refused while the account chosen has a working order on the bot's root: " + PageReject());
+        handOrder.OrderState = OrderState.Cancelled;
+        Position evalPos = new Position { Instrument = mnq, MarketPosition = MarketPosition.Short, Quantity = 2, AveragePrice = 25000 };
+        eval.Positions.Add(evalPos);
+        Page(AccountMsg("Sim101"));
+        Check(PageReject().Contains("the bot's account EVAL-A holds a position or a working order on MNQ: choose the bot's account when both accounts are flat on MNQ") && ChartBridgeBot.BotAccount == "EVAL-A",
+              "minors (3): botAccount refused while the bot's account now holds a position on its root (not the bot's): " + PageReject());
+        eval.Positions.Remove(evalPos);
+        Check(!File_("bot-account.txt").Contains("account\tSim101"), "minors (3): nothing saved while refused");
         // copilot: the proposal carries the account and the mark; a change of account expires it (never sent)
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"copilot\"}");
         string pid = NewId();

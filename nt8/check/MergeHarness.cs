@@ -52,7 +52,7 @@ public static class MergeHarness
             named["MNQ"] = mnq;
             ChartBridgeOrders.ResetConfig();
             ChartBridgeOrders.ReadConfig("trading", "true");
-            ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, EVAL-B, EVAL-C, EVAL-D, EVAL-E, EVAL-F, EVAL-G, EVAL-H, EVAL-J, EVAL-K, EVAL-L, EVAL-N, EVAL-P, EVAL-Q, EVAL-R, EVAL-S, EVAL-T, EVAL-U, EVAL-V, EVAL-W");
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, EVAL-B, EVAL-C, EVAL-D, EVAL-E, EVAL-F, EVAL-G, EVAL-H, EVAL-J, EVAL-K, EVAL-L, EVAL-N, EVAL-P, EVAL-Q, EVAL-R, EVAL-S, EVAL-T, EVAL-U, EVAL-V, EVAL-W, EVAL-X");
             ChartBridgeOrders.ReadConfig("maxQty.MNQ", "20");
             ChartBridgeOrders.MergeConfirmMs = 400; ChartBridgeOrders.MergeQuietMs = 100; ChartBridgeOrders.MergePollMs = 5;
             ChartBridgeOrders.NewToken();
@@ -74,6 +74,7 @@ public static class MergeHarness
             RestoreFails();
             CancelLandsLate();       // fix4 (G1)
             CancelLandsInRestore();  // fix4 (G1)
+            LateRestoreLocked();     // minors (4)
             FallbackRejected();      // fix1 (F3)
             FlattenDuringSwap();
             FlattenRefusedMidSwap(); // fix1 (F1)
@@ -742,6 +743,53 @@ public static class MergeHarness
         Order again = Live(a).FirstOrDefault(o => (o.Name ?? "").Contains(" stop f1 q1 p25008"));
         Check(m.Contains("\"result\":\"restored\"") && StopCover(a) == 3 && again != null && again != st3,
               "G1: the cancel lands while the restore waits (bounded): the pair is placed again and only then `restored`: " + m + " / " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
+        Done(a);
+    }
+
+    // Minors (4): while a late cancel's pair is being placed again, Merge is refused on that account and root ("a restore is
+    // finishing"), and the late placement counts the stops and sends under the swap's send lock (MergeSendLock): a stop that
+    // appears while another order call holds that lock is counted, so the pair is never placed over it.
+    static void LateRestoreLocked()
+    {
+        Account a = NewAccount("EVAL-X");
+        Entry(a, true, 1, 25000); Entry(a, true, 1, 25004); Entry(a, true, 1, 25008);
+        Order st3 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25008")), tg3 = a.Orders.First(o => (o.Name ?? "").Contains(" target f1 q1 p25008"));
+        Hold = (kind, o) => kind == "cancel" && (o == st3 || o == tg3);
+        string m = DoMerge(a, "lk");
+        Hold = null;
+        Check(m.Contains("\"result\":\"failed\"") && StopCover(a) == 3, "minors (4): set up: a cancel still pending after the merge: " + m);
+        object sendLock = typeof(ChartBridgeOrders).GetField("MergeSendLock", PS).GetValue(null);
+        System.Collections.IList running = (System.Collections.IList)typeof(ChartBridgeOrders).GetField("MergeLateRunning", PS).GetValue(null);
+        object mergeLock = typeof(ChartBridgeOrders).GetField("MergeLock", PS).GetValue(null);
+        int from;
+        lock (sent) from = sent.Count;
+        Order other = null;
+        Monitor.Enter(sendLock);   // another order call of a swap is being sent
+        try
+        {
+            st3.OrderState = OrderState.Cancelled; Update(a, st3);
+            tg3.OrderState = OrderState.Cancelled; Update(a, tg3);
+            Stopwatch sw = Stopwatch.StartNew();
+            int n = 0;
+            while (sw.ElapsedMilliseconds < 3000) { lock (mergeLock) n = running.Count; if (n > 0) break; Thread.Sleep(2); }
+            Check(n > 0, "minors (4): the late cancel landed: its placement runs");
+            Thread.Sleep(150);
+            Thread.Sleep(ChartBridgeOrders.MergeQuietMs + 50);
+            Msg("merge", MergeMsg(a, "lk2"));
+            Check(Rejected("a restore is finishing: try Merge again in a moment") && ChartBridgeOrders.MergeFrozen(a, mnq) == false,
+                  "minors (4): Merge is refused while a late placement runs on that account and root: " + Last());
+            // a stop for the uncovered contract appears while the lock is held (placed by hand with ChartBridge's name)
+            other = new Order { Account = a, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.StopMarket, Quantity = 1, StopPrice = 25006, Name = st3.Name, OrderState = OrderState.Working };
+            lock (a.Orders) a.Orders.Add(other);
+        }
+        finally { Monitor.Exit(sendLock); }
+        string said = WaitFor(from, "the cancel of CB#", 3000);
+        Stopwatch w2 = Stopwatch.StartNew();
+        int left = 1;
+        while (w2.ElapsedMilliseconds < 3000) { lock (mergeLock) left = running.Count; if (left == 0) break; Thread.Sleep(2); }
+        Check(StopCover(a) == 3 && Pos(a) == 3 && IsLive(other) && said.Contains("the stops already cover the position, nothing placed"),
+              "minors (4): the late placement counts and sends under the swap's lock: the stop that appeared is counted, the pair is not placed over it: " +
+              said + " / " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
         Done(a);
     }
 

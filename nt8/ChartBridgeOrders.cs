@@ -529,7 +529,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 List<double[]> list;
                 if (!Moves.TryGetValue(key, out list)) Moves[key] = list = new List<double[]>();
-                list.Add(new double[] { IsBuy(o) ? delta : -delta, ChartBridgeTime.NowUtcMs() });
+                list.Add(new double[] { IsBuy(o) ? delta : -delta, ChartBridgeTime.NowUtcMs(), ChartBridgeCopier.IsCopyEntry(o) ? 1 : 0 });   // 0.4.0 copier: minors (2), a copy entry's fill is marked (third value 1)
             }
         }
 
@@ -621,6 +621,27 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on the bot's account and root.
         public static string FlattenForBot(string root) { return Flatten("{\"account\":" + CbJson.Str(ChartBridgeBot.BotAccount) + ",\"root\":\"" + root + "\"}"); }
+
+        // 0.4.0 minors (3): botAccount's check. Any position (either reading: listed, or a fill not yet in it), or any order that may
+        // still fill (NinjaTrader's list and ChartBridge's own just sent), on root in any contract month, on this account.
+        internal static bool BotHoldsOnRoot(Account a, string root)
+        {
+            if (a == null || string.IsNullOrEmpty(root)) return false;
+            Func<Instrument, bool> onRoot = i => i != null && ((i.MasterInstrument != null && string.Equals(i.MasterInstrument.Name, root, StringComparison.OrdinalIgnoreCase)) || ChartBridgeServer.RootFor(i) == root);
+            List<Position> positions;
+            lock (a.Positions) positions = a.Positions.ToList();
+            if (positions.Any(p => onRoot(p.Instrument) && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0)) return true;
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            if (orders.Any(o => onRoot(o.Instrument) && MayFill(o.OrderState))) return true;
+            double now = ChartBridgeTime.NowUtcMs();
+            string prefix = a.Name + "|" + root + " ";
+            lock (Moves)
+                foreach (KeyValuePair<string, List<double[]>> kv in Moves)
+                    if (kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && kv.Value.Where(m => now - m[1] <= MoveTtlMs).Sum(m => m[0]) != 0) return true;
+            return false;
+        }
 
         private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed)
         {

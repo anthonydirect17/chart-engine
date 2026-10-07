@@ -712,6 +712,8 @@ public static class CopierHarness
         CancelPendingCovers();   // review 3 A
         StopResync();
         SweepNeedsSteadyFlatTwice();
+        FlatOutsideCancelsAtOnce();   // minors (1)
+        ExpiredFillHoldsTrim();       // minors (2)
         Msg("copierFollower", Follower("SIM-F1", "true", "3", "micro", "null"));
         Msg("copierFollower", Follower("SIM-F3", "true", "1", "micro", "null"));
     }
@@ -967,6 +969,68 @@ public static class CopierHarness
         Check(After(f1, b).Count == 0, "review 2 finding 5: one flat reading on a steady connection: not yet");
         ChartBridgeCopier.Tick(t + 3300);
         Check(After(f1, b).SequenceEqual(new[] { "cancel " + fs.Name }), "review 2 finding 5: flat twice on a steady connection: the copier stop is cancelled: " + string.Join(" | ", After(f1, b)));
+        Reset();
+    }
+
+    // Minors (1): a copy's fill, then the follower flattened OUTSIDE ChartBridge (by hand, or a prop firm's liquidation) while its
+    // copier stop is still young: once both readings agree it is flat on a steady connection, the copier stop is cancelled at
+    // once (not 3 to 5 s later by the sweep), and logged. Not on a connection that is not steady (the sweep's, later).
+    static void FlatOutsideCancelsAtOnce()
+    {
+        foreach (bool steady in new[] { false, true })
+        {
+            LeaderEntry(1);
+            Order fe = CopyEntry(f1);
+            if (fe == null) { Check(false, "minors (1): SIM-F1 got a copy of 1"); Reset(); return; }
+            Fill(f1, fe, 1, 25000); Pos(f1, mnq, 1);
+            Order fs = CopierStop(f1);
+            if (!steady) ConnectedSince()[f1] = Now();
+            int b = f1.Calls.Count;
+            sent.Clear();
+            Order liq = new Order { Account = f1, Instrument = mnq, OrderAction = OrderAction.Sell, OrderType = OrderType.Market, Quantity = 1, Name = "Close", OrderState = OrderState.Working };
+            f1.Orders.Add(liq);
+            Fill(f1, liq, 1, 24999); Pos(f1, mnq, 0);   // the liquidation's fill, then the position: flat by both readings
+            List<string> c = After(f1, b);
+            if (steady)
+                Check(fs != null && c.SequenceEqual(new[] { "cancel " + fs.Name }) && EventSaid("sweep", "SIM-F1", "flat by both readings (closed outside ChartBridge): its copier stops and exits cancelled at once"),
+                      "minors (1): flattened outside ChartBridge on a steady connection: the young copier stop is cancelled at once, and logged: " + string.Join(" | ", c));
+            else
+                Check(c.Count == 0, "minors (1): a connection that is not steady: nothing at once (the sweep's, later): " + string.Join(" | ", c));
+            ConnectedSince()[f1] = 0;
+            Reset();
+        }
+    }
+
+    // Minors (2): a copy's fill whose position update lags past 10 s (NinjaTrader's) expires from the second reading. The copier
+    // stops are never shrunk below the larger reading while a copy fill is unbooked; an expired one raises a status warn and
+    // holds the trim until a fresh position update arrives.
+    static void ExpiredFillHoldsTrim()
+    {
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Order e = lead.Orders.Last();
+        Fill(lead, e, 1, 25000); Pos(lead, mnq, 1);
+        Order fe1 = CopyEntry(f1);
+        if (fe1 == null) { Check(false, "minors (2): SIM-F1 got the first copy"); Reset(); return; }
+        Fill(f1, fe1, 1, 25000); Pos(f1, mnq, 1);
+        Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
+        Order fe2 = CopyEntry(f1);
+        if (fe2 == null || fe2 == fe1) { Check(false, "minors (2): SIM-F1 got the second copy"); Reset(); return; }
+        int b = f1.Calls.Count;
+        Fill(f1, fe2, 1, 25000);   // its position update does not come
+        Check(SellStops(f1, mnq) == 2, "minors (2): set up: two copier stops for the two fills (" + SellStops(f1, mnq) + ")");
+        var moves = (Dictionary<string, List<double[]>>)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null);
+        lock (moves) foreach (List<double[]> l in moves.Values) foreach (double[] m in l) m[1] -= ChartBridgeOrders.MoveTtlMs + 1000;   // 11 s ago
+        sent.Clear();
+        ChartBridgeCopier.Tick(Now());
+        ChartBridgeCopier.Tick(Now() + 1000);
+        List<string> c = After(f1, b);
+        Check(c.Count == 1 && c[0].StartsWith("submit ") && SellStops(f1, mnq) == 2, "minors (2): an expired unbooked copy fill: the copier stops are not shrunk below what it really holds: " + string.Join(" | ", c));
+        Check(sent.Count(m => m.StartsWith("{\"type\":\"status\"") && m.Contains("\"level\":\"warn\"") && m.Contains("MNQ SIM-F1: a copied fill's position update has not come in 10 s")) == 1,
+              "minors (2): and a status warn, once");
+        Pos(f1, mnq, 2);   // the fresh position update
+        ChartBridgeCopier.Tick(Now() + 2000);
+        Check(After(f1, b).Count == 1 && SellStops(f1, mnq) == 2, "minors (2): the fresh position update books it: the stops stay at what it holds: " + string.Join(" | ", After(f1, b)));
         Reset();
     }
 
