@@ -1177,6 +1177,78 @@ String values must be plain (no backslash escapes, at most 200 characters).
 Orders placed in NinjaTrader itself (or anywhere else) on an allowed account also show on the chart,
 with `role` `other`, and can be moved or cancelled from the chart.
 
+## 0.4.0 hardening and markets
+
+### Quote-only markets
+
+`config.txt` `quoteRoots` (default `YM, RTY, GC, SI, CL, 6E, ZN, ZB`; `quoteRoots =` for none) names markets ChartBridge
+serves for the Quote board only. The traded roots stay `roots` (default `MNQ, NQ, MES, ES`); a root in both lists is
+quote only. A quote-only market streams like the others (`hello`, `subscribe`, `history`, `tick`, `profile`, `htf`,
+`weekProfile`, the prior settlement), and every order action for it is refused:
+
+- `order` and `flatten` naming it, and `change`, `plan` and `cancel` naming an order on it (placed in NinjaTrader),
+  get `reject` with the reason `<ROOT> is quote only: ChartBridge shows its prices on the Quote board and refuses every
+  order for it (quoteRoots in config.txt)`. One check, right after the gate and the strict message check, before any
+  other order code. Nothing reaches NinjaTrader.
+- The order code's lookups (`InstrumentFor`, `RootFor`) never return a quote-only root or contract, so its orders and
+  positions are not listed to the page as chart orders, as for any root ChartBridge does not trade.
+
+Each `hello` instrument carries two more fields, after `pointValue` and before `settlement`:
+
+| field | value |
+|---|---|
+| `quoteOnly` | `true` for a quote-only market (orders refused), `false` for a traded root |
+| `priceFormat` | `"decimal"`, or `"32nds"` for ZN and ZB: the page writes 104.109375 as `104'035` (104 and 3.5/32) |
+
+`tick` is NinjaTrader's tick size (MasterInstrument.TickSize); a table in `ChartBridgeTape.cs` is used only when
+NinjaTrader gives none (YM 1, RTY 0.1, GC 0.1, SI 0.005, CL 0.01, 6E 0.00005, ZN 1/64, ZB 1/32).
+
+Front month, per market (New York dates; `contract.<ROOT>` in `config.txt` still wins):
+
+1. NinjaTrader's own rollover list (Tools > Instruments > Rollovers, MasterInstrument.RolloverCollection): the contract
+   month of the latest rollover on or before today, used only when the list also holds a later one (else out of date).
+2. Else the table's rule, the roll 8 calendar days before a key date: YM and RTY as the equity index roots (the third
+   Friday, quarterly); 6E quarterly, its last trade two business days before the third Wednesday; CL every month, its
+   last trade three business days before the 25th of the month before (counted from the business day before the 25th
+   when the 25th is not one); GC (Feb, Apr, Jun, Aug, Oct, Dec), SI (Mar, May, Jul, Sep, Dec), ZN and ZB (quarterly),
+   their first notice day, the last business day of the month before. Business days: Monday to Friday, not an NYSE holiday.
+
+The traded roots keep their rule exactly (checked for every day of 2026 and 2027). How each root was resolved is in the
+Output window at start and in `/diag` `markets`.
+
+Prior settlement: as in 0.3.7, with each market's own settlement time in place of 16:00 ET when it is earlier (CL 14:30,
+GC 13:30, SI 13:25, ZN, ZB and 6E 15:00; 12:00 on an NYSE holiday or early close for all). The snapshot read at
+subscription now goes through the same one queue as the updates, in order, off NinjaTrader's thread.
+
+### Fills after a recompile
+
+The fills already delivered (`Seen`, keyed by account and execution id) are kept in memory only. After F5 the session's
+executions go to The Desk once more. The Desk stores each `(source, account, exec_id)` once and counts a repeat as a
+duplicate (not a rejection, so no Output line), and `pending_fills.jsonl` drops an identical line. Keeping `Seen` in a
+file would instead skip fills that never reached The Desk before the F5 (for example with `postFills` turned on in that
+same F5), so it stays in memory.
+
+### `/diag` additions
+
+| key | what |
+|---|---|
+| `health.memory` | sizes of what grows: `seenFills`, `books`, `pastSessions`, `profileRows`, `windowTrades`, `liveTradesHeld`, `sideTaggers`, `htfSeries`, `weekProfiles`, `settlementRoots`, `seamsKept`, `windowsKept`; `lastSweepUtcMs` (the 10 s sweep), `windowsDroppedAfterSession`, `lastWindowDropUtcMs`; `heapBytes`, `gcGen0`, `gcGen1`, `gcGen2` |
+| `health.threads` | thread-pool headroom: `poolWorkersFree`, `poolWorkersMin`, `poolWorkersMax`, `poolWorkersBusy`, `poolIoFree`, `poolIoMin`, `poolIoMax`; `processThreads`; `pageSendThreads` (one per open page) |
+| `health.pages` | `connects`, `closes`, `notKeepingUp` (pages closed for being behind), `sendErrors`, `lastConnectUtcMs`, `lastNotKeepingUpUtcMs`, `sendMs` (every send since the start) |
+| `health.errors` | each rate-limited error kind (`tick error`, `tick send error`, `history error`, `tape counter error`) and how many came; the Output window says each at most once a minute, with the count since its last line |
+| `pages[].sendMs` | that page's sends: `n`, `p50`, `p95`, `max` in ms |
+| `markets` | per served root: `contract`, `quoteOnly`, `tick`, `tableTick`, `priceFormat`, `settlesBy`, `resolvedBy` |
+| `tape` | `failed` (faults in the counters, never a lost trade), and per root `late` (prints of an earlier session) with `session` and `last`: `from` (18:00 ET) and `slots`, one per 15 minutes with prints: `at`, `prints`, `perSec`, `peakPerSec`, `gapMs` (`p50`, `p95`, `max`, by NinjaTrader's time on the prints), `sameMsU` and `sameMsRx` (share of prints in the same millisecond as the one before, by NinjaTrader's time and by arrival), `jumpTicks` (share of steps of `0`, `1`, `2`, `3+` ticks), `delayMs` (`p50`, `p95` of arrival minus NinjaTrader's time; `below0` counted apart) |
+
+Medians and p95 are read from fixed log buckets, each about 41 percent wider than the last: the value given is the
+bucket's upper edge ("at most"). Nothing is sorted and nothing is made per trade; `max` is exact.
+
+### Send loop
+
+Each page's send loop runs on its own thread (as the tick request worker does), so a page never holds a thread-pool
+thread while it waits for its next message. Order is unchanged: before every data entry, and between the held trades
+released after `ready`, the order lane is sent first.
+
 ## Protocol v3 (ChartBridge 0.4.0)
 
 Decided by Anthony for the pre-cruise build (2026-10-07). v3 **only adds**: every v2 rule above (the eight safety gates,
@@ -1200,8 +1272,6 @@ Examples of every new message, both directions, are in `test/fixtures/protocol-v
 | `cancelFromList` | a `cancel` with `from: "list"` is refused | cancel from the page's Working orders tab |
 | `copier` | every `copier*` message is refused; nothing is copied | the copier engine (Sim followers only) |
 | `bot` | `/bot` answers 404; every `bot*` page message is refused | the bot channel |
-| `tapeStats` | no tape counters | `/diag` `tape` (see Tape timing) |
-| `quoteRoots` | none | the quote-only markets listed, e.g. `YM, RTY, GC, SI, CL, 6E, ZN, ZB` |
 | `botRoot` | `MNQ` | the one root the bot trades (a micro or a mini of a served root) |
 
 `on`, `true` and `1` mean on (any case); anything else is off, with one Output line naming the key and the value. The
@@ -1209,7 +1279,7 @@ switches are read at start like every key (recompile or restart NinjaTrader afte
 
 ### Telling the page what is on
 
-- `hello.features` adds `"v3"` (this ChartBridge speaks v3) and `"quoteOnly"` when `quoteRoots` names any root. Features are
+- `hello.features` adds `"v3"` (this ChartBridge speaks v3). Quote-only markets are told per instrument (`quoteOnly`). Features are
   not secret: every page that may read gets them.
 - **`client`** (page to server, new, the first v3 message): `{"type":"client","v":3}`, sent once right after `hello`. A
   connection that never sends it is a v2 page and gets **no** v3 message at all (the 1.15 page keeps working on 0.4.0
@@ -1447,33 +1517,11 @@ brackets could not be put back; ONE STOP at 24,980.25 covers 3 contracts; NO TAR
 
 ### Quote-only markets (`quoteRoots`)
 
-`quoteRoots = YM, RTY, GC, SI, CL, 6E, ZN, ZB` (any of them; empty by default) streams these markets to the page like
-the others (`subscribe`, `history`, `ticks`, `tick`, `settlement`, `htf`, `weekProfile`). **Every order for them is refused**
-with a plain reason ("YM is quote only: ChartBridge does not trade it"), at gate 6, before any other gate: `order`, `change`,
-`plan`, `cancel`, `flatten`, `merge`, copier and bot. Orders placed in NinjaTrader on them are never sent to the page (gate 6
-as before). They are not in `profileRoots` or `barsRoots` unless listed there.
-
-**Front month** per root (each its own roll; `contract.<ROOT>` in `config.txt` overrides it, and is the fallback when
-NinjaTrader does not know the computed name). Lead's default rolls, close to NinjaTrader's own:
-
-| root | months | rolls to the next listed month |
-|---|---|---|
-| `YM`, `RTY` | Mar, Jun, Sep, Dec | 8 days before the third-Friday expiry (as NQ and ES) |
-| `6E` | Mar, Jun, Sep, Dec | 8 days before the third Wednesday |
-| `ZN`, `ZB` | Mar, Jun, Sep, Dec | on the 24th of the month before the contract month |
-| `GC` | Feb, Apr, Jun, Aug, Oct, Dec | on the 24th of the month before the contract month |
-| `SI` | Mar, May, Jul, Sep, Dec | on the 24th of the month before the contract month |
-| `CL` | every month | the contract for month m expires about the 20th of m minus 1, so on or after the 10th of a month the front is two months ahead, before it one month ahead |
-
-**How the page learns it.** Each `hello.instruments` entry (every root, not only these) adds:
-
-- `quoteOnly` (*bool*): true for a `quoteRoots` root; the page shows no order controls for it and sends no orders.
-- `tick` and `pointValue`: from NinjaTrader's master instrument, as for every root (YM 1, RTY 0.1, GC 0.1, SI 0.005,
-  CL 0.01, 6E 0.00005, ZN 0.015625, ZB 0.03125).
-- `format`: `"dec"` with `decimals` (YM 0, RTY 1, GC 1, SI 3, CL 2, 6E 5, NQ and ES 2), or for bonds NinjaTrader's 32nds:
-  `"32"` (ZB: `118'15` is 118 and 15/32: whole, an apostrophe, the 32nds as two digits) or `"64"` (ZN, half 32nds:
-  `104'035` is 104 and 3.5/32: whole, an apostrophe, the 32nds as two digits, then `0` or `5` for the half). Prices on the
-  wire stay plain decimals (`104.109375`); only the page formats them.
+Built and documented in "0.4.0 hardening and markets" above, which is the contract: `quoteRoots` (default `YM, RTY, GC,
+SI, CL, 6E, ZN, ZB`, `quoteRoots =` for none), the early refusal of every order action naming one, each market's own
+front-month roll, and the `hello` instrument fields `quoteOnly` and `priceFormat` (`"decimal"`, or `"32nds"` for ZN and
+ZB; the page shows half 32nds when the tick is 1/64, so ZN `104.109375` is `104'035` and ZB `118.46875` is `118'15`).
+Copier and bot orders on a quote-only root are refused by the same check. Prices on the wire stay plain decimals.
 
 ### Copier engine (`copier = on`)
 
@@ -1602,23 +1650,11 @@ recovery cover them.
 
 ### Tape timing and new `/diag` counters
 
-With `tapeStats = on`, `/diag` adds `tape`: per root, the slots of the current session (15 minutes each, New York time,
-`"09:30"` keys), the latest 96 kept, each:
-
-- `prints`, `perSec` (prints over the slot's elapsed seconds);
-- `gapMs`: `median`, `p95` (read from fixed buckets of the gap between consecutive prints, edges 0, 1, 2, 5, 10, 20, 50,
-  100, 200, 500, 1000, 2000, 5000 ms and over: the upper edge of the bucket the rank falls in), `longest` (exact);
-- `sameMsShare`: the share of prints stamped in the same millisecond as the print before (a batch);
-- `jumps`: `{"1": n, "2": n, "3+": n}`, prints that moved the price that many ticks from the print before;
-- `rxMinusU`: `median`, `p95` (the same buckets) and `max` of `rx - u` in ms.
-
-Counted on the live trade path with fixed arrays (no allocation per trade). Always in `/diag`, every switch or not:
-`memory` (`managedMb`, `gen0`, `gen1`, `gen2` collection counts, `trims` and `lastTrimUtcMs`: ChartBridge's own clean-ups of
-kept data); `threads` (`workerAvailable`, `workerMax`, `ioAvailable`, `ioMax`, `minWorkerAvailableToday`); `send` (per page:
-`messages`, `medianUs`, `p95Us`, `maxUs` of each WebSocket send, by the same bucket method); `reconnects` (`pages` opened since
-start, `lagCloses`, `feedDrops`, `accountReconnects`); and with the switches on, `merges` (`ok`, `restored`, `failed`,
-`refused`, `lastAtUtcMs`), `copier` (`decisions`, `skipped`, `standDowns`, median `leaderMs`), `bot` (`signals`, `proposals`,
-`answered`, `notAnswered`, `placed`, `refused`, `heartbeatLost`).
+The tape counters and the hardening counters are built and documented in "0.4.0 hardening and markets" above (`/diag`
+`tape`, `health.memory`, `health.threads`, `health.pages`, `health.errors`, `pages[].sendMs`, `markets`). They are always
+on: they never touch the order path and cost no allocation per trade. With a v3 switch on, `/diag` adds its own block:
+`merges` (`ok`, `restored`, `failed`, `refused`, `lastAtUtcMs`), `copier` (`decisions`, `skipped`, `standDowns`, median
+`leaderMs`), `bot` (`signals`, `proposals`, `answered`, `notAnswered`, `placed`, `refused`, `heartbeatLost`).
 
 **The page's receipt-to-frame readout** (page side, nothing on the wire): per chart, the time from a `tick` message's
 arrival to the end of the frame that drew it, median and p95 over the last 60 s, shown beside the delay readout.

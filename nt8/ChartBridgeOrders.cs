@@ -12,7 +12,9 @@
 //      send the token it read from GET /session (new random token each start, no CORS headers);
 //   5. prices on the tick grid, a last price no older than 300 seconds, stops on the right side of the
 //      market (0.3.7: no distance limit unless config.txt sets maxTicksAway; maxBracketTicks likewise);
-//   6. only the roots ChartBridge serves, on the contract it resolved;
+//   6. only the roots ChartBridge serves, on the contract it resolved; never a quote-only root (0.4.0, config.txt quoteRoots:
+//      served for the Quote board only; one early check refuses every order action for them, and the lookups this file
+//      uses, InstrumentFor and RootFor, never return one);
 //   7. at most 10 order actions per second per connection;
 //   8. strict messages: only the keys the protocol names (a misspelt "bracket" is refused, never
 //      ignored), whole numbers must be plain JSON numbers, no duplicate keys, no nested objects other
@@ -365,6 +367,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (type == "auth") { Auth(client, text); return; }
                 string why = Gate(client);
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
+                if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
                 if (why != null) { Reject(client, cid, id, why); return; }
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid);
                 else if (type == "change") why = ChangeOrder(top, id);
@@ -378,6 +381,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeServer.Log("order error: " + ex.Message);
                 Reject(client, cid, id, "ChartBridge error: " + ex.Message);
             }
+        }
+
+        // 0.4.0: the quote-only markets (config.txt quoteRoots; YM, RTY, GC, SI, CL, 6E, ZN, ZB by default) stream to the page for
+        // the Quote board; every order action for them is refused, with a plain reason. The root is the message's own (order,
+        // flatten) or, for change, plan and cancel, that of the order it names.
+        private static string QuoteOnly(string top, string id)
+        {
+            string root = (Str(top, "root") ?? "").ToUpperInvariant();
+            if (root.Length == 0 && !string.IsNullOrEmpty(id))
+            {
+                Order o;
+                lock (Sync) ById.TryGetValue(id, out o);
+                if (o != null && o.Instrument != null && o.Instrument.MasterInstrument != null) root = (o.Instrument.MasterInstrument.Name ?? "").ToUpperInvariant();
+            }
+            if (root.Length == 0 || !ChartBridgeConfig.QuoteOnly(root)) return null;
+            return root + " is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)";
         }
 
         private static void Auth(ChartBridgeClient client, string text)
