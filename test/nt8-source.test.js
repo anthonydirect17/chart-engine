@@ -529,7 +529,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
 // ---- 0.3.4: the side of every trade (behaviour: nt8/check/SidesHarness.cs under Mono, test/trade-sides.test.js)
 test('0.3.4: every trade carries its side, additively, and the seam match ignores it', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.(4\.1|[5-9]) for NinjaTrader 8/);
-  assert.match(code, /public const string Version = "0\.3\.(4\.1|[5-9])";/);
+  assert.match(code, /public const string Version = "0\.(3\.(4\.1|[5-9])|4\.[0-9]+)";/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   // Bid and Ask updates only move the quote: nothing is sent or held for them
   const quote = md.slice(0, md.indexOf('if (type != MarketDataType.Last) return;') + 45);
@@ -575,7 +575,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 // ---- 0.3.5: the served window and the session's volume at price (behaviour: nt8/check/WindowHarness.cs under Mono)
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
-  assert.match(code, /public const string Version = "0\.3\.[5-9]";/);
+  assert.match(code, /public const string Version = "0\.(3\.[5-9]|4\.[0-9]+)";/);
   assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);

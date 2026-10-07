@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased: 1.16.0 (in progress)
+## 1.16.0 (2026-10-07): the pre-cruise release with ChartBridge 0.4.0 (every new order feature switched off)
 
 - **No text inside a chart** (Anthony 2026-10-07): a mounted chart (every workspace chart, a host's) has no legend and no
   **Aa** toggle any more (`live-legend-v1` is read by the single chart page only; `legendToggle` is an empty hidden element
