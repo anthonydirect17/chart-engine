@@ -144,7 +144,9 @@ namespace NinjaTrader.Cbi
                               NetLiquidation, NetLiquidationByCurrency, PositionMargin, RealizedProfitLoss, ShortOptionValue, ShortStockValue, SodCashValue,
                               SodLiquidatingValue, UnrealizedProfitLoss, TotalCashBalance, TrailingMaxDrawdown, WeeklyProfitLoss }
     public enum Currency { UsDollar, Euro, Unknown }
-    public enum Provider { Simulator, Playback, Rithmic, Tradovate, Unknown }
+    // 0.4.0 copier: Unknown first, so a stand-in account is not Sim unless a harness says so (NinjaTrader's own order does not
+    // matter: both lanes read the provider by name).
+    public enum Provider { Unknown, Simulator, Playback, Rithmic, Tradovate }
     public enum AccountStatus { Enabled, Disabled, Unknown }
     public class AccountStatusEventArgs : EventArgs { public Account Account { get; set; } public AccountStatus Status { get; set; } }
     // Stand-in account: records every order call so the Mono harness can check the gates.

@@ -1681,6 +1681,73 @@ follower 3 MNQ.
 | `copier` | `enabled` (the switch), `simOnly` (true), `armed` (*bool*), `standDownWhy` (null or plain words), `leader` (`{account, connection, position}` or null), `mode`, `followers`: `[{account, sim, on, qty, size, root, position, lastAction, lastAt, slippageTicks, skipped, lossLimit, pnlToday, connection}]` | after `auth` and `copierGet`, and on every change |
 | `copierEvent` | `at` (UTC ms), `account`, `action` (`enter`, `stop`, `move`, `reduce`, `flatten`, `skip`, `sweep`, `standDown`, `rearm`, `refused`), `root`, `qty`, `price`, `slippageTicks`, `leaderMs`, `fillMs`, `text` | each copy decision |
 
+#### Copier engine: as built (0.4.0, `nt8/ChartBridgeCopier.cs`)
+
+Built to the rules above. Where they left a detail open, the choice below was made and is marked **(lead's default)**.
+The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) runs Anthony's Sim test list against it.
+
+- **Switch.** `copier = on` (or `true`, `1`); anything else is off with one Output line. Off: every `copier*` message is
+  refused ("The copier is off (copier in config.txt).") and every hook returns at once, so ChartBridge behaves as 0.3.8.
+  `trading = true` stays above it; the copier never changes either switch.
+- **v3 pages only.** Copier messages need a v3 page (`ChartBridgeCopier.IsV3`; the `client` handshake is lane B2's, and until
+  it is merged a minimal stub in the copier file, `StubV3Client`, records `{"type":"client","v":3}`). Such a page gets `copier` after `auth`, with
+  `enabled: false` when the switch is off. `copier` is sent again on every decision and within a second of a position change.
+- **Sim** is read from NinjaTrader: the account's `Provider` (`Account.Provider`, else `Account.Connection.Options.Provider`)
+  must read exactly `Simulator`; anything else, or nothing readable, is not Sim; Backtest and Playback never (lead's default;
+  the accounts lane's `sim` can replace it through `ChartBridgeCopier.IsSim`). Every follower order (entry, stop, move,
+  reduce, flatten, cancel) checks it again first.
+- **Which leader entries.** Only an entry sent from the page on the leader while the copier is armed with a follower on,
+  and (executions mode) still armed when it fills (lead's default). A leader fill with no stop at the broker (its plan
+  removed the stop, or its stop level had traded and it exited at once) is not copied.
+- **Names.** Follower entry `CB#<tag> copy <leader entry tag>` (Day), reduce `CB#<tag> copy out`, follower stop
+  `CB#<tag> stop f<n> q<n> p<fill>` (a lone GTC stop, no target, no OCO), stop-already-traded exit `CB#<tag> exit ...`.
+  The stop is named as a ChartBridge leg, so v2's legs check, missing-stop alarm and flat cleanup watch it too (lead's
+  default). A follower gets no target: the leader's target fill is an exit and is copied as a reduce or a flatten.
+- **Order and lock.** Follower orders are checked and sent one at a time on one copier thread, under the same lock as the
+  page's orders (gate 3 cannot be raced). NinjaTrader's event thread only records and queues. A follower order counts in
+  gate 3 from the moment it is sent.
+- **Skips** (`skipped` on the page): `position limit`, `not connected`, `not checked for trading`, `gone`, `loss limit`,
+  `opposite position` (never cross zero), `no contract` (the micro or mini is not served), `busy` (the follower already
+  holds a copy of the leader's other contract on that one; lead's default), `not a Sim account` (action `refused`). In orders
+  mode also `price` (the leader's price fails gate 5 on the follower's contract) and `kind` (only market, limit and stop are
+  copied; lead's default). The next entry the follower takes clears it.
+- **Loss limit.** P&L today is realized plus unrealized as NinjaTrader reports it (`Account.Get`, US dollars). With a limit
+  set and no reading, the follower is skipped (never guessed). Once at or past the limit it stays skipped until the next
+  18:00 ET session, even if its P&L comes back (lead's default).
+- **Exits.** The leader's exits are read from its position updates (NinjaTrader's own position), acting only on a leader
+  connection that has been Connected for 30 s (v2's steady rule; lead's default). Flat, or turned to the other side in one
+  update: every follower copy on the old side gets NinjaTrader's Flatten on its contract. A scale-out: the share is taken of
+  the contracts the copier gave that follower, rounded half away from zero, at least 1, so a follower whose own stop already
+  took some is not reduced twice (lead's default). The follower's stops are shrunk to the new size first (stops whose leader
+  stop is gone first, then the newest), and the market reduce, sized from the follower's position read again, is sent only
+  once NinjaTrader shows the stops shrunk or cancelled; not confirmed within 3 s: no reduce at all, and a `status` `error`.
+- **A missed exit** (the follower, or the leader's connection, was down when the leader exited): a follower holding a copier
+  position while the leader has been flat on that contract for 4 s (both readings, a steady leader connection, no page entry
+  working there) is flattened (lead's default; the exit rule).
+- **Orders mode.** A follower filled before the leader gets its stop where the leader's planned stop goes if the leader
+  fills at its price; for a market leader entry it waits for the leader's stop up to 2 s, then uses the leader's planned
+  distance from its own fill, or is flattened when the leader has none. Once the leader fills, those stops follow the leader's
+  actual stop. A leader move the follower's contract refuses (gate 5) cancels that follower's order (lead's default).
+- **Stops follow** the leader stop of the same fill increment. When that leader stop goes away while the leader still holds
+  (a merge), a follower stop follows the leader's working stop if all of them are at one price, else stays where it is
+  (lead's default). A move NinjaTrader rejects leaves the stop where it was.
+- **The sweep** leaves an order alone for 3 s after it was sent (its fill or position update may be on its way), and acts only
+  when the follower is flat by both readings (lead's default).
+- **Mass disconnect** counts every listed follower, on or off, as does Re-arm (lead's default).
+- **copierSet** is refused while the current or the new leader has a position or a working entry. The leader cannot be
+  Backtest or Playback.
+- **A restart.** A follower's working copier stop is taken back from the names (its entry's name gives the leader entry's
+  tag) and follows that leader entry's working stop at the same price, if any; a working copier entry from before is
+  cancelled, since it can no longer be linked to the leader's and its fill would get no stop (lead's default). Every start
+  is stood down.
+- **copier.txt** cannot be read: no leader or followers that run, never rewritten, settings and Re-arm refused, `/diag`
+  says so. A failed save keeps the setting in force, raises a `status` `error` and is tried again every second.
+- **copier.log**, next to `config.txt`, one tab-separated line per decision, appended every second off NinjaTrader's thread:
+  `<UTC ISO time> <account or -> <action> <root or -> <qty> <price> <slippageTicks> <leaderMs> <fillMs> <text>`. The
+  Output window gets the same line. A follower's fill is logged with its stop (`stop`: price, slippage, `fillMs`).
+- **`/diag` `copier`** (only with the switch on): `armed`, `followers`, `followersOn`, `decisions`, `skipped`, `standDowns`,
+  `leaderMsMedian` (of the last 200), `openCopies`, `settingsReadFailed`, `settingsSaveFailed`. No account names.
+
 ### Bot channel (`bot = on`)
 
 A local bot program on the trading PC (a rule program, never AI; the bot in this repository's tests is made up)

@@ -210,6 +210,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem) { Live l; why = null; if (name == null || !Lives.TryGetValue(name, out l) || !l.Gone) return false; why = l.GoneWhy; return true; }
         }
 
+        // Integration: Gone for the copier (ChartBridgeCopier.IsGone skips a Gone follower); false with accountChecks off (no
+        // account goes Gone then, as 0.3.8).
+        public static bool IsGone(Account a) { string why; return a != null && Gone(a.Name, out why); }
+
         // Why an entry on this account is refused (gate 2 with the checkmark), for ChartBridgeOrders.FindAccount.
         public static string EntryRefusal(string name)
         {

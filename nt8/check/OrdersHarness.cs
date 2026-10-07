@@ -872,6 +872,8 @@ public static class OrdersHarness
         Console.WriteLine("== base: " + checks + " checks, " + fails + " failed");
         Section("accounts (B2)", AccountsHarness.Run);  // 0.4.0: the per-account checkmark, Gone, Archive, cancel from the Working orders tab, switches off = 0.3.8 (check/AccountsHarness.cs)
         Section("merge (B4)", MergeHarness.Run);        // 0.4.0 B4: Merge stops and targets (check/MergeHarness.cs)
+        Section("copier (B5)", CopierHarness.Run);
+        Section("cross-lane rules (integration)", IntegrationHarness.Run);   // 0.4.0: the rules that hold only with every lane together (check/IntegrationHarness.cs)      // 0.4.0 copier: Anthony's Sim test list against the copier engine (check/CopierHarness.cs)
 
         Console.WriteLine("== total: " + checks + " checks");
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");

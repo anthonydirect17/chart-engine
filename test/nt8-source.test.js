@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge" \};/);   // 0.4.0: accounts (B2) and merge (B4) in the order lane
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5) in the order lane
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -905,4 +905,84 @@ test('0.4.0 B4: Merge sends order calls only from MergeAct (under the Flatten lo
   assert.match(mBody('MergePlaceAgain'), /qty = Math\.Min\(u\.Qty, pos - MergeStopCover\(s\)\)/);
   // C# 5
   assert.ok(!/(^|[\s(=,+:])\$"/m.test(mcode) && !/\?\.\w/.test(mcode) && !/\bnameof\(/.test(mcode), 'C# 5 only');   // a regex's "...)?$" end is fine
+});
+
+// ---- 0.4.0 copier engine (copier = on, off by default; behaviour: nt8/check/CopierHarness.cs under Mono, inside check:orders)
+const csrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeCopier.cs'), 'utf8');
+const ccode = csrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+const copierBodies = name => {
+  const out = [], re = new RegExp('\\bstatic [\\w<>?, ]+ ' + name + '\\(', 'g');
+  let m;
+  while ((m = re.exec(ccode))) {
+    const start = m.index, i = ccode.indexOf('{', start);
+    let depth = 0, end = ccode.length;
+    for (let j = i; j < ccode.length; j++) { if (ccode[j] === '{') depth++; else if (ccode[j] === '}' && --depth === 0) { end = j + 1; break; } }
+    out.push(ccode.slice(start, end));
+  }
+  assert.ok(out.length > 0, name + ' not found in ChartBridgeCopier.cs');
+  return out.join('\n');
+};
+
+test('0.4.0 copier: the file ships, is compiled and run by both checks, and is C# 5', () => {
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeCopier.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs [^\n]*ChartBridgeCopier\.cs check\/Nt8Stubs\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/CopierHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("copier \(B5\)", CopierHarness\.Run\);/);
+  assert.ok(!/(^|[\s(=,+:?])\$"/m.test(ccode), 'string interpolation');
+  assert.ok(!/\?\.\w/.test(ccode), 'null-conditional ?.');
+  assert.ok(!/\bnameof\(|\bout var\b/.test(ccode), 'nameof or out var');
+});
+
+test('0.4.0 copier: off by default, and it never turns trading or itself on', () => {
+  // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the one v3 handshake and send (no stub left)
+  assert.match(ccode, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Copier; \} \}/);
+  assert.match(copierBodies('ResetConfig'), /ChartBridgeSwitches\.Note\("copier", "off"\);/);
+  assert.match(copierBodies('ReadConfig'), /return key == "copier";/);
+  assert.match(copierBodies('IsV3'), /return ChartBridgeV3\.IsV3\(c\);/);
+  assert.match(copierBodies('Broadcast'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
+  assert.ok(!/Stub|NoteV3/.test(ccode), 'no v3 stub left in the copier');
+  assert.ok(!/ChartBridgeOrders\.Enabled\s*=|ReadConfig\("trading"|\bEnabled = true\b/.test(ccode), 'never sets trading or the switch');
+  // every hook returns at once with the switch off
+  for (const f of ['LeaderEntryCheck', 'LeaderEntrySent', 'LeaderFilled', 'OnOrderUpdate', 'OnPositionUpdate', 'Tick', 'Start'])
+    assert.match(copierBodies(f), /if \(!Enabled[ )|]/, f + ' checks the switch first');
+  assert.match(copierBodies('OnMessage'), /if \(why == null && !Enabled\) why = "The copier is off \(copier in config\.txt\)\.";/);
+  assert.match(copierBodies('OnMessage'), /string why = ChartBridgeOrders\.CopierGate\(client\);/, 'gates 1, 4 and 7 first');
+});
+
+test('0.4.0 copier: the hooks in ChartBridge.cs and ChartBridgeOrders.cs are one marked line each', () => {
+  for (const f of ['ChartBridge.cs', 'ChartBridgeOrders.cs']) {
+    const lines = fs.readFileSync(path.join(__dirname, '..', 'nt8', f), 'utf8').split('\n').filter(l => /ChartBridgeCopier\.|CopierLeaderFill\(|copierWhy|partial class ChartBridgeOrders/.test(l));
+    assert.ok(lines.length > 0, f);
+    for (const l of lines) assert.match(l, /\/\/ 0\.4\.0 copier:/, f + ': unmarked hook: ' + l.trim());
+  }
+  const place = fnBody('PlaceOrderLocked');
+  assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0)') < place.indexOf('account.Submit('), 'the stop rule is checked before the leader entry is sent');
+  assert.ok(place.indexOf('ChartBridgeCopier.LeaderEntrySent(order, kind, price)') > place.indexOf('account.Submit('), 'the leader entry is registered after it is sent');
+});
+
+test('0.4.0 copier: order calls only in its named functions; every one is Sim checked', () => {
+  const placing = ['CopyIncrement', 'PlaceOrdersCopies', 'Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'StartReduce', 'SendReduce', 'Flatten', 'Sweep', 'Recover'];
+  let rest = ccode;
+  for (const f of placing) rest = rest.split(copierBodies(f)).join('');
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
+    assert.ok(!re.test(rest), 'copier order call outside its named functions: ' + re);
+  assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ccode), 'no ATM or cancel-all calls');
+  // S1: Sim before every order: directly, through Eligible, or through ExitAllowed
+  assert.match(copierBodies('Eligible'), /if \(!IsSim\(a\)\)/);
+  assert.match(copierBodies('ExitAllowed'), /if \(!IsSim\(c\.A\)\)/);
+  for (const f of ['Send', 'PlaceStop', 'MoveFollowerEntries', 'CancelFollowerEntries', 'MoveStops', 'Sweep', 'Recover']) assert.match(copierBodies(f), /IsSim\(/, f + ' checks Sim');
+  for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /Eligible\(/, f + ' checks the follower');
+  for (const f of ['StartReduce', 'SendReduce', 'Flatten']) assert.match(copierBodies(f), /ExitAllowed\(/, f + ' checks the exit');
+  // Sim is read from NinjaTrader's Provider, exactly "Simulator"; Backtest and Playback never
+  assert.match(copierBodies('ReadSim'), /IsNeverTradable\(a\.Name \?\? ""\)\) return false;\s*return ProviderOf\(a\) == "Simulator";/);
+  // entries are sent under PlaceLock (one order check and send at a time across all pages); legs are GTC stops, entries Day
+  for (const f of ['CopyIncrement', 'PlaceOrdersCopies']) assert.match(copierBodies(f), /lock \(ChartBridgeOrders\.CopierPlaceLock\)/);
+  assert.match(copierBodies('PlaceStop'), /OrderType\.StopMarket, OrderEntry\.Manual, TimeInForce\.Gtc, qty, 0, sp, ""/);
+  // never cross zero: exits are NinjaTrader's Flatten, or a reduce sent only after the stops are confirmed shrunk
+  assert.match(copierBodies('Flatten'), /if \(Flat\(c\.A, c\.Inst\)\) return;[\s\S]*c\.A\.Flatten\(new\[\] \{ c\.Inst \}\);/);
+  assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
+  assert.match(copierBodies('CheckReduces'), /SendReduce\(r\);/);
+  assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), k = held - r\.Target;/);
+  // /diag names no account
+  assert.ok(!/Name|leader\b(?!MsMedian)/.test(copierBodies('DiagJson').replace(/LeaderMs/g, '')), '/diag copier has counts only');
 });

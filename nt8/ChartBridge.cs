@@ -135,6 +135,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             AllowOrigins = new List<string>();
             ChartBridgeBars.ResetConfig();
             ChartBridgeSwitches.Reset();   // 0.4.0 accounts: the v3 switches, all off unless config.txt turns one on
+            ChartBridgeCopier.ResetConfig();   // 0.4.0 copier:
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -160,6 +161,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key == "accounts") AccountAllow = val.Split(',').Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
                 else if (key == "quoteHours") ChartBridgeServer.Log("config.txt: quoteHours is no longer used (its by-date tick load was replaced by the served window in 0.3.5 and removed in 0.3.7); the line can go");
+                else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = on (off by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else ChartBridgeOrders.ReadConfig(key, val);   // trading, tradeAccounts, maxQty.<ROOT>
             }
@@ -1442,7 +1444,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
-        private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge
+        private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)
@@ -1908,6 +1910,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
                     ChartBridgeBars.Start();   // daily bars to The Desk, when bars = on (its own low-priority thread)
+                    ChartBridgeCopier.Start();   // 0.4.0 copier: when copier = on (its own thread and 1 s timer); starts stood down
                     return true;
                 }
                 catch (Exception ex)
@@ -1918,6 +1921,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try { if (htfTimer != null) htfTimer.Dispose(); } catch (Exception) { }
                     accountTimer = null; pollTimer = null; htfTimer = null;
                     ChartBridgeAccounts.Stop();   // 0.4.0 accounts
+                    ChartBridgeCopier.Stop();   // 0.4.0 copier:
                     Unwatch();
                     return false;
                 }
@@ -1930,6 +1934,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 try { if (cts != null) cts.Cancel(); } catch (Exception) { }
                 ChartBridgeBars.Stop();
+                ChartBridgeCopier.Stop();   // 0.4.0 copier:
                 try { if (accountTimer != null) accountTimer.Dispose(); } catch (Exception) { }
                 accountTimer = null;
                 try { if (pollTimer != null) pollTimer.Dispose(); } catch (Exception) { }
@@ -2201,6 +2206,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "client" || type == "accountTrade" || type == "accountArchive")
                 ChartBridgeAccounts.OnMessage(client, type, text);   // 0.4.0 accounts: v3 page, the checkmark and Archive (ChartBridgeAccounts.cs; no order calls)
             else if (type == "merge") ChartBridgeOrders.OnMessage(client, type, text);   // 0.4.0 B4: Merge stops and targets (ChartBridgeMerge.cs)
+            else if (type.StartsWith("copier", StringComparison.Ordinal)) ChartBridgeCopier.OnMessage(client, type, text);   // 0.4.0 copier: copier*
         }
 
         // The order code's lookups (0.4.0): a root that may be traded from the chart and its contract. A quote-only root
@@ -4813,6 +4819,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"markets\":").Append(ChartBridgeMarkets.DiagJson(Instruments.ToList()));   // 0.4.0: each served root's contract, how it was found, quote only or not
             b.Append(",\"tape\":").Append(ChartBridgeTape.DiagJson());   // 0.4.0: how the live trades arrive, per root and 15 minutes
             if (ChartBridgeOrders.MergeOn) b.Append(",\"merges\":").Append(ChartBridgeOrders.MergeDiagJson());   // 0.4.0 B4: with merge = on
+            if (ChartBridgeCopier.Enabled) b.Append(",\"copier\":").Append(ChartBridgeCopier.DiagJson());   // 0.4.0 copier: counts only, never account names
             b.Append(",\"windows\":").Append(WindowsJson());   // 0.3.5: the last 20 served windows   // 0.3.4: how each trade's side was found, live and in the last backfill
             b.Append(",\"accounts\":[");
             List<Account> accounts;
