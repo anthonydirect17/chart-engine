@@ -1577,6 +1577,44 @@ brackets could not be put back; ONE STOP at 24,980.25 covers 3 contracts; NO TAR
 |---|---|---|
 | `merge` | `cid` (when the page sent one), `account`, `root`, `result` (`merged`, `restored`, `failed`), `stop` (`{price, qty}` or null), `targets` (`[{price, qty}]`), `pairsBefore`, `text` | once per accepted merge, when it ends |
 
+#### Merge as built (0.4.0, `ChartBridgeMerge.cs`; lead's defaults)
+
+Where the text above leaves a detail open, the build does this. Each is **(lead's default)**.
+
+- **Oldest.** Pairs are ordered by NinjaTrader's order list for the account (the order they were placed). The first leg is the
+  oldest pair's fill increment (every bucket of it), or a merged set from an earlier Merge.
+- **More refusals.** A pair with a target and no stop, two stops in one pair, targets larger than their stop, a leg on the
+  wrong side, or a leg being cancelled: refused ("let the legs check settle first"). First-leg stops at different prices
+  (breakeven or trailing moved some): refused. An entry is any working order on the opening side, or any `CB#` order that
+  is not a stop or target (an entry or a market exit). "Through the market" needs a last price under 300 s old (gate 5).
+  A fill on the account and root counts as a position change for the 2 s, and so does the end of a merge.
+- **The freeze** also refuses `cancel` on that account and root.
+- **Cancelling a pair** sends the cancel to both legs (the OCO would take the target; sending both means a slow OCO never
+  leaves half a pair).
+- **One target, kept pair.** The first-leg pair that has the target is kept and grown; any other first-leg pair is merged into
+  it like the rest. A merged set from an earlier strategy Merge is kept the same way: its stop grows, and its targets are
+  cancelled and placed again for the whole position by the allocation rule.
+- **The shares** for a strategy come from the strategies code (`MergeSharesHook`), else from the entry's line in `managed.txt`;
+  unknown shares refuse ("never guessed"). If a bucket of the first leg is gone (its target filled, or the rule dropped it),
+  the position is allocated over the buckets that are left, by their shares out of their sum.
+- **Names.** `mstop q<n>` carries the whole position at placement; names never change after that.
+- **Restore.** A pair is placed again with its own name and prices and a new OCO id (`...-r<n>`), and only for what the
+  position still needs (after a fill during the swap the position can be smaller), so the stops are never above it. A change
+  NinjaTrader never confirmed is sent again with the size it should have.
+- **Fallback.** Every other ChartBridge stop and target on the account and root is cancelled first; then one stop for what is
+  left uncovered: the merged stop resized, or a new `mstop`; a market `exit` when a trade from the last 2 s is at or through
+  the stop price.
+- **Flatten during a swap** ends it with no restore: `merge` `result` `failed`, text "Flatten ended the merge; ...", no status
+  error (Flatten closes the position). Counted under `failed`.
+- **The answer** (`merge`) goes to the page that sent the merge, until a v3 `client` flag exists to send it to every v3 page.
+- **After a multi-target merge** (upkeep, even with trading off): a merged target fill shrinks the merged stop by those contracts
+  (from the size last asked for, so two fills in a row never leave it larger); a part fill of the merged stop trims the targets
+  from the last bucket back. Gate 3, the scan's leg cover and the legs check count a merged set as one group (like an OCO pair),
+  and the legs check shrinks it as a set.
+- **A restart mid-swap.** `merge_swap.txt` (next to `config.txt`) lists running swaps; one left at the first legs check after a
+  start is a `status` `error` naming the account and root, also sent to each page that signs in for the next 10 minutes.
+- **Config.** A `merge` value other than on/true/1/off/false/0 is off, with one Output line. `/diag` `merges` also has `running`.
+
 ### Quote-only markets (`quoteRoots`)
 
 Built and documented in "0.4.0 hardening and markets" above, which is the contract: `quoteRoots` (default `YM, RTY, GC,

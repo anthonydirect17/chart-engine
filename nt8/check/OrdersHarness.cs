@@ -17,12 +17,14 @@ using NinjaTrader.NinjaScript.AddOns;
 
 public static class OrdersHarness
 {
-    static int fails;
+    static int fails, checks;
     static List<string> sent = new List<string>();
     static ChartBridgeClient c;
     static Instrument mnq, es;
 
-    static void Check(bool ok, string what) { Console.WriteLine((ok ? "ok   " : "FAIL ") + what); if (!ok) fails++; }
+    static void Check(bool ok, string what) { Console.WriteLine((ok ? "ok   " : "FAIL ") + what); checks++; if (!ok) fails++; }
+    // Integration: each 0.4.0 lane's harness prints its own count, so a lost or doubled check shows at once.
+    static void Section(string name, Action<Action<bool, string>> run) { int was = checks, failed = fails; run(Check); Console.WriteLine("== " + name + ": " + (checks - was) + " checks, " + (fails - failed) + " failed"); }
     static string LastSent() { return sent.Count > 0 ? sent[sent.Count - 1] : ""; }
     static bool Rejected(string contains) { string m = LastSent(); return m.Contains("\"type\":\"reject\"") && m.Contains(contains); }
     static void Msg(string type, string json) { lock (c.Actions) c.Actions.Clear(); ChartBridgeOrders.OnMessage(c, type, json); }
@@ -867,8 +869,11 @@ public static class OrdersHarness
         SidesHarness.Run(Check); // the side of every trade, as pure rules (check/SidesHarness.cs, 0.3.4; its loads run inside SeamHarness)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
         MarketsHarness.Run(Check);   // 0.4.0: quote-only markets, their rolls and settlement times, tape counters, error lines, /diag health (check/MarketsHarness.cs)
-        AccountsHarness.Run(Check);  // 0.4.0: the per-account checkmark, Gone, Archive, cancel from the Working orders tab, switches off = 0.3.8 (check/AccountsHarness.cs)
+        Console.WriteLine("== base: " + checks + " checks, " + fails + " failed");
+        Section("accounts (B2)", AccountsHarness.Run);  // 0.4.0: the per-account checkmark, Gone, Archive, cancel from the Working orders tab, switches off = 0.3.8 (check/AccountsHarness.cs)
+        Section("merge (B4)", MergeHarness.Run);        // 0.4.0 B4: Merge stops and targets (check/MergeHarness.cs)
 
+        Console.WriteLine("== total: " + checks + " checks");
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
     }

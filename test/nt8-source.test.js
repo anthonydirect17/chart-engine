@@ -184,7 +184,7 @@ test('strict messages: known keys only, bracket must be an object', () => {
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why == null && type != "flatten" && type != "merge"\) why = MergeFreezeWhy\(type, top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate; 0.4.0 B4: then the Merge freeze
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts" \};/);   // 0.4.0: accounts in the order lane
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge" \};/);   // 0.4.0: accounts (B2) and merge (B4) in the order lane
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -821,7 +821,7 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and i
   assert.ok(addons.includes('nt8/ChartBridgeAccounts.cs') && addons.includes('nt8/ChartBridgeV3.cs'));
   for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs ChartBridgeV3\.cs ChartBridgeAccounts\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/AccountsHarness\.cs/);
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /AccountsHarness\.Run\(Check\);/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("accounts \(B2\)", AccountsHarness\.Run\);/);
   // no order call of any kind: closing goes through ChartBridgeOrders.cs's gated functions
   for (const [name, c] of [['ChartBridgeAccounts.cs', acode], ['ChartBridgeV3.cs', vcode]]) {
     for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./, /\bOrderAction\./])
@@ -852,4 +852,57 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and i
   // the main file: client, accountTrade and accountArchive go to ChartBridgeAccounts; "accounts" rides the order lane
   assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   assert.match(code, /ChartBridgeAccounts\.Start\(\);[^\n]*\n[\s\S]*?WatchAccounts\(\);/);
+});
+
+// ---- 0.4.0 B4: Merge stops and targets (behaviour: nt8/check/MergeHarness.cs under Mono, inside check:orders)
+const msrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeMerge.cs'), 'utf8');
+const mcode = msrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+const mBody = name => {
+  const re = new RegExp('\\bstatic [\\w<>\\[\\], ]+ ' + name + '\\('), m = re.exec(mcode);
+  assert.ok(m, name + ' not found');
+  const i = mcode.indexOf('{', m.index);
+  let depth = 0;
+  for (let j = i; j < mcode.length; j++) { if (mcode[j] === '{') depth++; else if (mcode[j] === '}' && --depth === 0) return mcode.slice(m.index, j + 1); }
+  return mcode.slice(m.index);
+};
+
+test('0.4.0 B4: Merge ships, is checked, and is OFF by default', () => {
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeMerge.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs [^\n]*ChartBridgeMerge\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/MergeHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("merge \(B4\)", MergeHarness\.Run\);/);
+  // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the answer goes through the shared v3 send
+  assert.match(mcode, /public static bool MergeOn \{ get \{ return ChartBridgeV3\.Merge; \} \}/);
+  assert.match(mBody('MergeResetConfig'), /ChartBridgeSwitches\.Note\("merge", "off"\);/);
+  assert.match(fnBody('ResetConfig'), /MergeResetConfig\(\);/);
+  assert.match(mBody('MergeReadConfig'), /return key == "merge";/);
+  assert.match(mBody('MergeSendToV3Pages'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
+  assert.ok(!/MergeOn = /.test(mcode), 'nothing sets MergeOn but config.txt');
+  assert.match(mBody('MergeStart'), /^[^]*?\{\s*if \(!MergeOn\) return MergeRefuse\(/, 'the switch is the first check');
+  assert.ok(!/MergeOn = true|Enabled = |trading/.test(mcode.replace(/trading off|trading is off/g, '')), 'Merge never turns a switch or trading on or off');
+  // the hooks: the message, its keys, the freeze before every other order action, Flatten first ends the swap
+  assert.match(fnBody('OnMessage'), /else if \(type == "merge"\) why = MergeStart\(client, top, cid\);/);
+  assert.match(fnBody('OnMessage'), /if \(type == "flatten"\) MergeOnFlatten\(top\);[^\n]*\n[\s\S]*else if \(type == "flatten"\) why = Flatten\(top\);/);
+  assert.match(ocode, /\{ "merge", new\[\] \{ "type", "cid", "account", "root" \} \}/);
+  assert.match(code, /else if \(type == "merge"\) ChartBridgeOrders\.OnMessage\(client, type, text\);/);
+  assert.match(code, /if \(ChartBridgeOrders\.MergeOn\) b\.Append\(",\\"merges\\":"\)\.Append\(ChartBridgeOrders\.MergeDiagJson\(\)\);/);
+});
+
+test('0.4.0 B4: Merge sends order calls only from MergeAct (under the Flatten lock) and the merged-set upkeep', () => {
+  let rest = mcode;
+  for (const f of ['MergeAct', 'MergeKeepSet']) rest = rest.replace(mBody(f), '');
+  for (const re of [/\.Submit\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/]) assert.ok(!re.test(rest), 'order call outside MergeAct and MergeKeepSet: ' + re);
+  assert.ok(!/\.Flatten\s*\(|\.Submit\s*\(|CreateOrder\s*\(/.test(mBody('MergeKeepSet')), 'the upkeep only shrinks and cancels');
+  const act = mBody('MergeAct');
+  assert.match(act, /lock \(MergeSendLock\)\s*\{\s*if \(s\.Aborted\) return "Flatten";/, 'nothing is sent after Flatten');
+  assert.match(mBody('MergeOnFlatten'), /lock \(MergeSendLock\) foreach \(MergeSwapState s in hit\) s\.Aborted = true;/);
+  // never over-protected: S grows only after the pair is confirmed cancelled, and only within the position
+  const swap = mBody('MergeSwap');
+  assert.ok(swap.indexOf('MergeCancelUnit(s, u)') < swap.indexOf('MergeGrowStop(s, u.Qty)'), 'cancel first, then grow');
+  assert.match(swap, /if \(stops \+ u\.Qty > Math\.Abs\(s\.Pos\)\) return/);
+  assert.match(mBody('MergeCheck'), /if \(MergeStopCover\(s\) > Math\.Abs\(s\.Pos\)\) return/);
+  // the restore puts a pair back only for what the position still needs
+  assert.match(mBody('MergePlaceAgain'), /qty = Math\.Min\(u\.Qty, pos - MergeStopCover\(s\)\)/);
+  // C# 5
+  assert.ok(!/(^|[\s(=,+:])\$"/m.test(mcode) && !/\?\.\w/.test(mcode) && !/\bnameof\(/.test(mcode), 'C# 5 only');   // a regex's "...)?$" end is fine
 });
