@@ -1,0 +1,130 @@
+{
+  "protocol": 3,
+  "bridge": "0.4.0",
+  "note": "One example of every message protocol v3 adds (nt8/PROTOCOL.md, Protocol v3). Sample values only: made-up accounts (Sim101, EVAL-A, EVAL-B, FUNDED-C, SIM-F1, SIM-F2), a made-up bot, prices are not market data. A key with a dot names a variant of one message type.",
+  "config": {
+    "accountChecks": "on", "orderTypes": "on", "strategies": "on", "merge": "on", "cancelFromList": "on",
+    "quoteRoots": "YM, RTY, GC, SI, CL, 6E, ZN, ZB", "copier": "on", "bot": "on", "botRoot": "MNQ", "tapeStats": "on"
+  },
+  "pageToServer": {
+    "client": { "type": "client", "v": 3 },
+    "accountTrade": { "type": "accountTrade", "cid": "c1", "account": "EVAL-A", "on": true },
+    "accountTrade.off": { "type": "accountTrade", "cid": "c2", "account": "EVAL-B", "on": false },
+    "accountArchive": { "type": "accountArchive", "cid": "c3", "account": "FUNDED-C", "confirm": true },
+    "order.stopLimit.offset": { "type": "order", "cid": "c4", "account": "Sim101", "root": "MNQ", "side": "buy", "kind": "stopLimit", "qty": 1, "price": 25010.25, "limitOffset": 2, "bracket": { "stop": 8, "target": 16 } },
+    "order.stopLimit.price": { "type": "order", "cid": "c5", "account": "Sim101", "root": "MNQ", "side": "sell", "kind": "stopLimit", "qty": 1, "price": 24980, "limitPrice": 24979.5 },
+    "order.mit": { "type": "order", "cid": "c6", "account": "Sim101", "root": "MNQ", "side": "buy", "kind": "mit", "qty": 1, "price": 24985.5 },
+    "order.strategy": { "type": "order", "cid": "c7", "account": "EVAL-A", "root": "MNQ", "side": "buy", "kind": "market", "qty": 3,
+      "strategy": { "name": "Scalp 3T", "stop": 16, "stopLimit": null, "t1": 8, "t1Share": 34, "t2": 16, "t2Share": 33, "t3": 32, "t3Share": 33, "beAfter": 8, "bePlus": 1, "trailAfter": 12, "trailBy": 8, "trailStep": 2 } },
+    "order.strategy.stopOnly": { "type": "order", "cid": "c8", "account": "Sim101", "root": "MNQ", "side": "sell", "kind": "limit", "qty": 1, "price": 25005,
+      "strategy": { "name": "Stop only", "stop": 12, "stopLimit": 2 } },
+    "change.stopLimit": { "type": "change", "cid": "c9", "id": "o12", "price": 25012.25 },
+    "cancel.fromList": { "type": "cancel", "cid": "c10", "id": "o14", "from": "list" },
+    "merge": { "type": "merge", "cid": "c11", "account": "EVAL-A", "root": "MNQ" },
+    "copierGet": { "type": "copierGet", "cid": "c12" },
+    "copierSet": { "type": "copierSet", "cid": "c13", "leader": "Sim101", "mode": "executions" },
+    "copierFollower": { "type": "copierFollower", "cid": "c14", "account": "SIM-F1", "on": true, "qty": 3, "size": "micro", "lossLimit": null },
+    "copierFollower.lossLimit": { "type": "copierFollower", "cid": "c15", "account": "SIM-F2", "on": true, "qty": 1, "size": "mini", "lossLimit": 500 },
+    "copierRearm": { "type": "copierRearm", "cid": "c16" },
+    "botMode": { "type": "botMode", "cid": "c17", "mode": "copilot" },
+    "botKill": { "type": "botKill", "cid": "c18", "on": true },
+    "botSeen": { "type": "botSeen", "id": "demo-0947-1", "at": 1791380820450 },
+    "botAnswer": { "type": "botAnswer", "cid": "c19", "id": "demo-0947-1", "answer": "accept", "at": 1791380821200 }
+  },
+  "serverToPage": {
+    "hello.v3": { "type": "hello", "version": "0.4.0", "now": 1791380800000,
+      "instruments": [
+        { "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "settlement": 24950.25, "settlementDate": "2026-10-06", "quoteOnly": false, "format": "dec", "decimals": 2 },
+        { "root": "YM", "name": "YM 12-26", "tick": 1, "pointValue": 5, "settlement": 46210, "settlementDate": "2026-10-06", "quoteOnly": true, "format": "dec", "decimals": 0 },
+        { "root": "ZN", "name": "ZN 12-26", "tick": 0.015625, "pointValue": 1000, "settlement": 104.109375, "settlementDate": "2026-10-06", "quoteOnly": true, "format": "64", "decimals": 6 },
+        { "root": "ZB", "name": "ZB 12-26", "tick": 0.03125, "pointValue": 1000, "settlement": 118.46875, "settlementDate": "2026-10-06", "quoteOnly": true, "format": "32", "decimals": 5 }
+      ],
+      "accounts": ["EVAL-A", "EVAL-B", "FUNDED-C", "SIM-F1", "SIM-F2", "Sim101"],
+      "trading": { "enabled": false, "reason": "This page has not signed in yet (auth with the session token).", "accounts": [], "maxQty": {} },
+      "features": ["liveFirst", "profile", "settlement", "htf", "weekProfile", "v3", "quoteOnly"] },
+    "trading.v3": { "type": "trading", "enabled": true, "accounts": ["EVAL-A", "Sim101"], "maxQty": { "*": 1, "MNQ": 5 },
+      "switches": { "accountChecks": true, "orderTypes": true, "strategies": true, "merge": true, "cancelFromList": true, "copier": true, "bot": true } },
+    "accounts": { "type": "accounts",
+      "list": [
+        { "name": "EVAL-A", "sim": false, "connection": "connected", "trade": true, "tradable": true, "state": "active", "goneWhy": null, "goneSince": null,
+          "balance": 51240.5, "pnlToday": 312.5, "realizedToday": 280, "unrealized": 32.5, "positions": [{ "root": "MNQ", "name": "MNQ 12-26", "qty": 3, "avgPrice": 24991.25 }],
+          "roomDrawdown": 1740.5, "roomDrawdownWhy": null, "roomDailyLoss": null, "roomDailyLossWhy": "NinjaTrader does not report a daily loss limit for this account" },
+        { "name": "EVAL-B", "sim": false, "connection": "lost", "trade": false, "tradable": false, "state": "gone", "goneWhy": "disconnected", "goneSince": 1791380700000,
+          "balance": 49870, "pnlToday": -130, "realizedToday": -130, "unrealized": 0, "positions": [],
+          "roomDrawdown": null, "roomDrawdownWhy": "the account is not connected", "roomDailyLoss": null, "roomDailyLossWhy": "the account is not connected" },
+        { "name": "Sim101", "sim": true, "connection": "connected", "trade": true, "tradable": true, "state": "active", "goneWhy": null, "goneSince": null,
+          "balance": 100000, "pnlToday": 0, "realizedToday": 0, "unrealized": 0, "positions": [],
+          "roomDrawdown": null, "roomDrawdownWhy": "NinjaTrader does not report a trailing drawdown for this account", "roomDailyLoss": null, "roomDailyLossWhy": "NinjaTrader does not report a daily loss limit for this account" }
+      ],
+      "archived": [{ "name": "FUNDED-C", "at": 1791370000000 }] },
+    "order.v3": { "type": "order", "id": "o12", "cid": "c4", "account": "Sim101", "root": "MNQ", "name": "MNQ 12-26", "side": "buy", "kind": "stopLimit", "qty": 1, "filled": 0,
+      "price": 25010.25, "limitPrice": 25010.75, "avgFill": null, "state": "working", "role": "entry", "oco": null, "planned": { "stopTicks": 8, "targetTicks": 16 }, "tradable": true },
+    "order.strategyLeg": { "type": "order", "id": "o21", "account": "EVAL-A", "root": "MNQ", "name": "MNQ 12-26", "side": "sell", "kind": "stop", "qty": 1, "filled": 0,
+      "price": 24987.25, "avgFill": null, "state": "working", "role": "stop", "oco": "cb-1a2b3c4d-f3-2", "tradable": true, "by": "strategy", "bucket": 2 },
+    "managed": { "type": "managed", "id": "o20", "account": "EVAL-A", "root": "MNQ", "side": "buy", "name": "Scalp 3T",
+      "strategy": { "name": "Scalp 3T", "stop": 16, "stopLimit": null, "t1": 8, "t1Share": 34, "t2": 16, "t2Share": 33, "t3": 32, "t3Share": 33, "beAfter": 8, "bePlus": 1, "trailAfter": 12, "trailBy": 8, "trailStep": 2 },
+      "state": "resumed",
+      "pairs": [
+        { "bucket": 1, "qty": 1, "fill": 24991.25, "stopId": "o21", "stop": 24991.5, "targetId": "o22", "target": 24993.25, "be": true, "trailing": false },
+        { "bucket": 2, "qty": 1, "fill": 24991.25, "stopId": "o23", "stop": 24991.5, "targetId": "o24", "target": 24995.25, "be": true, "trailing": false },
+        { "bucket": 3, "qty": 1, "fill": 24991.25, "stopId": "o25", "stop": 24991.5, "targetId": "o26", "target": 24999.25, "be": true, "trailing": false }
+      ],
+      "best": 24993, "text": "ChartBridge restarted; breakeven and trailing resumed" },
+    "merge": { "type": "merge", "cid": "c11", "account": "EVAL-A", "root": "MNQ", "result": "merged", "stop": { "price": 24987.25, "qty": 3 },
+      "targets": [{ "price": 24993.25, "qty": 1 }, { "price": 24995.25, "qty": 1 }, { "price": 24999.25, "qty": 1 }], "pairsBefore": 5, "text": "Merged 5 pairs into one stop for 3 contracts at 24,987.25 and 3 targets" },
+    "merge.restored": { "type": "merge", "cid": "c11", "account": "EVAL-A", "root": "MNQ", "result": "restored", "stop": null, "targets": [], "pairsBefore": 2,
+      "text": "The merge stopped (NinjaTrader did not confirm the stop change within 3 s); the original brackets are back" },
+    "copier": { "type": "copier", "enabled": true, "simOnly": true, "armed": true, "standDownWhy": null,
+      "leader": { "account": "Sim101", "connection": "connected", "position": { "root": "NQ", "qty": 1, "avgPrice": 24990.5 } },
+      "mode": "executions",
+      "followers": [
+        { "account": "SIM-F1", "sim": true, "on": true, "qty": 3, "size": "micro", "root": "MNQ", "position": { "qty": 3, "avgPrice": 24991 }, "lastAction": "enter", "lastAt": 1791380821500, "slippageTicks": 2, "skipped": null, "lossLimit": null, "pnlToday": -12, "connection": "connected" },
+        { "account": "SIM-F2", "sim": true, "on": true, "qty": 1, "size": "mini", "root": "NQ", "position": { "qty": 0, "avgPrice": null }, "lastAction": "skip", "lastAt": 1791380821450, "slippageTicks": null, "skipped": "position limit", "lossLimit": 500, "pnlToday": 0, "connection": "connected" }
+      ] },
+    "copierEvent": { "type": "copierEvent", "at": 1791380821500, "account": "SIM-F1", "action": "enter", "root": "MNQ", "qty": 3, "price": 24991, "slippageTicks": 2, "leaderMs": 14, "fillMs": 61, "text": "entered 3 MNQ at market on the leader's fill" },
+    "copierEvent.standDown": { "type": "copierEvent", "at": 1791380900000, "account": null, "action": "standDown", "root": null, "qty": null, "price": null, "slippageTicks": null, "leaderMs": null, "fillMs": null,
+      "text": "3 followers left Connected within 10 s: the copier stands down until Re-arm" },
+    "bot": { "type": "bot", "enabled": true, "connected": true, "name": "Demo Opening Fade", "mode": "copilot", "account": "Sim101", "root": "MNQ",
+      "position": { "qty": 0, "avgPrice": null }, "pnlToday": 46, "trades": 2, "maxTrades": 5, "losses": 1, "maxLosses": 3, "killed": false, "standDown": null, "lastBeatMs": 420,
+      "lastSignal": { "type": "botSignal", "id": "demo-0947-1", "at": 1791380820000, "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice", "result": "proposed" } },
+    "botSignal": { "type": "botSignal", "id": "demo-0947-1", "at": 1791380820000, "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice", "result": "proposed" },
+    "botSignal.skipped": { "type": "botSignal", "id": "demo-0950-2", "at": 1791380850000, "action": "skipped", "side": null, "kind": null, "price": null, "stopTicks": null, "targetTicks": null, "reason": "Sample: range too small", "result": "skipped" },
+    "botProposal": { "type": "botProposal", "id": "demo-0947-1", "at": 1791380820000, "account": "Sim101", "root": "MNQ", "side": "sell", "kind": "limit", "price": 25001, "qty": 1, "stopTicks": 12, "targetTicks": 24,
+      "reason": "Sample: price stalled at the made-up level twice", "state": "open", "seenAt": null, "answeredAt": null },
+    "reject.v3": { "type": "reject", "cid": "c11", "reason": "Merge is refused while an entry is working on EVAL-A MNQ." },
+    "status.gone": { "type": "status", "level": "warn", "text": "EVAL-B is gone (disconnected for 10 s): trading is off for it" }
+  },
+  "botToServer": {
+    "botHello": { "type": "botHello", "name": "Demo Opening Fade" },
+    "beat": { "type": "beat" },
+    "signal": { "type": "signal", "id": "demo-0947-1", "action": "fired", "side": "sell", "kind": "limit", "price": 25001, "stopTicks": 12, "targetTicks": 24, "reason": "Sample: price stalled at the made-up level twice" },
+    "signal.skipped": { "type": "signal", "id": "demo-0950-2", "action": "skipped", "reason": "Sample: range too small" },
+    "withdraw": { "type": "withdraw", "id": "demo-0947-1", "reason": "Sample: price left the level" },
+    "flatten": { "type": "flatten" }
+  },
+  "serverToBot": {
+    "welcome": { "type": "welcome", "version": "0.4.0", "mode": "shadow", "account": "Sim101", "root": "MNQ", "rails": { "maxQty": 1, "maxTrades": 5, "maxLosses": 3 },
+      "instruments": [{ "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false, "format": "dec", "decimals": 2 }] },
+    "tick": { "type": "tick", "root": "MNQ", "t": 1791366420.137, "u": 1791380820137, "rx": 1791380820141, "p": 25001.25, "v": 2, "s": 1, "sm": 2, "q": 1 },
+    "botState": { "type": "botState", "mode": "copilot", "killed": false, "standDown": null, "trades": 2, "losses": 1 },
+    "answer": { "type": "answer", "id": "demo-0947-1", "answer": "accepted", "text": "placed as o31 on Sim101" },
+    "reject": { "type": "reject", "id": "demo-0951-3", "reason": "The bot has made 5 trades today (the limit)." }
+  },
+  "diag": {
+    "tape": { "MNQ": { "09:30": { "prints": 18342, "perSec": 20.4, "gapMs": { "median": 20, "p95": 200, "longest": 1730 }, "sameMsShare": 0.31,
+      "jumps": { "1": 4120, "2": 210, "3+": 14 }, "rxMinusU": { "median": 5, "p95": 20, "max": 412 } } } },
+    "memory": { "managedMb": 182.4, "gen0": 412, "gen1": 61, "gen2": 4, "trims": 3, "lastTrimUtcMs": 1791370000000 },
+    "threads": { "workerAvailable": 32763, "workerMax": 32767, "ioAvailable": 1000, "ioMax": 1000, "minWorkerAvailableToday": 32751 },
+    "send": { "1": { "messages": 81234, "medianUs": 50, "p95Us": 200, "maxUs": 5100 } },
+    "reconnects": { "pages": 3, "lagCloses": 0, "feedDrops": 1, "accountReconnects": 2 },
+    "merges": { "ok": 4, "restored": 1, "failed": 0, "refused": 2, "lastAtUtcMs": 1791380000000 },
+    "copier": { "decisions": 18, "skipped": 2, "standDowns": 0, "leaderMsMedian": 14 },
+    "bot": { "signals": 7, "proposals": 3, "answered": 2, "notAnswered": 1, "placed": 2, "refused": 0, "heartbeatLost": 0 }
+  },
+  "refusals": [
+    { "send": { "type": "order", "account": "Sim101", "root": "YM", "side": "buy", "kind": "market", "qty": 1 }, "reason": "YM is quote only: ChartBridge does not trade it." },
+    { "send": { "type": "order", "account": "Sim101", "root": "MNQ", "side": "buy", "kind": "market", "qty": 2, "strategy": { "name": "Bad", "stop": 8, "t1": 8, "t1Share": 60, "t2": 16, "t2Share": 30 } }, "reason": "The target shares add up to 90; they must add up to 100." },
+    { "send": { "type": "copierFollower", "account": "EVAL-A", "on": true, "qty": 1, "size": "micro", "lossLimit": null }, "reason": "EVAL-A is not a Sim account: the copier copies to Sim accounts only." },
+    { "send": { "type": "accountArchive", "account": "EVAL-A", "confirm": true }, "reason": "EVAL-A is not gone; only a gone account can be archived." }
+  ]
+}

@@ -1358,7 +1358,7 @@ position (as a bracket). Refusals name the key ("t2Share must be a whole percent
 **Allocation** (one rule, used here and by Merge): `q` contracts over shares `s1..sn` (percent): each target gets
 `floor(q * s / 100)`; the contracts left over go one each to the targets with the largest remainders, a tie to the later
 target; the total is exactly `q`, never more than the position; a target that gets 0 is dropped for that increment.
-Example: 3 contracts at 33/33/34 give 1/1/1; 1 contract at 50/50 gives 0/1 (T1 dropped); 5 at 50/30/20 give 3/1/1.
+Example: 3 contracts at 33/33/34 give 1/1/1; 1 contract at 50/50 gives 0/1 (T1 dropped); 5 at 50/30/20 give 2/2/1 (2.5 and 1.5 tie on the remainder, the later target wins).
 
 **Per fill increment** (v2's design): each increment of `q` contracts is allocated over the targets, and each target
 bucket `k` gets its own stop and target as an OCO pair for exactly its contracts, at that increment's own fill price

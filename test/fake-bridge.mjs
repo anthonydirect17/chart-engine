@@ -121,6 +121,22 @@
 //   moment it started, so bars and times read as a real market's), after --scene-delay=1500 ms. With --test-controls,
 //   GET /test/scene says how far it got ({ started, sent, total, done }). Sample data, never market data.
 // Order entry itself (gates, matching, brackets) is test/fake-orders.mjs.
+// --v3 (ChartBridge 0.4.0, protocol v3, nt8/PROTOCOL.md "Protocol v3"; test/fake-v3.mjs): every v3 switch on (accountChecks,
+//   orderTypes, strategies, merge, cancelFromList, copier, bot, tapeStats) and the quote-only roots; made-up accounts EVAL-A,
+//   EVAL-B, FUNDED-C, SIM-F1, SIM-F2 and Sim101 (tradeAccounts Sim101, EVAL-A pre-checked unless --trade-accounts says
+//   otherwise); EVAL-A holds 2 MNQ and a working sell limit, FUNDED-C a working NQ buy limit, EVAL-B loses its connection
+//   and goes Gone after the grace; SIM-F1 (3 micro) and SIM-F2 (1 mini) are copier followers of Sim101, stood down until
+//   Re-arm. Sample data and made-up names only.
+//   --v3-off=copier,bot             those v3 switches off (to test a page against a switch that is off)
+//   --gone-grace-ms=10000           the Gone grace (PROTOCOL.md: 10 s); shorter for tests
+//   --quote-roots                   only the quote-only roots (YM, RTY, GC, SI, CL, 6E, ZN, ZB), without the rest of v3
+//   --no-v3-seed                    no seeded positions, orders or followers
+//   With --v3 the bot channel listens on /bot (no Origin, header X-ChartBridge-Bot: the secret, one at a time).
+//   With --test-controls (POST): /test/bot-secret (tests only; ChartBridge never shows it), POST /test/bot-connect?on=1 (a
+//   simulated bot that never misses a heartbeat; on=0 drops it), /test/bot-signal?id=&action=fired&side=sell&kind=limit&p=
+//   &stop=12&target=24&reason= (a signal, handled by the mode), /test/bot-proposal?... (the same, always proposed: a
+//   proposal on demand), /test/bot-withdraw?id=, /test/account?name=EVAL-A&connection=lost|connected|disabled,
+//   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -130,6 +146,7 @@ import { createRequire } from 'node:module';
 import { OrderDesk } from './fake-orders.mjs';
 import { PinLock, HEADER as PIN_HEADER } from './fake-pin.mjs';
 import { signalScene } from './signals-scene.mjs';
+import { OrderDeskV3, V3_ACCOUNTS, QUOTE_INSTR, TapeStats, SWITCHES } from './fake-v3.mjs';
 
 const require = createRequire(import.meta.url);
 const CE = require('../src/chart-engine.js');
@@ -145,6 +162,10 @@ const PIN_OFF = !!flag('pin-off');
 const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
 const DATA_037 = !!flag('data-037');
 const DEEP = !!flag('deep-history');
+const V3 = !!flag('v3') && !flag('v1');
+const V3_OFF = flagValue('v3-off').split(',').map(x => x.trim()).filter(Boolean);
+const QUOTE = (V3 && !V3_OFF.includes('quoteRoots')) || (!!flag('quote-roots') && !flag('v1'));
+const TAPE_STATS = V3 && !V3_OFF.includes('tapeStats');
 let htfFail = '';                                  // /test/htf?fail=: the error every htf request gets (none when '')
 const V1 = !!flag('v1'), TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-frames'), TICK_GAPS = !!flag('tick-gaps'), TICKETS = !!flag('tickets');
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
@@ -180,7 +201,7 @@ function limitFlag(name, key) {
 }
 const config = {
   trading: !V1 && !!flag('trading'),
-  tradeAccounts: flagValue('trade-accounts').split(',').map(x => x.trim()).filter(Boolean),
+  tradeAccounts: (flagValue('trade-accounts') || (V3 ? 'Sim101,EVAL-A' : '')).split(',').map(x => x.trim()).filter(Boolean),
   maxQty: Object.fromEntries(flagValue('max-qty').split(',').filter(Boolean).map(x => { const [r, n] = x.split(':'); return [r.trim(), +n]; })),
   maxTicksAway: limitFlag('max-ticks-away', 'maxTicksAway'),            // 0.3.7: 0 = no limit, as an absent config.txt line
   maxBracketTicks: limitFlag('max-bracket-ticks', 'maxBracketTicks'),
@@ -190,7 +211,7 @@ const config = {
   // a trailing slash, and skips wildcards; the fake takes the list as given)
   allowOrigins: flagValue('allow-origins').split(',').map(x => x.trim().toLowerCase().replace(/\/$/, '')).filter(Boolean),
 };
-const ACCOUNTS = ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
+const ACCOUNTS = V3 ? V3_ACCOUNTS.map(a => a.name) : ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
 const pin = new PinLock({ file: flagValue('pin-file') || null });
 const pinReady = flagValue('test-pin') && !pin.isSet() ? pin.set(flagValue('test-pin')) : Promise.resolve();
 const OWN = 'http://localhost:' + PORT;
@@ -220,7 +241,10 @@ const INSTR = {
   MES: { name: 'MES 12-26', tick: 0.25, pointValue: 5, scale: 0.26 },
   ES: { name: 'ES 12-26', tick: 0.25, pointValue: 50, scale: 0.26 },
 };
+if (QUOTE) Object.assign(INSTR, QUOTE_INSTR);       // v3: quote-only markets (sample prices), never traded
 const rq = (p, t) => Math.round(p / t) * t;
+/* a price on root r's grid; the quote-only roots' small ticks are rounded to their decimals (float noise) */
+const rqr = (p, r) => { const i = INSTR[r]; return i.quoteOnly ? +(Math.round(p / i.tick) * i.tick).toFixed(i.decimals) : rq(p, i.tick); };
 
 // Sample history shifted so its last bar is the current minute (--calendar: made on the real calendar up to now, unshifted).
 function makeData(rootSym) {
@@ -236,12 +260,13 @@ function makeData(rootSym) {
   const base = CALENDAR ? feed.base.filter(b => b.t <= liveMin) : feed.base.slice(0, -1);
   let shift = CALENDAR ? 0 : liveMin - base[base.length - 1].t;
   if (MARKET_HOURS && !CALENDAR) { const W = 7 * 86400; let k = Math.ceil(shift / W); if (base[0].t + k * W > etNow()) k--; shift = k * W; }
-  let bars = base.map(b => ({ t: b.t + shift, o: rq(b.o * k, 0.25), h: rq(b.h * k, 0.25), l: rq(b.l * k, 0.25), c: rq(b.c * k, 0.25), v: b.v }));
+  let bars = base.map(b => ({ t: b.t + shift, o: rqr(b.o * k, rootSym), h: rqr(b.h * k, rootSym), l: rqr(b.l * k, rootSym), c: rqr(b.c * k, rootSym), v: b.v }));
   for (const b of bars) { b.h = Math.max(b.h, b.o, b.c); b.l = Math.min(b.l, b.o, b.c); }
   if (CME_HOURS) bars = bars.filter(b => !cmeClosed(b.t));
   return MARKET_HOURS ? bars.filter(b => b.t <= Math.floor(etNow() / 60) * 60 && !marketClosed(b.t)) : bars;
 }
-function ticksFrom(bars, hours) {
+function ticksFrom(bars, hours, r) {
+  const tk = r && INSTR[r] ? INSTR[r].tick : 0.25, grid = p => r && INSTR[r] ? rqr(p, r) : rq(p, 0.25);
   const out = [], from = (MARKET_HOURS ? etNow() : bars[bars.length - 1].t) - hours * 3600;
   const quoteFrom = QUOTE_HOURS === null ? -Infinity : (MARKET_HOURS ? etNow() : bars[bars.length - 1].t + 60) - QUOTE_HOURS * 3600;
   const nowT = etNow();                                  // no trade after now (the forming minute's walk used to run on to :59.9)
@@ -256,7 +281,7 @@ function ticksFrom(bars, hours) {
     for (let s = 1; s < way.length; s++) {
       let p = prices[prices.length - 1];
       const dir = way[s] > p ? 1 : -1;
-      while (Math.abs(way[s] - p) > 1e-9) { const left = Math.round(Math.abs(way[s] - p) / 0.25); p = rq(p + dir * 0.25 * Math.min(left, stepTicks()), 0.25); prices.push(p); }
+      while (Math.abs(way[s] - p) > tk / 1e4) { const left = Math.round(Math.abs(way[s] - p) / tk); p = grid(p + dir * tk * Math.min(left, stepTicks())); prices.push(p); }
     }
     if (TICK_RATE) pad(prices, b, Math.round(TICK_RATE * 60 * b.v / avgVol(bars)), rnd);
     // the minute's volume shared out over its trades, so they add up to the bar's (at least 1 each), as NinjaTrader's do
@@ -326,7 +351,7 @@ class Tape {
 }
 const tapes = {};
 if (LIVE_FIRST) for (const r of Object.keys(INSTR)) {
-  const hist = ticksFrom(data[r], CALENDAR ? 96 : 48), now = etNow(), k = new Tape(hist.length + 65536);   // --calendar: back over a weekend
+  const hist = ticksFrom(data[r], CALENDAR ? 96 : 48, r), now = etNow(), k = new Tape(hist.length + 65536);   // --calendar: back over a weekend
   let prevP, prevS = 0;
   for (const x of hist) {
     if (x[0] > now) break;                          // the tape ends now; live trades carry on from here
@@ -422,10 +447,15 @@ const ticketsUsed = new Set();
 function send(c, obj) { if (!c.sock.destroyed) c.sock.write(frame(JSON.stringify(obj))); }
 
 // a new random session token each start, served same-origin at GET /session (gate 4)
-const desk = new OrderDesk({
+const deskOpts = {
   config, instruments: INSTR, knownAccounts: ACCOUNTS, token: crypto.randomBytes(24).toString('base64url'),
   send, conns: () => clients, barTime: () => etNow(),
-});
+};
+// --v3: ChartBridge 0.4.0's desk (test/fake-v3.mjs) with every switch on but those in --v3-off
+const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { switches: Object.fromEntries(SWITCHES.map(k => [k, !V3_OFF.includes(k)])), accountList: V3_ACCOUNTS,
+  graceMs: flagValue('gone-grace-ms') === '' ? 10000 : +flagValue('gone-grace-ms'), botRoot: 'MNQ' })) : new OrderDesk(deskOpts);
+const tapeStats = TAPE_STATS ? new TapeStats() : null;
+const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
 
 function onMessage(c, text) {
   let m; try { m = JSON.parse(text); } catch (e) { return; }
@@ -437,6 +467,9 @@ function onMessage(c, text) {
   if (m.type === 'subscribe') subscribe(c, m);
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
+  else if (V3 && m.type === 'client') desk.client(c, m);
+  else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm',
+    'botMode', 'botKill', 'botSeen', 'botAnswer'].includes(m.type)) desk.handle(c, m, text);
   else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
@@ -545,7 +578,7 @@ function subscribe(c, m) {
   // the fake used to send the forming minute's trades)
   const finish = () => {
     if (c.seq !== seq) return;                             // a newer subscribe won
-    const ticks = m.tickHours === 0 ? null : TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours)).get(key)) : ticksFrom(bars, hours);
+    const ticks = m.tickHours === 0 ? null : TICK_RATE ? (tickCache.get(key) || tickCache.set(key, ticksFrom(bars, hours, r)).get(key)) : ticksFrom(bars, hours, r);
     for (let i = 0; ticks && (i < ticks.length || i === 0); i += 20000) {
       send(c, { type: 'ticks', root: r, ticks: ticks.slice(i, i + 20000), done: i + 20000 >= ticks.length });
       if (!ticks.length) break;
@@ -611,6 +644,8 @@ function trade(r, p) {
   }
   for (const c of clients) if (c.ready && c.root === r) send(c, msg);
   if (DATA_037) htfTrade(r, msg.t, p, msg.v);   // the forming 4h, 1D and 1W bars follow the trades
+  if (tapeStats) tapeStats.add(r, msg.t, p, msg.u, msg.rx, INSTR[r].tick);
+  if (V3 && desk.bot.conn) send(desk.bot.conn, msg);  // the bot reads every live trade
   desk.tick(r, p);                        // the matching engine sees every trade
 }
 /* --scene=signals: the scripted MNQ tape (see the header), replayed once from the first page that is live on MNQ. */
@@ -639,7 +674,7 @@ function sceneTrade(r, t, p, v, sd) {
 }
 if (!LIVE_RATE) setInterval(() => {
   if (MARKET_HOURS && marketClosed(etNow())) return;              // CME closed: no trades
-  for (const r of Object.keys(INSTR)) if (!(scene.started && r === 'MNQ')) trade(r, held[r] ? last[r] : rq(last[r] + (Math.random() - 0.5) * 1.5, 0.25));
+  for (const r of Object.keys(INSTR)) if (!(scene.started && r === 'MNQ')) trade(r, held[r] ? last[r] : rqr(last[r] + (Math.random() - 0.5) * 6 * INSTR[r].tick, r));
 }, 120);
 else {
   // --live-rate: a busy market. Every 10 ms a Poisson number of trades; mostly 0 or 1 tick apart, and a fast jump of
@@ -655,7 +690,7 @@ else {
       const n = poisson(LIVE_RATE * burst / 100);
       for (let k = 0; k < n; k++) {
         const u = rnd(), steps = u < 0.0005 ? 8 + Math.floor(rnd() * 9) : u < 0.5 ? 0 : 1;
-        trade(r, rq(last[r] + (rnd() < 0.5 ? -1 : 1) * steps * INSTR[r].tick, INSTR[r].tick));
+        trade(r, rqr(last[r] + (rnd() < 0.5 ? -1 : 1) * steps * INSTR[r].tick, r));
       }
     }
   }, 10);
@@ -689,7 +724,7 @@ const server = http.createServer((req, res) => {
   if (p.startsWith('/pin/') && !V1 && !PIN_OFF) return pin.handle(req, res, PORT);
   if (p.startsWith('/test/') && TEST_CONTROLS && req.method === 'POST') {
     const q = new URL(req.url, 'http://x').searchParams, r = q.get('root') || 'MNQ';
-    if (p === '/test/price') { held[r] = true; trade(r, rq(+q.get('p'), INSTR[r].tick)); }
+    if (p === '/test/price') { held[r] = true; trade(r, rqr(+q.get('p'), r)); }
     else if (p === '/test/hold') held[r] = q.get('on') !== '0';
     else if (p === '/test/state') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -722,6 +757,29 @@ const server = http.createServer((req, res) => {
       return res.end(JSON.stringify(Object.fromEntries(Object.entries(books).map(([x, b]) => [x, { asked: b.asked, served: b.served, profiles: b.profiles, pushed: b.pushed, whole: tableWhole(x),
         windowFrom: b.window ? tapes[x].t[b.window.from] : null }]))));
     }
+    else if (V3 && p === '/test/bot-secret' && req.method === 'POST') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ secret: BOT_SECRET })); }
+    else if (V3 && p === '/test/bot-connect') {
+      if (q.get('on') === '0') { desk.bot.simulated = false; desk.bot.connected = false; desk.botQuiet('no heartbeat for 5 s'); desk.bot.stats.heartbeatLost++; desk.botNotify(); }
+      else { desk.bot.simulated = true; desk.botMessage({ type: 'botHello', name: q.get('name') || 'Demo Opening Fade' }); }
+    }
+    else if (V3 && (p === '/test/bot-signal' || p === '/test/bot-proposal')) {
+      if (!desk.bot.connected) { desk.bot.simulated = true; desk.botMessage({ type: 'botHello', name: 'Demo Opening Fade' }); }
+      const mode = desk.bot.mode, sig = { type: 'signal', id: q.get('id') || 'demo-' + Date.now(), action: q.get('action') || 'fired', reason: q.get('reason') || 'Sample: price stalled at the made-up level twice' };
+      if (sig.action === 'fired') Object.assign(sig, { side: q.get('side') || 'sell', kind: q.get('kind') || 'market', stopTicks: +(q.get('stop') || 12), targetTicks: q.get('target') === 'null' ? null : +(q.get('target') || 24) });
+      if (sig.kind && sig.kind !== 'market') sig.price = q.get('p') ? rqr(+q.get('p'), desk.botRoot) : rqr(last[desk.botRoot] + (sig.side === 'sell' ? 4 : -4) * INSTR[desk.botRoot].tick, desk.botRoot);
+      if (p === '/test/bot-proposal') desk.bot.mode = 'copilot';      // a proposal on demand, whatever the mode
+      desk.botMessage(sig);
+      if (p === '/test/bot-proposal') { desk.bot.mode = mode; desk.botNotify(); }
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: sig.id }));
+    }
+    else if (V3 && p === '/test/bot-withdraw') desk.botMessage({ type: 'withdraw', id: q.get('id') || '', reason: q.get('reason') || 'Sample: the entry is no longer valid' });
+    else if (V3 && p === '/test/account') desk.setConnection(q.get('name'), q.get('connection') || 'lost');
+    else if (V3 && p === '/test/restart') desk.simulateRestart(q.get('lost') === '1');
+    else if (V3 && p === '/test/v3') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ accounts: desk.accountsMsg(), copier: desk.copierMsg(), bot: desk.botMsg(), managed: [...desk.managed.values()].map(x => desk.managedMsg(x)),
+        proposals: [...desk.bot.proposals.values()], log: desk.log, diag: desk.diag() }));
+    }
     else if (p === '/test/elsewhere') desk.placeElsewhere({ account: q.get('account'), root: r, side: q.get('side'), kind: q.get('kind'), qty: +q.get('qty'), price: +q.get('p') });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ root: r, last: last[r], held: !!held[r] }));
@@ -732,7 +790,11 @@ const server = http.createServer((req, res) => {
       desk: { postFills: false, deskUrl: 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
       ...(V1 ? {} : { network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
         pin: { set: pin.isSet() } }),
-      accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })) }));
+      accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),
+      ...(V3 ? Object.assign({   // 0.4.0 (PROTOCOL.md "Tape timing and new /diag counters"); sample values where the fake has no real number
+        memory: { managedMb: +(process.memoryUsage().heapUsed / 1048576).toFixed(1), gen0: 0, gen1: 0, gen2: 0, trims: 0, lastTrimUtcMs: null },
+        threads: { workerAvailable: 32767, workerMax: 32767, ioAvailable: 1000, ioMax: 1000, minWorkerAvailableToday: 32767 },
+        send: {}, reconnects: { pages: received.urls.length, lagCloses: 0, feedDrops: dropAt === null ? 0 : 1, accountReconnects: 0 } }, desk.diag(), tapeStats ? { tape: tapeStats.diag() } : {}) : {}) }));
   }
   if (p.endsWith('/')) p += 'index.html';
   const full = path.join(root, p);
@@ -742,6 +804,7 @@ const server = http.createServer((req, res) => {
 });
 server.on('upgrade', (req, sock) => {
   if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
+  if (V3 && !V3_OFF.includes('bot') && req.url.split('?')[0] === '/bot') return botUpgrade(req, sock);
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
   if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (TICKETS) {
@@ -764,6 +827,10 @@ server.on('upgrade', (req, sock) => {
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
+  if (V3 || QUOTE) {                                // 0.4.0: every instrument says whether it is quote only, and its price format
+    for (const i of hello.instruments) { const x = INSTR[i.root]; i.quoteOnly = !!x.quoteOnly; i.format = x.format || 'dec'; i.decimals = x.decimals === undefined ? 2 : x.decimals; }
+    hello.features = (hello.features || []).concat(V3 ? ['v3'] : [], QUOTE ? ['quoteOnly'] : []); if (V3) hello.version = 'fake-0.4.0';
+  }
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
@@ -773,5 +840,44 @@ server.on('upgrade', (req, sock) => {
   sock.on('close', () => clients.delete(c));
   sock.on('error', () => clients.delete(c));
 });
+/* --v3: the bot channel (PROTOCOL.md "Bot channel"): no Origin, the secret in X-ChartBridge-Bot, one bot at a time */
+function botUpgrade(req, sock) {
+  const no = code => sock.end('HTTP/1.1 ' + code + '\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+  const given = String(req.headers['x-chartbridge-bot'] || '');
+  if (req.headers.origin !== undefined) return no('403 Forbidden');
+  if (given.length !== BOT_SECRET.length || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(BOT_SECRET))) return no('403 Forbidden');
+  if (desk.bot.conn) return no('409 Conflict');
+  const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+  const c = { sock, bot: true, buf: Buffer.alloc(0) };
+  desk.bot.conn = c; desk.bot.simulated = false; desk.bot.lastBeat = Date.now();
+  sock.on('data', d => {
+    const r = parseFrames(Buffer.concat([c.buf, d]), t => {
+      let m; try { m = JSON.parse(t); } catch (e) { return send(c, { type: 'reject', id: null, reason: 'Not JSON.' }); }
+      const why = desk.botMessage(m, t);
+      if (why) send(c, { type: 'reject', id: m && typeof m.id === 'string' ? m.id : null, reason: why });
+    });
+    c.buf = r.rest; if (r.closed) sock.end();
+  });
+  const gone = () => { if (desk.bot.conn === c) { desk.bot.conn = null; desk.bot.connected = false; desk.botQuiet('the bot disconnected'); desk.botNotify(); } };
+  sock.on('close', gone); sock.on('error', gone);
+}
+if (V3) {
+  setInterval(() => { desk.everySecond(); desk.sendAccounts(); for (const c of clients) if (c.authed && c.v3 && desk.sw.bot && desk.bot.connected) send(c, desk.botMsg()); }, 1000);
+  if (!flag('no-v3-seed')) {                           // made-up state for the page lanes' smokes (see the header)
+    const lp = r => last[r];
+    desk.placeElsewhere({ account: 'EVAL-A', root: 'MNQ', side: 'buy', kind: 'market', qty: 2, price: null });
+    desk.placeElsewhere({ account: 'EVAL-A', root: 'MNQ', side: 'sell', kind: 'limit', qty: 2, price: rq(lp('MNQ') + 40, 0.25) });
+    desk.placeElsewhere({ account: 'FUNDED-C', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, price: rq(lp('NQ') - 40, 0.25) });
+    const a = desk.acct.get('FUNDED-C'); if (a) a.drawdown = 2500;
+    desk.setConnection('EVAL-B', 'lost');
+    if (desk.sw.copier) {
+      desk.copier.followers.set('SIM-F1', { account: 'SIM-F1', on: true, qty: 3, size: 'micro', lossLimit: null, root: 'MNQ' });
+      desk.copier.followers.set('SIM-F2', { account: 'SIM-F2', on: true, qty: 1, size: 'mini', lossLimit: 500, root: 'NQ' });
+      for (const n of ['SIM-F1', 'SIM-F2']) { const x = desk.acct.get(n); if (x) x.trade = true; }
+      desk.refreshAccounts();
+    }
+  }
+}
 pinReady.then(() => server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
   (V1 ? ' (v1, read only)' : (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)')))));
