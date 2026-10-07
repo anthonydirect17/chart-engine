@@ -48,7 +48,7 @@ using NinjaTrader.Cbi;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    public static class ChartBridgeOrders
+    public static partial class ChartBridgeOrders   // 0.4.0 B4: partial, Merge lives in ChartBridgeMerge.cs
     {
         public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;
         public const double MaxPriceAgeMs = 300000;
@@ -66,12 +66,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // whenever a page signs in, not only the Output window.
         private static readonly List<string> ConfigWarnings = new List<string>();
 
-        public static void ResetConfig() { Enabled = false; TradeAccounts.Clear(); MaxQty.Clear(); MaxTicksAway = 0; MaxBracketTicks = 0; lock (ConfigWarnings) ConfigWarnings.Clear(); }
+        public static void ResetConfig() { Enabled = false; TradeAccounts.Clear(); MaxQty.Clear(); MaxTicksAway = 0; MaxBracketTicks = 0; lock (ConfigWarnings) ConfigWarnings.Clear(); MergeResetConfig(); }   // 0.4.0 B4: merge off
 
         // Called by ChartBridgeConfig.Load for each key it does not know itself.
         public static bool ReadConfig(string key, string val)
         {
             int n;
+            if (MergeReadConfig(key, val)) return true;   // 0.4.0 B4: merge = on (ChartBridgeMerge.cs)
             if (key == "trading") { Enabled = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1"; return true; }
             if (key == "tradeAccounts")
             {
@@ -259,13 +260,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string name = o.Name ?? "";
             if (IsEntryName(name)) return "entry";
             Match m = LegNameRx.Match(name);
-            return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : "other";
+            return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : MergedRole(name) ?? "other";   // 0.4.0 B4: merged legs
         }
 
         private static bool IsExit(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == "exit"; }
 
         // A ChartBridge stop or target (not an entry, not a market exit).
-        private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value != "exit"; }
+        private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return (m.Success && m.Groups[2].Value != "exit") || IsMergedLeg(o); }   // 0.4.0 B4: merged legs
 
         public static void Clear()
         {
@@ -276,6 +277,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConnectedSince) ConnectedSince.Clear();
             lock (PlanMemLock) { Plans.Clear(); LegacyPlans.Clear(); plansLoaded = false; plansReadFailed = false; writeWaiting = false; writeFailed = null; planGeneration++; }
             lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }
+            MergeClear();   // 0.4.0 B4
         }
 
         // ---------------------------------------------------------- strict message reading (gate 8)
@@ -288,6 +290,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "plan", new[] { "type", "cid", "id", "stopTicks", "targetTicks" } },
             { "cancel", new[] { "type", "cid", "id" } },
             { "flatten", new[] { "type", "cid", "account", "root" } },
+            { "merge", new[] { "type", "cid", "account", "root" } },   // 0.4.0 B4
         };
         private static readonly string[] BracketKeys = { "stop", "target" };
         private static readonly Regex BracketRx = new Regex("\"bracket\"\\s*:\\s*\\{([^{}]*)\\}");
@@ -368,12 +371,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string why = Gate(client);
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
                 if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
+                if (why == null && type != "flatten" && type != "merge") why = MergeFreezeWhy(type, top, id);   // 0.4.0 B4: a Merge swap freezes its account and root
                 if (why != null) { Reject(client, cid, id, why); return; }
+                if (type == "flatten") MergeOnFlatten(top);   // 0.4.0 B4: Flatten ends a Merge swap at once (then flattens as always)
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid);
                 else if (type == "change") why = ChangeOrder(top, id);
                 else if (type == "plan") why = PlanOrder(top, id);
                 else if (type == "cancel") why = CancelOrder(id);
                 else if (type == "flatten") why = Flatten(top);
+                else if (type == "merge") why = MergeStart(client, top, cid);   // 0.4.0 B4
                 if (why != null) Reject(client, cid, id, why);
             }
             catch (Exception ex)
@@ -412,6 +418,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
             if (client.Trader) { client.Send(OrdersJson()); foreach (string p in PositionJsons()) client.Send(p); }
+            if (client.Trader) MergeOnAuth(client);   // 0.4.0 B4: a Merge cut by a restart is told to each page that signs in
         }
 
         private static bool SlowEquals(string a, string b)
@@ -573,8 +580,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (!SameInstrument(o.Instrument, inst) || !MayFill(o.OrderState)) continue;
                 int left = Math.Max(0, o.Quantity - o.Filled), had;
-                if (string.IsNullOrEmpty(o.Oco)) { if (IsBuy(o)) buys += left; else sells += left; continue; }
-                string key = (IsBuy(o) ? "b|" : "s|") + o.Oco;
+                string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
+                if (grp == null) { if (IsBuy(o)) buys += left; else sells += left; continue; }
+                string key = (IsBuy(o) ? "b|" : "s|") + grp;
                 if (!groups.TryGetValue(key, out had) || left > had) groups[key] = left;
             }
             foreach (KeyValuePair<string, int> g in groups) { if (g.Key[0] == 'b') buys += g.Value; else sells += g.Value; }
@@ -930,6 +938,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (role == "stop" || role == "target") KeepPartner(o, role, where);
             }
             catch (Exception ex) { Alarm(where + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
+            try { MergeOnOrderUpdate(account, o, e.Error); } catch (Exception ex) { Alarm(where + ": merge upkeep error (" + ex.Message + "); check the position's stop in NinjaTrader"); }   // 0.4.0 B4
             if ((role == "stop" || role == "target") && (o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Rejected))
             {
                 try { NoteLostPair(account, o); } catch (Exception ex) { ChartBridgeServer.Log("OCO check error: " + ex.Message); }
@@ -1365,8 +1374,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (!SameInstrument(o.Instrument, inst) || !IsWorking(o.OrderState) || !IsChartBridgeLeg(o) || IsBuy(o) != buySide) continue;
                 int left = Math.Max(0, o.Quantity - o.Filled), had;
-                if (string.IsNullOrEmpty(o.Oco)) { lone += left; continue; }
-                if (!groups.TryGetValue(o.Oco, out had) || left > had) groups[o.Oco] = left;
+                string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
+                if (grp == null) { lone += left; continue; }
+                if (!groups.TryGetValue(grp, out had) || left > had) groups[grp] = left;
             }
             return lone + groups.Values.Sum();
         }
@@ -1450,6 +1460,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null || e.Position == null) return;
             Instrument inst = e.Position.Instrument;
             Booked(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);
+            MergeSawPosition(account, inst);   // 0.4.0 B4: the position is changing (Merge waits 2 s)
             string root = ChartBridgeServer.RootFor(inst);
             if (Enabled && AccountTradable(account.Name) && root != null)
                 ChartBridgeServer.SendToTraders(PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice));
@@ -1756,11 +1767,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Order o in orders)
                 {
                     if (!SameInstrument(o.Instrument, inst) || !IsWorking(o.OrderState)) continue;
-                    Match lm = LegNameRx.Match(o.Name ?? "");
-                    if (!lm.Success || lm.Groups[2].Value == "exit") continue;
+                    string lr = RoleFor(o);   // 0.4.0 B4: "stop" or "target" for a ChartBridge leg, merged ones too
+                    if (lr != "stop" && lr != "target") continue;
                     legsWorking = true;
-                    if (lm.Groups[2].Value == "stop" && pos != 0 && IsBuy(o) == (pos < 0)) stops += Math.Max(0, o.Quantity - o.Filled);
-                    if (lm.Groups[2].Value == "target" && pos != 0 && IsBuy(o) == (pos < 0)) targets += Math.Max(0, o.Quantity - o.Filled);
+                    if (lr == "stop" && pos != 0 && IsBuy(o) == (pos < 0)) stops += Math.Max(0, o.Quantity - o.Filled);
+                    if (lr == "target" && pos != 0 && IsBuy(o) == (pos < 0)) targets += Math.Max(0, o.Quantity - o.Filled);
                 }
                 lock (Sync)
                 {
@@ -1803,6 +1814,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ScanEntries(now);
             try { CheckStops(now); } catch (Exception ex) { ChartBridgeServer.Log("stop check error: " + ex.Message); }
             try { KeepPlansSaved(); } catch (Exception ex) { ChartBridgeServer.Log("planned brackets check error: " + ex.Message); }   // 0.3.8
+            try { MergeEvery2s(now); } catch (Exception ex) { ChartBridgeServer.Log("merge check error: " + ex.Message); }   // 0.4.0 B4
             List<Account> accounts = new List<Account>();
             lock (Account.All) foreach (Account a in Account.All) if (!IsNeverTradable(a.Name ?? "")) accounts.Add(a);
             HashSet<string> seen = new HashSet<string>();
@@ -1833,11 +1845,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (Order o in legs)
             {
                 Unit u;
-                if (string.IsNullOrEmpty(o.Oco) || !byOco.TryGetValue(o.Oco, out u))
+                string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
+                if (grp == null || !byOco.TryGetValue(grp, out u))
                 {
                     u = new Unit { Buy = IsBuy(o) };
                     units.Add(u);
-                    if (!string.IsNullOrEmpty(o.Oco)) byOco[o.Oco] = u;
+                    if (grp != null) byOco[grp] = u;
                 }
                 u.Legs.Add(o);
                 u.Left = Math.Max(u.Left, o.Quantity - o.Filled);
@@ -1861,6 +1874,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Unit u = right[i];
                 if (u.Left <= excess) { cancel.AddRange(u.Legs); excess -= u.Left; continue; }
                 int keep = u.Left - excess;
+                if (!MergeShrinkUnit(u.Legs, keep, cancel, change))   // 0.4.0 B4: a merged set shrinks as a set
                 foreach (Order o in u.Legs) if (o.Quantity - o.Filled > keep) { o.QuantityChanged = keep + o.Filled; change.Add(o); }
                 excess = 0;
             }

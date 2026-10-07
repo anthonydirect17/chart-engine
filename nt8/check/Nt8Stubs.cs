@@ -158,9 +158,13 @@ namespace NinjaTrader.Cbi
             return new Order { Account = this, Instrument = instrument, OrderAction = action, OrderType = orderType, Quantity = quantity, LimitPrice = limitPrice,
                                StopPrice = stopPrice, Oco = oco, Name = name, OrderState = OrderState.Initialized };
         }
-        public void Submit(IEnumerable<Order> orders) { foreach (Order o in orders) { Calls.Add("submit " + o.Name + " " + o.OrderAction + " " + o.OrderType + " " + o.Quantity + " L" + o.LimitPrice + " S" + o.StopPrice + " oco:" + o.Oco); o.OrderState = OrderState.Working; Orders.Add(o); } }
-        public void Change(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("change " + o.Name + " L" + o.LimitPriceChanged + " S" + o.StopPriceChanged + " Q" + o.QuantityChanged); }
-        public void Cancel(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("cancel " + o.Name); }
+        public void Submit(IEnumerable<Order> orders) { foreach (Order o in orders) { Calls.Add("submit " + o.Name + " " + o.OrderAction + " " + o.OrderType + " " + o.Quantity + " L" + o.LimitPrice + " S" + o.StopPrice + " oco:" + o.Oco); o.OrderState = OrderState.Working; Orders.Add(o); } Broker("submit", orders); }
+        public void Change(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("change " + o.Name + " L" + o.LimitPriceChanged + " S" + o.StopPriceChanged + " Q" + o.QuantityChanged); Broker("change", orders); }
+        public void Cancel(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("cancel " + o.Name); Broker("cancel", orders); }
+        // 0.4.0 B4: the harness may answer each call the way NinjaTrader would (confirm a change or a cancel, fire the events);
+        // null (the default) leaves every state as it was, as before.
+        public Action<string, Order> OnCall;
+        private void Broker(string kind, IEnumerable<Order> orders) { Action<string, Order> h = OnCall; if (h != null) foreach (Order o in new List<Order>(orders)) h(kind, o); }
         public void Flatten(ICollection<Instrument> instruments) { foreach (Instrument i in instruments) Calls.Add("flatten " + i.FullName); }
     }
 }

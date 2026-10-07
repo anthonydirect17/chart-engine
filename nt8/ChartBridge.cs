@@ -1437,7 +1437,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
-        private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong" };
+        private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "merge" };   // 0.4.0 B4: merge
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)
@@ -2190,6 +2190,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
             else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
+            else if (type == "merge") ChartBridgeOrders.OnMessage(client, type, text);   // 0.4.0 B4: Merge stops and targets (ChartBridgeMerge.cs)
         }
 
         // The order code's lookups (0.4.0): a root that may be traded from the chart and its contract. A quote-only root
@@ -4799,6 +4800,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"health\":").Append(HealthJson());           // 0.4.0: memory, thread headroom, page connects and closes, send times, errors
             b.Append(",\"markets\":").Append(ChartBridgeMarkets.DiagJson(Instruments.ToList()));   // 0.4.0: each served root's contract, how it was found, quote only or not
             b.Append(",\"tape\":").Append(ChartBridgeTape.DiagJson());   // 0.4.0: how the live trades arrive, per root and 15 minutes
+            if (ChartBridgeOrders.MergeOn) b.Append(",\"merges\":").Append(ChartBridgeOrders.MergeDiagJson());   // 0.4.0 B4: with merge = on
             b.Append(",\"windows\":").Append(WindowsJson());   // 0.3.5: the last 20 served windows   // 0.3.4: how each trade's side was found, live and in the last backfill
             b.Append(",\"accounts\":[");
             List<Account> accounts;
