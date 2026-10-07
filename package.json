@@ -35,6 +35,7 @@
     "smoke:dragfreeze": "node test/dragfreeze-smoke.mjs",
     "smoke:display": "node test/display-smoke.mjs",
     "smoke:h1": "node test/h1-smoke.mjs",
+    "smoke:display116": "node test/display116-smoke.mjs",
     "smoke:h1orders": "node test/h1-orders-smoke.mjs",
     "smoke:markup": "node test/markup-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",

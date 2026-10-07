@@ -403,7 +403,7 @@ try {
       window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + pt + '/ws', paneId: 'main', storagePrefix: 'desk:' });
       window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: 'ws://localhost:' + pt + '/ws', paneId: 'pane-2', storagePrefix: 'desk:' });
     }, b6.port);
-    await host.waitForFunction(() => [...document.querySelectorAll('[id$="-connPill"]')].every(x => x.textContent === 'LIVE'), null, { timeout: 30000 });
+    await host.waitForFunction(() => { const b = [...document.querySelectorAll('[id$="-badge"]')]; return b.length > 0 && b.every(x => x.dataset.conn === 'live'); }, null, { timeout: 30000 });   // 1.16.0: the badge
     await host.waitForTimeout(1000);
     let a = await state(host, '__a'), b = await state(host, '__b');
     check(a.layer && a.pane.on && a.delta && b.layer === false && !b.pane.on && b.count === '0/0', 'mounted: the main pane has the delta pane, pane-2 starts without it');

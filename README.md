@@ -64,6 +64,19 @@ cancel orders", or "Armed went off: ChartBridge reconnected"); and two new panel
 realized and day P&L and trades, then Positions with Close, Orders with x, and Fills with each flat-to-flat trade's P&L)
 and the **Quote board** (NQ and ES: last, change and % from the prior settlement, the session's high and low).
 
+**1.16.0 (the display round; `/single.html` keeps its 1.14.0 legend):** **no text inside a workspace chart** (no legend,
+no **Aa** toggle); a small badge in each chart's header says **ARMED** while its orders are live and the connection when
+it is not LIVE; a **stale feed** (no trade for 10 s in RTH, 09:30 to 16:00 ET, or 60 s outside it, while CME Globex is
+open) draws a thin amber edge on the chart and "Feed stale 12 s" in its badge, gone with the next trade; the size of the
+**bubble under the mouse** joins the corner readout ("Buy 142 · Bar 0:54 · ATR(14) 5.58"); the **auto-fit keeps every
+bubble in view inside the plot**; a new panel, the **Data Box** (the bar under the cursor on any chart, else the newest
+bar of the last chart hovered: open time and how long it lasted, OHLC, range, volume, buy and sell volume, delta, the
+largest print and the bubbles; the tape timing, ChartBridge's receipt of a trade to the frame that drew it); **maximize
+and restore** a panel (the square beside its x, or a Maximize panel hotkey set in Settings, never a trading key); a
+**laptop preset** (two blank layout tabs, Main and Second, tight margins); **New layout** starts with no panels; **IBM
+Plex served from the PC** (`live/fonts`, SIL OFL): the pages load nothing from the internet; and the shared feed keeps a
+rolling window of live trades, so a panel added late in a long day loads on its own and no other panel reloads.
+
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
 
@@ -606,7 +619,9 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's) · `setFitTop(px)` (room kept at the top of the
 price scale) · `getFitTop()` · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()` ·
 `setProfileLines({ poc, vah, val })` · `getProfileLines()` (the developing profile lines) · `setVwapSource(fn)` (a page's own VWAP per bar) · `redraw()` ·
-`setScaleLock(on)` · `scaleLock()` · `on('scaleLock', fn)` (the price scale lock; option `lockButton`)
+`setScaleLock(on)` · `scaleLock()` · `on('scaleLock', fn)` (the price scale lock; option `lockButton`) · 1.16.0:
+`on('drawn', fn)` (after each frame drawn) · `vwapAt(i)` (the VWAP drawn at bar i); the auto-fit keeps the bubbles in
+view inside the plot (`util.fitRange`'s `bub`); the delta core's bars carry `big` (the largest single trade)
 
 Volume profile (1.6.0): `new ChartEngine.VolumeProfile({ tick, rowTicks, valueArea, rth })` counts
 trades (`add(t, price, v)`) into rows with a POC and value area, per 18:00 ET session, or with `rth: true` only

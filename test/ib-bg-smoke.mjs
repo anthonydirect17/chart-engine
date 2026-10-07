@@ -377,7 +377,7 @@ async function openPageEmbed(ctx, p) {
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws', paneId: 'main', storagePrefix: 'desk:' });
     window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: 'ws://localhost:' + port + '/ws', paneId: 'pane-2', storagePrefix: 'desk:' });
   }, p);
-  await host.waitForFunction(() => [...document.querySelectorAll('[id$="-connPill"]')].every(x => x.textContent === 'LIVE'), null, { timeout: 20000 });
+  await host.waitForFunction(() => { const b = [...document.querySelectorAll('[id$="-badge"]')]; return b.length > 0 && b.every(x => x.dataset.conn === 'live'); }, null, { timeout: 20000 });   // 1.16.0: a mounted chart's badge
   await host.waitForTimeout(700);
   return host;
 }

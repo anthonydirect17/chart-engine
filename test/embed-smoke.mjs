@@ -99,12 +99,15 @@ try {
     // trading: true is ignored by mount(): a mounted chart is read only whatever the options say
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: window.__urlA, trading: true, paneId: 'main', storagePrefix: 'desk:', onStatus: s => window.__status.A.push(s.state) });
   }, PORT);
-  const paneLive = id => page.evaluate(id => { const el = document.querySelector('#' + id + ' .pill[id$="-connPill"]'); return !!el && el.textContent === 'LIVE'; }, id);
+  // 1.16.0: a mounted chart has no legend or LIVE pill; its badge carries the connection state
+  const paneLive = id => page.evaluate(id => { const el = document.querySelector('#' + id + ' [id$="-badge"]'); return !!el && el.dataset.conn === 'live'; }, id);
   await until(() => paneLive('paneA'), 'pane A live');
   await page.waitForTimeout(1200);
   check(await page.evaluate(() => window.__a.chart.bars().length > 100), 'bars from wsUrl: ' + await page.evaluate(() => window.__a.chart.bars().length));
-  const legendA = (await page.textContent('#paneA .legend')).replace(/\s+/g, ' ');
-  check(/MNQ 12-26/.test(legendA) && /Last fill (BUY|SELL)/.test(legendA), 'legend shows the contract and the last fill: ' + legendA.slice(0, 120));
+  // 1.16.0 (Anthony): no text on a mounted chart: no legend; the fills are marked on the chart, the badge says nothing while LIVE
+  const embA = await page.evaluate(() => { const b = document.querySelector('#paneA [id$="-badge"]'); return { legend: document.querySelectorAll('#paneA .legend').length, marks: window.__a.chart.getMarkers().length,
+    badge: b ? [...b.children].filter(x => !x.hidden).map(x => x.textContent) : null }; });
+  check(embA.legend === 0 && embA.marks > 0 && embA.badge && embA.badge.length === 0, 'no legend on the chart, its fills marked, the badge empty while LIVE: ' + JSON.stringify(embA));
   check(await page.evaluate(() => window.__status.A.join(',')) === 'connecting,loading,live', 'onStatus: ' + await page.evaluate(() => window.__status.A.join(',')));
   check(await page.evaluate(() => window.liveChart === undefined), 'no window.liveChart from an embedded chart');
   // the page's ids are prefixed per mount; the engine's Colors panel makes its own random ones
@@ -211,7 +214,7 @@ try {
     check(a.visible && JSON.stringify(a.options) === '["DEMO-EVAL","Sim101","DEMO-EMPTY"]' && a.marks.every(x => x === a.value), 'embed: a compact account picker in the toolbar, no "All accounts", the fills are its account\'s: ' + JSON.stringify(a));
     await page.selectOption('#paneA [id$="-acctPick"]', 'DEMO-EVAL'); await page.waitForTimeout(200);
     a = await acct('paneA');
-    check(a.value === 'DEMO-EVAL' && a.marks.join() === 'DEMO-EVAL' && /DEMO-EVAL/.test(await page.textContent('#paneA [id$="-lgFill"]')), 'embed: switching the account switches the fills: ' + JSON.stringify(a));
+    check(a.value === 'DEMO-EVAL' && a.marks.join() === 'DEMO-EVAL', 'embed: switching the account switches the fills: ' + JSON.stringify(a));
     check(await page.evaluate(() => localStorage.getItem('desk:live-account-v1')) === '"DEMO-EVAL"' && await page.evaluate(() => localStorage.getItem('live-account-v1')) === null, 'embed: the account is saved under the prefix only');
     const b = await acct('paneB');
     check(b.value === 'DEMO-EVAL' && b.marks.every(x => x === 'DEMO-EVAL'), 'embed: the other pane with the same prefix follows the pick at once (review 2, N6): ' + JSON.stringify(b));
@@ -233,7 +236,7 @@ try {
   await page.click('#paneB .seg >> text="5m"');
   await until(() => paneLive('paneB'), 'pane B live on ES');
   await page.waitForTimeout(1500);
-  check(/ES 12-26/.test(await page.textContent('#paneB .legend')) && /MNQ 12-26/.test(await page.textContent('#paneA .legend')), 'each pane has its own instrument');
+  check(await page.evaluate(() => window.__b.view().root === 'ES' && window.__a.view().root === 'MNQ' && window.__b.chart.lastBar().c !== window.__a.chart.lastBar().c), 'each pane has its own instrument');
   // keys go to the focused pane only: arrows pan pane A away from live, pane B stays live
   await page.focus('#paneA .chart-box');
   for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowLeft');
@@ -398,7 +401,7 @@ try {
       localStorage.setItem(ChartLive.EMBED_PREFIX + 'live-indicators-v1', JSON.stringify({ main: { volume: true, vwap: false, levels: true, fills: true, ib: true } }));
       document.getElementById('paneB').hidden = true; window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws' });
     }, PORT + 1);
-    await p2.waitForFunction(() => { const el = document.querySelector('#paneA .pill[id$="-connPill"]'); return el && el.textContent === 'LIVE'; }, null, { timeout: 15000 });
+    await p2.waitForFunction(() => { const el = document.querySelector('#paneA [id$="-badge"]'); return el && el.dataset.conn === 'live'; }, null, { timeout: 15000 });
     await p2.click('#paneA .seg >> text="5m"'); await p2.waitForTimeout(300);
     const keys = await p2.evaluate(() => Object.keys(localStorage)), prefix = await p2.evaluate(() => ChartLive.EMBED_PREFIX);
     check(prefix && keys.length > 0 && keys.every(k => k.startsWith(prefix)), 'string wsUrl on ChartBridge 0.2 works; with no storagePrefix every key starts with "' + prefix + '": ' + keys.join(','));
@@ -444,7 +447,7 @@ try {
       }, PORT + 3);
       await until(() => p3.evaluate(() => window.__st.filter(s => s === 'offline').length >= 2), 'not listed: refused, offline after each try');
       const diag3 = await (await fetch(`http://127.0.0.1:${PORT + 3}/diag`)).json();
-      const pill3 = await p3.textContent('#paneA .pill[id$="-connPill"]');
+      const pill3 = await p3.textContent('#paneA [id$="-bConn"]');   // 1.16.0: the badge (no LIVE pill on a mounted chart)
       check(!(await p3.evaluate(() => window.__st.includes('live'))) && diag3.network.refusedOrigin >= 2 && /CONNECTING|OFFLINE/.test(pill3),
         'host origin not in allowOrigins: refused (' + diag3.network.refusedOrigin + ' refusals), never live, pill ' + pill3);
       await p3.evaluate(port => {

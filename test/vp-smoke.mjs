@@ -241,7 +241,7 @@ try {
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + pt + '/ws', paneId: 'main', storagePrefix: 'desk:' });
     window.__b = ChartLive.mount(document.getElementById('paneB'), { wsUrl: 'ws://localhost:' + pt + '/ws', paneId: 'pane-2', storagePrefix: 'desk:' });
   }, br.port);
-  await host.waitForFunction(() => [...document.querySelectorAll('[id$="-connPill"]')].every(x => x.textContent === 'LIVE'), null, { timeout: 30000 });
+  await host.waitForFunction(() => { const b = [...document.querySelectorAll('[id$="-badge"]')]; return b.length > 0 && b.every(x => x.dataset.conn === 'live'); }, null, { timeout: 30000 });   // 1.16.0: a mounted chart's badge
   await host.waitForTimeout(600);
   check(await host.evaluate(() => !window.__a.chart.getLayers().vp && !window.__b.chart.getLayers().vp && window.__a.indicatorOptions('vp').session === 'full'), 'mounted panes: profile off, Session');
   // review S5: inherited names are not options; the call returns false and throws nothing
@@ -561,7 +561,7 @@ try {
     q.on('pageerror', e => fail('pageerror: ' + e.message));
     await q.goto(`http://localhost:${br.port}/test/embed-host.html`);
     await q.evaluate(port => { window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws', paneId: 'main', storagePrefix: 'desk:' }); }, br.port);
-    await q.waitForFunction(() => { const p = window.__a.element.querySelector('[id$="connPill"]'); return p && p.textContent === 'LIVE'; }, null, { timeout: 30000 });
+    await q.waitForFunction(() => { const p = window.__a.element.querySelector('[id$="-badge"]'); return p && p.dataset.conn === 'live'; }, null, { timeout: 30000 });   // 1.16.0: the badge
     await q.waitForTimeout(1200);
     const note = await q.evaluate(() => { const n = window.__a.element.querySelector('[id$="vpNote"]'); return n && !n.hidden ? n.textContent : ''; });
     check(/^Volume profile/.test(note) && !/install|ChartBridge|reload/i.test(note), 'The Desk\'s embed on Sunday with a relay serving 8 hours: a neutral note: "' + note + '"');

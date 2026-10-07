@@ -64,8 +64,14 @@ mounted chart still follows a pick made by another chart or tab with its prefix 
 trading page, where each tab keeps its own order account).
 
 `mount` returns `{ destroy(), chart, element, paneId, setIndicatorOption(id, key, value), indicatorOptions(id) }` and,
-since 1.14.0, `legendToggle` (the **Aa** header text button, for a host to place beside Indicators), `legendShown()`
-and `setLegendShown(on)` (saved per pane in `live-legend-v1`):
+since 1.14.0, `legendToggle`, `legendShown()` and `setLegendShown(on)`. 1.16.0 (Anthony): a mounted chart has no text on
+it, no legend and no **Aa** toggle: `legendToggle` is an empty hidden element (a host that places it shows nothing),
+`legendShown()` is false and `setLegendShown` does nothing (only the single chart page has its legend and toggle). It has
+`badge` instead, a small element (in the chart's top left corner, unless the host places it in its own header, inside an
+element with the class `chart-live`) that shows **ARMED · account** while the chart takes orders (`setTrade`'s `live`) and
+the connection when it is not LIVE: CONNECTING, LOADING, OFFLINE, or "Feed stale 12 s" (no trade for 10 s in RTH or 60 s
+outside it while CME Globex is open; the chart then has a thin amber edge, gone with the next trade). Its `data-conn` is the
+state, also while LIVE. The other parts of the object:
 `chart` is the chart-engine instance (for reading, such as `chart.bars()`), `element` the `.chart-live` element it
 created in the container. `setIndicatorOption` sets an indicator's own option on this pane and saves it (1.6.0). There
 are three:
@@ -108,21 +114,28 @@ so after a weekend load it shows what the view's ticks hold, with a quiet note. 
 | `wsUrl` | none, required | ChartBridge's WebSocket URL. A **function** is called again for **every** connect and reconnect, so it can hand out a fresh single-use relay ticket each time (`/api/live/ws?ticket=...`), or choose between `ws://localhost:8765/ws` and the relay. It may return a promise; a thrown error or a rejected promise counts as a failed connect and is retried. The query string is never shown on screen. |
 | `paneId` | `'main'` | Key for this chart's indicators (Volume bars, VWAP, Levels, Initial balance, Volume profile, Cumulative delta, Fills: on the chart, shown, pinned; and their options), the delta pane's height and drawings. `'main'` starts with the five on and pinned and the cumulative delta pane on without a chip (the volume profile off), any other id with none on (Anthony's rule for new panes). Give every pane its own id. |
 | `storagePrefix` | `'embed:'` | Put in front of every storage key, see below. |
-| `onStatus` | none | Called with `{ state, paneId, root, attempt }` on every connection change. `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
+| `onStatus` | none | Called with `{ state, paneId, root, attempt, contract }` on every connection change (`contract`, 1.16.0: the contract's name, such as "MNQ 12-26", once known). `state` is `'connecting'`, `'loading'` (subscribed, history coming), `'live'` or `'offline'`; `attempt` counts failed connects since the last good one. |
 | `brand` | `false` | Show The Desk logo and "Live chart" at the start of the toolbar (the standalone page shows it). |
 | `presetStore` | this browser's storage | Where the Colors panel's named presets live (1.9.0): `{ list(), save(group, name, colors, ind), rename(group, id, name), remove(group, id), shared }` (`ind`: a chart preset's linked indicator preset id), each call returning a promise, as `LivePrefs.localPresetStore` in `live/live.js` describes. |
 | `feed` | none | A `ChartFeed` hub (`live/feed.js`, `ChartFeed.create({ wsUrl })`): the chart takes its data from the hub's one connection per instrument instead of opening its own WebSocket, so several charts (and tapes) of one instrument share one connection and one subscribe. `wsUrl` is then not needed. Added for the workspace (E2a). |
 | `view` | none | `{ root, tf, range }`: the chart's own instrument, bars (`s15` to `h1`, `range`) and range size in ticks. The chart starts on them and never saves them under the prefix; the host keeps them (`onView`). Without it the chart reads and saves them under the prefix as before. |
 | `onView` | none | Called with `{ root, tf, range }` whenever the chart's instrument, bars or range size change (from its toolbar or `setView`). |
 | `toolbar` | `true` | `false`: the chart's toolbar is not shown. The host shows its own header with the chart's Indicators button and its pinned chips (the returned `indicators` and `chips` elements, moved into an element with the class `chart-live` so `live.css` styles them; the chips are then 2-letter, and those that do not fit the room left go behind a "+N" chip with a small list) and calls `setView`, `chart.setTool`, `chart.clearDrawings`, `chart.reset`. |
-| `compact` | `false` | `true`: for a small panel. The legend is at most 2 lines (no source and version line, no LIVE pill, no bar time; the close and change first, then VWAP, delta, O H L, volume, the last fill) and the status line shows only while it carries a note (loading, the range, IB and profile notes, warnings), with no delays or fps. |
+| `compact` | `false` | `true`: for a small panel. The status line shows only while it carries a note (loading, the range, IB and profile notes, warnings), with no delays or fps. (Up to 1.15.0 it also made the legend at most 2 lines; 1.16.0 has no legend on a mounted chart.) |
 | `onColors` | none | Called after this chart's Colors panel or an indicator gear changed a color, so a host can call `refreshColors()` on its other charts. |
 | `trade` | none | 1.12.0, the workspace: `{ place(side, price, root, kind), move(id, price, root), cancel(id, root) }` (`kind`: the limit or stop this chart's own price gives, null with no price yet). The chart shows what `setTrade({ root, live, account, orders, position, pointValue, qty })` gives it (only while `root` is its instrument: the working orders and position lines, the account's fills, and while `live` the Armed outline and order editing) and hands Shift + left click (buy), Shift + right click and Ctrl + left click (sell), a drag and an x to the host, which checks and sends them. `setTrade(null)` clears. The browser's menu is off on such a chart. 1.13.0: `orders` may hold a resting entry's planned lines (`{ id: '<entry>:sl' or ':tp', plan: { parent, offset, role } }`, TradeCore's `chartOrders`) and `adds` on an entry; a drag or x of a planned line comes to `move` / `cancel` with that id, and "+SL" / "+TP" calls an optional `planAdd(id, which, root)` (`which`: `stop` or `target`). 1.15.0: such a chart draws its order labels short ("TGT 1", "L1 +4.50 +$90"; the full label on hover, the hit areas and the x as before), lets a Shift or Ctrl click place an order whatever drawing tool is armed, and keeps day labels apart; an optional `pressOff(root)` returns the note shown on the chart when a press on an order does nothing (not live for orders; default "Armed is off: arm to move or cancel orders."). |
 
 With these options the returned object also has `setView({ root, tf, range })` (any of the three), `view()`,
 `refreshSettings()` (Glide and Range style read again from storage, for a host whose Settings change them),
 `refreshColors()` (the chart and indicator colors read again from storage), `stats()` (`{ root, feed, local, chart }`:
-the median feed and local delays in ms and the engine's frame stats, for a host's own status line), and the elements
+the median feed and local delays in ms and the engine's frame stats, for a host's own status line; 1.16.0 adds `draw` and
+`drawMax`, the tape timing below, and `stale`, the seconds the feed has been stale or 0), and 1.16.0's Data Box:
+`barInfo()` (the bar under the crosshair, else the newest: `{ root, name, tf, range, tick, dp, t, end, forming, hovering,
+o, h, l, c, v, delta: { buy, sell, unknown, big } or null, deltaWhy, deltaFrom, bubbles: { n, max, side } or null, bubble }`;
+`big` is the bar's largest single trade, from the chart's Cumulative delta), `onBar(fn)` (`fn(hovering)` when it may have
+changed, after a frame that changed it or the bubble under the mouse; returns the undo; nothing is worked out without a
+listener) and `timing()` (`{ draw, drawMax }`: ms from ChartBridge's receipt of a trade, its `rx`, to the frame that drew
+it, the latest and the worst of the last second; one stamp per frame), and the elements
 `indicators` (the Indicators button and its menu), `chips` (the pinned chips) and `colors` (the Colors button and
 panel) for a host to place, and `setTrade` (with `trade`). None of it changes a
 chart mounted without them. `ChartLive.hotkeyHandler(o)` is the trading hotkeys' one keydown handler (1.11.0), which
