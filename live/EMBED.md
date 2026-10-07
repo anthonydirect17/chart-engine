@@ -24,8 +24,9 @@ Leave out `data-mount="page"`: that attribute is how `live/single.html` boots th
 
 Record the chart-engine commit and version (`ChartEngine.VERSION`) in the host's `VENDORED.txt`.
 
-Optional: the IBM Plex fonts the chart uses (IBM Plex Sans, Sans Condensed and Mono, from Google Fonts in
-`live/single.html`). Without them the chart falls back to system fonts.
+Optional: the IBM Plex fonts the chart uses (IBM Plex Sans, Sans Condensed and Mono). Since 1.16.0 the pages serve them
+from their own folder: `live/fonts/plex.css` and the woff2 files beside it (SIL Open Font License, `live/fonts/OFL.txt`);
+a host can vendor that folder and link `fonts/plex.css`. Without them the chart falls back to system fonts.
 
 If the host sets a Content Security Policy: `connect-src` must allow the WebSocket URLs it passes (for
 example `ws://localhost:8765` and its own relay), and `style-src` must allow inline styles (the engine adds one
