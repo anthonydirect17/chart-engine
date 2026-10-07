@@ -882,7 +882,12 @@ test('0.4.0 B4: Merge ships, is checked, and is OFF by default', () => {
   assert.ok(!/MergeOn = true|Enabled = |trading/.test(mcode.replace(/trading off|trading is off/g, '')), 'Merge never turns a switch or trading on or off');
   // the hooks: the message, its keys, the freeze before every other order action, Flatten first ends the swap
   assert.match(fnBody('OnMessage'), /else if \(type == "merge"\) why = MergeStart\(client, top, cid\);/);
-  assert.match(fnBody('OnMessage'), /if \(type == "flatten"\) MergeOnFlatten\(top\);[^\n]*\n[\s\S]*else if \(type == "flatten"\) why = Flatten\(top\);/);
+  // fix1 (F1): the swap ends only inside Flatten, after its gates, in one step with the flatten call
+  assert.match(fnBody('OnMessage'), /else if \(type == "flatten"\) why = Flatten\(top\);/);
+  assert.ok(!/MergeOnFlatten/.test(ocode + mcode), 'no Merge abort before Flatten is checked');
+  const fl = fnBody('Flatten');
+  assert.ok(fl.indexOf('if (account == null) return why;') < fl.indexOf('MergeFlattenSend(') && fl.indexOf('if (inst == null) return') < fl.indexOf('MergeFlattenSend('), 'the gates first');
+  assert.match(fl, /MergeFlattenSend\(account, inst, \(\) => account\.Flatten\(new\[\] \{ inst \}\)\);/);
   assert.match(ocode, /\{ "merge", new\[\] \{ "type", "cid", "account", "root" \} \}/);
   assert.match(code, /else if \(type == "merge"\) ChartBridgeOrders\.OnMessage\(client, type, text\);/);
   assert.match(code, /if \(ChartBridgeOrders\.MergeOn\) b\.Append\(",\\"merges\\":"\)\.Append\(ChartBridgeOrders\.MergeDiagJson\(\)\);/);
@@ -890,12 +895,13 @@ test('0.4.0 B4: Merge ships, is checked, and is OFF by default', () => {
 
 test('0.4.0 B4: Merge sends order calls only from MergeAct (under the Flatten lock) and the merged-set upkeep', () => {
   let rest = mcode;
-  for (const f of ['MergeAct', 'MergeKeepSet']) rest = rest.replace(mBody(f), '');
-  for (const re of [/\.Submit\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/]) assert.ok(!re.test(rest), 'order call outside MergeAct and MergeKeepSet: ' + re);
+  for (const f of ['MergeAct', 'MergeKeepSet', 'MergeShrinkToHeld']) rest = rest.replace(mBody(f), '');
+  for (const re of [/\.Submit\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/]) assert.ok(!re.test(rest), 'order call outside MergeAct, MergeKeepSet and MergeShrinkToHeld: ' + re);
   assert.ok(!/\.Flatten\s*\(|\.Submit\s*\(|CreateOrder\s*\(/.test(mBody('MergeKeepSet')), 'the upkeep only shrinks and cancels');
+  assert.ok(!/\.Flatten\s*\(|\.Submit\s*\(|\.Cancel\s*\(|CreateOrder\s*\(/.test(mBody('MergeShrinkToHeld')), 'fix1: the first-seen upkeep only shrinks');
   const act = mBody('MergeAct');
   assert.match(act, /lock \(MergeSendLock\)\s*\{\s*if \(s\.Aborted\) return "Flatten";/, 'nothing is sent after Flatten');
-  assert.match(mBody('MergeOnFlatten'), /lock \(MergeSendLock\) foreach \(MergeSwapState s in hit\) s\.Aborted = true;/);
+  assert.match(mBody('MergeFlattenSend'), /lock \(MergeSendLock\)\s*\{\s*foreach \(MergeSwapState s in hit\) s\.Aborted = true;[^\n]*\n\s*try \{ flatten\(\); \}/);
   // never over-protected: S grows only after the pair is confirmed cancelled, and only within the position
   const swap = mBody('MergeSwap');
   assert.ok(swap.indexOf('MergeCancelUnit(s, u)') < swap.indexOf('MergeGrowStop(s, u.Qty)'), 'cancel first, then grow');

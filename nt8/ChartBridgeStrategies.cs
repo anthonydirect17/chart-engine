@@ -1165,7 +1165,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int saveQueued;
         private static readonly object ManagedFileLock = new object();
         public static Func<string> ManagedReadFault, ManagedWriteFault;   // test hooks (unused in NinjaTrader)
-        private static readonly Regex ManagedLineRx = new Regex("^([0-9a-f]{8})\t(\\{[^\t]*\\})\t([^\t]*)\t([0-9]{1,15})(\tmerged)?$");   // fix1 (F4): optional "merged"
+        private static readonly Regex ManagedLineRx = new Regex("^([0-9a-f]{8})\t(\\{[^\t]*\\})\t([^\t]*)\t([0-9]{1,15})(\tmerged){0,1}$");   // fix1 (F4): optional "merged"
 
         private static string ManagedFile { get { return Path.Combine(ChartBridgeConfig.Folder, "managed.txt"); } }
 
