@@ -581,11 +581,13 @@ function create(o) {
     const ctx = f.ctx, w = f.w, h = f.h;
     if (!ctx) return;
     ctx.clearRect(0, 0, w, h);
-    const pts = BC.thinEquity(eq, big ? 600 : 120);
+    // the points and their range once per canvas (nothing allocated per frame while it draws in)
+    if (!c._pts || c._eq !== eq) { c._eq = eq; c._pts = BC.thinEquity(eq, big ? 600 : 120); c._lo = Math.min(0, ...c._pts); c._hi = Math.max(0, ...c._pts); }
+    const pts = c._pts;
     if (pts.length < 2) return;
     const K = css();
     const padL = big ? 44 : 2, padR = big ? 10 : 4, padT = big ? 10 : 4, padB = big ? 20 : 3;
-    const lo = Math.min(0, ...pts), hi = Math.max(0, ...pts), span = hi - lo || 1;
+    const lo = c._lo, hi = c._hi, span = hi - lo || 1;
     const X = i => padL + (w - padL - padR) * i / (pts.length - 1), Y = v => padT + (h - padT - padB) * (1 - (v - lo) / span);
     if (big) {
       ctx.font = '500 10px ' + K.mono; ctx.fillStyle = K.muted; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';

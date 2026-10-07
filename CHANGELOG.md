@@ -41,6 +41,18 @@
   everything else in `live/live.js`'s hello; the workspace's connection badge); nothing is fetched or sent for it. Display
   only: the order path is not touched. Tests: `test/update-notice.test.js`, `smoke:update`.
 
+- **Bot tab** (Anthony's addenda 2 to 4; ChartBridge 0.4.0's bot channel, shown only when its `bot` switch is on; with it
+  off the tab says so and offers nothing): its own layout tab with the bot's chart, the Library (one slot; Ready L1 or higher
+  and Research shelves; full screen with the large equity curve, rule card, settings, live record and "Conditions it works
+  best in"; read from `GET /bot-library`, the file's shape in `docs/BOT_LIBRARY.md`), the bot panel (mode, rails with how
+  close to each and Tighten only, kill switch, day type log, today's signals and trades, Log, Options) and **Pop out**
+  (`bot.html`, its own window). The **bot strip** across the top of the Main tab; **copilot proposals** on any tab with
+  `botSeen` and `botAnswer` (The Desk's `accept` and `reject` keys or the buttons; an expired one says "not answered");
+  corner notices (sound off by default); per-chart **ghost marks** of the bot's trades (off by default; the engine's
+  `setTrades` draws `ghost` trades faint and an open trade's entry only). Motion (`live/motion.js`) on the Bot tab and
+  the Library only; Settings > Motion: Less. Files `live/bot-core.js`, `live/bot.js`, `live/bot.css`, `live/bot.html`;
+  tests `test/bot.test.js`, `smoke:bot`, `perf:bot`; the fake bridge gains `botRails` and `/bot-library`. Made-up bots only.
+
 ## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
 
 - **Markup Studio** (`tools/markup_studio.py`, `live/markup.html`): grade NQ liquidity sweeps blind on the chart's own Range 40

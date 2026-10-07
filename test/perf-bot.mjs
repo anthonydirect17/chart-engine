@@ -77,6 +77,10 @@ try {
   if (arg('css', '')) await page.addStyleTag({ content: String(arg('css', '')) });   // an experiment: a style added (what costs what)
   await page.waitForTimeout(WARM * 1000);
   const heapStart = await page.evaluate(() => performance.memory.usedJSHeapSize);
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send('Performance.enable');
+  const metric = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
+  const m0 = await metric();
   await page.evaluate(() => { window.__perf.on = true; });
   // motion in nearly every frame: the entrance again, then a build full screen and closed, over and over
   const t0 = Date.now();
@@ -92,13 +96,15 @@ try {
     }
   }
   const P = await page.evaluate(() => { const p = window.__perf; p.on = false; return Object.assign({}, p, { heapEnd: performance.memory.usedJSHeapSize, iso: self.crossOriginIsolated }); });
+  const m1 = await metric();
+  const pct = k => Math.round((m1[k] - m0[k]) / SECS * 10000) / 100;
   const heapGc = await page.evaluate(() => { if (window.gc) window.gc(); return performance.memory.usedJSHeapSize; });
   const iv = []; for (let i = 1; i < P.ts.length; i++) iv.push(P.ts[i] - P.ts[i - 1]);
   result = {
     page: 'workspace, the Bot tab (MNQ 1 min, live) with the entrance and the Library full screen playing', secs: SECS, liveRate: LIVE_RATE, scenes,
     chartFrames: P.charts.length, chartP50: r3(q(P.charts, 0.5)), chartP95: r3(q(P.charts, 0.95)), chartP99: r3(q(P.charts, 0.99)),
     allChartsPerFrameP95: r3(q(P.perFrame, 0.95)), motionFrames: P.motion.length, motionP50: r3(q(P.motion, 0.5)), motionP95: r3(q(P.motion, 0.95)), motionMax: r3(Math.max(0, ...P.motion)),
-    motionInsideChartFrame: P.nested, frameP50: r3(q(iv, 0.5)), frameP95: r3(q(iv, 0.95)), over33: iv.filter(d => d > 33.4).length, longTasks: P.long.length,
+    motionInsideChartFrame: P.nested, mainThreadBusyPct: pct('TaskDuration'), scriptPct: pct('ScriptDuration'), layoutStylePct: Math.round((pct('LayoutDuration') + pct('RecalcStyleDuration')) * 100) / 100, frameP50: r3(q(iv, 0.5)), frameP95: r3(q(iv, 0.95)), over33: iv.filter(d => d > 33.4).length, longTasks: P.long.length,
     heapStartMB: r3(heapStart / 1048576), heapEndMB: r3(P.heapEnd / 1048576), heapAfterGcMB: r3(heapGc / 1048576), crossOriginIsolated: P.iso, errors,
   };
   if (!(result.chartFrames > SECS * 10)) failed.push('the Bot tab\'s chart drew only ' + result.chartFrames + ' frames');

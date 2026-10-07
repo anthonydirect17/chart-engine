@@ -354,3 +354,58 @@ test('files: the Bot tab is installed, loaded in order, and keeps motion off its
   // no em or en dashes in what Anthony reads
   for (const f of [['live', 'bot.js'], ['live', 'bot-core.js'], ['live', 'bot.css'], ['live', 'bot.html'], ['docs', 'BOT_LIBRARY.md']]) assert.doesNotMatch(read(...f), /[–—]/, f.join('/'));
 });
+
+test('engine: ghost trades are drawn faint with no label; an open trade draws its entry only', () => {
+  // a stand-in canvas that records the alpha used and the text drawn (as test/perf.test.js's)
+  const seen = { alpha: new Set(), text: [], arcs: 0 };
+  const ctx = new Proxy({}, {
+    get(t, k) {
+      if (k in t) return t[k];
+      if (k === 'measureText') return s => ({ width: String(s).length * 7 });
+      if (k === 'fillText') return s => seen.text.push(String(s));
+      if (k === 'arc') return () => { seen.arcs++; };
+      if (k === 'getLineDash') return () => [];
+      return () => {};
+    },
+    set(t, k, v) { if (k === 'globalAlpha') seen.alpha.add(v); t[k] = v; return true; },
+  });
+  const element = () => ({
+    handlers: {}, style: {}, dataset: {}, hidden: false, textContent: '', tabIndex: -1,
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
+    appendChild(c) { return c; }, remove() {}, setAttribute() {}, hasAttribute() { return false; },
+    getContext: () => ctx, focus() {}, setPointerCapture() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1400, height: 800, right: 1400, bottom: 800 }),
+  });
+  let frameFn = null;
+  const saved = { document: global.document, window: global.window, raf: global.requestAnimationFrame, caf: global.cancelAnimationFrame, Path2D: global.Path2D };
+  global.document = { createElement: element, getElementById: () => null, head: { appendChild() {} } };
+  global.window = { devicePixelRatio: 1 };
+  global.requestAnimationFrame = fn => { frameFn = fn; return 1; };
+  global.cancelAnimationFrame = () => { frameFn = null; };
+  global.Path2D = class { moveTo() {} lineTo() {} rect() {} closePath() {} arc() {} };
+  try {
+    delete require.cache[require.resolve('../src/chart-engine.js')];
+    const CE = require('../src/chart-engine.js');
+    const bars = [];
+    for (let i = 0; i < 120; i++) { const c = 25000 + Math.sin(i / 9) * 20; bars.push({ t: 1790000000 + i * 60, o: c - 1, h: c + 3, l: c - 3, c, v: 100, vw: c }); }
+    const chart = CE.create(element(), { clock: () => bars[bars.length - 1].t + 30 });
+    chart.setBars(bars);
+    chart.setLayers({ trades: true });
+    const T = i => bars[i].t;
+    const draw = list => { chart.setTrades(list); seen.alpha.clear(); seen.text.length = 0; seen.arcs = 0; for (let k = 0; k < 3 && frameFn; k++) { const f = frameFn; frameFn = null; f(1000 + k * 16); } };
+    draw([{ tIn: T(100), pIn: 25000, tOut: T(110), pOut: 25002, dir: 1, ghost: true }]);
+    assert.ok(seen.alpha.has(0.38), 'faint: ' + [...seen.alpha].join(','));
+    assert.ok(!seen.text.some(s => /^\+2\.00/.test(s)), 'no label on a ghost trade');
+    draw([{ tIn: T(100), pIn: 25000, tOut: T(110), pOut: 24998.5, dir: 1 }]);
+    assert.ok(seen.text.some(s => /^-1\.50/.test(s)), 'a normal trade keeps its label: ' + seen.text.filter(s => /\d\.\d\d/.test(s)).slice(0, 3).join('|'));
+    assert.ok(!seen.alpha.has(0.38));
+    const arcsWithExit = seen.arcs;
+    draw([{ tIn: T(100), pIn: 25000, tOut: null, pOut: null, dir: -1 }]);
+    assert.ok(seen.arcs < arcsWithExit, 'an open trade has no exit dot');
+    assert.ok(!seen.text.includes('0.00'), 'and no label (an open trade has no result yet)');
+  } finally {
+    Object.assign(global, { document: saved.document, window: saved.window, requestAnimationFrame: saved.raf, cancelAnimationFrame: saved.caf, Path2D: saved.Path2D });
+    delete require.cache[require.resolve('../src/chart-engine.js')];
+  }
+});
