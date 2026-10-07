@@ -30,7 +30,8 @@
 //  11. PASS, then "my trade instead" (M) with --trade-exits=t5: nothing of the outcome before his trade is saved or declined,
 //      the .mine.json files (instead, none), the reveal's Your trade instead row, and only the t5 legs drawn (never the
 //      primary target).
-//  12. The Work list (--work, items staged with tools/markup_work.py): offered with counts and no paths, a stopped set listed
+//  12. The Work list (--work, items staged with tools/markup_work.py): offered with counts and no paths ("N graded" with no
+//      "of" for a stopped Trades item without a target, its own queue's grades only), a stopped set listed
 //      but not offered, picking an item opens it, a link (#work=) is refused while a trade is open and says why, then opens
 //      once the grade is saved, and another origin allowed with --allow-origin reads /api/work and nothing else.
 //  13. A question set (--trade-labels-only --trade-question=approach): only the question's choices show (no chip list), T, A
@@ -780,6 +781,15 @@ try {
       '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py'), '--trade-labels-only', '--trade-target=3', '--trade-variant=TM', tFlags[0]]);
     tool(['add', ...common, '--id=old-set', '--title=Old practice set', '--marks=' + path.join(tmp, 'w-old')]);
     tool(['status', '--work=' + wd, '--id=old-set', '--set=stopped']);
+    // a stopped Trades item with no --trade-target whose marks folder also holds another queue's grade: "2 graded", never "of"
+    const oldT = path.join(tmp, 'w-old-trades'), oq = [0, 1, 2].map(i => ({ qid: 'Q000000000' + i, trade_id: 'OLD-' + i }));
+    fs.mkdirSync(path.join(oldT, 'trade_grades'), { recursive: true });
+    fs.writeFileSync(path.join(oldT, 'trade_queue_v1.json'), JSON.stringify({ sha256: 'a'.repeat(64), items: oq }));
+    for (const [x, sha] of [[oq[0], 'a'], [oq[1], 'a'], [oq[2], 'b']])
+      fs.writeFileSync(path.join(oldT, 'trade_grades', x.qid + '.json'), JSON.stringify({ qid: x.qid, trade_id: x.trade_id, queue_sha256: sha.repeat(64), label: 'TAKE' }));
+    tool(['add', ...common, '--id=old-trades', '--title=Old trades set', '--marks=' + oldT, '--bot=' + path.join(root, 'test', 'markup_bot_fixture.py'),
+      '--trade-variant=TM', tFlags[0]]);
+    tool(['status', '--work=' + wd, '--id=old-trades', '--set=stopped']);
     const desk = `http://127.0.0.1:${DP}`;
     const child = spawn(PY, [path.join(root, 'tools', 'markup_studio.py'), '--work=' + wd, '--source=npz', '--data=' + dataDir, '--port=' + WP,
       '--no-browser', '--allow-origin=' + desk], { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -787,13 +797,16 @@ try {
     await new Promise(r => child.stdout.once('data', r));
     const work = () => fetch(`http://127.0.0.1:${WP}/api/work`).then(r => r.json());
     const w0 = await until(() => work().catch(() => null), 10000);
-    check(!!w0 && w0.current === null && w0.items.map(i => i.id).join() === 'labels,sweeps,old-set', 'work: three items offered, active first, nothing open at the first start (' + (w0 && w0.items.map(i => i.id)) + ')');
+    check(!!w0 && w0.current === null && w0.items.map(i => i.id).join() === 'labels,sweeps,old-set,old-trades', 'work: four items offered, active first, nothing open at the first start (' + (w0 && w0.items.map(i => i.id)) + ')');
     check(!!w0 && !JSON.stringify(w0).includes(tmp), 'work: the list carries no folders or file paths');
     const wp = await openPage(WP);
     await until(() => wp.page.evaluate(() => !document.getElementById('msWorkBox').hidden), 15000);
     const opts = await wp.page.evaluate(() => [...document.getElementById('msWork').options].map(o => [o.value, o.textContent, o.disabled]));
     check(opts.some(o => o[0] === 'labels' && o[1].includes('Label set A') && o[1].includes('0 of 3 graded') && !o[2]) &&
       opts.some(o => o[0] === 'old-set' && o[2] && o[1].includes('stopped')), 'work: the Work list shows titles, kinds and counts; the stopped set is listed, not offered (' + JSON.stringify(opts) + ')');
+    const ot = (opts.find(o => o[0] === 'old-trades') || [])[1] || '';
+    check(ot.includes('2 graded') && !ot.includes(' of ') && w0.items.find(i => i.id === 'old-trades').progress.total === null,
+      'work: a stopped Trades item without a target counts only its own queue\'s grades, "N graded" with no "of" (' + ot + ')');
     const st0 = await until(() => wp.page.evaluate(() => document.getElementById('msStatus').textContent).then(t => t.includes('Work list') && t), 15000) || '';
     check(st0.includes('pick one from the Work list'), 'work: with nothing open the page says to pick from the Work list (' + st0 + ')');
     await shot(wp.page, 'markup-work-list.png');

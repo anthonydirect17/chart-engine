@@ -174,6 +174,40 @@ class Progress(TBase):
         self.assertIn('(1 graded)', out.getvalue())
         self.assertNotIn(' of ', out.getvalue())
 
+    def test_the_home_case_354_graded_never_of_300(self):
+        """HOME's stopped Trades item: 354 grades of its own queue, no --trade-target, a marks folder shared with Sweeps
+        (blind grades) and with another queue's grades. The old list said "354 of 300 graded"; now "354 graded"."""
+        marks = os.path.join(self.tmp.name, 'shared')
+        gdir = os.path.join(marks, 'trade_grades')
+        os.makedirs(gdir)
+        sha = 'a' * 64
+        items = [{'qid': 'Q%010d' % i, 'trade_id': 'A1-%d' % i} for i in range(400)]
+        with open(os.path.join(marks, 'trade_queue_v1.json'), 'w', encoding='utf-8') as f:
+            json.dump({'sha256': sha, 'items': items}, f)
+        for i, x in enumerate(items[:354]):
+            with open(os.path.join(gdir, x['qid'] + '.json'), 'w', encoding='utf-8') as f:
+                json.dump({'qid': x['qid'], 'trade_id': x['trade_id'], 'queue_sha256': sha, 'label': 'TAKE'}, f)
+        for x in items[354:384]:                   # another queue's grades in the same folder: not this item's
+            with open(os.path.join(gdir, x['qid'] + '.json'), 'w', encoding='utf-8') as f:
+                json.dump({'qid': x['qid'], 'trade_id': x['trade_id'], 'queue_sha256': 'b' * 64, 'label': 'TAKE'}, f)
+        os.makedirs(os.path.join(marks, 'grades'))  # the Sweeps grades the folder also holds
+        for i in range(5):
+            with open(os.path.join(marks, 'grades', 'g%d.json' % i), 'w', encoding='utf-8') as f:
+                json.dump({'id': 'c%d' % i, 'mode': 'blind'}, f)
+        it = self.item(marks)
+        self.assertEqual(work.progress(it), {'done': 354, 'total': None})
+        self.assertEqual(work.public(it)['progress'], {'done': 354, 'total': None})
+        wd = os.path.join(self.tmp.name, 'work354')
+        os.makedirs(wd)
+        with open(os.path.join(wd, 'x.json'), 'w', encoding='utf-8') as f:
+            json.dump({k: v for k, v in it.items() if k != 'kind'}, f)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            work.main(['list', '--work=' + wd])
+        self.assertIn('(354 graded)', out.getvalue())
+        self.assertNotIn('of 300', out.getvalue())
+        self.assertNotIn(' of ', out.getvalue())
+
 
 class QuietLog(unittest.TestCase):
     def setUp(self):
