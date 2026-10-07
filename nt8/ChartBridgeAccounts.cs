@@ -69,6 +69,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, Live> Lives = new Dictionary<string, Live>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, string> StatusText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // AccountStatusUpdate
         private static readonly HashSet<string> DrawdownSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // a non-zero trailing drawdown seen this run
+        private static readonly HashSet<string> EverConnected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);  // seen Connected this run (lead's default: only these can go Gone by disconnecting)
         private static readonly List<string[]> PendingLog = new List<string[]>();   // accounts.log lines not written yet (Mem)
         private static bool loaded;          // accounts.txt read, or made on a first start, this run
         private static string readError;     // accounts.txt exists but could not be read: every checkmark off, never rewritten this run
@@ -104,7 +105,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Mem)
             {
-                Recs.Clear(); Lives.Clear(); StatusText.Clear(); DrawdownSeen.Clear(); PendingLog.Clear();
+                Recs.Clear(); Lives.Clear(); StatusText.Clear(); DrawdownSeen.Clear(); EverConnected.Clear(); PendingLog.Clear();
                 loaded = false; readError = null; startAlarm = null; dirty = false; saveError = null; lastAccountsJson = null;
             }
         }
@@ -506,7 +507,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string name = listed;
                 Account a = all.FirstOrDefault(x => x.Name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-                string why = BadWhy(a);   // NinjaTrader calls, outside Mem
+                string why = BadWhy(name, a);   // NinjaTrader calls, outside Mem
+                bool upNow = a != null && ConnectionText(a) == "connected";
                 lock (Mem)
                 {
                     Live l;
@@ -515,7 +517,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (!Recs.TryGetValue(name, out r)) { Recs[name] = r = new Rec { Name = name, State = "off", ChangedMs = (long)now }; dirty = true; }   // seen: kept in accounts.txt
                     if (r.State == "archived")
                     {
-                        if (why == null && a != null) { r.State = "off"; r.ChangedMs = (long)now; dirty = true; l.Gone = false; l.GoneWhy = null; l.BadSince = -1; changed = true; notes.Add(new[] { name, "back from the archive", "connected again; unchecked" }); }
+                        if (why == null && upNow) { r.State = "off"; r.ChangedMs = (long)now; dirty = true; l.Gone = false; l.GoneWhy = null; l.BadSince = -1; changed = true; notes.Add(new[] { name, "back from the archive", "connected again; unchecked" }); }
                         continue;
                     }
                     if (why == null)
@@ -548,10 +550,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // What makes an account Gone now, or null when it is healthy.
-        private static string BadWhy(Account a)
+        // Lead's default (2026-10-07): Anthony signs the prop accounts in by hand after NinjaTrader opens, so an account that has
+        // not been Connected yet in this ChartBridge run is never Gone for being disconnected: it keeps its saved checkmark, is
+        // listed "not connected yet", and every order to it is refused by the normal gates (not Connected) until it connects.
+        // Once it has been Connected, a drop counts. Disabled (or past its drawdown) counts at first sight, after the grace.
+        private static string BadWhy(string name, Account a)
         {
-            if (a == null || ConnectionText(a) != "connected") return "disconnected";
-            if (IsDisabled(a.Name)) return "disabled";
+            bool up = a != null && ConnectionText(a) == "connected";
+            if (up) lock (Mem) EverConnected.Add(name);
+            if (IsDisabled(name)) return "disabled";
+            if (!up) return WasConnected(name) ? "disconnected" : null;
             string w;
             double? room = RoomDrawdown(a, out w);
             if (room.HasValue && room.Value <= 0) return "drawdown";
@@ -590,12 +598,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             double? realized = up ? Item(a, AccountItem.RealizedProfitLoss) : null;
             double? unrealized = up ? Item(a, AccountItem.UnrealizedProfitLoss) : null;
             double? pnl = realized.HasValue && unrealized.HasValue ? realized.Value + unrealized.Value : (double?)null;
-            string ddWhy = "the account is not connected", dlWhy = "the account is not connected";
+            bool yet = WasConnected(name);
+            string ddWhy = yet ? "the account is not connected" : "the account is not connected yet", dlWhy = ddWhy;
             double? room = up ? RoomDrawdown(a, out ddWhy) : null;
             if (up) dlWhy = "NinjaTrader reports the daily loss limit only as the share already used (its Accounts tab), not as dollars left; ChartBridge does not estimate it";
             b.Append("{\"name\":").Append(CbJson.Str(name))
              .Append(",\"sim\":").Append(a != null && IsSim(a) ? "true" : "false")
              .Append(",\"connection\":").Append(CbJson.Str(connection))
+             .Append(",\"notConnectedYet\":").Append(!up && !yet ? "true" : "false")   // lead's default: not Connected since ChartBridge started (keeps its checkmark)
              .Append(",\"trade\":").Append(trade ? "true" : "false")
              .Append(",\"tradable\":").Append(!gone && TradableNow(name, connection) ? "true" : "false")
              .Append(",\"state\":").Append(gone ? "\"gone\"" : "\"active\"")
@@ -703,6 +713,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (s == "ConnectionLost") return "lost";
             return "disconnected";
         }
+
+        private static bool WasConnected(string name) { lock (Mem) return name != null && EverConnected.Contains(name); }
 
         private static bool IsDisabled(string name)
         {

@@ -80,6 +80,7 @@ public static class AccountsHarness
             Exits();
             StrictAndRefusals();
             Persisted();
+            NotYetConnected();
             Scope();
             GraceAndGone();
             Archive();
@@ -362,6 +363,55 @@ public static class AccountsHarness
         Check(ChartBridgeAccounts.Checked("EVAL-A"), "EVAL-A checked again");
     }
 
+    // ------------------------------------------------------------ lead's default: an account signed in by hand after a restart keeps its checkmark
+    static void NotYetConnected()
+    {
+        Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "EVAL-A and FUNDED-B checked before the restart");
+        evalA.Connection.Status = ConnectionStatus.Disconnected;
+        Account.All.Remove(fundedB);   // its connection not up yet: NinjaTrader does not list it
+        Restart();
+        double t = ChartBridgeTime.NowUtcMs() + 50000;
+        ChartBridgeAccounts.Tick(t);
+        ChartBridgeAccounts.Tick(t + 30000);
+        ChartBridgeAccounts.Tick(t + 60000);
+        Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "restart, not connected for 60 s: the saved checkmarks stay (never connected this run, not Gone)");
+        string acc = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), e = Entry(acc, "EVAL-A");
+        Check(e.Contains("\"connection\":\"disconnected\"") && e.Contains("\"notConnectedYet\":true") && e.Contains("\"state\":\"active\"") && e.Contains("\"trade\":true") && e.Contains("\"tradable\":false") && e.Contains("the account is not connected yet"), "not connected yet: listed so, checked, not tradable");
+        Check(Entry(acc, "FUNDED-B").Contains("\"notConnectedYet\":true"), "an account NinjaTrader does not list yet: not connected yet too");
+        int calls = evalA.Calls.Count;
+        Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Rejected("EVAL-A is not connected (Disconnected)") && evalA.Calls.Count == calls, "not connected yet: an order is refused by the normal gate");
+        Send(page, Order("FUNDED-B", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(Rejected("FUNDED-B is in tradeAccounts but not connected in NinjaTrader") || Rejected("not connected"), "not listed yet: refused");
+        // Anthony signs in by hand: it trades at once, with the saved checkmark
+        evalA.Connection.Status = ConnectionStatus.Connected;
+        Account.All.Add(fundedB);
+        ChartBridgeAccounts.Tick(t + 61000);
+        Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
+        Check(evalA.Calls.Count == calls + 1 && evalA.Calls.Last().StartsWith("submit"), "connected after 60 s: trades with its saved checkmark");
+        Check(Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "EVAL-A").Contains("\"notConnectedYet\":false"), "connected: no longer not connected yet");
+        // then it drops: that counts now
+        fundedB.Connection.Status = ConnectionStatus.ConnectionLost;
+        ChartBridgeAccounts.Tick(t + 62000);
+        ChartBridgeAccounts.Tick(t + 72000);
+        Check(!ChartBridgeAccounts.Checked("FUNDED-B") && ChartBridgeAccounts.Checked("EVAL-A") && Entry(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0), "FUNDED-B").Contains("\"goneWhy\":\"disconnected\""), "connected, then dropped for 10 s: Gone, the checkmark lost (that account only)");
+        fundedB.Connection.Status = ConnectionStatus.Connected;
+        ChartBridgeAccounts.Tick(t + 73000);
+        Send(page, Trade("FUNDED-B", "true"));
+        // disabled at first sight, never connected: Gone after the grace all the same
+        sim.Connection.Status = ConnectionStatus.Disconnected;
+        Restart();
+        Account.FireStatus(sim, AccountStatus.Disabled);
+        ChartBridgeAccounts.Tick(t + 80000);
+        ChartBridgeAccounts.Tick(t + 90000);
+        Check(!ChartBridgeAccounts.Checked("Sim101") && ChartBridgeAccounts.Checked("EVAL-A"), "disabled at first sight (never connected): Gone after the grace");
+        Account.FireStatus(sim, AccountStatus.Enabled);
+        sim.Connection.Status = ConnectionStatus.Connected;
+        ChartBridgeAccounts.Tick(t + 91000);
+        Send(page, Trade("Sim101", "true"));
+        Check(ChartBridgeAccounts.Checked("Sim101") && ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "all three checked again");
+    }
+
     // ------------------------------------------------------------ a v3 page sees every watched account at sign-in
     static void Scope()
     {
@@ -386,6 +436,7 @@ public static class AccountsHarness
     {
         double t = ChartBridgeTime.NowUtcMs() + 100000;
         Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B") && ChartBridgeAccounts.Checked("Sim101"), "all three checked before the grace checks");
+        ChartBridgeAccounts.Tick(t - 1000);   // seen Connected this run: from now on a drop counts
         evalA.Connection.Status = ConnectionStatus.ConnectionLost;
         ChartBridgeAccounts.Tick(t);
         ChartBridgeAccounts.Tick(t + 9000);

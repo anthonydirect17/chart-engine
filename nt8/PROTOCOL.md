@@ -1411,11 +1411,15 @@ Where the contract above left a detail open, the build chose the safe simple opt
 - **With `accountChecks` off** there is no Gone and no file at all (0.3.8 exactly): `state` is always `active`, `trade` is
   "in `tradeAccounts`", and `accountTrade` / `accountArchive` are refused ("accountTrade is off (accountChecks in config.txt)").
   The `accounts` list still goes to a v3 page, read only.
+- **Gone only after a first connect** (lead's default, 2026-10-07: Anthony signs the prop accounts in by hand after
+  NinjaTrader opens). Being disconnected makes an account Gone only if it has been Connected at least once in this ChartBridge
+  run and then drops. An account not Connected yet since ChartBridge started keeps its saved checkmark, is listed with
+  `"notConnectedYet": true` (an added field in each `account`; the room whys say "the account is not connected yet"), and every
+  order to it is refused by the normal gates (it is not Connected) until it connects; then it trades at once with its checkmark.
+  Disabled, or past its trailing drawdown, counts at first sight (after the grace), connected before or not.
 - **Gone**: sampled once a second; the 10 s grace starts at the first bad reading and any healthy reading starts it again. An
-  account `accounts.txt` knows but NinjaTrader no longer lists (its connection is off) is listed `disconnected` and goes Gone
-  like any other. So after a NinjaTrader start, an account whose connection is not up within 10 s of ChartBridge's start loses
-  its checkmark (Anthony checks it again once connected). An archived account that NinjaTrader lists again, Connected and
-  healthy, comes back `active` and unchecked.
+  account `accounts.txt` knows but NinjaTrader no longer lists is listed `disconnected` (Gone only if it was Connected this run).
+  An archived account that NinjaTrader lists again, Connected and healthy, comes back `active` and unchecked.
 - **`accountTrade` with `on: false`** is accepted for any name (signed in); it changes nothing for an account that is unknown,
   archived or already off. `on: true` for a name NinjaTrader and `accounts.txt` do not know is refused ("no account ...").
 - **Every account ChartBridge lists is written to `accounts.txt`** (as `off` until checked), so an account that later
