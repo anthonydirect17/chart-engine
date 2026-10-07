@@ -6,6 +6,10 @@
 //   X2 Merge on the copier's leader: the swap's orders are leg changes, never a new entry to copy; the follower whose
 //      leader stop the swap cancelled follows the merged stop's price, and a later move of that stop moves every follower.
 //   X3 the copier skips a Gone follower through the accounts lane's own Gone (one rule).
+//   X4 the bot and the copier: a bot order is never copied (only the page's entries on the leader are), and with the copier on
+//      the bot never trades the leader's account (lead's default: every exit on the leader is copied, so a bot position mixed
+//      into the leader's would shrink or flatten the followers).
+//   X5 a page that signs in first and sends client after still gets each lane's v3 state (the one handshake tells the lanes).
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -25,7 +29,7 @@ public static class IntegrationHarness
     static readonly List<string> sent = new List<string>();
     static ChartBridgeClient page;
     static Instrument mnq;
-    static Account lead, f1;
+    static Account lead, f1, other;
     static string token;
 
     static ConcurrentDictionary<int, ChartBridgeClient> Clients() { return (ConcurrentDictionary<int, ChartBridgeClient>)typeof(ChartBridgeServer).GetField("Clients", PS).GetValue(null); }
@@ -50,6 +54,8 @@ public static class IntegrationHarness
         if (signed != 0) a.Positions.Add(pos);
         ChartBridgeOrders.OnPositionUpdate(a, new PositionEventArgs { Position = pos, MarketPosition = pos.MarketPosition, Quantity = pos.Quantity, AveragePrice = 25000 });
     }
+    // Positions closed by hand here have no closing fill: every fill counts as booked (as CopierHarness).
+    static void Booked() { ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear(); }
     static List<Order> LiveStops(Account a) { lock (a.Orders) return a.Orders.Where(o => o.Instrument == mnq && IsLive(o) && (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit)).ToList(); }
     static int CopyEntries(Account a) { lock (a.Orders) return a.Orders.Count(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} copy [0-9a-f]{8}$")); }
 
@@ -128,6 +134,8 @@ public static class IntegrationHarness
         try
         {
             NinjaTrader.Core.Globals.UserDataDir = home;
+            FieldInfo et = typeof(ChartBridgeTime).GetField("et", PS);   // Linux names New York's zone differently from Windows (as PinHarness)
+            if (et.GetValue(null) == null) et.SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
             lock (Account.All) Account.All.Clear();
             ChartBridgeOrders.Clear();
             ChartBridgeOrders.LoadPlansNow();
@@ -135,10 +143,11 @@ public static class IntegrationHarness
             Named().Clear(); Named()["MNQ"] = mnq;
             lead = NewAccount("Sim101", Provider.Simulator);
             f1 = NewAccount("SIM-F1", Provider.Simulator);
+            other = NewAccount("SIM-L", Provider.Simulator);
             ChartBridgeOrders.ResetConfig();
             ChartBridgeSwitches.Reset();
             ChartBridgeOrders.ReadConfig("trading", "true");
-            ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1");
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L");
             ChartBridgeOrders.ReadConfig("maxQty.MNQ", "10");
             ChartBridgeOrders.MergeConfirmMs = 400; ChartBridgeOrders.MergeQuietMs = 100; ChartBridgeOrders.MergePollMs = 5;
             ChartBridgeOrders.NewToken();
@@ -147,16 +156,19 @@ public static class IntegrationHarness
             page.Tap = s => { lock (sent) sent.Add(s); };
             Clients()[71] = page;
             ChartBridgeCopier.HarnessManual = true;
-            foreach (Account a in new[] { lead, f1 }) SetPos(a, 0);
+            foreach (Account a in new[] { lead, f1, other }) SetPos(a, 0);
 
             OneHandshake();
             MergeOnTheLeader();
             GoneIsOneRule();
+            BotNeverCopied();
+            LateHandshake();
         }
         catch (Exception ex) { Check(false, "integration harness threw: " + ex); }
         finally
         {
             ChartBridgeCopier.Stop();
+            ChartBridgeBot.Stop();
             ChartBridgeCopier.HarnessManual = false;
             ChartBridgeOrders.MergeConfirmMs = timings[0]; ChartBridgeOrders.MergeQuietMs = timings[1]; ChartBridgeOrders.MergePollMs = timings[2];
             ChartBridgeClient gone;
@@ -236,6 +248,7 @@ public static class IntegrationHarness
         lock (lead.Orders) foreach (Order o in lead.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
         lock (f1.Orders) foreach (Order o in f1.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
         SetPos(lead, 0); SetPos(f1, 0);
+        Booked();
         ChartBridgeCopier.Tick();
     }
 
@@ -244,5 +257,59 @@ public static class IntegrationHarness
     {
         Check(ChartBridgeCopier.IsGone(f1) == ChartBridgeAccounts.IsGone(f1) && !ChartBridgeCopier.IsGone(f1),
               "X3: the copier asks the accounts lane whether a follower is Gone (accountChecks off: nobody is Gone, as 0.3.8)");
+    }
+
+    // ------------------------------------------------------------ X4: the bot and the copier
+    static string BotEntry() { return "{\"type\":\"order\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}"; }
+
+    static void BotNeverCopied()
+    {
+        // the copier on, its leader Sim101 (the bot's account), armed with SIM-F1 on (set in X2)
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        int leadCalls = lead.Calls.Count, fCalls = f1.Calls.Count;
+        Order placed;
+        string why = ChartBridgeOrders.PlaceBotEntry(BotEntry(), out placed);
+        Check(why != null && why.Contains("Sim101 is the copier's leader") && placed == null && lead.Calls.Count == leadCalls && f1.Calls.Count == fCalls,
+              "X4: copier on with Sim101 as its leader: a bot entry is refused before anything is sent: " + why);
+
+        // the leader moved to another account: the bot's entry on Sim101 goes, and nothing of it is ever copied
+        lock (sent) sent.Clear();
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"s2\",\"leader\":\"SIM-L\"}");
+        Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r2\"}");
+        Check(!Rejected(""), "X4: the copier's leader is now SIM-L, armed: " + Last());
+        why = ChartBridgeOrders.PlaceBotEntry(BotEntry(), out placed);
+        Check(why == null && placed != null && Regex.IsMatch(placed.Name ?? "", "^CB#[0-9a-f]{8} bot s8 t16$"), "X4: a bot entry on Sim101 (not the leader) is placed: " + (why ?? placed.Name));
+        if (placed == null) return;
+        placed.Filled = 1; placed.AverageFillPrice = 25000; placed.OrderState = OrderState.Filled;
+        Update(lead, placed);
+        SetPos(lead, 1);
+        ChartBridgeCopier.Tick();
+        Check(f1.Calls.Count == fCalls && CopyEntries(f1) == 2, "X4: the bot's fill is never copied (no copier order on the follower)");
+        lock (lead.Orders) foreach (Order o in lead.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled;
+        SetPos(lead, 0);
+        Booked();
+        Msg("copierSet", "{\"type\":\"copierSet\",\"cid\":\"s3\",\"leader\":\"Sim101\"}");
+    }
+
+    // ------------------------------------------------------------ X5: client after auth
+    static void LateHandshake()
+    {
+        ChartBridgeSwitches.Note("bot", "on");
+        ChartBridgeBot.Start(false);
+        List<string> got = new List<string>();
+        ChartBridgeClient late = new ChartBridgeClient(null, 72) { Origin = "http://localhost:8765" };
+        late.Tap = s => { lock (got) got.Add(s); };
+        Clients()[72] = late;
+        try
+        {
+            ChartBridgeOrders.OnMessage(late, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+            bool before;
+            lock (got) before = got.Any(m => m.StartsWith("{\"type\":\"bot\"") || m.StartsWith("{\"type\":\"copier\""));
+            ChartBridgeAccounts.OnMessage(late, "client", "{\"type\":\"client\",\"v\":3}");
+            bool bot, copier;
+            lock (got) { bot = got.Any(m => m.StartsWith("{\"type\":\"bot\"")); copier = got.Any(m => m.StartsWith("{\"type\":\"copier\",")); }
+            Check(late.Trader && !before && bot && copier, "X5: signed in as a v2 page (no bot or copier message), then client v3: the bot strip and the copier's state arrive");
+        }
+        finally { ChartBridgeClient gone; Clients().TryRemove(72, out gone); ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off"); }
     }
 }

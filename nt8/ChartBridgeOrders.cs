@@ -209,7 +209,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   legs  "CB#1a2b3c4d stop f2 q2 p24990.25" and "CB#1a2b3c4d target f2 q2 p24990.25": the pair for the
         //         fill increment that brought the entry to 2 filled, for 2 contracts, filled at 24990.25
         //   exit  "CB#1a2b3c4d exit f2 q2 p24990.25": a market exit sent when the stop level had already traded
-        private static readonly Regex EntryNameRx = new Regex("^CB#([0-9a-f]{8}) s([0-9]{1,9}) t([0-9]{1,9})$");
+        private static readonly Regex EntryNameRx = new Regex("^CB#([0-9a-f]{8})(?: bot)? s([0-9]{1,9}) t([0-9]{1,9})$");   // 0.4.0 bot: "CB#1a2b3c4d bot s8 t16" too (ChartBridgeBot.cs), ticks from each fill, as a market entry
         private static readonly Regex RestingNameRx = new Regex("^CB#([0-9a-f]{8}) atm s([0-9]{1,9}) t([0-9]{1,9})$");
         private static readonly Regex PlanNameRx = new Regex("^CB#([0-9a-f]{8}) plan s([0-9]{1,9}(?:\\.[0-9]{1,8})?) t([0-9]{1,9}(?:\\.[0-9]{1,8})?)$");
 
@@ -421,6 +421,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (client.Trader) { client.Send(OrdersJson(client)); foreach (string p in PositionJsons(client)) client.Send(p); ChartBridgeAccounts.SignedIn(client); }   // 0.4.0 accounts: a v3 page sees every watched account
             if (client.Trader) MergeOnAuth(client);   // 0.4.0 B4: a Merge cut by a restart is told to each page that signs in
             if (client.Trader) ChartBridgeCopier.AfterAuth(client);   // 0.4.0 copier: a v3 page gets the copier's state
+            ChartBridgeBot.AfterAuth(client);   // 0.4.0 bot: a signed-in v3 page gets the bot strip and its open proposals
         }
 
         private static bool SlowEquals(string a, string b)
@@ -594,10 +595,25 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool isBuyOrder(string top) { return Str(top, "side") == "buy"; }
 
-        private static string PlaceOrder(string top, string bracketBody, string cid)
+        private static string PlaceOrder(string top, string bracketBody, string cid) { Order ignored; return PlaceOrder(top, bracketBody, cid, false, out ignored); }
+
+        // 0.4.0 bot: a bot entry (ChartBridgeBot.cs builds the message from the bot's or the proposal's own parameters, always
+        // Sim101 and the bot's root), through the same strict reading, quote-only check and gates as an order from the page.
+        public static string PlaceBotEntry(string text, out Order placed)
+        {
+            placed = null;
+            string bracketBody, why, top = TopLevel("order", text, out bracketBody, out why);
+            if (why == null) why = QuoteOnly(top, null);
+            return why ?? PlaceOrder(top, bracketBody, null, true, out placed);
+        }
+
+        // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on Sim101 and the bot's root.
+        public static string FlattenForBot(string root) { return Flatten("{\"account\":\"" + ChartBridgeBot.BotAccount + "\",\"root\":\"" + root + "\"}"); }
+
+        private static string PlaceOrder(string top, string bracketBody, string cid, bool bot, out Order placed)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, out planTag);   // two pages or tabs cannot both pass the cap check
+            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, bot, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -609,9 +625,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why;
         }
 
-        private static string PlaceOrderLocked(string top, string bracketBody, string cid, out string planTag)
+        private static string PlaceOrderLocked(string top, string bracketBody, string cid, bool bot, out string planTag, out Order placed)
         {
-            planTag = null;
+            planTag = null; placed = null;
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
             string side = Str(top, "side"), kind = Str(top, "kind"), why;
             Account account = FindAccount(accountName, out why);
@@ -627,6 +643,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // order differs between connections, so either can be the stale one: the cap takes the worse.
             int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
             int cap = CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);
+            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3's own count)
             if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
             PendingOrders(account, inst, out pendBuy, out pendSell);
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
@@ -664,11 +681,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
             if (wantsLegs && reduces) return "a bracket can only go on an order that opens or adds; this order reduces the position";
-            string copierWhy = ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed
+            string copierWhy = bot ? ChartBridgeCopier.BotEntryCheck(account) : ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed (integration: a bot entry is never a leader entry, and never on the leader's account)
             if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
-            string name = "CB#" + tag + (kind == "market" ? "" : " atm") + " s" + stopTicks + " t" + targetTicks;
+            string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + " s" + stopTicks + " t" + targetTicks;   // 0.4.0 bot: "bot" names a bot entry
             if (kind != "market") { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
             OrderType type = kind == "market" ? OrderType.Market : kind == "limit" ? OrderType.Limit : OrderType.StopMarket;
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
@@ -684,8 +701,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = stopTicks, TargetTicks = targetTicks };
             }
             account.Submit(new[] { order });
-            ChartBridgeCopier.LeaderEntrySent(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied
-            ChartBridgeServer.Log("order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
+            placed = order;
+            if (!bot) ChartBridgeCopier.LeaderEntrySent(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is)
+            ChartBridgeServer.Log((bot ? "bot " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
                 (wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
         }
@@ -964,6 +982,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);
             if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: v2 pages the tradable accounts (as before), v3 pages every watched one
                 ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true);
+            try { if (ChartBridgeBot.Watching(o)) ChartBridgeBot.OnOrderUpdate(account, o, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.4.0 bot: the bot sees its own orders
+            catch (Exception ex) { ChartBridgeServer.Log("bot order update error: " + ex.Message); }
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
             ChartBridgeCopier.OnOrderUpdate(account, o);   // 0.4.0 copier: follower fills get their stop; the leader's stop moves are followed
         }

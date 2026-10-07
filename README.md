@@ -156,6 +156,7 @@ line; recompile or restart NinjaTrader after a change):
 | `copier` | off | 0.4.0: `on` turns on the copier engine (followers must be Sim accounts). |
 | `bot` | off | 0.4.0: `on` opens the bot channel (`/bot`, its own secret in `bot-secret.txt`; auto orders on Sim101 only). |
 | `botRoot` | `MNQ` | 0.4.0: the one root the bot may trade (1 contract). |
+| `botLibrary` | `bot-library.json` | 0.4.0: the file `GET /bot-library` serves to ChartBridge's own page (next to `config.txt`, or a full path; `.json`, at most 2 MB). |
 
 **This PC only** (ChartBridge 0.3.1). Windows' web server (HTTP.sys) listens on every network interface and
 matches only the `Host` header, so the `localhost` address alone does not keep other devices out. ChartBridge

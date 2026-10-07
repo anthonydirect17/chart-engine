@@ -550,6 +550,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             return hasStop ? null : "The copier needs a stop on every leader entry.";
         }
 
+        // Integration (lead's default): with the copier on, the bot never trades the leader's account. Only the page's entries
+        // on the leader are copied, but every exit on the leader is (PROTOCOL "Copier engine"), so a bot position mixed into the
+        // leader's would make the bot's exits shrink or flatten the followers. Refused before anything is sent.
+        public static string BotEntryCheck(Account account)
+        {
+            if (!Enabled || account == null) return null;
+            lock (Lk) { if (!IsLeader(account.Name)) return null; }
+            return account.Name + " is the copier's leader: the bot does not trade the leader's account while the copier is on (its exits would be copied to the followers).";
+        }
+
         // S2: an entry the page just sent on the leader. Copied only if the copier is armed with a follower on now (and,
         // in executions mode, again when it fills). Orders mode: each follower gets its own real order at once.
         public static void LeaderEntrySent(Order entry, string kind, double price)

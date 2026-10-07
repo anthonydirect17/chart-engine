@@ -557,7 +557,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(bodyOf(code, 'public void Close()'), /try \{ if \(Socket != null\) Socket\.Abort\(\); \} catch \(Exception\) \{ \}/);
   assert.match(code, /long waited = Stopwatch\.GetTimestamp\(\) - q\.At - \(Interlocked\.Read\(ref bulkSpent\) - q\.Bulk\);/);
   for (const f of ['private static void SendBars(', 'private static void SendTicks(Load L, RawBars bars, int from)']) assert.match(bodyOf(code, f), /if \(!L\.Client\.WaitForBulkRoom\(\)\) return;/);
-  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5) in the order lane
+  assert.match(code, /OrderLaneTypes = \{ "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",\s*"bot", "botSignal", "botProposal", "welcome", "botState", "answer" \};/);   // 0.4.0: accounts (B2), merge (B4), copier (B5) and the bot channel (B3) in the order lane
   assert.match(code, /if \(outbox\.Count >= SoftCap && Stuck\(\)\) \{ NotKeepingUp\(null\); return true; \}/);
   // review 2 S2: a reset is never a trade; a Last without a real price never reaches the order code
   const md2 = bodyOf(code, 'private static void OnMarketData(');
@@ -925,7 +925,7 @@ const copierBodies = name => {
 
 test('0.4.0 copier: the file ships, is compiled and run by both checks, and is C# 5', () => {
   assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeCopier.cs'));
-  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs [^\n]*ChartBridgeCopier\.cs check\/Nt8Stubs\.cs/);
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs [^\n]*ChartBridgeCopier\.cs [^\n]*check\/Nt8Stubs\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/CopierHarness\.cs/);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("copier \(B5\)", CopierHarness\.Run\);/);
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(ccode), 'string interpolation');
@@ -985,4 +985,97 @@ test('0.4.0 copier: order calls only in its named functions; every one is Sim ch
   assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), k = held - r\.Target;/);
   // /diag names no account
   assert.ok(!/Name|leader\b(?!MsMedian)/.test(copierBodies('DiagJson').replace(/LeaderMs/g, '')), '/diag copier has counts only');
+});
+
+// ---- 0.4.0 the bot channel (behaviour: nt8/check/BotHarness.cs under Mono, inside check:orders; test/fake-bot.test.js)
+const bsrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeBot.cs'), 'utf8');
+const bcode = bsrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+
+test('0.4.0 bot: the new file ships, is compile-checked and harnessed', () => {
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeBot.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs [^\n]*ChartBridgeBot\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/BotHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("bot \(B3\)", BotHarness\.Run\);/);
+});
+
+test('0.4.0 bot: off by default, Sim101 only, 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
+  // integration: one source of truth, the shared v3 switches (ChartBridgeV3.cs); the one v3 handshake and send (no stub left)
+  assert.match(bcode, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Bot; \} \}/);
+  assert.match(bcode, /public static void ResetConfig\(\) \{ ChartBridgeSwitches\.Note\("bot", "off"\); ConfigRoot = "MNQ";/, 'off by default, botRoot MNQ');
+  assert.match(bcode, /if \(key == "bot"\) return true;/);
+  assert.ok(!/Stub|SwitchOn/.test(bcode), 'no v3 stub or second switch parser left in the bot');
+  assert.match(bodyOf(bcode, 'private static void ToPages(string json)'), /ChartBridgeV3\.SendToV3Traders\(json\);/);
+  assert.match(bcode, /public const string BotAccount = "Sim101";/);
+  assert.match(bcode, /public const int MaxQty = 1;/);
+  assert.match(bcode, /public const int MaxTradesLimit = 5, MaxLossesLimit = 3;/);
+  assert.match(bcode, /public const double SilenceMs = 5000/);
+  // never places, changes or flattens by itself: the only order calls are a cancel of a bot entry and the two ChartBridgeOrders entry points
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Flatten\s*\(/, /OrderAction\./, /\bAtm\w*\./]) assert.ok(!re.test(bcode), 'ChartBridgeBot.cs: ' + re);
+  assert.equal((bcode.match(/\.Cancel\(/g) || []).length, 1, 'one cancel call');
+  assert.match(bodyOf(bcode, 'private static bool Cancel(Order o)'), /!IsBotEntry\(o\)\) return false;/, 'it cancels only a bot entry, never a stop or target');
+  assert.deepEqual([...new Set(bcode.match(/ChartBridgeOrders\.(PlaceBotEntry|FlattenForBot)/g))].sort(), ['ChartBridgeOrders.FlattenForBot', 'ChartBridgeOrders.PlaceBotEntry']);
+  assert.match(bodyOf(bcode, 'private static void OnBotFlatten()'), /if \(m != "auto"\) why = "flatten is for auto mode only";/, 'the bot\'s own flatten: auto only');
+  assert.ok(!/ChartBridgeOrders\.FlattenForBot/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never flattens');
+  assert.ok(!/trading = false|Enabled = true/.test(bcode), 'never turns trading or itself on or off');
+  // the order is always built from Sim101 and the bot's root, quantity 1
+  assert.match(bodyOf(bcode, 'private static string Place(Signal s, out Order placed)'), /"\{\\"type\\":\\"order\\",\\"account\\":\\"" \+ BotAccount \+ "\\",\\"root\\":\\"" \+ root \+/);
+  // the secret: never logged; constant time
+  assert.ok(!/Log\([^;]*\+\s*(secret|given|givenSecret)\b/.test(bcode), 'the secret is never logged');
+  assert.ok(!/Log\([^;]*\+\s*s\b(?!\.)/.test(bodyOf(bcode, 'private static void LoadSecret()')), 'nor the one just made');
+  assert.match(bodyOf(bcode, 'private static bool SecretMatches(string given)'), /diff \|= s\[i\] \^ given\[i\];/);
+  assert.match(bodyOf(bcode, 'public static int UpgradeCheck(string origin, string givenSecret, bool isWebSocket)'),
+    /if \(!Enabled\) return 404;[\s\S]*if \(origin != null\) return 403;[\s\S]*if \(!SecretMatches\(givenSecret\)\) return 403;[\s\S]*if \(!isWebSocket\) return 400;[\s\S]*return 409;[\s\S]*return 101;/);
+});
+
+test('0.4.0 bot: the hooks in ChartBridge.cs and ChartBridgeOrders.cs', () => {
+  assert.match(code, /if \(path == "\/bot" \|\| path == "\/bot-library"\) \{ await ChartBridgeBot\.Serve\(ctx, path, token\); return; \}/);
+  const handle = code.slice(code.indexOf('private static async Task Handle('));
+  assert.ok(handle.indexOf('ChartBridgeAccess.IsLoopback(remote)') < handle.indexOf('ChartBridgeBot.Serve('), 'the address check comes first');
+  assert.match(code, /ChartBridgeBot\.ResetConfig\(\);/);
+  assert.match(code, /else if \(ChartBridgeBot\.ReadConfig\(key, val\)\) \{ \}/);
+  assert.match(code, /ChartBridgeOrders\.StartPlans\(\);[^\n]*\n(?:\s*ChartBridge\w+\.Start\(\);[^\n]*\n)*\s*ChartBridgeBot\.Start\(\);/);
+  assert.match(code, /ChartBridgeBot\.Stop\(\);/);
+  assert.match(code, /ChartBridgeBot\.OnTick\(json\);/);
+  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json\); \} catch/);
+  assert.match(code, /try \{ ChartBridgeBot\.OnPosition\(a, e\); \} catch/);
+  assert.match(code, /if \(ChartBridgeBot\.Enabled\) b\.Append\(",\\"bot\\":"\)\.Append\(ChartBridgeBot\.DiagJson\(\)\);/);
+  assert.ok(!/SendToV3Traders|IsV3Stub/.test(code), 'the main file has no v3 send of its own (ChartBridgeV3.cs has the one)');
+  assert.match(ocode, /new Regex\("\^CB#\(\[0-9a-f\]\{8\}\)\(\?: bot\)\? s/);
+  assert.match(ocode, /if \(bot\) cap = Math\.Min\(cap, ChartBridgeBot\.MaxQty\);/);
+  assert.match(ocode, /ChartBridgeBot\.AfterAuth\(client\);/);
+  assert.match(ocode, /try \{ if \(ChartBridgeBot\.Watching\(o\)\) ChartBridgeBot\.OnOrderUpdate\(account, o, OrderJson\(o, failed/);
+  // PlaceBotEntry reads its own message strictly and runs the quote-only check, then the page's path with bot = true
+  assert.match(bodyOf(ocode, 'public static string PlaceBotEntry(string text, out Order placed)'), /TopLevel\("order", text, out bracketBody, out why\);\s*if \(why == null\) why = QuoteOnly\(top, null\);\s*return why \?\? PlaceOrder\(top, bracketBody, null, true, out placed\);/);
+});
+
+// ---- 0.4.0 integration: the order lanes together (behaviour: nt8/check/IntegrationHarness.cs under Mono, inside check:orders)
+test('0.4.0 integration: exactly one v3 handshake and one v3 send; no lane keeps a stub', () => {
+  const nt8 = path.join(__dirname, '..', 'nt8');
+  const files = fs.readdirSync(nt8).filter(f => /^ChartBridge.*\.cs$/.test(f));
+  const strip = t => t.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+  const all = files.map(f => [f, strip(fs.readFileSync(path.join(nt8, f), 'utf8'))]);
+  for (const [f, c] of all) {
+    assert.ok(!/\bStub\w*\s*\(|\w+Stub\b|NoteV3\(|V3ClientStub|MarkV3PageStub/.test(c), f + ': a v3 stub is left');
+    if (f !== 'ChartBridgeV3.cs') assert.ok(!/static void SendToV3\w*\(|ConditionalWeakTable/.test(c), f + ': a v3 send or page table of its own');
+  }
+  // the one "client" dispatch, to the accounts lane, which marks the page through ChartBridgeV3.OnClient and tells the lanes
+  const clientLines = code.split('\n').filter(l => /type == "client"/.test(l));
+  assert.equal(clientLines.length, 1, 'one client dispatch: ' + clientLines.join(' | '));
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  const acode = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeAccounts.cs'), 'utf8'));
+  assert.match(bodyOf(acode, 'private static void OnClient(ChartBridgeClient client, string text)'), /if \(!ChartBridgeV3\.OnClient\(client, text\)\) return;[\s\S]*ChartBridgeV3\.TellLanes\(client\);/);
+  // every switch is read once, by ChartBridgeSwitches; each lane's Enabled reads it
+  const ccode2 = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeCopier.cs'), 'utf8'));
+  const bcode2 = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeBot.cs'), 'utf8'));
+  const mcode2 = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeMerge.cs'), 'utf8'));
+  assert.match(ccode2, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Copier; \} \}/);
+  assert.match(bcode2, /public static bool Enabled \{ get \{ return ChartBridgeV3\.Bot; \} \}/);
+  assert.match(mcode2, /public static bool MergeOn \{ get \{ return ChartBridgeV3\.Merge; \} \}/);
+  // a bot entry is never a copier leader entry, and never on the copier's leader account
+  const place = fnBody('PlaceOrderLocked');
+  assert.match(place, /string copierWhy = bot \? ChartBridgeCopier\.BotEntryCheck\(account\) : ChartBridgeCopier\.LeaderEntryCheck\(account, stopTicks > 0\);/);
+  assert.match(place, /if \(!bot\) ChartBridgeCopier\.LeaderEntrySent\(order, kind, price\);/);
+  assert.ok(place.indexOf('copierWhy') < place.indexOf('account.Submit('), 'the copier checks come before the order is sent');
+  assert.match(fs.readFileSync(path.join(nt8, 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("cross-lane rules \(integration\)", IntegrationHarness\.Run\);/);
+  assert.match(fs.readFileSync(path.join(nt8, 'check', 'orders.sh'), 'utf8'), /check\/IntegrationHarness\.cs/);
 });

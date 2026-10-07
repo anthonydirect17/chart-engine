@@ -809,6 +809,7 @@ const server = http.createServer((req, res) => {
 server.on('upgrade', (req, sock) => {
   if (!V1 && !isLoopback(req.socket.remoteAddress)) { refused.notThisPc++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (V3 && !V3_OFF.includes('bot') && req.url.split('?')[0] === '/bot') return botUpgrade(req, sock);
+  if (req.url.split('?')[0] === '/bot') { sock.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }   // bot off: /bot does not exist (PROTOCOL.md)
   if (!req.url.startsWith('/ws')) { sock.destroy(); return; }
   if (!V1 && !wsOriginAllowed(req.headers.origin)) { refused.origin++; sock.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); return; }
   if (TICKETS) {

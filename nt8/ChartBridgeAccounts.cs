@@ -370,6 +370,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (!ChartBridgeV3.OnClient(client, text)) return;
             if (ChartBridgeOrders.OriginAllowed(client.Origin)) client.Send(AccountsJson(Snapshot(), ChartBridgeTime.NowUtcMs()));   // signed in or not
+            ChartBridgeV3.TellLanes(client);   // integration: a page that signed in before its client message gets each lane's v3 state now
         }
 
         private static string AccountTrade(Dictionary<string, string> m)

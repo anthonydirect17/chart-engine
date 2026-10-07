@@ -92,6 +92,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Gates 1, 4 and 7 for every v3 action (Strict messages in v3: "Rate", "Sign-in"): null when it may go on.
         public static string Gate(ChartBridgeClient client) { return ChartBridgeOrders.Gate(client); }
 
+        // Integration: the one v3 handshake tells every lane that keeps v3 state for a signed-in page (each checks the page is
+        // signed in and v3, and its own switch, so a v2 page or a page not signed in gets nothing).
+        public static void TellLanes(ChartBridgeClient client)
+        {
+            try { ChartBridgeCopier.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("copier error: " + ex.Message); }
+            try { ChartBridgeBot.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("bot error: " + ex.Message); }
+        }
+
         public static void SendToV3Traders(string json)
         {
             foreach (ChartBridgeClient c in ChartBridgeServer.AllClients()) if (c.Trader && IsV3(c)) c.Send(json);

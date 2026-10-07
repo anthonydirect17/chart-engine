@@ -1815,6 +1815,75 @@ recovery cover them.
 | `botSignal` | `id`, `at`, `action`, `side`, `kind`, `price`, `stopTicks`, `targetTicks`, `reason`, `result` (`shadow`, `proposed`, `placed`, `refused: <why>`, `skipped`) | each signal |
 | `botProposal` | `id`, `at`, `account`, `root`, `side`, `kind`, `price`, `qty` (1), `stopTicks`, `targetTicks`, `reason`, `state` (`open`, `accepted`, `rejected`, `withdrawn`, `not answered`), `seenAt`, `answeredAt` | when proposed and at each change |
 
+#### Bot channel as built (ChartBridge 0.4.0, `nt8/ChartBridgeBot.cs`)
+
+Built exactly to the section above. Where it left a detail open, the safest simple choice is written here and marked
+**(lead's default)**. Tests: `nt8/check/BotHarness.cs` (Mono, inside `npm run check:orders`) and `test/fake-bot.test.js` with
+the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this repository).
+
+- **`config.txt`**: `bot` (off by default; `on`, `true`, `1` in any case are on, anything else off with an Output line),
+  `botRoot` (default `MNQ`), `botLibrary` (default `bot-library.json`, see below) (lead's default).
+- **The upgrade to `/bot`** answers, in this order: **404** while `bot` is off (any request to `/bot` or `/bot-library`);
+  **403** for any `Origin` header (even an empty one or ChartBridge's own); **403** for a missing or wrong
+  `X-ChartBridge-Bot`; **400** for a request that is not a WebSocket upgrade; **409** while a bot is connected. The address
+  check (loopback only) runs first, as for every request. A `bot-secret.txt` that exists but cannot be read (not exactly one
+  line of 64 hex characters after the `#` lines) is never written over: every bot is refused until it is fixed or deleted
+  (lead's default). `/diag` says only `"secretFile": "ok" | "missing" | "unreadable"`.
+- **The bot's first message is `botHello`**; anything else before it is refused (`reject`, nothing done). `connected` in
+  `bot` is true once it said hello. A bot message over 64 KB closes its connection. At most 10 bot messages a second
+  (`beat` not counted). `reject` to the bot carries `id` null when the refused message had none.
+- **`signal`**: `stopTicks` (1 or more) and `targetTicks` (1 or more, or `null`) are both required on `fired`; the bot never
+  names an account, a root or a quantity (unknown keys, refused in every mode). An `id` used once today is refused.
+- **One trade at a time, 1 contract** (lead's default): a new bot entry is refused while a bot entry is working or a bot trade
+  is open, and gate 3's cap for a bot entry is 1 whatever `maxQty` says, counted with the Sim101 position and its working
+  orders on that root as gate 3 always does (so a manual Sim101 position blocks a bot entry on the same side, and a bot entry
+  never reduces a position: it always carries a stop, and v2 refuses a bracket on a reducing order).
+- **A bot trade** (lead's default) opens with the first fill of a bot entry (counted as a trade then, even if part filled) and
+  closes when Sim101's position on the bot's root, followed from every execution on it since that fill, is flat again,
+  whatever closed it (its stop or target, the page's Flatten, an order in NinjaTrader). Its realized dollars are those
+  executions' cash flow times the point value; below 0 is a losing trade. `pnlToday` is the sum of today's closed bot trades.
+- **`bot-day.txt`** next to `config.txt` (lead's default) keeps the trading day's trades so a restart forgets nothing:
+  `session<TAB>yyyy-MM-dd`, then `trade<TAB><entry tag><TAB>open` or `<realized dollars>`, written whole through a temp
+  file. Executions replayed after a restart re-open a trade still open and never count one twice. A file that cannot be read
+  is never written over and stands the bot down (no new entries) for that run. At 18:00 ET trades, losses and signal ids
+  start over (a trade still open goes on into the new day).
+- **Heartbeat lost** (5 s with no bot message): ChartBridge closes the bot's connection (it reconnects and says hello again),
+  cancels its unfilled entries (only `bot` entries: never a stop, a target or another order), and every open proposal expires
+  as `not answered` (the bot can no longer withdraw it; lead's default). The mode is kept. Pages get `bot` and a `status`
+  `warn`; `/diag` counts `heartbeatLost`. The same when the bot disconnects, and whenever no bot has been connected for 5 s
+  (after a restart a bot entry left working at the broker is cancelled then) (lead's default). Never a flatten.
+- **Modes**: leaving `copilot` expires the open proposals as `not answered`; leaving `auto` cancels the bot's unfilled
+  entries (lead's default). `auto` needs Sim101 to be NinjaTrader's simulator (its `Provider` is `Simulator`, read by name;
+  when NinjaTrader does not say, it is refused), in `tradeAccounts` (gate 2) and Connected. The kill switch on also expires
+  open proposals and refuses the bot's own `flatten` (the page's Flatten works as always).
+- **Proposals**: `botAnswer` takes no order field (a `price` or anything else is an unknown key, refused). An accepted
+  proposal that a rail or a gate refuses at that moment ends `rejected`, the bot gets `answer` `refused` with the reason and
+  the page a `reject` naming it. A `withdraw` after an accept cancels the entry if it has not filled (`state` `withdrawn`).
+- **Bot orders** are named `CB#1a2b3c4d bot s8 t16` for every kind (a resting one too); recovery reads them as v2 entries
+  (ticks from each fill). The bot gets `order`, `exec` and `position` for its own orders and Sim101's position on its root;
+  `tick` for every live trade on every served root.
+- **`botRails`** (page to server, lead's default; Anthony: the rails can be changed in the Bot tab): `{type, cid (optional),
+  maxTrades, maxLosses, root}`, all but `cid` required: `maxTrades` 1 to 5, `maxLosses` 1 to 3 (tighten only: never above the
+  defaults; the quantity stays 1), `root` `botRoot` or its micro/mini sibling (MNQ and NQ, MES and ES), served and not quote
+  only. Refused while the bot has a position or a working entry, and with `bot` off. Saved in `bot-rails.txt` next to
+  `config.txt` (`maxTrades<TAB>n`, `maxLosses<TAB>n`, `root<TAB>ROOT` after two `#` lines, through a temp file); a file that
+  cannot be understood stands the bot down until the page sets the rails again or it is deleted. Reported in `bot`
+  (`maxTrades`, `maxLosses`, `root`, and `maxQty` 1) and in `welcome`, which is sent to the bot again after a change.
+- **`GET /bot-library`** (lead's default): the bytes of the file `botLibrary` names (a plain file name in ChartBridge's folder,
+  next to `config.txt`, or a full path; a `.json` file either way), read fresh on every request, as `application/json`,
+  `Cache-Control: no-store`, no CORS headers. **404** while `bot` is off or the file is missing; **403** unless asked for as
+  `Host: localhost:<port>` (as `/session`); **405** for a method other than GET or HEAD; **500** with
+  `{"error": "..."}` when it is over 2 MB or is not valid JSON. Loopback only, as every request; never through Tailscale or the
+  tunnel. ChartBridge checks only that it is JSON; the page lane owns its schema (`docs/BOT_LIBRARY.md`).
+- **`client`**: lane B2 owns the v3 handshake. Until it is merged, `ChartBridgeBot.IsV3Stub` and `V3ClientStub` stand in
+  (they only remember which connections sent `{"type":"client","v":3}`; anything else gets a `status` `warn`). `bot`,
+  `botSignal` and `botProposal` go to signed-in v3 pages only, in the order lane (with `welcome`, `botState` and `answer` to
+  the bot). A v3 page that signs in gets `bot` and every open proposal.
+- **`/diag` `bot`** (only with the switch on): `enabled`, `connected`, `mode`, `killed`, `trades`, `losses`, `signals`,
+  `proposals`, `answered`, `notAnswered`, `placed`, `refused`, `heartbeatLost`, `secretFile`.
+- **`bot.log`** next to `config.txt`: one line per signal, proposal outcome (`not answered` included), placement, trade and
+  mode change, `<UTC ISO time><TAB><what>`. Never the secret.
+
 ### Tape timing and new `/diag` counters
 
 The tape counters and the hardening counters are built and documented in "0.4.0 hardening and markets" above (`/diag`
