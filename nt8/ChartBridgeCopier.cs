@@ -146,7 +146,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Func<Account, bool> IsSim = ReadSim;
         public static Func<Account, bool> IsGone = a => false;
         public static Func<Account, double?> PnlToday = ReadPnlToday;
-        public static Func<ChartBridgeClient, bool> IsV3 = SentClientV3;
+        // Whether a page speaks protocol v3. B2 (accounts) owns the v3 plumbing (the client handshake, switches); until it is
+        // merged this points at the copier's own minimal stub (StubV3...). The integrator sets it to B2's helper.
+        public static Func<ChartBridgeClient, bool> IsV3 = StubV3IsV3;
         public static bool HarnessManual;   // test hook: no copier thread and no timer; work runs on the caller's thread and the harness calls Tick (unused in NinjaTrader)
 
         // ---------------------------------------------------------- state (all under Lk)
@@ -391,11 +393,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static bool Flat(Account a, Instrument inst) { return ChartBridgeOrders.CopierListed(a, inst) == 0 && ChartBridgeOrders.CopierEffective(a, inst) == 0; }
 
         // ---------------------------------------------------------- pages (protocol v3 only)
-        // A page that sent {"type":"client","v":3}. Only those get copier messages (a v2 page gets no v3 message at all).
+        // The pages the copier talks to: those that may get v3 messages (IsV3). A v2 page gets no copier message at all.
+        // V3 STUB (StubV3*): a minimal stand-in for lane B2's v3 plumbing, to be swapped at integration: it records a page
+        // that sent {"type":"client","v":3}. Nothing else of v3 (hello.features, trading.switches) is built here.
         private static readonly List<ChartBridgeClient> V3 = new List<ChartBridgeClient>();
 
-        private static bool SentClientV3(ChartBridgeClient c) { lock (V3) return V3.Contains(c); }
+        private static bool StubV3IsV3(ChartBridgeClient c) { lock (V3) return V3.Contains(c); }
 
+        // A page the copier may talk to (B2's client handshake calls this once it accepts a v3 client).
         public static void NoteV3(ChartBridgeClient c)
         {
             lock (V3)
@@ -432,10 +437,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "copierRearm", new[] { "type", "cid" } },
         };
 
-        // client and copier* (ChartBridgeServer.OnClientMessage). Every refusal is a reject; nothing reaches NinjaTrader.
+        // copier* (ChartBridgeServer.OnClientMessage). Every refusal is a reject; nothing reaches NinjaTrader.
         public static void OnMessage(ChartBridgeClient client, string type, string text)
         {
-            if (type == "client") { OnClient(client, text); return; }
             string cid = ChartBridgeOrders.CopierStr(text, "cid");
             try
             {
@@ -462,8 +466,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // {"type":"client","v":3}, once after hello. Only v 3 is known.
-        private static void OnClient(ChartBridgeClient client, string text)
+        // V3 STUB: {"type":"client","v":3}, once after hello. Only v 3 is known. Replaced by lane B2's handshake at integration.
+        public static void StubV3Client(ChartBridgeClient client, string text)
         {
             int v;
             string why = ChartBridgeOrders.CopierStrict("client", text, new[] { "type", "v" });
@@ -641,7 +645,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     int fq = f.Qty * inc;
                     Instrument fInst;
                     Account a = Eligible(f, fRoot, le, fq, out fInst, out label, out why);
-                    if (a == null) { Skip(f, label, why, fRoot, fq); continue; }
+                    if (a == null) { Skip(f, label, why, fRoot, fq, Ms(ts, Stopwatch.GetTimestamp())); continue; }
                     string tag = NewTag();
                     Order o = a.CreateOrder(fInst, le.Buy ? OrderAction.Buy : OrderAction.Sell, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, fq, 0, 0, "",
                         "CB#" + tag + " copy " + le.Tag, NinjaTrader.Core.Globals.MaxDate, null);
@@ -662,19 +666,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                     int fq = f.Qty * le.Entry.Quantity;
                     Instrument fInst;
                     Account a = Eligible(f, fRoot, le, fq, out fInst, out label, out why);
-                    if (a == null) { Skip(f, label, why, fRoot, fq); continue; }
-                    if (le.Kind != "market" && le.Kind != "limit" && le.Kind != "stop") { Skip(f, "kind", "a " + le.Kind + " entry is not copied in orders mode", fRoot, fq); continue; }
+                    if (a == null) { Skip(f, label, why, fRoot, fq, Ms(ts, Stopwatch.GetTimestamp())); continue; }
+                    if (le.Kind != "market" && le.Kind != "limit" && le.Kind != "stop") { Skip(f, "kind", "a " + le.Kind + " entry is not copied in orders mode", fRoot, fq, null); continue; }
                     if (le.Kind != "market")
                     {
                         string bad = ChartBridgeOrders.CopierPriceProblem(fRoot, fInst.MasterInstrument.TickSize, le.Kind, le.Buy, le.Price);
-                        if (bad != null) { Skip(f, "price", bad, fRoot, fq); continue; }
+                        if (bad != null) { Skip(f, "price", bad, fRoot, fq, null); continue; }
                     }
                     OrderType type = le.Kind == "market" ? OrderType.Market : le.Kind == "limit" ? OrderType.Limit : OrderType.StopMarket;
                     string tag = NewTag();
                     Order o = a.CreateOrder(fInst, le.Buy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, fq,
                         le.Kind == "limit" ? le.Price : 0, le.Kind == "stop" ? le.Price : 0, "", "CB#" + tag + " copy " + le.Tag, NinjaTrader.Core.Globals.MaxDate, null);
                     FEntry fe = new FEntry { Order = o, F = f, A = a, Inst = fInst, LInst = le.Inst, Root = fRoot, Tag = tag, Buy = le.Buy, L = le, OrdersMode = true, LeaderTs = ts };
-                    lock (Lk) le.Copies.Add(fe);
                     Send(fe, o, "placed " + (le.Buy ? "buy " : "sell ") + fq + " " + fRoot + " " + le.Kind + (le.Kind == "market" ? "" : " @ " + P(le.Price)) + " for the leader's entry");
                 }
             }
@@ -683,8 +686,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Called under PlaceLock: S1 once more, then the entry is sent and logged.
         private static void Send(FEntry fe, Order o, string text)
         {
-            if (!IsSim(fe.A)) { Skip(fe.F, "not a Sim account", fe.A.Name + " is not a Sim account; nothing copied to it", fe.Root, o.Quantity); return; }
-            lock (Lk) { FEntries[o] = fe; Placed[o] = ChartBridgeTime.NowUtcMs(); fe.F.Skipped = null; fe.F.LastAction = "enter"; fe.F.LastAt = ChartBridgeTime.NowUtcMs(); }
+            if (!IsSim(fe.A)) { Skip(fe.F, "not a Sim account", fe.A.Name + " is not a Sim account; nothing copied to it", fe.Root, o.Quantity, null); return; }
+            lock (Lk) { FEntries[o] = fe; Placed[o] = ChartBridgeTime.NowUtcMs(); if (fe.OrdersMode) fe.L.Copies.Add(fe); fe.F.Skipped = null; fe.F.LastAction = "enter"; fe.F.LastAt = ChartBridgeTime.NowUtcMs(); }
             ChartBridgeOrders.CopierSent(o, false);
             fe.SentTs = Stopwatch.GetTimestamp();
             fe.A.Submit(new[] { o });
@@ -728,10 +731,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             return a;
         }
 
-        private static void Skip(Follower f, string label, string why, string root, int qty)
+        private static void Skip(Follower f, string label, string why, string root, int qty, double? leaderMs)
         {
             lock (Lk) { f.Skipped = label; f.LastAction = "skip"; f.LastAt = ChartBridgeTime.NowUtcMs(); skippedCount++; }
-            Event(f.Name, label == "not a Sim account" ? "refused" : "skip", root, qty, double.NaN, null, null, null, "skipped: " + why);
+            Event(f.Name, label == "not a Sim account" ? "refused" : "skip", root, qty, double.NaN, null, leaderMs, null, "skipped: " + why);
         }
 
         // The trading session (18:00 New York to 18:00) a time belongs to: the loss limit holds until the next one.
@@ -921,7 +924,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 Copy c;
                 string key = a.Name + "|" + inst.FullName;
-                if (!Copies.TryGetValue(key, out c) || (c.Intended <= 0 && c.Stops.All(s => !Working(s.Stop)) && c.Dir != dir))
+                if (!Copies.TryGetValue(key, out c) || (c.Intended <= 0 && c.Stops.All(s => !Working(s.Stop)) && (c.Dir != dir || (linst != null && c.LInst != null && c.LInst.FullName != linst.FullName))))
                 {
                     c = new Copy { A = a, F = f, Inst = inst, Root = root, LInst = linst, Dir = dir, Tag = NewTag() };
                     Copies[key] = c;
@@ -981,18 +984,23 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The leader's stop moved (a drag, breakeven, trailing, a merge): each follower stop mapped to it moves to the same price.
+        // The stops and the price are read when the move runs on the copier thread, so a follower stop placed meanwhile (from
+        // the old price) is moved too.
         private static void LeaderStopUpdate(Order ls)
         {
             if (!Working(ls) || !(ls.StopPrice > 0)) return;
-            double price = ls.StopPrice, was;
+            double was;
+            lock (Lk) { if (LeaderStopPrice.TryGetValue(ls, out was) && Math.Abs(was - ls.StopPrice) < 1e-9) return; LeaderStopPrice[ls] = ls.StopPrice; }
+            Work(() => FollowLeaderStop(ls));
+        }
+
+        private static void FollowLeaderStop(Order ls)
+        {
+            if (!Working(ls) || !(ls.StopPrice > 0)) return;
+            double price = ls.StopPrice;
             List<FStop> mapped;
-            lock (Lk)
-            {
-                if (LeaderStopPrice.TryGetValue(ls, out was) && Math.Abs(was - price) < 1e-9) return;
-                LeaderStopPrice[ls] = price;
-                mapped = FStops.Values.Where(s => s.LeaderStop == ls).ToList();
-            }
-            Work(() => MoveStops(mapped, price, "stop moved with the leader's to " + P(price)));
+            lock (Lk) mapped = FStops.Values.Where(s => s.LeaderStop == ls).ToList();
+            MoveStops(mapped, price, "stop moved with the leader's to " + P(price));
         }
 
         private static void MoveStops(List<FStop> stops, double price, string text)

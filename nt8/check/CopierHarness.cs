@@ -30,7 +30,7 @@ public static class CopierHarness
     static bool Rejected(string has) { return sent.Any(m => m.Contains("\"type\":\"reject\"") && m.Contains(has)); }
     static bool EventSaid(string action, string account, string has) { return sent.Any(m => m.StartsWith("{\"type\":\"copierEvent\"") && m.Contains("\"action\":\"" + action + "\"") && (account == null || m.Contains("\"account\":\"" + account + "\"")) && (has == null || m.Contains(has))); }
     static string State() { return sent.LastOrDefault(m => m.StartsWith("{\"type\":\"copier\",")) ?? ""; }
-    static void Msg(string type, string json) { lock (page.Actions) page.Actions.Clear(); if (type == "client" || type.StartsWith("copier")) ChartBridgeCopier.OnMessage(page, type, json); else ChartBridgeOrders.OnMessage(page, type, json); }
+    static void Msg(string type, string json) { lock (page.Actions) page.Actions.Clear(); if (type == "client") ChartBridgeCopier.StubV3Client(page, json); else if (type.StartsWith("copier")) ChartBridgeCopier.OnMessage(page, type, json); else ChartBridgeOrders.OnMessage(page, type, json); }
     static void Update(Account a, Order o) { ChartBridgeOrders.OnOrderUpdate(a, new OrderEventArgs { Order = o }); }
     static void Fill(Account a, Order o, int filled, double avg) { o.Filled = filled; o.AverageFillPrice = avg; o.OrderState = filled >= o.Quantity ? OrderState.Filled : OrderState.PartFilled; Update(a, o); }
     static void Pos(Account a, Instrument inst, int signed)
@@ -131,6 +131,7 @@ public static class CopierHarness
             BothAtOnce();
             ScaleOut();
             StopAlreadyTraded();
+            ShortsAndContracts();
             RealFollowerRefused();
             PositionLimit();
             DailyLoss();
@@ -212,7 +213,7 @@ public static class CopierHarness
         ChartBridgeClient evil = new ChartBridgeClient(null, 94) { Origin = "https://evil.example" };
         List<string> evilSent = new List<string>();
         evil.Tap = s => evilSent.Add(s);
-        ChartBridgeCopier.OnMessage(evil, "client", "{\"type\":\"client\",\"v\":3}");
+        ChartBridgeCopier.StubV3Client(evil, "{\"type\":\"client\",\"v\":3}");
         ChartBridgeCopier.OnMessage(evil, "copierSet", "{\"type\":\"copierSet\",\"leader\":\"Sim101\"}");
         Check(evilSent.Any(m => m.Contains("may not trade")), "another origin: copier messages refused (gate 4)");
         sent.Clear(); Msg("client", "{\"type\":\"client\",\"v\":2}");
@@ -402,6 +403,39 @@ public static class CopierHarness
         Check(c1.Count == 1 && Regex.IsMatch(c1[0], "^submit CB#[0-9a-f]{8} exit f3 q3 p24998.5 Sell Market 3 "), "the stop level had already traded: a market exit instead of a stop through the market: " + string.Join(" | ", c1));
         Check(Logged("price had already passed the leader's stop level 24998"), "...with an alarm");
         Reset();
+    }
+
+    // ------------------------------------------------------------ a short; the leader on NQ; the leader turning to the other side
+    static void ShortsAndContracts()
+    {
+        ChartBridgeOrders.NoteLast("MNQ", 25000); ChartBridgeOrders.NoteLast("NQ", 25000);
+        int b1 = f1.Calls.Count;
+        Msg("order", Leader("\"side\":\"sell\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Fill(lead, lead.Orders.Last(), 1, 25000); Pos(lead, mnq, -1);
+        Check(After(f1, b1).Count == 1 && After(f1, b1)[0].Contains("Sell Market 3"), "a leader short: SIM-F1 sells 3 at market");
+        FollowerFill(f1, mnq, 24999.5);
+        Check(After(f1, b1).Last().Contains("Buy StopMarket 3 L0 S25002") && EventSaid("stop", "SIM-F1", "\"slippageTicks\":2"), "the short's stop: a buy stop at the leader's 25002; selling lower is 2 ticks worse");
+        Fill(lead, LeaderStop(), 1, 25002); Pos(lead, mnq, 0);
+        Check(f1.Calls.Last() == "flatten MNQ 12-26", "the short's exit is copied");
+        Reset();
+
+        // the leader on NQ: SIM-F1 (micro) trades MNQ, SIM-F2 (mini) NQ; the exit maps back
+        Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "null"));
+        int c1 = f1.Calls.Count, c2 = f2.Calls.Count;
+        Msg("order", "{\"type\":\"order\",\"cid\":\"L\",\"account\":\"Sim101\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}");
+        Fill(lead, lead.Orders.Last(), 1, 25000); Pos(lead, nq, 1);
+        Check(After(f1, c1).Count == 1 && f1.Orders.Last().Instrument == mnq && After(f1, c1)[0].Contains("Buy Market 3"), "the leader on NQ: SIM-F1 (micro) buys 3 MNQ");
+        Check(After(f2, c2).Count == 1 && f2.Orders.Last().Instrument == nq, "the leader on NQ: SIM-F2 (mini) buys 1 NQ");
+        ChartBridgeCopier.Tick(Now());   // positions reach the page within the second
+        Check(State().Contains("{\"account\":\"SIM-F1\",\"sim\":true,\"on\":true,\"qty\":3,\"size\":\"micro\",\"root\":\"MNQ\"") && State().Contains("\"position\":{\"root\":\"NQ\",\"qty\":1"), "the copier message, within a second: the leader's NQ position, the follower's MNQ");
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000);
+        // the leader turns to the other side in one go (an order placed elsewhere): every copy on the old side closes, none opens
+        int d1 = f1.Calls.Count, d2 = f2.Calls.Count;
+        Pos(lead, nq, -1);
+        Check(After(f1, d1).SequenceEqual(new[] { "flatten MNQ 12-26" }) && After(f2, d2).SequenceEqual(new[] { "flatten NQ 12-26" }) && EventSaid("flatten", "SIM-F1", "the leader turned to the other side"),
+              "the leader turned short: the followers are flattened, nothing opposite is sent");
+        Reset();
+        Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "500"));
     }
 
     // ------------------------------------------------------------ a real follower refused (Sim only, again before every order)
