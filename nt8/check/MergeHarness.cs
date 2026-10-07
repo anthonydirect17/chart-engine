@@ -52,7 +52,7 @@ public static class MergeHarness
             named["MNQ"] = mnq;
             ChartBridgeOrders.ResetConfig();
             ChartBridgeOrders.ReadConfig("trading", "true");
-            ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, EVAL-B, EVAL-C, EVAL-D, EVAL-E, EVAL-F, EVAL-G, EVAL-H, EVAL-J, EVAL-K, EVAL-L, EVAL-N, EVAL-P, EVAL-Q, EVAL-R, EVAL-S, EVAL-T, EVAL-U");
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "EVAL-A, EVAL-B, EVAL-C, EVAL-D, EVAL-E, EVAL-F, EVAL-G, EVAL-H, EVAL-J, EVAL-K, EVAL-L, EVAL-N, EVAL-P, EVAL-Q, EVAL-R, EVAL-S, EVAL-T, EVAL-U, EVAL-V, EVAL-W");
             ChartBridgeOrders.ReadConfig("maxQty.MNQ", "20");
             ChartBridgeOrders.MergeConfirmMs = 400; ChartBridgeOrders.MergeQuietMs = 100; ChartBridgeOrders.MergePollMs = 5;
             ChartBridgeOrders.NewToken();
@@ -72,6 +72,8 @@ public static class MergeHarness
             NotConfirmed();
             FillDuringSwap();
             RestoreFails();
+            CancelLandsLate();       // fix4 (G1)
+            CancelLandsInRestore();  // fix4 (G1)
             FallbackRejected();      // fix1 (F3)
             FlattenDuringSwap();
             FlattenRefusedMidSwap(); // fix1 (F1)
@@ -681,6 +683,61 @@ public static class MergeHarness
         n = a.Calls.Count;
         t2.Filled = 1; t2.OrderState = OrderState.Filled; Update(a, t2);
         Check(CallsFrom(a, n).Count == 1 && CallsFrom(a, n)[0] == "cancel " + S.Name, "the next fill of a target seen before (a counted delta) cancels the stop: " + string.Join(" | ", CallsFrom(a, n)));
+        Done(a);
+    }
+
+    // Fix4 (G1): a pair's cancel is not confirmed in time, so the swap restores; the stop it asked to cancel may still go, so it
+    // never counts as protecting: the restore waits for it (bounded), and when it is still pending the answer is NOT `restored`
+    // but `failed` with a status error naming it. When the cancel then lands, the stops are checked again at once and the pair
+    // is placed again (never over the position).
+    static void CancelLandsLate()
+    {
+        Account a = NewAccount("EVAL-V");
+        Entry(a, true, 1, 25000); Entry(a, true, 1, 25004); Entry(a, true, 1, 25008);
+        Order st3 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25008")), tg3 = a.Orders.First(o => (o.Name ?? "").Contains(" target f1 q1 p25008"));
+        Hold = (kind, o) => kind == "cancel" && (o == st3 || o == tg3);   // NinjaTrader does not confirm that pair's cancel (yet)
+        string m = DoMerge(a, "cl");
+        Hold = null;
+        Check(!m.Contains("\"result\":\"restored\"") && m.Contains("\"result\":\"failed\"") && m.Contains("is not confirmed") && m.Contains("ChartBridge places that pair again"),
+              "G1: a cancel still pending: the answer is not `restored` (the stop may still go), and it says so: " + m);
+        Check(Sent("\"level\":\"error\",\"text\":\"MNQ EVAL-V: the merge failed"), "and a status error");
+        Check(StopCover(a) == 3 && IsLive(st3), "meanwhile nothing is placed for it (never over-protected if the cancel fails): " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity + " " + o.OrderState)));
+        int from;
+        lock (sent) from = sent.Count;
+        // the cancel lands now, after the merge ended
+        st3.OrderState = OrderState.Cancelled; Update(a, st3);
+        tg3.OrderState = OrderState.Cancelled; Update(a, tg3);
+        string said = WaitFor(from, "the cancel of CB#", 3000);
+        Stopwatch sw = Stopwatch.StartNew();
+        while (StopCover(a) < 3 && sw.ElapsedMilliseconds < 3000) Thread.Sleep(5);
+        Order again = Live(a).FirstOrDefault(o => (o.Name ?? "").Contains(" stop f1 q1 p25008")), againT = Live(a).FirstOrDefault(o => (o.Name ?? "").Contains(" target f1 q1 p25008"));
+        Check(StopCover(a) == 3 && Pos(a) == 3 && again != null && again != st3 && again.StopPrice == 25006 && againT != null && again.Oco == againT.Oco && !string.IsNullOrEmpty(again.Oco),
+              "G1: the late cancel lands: checked again at once, the pair placed again at its own prices, the stops cover the position: " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
+        Check(said.Contains("landed late, after the merge ended; ChartBridge placed the pair again; the working stops cover 3 of 3"), "and the pages are told: " + said);
+        Done(a);
+    }
+
+    // Fix4 (G1): the cancel lands while the restore waits for it: the pair is placed again and the answer is `restored`, with the
+    // stops confirmed to cover the position.
+    static void CancelLandsInRestore()
+    {
+        Account a = NewAccount("EVAL-W");
+        Entry(a, true, 1, 25000); Entry(a, true, 1, 25004); Entry(a, true, 1, 25008);
+        Order st3 = a.Orders.First(o => (o.Name ?? "").Contains(" stop f1 q1 p25008")), tg3 = a.Orders.First(o => (o.Name ?? "").Contains(" target f1 q1 p25008"));
+        ChartBridgeOrders.MergeConfirmMs = 1000;
+        Hold = (kind, o) => kind == "cancel" && (o == st3 || o == tg3);
+        After = (kind, o) =>
+        {
+            if (kind != "cancel" || o != st3) return;
+            After = null;
+            new Thread(() => { Thread.Sleep(1500); st3.OrderState = OrderState.Cancelled; Update(a, st3); tg3.OrderState = OrderState.Cancelled; Update(a, tg3); }) { IsBackground = true }.Start();
+        };
+        string m = DoMerge(a, "cr");
+        Hold = null; After = null;
+        ChartBridgeOrders.MergeConfirmMs = 400;
+        Order again = Live(a).FirstOrDefault(o => (o.Name ?? "").Contains(" stop f1 q1 p25008"));
+        Check(m.Contains("\"result\":\"restored\"") && StopCover(a) == 3 && again != null && again != st3,
+              "G1: the cancel lands while the restore waits (bounded): the pair is placed again and only then `restored`: " + m + " / " + string.Join(" | ", Live(a).Select(o => o.Name + " x" + o.Quantity)));
         Done(a);
     }
 
