@@ -281,12 +281,23 @@ function create(o) {
     el.innerHTML = propHtml(p);
     propBox.prepend(el);
     propEls.set(p.id, { el, p, shownAt: Date.now() });
-    // botSeen the moment it shows (PROTOCOL.md: "the page sends botSeen the moment it shows it"); not rate counted
-    const seen = props.shown(p.id, Date.now());
-    if (seen) sendRaw(seen);
+    seenNow();
     beep('');
     ageTick();
   }
+  /* botSeen the moment it shows (PROTOCOL.md: "the page sends botSeen the moment it shows it"; not rate counted): in a
+     window Anthony can see. A window behind another tab or minimized sends it when it comes to the front; the first window
+     to show it is the one ChartBridge records. */
+  function seenNow() {
+    if (document.visibilityState === 'hidden') return;
+    const at = Date.now();
+    for (const x of propEls.values()) {
+      if (x.ended) continue;
+      const seen = props.shown(x.p.id, at);
+      if (seen) { x.shownAt = at; sendRaw(seen); }
+    }
+  }
+  document.addEventListener('visibilitychange', seenNow);
   function updateProposal(p) { const x = propEls.get(p.id); if (x) x.p = p; else showProposal(p); }
   function endProposal(p, why) {
     const x = propEls.get(p.id);
@@ -426,7 +437,8 @@ function create(o) {
       '<span class="sn">' + esc(b.sentence) + '</span>' +
       '<canvas class="bt-thumb" data-thumb="' + i + '" aria-hidden="true"></canvas>' +
       '<span class="st"><span>' + st.trades + ' trades</span><span>' + BC.fmtPct(st.winRate) + ' won</span><span>' + BC.fmtR(st.avgR) + ' avg</span></span>' +
-      (loaded ? '<span class="bt-inslot">In the slot now</span>' : '') + '</button>';
+      '<span class="st2">Rule card ' + BC.ruleLines(b.ruleCard).length + ' rules · ' + Object.keys(b.settings).length + ' settings' + (b.frozen ? ' · frozen ' + esc(b.frozen) : '') + '</span>' +
+      (loaded ? '<span class="bt-inslot" data-k="inslot">In the slot now · ' + esc(liveLine()) + '</span>' : '') + '</button>';
   }
   function renderLibrary() {
     if (!view) return;
@@ -519,6 +531,11 @@ function create(o) {
     scene(card, 1300);
   }
   function closeDetail() { if (S.detail) { S.detail.el.remove(); S.detail = null; } }
+  /** today's live record of the running build, in a few words (the slot's entry) */
+  function liveLine() {
+    const b = S.bot || {}, sigs = log.list().filter(e => e.kind === 'signal').length;
+    return sigs + (sigs === 1 ? ' signal, ' : ' signals, ') + (isNum(b.trades) ? b.trades : 0) + (b.trades === 1 ? ' trade' : ' trades') + ' today';
+  }
   function liveRecordHtml(b, loaded) {
     if (!loaded) return '<span class="k">In the slot</span><span class="v">No</span>';
     const bot = S.bot || {}, sigs = log.list().filter(e => e.kind === 'signal').length;
@@ -683,7 +700,11 @@ function create(o) {
     const calls = days.calls();
     put(q('[data-k="dtWhy"]'), 'textContent', calls.length ? 'Called ' + cur + ' at ' + BC.etClock(calls[calls.length - 1].at) + ' ET (' + calls.length + (calls.length === 1 ? ' call' : ' calls') + ' today, all in the Log)' : 'No call yet today.');
     renderSlot();
-    if (S.library.state === 'ok') for (const btn of q('[data-k="shelves"]').querySelectorAll('.bt-entry')) tog(btn, 'loaded', btn.dataset.id === (e && e.id));
+    if (S.library.state === 'ok') {
+      const was = q('.bt-entry.loaded'), inslot = q('[data-k="inslot"]');
+      if ((was ? was.dataset.id : null) !== (e ? e.id : null)) renderLibrary();       // the slot changed: the cards say so
+      else if (inslot) put(inslot, 'textContent', 'In the slot now · ' + liveLine());
+    }
     renderPanelTab();
   }
   function renderPanelTab() {
