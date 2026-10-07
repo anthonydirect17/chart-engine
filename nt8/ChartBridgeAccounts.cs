@@ -6,9 +6,11 @@
 //   - gate 2 with accountChecks on (the default since Anthony's 2026-10-07 decision): the page's per-account checkmark, which ChartBridge saves itself in accounts.txt
 //     next to config.txt. First start (no accounts.txt) pre-checks tradeAccounts; afterwards only the checkmarks count.
 //     trading = true stays the master switch above every checkmark (ChartBridgeOrders.AccountTradable checks it first);
-//   - Gone: an account that is disconnected, disabled, or past its trailing drawdown for 10 s without a break loses its
-//     checkmark at once (saved), is listed Gone, and the pages are told. Archive only after the page's confirm, and only
-//     for a Gone account. History is kept (nothing is deleted); every change is one Output line and one accounts.log line;
+//   - Gone: an account that is disconnected (after it was connected) or disabled for 10 s without a break is listed Gone and
+//     the pages are told; entries wait until it is back. ChartBridge never clears a checkmark (Anthony, 2026-10-07: "I will
+//     manage the checkmarks"; 0.4.2): Gone keeps it, and NinjaTrader's trailing drawdown never makes an account Gone (it is
+//     shown in the Room column only). Archive only after the page's confirm, and only for a Gone account. History is kept
+//     (nothing is deleted); every change is one Output line and one accounts.log line;
 //   - the "accounts" message: every watched account with its connection, checkmark, money, positions and the room to its
 //     trailing drawdown and daily loss limit where NinjaTrader reports them (else null with a plain reason, never estimated);
 //   - the exit side of gate 2 (flatten, cancel, moving a stop or target, cancel from the Working orders tab): a watched,
@@ -185,8 +187,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- gate 2 (asked by ChartBridgeOrders.cs only when accountChecks is on)
-        // The checkmark: on, accounts.txt read, not Gone. A Gone account's checkmark is already off (Gone turns it off); the
-        // Gone test here is a second lock on the same door.
+        // Gate 2 for entries: the checkmark on, accounts.txt read, and not Gone. Gone keeps the checkmark (0.4.2), so a Gone
+        // account takes no entry until it is back; then it trades again with its checkmark.
+        // The saved checkmark alone (accounts.txt), Gone or not: the "trade" field (0.4.2).
+        private static bool SavedChecked(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            lock (Mem) { Rec r; return loaded && readError == null && Recs.TryGetValue(name, out r) && r.State == "trade"; }
+        }
+
         public static bool Checked(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
@@ -221,7 +230,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (string.IsNullOrEmpty(name) || ChartBridgeOrders.IsNeverTradable(name)) return "account " + label + " may not trade from the chart (never Backtest or Playback)";
             lock (Mem) { if (readError != null) return ReadFailedText; if (!loaded) return "ChartBridge is still reading accounts.txt; try again in a moment"; }
             if (Archived(name)) return "account " + name + " is archived";
-            if (Gone(name, out gw)) return "account " + name + " is gone (" + gw + "): trading is off for it; check it again on the Accounts tab once it is back";
+            if (Gone(name, out gw)) return "account " + name + " is gone (" + gw + "): entries wait until it is back (its checkmark is kept)";
             return "account " + name + " is not checked for trading (the Accounts tab)";
         }
 
@@ -381,7 +390,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (on != "true" && on != "false") return "on must be true or false";
             double now = ChartBridgeTime.NowUtcMs();
             if (on == "false") return Uncheck(name, now);
-            // On is refused for an account that is Gone, archived, not Connected, Backtest or Playback.
+            // On is refused for an account that is Gone, archived, not Connected, Backtest or Playback (a Gone account keeps
+            // whatever checkmark it had; 0.4.2).
             if (ChartBridgeOrders.IsNeverTradable(name)) return name + " can never trade (Backtest and Playback)";
             lock (Mem) if (readError != null) return ReadFailedText + "; nothing was changed";
             Account a = Find(name);
@@ -390,7 +400,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (a != null) name = a.Name;
             string gw;
             if (Archived(name)) return name + " is archived; it comes back unchecked when it connects again";
-            if (Gone(name, out gw)) return name + " is gone (" + gw + "); it can be checked again once it is back";
+            if (Gone(name, out gw)) return name + " is gone (" + gw + "); it can be checked once it is back";
             string status = a != null ? StatusOf(a) : "not in NinjaTrader";
             if (status != "Connected") return name + " is not connected (" + status + ")";
             SetState(name, "trade", now);
@@ -500,14 +510,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        // Gone (PROTOCOL.md "Gone"): disconnected, disabled, or past its drawdown limit for GraceMs without a break. At that
-        // moment its checkmark goes off and is saved, the pages are told and the change is logged. When it comes back healthy
-        // it is listed as active again with the checkmark still off. An archived account that comes back healthy returns as
-        // active and unchecked. Returns true when a checkmark or a state changed.
+        // Gone (PROTOCOL.md "Gone"): disconnected (after it was connected) or disabled for GraceMs without a break. At that
+        // moment the pages are told and the change is logged; its checkmark is kept (0.4.2: ChartBridge never clears one) and
+        // entries wait. When it comes back healthy it is listed as active again and trades with its checkmark. An archived
+        // account that comes back healthy returns as active and unchecked (Anthony archived it). Returns true when a state
+        // changed.
         private static bool CheckGone(List<Account> all, double now)
         {
             bool changed = false;
-            List<string> warn = new List<string>();
+            List<string> warn = new List<string>(), back = new List<string>();
             List<string[]> notes = new List<string[]>();   // logged after Mem is released
             foreach (string listed in Names(all, true))
             {
@@ -529,29 +540,33 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (why == null)
                     {
                         l.BadSince = -1;
-                        if (l.Gone) { l.Gone = false; l.GoneWhy = null; l.GoneSince = 0; changed = true; notes.Add(new[] { name, "active again", "healthy again; the checkmark stays off" }); }
+                        if (l.Gone)
+                        {
+                            l.Gone = false; l.GoneWhy = null; l.GoneSince = 0; changed = true;
+                            bool on = r.State == "trade";
+                            notes.Add(new[] { name, "active again", on ? "healthy again; checked: entries are taken again" : "healthy again; not checked for trading" });
+                            back.Add(name + " is back (" + (upNow ? "connected" : "healthy") + "): " + (on ? "its checkmark is kept, entries are taken again" : "it is not checked for trading"));
+                        }
                         continue;
                     }
                     if (l.Gone) continue;
                     if (l.BadSince < 0) { l.BadSince = now; continue; }   // the grace starts with the first bad reading
                     if (now - l.BadSince < GraceMs) continue;
-                    l.Gone = true; l.GoneWhy = why; l.GoneSince = (long)now;
+                    l.Gone = true; l.GoneWhy = why; l.GoneSince = (long)now; changed = true;   // the checkmark is not touched (0.4.2)
                     bool wasChecked = r.State == "trade";
-                    r.State = "off"; r.ChangedMs = (long)now; dirty = true; changed = true;
-                    notes.Add(new[] { name, "gone", why + " for " + (GraceMs / 1000).ToString(CultureInfo.InvariantCulture) + " s" + (wasChecked ? "; unchecked: trading is off for it" : "") });
-                    warn.Add(name + " is gone (" + WhyWords(why) + " for " + (GraceMs / 1000).ToString(CultureInfo.InvariantCulture) + " s): trading is off for it");
+                    notes.Add(new[] { name, "gone", why + " for " + (GraceMs / 1000).ToString(CultureInfo.InvariantCulture) + " s" + (wasChecked ? "; the checkmark is kept: entries wait until it is back" : "") });
+                    warn.Add(name + " is gone (" + WhyWords(why) + " for " + (GraceMs / 1000).ToString(CultureInfo.InvariantCulture) + " s): entries wait until it is back" + (wasChecked ? "; its checkmark is kept" : ""));
                 }
             }
             foreach (string[] n in notes) NoteChange(n[0], n[1], n[2]);
             foreach (string w in warn) Warn(w);
+            foreach (string x in back) Info(x);
             return changed;
         }
 
         private static string WhyWords(string why)
         {
             if (why == "disabled") return "disabled in NinjaTrader";
-            if (why == "drawdown") return "past its trailing drawdown";
-            if (why == "dailyLoss") return "past its daily loss limit";
             return "disconnected";
         }
 
@@ -559,17 +574,16 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Lead's default (2026-10-07): Anthony signs the prop accounts in by hand after NinjaTrader opens, so an account that has
         // not been Connected yet in this ChartBridge run is never Gone for being disconnected: it keeps its saved checkmark, is
         // listed "not connected yet", and every order to it is refused by the normal gates (not Connected) until it connects.
-        // Once it has been Connected, a drop counts. Disabled (or past its drawdown) counts at first sight, after the grace.
+        // Once it has been Connected, a drop counts. Disabled counts at first sight, after the grace. NinjaTrader's trailing
+        // drawdown never makes an account Gone (0.4.2, Anthony: its figure drifts once a prop account passes the drawdown
+        // lock; the Room column shows it, ChartBridge never acts on it).
         private static string BadWhy(string name, Account a)
         {
             bool up = a != null && ConnectionText(a) == "connected";
             if (up) lock (Mem) EverConnected.Add(name);
             if (IsDisabled(name)) return "disabled";
             if (!up) return WasConnected(name) ? "disconnected" : null;
-            string w;
-            double? room = RoomDrawdown(a, out w);
-            if (room.HasValue && room.Value <= 0) return "drawdown";
-            return null;   // roomDailyLoss is never reported in dollars (see the top of this file), so it never makes an account Gone
+            return null;
         }
 
         // ---------------------------------------------------------- the accounts message
@@ -594,7 +608,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void AccountJson(StringBuilder b, string name, Account a)
         {
             string connection = a == null ? "disconnected" : ConnectionText(a);
-            bool trade = On ? Checked(name) : ChartBridgeOrders.TradeAccounts.Any(t => t.Equals(name, StringComparison.OrdinalIgnoreCase));
+            bool trade = On ? SavedChecked(name) : ChartBridgeOrders.TradeAccounts.Any(t => t.Equals(name, StringComparison.OrdinalIgnoreCase));
             string goneWhy;
             bool gone = Gone(name, out goneWhy);
             long goneSince;
@@ -847,6 +861,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             ChartBridgeServer.Log("NOTE: " + text);
             ChartBridgeServer.SendToTraders(Status("warn", text));
+        }
+
+        private static void Info(string text)
+        {
+            ChartBridgeServer.Log("NOTE: " + text);
+            ChartBridgeServer.SendToTraders(Status("info", text));
         }
     }
 }

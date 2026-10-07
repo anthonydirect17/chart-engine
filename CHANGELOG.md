@@ -1,5 +1,24 @@
 # Changelog
 
+## ChartBridge 0.4.2 (2026-10-07): ChartBridge never clears a checkmark
+
+- Anthony, after seeing NinjaTrader's trailing drawdown drift on a prop account past its drawdown lock: "I will manage the
+  checkmarks on accounts ... I know when they blow, or pass to funded." So ChartBridge no longer clears a checkmark by
+  itself, for any reason:
+  - **Gone keeps the checkmark.** An account that drops (after it was connected) or is disabled for 10 s is still listed
+    Gone and its entries wait (it is not in the ticket's list while Gone); when it is back it trades again at once with
+    its checkmark, and the pages get an info line saying so. An account Anthony unchecked stays unchecked. Archive is
+    unchanged (only for a Gone account, after the page's confirm); an archived account that connects again still comes
+    back unchecked, since Anthony archived it.
+  - **NinjaTrader's trailing drawdown never makes an account Gone.** It is shown in the Room column and the amber and red
+    warnings only. (0.4.1 made an account Gone, and cleared its checkmark, when that figure read 0 or below for 10 s.)
+- ChartBridge only; the page is unchanged (no page install, so each PC keeps its page rollback to 1.15.0). Known wording
+  left for the single Account page release after the Thursday and Friday tests: when an account comes back, the Account
+  page's own Log line still says "the checkmark stays off"; ChartBridge's info line next to it gives the truth.
+- Tests: the Mono accounts harness checks Gone keeping the checkmark in `accounts.txt`, an entry refused while Gone and
+  taken at once when it is back (no tick), an unchecked account staying unchecked through Gone, disabled and enabled
+  again, and a trailing drawdown at 0 and below 0 for a minute leaving the account active and checked.
+
 ## ChartBridge 0.4.1 (2026-10-07): compiles on NinjaTrader 8.1
 
 - ChartBridge 0.4.0 did not compile on WORK's NinjaTrader 8.1.6.3 (CS1503 at ChartBridge.cs line 2266): it passed

@@ -1358,11 +1358,16 @@ upkeep) need only a watched, Connected account that is not Backtest or Playback:
 account, or its going Gone, never strands a position. `change` on an entry is an entry action.
 
 **Gone.** An account is **Gone** when, for 10 s without a break (the grace): its connection is not Connected
-(`connection` below), or NinjaTrader reports it disabled, or it is past its drawdown limit (`roomDrawdown` or
-`roomDailyLoss` 0 or below, where NinjaTrader reports them). At that moment its checkmark goes **off** and is saved, the
-pages get `accounts` and a `status` `warn` ("EVAL-A is gone (disconnected for 10 s): trading is off for it"), and the change
-is logged. Bracket upkeep and the missing-stop alarm keep running for it. When it comes back healthy it is listed as
-active again with the checkmark still **off**: Anthony checks it again (lead's default).
+(`connection` below), or NinjaTrader reports it disabled. At that moment the pages get `accounts` and a `status` `warn`
+("EVAL-A is gone (disconnected for 10 s): entries wait until it is back; its checkmark is kept"), and the change is logged.
+Entries to it are refused while it is Gone (and it leaves `trading`'s account list); bracket upkeep and the missing-stop
+alarm keep running for it. **ChartBridge never clears a checkmark** (0.4.2, Anthony 2026-10-07: "I will manage the
+checkmarks on accounts ... I know when they blow, or pass to funded"): Gone keeps it, saved as it was. When the account comes
+back healthy it is listed as active again, trades at once with its checkmark, is back in `trading`, and the pages get a
+`status` `info` ("EVAL-A is back (connected): its checkmark is kept, entries are taken again"). NinjaTrader's trailing
+drawdown (`roomDrawdown`) **never** makes an account Gone (0.4.2: NinjaTrader's figure drifts once a prop account passes
+its drawdown lock); it is shown, never acted on. Until 0.4.1 Gone cleared the checkmark and `roomDrawdown` at 0 or below
+made an account Gone.
 
 **Archive.** Only Anthony, on the page, after confirming (`accountArchive` with `confirm: true`), and only for a Gone account.
 An archived account leaves every list (`accounts`, the copier, the Working orders tab); its history stays (fills, logs,
@@ -1388,9 +1393,9 @@ unrealized, positions, roomDrawdown, roomDrawdownWhy, roomDailyLoss, roomDailyLo
   any broker account, an evaluation or funded account included (a prop firm's "simulated" account is real to
   NinjaTrader). The copier and the bot lean on this.
 - `connection`: `connected`, `connecting`, `lost` (connection lost, NinjaTrader retrying), `disconnected`.
-- `trade`: the checkmark (with `accountChecks` off: in `tradeAccounts`). `tradable`: what gate 2 says now (checkmark, the
+- `trade`: the checkmark, kept while Gone (0.4.2) (with `accountChecks` off: in `tradeAccounts`). `tradable`: what gate 2 says now (checkmark, the
   master switch, Connected, not Gone).
-- `state`: `active` or `gone`; `goneWhy` (`disconnected`, `disabled`, `drawdown`, `dailyLoss`, or null), `goneSince` (UTC ms
+- `state`: `active` or `gone`; `goneWhy` (`disconnected`, `disabled`, or null; 0.4.1 could also send `drawdown`), `goneSince` (UTC ms
   or null).
 - Money in the account's currency as NinjaTrader reports it, numbers or null: `balance` (cash value), `realizedToday`,
   `unrealized`, `pnlToday` (the two added).
@@ -1447,7 +1452,7 @@ Where the contract above left a detail open, the build chose the safe simple opt
   run and then drops. An account not Connected yet since ChartBridge started keeps its saved checkmark, is listed with
   `"notConnectedYet": true` (an added field in each `account`; the room whys say "the account is not connected yet"), and every
   order to it is refused by the normal gates (it is not Connected) until it connects; then it trades at once with its checkmark.
-  Disabled, or past its trailing drawdown, counts at first sight (after the grace), connected before or not.
+  Disabled counts at first sight (after the grace), connected before or not.
 - **Gone**: sampled once a second; the 10 s grace starts at the first bad reading and any healthy reading starts it again. An
   account `accounts.txt` knows but NinjaTrader no longer lists is listed `disconnected` (Gone only if it was Connected this run).
   An archived account that NinjaTrader lists again, Connected and healthy, comes back `active` and unchecked.

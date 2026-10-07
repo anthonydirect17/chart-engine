@@ -182,22 +182,25 @@ export class OrderDeskV3 extends OrderDesk {
     const a = this.acct.get(name); if (!a || a.connection === connection) return;
     a.connection = connection; a.since = this.now();
     a.badSince = null;
-    if (connection === 'connected' && a.state === 'gone') { a.state = 'active'; a.goneWhy = null; a.goneSince = null; this.logLine('accounts', name, 'back: connected (the checkmark stays off)'); }
+    if (connection === 'connected' && a.state === 'gone') {   // 0.4.2: back with whatever checkmark it had
+      a.state = 'active'; a.goneWhy = null; a.goneSince = null; this.logLine('accounts', name, 'active again: ' + (a.trade ? 'checked: entries are taken again' : 'not checked for trading'));
+      this.broadcastV3({ type: 'status', level: 'info', text: name + ' is back (connected): ' + (a.trade ? 'its checkmark is kept, entries are taken again' : 'it is not checked for trading') });
+    }
     if (connection !== 'connected') this.copierDrop(name);
     this.refreshAccounts(); this.sendAccounts();
   }
-  /** every second (and in tests): the 10 s grace, then Gone and the checkmark off */
+  /** every second (and in tests): the 10 s grace, then Gone; the checkmark is kept and NinjaTrader's drawdown never counts (0.4.2) */
   checkGone() {
     const t = this.now();
     for (const a of this.acct.values()) {
       if (a.state !== 'active') continue;
-      const why = a.connection !== 'connected' ? (a.connection === 'disabled' ? 'disabled' : 'disconnected') : a.drawdown !== null && this.room(a) <= 0 ? 'drawdown' : null;
+      const why = a.connection !== 'connected' ? (a.connection === 'disabled' ? 'disabled' : 'disconnected') : null;
       if (!why) { a.badSince = null; continue; }
-      if (a.badSince == null) a.badSince = why === 'drawdown' ? t : a.since;   // the grace runs from the connection change
+      if (a.badSince == null) a.badSince = a.since;   // the grace runs from the connection change
       if (t - a.badSince < this.graceMs) continue;
-      a.state = 'gone'; a.goneWhy = why; a.goneSince = t; a.trade = false;
-      this.logLine('accounts', a.name, 'gone: ' + why + '; trading off');
-      this.broadcastV3({ type: 'status', level: 'warn', text: a.name + ' is gone (' + why + ' for ' + Math.round(this.graceMs / 1000) + ' s): trading is off for it' });
+      a.state = 'gone'; a.goneWhy = why; a.goneSince = t;   // the checkmark is kept (0.4.2)
+      this.logLine('accounts', a.name, 'gone: ' + why + (a.trade ? '; the checkmark is kept: entries wait until it is back' : ''));
+      this.broadcastV3({ type: 'status', level: 'warn', text: a.name + ' is gone (' + why + ' for ' + Math.round(this.graceMs / 1000) + ' s): entries wait until it is back' + (a.trade ? '; its checkmark is kept' : '') });
       this.refreshAccounts(); this.sendAccounts();
     }
   }
@@ -297,7 +300,7 @@ export class OrderDeskV3 extends OrderDesk {
   checkEntryAccount(account) {
     if (this.sw.accountChecks && this.acct.has(account) && !this.accounts.includes(account)) {
       const a = this.acct.get(account);
-      return a.state === 'gone' ? account + ' is gone: trading is off for it.' : a.connection !== 'connected' ? account + ' is not connected.' : account + ' is not checked for trading (the Accounts tab).';
+      return a.state === 'gone' ? account + ' is gone: entries wait until it is back (its checkmark is kept).' : a.connection !== 'connected' ? account + ' is not connected.' : account + ' is not checked for trading (the Accounts tab).';
     }
     return null;
   }
@@ -393,7 +396,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (!a || a.state === 'archived') return 'No account ' + m.account + '.';
     if (!m.on) return null;
     if (a.name === 'Backtest' || /^Playback/i.test(a.name)) return a.name + ' can never trade.';
-    if (a.state === 'gone') return a.name + ' is gone (' + a.goneWhy + '); it can be checked again once it is back.';
+    if (a.state === 'gone') return a.name + ' is gone (' + a.goneWhy + '); it can be checked once it is back.';
     if (a.connection !== 'connected') return a.name + ' is not connected.';
     return null;
   }
