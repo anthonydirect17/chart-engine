@@ -221,6 +221,7 @@ public static class DataHarness
         int feedsBefore = feeds.Count;
         try { Priv("SubscribeMarketData"); }
         finally { MarketData.SettlementFor = null; feeds.RemoveRange(feedsBefore, feeds.Count - feedsBefore); }
+        WaitFor(() => ChartBridgeServer.SettlementsIdle);   // 0.4.0: the snapshot goes through the one settlement queue too
         Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21456.25", "2026-09-28")) && HelloOf("NQ").EndsWith(SetOf("NQ", "null", "2026-09-28")) && HelloOf("ES").EndsWith(SetOf("ES", "null", "2026-09-28")),
             "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is dated a Saturday (no session: no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
         Check(Hello().Contains("\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\"]"), "hello: features list settlement, htf and weekProfile");
@@ -413,6 +414,7 @@ public static class DataHarness
         int before = feeds.Count;
         try { Priv("SubscribeMarketData"); }
         finally { MarketData.SettlementFor = null; feeds.RemoveRange(before, feeds.Count - before); }
+        WaitFor(() => ChartBridgeServer.SettlementsIdle);   // 0.4.0: the snapshot goes through the one settlement queue too
         Thread.Sleep(100);
     }
     static void StartChecks()

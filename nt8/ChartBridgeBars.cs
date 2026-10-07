@@ -200,12 +200,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The contract the chart uses for a root in that session: contract.<ROOT> from config.txt if set, else the front
-        // month by the chart's own roll rule (ChartBridgeServer.FrontMonth, 8 days before expiry) on the session's date.
+        // month by the chart's own roll rule (ChartBridgeServer.FrontMonth, 8 days before expiry) on the session's date
+        // (0.4.0: the root's own roll for a market that is not an equity index, ChartBridgeMarkets; the same for MNQ, NQ, ES, MES).
         public static string FrontContract(string root, DateTime session)
         {
             string name;
             if (ChartBridgeConfig.ContractOverride.TryGetValue(root, out name)) return name;
-            return root + " " + ChartBridgeServer.FrontMonth(session.Date);
+            return root + " " + ChartBridgeMarkets.FrontMonth(root, session.Date);
         }
 
         public static string KeyOf(DateTime session, string contract) { return session.ToString("yyyy-MM-dd", Inv) + " " + contract; }

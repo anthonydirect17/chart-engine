@@ -172,7 +172,7 @@ test('strict messages: known keys only, bracket must be an object', () => {
 
 test('every order message passes the gate first; auth checks origin and token', () => {
   const on = fnBody('OnMessage');
-  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why != null\) \{ Reject/);
+  assert.match(on, /if \(type == "auth"\) \{ Auth\(client, text\); return; \}\s*string why = Gate\(client\);\s*string bracketBody = null, top = why == null \? TopLevel\(type, text, out bracketBody, out why\) : null;\s*if \(why == null\) why = QuoteOnly\(top, id\);\s*if \(why != null\) \{ Reject/);   // 0.4.0: a quote-only market is refused right after the gate
   const gate = fnBody('Gate');
   assert.match(gate, /if \(!Enabled\) return/);
   assert.match(gate, /if \(!client\.Trader \|\| !OriginAllowed\(client\.Origin\)\) return/);
@@ -683,7 +683,7 @@ test('0.3.7: the by-date tick load and its Bid and Ask history are removed; a qu
 test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only through the gate, the weekly profile never asks', () => {
   const note = bodyOf(code, 'public static void NoteSettlement(string root, string contract,');
   assert.match(note, /!\(price > 0\)\) return;/, 'only a real price');
-  assert.match(note, /DateTime\? day = SettlementDay\(ntTime, NowNt\(\), out provisional\);/, 'every value dated from NinjaTrader\'s time on it (0.3.8: and whether it is in the 16:00 to 17:00 buffer)');
+  assert.match(note, /DateTime\? day = SettlementDay\(ntTime, NowNt\(\), out provisional, root\);/, 'every value dated from NinjaTrader\'s time on it (0.3.8: and whether it is in the 16:00 to 17:00 buffer)');
   assert.match(bodyOf(code, 'private static void PriorSettlement('), /ChartBridgeCme\.PreviousSession\(ChartBridgeCme\.CurrentSession\(/);
   assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlementsSoon\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);   // read off NinjaTrader's thread
   // review B2: answers built outside HtfLock, one waiter per page, the 15 s limit
@@ -731,4 +731,63 @@ test('0.3.8 review: never legs from an estimated fill price; settlement updates 
   assert.match(ocode, /object\.ReferenceEquals\(x\.Order, entry\) \|\| \(!string\.IsNullOrEmpty\(id\) && x\.OrderId == id\)/, 'the price comes from the entry\'s own executions');
   assert.ok(!/Task\.Run\(\(\) => NoteSettlement/.test(code), 'no task per settlement update');
   assert.match(code, /QueueSettlement\(RootOf\(e\.Instrument\)/, 'updates go to the one queue');
+});
+
+// ---- 0.4.0 hardening and markets (behaviour: nt8/check/MarketsHarness.cs under Mono, inside check:orders)
+const tsrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeTape.cs'), 'utf8');
+const tcode = tsrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+
+test('0.4.0: the new file ships and is checked; it places no orders', () => {
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeTape.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeBars\.cs ChartBridgeTape\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/MarketsHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /MarketsHarness\.Run\(Check\);/);
+  const forbidden = [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Flatten\s*\(/, /\.Cancel\s*\(/, /\bOrderAction\./, /ChartBridgeOrders\.\w+\s*\(/];
+  for (const re of forbidden) assert.ok(!re.test(tcode), 'ChartBridgeTape.cs: ' + re);
+});
+
+test('0.4.0: quote-only markets are served for the Quote board and refused for every order', () => {
+  assert.match(code, /public static string\[\] Roots = new string\[\] \{ "MNQ", "NQ", "MES", "ES" \};/, 'the traded roots stay MNQ, NQ, MES, ES');
+  assert.match(tcode, /DefaultQuoteRoots\(\) \{ return new\[\] \{ "YM", "RTY", "GC", "SI", "CL", "6E", "ZN", "ZB" \}; \}/);
+  assert.match(bodyOf(code, 'public static void Load()'), /else if \(key == "quoteRoots"\) QuoteRoots = /);
+  // the order code's lookups never reach a quote-only contract; the data side has its own
+  assert.match(bodyOf(code, 'public static Instrument InstrumentFor(string root)'), /if \(ChartBridgeConfig\.QuoteOnly\(root\)\) return null;/);
+  assert.match(bodyOf(code, 'public static string RootFor(Instrument inst)'), /return ChartBridgeConfig\.QuoteOnly\(kv\.Key\) \? null : kv\.Key;/);
+  assert.ok(!/ChartBridgeServer\.ServedInstrumentFor/.test(ocode), 'the order file never uses the data side\'s lookup');
+  // one early check, right after the gate, with a plain reason; for change, plan and cancel the root of the order named
+  const q = fnBody('QuoteOnly');
+  assert.match(q, /ChartBridgeConfig\.QuoteOnly\(root\)/);
+  assert.match(q, /ById\.TryGetValue\(id, out o\)/);
+  assert.match(q, /is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it/);
+  // hello: quoteOnly and priceFormat before the settlement fields (pages that read the end keep working)
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"pointValue\\":"\)[^\n]*\n\s*\.Append\(",\\"quoteOnly\\":"\)[^\n]*\n\s*\.Append\(",\\"priceFormat\\":"\)[^\n]*\n\s*\.Append\(SettlementHelloFields\(/);
+  // the traded roots keep their roll: the index rule (ChartBridgeServer.FrontMonth) for any root not in the table, YM and RTY too
+  assert.match(tcode, /if \(s == null \|\| s\.Roll == IndexRoll\) return ChartBridgeServer\.FrontMonth\(nowEt\);/);
+  assert.match(tcode, /GetProperty\("RolloverCollection"\)/, 'NinjaTrader\'s own rollover list, by reflection');
+});
+
+test('0.4.0: the settlement snapshot goes through the one queue; error lines once a minute', () => {
+  const sub = bodyOf(code, 'private static void SubscribeMarketData(');
+  assert.match(sub, /QueueSettlement\(kv\.Key, kv\.Value\.FullName, st\.Price, st\.Time, "snapshot"\)/);
+  assert.ok(!/NoteSettlement\(/.test(sub), 'no direct NoteSettlement at subscription');
+  assert.match(code, /try \{ NoteSettlement\(\(string\)x\[0\], \(string\)x\[1\], \(double\)x\[2\], \(DateTime\)x\[3\], \(string\)x\[4\]\); \}/);
+  for (const k of ['tick error', 'tick send error', 'history error']) {
+    assert.match(code, new RegExp('CbLogLimit\\.Error\\("' + k + '", ex\\)'));
+    assert.ok(!code.includes('Log("' + k + ': "'), k + ' no longer logged on every fault');
+  }
+  assert.match(tcode, /public const double EveryMs = 60000;/);
+});
+
+test('0.4.0: the tape counters run after the send, on their own, with no lock and nothing made per trade', () => {
+  const md = bodyOf(code, 'private static void OnMarketData(');
+  const tape = md.indexOf('ChartBridgeTape.OnPrint(');
+  assert.ok(tape > md.indexOf('c.Send(json)') && tape > md.indexOf('ChartBridgeOrders.NoteLast(') && tape > md.indexOf('c.Pending.Add('), 'after the send and NoteLast');
+  assert.match(md, /try \{ ChartBridgeTape\.OnPrint\(root, book\.Tick, ChartBridgeTime\.UtcMs\(utc\), rx, t, e\.Price\); \}\s*catch \(Exception tx\) \{ ChartBridgeTape\.Failed\(tx\); \}/);
+  // outside the book lock: at the lock statement's own indent, after it (the lock's block has closed)
+  const indentOf = at => { const ls = md.lastIndexOf('\n', at) + 1; return md.slice(ls, at).match(/^ */)[0].length; };
+  assert.ok(tape > md.indexOf('lock (book.Sync)') && indentOf(tape) === indentOf(md.indexOf('lock (book.Sync)')) && tape < md.indexOf('HtfOnTrade('), 'outside the book lock, before the higher-timeframe bars');
+  const onPrint = tcode.slice(tcode.indexOf('public void OnPrint(double uMs'), tcode.indexOf('public static class ChartBridgeTape'));
+  assert.ok(!/\bnew\b|lock \(|\.ToString\(|string\.|Sort\(|OrderBy\(|\+ "/.test(onPrint), 'TapeRoot.OnPrint: no allocation, lock, string or sorting');
+  assert.match(code, /b\.Append\(",\\"tape\\":"\)\.Append\(ChartBridgeTape\.DiagJson\(\)\);/);
+  assert.match(code, /b\.Append\(",\\"health\\":"\)\.Append\(HealthJson\(\)\);/);
 });

@@ -4,7 +4,8 @@
     "nt8/ChartBridge.cs",
     "nt8/ChartBridgeOrders.cs",
     "nt8/ChartBridgePin.cs",
-    "nt8/ChartBridgeBars.cs"
+    "nt8/ChartBridgeBars.cs",
+    "nt8/ChartBridgeTape.cs"
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },

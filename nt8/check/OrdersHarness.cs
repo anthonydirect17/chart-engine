@@ -866,6 +866,7 @@ public static class OrdersHarness
         SeamHarness.Run(Check);  // where the backfill meets the live trades (check/SeamHarness.cs, 0.3.3)
         SidesHarness.Run(Check); // the side of every trade, as pure rules (check/SidesHarness.cs, 0.3.4; its loads run inside SeamHarness)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
+        MarketsHarness.Run(Check);   // 0.4.0: quote-only markets, their rolls and settlement times, tape counters, error lines, /diag health (check/MarketsHarness.cs)
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;

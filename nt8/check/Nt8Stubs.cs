@@ -52,7 +52,10 @@ namespace NinjaTrader.Cbi
         public double TickSize { get; set; }
         public double PointValue { get; set; }
         public NinjaTrader.Data.TradingHours TradingHours { get; set; }
+        public List<Rollover> RolloverCollection { get; set; }   // 0.4.0: read by reflection only (ChartBridgeMarkets.NtFrontMonth)
     }
+    // A row of NinjaTrader's rollover list (Tools > Instruments > Rollovers): the contract month, and the date it becomes the front month.
+    public class Rollover { public DateTime ContractMonth { get; set; } public DateTime Date { get; set; } public double Offset { get; set; } }
     public class Instrument
     {
         public string FullName { get; set; }
