@@ -6,12 +6,16 @@
 //     faded); Escape closes it;
 //   - R4: a click during the entrance acts at once and finishes it; R3: the kill switch, the mode, position and P&L are
 //     never animated;
-//   - the panel: the kill switch (on in one click, release in two), the rails tightened (never loosened), the modes
+//   - the panel: the kill switch (on in one click, release in two), the rails as ChartBridge built them (1 to 5 trades, 1 to
+//     3 losing trades, the root or its micro or mini; never above ChartBridge's limits), the modes
 //     (Sim auto asks once more; a Research build offers Shadow only), the day type calls logged with their times;
-//   - copilot proposals on the Main tab: botSeen the moment one shows, Accept with The Desk's accept key, Reject with
+//   - one v3 connection per window: the Bot tab opens none of its own (the workspace's, shared with the Account page and
+//     the ticket's 0.4.0 parts);
+//   - copilot proposals on the Main tab: botSeen the moment one shows, Accept with The Desk's accept key (the workspace's
+//     hotkey, through the chart-copilot-key event), Reject with
 //     the button, an expired one shows "not answered" and goes; ChartBridge places the order from the proposal itself;
 //   - corner notices; per-chart ghost marks from a chart's menu (off by default); Less motion in Settings;
-//   - the pop-out window (bot.html) on its own connection;
+//   - the pop-out window (bot.html) on its own one v3 connection;
 //   - with the bot switch off: the Bot tab says the bot channel is off and offers nothing (no strip, no ghost choice);
 //     with no library file: "No frozen builds on this PC".
 //   npm run smoke:bot        (CHROMIUM_PATH=/path/to/chrome; BOT_SMOKE_PORT, and the next two ports; SHOTS=dir)
@@ -54,6 +58,15 @@ try {
   bridge = await startBridge(PORT);
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   await ctx.route('http://localhost:8800/api/chart-hotkeys', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(DESK_KEYS) }));
+  await ctx.route('http://localhost:8800/api/chart-strategies', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ rev: 0, strategies: [] }) }));
+  await ctx.route('http://localhost:8800/api/chart-accounts', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ accounts: [] }) }));
+  /* every WebSocket a page opens, by its URL (one per instrument, the ticket's, and the one v3 connection) */
+  await ctx.addInitScript(() => {
+    const Real = window.WebSocket, socks = window.__socks = [];
+    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), types: [] }; const send = s.send.bind(s); s.send = d => { try { rec.types.push(JSON.parse(d).type); } catch (e) { /* not JSON */ } return send(d); }; socks.push(rec); return s; }
+    Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
+    window.WebSocket = Spy;
+  });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   const open = async (q = '?layout=Main') => {
@@ -68,6 +81,9 @@ try {
   /* ---------------------------------------------------------------- the strip on Main */
   console.log('the bot strip (Main tab)');
   await until(async () => (await B()).on, 'the bot switch read from ChartBridge (trading.switches.bot)');
+  const socks = await page.evaluate(() => window.__socks.map(s => s.types));
+  check(socks.filter(t => t.includes('client')).length === 1 && socks.filter(t => t.includes('auth')).length === 2,
+    'one v3 connection in the window (client once), shared by the Bot tab and the Account page; the ticket\'s signs in as a v2 page: ' + JSON.stringify(socks.filter(t => t.includes('auth'))));
   check(await page.isVisible('#wsBotTab'), 'the Bot tab button is in the top bar');
   check(await page.isHidden('#btStrip'), 'no strip before ChartBridge tells the bot\'s status');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
@@ -146,15 +162,18 @@ try {
   await until(async () => (await v3()).bot.killed === false, 'the second click releases it');
   await page.click('[data-act="railsOpen"]');
   const maxAttr = await page.getAttribute('[data-k="railTIn"]', 'max');
+  const roots = await page.$$eval('[data-k="railRoot"] option', o => o.map(x => x.value));
+  check(roots.join() === 'MNQ,NQ', 'the root: the bot\'s, or its mini (ChartBridge\'s rule): ' + roots.join());
   await page.fill('[data-k="railTIn"]', '6');
   await page.click('[data-act="railsSave"]');
   const loosen = await page.textContent('[data-k="railsWhy"]');
-  check(maxAttr === '5' && /only be tightened/.test(loosen), 'the rails never loosen: ' + loosen);
-  check((await v3()).bot.maxTrades === 5, 'nothing was sent for a loosening');
+  check(maxAttr === '5' && /from 1 to 5 \(ChartBridge's limit\)/.test(loosen), 'never above ChartBridge\'s own limit: ' + loosen);
+  check((await v3()).bot.maxTrades === 5, 'nothing was sent for it');
   await page.fill('[data-k="railTIn"]', '3'); await page.fill('[data-k="railLIn"]', '2');
   await page.click('[data-act="railsSave"]');
   await until(async () => { const b = (await v3()).bot; return b.maxTrades === 3 && b.maxLosses === 2; }, 'botRails reached ChartBridge');
-  await until(async () => (await page.textContent('[data-k="railTText"]')) === '0 of 3' && (await page.textContent('[data-k="railLText"]')) === '0 of 2', 'the panel shows the tighter rails');
+  await until(async () => (await page.textContent('[data-k="railTText"]')) === '0 of 3' && (await page.textContent('[data-k="railLText"]')) === '0 of 2', 'the panel shows the rails set');
+  check(/bot-rails\.txt/.test(await page.textContent('[data-k="railsWhy"]')), 'kept by ChartBridge (bot-rails.txt), not reset at 18:00');
   await page.click('.bt-modes [data-mode="copilot"]');
   await until(async () => (await v3()).bot.mode === 'copilot', 'Copilot');
   await page.click('.bt-modes [data-mode="auto"]');
@@ -172,7 +191,7 @@ try {
   await control('bot-signal', { id: 's1', action: 'skipped', reason: 'Sample: the range was too wide' });
   await until(() => page.isVisible('.bt-note'), 'a corner notice for a signal');
   check(/Skipped/.test(await page.textContent('.bt-note')), 'it says what the signal was');
-  await until(async () => (await B()).keys.accept === 'Alt+Y', 'the copilot keys from The Desk\'s hotkeys document');
+  await until(async () => (await B()).keys.accept === 'Alt+Y', 'the copilot keys from The Desk\'s hotkeys document (as the workspace read it)');
   await control('bot-proposal', { id: 'p1', side: 'sell', kind: 'market', stop: 12, target: 24, reason: 'Sample: price stalled at the made-up line twice' });
   await until(() => page.isVisible('.bt-prop[data-id="p1"]'), 'the proposal pops up on the Main tab');
   const pv = await until(async () => { const p = (await v3()).proposals.find(x => x.id === 'p1'); return p && p.seenAt ? p : null; }, 'botSeen reached ChartBridge');
@@ -214,7 +233,10 @@ try {
   check(/: on/.test(await page.textContent('#wsMore [data-do="ghost"]')), 'the menu says it is on');
   await page.keyboard.press('Escape');
   const trips = (await B()).trips;
-  check(trips.length === 1 && trips[0].tOut === null && trips[0].dir === -1, 'the bot\'s open trade is known for its marks (' + JSON.stringify(trips) + ')');
+  /* ChartBridge 0.4.0 marks no bot order on the page: Sim101's fills on the bot's root are the bot's (the fake's sample
+     Sim101 MNQ round trip of 2 counts too); the proposal's short of 1 is there (open, or closed by its stop since) */
+  check(trips.some(t => t.dir === -1 && t.qty === 1 && t.tIn > 0), 'the bot\'s trade (the accepted short) is known for its marks (' + JSON.stringify(trips) + ')');
+  check(trips.some(t => t.qty === 2), 'Sim101\'s own fills on the bot\'s root count as the bot\'s (no mark from ChartBridge 0.4.0)');
   await page.screenshot({ path: path.join(SHOTS, 'bot-ghost.png') });
 
   /* ---------------------------------------------------------------- Research: shadow only; Less motion */

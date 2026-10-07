@@ -37,7 +37,8 @@ async function until(fn, what, ms) {
 }
 let bridge = null;
 async function startBridge(flags) {
-  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9,NQ:2,MES:2,ES:2', '--no-v3-seed', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
+  /* The Desk's address comes from ChartBridge's deskUrl (/diag), the page's one source for it */
+  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--trade-accounts=Sim101', '--max-qty=MNQ:9,NQ:2,MES:2,ES:2', '--no-v3-seed', '--test-controls', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DESK_PORT].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => bridge.stdout.once('data', r));
 }
 const stopBridge = () => new Promise(r => { if (!bridge) return r(); bridge.once('exit', r); bridge.kill(); bridge = null; });
@@ -45,14 +46,14 @@ const control = async (what, q) => (await fetch(`http://127.0.0.1:${PORT}/test/$
 const state = () => control('state', { root: 'MNQ' });
 
 /* before any page script: every message sent (by connection), every note, and the NO STOP question answered */
-function spies(deskUrl) {
+function spies() {
   const S = window.__spy = { sockets: [], got: [] };
   const Real = window.WebSocket;
   function Spy(url, p) {
     const sock = p === undefined ? new Real(url) : new Real(url, p);
     const rec = { sent: [], sock };
     const send = sock.send.bind(sock);
-    sock.send = d => { rec.sent.push(d); try { if (JSON.parse(d).type === 'auth') rec.auth = true; } catch (e) { /* not JSON */ } return send(d); };
+    sock.send = d => { rec.sent.push(d); try { const t = JSON.parse(d).type; if (t === 'auth') rec.auth = true; if (t === 'client') rec.v3 = true; } catch (e) { /* not JSON */ } return send(d); };
     sock.addEventListener('message', e => { try { const m = JSON.parse(e.data); if (['reject', 'merge', 'managed', 'trading'].includes(m.type)) S.got.push(m); } catch (err) { /* not JSON */ } });
     S.sockets.push(rec);
     return sock;
@@ -66,7 +67,6 @@ function spies(deskUrl) {
   try {
     if (!sessionStorage.getItem('__seeded')) {
       sessionStorage.setItem('__seeded', '1');
-      localStorage.setItem('live-desk-url-v1', JSON.stringify(deskUrl));
       if (!localStorage.getItem('live-hotkeys-v1')) localStorage.setItem('live-hotkeys-v1', JSON.stringify({ buy: 'F2', sell: 'Alt+X', be: '', close: 'F9', flattenAll: '' }));
     }
   } catch (e) { /* blocked */ }
@@ -84,7 +84,7 @@ try {
   await control('price', { root: 'MNQ', p: L });
   let ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await ctx.addInitScript(spies, `http://127.0.0.1:${DESK_PORT}`);
+  await ctx.addInitScript(spies);
   const open = async (c, url, pin) => {
     const p = await c.newPage();
     p.on('pageerror', e => fail('page error: ' + e.message));
@@ -107,8 +107,13 @@ try {
   const v3 = p => p.evaluate(() => window.workspace.v3());
 
   check(JSON.stringify((await v3(A)).switches) === JSON.stringify(OS.cleanSwitches(null)), 'the page read every switch as off');
-  const first = (await orderSent(A)).map(m => m.type);
-  check(first[0] === 'client' && first[1] === 'auth', 'the order connection says client v3 right after hello, then signs in: ' + first.join(', '));
+  /* two signed-in connections: the order ticket's (a v2 page as in 0.3.8: never client) and the window's one v3 connection
+     (client right after hello, then auth) */
+  const conns = await A.evaluate(() => window.__spy.sockets.filter(k => k.auth).map(k => k.sent.map(d => JSON.parse(d).type)));
+  const v3c = conns.filter(t => t.includes('client')), v2c = conns.filter(t => !t.includes('client'));
+  check(v3c.length === 1 && v3c[0][0] === 'client' && v3c[0][1] === 'auth', 'one v3 connection: client right after hello, then auth: ' + JSON.stringify(v3c));
+  check(v2c.length === 1 && v2c[0][0] === 'auth', 'the order ticket\'s connection signs in as a v2 page (no client): ' + JSON.stringify(v2c));
+  check(await A.evaluate(() => window.__spy.sockets.filter(k => k.sent.some(d => JSON.parse(d).type === 'client')).length) === 1, 'client is sent on one connection only');
   for (const id of ['stratRow', 'stratDesc', 'mergeBtn']) check(!(await visible(A, `.ws-panel[data-type="ticket"] [data-tk-id="${id}"]`)), 'switches off: no ' + id + ' on the ticket');
   check((await tk(A, 'managed').textContent()) === '' && (await tk(A, 'mergeLine').textContent()) === '', 'no managed or merge line');
   check(await visible(A, '.ws-panel[data-type="ticket"] .tk-bk'), 'the bracket boxes as in 1.15');
@@ -147,7 +152,7 @@ try {
   await control('price', { root: 'MNQ', p: L });
   ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
-  await ctx.addInitScript(spies, `http://127.0.0.1:${DESK_PORT}`);
+  await ctx.addInitScript(spies);
   A = await open(ctx, `http://localhost:${PORT}/live/`, true);
   await A.waitForFunction(() => window.workspace.ticket().enabled && window.workspace.ticket().held, null, { timeout: 30000 });
   await until(async () => (await v3(A)).desk.mode === 'desk', 'The Desk read');
@@ -287,7 +292,7 @@ try {
   check(/^Stop 12 STL\+2 · T1 8 34% · T2 16 33% · T3 32 33% · BE 4\+1 · Trail 12\/6\/2$/.test(await tk(A, 'stratDesc').textContent()), 'its one line on the ticket: ' + await tk(A, 'stratDesc').textContent());
   check(!(await visible(A, '.ws-panel[data-type="ticket"] .tk-bk')), 'the bracket boxes step aside');
   // never while typing in a box (HOTKEY_IN_BOX)
-  await A.click('#wsSet'); await wait(300); await A.click('#wsDeskUrl');
+  await A.click('#wsSet'); await wait(300); await A.click('#wsAtr');
   await A.keyboard.press('Numpad9'); await wait(200);
   check((await v3(A)).strategy === runner.id, 'a strategy\'s key typed in a box does nothing');
   await A.keyboard.press('Escape'); await A.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(200);
@@ -298,6 +303,7 @@ try {
   await tk(A, 'buyMkt').click(); await wait(800);
   sent = await orderSent(A, ['order']);
   check(sent.length === 1 && JSON.stringify(sent[0].strategy) === JSON.stringify(OS.toWire(runner)) && !('bracket' in sent[0]), 'Buy MKT sends the strategy, flat: ' + JSON.stringify(sent[0] && sent[0].strategy));
+  check(await A.evaluate(() => window.__spy.sockets.filter(k => k.sent.some(d => /"type":"order"/.test(d))).every(k => !k.v3)), 'the strategy order goes on the order ticket\'s connection (a v2 page; ChartBridge 0.4.0 takes it there)');
   check((await got(A, 'reject')).length === 0, 'ChartBridge took it');
   await until(async () => /Runner 3T managing: 3 pairs/.test(await tk(A, 'managed').textContent()), 'managed line', 6000);
   check(/Runner 3T managing: 3 pairs/.test(await tk(A, 'managed').textContent()), 'the managed state near the position: ' + await tk(A, 'managed').textContent());
@@ -325,6 +331,7 @@ try {
   await tk(A, 'mergeBtn').click(); await wait(800);
   const mm = await orderSent(A, ['merge']);
   check(mm.length === 1 && JSON.stringify(Object.keys(mm[0])) === '["type","cid","account","root"]' && mm[0].account === 'Sim101' && mm[0].root === 'MNQ', 'Merge sends exactly type, cid, account, root: ' + JSON.stringify(mm[0]));
+  check(await A.evaluate(() => window.__spy.sockets.filter(k => k.sent.some(d => /"type":"merge"/.test(d))).every(k => k.auth && !k.v3)), 'Merge goes on the order ticket\'s connection (every order action does); its result comes on the v3 one');
   await until(async () => /^Merged · Sim101 MNQ/.test(await tk(A, 'mergeLine').textContent()), 'merge result shown');
   check(/^Merged · Sim101 MNQ: /.test(await tk(A, 'mergeLine').textContent()), 'the result, plainly: ' + await tk(A, 'mergeLine').textContent());
   await tk(A, 'buyMkt').click(); await wait(2600);

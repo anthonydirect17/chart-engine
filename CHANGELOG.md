@@ -45,13 +45,24 @@
   off the tab says so and offers nothing): its own layout tab with the bot's chart, the Library (one slot; Ready L1 or higher
   and Research shelves; full screen with the large equity curve, rule card, settings, live record and "Conditions it works
   best in"; read from `GET /bot-library`, the file's shape in `docs/BOT_LIBRARY.md`), the bot panel (mode, rails with how
-  close to each and Tighten only, kill switch, day type log, today's signals and trades, Log, Options) and **Pop out**
+  close to each and their change as ChartBridge built it, kill switch, day type log, today's signals and trades, Log,
+  Options) and **Pop out**
   (`bot.html`, its own window). The **bot strip** across the top of the Main tab; **copilot proposals** on any tab with
   `botSeen` and `botAnswer` (The Desk's `accept` and `reject` keys or the buttons; an expired one says "not answered");
   corner notices (sound off by default); per-chart **ghost marks** of the bot's trades (off by default; the engine's
   `setTrades` draws `ghost` trades faint and an open trade's entry only). Motion (`live/motion.js`) on the Bot tab and
   the Library only; Settings > Motion: Less. Files `live/bot-core.js`, `live/bot.js`, `live/bot.css`, `live/bot.html`;
   tests `test/bot.test.js`, `smoke:bot`, `perf:bot`; the fake bridge gains `botRails` and `/bot-library`. Made-up bots only.
+- **One v3 connection per window** (the page integration of the Account page, the ticket's 0.4.0 parts and the Bot tab):
+  `live/accounts.js` `createFeed` is the window's only v3 connection (`client` v3, signed in), shared through `listen` and
+  `post`; the Bot tab opens none of its own (`bot.html` makes its one). The order ticket's connection stays a v2 page
+  exactly as in 0.3.8 and carries every order action (`order` with a strategy or a new kind, `merge`, the Account page's
+  cancel from the list); the ticket's switches, `managed` and the Merge result come from the v3 connection. As ChartBridge
+  0.4.0 built it: `botRails` takes the root and 1 to 5 trades and 1 to 3 losses (kept in `bot-rails.txt`, no 18:00 reset);
+  the bot's orders carry no mark (Sim101 on the bot's root are the bot's); the copilot keys reach the Bot tab only through
+  the `chart-copilot-key` event; The Desk's address is ChartBridge's `deskUrl` (from `/diag`), nothing per browser. The
+  fake bridge sends what the C# sends (`by` only for a strategy, `tradable` to a v3 page only, the bot's `welcome`).
+  `smoke:v038`: with a ChartBridge without v3 no new control and no v3 message, and the ticket's messages equal 1.15.0's.
 
 ## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
 

@@ -2298,7 +2298,7 @@ let accountRaf = 0;
 function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
 setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
-/* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on its own connection (AF).
+/* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on the window's one v3 connection (AF, shared with the ticket's 0.4.0 parts and the Bot tab).
    Its figures follow the feed (accounts at most once a second) and the prices (quoteSubs, at most 4 times a second). */
 const accountPages = () => [...views.values()].filter(v => v.accountPage);
 function mountAccountsPage(v) {

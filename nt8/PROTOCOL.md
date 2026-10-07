@@ -1648,32 +1648,37 @@ recovery cover them.
 | `botSignal` | `id`, `at`, `action`, `side`, `kind`, `price`, `stopTicks`, `targetTicks`, `reason`, `result` (`shadow`, `proposed`, `placed`, `refused: <why>`, `skipped`) | each signal |
 | `botProposal` | `id`, `at`, `account`, `root`, `side`, `kind`, `price`, `qty` (1), `stopTicks`, `targetTicks`, `reason`, `state` (`open`, `accepted`, `rejected`, `withdrawn`, `not answered`), `seenAt`, `answeredAt` | when proposed and at each change |
 
-#### Bot rails from the page, the library, and the bot's legs (lane C4, lead's defaults)
+#### The bot channel as built, and the page's side (chart 1.16.0)
 
-The Bot tab (chart page 1.16.0, `live/bot.js`) needs three things the tables above do not have. Each is the safest simple
-choice, marked **(lead's default)**; ChartBridge 0.4.0 builds them (lane B3), and `test/fake-v3.mjs` does them already.
+What ChartBridge 0.4.0 built (`ChartBridgeBot.cs`, lane B3) where the tables above leave a detail open, and what the Bot
+tab (`live/bot.js`, lane C4) does with it. The page follows the C#; `test/fake-v3.mjs` does the same.
 
-- **`botRails`** (page to server, **(lead's default)**): `cid` (optional), `maxTrades`, `maxLosses` (no others; both
-  required). Each a whole number from 1 to the rail **in force now**: the page can only tighten. A value above the rail in
-  force is refused ("Rails can only be tightened: maxTrades is 5."); so is anything with the bot switch off, as every `bot*`
-  message. It counts in gate 7's rate and needs the signed-in own page, like `botKill`. The new rails apply at once to the
-  next entry (`trades` at or over `maxTrades`: no new entry; `losses` at or over `maxLosses`: stand down). They hold until
-  the 18:00 ET reset; the reset and every ChartBridge start go back to 1 contract, 5 trades and 3 losing trades (the
-  rails a page cannot loosen are ChartBridge's own). `bot` (`maxTrades`, `maxLosses`) and `welcome.rails` carry the rails
-  in force. Example in `test/fixtures/protocol-v3.json` (`pageToServer.botRails`).
-- **A bot entry's legs carry `by: "bot"`** too **(lead's default)**: the stop and the target ChartBridge places for a bot
-  entry are placed by the bot feature, so a v3 page can tell the bot's working orders from Anthony's own on Sim101 (the Bot
-  tab's chart shows the bot's lines only).
-- **`GET /bot-library`** **(lead's default)**: the frozen Bot-Lab builds for the Bot tab's Library, one local JSON file
-  served as it is (`Content-Type: application/json`, `Cache-Control: no-store`). This PC only, as every request; the page
-  sends the PIN unlock header (`X-ChartBridge-Unlock`) as for `GET /session`. No file, or the bot switch off: `404` (the
-  page says "No frozen builds on this PC"). ChartBridge never reads anything from the file and never sends it anywhere: it
-  carries no order, rule program or secret. The file's shape is `docs/BOT_LIBRARY.md`; a made-up example is
-  `test/fixtures/bot-library.json`.
-
-Copilot's one-key Accept and Reject: the page reads `keys.accept` and `keys.reject` from The Desk's hotkeys document
-(`GET /api/chart-hotkeys`) when The Desk has them (no default key; D2's draft has seven keys, so the two are the lead's
-open item); they are never a trading hotkey of the page. The buttons always work, and `botAnswer` is the same either way.
+- **`botRails`** (page to server): `cid` (optional), `maxTrades`, `maxLosses`, `root` (no others; the three required).
+  `maxTrades` a whole number from 1 to 5 and `maxLosses` from 1 to 3 (ChartBridge's own limits: the page may lower the
+  rails and put them back up to these, never above), `root` botRoot or its micro or mini sibling (MNQ and NQ, MES and ES).
+  Refused while the bot has a position or a working entry ("the bot has a position or a working entry: change its rails
+  when it is flat"), with the bot switch off, and like every `bot*` page message without the signed-in own page or over
+  gate 7's rate. ChartBridge saves them in `bot-rails.txt` next to `config.txt`, so a restart and a new trading day keep
+  them (there is no 18:00 reset of the rails; trades and losses start over at 18:00 ET); a file it cannot read stands the
+  bot down until it is fixed or deleted. `bot` (`maxTrades`, `maxLosses`, `root`, and `maxQty` 1) and `welcome` carry the
+  rails in force. The Bot tab offers exactly these (Change the rails), only while the bot is flat.
+- **The bot's orders on the page.** ChartBridge names them `CB#1a2b3c4d bot s8 t16`, legs as v2, but the order message
+  carries the instrument's name, not the order's, and no `by` for the bot (only Order Strategies add `by`), so nothing
+  marks a bot order or fill to a page. The bot trades only on Sim101 and only on its root, so the Bot tab takes Sim101's
+  working orders and fills on the bot's root (`bot.root`) as the bot's (its lines, its trades, the ghost marks); Anthony's
+  own Sim101 orders on that root show there too, and the panel says so (lead's default). A `by: "bot"` on the order
+  message (the contract's line above) would let the page tell them apart; ChartBridge 0.4.0 does not send it.
+- **`welcome.instruments`** is the bot's own root only: `{root, name, tick, pointValue, quoteOnly}`.
+- **`GET /bot-library`** (lead's default): the frozen Bot-Lab builds for the Bot tab's Library, one local JSON file
+  (`botLibrary` in `config.txt`, default `bot-library.json`) served as it is (`Content-Type: application/json`,
+  `Cache-Control: no-store`). This PC only, as every request; the page sends the PIN unlock header (`X-ChartBridge-Unlock`)
+  as for `GET /session`. No file, or the bot switch off: `404` (the page says "No frozen builds on this PC"). ChartBridge
+  never reads anything from the file and never sends it anywhere: it carries no order, rule program or secret. The file's
+  shape is `docs/BOT_LIBRARY.md`; a made-up example is `test/fixtures/bot-library.json`.
+- **Copilot's one-key Accept and Reject**: The Desk's hotkeys document's `accept` and `reject` (no default key), set in
+  the workspace's Settings with the other trading keys. The workspace's hotkey handler fires a cancelable
+  `chart-copilot-key` DOM event (`detail.answer` `accept` or `reject`); the Bot tab is its one handler (the oldest open
+  proposal). The buttons always work, and `botAnswer` is the same either way; `bot.html` has the buttons only.
 
 ### Tape timing and new `/diag` counters
 
@@ -1726,20 +1731,19 @@ store).
 How the chart page uses the messages above for its Account page (`live/accounts.js`, a workspace panel) and the Quote
 board. Page side only; nothing here changes what ChartBridge sends or accepts.
 
-- **Its own connection** (lead's default). The Account page opens one more WebSocket per window, sends `client` v3 right
-  after `hello` and signs in (`auth`) on it. It is opened only when `hello.features` lists `"v3"`; with an older ChartBridge
-  nothing new is opened and the panel says it needs 0.4.0. The order ticket's connection stays a v2 page, as in 0.3.8.
-  Its actions are exactly `accountTrade`, `accountArchive` (`confirm: true`, sent only after the page's own confirm in the
-  panel), `cancel` with `from: "list"`, `copierSet`, `copierFollower` (every key) and `copierRearm`; each control shows only
-  when its switch in `trading.switches` is `true` (a missing or non-boolean switch is off). Archive shows only with
-  `accountChecks` on, as ChartBridge refuses `accountArchive` with it off (lead's default).
+- **The window's v3 connection** (see "The page's v3 connection" below). Its actions are exactly `accountTrade`,
+  `accountArchive` (`confirm: true`, sent only after the page's own confirm in the panel), `copierSet`, `copierFollower`
+  (every key) and `copierRearm` on the v3 connection, and `cancel` with `from: "list"` on the order ticket's connection
+  (every order action goes there); each control shows only when its switch in `trading.switches` is `true` (a missing or
+  non-boolean switch is off). Archive shows only with `accountChecks` on, as ChartBridge refuses `accountArchive` with it
+  off (lead's default). With an older ChartBridge nothing new is opened and the panel says it needs 0.4.0.
 - **Limits** (lead's default; never estimated). Daily loss: the room is `roomDailyLoss`, else The Desk's `daily_loss_limit`
   less today's loss (`pnlToday` below 0); the limit is The Desk's, else the room plus today's loss. Trailing drawdown: the
   room is `roomDrawdown` only (The Desk has no high-water mark); the limit is The Desk's `trailing_drawdown`. Used is
   (limit - room) / limit. The closer is the one with less room in dollars; its percent gives the level: amber from 70
   percent, red from 90; when the closer's limit is unknown the other's percent is used; a room at or below 0 is red. Every
   chart in the window shows the warning for the ticket's account (all its charts show that account's orders).
-- **The Desk** (lead's default). Its address is `/diag` `desk.deskUrl` (default `http://localhost:8800`);
+- **The Desk** (lead's default). Its address is the page's one source for it, `/diag` `desk.deskUrl` (see below);
   `GET /api/chart-accounts` is read at start and every minute. Net on Today's trades needs a commission per contract per
   side: the page reads an optional `commission` (`{"MNQ": 0.62, ...}`, the rate The Desk itself uses, its firm default
   when the account has none) on each row; until The Desk sends it, net shows `n/a` and says why (an open item for The
@@ -1754,13 +1758,13 @@ board. Page side only; nothing here changes what ChartBridge sends or accepts.
 Built in the workspace (`live/index.html`; the rules in `live/order-strategies.js`, the order path in `live/trade.js`).
 Each choice below that the brief left open is marked **(lead's default)**.
 
-- **v3 page.** The workspace's order connection sends `client` v3 right after a `hello` that names `"v3"`, before it signs
-  in. The single chart page (`single.html`) stays a v2 page (lead's default). A control shows only while its switch is
+- **v3 page.** The ticket's switches, `managed` and the Merge result come from the window's v3 connection (see "The page's
+  v3 connection" below); the ticket's own connection stays a v2 page and sends every order action, a strategy's `order`
+  and `merge` included. The single chart page (`single.html`) has no v3 connection (lead's default). A control shows only while its switch is
   true: the Strategy picker on the ticket and Settings > Order Strategies (`strategies`), the Merge button and key
   (`merge`), the entry-type modifiers (`orderTypes`), Accept and Reject keys (`bot`). With every switch off the page is
   the 1.15 page: no new control, The Desk never asked, an order is the 1.15 order.
-- **The Desk's address** is a box in Settings, kept per browser (`live-desk-url-v1`), `http://localhost:8800` until one is
-  typed (ChartBridge's `deskUrl` default; ChartBridge does not tell the page its `deskUrl`) (lead's default).
+- **The Desk's address** is ChartBridge's `deskUrl` (see "The page's v3 connection" below), shown in Settings.
 - **When the hotkeys live in The Desk** (lead's default): while any of `strategies`, `orderTypes`, `merge` or `bot` is on
   (they need the shared keys). With all four off they stay this browser's, as in 1.15. On The Desk's first answer in a
   browser: when The Desk has none yet (rev 0) and the browser has keys, they are saved there; otherwise The Desk's keys are
@@ -1770,7 +1774,7 @@ Each choice below that the brief left open is marked **(lead's default)**.
   nothing here.
 - **The hotkeys document** has nine keys: The Desk's seven plus `accept` and `reject` (the copilot's one-key answers, no
   default key) (lead's default; The Desk lane adds them). The page sends a cancelable `chart-copilot-key` DOM event
-  (`detail.answer` `accept` or `reject`) for the bot channel's page part to answer; nothing handles it: a note says so.
+  (`detail.answer` `accept` or `reject`); the Bot tab answers it (the oldest open proposal); with none open a note says so.
 - **The Desk not reachable:** the last copy read (`live-desk-cache-v1`) is used and shown read only, with a plain note; a
   key pressed, a modifier picked or a strategy saved is refused and says it was not saved (nothing is queued or guessed).
   A `409` reads the document again and says another PC saved first; a strategy's edit stays in its form to save again.
@@ -1792,6 +1796,37 @@ Each choice below that the brief left open is marked **(lead's default)**.
 - **Merge** needs Armed, a position and two or more stops working (as B/E); its result (`merged`, `restored`, `failed`)
   and each managed strategy's state (`resumed`, `NOT MANAGED` with ChartBridge's text) are shown under the position on the
   ticket until the position is flat or a newer one comes. No motion on any of it.
+
+### The page's v3 connection (chart 1.16.0)
+
+The page integration's one rule for the Account page, the order ticket's 0.4.0 parts and the Bot tab (lead's rule: with
+every switch off, the ticket and every order surface behave as chart 1.15.0 with ChartBridge 0.3.8, and the page keeps
+working with ChartBridge 0.3.8; COMPAT `minChartBridge` stays 0.3.2):
+
+- **The ticket's connection stays a v2 page**, exactly as in 0.3.8: it never sends `client`, so ChartBridge 0.4.0 gives
+  it v2's scope (the tradable accounts' orders and positions), no `tradable` key, no `switches` and no v3 message. It
+  carries **every order action**: `order` (with a bracket, or a `strategy`, or a `stopLimit` or `mit` kind), `change`,
+  `plan`, `cancel` (the Account page's `from: "list"` too), `flatten` and `merge`: one order path, one rate count, one
+  refusal path. ChartBridge 0.4.0 takes each of them on any signed-in own page; the switch decides
+  (`ChartBridgeOrders.Gate` is gates 1, 4 and 7; `strategy` is read only with `strategies` on, `merge` is refused with
+  `merge` off, `from` with `cancelFromList` off; nothing there asks whether the page sent `client`).
+- **One v3 connection per window** (`live/accounts.js` `createFeed`), opened only when the ticket connection's `hello`
+  lists `"v3"`: `client` v3 right after its own `hello`, then `auth`. It is shared: the Account page (`accounts`, the
+  copier, the account and copier actions), the ticket (`trading.switches`, `managed`, the `merge` result: ChartBridge
+  sends those to v3 pages only) and the Bot tab (`bot`, `botSignal`, `botProposal`, Sim101's orders and fills, and
+  `botMode`, `botKill`, `botSeen`, `botAnswer`, `botRails`) each read it through `listen` and send through `post`. Its
+  `status` errors and warnings (not the bot's) are shown as the ticket's, once when both connections carry the same text.
+  `bot.html` (the Bot window) has no ticket and opens its own one.
+- **Why not the ticket's connection as v3** (lane C3's first cut): a v3 page gets every watched account's orders and
+  positions, `tradable` on each order and the v3 messages, so the ticket's connection would no longer be the 0.3.8 one
+  with every switch off. **Why not one per part** (lanes C2 and C4): two connections reading `bot`, `trading` and the
+  orders, and two code paths for the same message.
+- **The Desk's address** has one source: ChartBridge's `deskUrl` in `config.txt` (where ChartBridge sends the fills),
+  read from `/diag` `desk.deskUrl` once per page load (`AccountsPage.deskBase`; `http://localhost:8800` when `/diag` has
+  none). The Account page's limits, the shared hotkeys and Order Strategies, and the copilot keys all use it; nothing is
+  kept per browser (`live-desk-url-v1` is gone). Settings shows it.
+- **With ChartBridge 0.3.8** (no `"v3"`): no v3 connection, no `client`, no new control, no request to The Desk or
+  `/bot-library`; the ticket's connection sends what 1.15.0 sends (`smoke:v038` compares it with the 1.15.0 page).
 
 ### Order lane
 

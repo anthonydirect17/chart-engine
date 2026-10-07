@@ -82,7 +82,10 @@ every account ChartBridge watches: Accounts (connection, balance, today's P&L, p
 drawdown and the daily loss limit, amber at 70 percent used and red at 90, also on the charts trading that account; the
 trading checkmark, the Gone list and Archive), Positions, Working orders, Today's trades (gross and net), the Copier and
 a Log. Every control on it shows only when its switch is on in `config.txt` (all off by default); details in
-`nt8/PROTOCOL.md`, "The page's Account page".
+`nt8/PROTOCOL.md`, "The page's Account page". Each workspace window opens **one** v3 connection to ChartBridge 0.4.0,
+shared by the Account page, the order ticket's 0.4.0 parts and the Bot tab; the order ticket's own connection stays as
+in 0.3.8 and carries every order (`nt8/PROTOCOL.md`, "The page's v3 connection"). With an older ChartBridge nothing new
+is opened or sent.
 
 Live CME data is licensed for your own screen: never publish it (the GitHub Pages demo stays on sample
 data).
@@ -454,9 +457,9 @@ while its switch is on (all off by default; with every switch off the ticket is 
 - **Entry types** (`orderTypes`): in Settings pick a Limit key and a Stop key (Shift, Ctrl or Alt). Hold one with Buy
   MKT's or Sell MKT's key (at the price under the mouse) or with a chart click (Alt only): Limit gives a limit, or a
   stop-limit past the market; Stop gives a stop, or an MIT.
-- **Shared by every PC**: the strategies and the hotkeys are kept in The Desk (its address in Settings,
-  `http://localhost:8800` until you type another). When The Desk does not answer, the last copy read is used and shown
-  read only; nothing you change is lost silently (it says it was not saved).
+- **Shared by every PC**: the strategies and the hotkeys are kept in The Desk, at `deskUrl` in ChartBridge's `config.txt`
+  (where ChartBridge already sends the fills; shown in Settings). When The Desk does not answer, the last copy read is
+  used and shown read only; nothing you change is lost silently (it says it was not saved).
 
 ## The Bot tab (1.16.0)
 
@@ -469,16 +472,19 @@ program on this PC, never AI: **ChartBridge places every bot order**, inside its
   evidence badge, one sentence, its equity curve and numbers; a click opens it full screen with the large curve, the rule
   card, the settings, the live record and "Conditions it works best in". Read from `GET /bot-library`
   (`docs/BOT_LIBRARY.md`); no file: "No frozen builds on this PC".
-- **The bot's own chart** (MNQ by default) with its working entry, stop and target and its trades.
+- **The bot's own chart** (MNQ by default) with its working entry, stop and target and its trades. ChartBridge 0.4.0
+  does not mark the bot's orders on the page, so these are Sim101's on the bot's root (your own Sim101 orders there too).
 - **Bot panel:** on or off, Sim101, the size, the status and heartbeat, the position and today's P&L, the mode (Shadow,
   Copilot, Sim auto when ChartBridge allows it; Sim auto asks once more), the **rails** (trades x of 5, losing trades x of
-  3; amber from 70%, red from 90%; **Tighten the rails**, never loosen), the **kill switch** (on in one click; release in
+  3; amber from 70%, red from 90%; **Change the rails**: 1 to 5 trades, 1 to 3 losing trades, the bot's root or its micro
+  or mini, only while the bot is flat; ChartBridge keeps them in `bot-rails.txt`), the **kill switch** (on in one click; release in
   two), the **day type** (every call logged with its time), and Today (signals and trades with each reason), Log and
   Options (sound for notices, off by default; Less motion).
 - **Bot strip:** one thin line per bot across the top of the **Main** tab only; a click opens the Bot tab.
 - **Pop-ups:** a corner notice for a signal, an entry or exit, a limit, a stand-down, the heartbeat lost. A **copilot
   proposal pops up wherever you are**, with the bot's reason: Accept or Reject with the buttons, or one key (The Desk's
-  `accept` and `reject` hotkeys; none by default). An unanswered proposal is never sent; when the bot withdraws it, it
+  `accept` and `reject` hotkeys, set in the workspace's Settings; none by default; in `bot.html` the buttons). An
+  unanswered proposal is never sent; when the bot withdraws it, it
   says "not answered" and goes.
 - **Ghost marks:** the bot's trades, faint, on your own charts: a chart's ⋯ menu, per chart, off by default.
 - **Motion** (`live/motion.js`) on the Bot tab and the Library only. The kill switch, the mode, Accept and Reject, the
@@ -768,6 +774,7 @@ npm run smoke:ib         # Initial balance forming, locked, on every view and mo
 npm run smoke:live-first # the served window and the session table: exact range bars, profile and VWAP against the fake's tape
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 npm run smoke:bot        # the Bot tab against the fake's v3 bot channel: strip, Library, panel, proposals, pop-out, switch off
+npm run smoke:v038       # the page with a ChartBridge without v3: no new control, no v3 message; V115_ROOT=dir compares the orders with 1.15.0
 npm run perf:bot         # the Bot tab's entrance and Library playing while its live chart draws: the chart's gates hold
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)
