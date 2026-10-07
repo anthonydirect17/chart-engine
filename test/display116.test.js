@@ -40,3 +40,49 @@ test('the delta core keeps each bar\'s largest single trade (big), counted trade
   cd.add(T + 61, 5, 1);
   assert.deepStrictEqual(cd.bars.map(b => [b.buy, b.sell, b.unknown, b.big]), [[3, 12, 7, 12], [5, 0, 0, 5]]);
 });
+
+const { LivePrefs: LP } = require('../live/live.js');
+const W = require('../live/workspace.js');
+const OT = require('../live/order-ticket.js');
+
+/* bar time (New York wall clock as UTC seconds) of a weekday at hh:mm: 2026-10-05 is a Monday */
+const at = (dayOfOct, hh, mm, ss = 0) => Date.UTC(2026, 9, dayOfOct, hh, mm, ss) / 1000;
+
+test('stale feed: 10 s in RTH (09:30 to 16:00 ET), 60 s outside it, never while CME Globex is shut', () => {
+  assert.strictEqual(LP.staleSeconds(9999, at(6, 10, 2)), 0, 'Tuesday 10:02: under 10 s is fine');
+  assert.strictEqual(LP.staleSeconds(10000, at(6, 10, 2)), 10, 'Tuesday 10:02: 10 s quiet is stale');
+  assert.strictEqual(LP.staleSeconds(12500, at(6, 9, 30)), 12, 'from 09:30');
+  assert.strictEqual(LP.staleSeconds(30000, at(6, 9, 29, 59)), 0, '09:29:59 is outside RTH: 60 s');
+  assert.strictEqual(LP.staleSeconds(30000, at(6, 16, 0)), 0, '16:00 is outside RTH (the stale rule; Time and Sales keeps 16:15)');
+  assert.strictEqual(LP.staleSeconds(61000, at(6, 3, 0)), 61, 'overnight: 60 s');
+  assert.strictEqual(LP.staleSeconds(600000, at(6, 17, 30)), 0, 'the 17:00 to 18:00 break: nothing is due');
+  assert.strictEqual(LP.staleSeconds(61000, at(6, 18, 0)), 61, 'from 18:00 again');
+  assert.strictEqual(LP.staleSeconds(600000, at(9, 17, 0)), 0, 'Friday from 17:00: shut');
+  assert.strictEqual(LP.staleSeconds(600000, at(10, 12, 0)), 0, 'Saturday: shut');
+  assert.strictEqual(LP.staleSeconds(600000, at(11, 17, 59)), 0, 'Sunday before 18:00: shut');
+  assert.strictEqual(LP.staleSeconds(61000, at(11, 18, 1)), 61, 'Sunday from 18:00: open, overnight rule');
+  assert.strictEqual(LP.staleSeconds(0, at(6, 10, 0)), 0);
+  assert.strictEqual(LP.staleSeconds(NaN, at(6, 10, 0)), 0);
+  assert.ok(LP.isRthEt(at(5, 10, 0)) && !LP.isRthEt(at(10, 10, 0)), 'RTH on weekdays only');
+});
+
+test('the Data Box panel type, its spans, and the Maximize panel hotkey (never a trading key)', () => {
+  assert.ok(W.TYPES.includes('databox'));
+  assert.deepStrictEqual(W.cleanPanel({ id: 'db1', type: 'databox', x: 10, y: 3, w: 2, h: 3 }), { id: 'db1', type: 'databox', x: 10, y: 3, w: 2, h: 3 }, 'no instrument');
+  assert.deepStrictEqual(W.cleanLayout({ panels: [{ id: 'a', type: 'databox', x: 0, y: 0, w: 2, h: 2 }, { id: 'b', type: 'databox', x: 2, y: 0, w: 2, h: 2 }] }).panels.length, 2);
+  assert.deepStrictEqual(['', '12 s', '59 s', '1:00', '4:05', '1:02:03', '1d 02h'], [-1, 12.4, 59.4, 60, 245, 3723, 93600].map(W.fmtSpan));
+  const trading = { buy: 'Alt+B', sell: '', be: '', close: 'F9', flattenAll: '' };
+  assert.deepStrictEqual(W.cleanViewKeys({ maximize: 'Alt+M' }, trading, OT.hotkeyRefused), { maximize: 'Alt+M' });
+  assert.deepStrictEqual(W.cleanViewKeys('{"maximize":"Alt+M"}', trading, OT.hotkeyRefused), { maximize: 'Alt+M' }, 'from the stored text');
+  assert.deepStrictEqual(W.cleanViewKeys({ maximize: 'Alt+B' }, trading, OT.hotkeyRefused), { maximize: '' }, 'a trading key wins');
+  assert.deepStrictEqual(W.cleanViewKeys({ maximize: 'F9' }, trading, OT.hotkeyRefused), { maximize: '' });
+  assert.deepStrictEqual(W.cleanViewKeys({ maximize: 'Ctrl+W' }, trading, OT.hotkeyRefused), { maximize: '' }, 'refused by the trading hotkeys\' own rule (the browser keeps it)');
+  assert.deepStrictEqual(W.cleanViewKeys({ maximize: 'A' }, trading, OT.hotkeyRefused), { maximize: '' }, 'the chart\'s own key');
+  assert.deepStrictEqual(W.cleanViewKeys(null, trading, OT.hotkeyRefused), { maximize: '' }, 'none by default');
+  assert.deepStrictEqual(W.cleanViewKeys('{bad', trading, OT.hotkeyRefused), { maximize: '' });
+  // setting a trading key in Settings: the trading hotkeys' own capture rule refuses another trading key; the workspace
+  // refuses its own Maximize key too (workspace.js saveHotkey); and a Maximize key equal to a trading key is refused
+  const e = { code: 'KeyB', key: 'b', altKey: true, ctrlKey: false, shiftKey: false, metaKey: false };
+  assert.match(OT.hotkeyFromEvent(e, trading, 'maximize').error, /is already Buy MKT/);
+  assert.deepStrictEqual([W.LAPTOP_TABS, W.GAP, W.GAP_TIGHT], [['Main', 'Second'], 6, 2]);
+});
