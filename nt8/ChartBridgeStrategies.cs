@@ -16,7 +16,7 @@
 //   - breakeven and trailing on ChartBridge's live trades: never loosens, never at or through the last trade, at most one
 //     move per stop per 500 ms, a change on the working stop; a rejected move leaves the stop and raises an error;
 //   - managed.txt (what a restart needs) and the restart: resumed, or every stop left where it is and said so;
-//   - the managed message, to signed-in v3 pages (the "client" message marks a v3 page).
+//   - the managed message, to signed-in v3 pages (lane B2 marks a v3 page; a stub stands in here).
 // Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
 #region Using declarations
 using System;
@@ -53,29 +53,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool IsOffWord(string v) { return v.Equals("off", StringComparison.OrdinalIgnoreCase) || v.Equals("false", StringComparison.OrdinalIgnoreCase) || v == "0"; }
 
-        // ---------------------------------------------------------- a v3 page ("client", PROTOCOL "Telling the page what is on")
-        // {"type":"client","v":3}, once, right after hello. Strict (gate 8): only type and v, v a plain whole number; anything
-        // but 3 is refused with a status warn. A connection that never sends it is a v2 page and gets no v3 message.
-        public static void OnClient(ChartBridgeClient client, string text)
-        {
-            string why = null;
-            int v;
-            if (text.IndexOf('\\') >= 0) why = "client: the message has an escape sequence";
-            else if (text.Count(ch => ch == '{') != 1 || text.Count(ch => ch == '[') != 0) why = "client: the message has a nested object or list";
-            else if (Duplicate(text)) why = "client: the message has a key twice";
-            else if (Unknown(text, new[] { "type", "v" }) != null) why = "client: unknown key \"" + Unknown(text, new[] { "type", "v" }) + "\"";
-            else if (Int(text, "v", out v) != 1) why = "client needs v, a whole number";
-            else if (v != 3) why = "client v " + v + " is not spoken here; this ChartBridge speaks v3";
-            if (why != null) { client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(why) + "}"); return; }
-            client.V3 = true;
-        }
+        // ---------------------------------------------------------- a v3 page: STUB (lane B2 owns the v3 plumbing)
+        // Lane B2 builds hello.features "v3", the client handshake, trading.switches and the v3 page flag (its helper, e.g.
+        // ChartBridgeV3.IsV3(client)). This lane does not: the stubs below stand in for it, and the integrator swaps them for
+        // B2's helper. Until then nothing in NinjaTrader marks a page v3, so managed goes to no page (only the harness marks
+        // one). B2's trading.switches takes orderTypes and strategies from OrderTypesOn and StrategiesOn here.
+        private static readonly List<ChartBridgeClient> V3PagesStub = new List<ChartBridgeClient>();
 
-        // The trading message to a v3 page adds switches (each config.txt value). Lanes that build the other switches set theirs.
-        private static string WithSwitches(ChartBridgeClient client, string tradingJson)
+        internal static void MarkV3PageStub(ChartBridgeClient client) { lock (V3PagesStub) if (!V3PagesStub.Contains(client)) V3PagesStub.Add(client); }
+
+        private static bool IsV3Page(ChartBridgeClient client) { lock (V3PagesStub) return V3PagesStub.Contains(client); }
+
+        // A v3 message, to signed-in v3 pages only (B2's send helper replaces this).
+        private static void SendToV3Pages(string json)
         {
-            if (!client.V3 || !tradingJson.EndsWith("}", StringComparison.Ordinal)) return tradingJson;
-            return tradingJson.Substring(0, tradingJson.Length - 1) + ",\"switches\":{\"accountChecks\":false,\"orderTypes\":" + (OrderTypesOn ? "true" : "false") +
-                   ",\"strategies\":" + (StrategiesOn ? "true" : "false") + ",\"merge\":false,\"cancelFromList\":false,\"copier\":false,\"bot\":false}}";
+            List<ChartBridgeClient> pages;
+            lock (V3PagesStub) pages = V3PagesStub.ToList();
+            foreach (ChartBridgeClient c in pages) if (c.Trader) c.Send(json);
         }
 
         // ---------------------------------------------------------- order types (PROTOCOL "Order types")
@@ -381,6 +375,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public readonly List<MPair> Pairs = new List<MPair>();
             public bool Announced;                // the done message went out
             public bool Quiet;                    // recovered with nothing working and nothing to wait for: not told to the page
+            public bool Paused;                   // PauseStrategies (Merge's swap freezes breakeven and trailing on its account and root)
         }
 
         // StratLock guards the records and managed.txt's memory. It is a leaf: nothing else is locked and nothing is sent
@@ -407,6 +402,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Sync and PlaceLock are held here: the page and managed.txt hear of it from a pool thread.
             if (StrategyInline) ManagedChanged(m, true);
             else ThreadPool.QueueUserWorkItem(delegate { try { ManagedChanged(m, true); } catch (Exception ex) { ChartBridgeServer.Log("managed error: " + ex.Message); } });
+        }
+
+        // For Merge (lane B4): breakeven and trailing paused on an account and contract while a swap runs, and resumed after.
+        internal static void PauseStrategies(Account account, Instrument inst, bool paused)
+        {
+            lock (StratLock)
+                foreach (MEntry m in ManagedByTag.Values)
+                    if (m.Account == account && SameInstrument(m.Instrument, inst)) m.Paused = paused;
         }
 
         // Flatten on an account and contract: breakeven and trailing stop there (its cancels would otherwise race a move).
@@ -520,7 +523,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     foreach (MPair p in m.Pairs)
                     {
                         if (m.Buy ? price > p.Best : price < p.Best) { p.Best = price; moved = true; }
-                        if (m.NoMoves || !Enabled || !StrategiesOn) continue;
+                        if (m.NoMoves || m.Paused || !Enabled || !StrategiesOn) continue;
                         double level;
                         if (MoveDue(m, p, price, now, out level))
                         {
@@ -591,6 +594,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Order stop = d.Key.Stop;
                 try
                 {
+                    // The account must still be Connected (a change into a dropped connection would only be rejected); the
+                    // move is let go, never halted, and a later trade tries again.
+                    if (stop.Account == null || StatusOf(stop.Account) != "Connected" || !IsWorking(stop.OrderState))
+                    {
+                        lock (StratLock) d.Key.Pending = 0;
+                        continue;
+                    }
                     if (stop.OrderType == OrderType.StopLimit) stop.LimitPriceChanged = Round(stop.LimitPrice + (d.Value - stop.StopPrice), stop.Instrument.MasterInstrument.TickSize);
                     stop.StopPriceChanged = d.Value;
                     stop.Account.Change(new[] { stop });
@@ -717,13 +727,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool quiet;
             lock (StratLock) quiet = m.Quiet;
             if (quiet) return;
-            if (Enabled && m.Account != null && AccountTradable(m.Account.Name)) ChartBridgeServer.SendToV3Traders(ManagedJson(m));
+            if (Enabled && m.Account != null && AccountTradable(m.Account.Name)) SendToV3Pages(ManagedJson(m));
         }
 
         // After auth: every live managed entry, to a signed-in v3 page.
         private static void SendManagedTo(ChartBridgeClient client)
         {
-            if (!client.Trader || !client.V3) return;
+            if (!client.Trader || !IsV3Page(client)) return;
             List<MEntry> all;
             lock (StratLock) all = ManagedByTag.Values.ToList();
             foreach (MEntry m in all) if (!m.Quiet && m.Account != null && AccountTradable(m.Account.Name)) client.Send(ManagedJson(m));
@@ -995,7 +1005,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 managedCount = ManagedByTag.Count;
                 saveDirty = true;
             }
-            if (!quiet && Enabled && m.Account != null && AccountTradable(m.Account.Name)) ChartBridgeServer.SendToV3Traders(ManagedJson(m));
+            if (!quiet && Enabled && m.Account != null && AccountTradable(m.Account.Name)) SendToV3Pages(ManagedJson(m));
         }
 
         // ---------------------------------------------------------- managed.txt

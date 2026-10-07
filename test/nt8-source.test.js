@@ -564,7 +564,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge 0\.3\.[5-9] for NinjaTrader 8/);   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.3\.[5-9]";/);
-  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\"\]/);   // 0.3.7 adds three
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));
@@ -837,7 +837,9 @@ test('0.4.0 B1: switches off by default; off is 0.3.8 (every hook is behind a sw
   assert.match(sBodies('MovesNewKind'), /\(OrderTypesOn && IsEntryName\(o\.Name\)\) \|\| \(StrategiesOn && IsStrategyLeg\(o\.Name\)\)/);
   assert.match(fnBody('NoteLast'), /if \(StrategiesOn\) StrategyTrade\(root, price\);/);
   // the v3 message goes to v3 pages only
-  assert.match(code, /public static void SendToV3Traders\(string json\)\s*\{\s*foreach \(ChartBridgeClient c in Clients\.Values\) if \(c\.Trader && c\.V3\) c\.Send\(json\);/);
+  // lane B2 owns the v3 page flag; until it is merged a stub stands in (IsV3Page, SendToV3Pages), and nothing else marks a page v3
+  assert.match(sBodies('SendToV3Pages'), /foreach \(ChartBridgeClient c in pages\) if \(c\.Trader\) c\.Send\(json\);/);
+  assert.ok(!/MarkV3PageStub\(/.test(code + ocode), 'only the harness marks a v3 page');
   assert.ok(!/SendToTraders\(ManagedJson/.test(scode), 'managed never goes to a v2 page');
 });
 

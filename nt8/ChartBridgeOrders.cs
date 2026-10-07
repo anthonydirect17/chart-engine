@@ -416,7 +416,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (!OriginAllowed(client.Origin)) reason = "orders are only accepted from ChartBridge's own page";
             else if (string.IsNullOrEmpty(given) || token.Length == 0 || !SlowEquals(given, token)) reason = "session token does not match; reload the page";
             client.Trader = reason == null;
-            client.Send(WithSwitches(client, TradingJson(client.Trader, reason)));   // 0.4.0 B1: switches, to a v3 page
+            client.Send(TradingJson(client.Trader, reason));
             List<string> warnings;
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");

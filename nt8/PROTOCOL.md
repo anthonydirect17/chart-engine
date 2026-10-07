@@ -1467,9 +1467,10 @@ Built in `nt8/ChartBridgeStrategies.cs` (the rest of the `ChartBridgeOrders` cla
 bracket code are the same code). Checked by `nt8/check/StrategiesHarness.cs` inside `npm run check:orders`. Where the
 contract left a detail open:
 
-- **A v3 page.** `hello.features` has `"v3"`; `client` is strict (only `type` and `v`); a v3 page's `trading` carries
-  `switches` (this lane sets `orderTypes` and `strategies`; the other keys read false until their lanes set them);
-  `managed` goes to signed-in v3 pages only, in the order lane. (lead's default)
+- **A v3 page.** Lane B2 owns `hello.features` `"v3"`, the `client` handshake and `trading.switches`; this lane uses a
+  stub for "is this a v3 page" (`IsV3Page`, `SendToV3Pages` in `ChartBridgeStrategies.cs`), swapped for B2's helper when
+  merged. `managed` goes to signed-in v3 pages only, in the order lane (`"managed"` is in `OrderLaneTypes`). The switches'
+  `orderTypes` and `strategies` values are `OrderTypesOn` and `StrategiesOn`.
 - **Switched off is 0.3.8 exactly:** `kind` `stopLimit` or `mit` is "kind must be market, limit or stop", `limitOffset` and
   `limitPrice` are unknown keys, an order with `strategy` is refused as a nested object, a stop-limit moves only in
   NinjaTrader, order messages carry no `limitPrice`, `by` or `bucket`, and an MIT placed elsewhere is `kind` `other`.

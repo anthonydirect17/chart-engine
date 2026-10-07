@@ -1393,7 +1393,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public volatile bool Ready;             // backfill sent; live ticks go straight out
         public string Origin;                   // the WebSocket's Origin header (orders only from ChartBridge's own page)
         public volatile bool Trader;            // signed in for orders (ChartBridgeOrders.Auth)
-        public volatile bool V3;                // 0.4.0 B1: sent {"type":"client","v":3}; only such a page gets v3 messages
         public readonly Queue<double> Actions = new Queue<double>();   // recent order actions, for the rate limit
         public readonly List<SeamTick> Pending = new List<SeamTick>();   // live ticks held during backfill (lock it to read or write)
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
@@ -2189,7 +2188,6 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             else if (type == "htf") OnHtfMessage(client, text);                 // 0.3.7: 4h, 1D, 1W bars (strict)
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
-            else if (type == "client") ChartBridgeOrders.OnClient(client, text);   // 0.4.0 B1: a v3 page (protocol v3)
             else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
         }
@@ -2220,12 +2218,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void SendToTraders(string json)
         {
             foreach (ChartBridgeClient c in Clients.Values) if (c.Trader) c.Send(json);
-        }
-
-        // 0.4.0 B1: a v3 message, to signed-in pages that said they speak v3 (client) only.
-        public static void SendToV3Traders(string json)
-        {
-            foreach (ChartBridgeClient c in Clients.Values) if (c.Trader && c.V3) c.Send(json);
         }
 
         // ---------------------------------------------------------- instruments and front month
@@ -2317,7 +2309,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Account a in Watched) { if (!first) b.Append(','); first = false; b.Append(CbJson.Str(a.Name)); }
             }
             b.Append("],\"trading\":").Append(ChartBridgeOrders.TradingJson(false, null));
-            b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\"]}");   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
+            b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\"]}");   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
             return b.ToString();
         }
 

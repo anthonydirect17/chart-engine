@@ -64,7 +64,7 @@ public static class StrategiesHarness
     {
         ChartBridgeOrders.ResetConfig();
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "6");
         ChartBridgeOrders.ReadConfig("orderTypes", orderTypes ? "on" : "off");
         ChartBridgeOrders.ReadConfig("strategies", strategies ? "On" : "off");
@@ -93,12 +93,10 @@ public static class StrategiesHarness
             v2page = new ChartBridgeClient(null, 42) { Origin = "http://localhost:8765" };
             v2page.Tap = s => { lock (sentV2) sentV2.Add(s); };
             clients[41] = page; clients[42] = v2page;
-            ClientMessage();
+            ChartBridgeOrders.MarkV3PageStub(page);   // lane B2's client handshake marks a v3 page; its stub here
             Msg("auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
             ChartBridgeOrders.OnMessage(v2page, "auth", "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
-            Check(page.Trader && sent.Any(m => m.Contains("\"type\":\"trading\"") && m.Contains("\"switches\":{\"accountChecks\":false,\"orderTypes\":false,\"strategies\":false,\"merge\":false,\"cancelFromList\":false,\"copier\":false,\"bot\":false}")),
-                  "a v3 page's trading message names every switch, all off by default");
-            Check(v2page.Trader && !sentV2.Any(m => m.Contains("switches")), "a v2 page (no client message) gets no switches");
+            Check(page.Trader && v2page.Trader, "both pages signed in");
             Trade(25000);
             SwitchesOff();
             OrderTypes();
@@ -109,6 +107,7 @@ public static class StrategiesHarness
             RejectedMove();
             FlattenStopsMoves();
             Restarts();
+            RestartFills();
             Done();
             Check(!sentV2.Any(m => m.Contains("\"type\":\"managed\"")), "a v2 page never gets a managed message");
         }
@@ -125,21 +124,6 @@ public static class StrategiesHarness
                 named.Clear(); foreach (KeyValuePair<string, Instrument> kv in namedWas) named[kv.Key] = kv.Value;
             }
         }
-    }
-
-    // ------------------------------------------------------------ {"type":"client","v":3}
-    static void ClientMessage()
-    {
-        ChartBridgeOrders.OnClient(page, "{\"type\":\"client\",\"v\":2}");
-        Check(!page.V3 && Last().Contains("\"level\":\"warn\"") && Last().Contains("speaks v3"), "client v 2: refused with a status warn");
-        ChartBridgeOrders.OnClient(page, "{\"type\":\"client\",\"v\":\"3\"}");
-        Check(!page.V3 && Last().Contains("whole number"), "client v as a string: refused");
-        ChartBridgeOrders.OnClient(page, "{\"type\":\"client\",\"v\":3,\"x\":1}");
-        Check(!page.V3 && Last().Contains("unknown key"), "client with another key: refused");
-        ChartBridgeOrders.OnClient(page, "{\"type\":\"client\",\"v\":3,\"v\":3}");
-        Check(!page.V3 && Last().Contains("twice"), "client with a key twice: refused");
-        ChartBridgeOrders.OnClient(page, "{\"type\":\"client\",\"v\":3}");
-        Check(page.V3, "client v 3: a v3 page");
     }
 
     // ------------------------------------------------------------ both switches off: 0.3.8 exactly, nothing sent
@@ -550,10 +534,23 @@ public static class StrategiesHarness
         Account a = NewAccount("SIM-T2");
         Trade(25000);
         StrategyLong(a, BeTrail, 25000);
+        Order stop = a.Orders[1];
+        int p = a.Calls.Count;
+        ChartBridgeOrders.PauseStrategies(a, mnq, true);   // Merge's swap (lane B4) freezes the moves
+        Tick(600); Trade(25002);
+        Check(a.Calls.Count == p, "paused for a merge swap: no move");
+        ChartBridgeOrders.PauseStrategies(a, mnq, false);
+        a.Connection.Status = ConnectionStatus.ConnectionLost;
+        Tick(600); Trade(25002.25);
+        Check(a.Calls.Count == p, "the account not Connected: the move is not sent");
+        a.Connection.Status = ConnectionStatus.Connected;
+        Tick(600); Trade(25002.5);
+        Check(a.Calls.Count == p + 1 && a.Calls.Last() == "change " + stop.Name + " L0 S25000.25 Q0", "Connected again: the next trade sends it: " + a.Calls.Last());
+        Confirm(a, stop, 25000.25);
         Msg("flatten", "{\"type\":\"flatten\",\"account\":\"SIM-T2\",\"root\":\"MNQ\"}");
         Check(a.Calls.Last() == "flatten MNQ 12-26", "flatten sent as in v2");
         int n = a.Calls.Count;
-        Tick(600); Trade(25003);
+        Tick(600); Trade(25004);
         Check(a.Calls.Count == n, "after Flatten: no breakeven or trailing move");
         foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
         SetPos(a, 0, 0);
@@ -674,6 +671,57 @@ public static class StrategiesHarness
         Restart();
     }
 
+    // ------------------------------------------------------------ fills while ChartBridge was restarting
+    static void RestartFills()
+    {
+        Config(false, true);
+        Trade(25000);
+        // a resting strategy entry part filled before the restart, the rest filled while it was stopped: the 2 s scan
+        // legs what the settled position holds, from the names and managed.txt, at that increment's own price
+        Account a = NewAccount("SIM-U1");
+        Msg("order", Ord("SIM-U1", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":2,\"price\":24990,\"strategy\":{\"name\":\"Halves\",\"stop\":8,\"t1\":8,\"t1Share\":50,\"t2\":16,\"t2Share\":50}"));
+        Order e = a.Orders[0];
+        string t = Tag(e);
+        Fill(a, e, 1, 24990);
+        Check(a.Calls.Count == 3 && a.Calls[1].StartsWith("submit CB#" + t + " stop f1 q1 p24990 k2 "), "1 contract at 50/50: bucket 2 (a tie to the later target): " + a.Calls[1]);
+        ChartBridgeOrders.SaveManagedNow();
+        e.Filled = 2; e.AverageFillPrice = 24989.5; e.OrderState = OrderState.Filled;   // the second at 24989, while ChartBridge was stopped
+        SetPos(a, 2, 24989.5);
+        Restart();
+        sent.Clear();
+        Trade(24995);
+        int n = a.Calls.Count;
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(a.Calls.Count == n, "the gap is not acted on at once (an order event may still be on its way)");
+        ChartBridgeOrders.CheckLegs(clock + 4500);
+        List<string> legs = After(a, n);
+        Check(legs.Count == 2 && legs[0] == "submit CB#" + t + " stop f2 q1 p24989 k2 Sell StopMarket 1 L0 S24987 oco:cb-" + t + "-f2-2" && legs[1] == "submit CB#" + t + " target f2 q1 p24989 k2 Sell Limit 1 L24993 S0 oco:cb-" + t + "-f2-2",
+              "the fill from while it was stopped gets its pair at its own price (24989): " + string.Join(" | ", legs));
+        Check(Managed().Any(m => m.Contains("\"account\":\"SIM-U1\"") && m.Contains("\"state\":\"resumed\"") && Regex.Matches(m, "\"bucket\":2").Count == 2), "resumed with both pairs: " + string.Join(" | ", Managed()));
+        ChartBridgeOrders.CheckLegs(clock + 9000);
+        Check(a.Calls.Count == n + 2, "nothing twice");
+        foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
+        SetPos(a, 0, 0);
+
+        // a resting strategy entry whose line is lost: never legs from a guess; said at recovery and at the fill
+        Account b = NewAccount("SIM-U2");
+        Msg("order", Ord("SIM-U2", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Lost\",\"stop\":8}"));
+        Order le = b.Orders[0];
+        File.Delete(ManagedFile);
+        Restart();
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(Error("MNQ SIM-U2: Order Strategy entry CB#" + Tag(le) + " could not be resumed after the restart (managed.txt has no line for it); if it fills it gets NO STOP: cancel it and place it again"),
+              "a resting strategy entry with no line: said at recovery: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
+        n = b.Calls.Count;
+        sent.Clear();
+        Fill(b, le, 1, 24990);
+        Check(b.Calls.Count == n, "its fill gets no legs from a guess");
+        Check(Error("NO STOP: 1 contract(s) of Order Strategy entry CB#" + Tag(le) + " filled"), "and an error says NO STOP");
+        le.OrderState = OrderState.Filled;
+        SetPos(b, 0, 0);
+    }
+
     // ------------------------------------------------------------ done: the legs gone, the page told, the line removed
     static void Done()
     {
@@ -697,7 +745,7 @@ public static class StrategiesHarness
         ChartBridgeClient late = new ChartBridgeClient(null, 43) { Origin = "http://localhost:8765" };
         List<string> got = new List<string>();
         late.Tap = s => got.Add(s);
-        ChartBridgeOrders.OnClient(late, "{\"type\":\"client\",\"v\":3}");
+        ChartBridgeOrders.MarkV3PageStub(late);
         ChartBridgeOrders.OnMessage(late, "auth", "{\"type\":\"auth\",\"token\":\"" + ChartBridgeOrders.SessionJson().Split('"')[3] + "\"}");
         Check(got.Any(m => m.StartsWith("{\"type\":\"managed\"") && m.Contains("\"id\":\"" + IdOf(e2) + "\"") && m.Contains("\"state\":\"active\"")), "a v3 page signing in gets the live managed entries");
         foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
