@@ -73,33 +73,46 @@ namespace NinjaTrader.NinjaScript.AddOns
         // close there: after MoveTtlMs (10 s) it no longer blocks, said once. Second review (3): it is not taken as booked then
         // either (NinjaTrader's position may still be without it, and both readings with it): its contracts come back in
         // lateBuys and lateSells, and a close or reduce takes the closing side's off what it sends, so it can only send too
-        // little, never too much. Third review (1): only until NinjaTrader's position for that account and contract updates
-        // after it went late (an update 10 s or more after the fill was first seen includes it): then it is booked, so it is
-        // never taken off a later trade's close. The copier looks at every follower's orders each second (CopierWatchUnnoted),
-        // so a lost event starts its 10 s at once, not at the next close.
+        // little, never too much. Third review (1): it is booked (never taken off a later trade's close) once NinjaTrader shows
+        // it in full: fourth review (1): its executions (Execution.Order) add up to its filled count, and a position update for
+        // that account and contract came after they did (NinjaTrader's position is built from its executions). A position
+        // update alone is not enough (one for another change could still be without it). The copier looks at every watched
+        // follower's orders each second (CopierWatchUnnoted), so a lost event starts its 10 s at once, not at the next close.
         private static readonly Dictionary<Order, double> UnnotedSince = new Dictionary<Order, double>();
         private static readonly HashSet<Order> LateSaid = new HashSet<Order>();
-        private static readonly Dictionary<Order, int> LateSeq = new Dictionary<Order, int>();   // the position update count when it went late
+        private static readonly Dictionary<Order, int> ExecSeq = new Dictionary<Order, int>();   // the position update count when its executions were all in
         private static readonly Dictionary<string, int> PosSeq = new Dictionary<string, int>();  // position updates per account and contract
         internal static void CopierSawPosition(Account a, Instrument i) { if (i == null) return; string k = a.Name + "|" + i.FullName; lock (Sync) { int n; PosSeq.TryGetValue(k, out n); PosSeq[k] = n + 1; } }
 
         // Under Sync. 0: through (or booked now); 1: not through yet (waits); 2: late (more contracts not in the readings, maybe).
-        private static int UnnotedState(Order o, double now, out int more, out bool newlyLate)
+        // execFilled: what that order's executions add up to (read outside Sync).
+        private static int UnnotedState(Order o, double now, int execFilled, out int more, out bool newlyLate)
         {
             more = 0; newlyLate = false;
             int had;
             bool noted = NotedFilled.TryGetValue(o, out had);
-            if (noted && had >= o.Filled) { UnnotedSince.Remove(o); LateSaid.Remove(o); LateSeq.Remove(o); return 0; }
+            if (noted && had >= o.Filled) { UnnotedSince.Remove(o); LateSaid.Remove(o); ExecSeq.Remove(o); return 0; }
             double since;
             if (!UnnotedSince.TryGetValue(o, out since)) UnnotedSince[o] = since = now;
-            if (now - since <= MoveTtlMs) return 1;
-            int seqNow = 0, seqLate;
+            int seqNow = 0, seqExec;
             if (o.Account != null && o.Instrument != null) PosSeq.TryGetValue(o.Account.Name + "|" + o.Instrument.FullName, out seqNow);
-            if (!LateSeq.TryGetValue(o, out seqLate)) { LateSeq[o] = seqNow; newlyLate = true; }
-            else if (seqNow > seqLate) { NotedFilled[o] = o.Filled; UnnotedSince.Remove(o); LateSaid.Remove(o); LateSeq.Remove(o); return 0; }   // NinjaTrader's position has it now
+            if (execFilled < o.Filled) ExecSeq.Remove(o);
+            else if (!ExecSeq.TryGetValue(o, out seqExec)) ExecSeq[o] = seqNow;
+            if (now - since <= MoveTtlMs) return 1;
+            if (ExecSeq.TryGetValue(o, out seqExec) && seqNow > seqExec) { NotedFilled[o] = o.Filled; UnnotedSince.Remove(o); LateSaid.Remove(o); ExecSeq.Remove(o); return 0; }   // NinjaTrader's position has it
             more = o.Filled - (noted ? had : 0);
-            if (!LateSaid.Add(o)) newlyLate = false;
+            newlyLate = LateSaid.Add(o);
             return 2;
+        }
+
+        // Each order's executions added up (fourth review (1)): read outside Sync (never nested with it).
+        private static Dictionary<Order, int> ExecFilled(Account a)
+        {
+            List<Execution> xs;
+            lock (a.Executions) xs = a.Executions.ToList();
+            Dictionary<Order, int> sum = new Dictionary<Order, int>();
+            foreach (Execution x in xs) { if (x == null || x.Order == null) continue; int n; sum.TryGetValue(x.Order, out n); sum[x.Order] = n + x.Quantity; }
+            return sum;
         }
 
         internal static string CopierUnnotedFill(Account a, Instrument i, double now) { int b, s; return CopierUnnotedFill(a, i, now, out b, out s); }
@@ -108,6 +121,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lateBuys = 0; lateSells = 0;
             List<Order> orders;
             lock (a.Orders) orders = a.Orders.ToList();
+            Dictionary<Order, int> execs = ExecFilled(a);
             List<Order> late = new List<Order>();
             string waiting = null;
             lock (Sync)
@@ -116,9 +130,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Order o in orders)
                 {
                     if (!SameInstrument(o.Instrument, i) || o.Filled <= 0) continue;
-                    int more;
+                    int more, ex;
                     bool newlyLate;
-                    int st = UnnotedState(o, now, out more, out newlyLate);
+                    execs.TryGetValue(o, out ex);
+                    int st = UnnotedState(o, now, ex, out more, out newlyLate);
                     if (newlyLate) late.Add(o);
                     if (st == 1) { if (waiting == null) waiting = o.Name ?? "an order"; }
                     else if (st == 2) { if (o.OrderAction == OrderAction.Buy || o.OrderAction == OrderAction.BuyToCover) lateBuys += more; else lateSells += more; }
@@ -133,13 +148,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             List<Order> orders, late = new List<Order>();
             lock (a.Orders) orders = a.Orders.ToList();
+            Dictionary<Order, int> execs = ExecFilled(a);
             lock (Sync)
                 foreach (Order o in orders)
                 {
                     if (o.Filled <= 0 || o.Instrument == null) continue;
-                    int more;
+                    int more, ex;
                     bool newlyLate;
-                    UnnotedState(o, now, out more, out newlyLate);
+                    execs.TryGetValue(o, out ex);
+                    UnnotedState(o, now, ex, out more, out newlyLate);
                     if (newlyLate) late.Add(o);
                 }
             SayLate(a, late);
@@ -149,7 +166,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             foreach (Order o in late)
                 Alarm(a.Name + " " + (ChartBridgeServer.RootFor(o.Instrument) ?? o.Instrument.FullName) + ": the fill of " + (o.Name ?? "an order") + " never came through its order event in " + (MoveTtlMs / 1000) +
-                      " s; until NinjaTrader's position there updates, the copier closes or reduces there at most what the position shows less that fill (never more); check NinjaTrader");
+                      " s; until NinjaTrader shows it in full (its executions, then a position update), the copier closes or reduces there at most what the position shows less that fill (never more); check NinjaTrader");
         }
         // 0.4.3 review (4): an order whose Submit threw is taken out of the just-sent list.
         internal static void CopierUnsent(Order o) { lock (Sync) Ours.Remove(o); }
@@ -324,7 +341,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             public double OppSince;      // second review (4): owed while it holds the other side, since (the user's to sort out)
             public bool ShortSaid;       // second review (3): "closed less than it shows" said once for this close
             public double CloseSentAt;   // third review (2): when CloseOrder was sent
-            public bool CloseStuckSaid;  // third review (2): CloseOrder not done in 10 s: said (and cancelled) once
+            public bool CloseStuckSaid;  // third review (2): a close not done in 10 s: said once until it is flat (fourth review: not per close)
+            public bool CloseCancelSent; // fourth review (2): the stuck CloseOrder's cancel went out (tried each second until it does)
             public double BookedAfter;   // minors (2): expired fills from before this position update are no longer counted
             public readonly List<FStop> Stops = new List<FStop>();
         }
@@ -552,7 +570,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // third review (2): never while the close sent may still fill (a new copy beside a live close)
             return Flat(c.A, c.Inst) && ChartBridgeOrders.CopierUnnotedFill(c.A, c.Inst, now) == null && (co == null || ChartBridgeOrders.CopierDone(co));
         }
-        private static void CloseDone(Copy c) { lock (Lk) { c.CloseOwed = false; c.CloseOrder = null; c.OppSince = 0; c.ShortSaid = false; c.CloseStuckSaid = false; } }
+        private static void CloseDone(Copy c) { lock (Lk) { c.CloseOwed = false; c.CloseOrder = null; c.OppSince = 0; c.ShortSaid = false; c.CloseStuckSaid = false; c.CloseCancelSent = false; } }
 
         // ---------------------------------------------------------- pages (protocol v3 only)
         // The pages the copier talks to: every signed-in v3 page (the shared v3 send). A v2 page gets no copier message at all.
@@ -1731,7 +1749,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             long sent = Stopwatch.GetTimestamp();
             SubmitOne(c.A, x);
             // Second review (1): still owed until it is flat: a close rejected, cancelled or part filled is tried again once it is done
-            lock (Lk) { c.CloseOrder = x; c.CloseSentAt = now; c.CloseStuckSaid = false; }
+            lock (Lk) { c.CloseOrder = x; c.CloseSentAt = now; c.CloseCancelSent = false; }
             Event(c.A.Name, "flatten", c.Root, held, double.NaN, null, Ms(r.Ts, sent), null, "flattened: " + r.Why + " (closed the " + held + " it still held, at market)");
         }
 
@@ -1785,7 +1803,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             List<string> names;
             lock (Lk) names = Followers.Select(f => f.Name).ToList();
-            foreach (string n in names) { Account a = Find(n); if (a != null && Up(a)) ChartBridgeOrders.CopierWatchUnnoted(a, now); }
+            foreach (string n in names) { Account a = Find(n); if (a != null && Up(a) && ChartBridgeServer.IsWatched(a)) ChartBridgeOrders.CopierWatchUnnoted(a, now); }   // fourth review (3): watched only
         }
 
         // S6: the leader, or 3 or more followers, leaving Connected within 10 s: stand down until Re-arm.
@@ -1927,11 +1945,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (co != null && !ChartBridgeOrders.CopierDone(co))
             {
                 if (now - sentAt <= ChartBridgeOrders.MoveTtlMs) return;
-                bool said;
-                lock (Lk) { said = c.CloseStuckSaid; c.CloseStuckSaid = true; }
-                if (said) return;
-                ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier's close (" + (co.Name ?? "an order") + ", " + co.OrderState + ") has not filled or ended in " + (ChartBridgeOrders.MoveTtlMs / 1000) + " s; the copier cancels it and closes again once NinjaTrader confirms; check NinjaTrader");
-                CancelStuckClose(c, co);
+                bool said, cancelSent;
+                lock (Lk) { said = c.CloseStuckSaid; c.CloseStuckSaid = true; cancelSent = c.CloseCancelSent; }
+                if (!said)
+                    ChartBridgeOrders.CopierAlarm(c.Root + " " + c.A.Name + ": the copier's close (" + (co.Name ?? "an order") + ", " + co.OrderState + ") has not filled or ended in " + (ChartBridgeOrders.MoveTtlMs / 1000) +
+                                                  " s; the copier cancels it (once the account is connected) and closes again once NinjaTrader confirms; check NinjaTrader");
+                if (!cancelSent) CancelStuckClose(c, co);   // fourth review (2): tried each second until the cancel goes out
                 return;
             }
             if (owed && !Flat(c.A, c.Inst) && Held(c.A, c.Inst, c.Dir) == 0)
@@ -1963,8 +1982,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Third review (2): the one order call Reconcile makes itself: the stuck close cancelled (only on a connected account).
         private static void CancelStuckClose(Copy c, Order co)
         {
-            if (!ExitAllowed(c, "flatten")) return;
-            c.A.Cancel(new[] { co });
+            if (!Up(c.A) || !ChartBridgeServer.EnsureWatched(c.A)) return;   // not connected: tried again next second (no skip line each second)
+            try { c.A.Cancel(new[] { co }); }
+            catch (Exception ex) { ChartBridgeServer.Log("copier: " + c.A.Name + ": the cancel of its stuck close was refused (" + ex.Message + "); tried again next second"); return; }
+            lock (Lk) c.CloseCancelSent = true;
             Event(c.A.Name, "flatten", c.Root, 0, double.NaN, null, null, null, "its close was not filled or ended in " + (ChartBridgeOrders.MoveTtlMs / 1000) + " s: cancelled; closed again once NinjaTrader confirms");
         }
 

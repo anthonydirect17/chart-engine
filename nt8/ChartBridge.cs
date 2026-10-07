@@ -4770,6 +4770,9 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Order code calls this before trading an account: an account that just connected may not be watched yet,
         // and an unwatched account's fills and order updates would never reach the page.
+        // 0.4.3: watched already (no watch attempt): the copier's every-second order look skips the rest
+        public static bool IsWatched(Account a) { if (a == null) return false; lock (Watched) return Watched.Contains(a); }
+
         public static bool EnsureWatched(Account a)
         {
             if (a == null) return false;

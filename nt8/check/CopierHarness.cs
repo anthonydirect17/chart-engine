@@ -565,8 +565,21 @@ public static class CopierHarness
         Check(Closes(f1, b1).Count == 1 && Closes(f1, b1)[0].Contains("Sell Market 2 ") && Logged("the copier closes 2 of the 3 this follower shows"),
               "second review (3): past 10 s: the close is 2 of the 3 shown (the unseen 1 taken off; never 3), and an alarm: " + string.Join(" | ", After(f1, b1)));
         Check(!Closes(f1, b1).Any(c => c.Contains("Sell Market 3 ")), "second review (3): never 3");
-        // third review (1): the next trade: NinjaTrader's position has updated since, so the unseen fill is booked and the close
-        // is the whole 3 (it is not taken off a later trade's close, leaving the follower open with its stops cancelled)
+        // fourth review (1): a position update alone does not book it (its execution is not in yet): still taken off
+        Pos(f1, mnq, 0);
+        ChartBridgeCopier.Tick(t + 26000);
+        int lb, ls;
+        ChartBridgeOrders.CopierUnnotedFill(f1, mnq, t + 26000, out lb, out ls);
+        Check(ls == 1, "fourth review (1): a position update without its execution: the unseen sell is still taken off (" + ls + ")");
+        // its execution comes in, then a position update after it: booked
+        f1.Executions.Add(new Execution { Instrument = mnq, MarketPosition = MarketPosition.Short, Quantity = 1, Price = 24998, Order = unseen, ExecutionId = "unseen-x" });
+        ChartBridgeCopier.Tick(t + 27000);
+        Pos(f1, mnq, 0);
+        ChartBridgeCopier.Tick(t + 28000);
+        ChartBridgeOrders.CopierUnnotedFill(f1, mnq, t + 28000, out lb, out ls);
+        Check(ls == 0, "fourth review (1): its execution in, then a position update: booked (" + ls + ")");
+        // third review (1): the next trade: the unseen fill is booked, so the close is the whole 3 (it is not taken off a later
+        // trade's close, leaving the follower open with its stops cancelled)
         Reset();
         LeaderEntry(1);
         FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);

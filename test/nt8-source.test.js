@@ -1019,7 +1019,7 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   assert.match(copierBodies('LeaderExit'), /try\s*\{\s*if \(nowAbs == 0\)[\s\S]*ScaleOut\(c, prevAbs, nowAbs, ts\);\s*\}\s*catch \(Exception ex\)/);
   // third review (1): a late fill is booked once NinjaTrader's position updates after it went late; followers looked at each second
   assert.match(ocode, /CopierSawPosition\(account, inst\);/);
-  assert.match(ccode, /else if \(seqNow > seqLate\) \{ NotedFilled\[o\] = o\.Filled;/);
+  assert.match(ccode, /if \(ExecSeq\.TryGetValue\(o, out seqExec\) && seqNow > seqExec\) \{ NotedFilled\[o\] = o\.Filled;/);
   assert.match(copierBodies('Tick'), /WatchUnnoted\(now\);/);
   // third review (2): a close not done in 10 s is said once and cancelled; FlatThrough never clears an owed close beside a live one
   assert.match(copierBodies('ReconcileOne'), /if \(co != null && !ChartBridgeOrders\.CopierDone\(co\)\)[\s\S]*CancelStuckClose\(c, co\);/);
@@ -1038,7 +1038,7 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   assert.match(sc, /int dir = Math\.Sign\(l\), shows = Math\.Min\(Math\.Abs\(l\), Math\.Abs\(e\)\), late = dir > 0 \? lateSells : lateBuys, held = shows - late;/);
   assert.match(sc, /if \(held <= 0\)\s*\{\s*Event\([^\n]*\n\s*return;\s*\}/);
   // second review (1): owed until flat: the close sent is kept, the owed flag is not cleared on sending
-  assert.match(sc, /SubmitOne\(c\.A, x\);[^\n]*\n[^\n]*\n\s*lock \(Lk\) \{ c\.CloseOrder = x; c\.CloseSentAt = now; c\.CloseStuckSaid = false; \}/);
+  assert.match(sc, /SubmitOne\(c\.A, x\);[^\n]*\n[^\n]*\n\s*lock \(Lk\) \{ c\.CloseOrder = x; c\.CloseSentAt = now; c\.CloseCancelSent = false; \}/);
   assert.ok(!/CloseOwed = false/.test(sc), 'SendClose never clears the owed close itself (only CloseDone, when flat with every fill through)');
   assert.ok(!/\.Submit\(/.test(copierBodies('StartReduce')), 'StartReduce only shrinks stops; the reduce is SendReduce, after confirmation');
   // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position;

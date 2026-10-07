@@ -42,7 +42,9 @@ Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of
   taken off a close only until NinjaTrader's position there updates after it (then it is booked), so it is never taken off a
   later trade's close; the copier looks at every follower's orders each second, so a lost event is known at once. A close
   that neither fills nor ends in 10 s raises one alarm, is cancelled, and the close goes again once NinjaTrader confirms;
-  the owed close is never cleared beside a live close. One refused order during a leader exit no longer stops the other
+  the owed close is never cleared beside a live close. Fourth review: a late fill is booked only once its executions add
+  up to its filled count and a position update came after them (a position update alone is not enough); a stuck close's
+  cancel is tried each second until it goes out, with one alarm per close. One refused order during a leader exit no longer stops the other
   followers' exits.
 - ChartBridge only; the page is unchanged (each PC keeps its page rollback to 1.15.0). Page wording left for the Account
   page release: the Qty dropdown's hidden label and its error text still say "per leader contract".
