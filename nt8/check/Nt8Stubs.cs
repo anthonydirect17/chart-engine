@@ -136,11 +136,15 @@ namespace NinjaTrader.Cbi
         public int Quantity { get; set; }
         public double AveragePrice { get; set; }
     }
+    // NinjaTrader's provider of an account (Simulator for Sim101 and the sim accounts made in NinjaTrader). 0.4.0: read by name
+    // (reflection) in ChartBridgeBot.IsSim; Unknown first, so a stand-in account is never a simulator unless the harness says so.
+    public enum Provider { Unknown, Simulator, Playback, Rithmic }
     // Stand-in account: records every order call so the Mono harness can check the gates.
     public class Account
     {
         public static List<Account> All = new List<Account>();
         public string Name { get; set; }
+        public Provider Provider { get; set; }
         public Connection Connection { get; set; }
         public List<Execution> Executions = new List<Execution>();
         public List<Order> Orders = new List<Order>();

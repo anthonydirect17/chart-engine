@@ -867,6 +867,7 @@ public static class OrdersHarness
         SidesHarness.Run(Check); // the side of every trade, as pure rules (check/SidesHarness.cs, 0.3.4; its loads run inside SeamHarness)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
         MarketsHarness.Run(Check);   // 0.4.0: quote-only markets, their rolls and settlement times, tape counters, error lines, /diag health (check/MarketsHarness.cs)
+        BotHarness.Run(Check);       // 0.4.0: the bot channel, Sim101 only, its rails, heartbeat, secret and off switch (check/BotHarness.cs)
 
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;

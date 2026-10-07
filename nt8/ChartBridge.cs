@@ -1396,7 +1396,6 @@ namespace NinjaTrader.NinjaScript.AddOns
         public volatile bool Ready;             // backfill sent; live ticks go straight out
         public string Origin;                   // the WebSocket's Origin header (orders only from ChartBridge's own page)
         public volatile bool Trader;            // signed in for orders (ChartBridgeOrders.Auth)
-        public volatile bool V3;                // 0.4.0 bot: the page sent {"type":"client","v":3} (shared v3 plumbing; keep one copy when merging)
         public readonly Queue<double> Actions = new Queue<double>();   // recent order actions, for the rate limit
         public readonly List<SeamTick> Pending = new List<SeamTick>();   // live ticks held during backfill (lock it to read or write)
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
@@ -2198,7 +2197,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
             else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten")
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
-            else if (type == "client") ChartBridgeBot.OnClient(client, text);   // 0.4.0 bot: shared v3 plumbing (keep one copy when merging)
+            else if (type == "client") ChartBridgeBot.V3ClientStub(client, text);   // 0.4.0 bot: STUB until lane B2's v3 handshake is merged (then B2's line replaces this one)
             else if (type.StartsWith("bot", StringComparison.Ordinal)) ChartBridgeBot.OnPageMessage(client, type, text);   // 0.4.0 bot: botMode, botKill, botSeen, botAnswer, botRails
         }
 
@@ -2230,10 +2229,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (ChartBridgeClient c in Clients.Values) if (c.Trader) c.Send(json);
         }
 
-        // 0.4.0 bot: signed-in v3 pages only (a v2 page gets no v3 message). Shared v3 plumbing: keep one copy when merging.
+        // 0.4.0 bot: signed-in v3 pages only (a v2 page gets no v3 message). IsV3Stub stands in for lane B2's v3 helper.
         public static void SendToV3Traders(string json)
         {
-            foreach (ChartBridgeClient c in Clients.Values) if (c.Trader && c.V3) c.Send(json);
+            foreach (ChartBridgeClient c in Clients.Values) if (c.Trader && ChartBridgeBot.IsV3Stub(c)) c.Send(json);
         }
 
         // ---------------------------------------------------------- instruments and front month

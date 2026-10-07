@@ -5,5 +5,6 @@
 # the session tables and the served window (check/WindowHarness.cs, 0.3.5), the daily bars (check/BarsHarness.cs, 0.3.6) and the
 # 0.3.7 data side: settlement, higher-timeframe bars, the weekly profile, the gate's stop edges and CME holidays (check/DataHarness.cs).
 # 0.4.0: quote-only markets, their rolls and settlement times, the tape counters, error lines and /diag health (check/MarketsHarness.cs).
+# 0.4.0: the bot channel: Sim101 only, shadow, copilot and auto, the rails, the heartbeat, the secret and the off switch (check/BotHarness.cs).
 cd "$(dirname "$0")/.." && mcs -langversion:5 -nowarn:67,169,219,414 -r:System.dll -r:System.Core.dll -out:/tmp/chartbridge-orders.exe \
-  ChartBridge.cs ChartBridgeOrders.cs ChartBridgePin.cs ChartBridgeBars.cs ChartBridgeTape.cs ChartBridgeBot.cs check/Nt8Stubs.cs check/OrdersHarness.cs check/PinHarness.cs check/SeamHarness.cs check/SidesHarness.cs check/WindowHarness.cs check/BarsHarness.cs check/DataHarness.cs check/MarketsHarness.cs && mono /tmp/chartbridge-orders.exe
+  ChartBridge.cs ChartBridgeOrders.cs ChartBridgePin.cs ChartBridgeBars.cs ChartBridgeTape.cs ChartBridgeBot.cs check/Nt8Stubs.cs check/OrdersHarness.cs check/PinHarness.cs check/SeamHarness.cs check/SidesHarness.cs check/WindowHarness.cs check/BarsHarness.cs check/DataHarness.cs check/MarketsHarness.cs check/BotHarness.cs && mono /tmp/chartbridge-orders.exe

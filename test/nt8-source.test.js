@@ -798,3 +798,59 @@ test('0.4.0: the tape counters run after the send, on their own, with no lock an
   assert.match(code, /b\.Append\(",\\"tape\\":"\)\.Append\(ChartBridgeTape\.DiagJson\(\)\);/);
   assert.match(code, /b\.Append\(",\\"health\\":"\)\.Append\(HealthJson\(\)\);/);
 });
+
+// ---- 0.4.0 the bot channel (behaviour: nt8/check/BotHarness.cs under Mono, inside check:orders; test/fake-bot.test.js)
+const bsrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeBot.cs'), 'utf8');
+const bcode = bsrc.split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1')).join('\n');
+
+test('0.4.0 bot: the new file ships, is compile-checked and harnessed', () => {
+  assert.ok(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'install-files.json'), 'utf8')).addons.includes('nt8/ChartBridgeBot.cs'));
+  for (const f of ['check.sh', 'orders.sh']) assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', f), 'utf8'), /ChartBridgeTape\.cs ChartBridgeBot\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'orders.sh'), 'utf8'), /check\/BotHarness\.cs/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'nt8', 'check', 'OrdersHarness.cs'), 'utf8'), /BotHarness\.Run\(Check\);/);
+});
+
+test('0.4.0 bot: off by default, Sim101 only, 1 contract; orders only through ChartBridgeOrders.PlaceBotEntry', () => {
+  assert.match(bcode, /public static void ResetConfig\(\) \{ Enabled = false; ConfigRoot = "MNQ";/, 'off by default, botRoot MNQ');
+  assert.match(bcode, /public const string BotAccount = "Sim101";/);
+  assert.match(bcode, /public const int MaxQty = 1;/);
+  assert.match(bcode, /public const int MaxTradesLimit = 5, MaxLossesLimit = 3;/);
+  assert.match(bcode, /public const double SilenceMs = 5000/);
+  // never places, changes or flattens by itself: the only order calls are a cancel of a bot entry and the two ChartBridgeOrders entry points
+  for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Flatten\s*\(/, /OrderAction\./, /\bAtm\w*\./]) assert.ok(!re.test(bcode), 'ChartBridgeBot.cs: ' + re);
+  assert.equal((bcode.match(/\.Cancel\(/g) || []).length, 1, 'one cancel call');
+  assert.match(bodyOf(bcode, 'private static bool Cancel(Order o)'), /!IsBotEntry\(o\)\) return false;/, 'it cancels only a bot entry, never a stop or target');
+  assert.deepEqual([...new Set(bcode.match(/ChartBridgeOrders\.(PlaceBotEntry|FlattenForBot)/g))].sort(), ['ChartBridgeOrders.FlattenForBot', 'ChartBridgeOrders.PlaceBotEntry']);
+  assert.match(bodyOf(bcode, 'private static void OnBotFlatten()'), /if \(m != "auto"\) why = "flatten is for auto mode only";/, 'the bot\'s own flatten: auto only');
+  assert.ok(!/ChartBridgeOrders\.FlattenForBot/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never flattens');
+  assert.ok(!/trading = false|Enabled = true/.test(bcode), 'never turns trading or itself on or off');
+  // the order is always built from Sim101 and the bot's root, quantity 1
+  assert.match(bodyOf(bcode, 'private static string Place(Signal s, out Order placed)'), /"\{\\"type\\":\\"order\\",\\"account\\":\\"" \+ BotAccount \+ "\\",\\"root\\":\\"" \+ root \+/);
+  // the secret: never logged; constant time
+  assert.ok(!/Log\([^;]*\+\s*(secret|given|givenSecret)\b/.test(bcode), 'the secret is never logged');
+  assert.ok(!/Log\([^;]*\+\s*s\b(?!\.)/.test(bodyOf(bcode, 'private static void LoadSecret()')), 'nor the one just made');
+  assert.match(bodyOf(bcode, 'private static bool SecretMatches(string given)'), /diff \|= s\[i\] \^ given\[i\];/);
+  assert.match(bodyOf(bcode, 'public static int UpgradeCheck(string origin, string givenSecret, bool isWebSocket)'),
+    /if \(!Enabled\) return 404;[\s\S]*if \(origin != null\) return 403;[\s\S]*if \(!SecretMatches\(givenSecret\)\) return 403;[\s\S]*if \(!isWebSocket\) return 400;[\s\S]*return 409;[\s\S]*return 101;/);
+});
+
+test('0.4.0 bot: the hooks in ChartBridge.cs and ChartBridgeOrders.cs', () => {
+  assert.match(code, /if \(path == "\/bot" \|\| path == "\/bot-library"\) \{ await ChartBridgeBot\.Serve\(ctx, path, token\); return; \}/);
+  const handle = code.slice(code.indexOf('private static async Task Handle('));
+  assert.ok(handle.indexOf('ChartBridgeAccess.IsLoopback(remote)') < handle.indexOf('ChartBridgeBot.Serve('), 'the address check comes first');
+  assert.match(code, /ChartBridgeBot\.ResetConfig\(\);/);
+  assert.match(code, /else if \(ChartBridgeBot\.ReadConfig\(key, val\)\) \{ \}/);
+  assert.match(code, /ChartBridgeOrders\.StartPlans\(\);[^\n]*\n\s*ChartBridgeBot\.Start\(\);/);
+  assert.match(code, /ChartBridgeBot\.Stop\(\);/);
+  assert.match(code, /ChartBridgeBot\.OnTick\(json\);/);
+  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json\); \} catch/);
+  assert.match(code, /try \{ ChartBridgeBot\.OnPosition\(a, e\); \} catch/);
+  assert.match(code, /if \(ChartBridgeBot\.Enabled\) b\.Append\(",\\"bot\\":"\)\.Append\(ChartBridgeBot\.DiagJson\(\)\);/);
+  assert.match(code, /foreach \(ChartBridgeClient c in Clients\.Values\) if \(c\.Trader && ChartBridgeBot\.IsV3Stub\(c\)\) c\.Send\(json\);/);
+  assert.match(ocode, /new Regex\("\^CB#\(\[0-9a-f\]\{8\}\)\(\?: bot\)\? s/);
+  assert.match(ocode, /if \(bot\) cap = Math\.Min\(cap, ChartBridgeBot\.MaxQty\);/);
+  assert.match(ocode, /ChartBridgeBot\.AfterAuth\(client\);/);
+  assert.match(ocode, /try \{ if \(ChartBridgeBot\.Watching\(o\)\) ChartBridgeBot\.OnOrderUpdate\(account, o, OrderJson\(o, failed/);
+  // PlaceBotEntry reads its own message strictly and runs the quote-only check, then the page's path with bot = true
+  assert.match(bodyOf(ocode, 'public static string PlaceBotEntry(string text, out Order placed)'), /TopLevel\("order", text, out bracketBody, out why\);\s*if \(why == null\) why = QuoteOnly\(top, null\);\s*return why \?\? PlaceOrder\(top, bracketBody, null, true, out placed\);/);
+});

@@ -28,6 +28,7 @@ using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -110,7 +111,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static ChartBridgeClient bot;             // the connected bot, or null
         private static bool claimed;                      // an upgrade is being accepted (one bot at a time)
-        private static bool helloed;                      // botHello received on this connection
+        private static volatile bool helloed;             // botHello received on this connection (volatile: read on the tick path without the lock)
         private static string botName;
         private static double lastMsgMs, noBotSinceMs, lastStripMs;
         private static string mode = "shadow";            // every start begins in shadow (auto never survives a restart)
@@ -149,7 +150,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
         // ---------------------------------------------------------- start and stop (ChartBridgeServer.Start and Stop)
-        public static void Start()
+        public static void Start() { Start(true); }
+
+        // withTimer false: the Mono harness runs Check itself, step by step.
+        public static void Start(bool withTimer)
         {
             Reset();
             if (!Enabled) return;
@@ -157,7 +161,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadRails();
             LoadDay();
             lock (Sync) noBotSinceMs = Now();
-            timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
+            if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("bot check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
             Log("the bot channel is ON: a bot may connect at ws://localhost:" + ChartBridgeConfig.Port + "/bot (Sim101 only, " + EffectiveRoot() + ", starting in shadow)");
         }
 
@@ -699,7 +703,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (Sync)
             {
-                if (bot != null) return false;
+                if (!Enabled || c == null || bot != null) return false;
                 bot = c; claimed = false; helloed = false; botName = null; lastMsgMs = Now(); Actions.Clear();
             }
             Log("a bot connected; it is told nothing until its botHello");
@@ -1147,10 +1151,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static void OnTick(string json)
         {
             ChartBridgeClient c = Volatile.Read(ref bot);
-            if (c == null) return;
-            bool h;
-            lock (Sync) h = helloed && c == bot;
-            if (h) c.Send(json);
+            if (c != null && helloed) c.Send(json);   // no lock on the tick path
         }
 
         // ---------------------------------------------------------- the timer: heartbeat, the day, the strip
@@ -1340,22 +1341,31 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ChartBridgeOrders.Auth (a page that signed in) and "client" after it: a v3 page gets the strip and the open proposals.
         public static void AfterAuth(ChartBridgeClient client)
         {
-            if (!Enabled || client == null || !client.Trader || !client.V3) return;
+            if (!Enabled || client == null || !client.Trader || !IsV3Stub(client)) return;
             client.Send(StripJson());
             List<Proposal> open;
             lock (Sync) open = Proposals.Values.Where(p => p.State == "open").ToList();
             foreach (Proposal p in open) client.Send(ProposalJson(p));
         }
 
-        // {"type":"client","v":3}: this connection speaks protocol v3 (shared v3 plumbing; PROTOCOL.md "Telling the page what is on").
-        public static void OnClient(ChartBridgeClient client, string text)
+        // ---------------------------------------------------------- STUB for lane B2's shared v3 plumbing (swap when merging)
+        // Lane B2 (branch r116-accounts) owns the "client" v3 handshake, hello.features "v3" and trading.switches. Until it is
+        // merged, this minimal stub only remembers which connections sent {"type":"client","v":3}, so bot messages go to v3 pages
+        // only. When merging: replace IsV3Stub(c) with B2's helper (in AfterAuth here and in ChartBridgeServer.SendToV3Traders),
+        // drop V3ClientStub and its dispatch line in ChartBridgeServer.OnClientMessage, and call AfterAuth from B2's handshake.
+        private static readonly ConditionalWeakTable<ChartBridgeClient, object> V3Stub = new ConditionalWeakTable<ChartBridgeClient, object>();
+        private static readonly object V3Mark = new object();
+
+        public static bool IsV3Stub(ChartBridgeClient c) { object o; return c != null && V3Stub.TryGetValue(c, out o); }
+
+        public static void V3ClientStub(ChartBridgeClient client, string text)
         {
             string why;
             Dictionary<string, Val> d = Parse(text, out why);
             int v;
             if (d != null && UnknownKey(d, new[] { "type", "v" }) == null && Whole(d, "v", out v) == 1 && v == 3)
             {
-                client.V3 = true;
+                V3Stub.GetValue(client, k => V3Mark);
                 AfterAuth(client);
                 return;
             }
