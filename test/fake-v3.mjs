@@ -12,29 +12,33 @@ export const V3_ACCOUNTS = [
   { name: 'FUNDED-C', sim: false, balance: 52010 }, { name: 'SIM-F1', sim: true, balance: 50000 },
   { name: 'SIM-F2', sim: true, balance: 50000 }, { name: 'Sim101', sim: true, balance: 100000 },
 ];
-// quote-only markets (PROTOCOL.md "Quote-only markets"): tick, point value, price format; scale turns the sample feed
-// (about 25,400) into a plausible price level. Sample data, never market data.
+// quote-only markets (PROTOCOL.md "0.4.0 hardening and markets"): tick, point value, price format ("decimal", or "32nds" for
+// ZN and ZB, as ChartBridge 0.4.0's hello says it); decimals only round the fake's prices (float noise), never on the wire;
+// scale turns the sample feed (about 25,400) into a plausible price level. Sample data, never market data.
 export const QUOTE_INSTR = {
-  YM: { name: 'YM 12-26', tick: 1, pointValue: 5, scale: 1.817, format: 'dec', decimals: 0 },
-  RTY: { name: 'RTY 12-26', tick: 0.1, pointValue: 50, scale: 0.0964, format: 'dec', decimals: 1 },
-  GC: { name: 'GC 12-26', tick: 0.1, pointValue: 100, scale: 0.1554, format: 'dec', decimals: 1 },
-  SI: { name: 'SI 12-26', tick: 0.005, pointValue: 5000, scale: 0.001868, format: 'dec', decimals: 3 },
-  CL: { name: 'CL 12-26', tick: 0.01, pointValue: 1000, scale: 0.002439, format: 'dec', decimals: 2 },
-  '6E': { name: '6E 12-26', tick: 0.00005, pointValue: 125000, scale: 0.00004602, format: 'dec', decimals: 5 },
-  ZN: { name: 'ZN 12-26', tick: 0.015625, pointValue: 1000, scale: 0.004425, format: '64', decimals: 6 },
-  ZB: { name: 'ZB 12-26', tick: 0.03125, pointValue: 1000, scale: 0.004621, format: '32', decimals: 5 },
+  YM: { name: 'YM 12-26', tick: 1, pointValue: 5, scale: 1.817, priceFormat: 'decimal', decimals: 0 },
+  RTY: { name: 'RTY 12-26', tick: 0.1, pointValue: 50, scale: 0.0964, priceFormat: 'decimal', decimals: 1 },
+  GC: { name: 'GC 12-26', tick: 0.1, pointValue: 100, scale: 0.1554, priceFormat: 'decimal', decimals: 1 },
+  SI: { name: 'SI 12-26', tick: 0.005, pointValue: 5000, scale: 0.001868, priceFormat: 'decimal', decimals: 3 },
+  CL: { name: 'CL 12-26', tick: 0.01, pointValue: 1000, scale: 0.002439, priceFormat: 'decimal', decimals: 2 },
+  '6E': { name: '6E 12-26', tick: 0.00005, pointValue: 125000, scale: 0.00004602, priceFormat: 'decimal', decimals: 5 },
+  ZN: { name: 'ZN 12-26', tick: 0.015625, pointValue: 1000, scale: 0.004425, priceFormat: '32nds', decimals: 6 },
+  ZB: { name: 'ZB 12-26', tick: 0.03125, pointValue: 1000, scale: 0.004621, priceFormat: '32nds', decimals: 5 },
 };
 for (const i of Object.values(QUOTE_INSTR)) i.quoteOnly = true;
 
-/** NinjaTrader's bond format: "32" (ZB, 118'15) or "64" (ZN, half 32nds, 104'035). */
-export function formatPrice(p, format, decimals) {
-  if (format === '32' || format === '64') {
-    const whole = Math.floor(p + 1e-9), f = (p - whole) * 32, tt = Math.floor(f + 1e-9);
-    const two = String(tt).padStart(2, '0');
-    if (format === '32') return whole + "'" + two;
-    return whole + "'" + two + (f - tt >= 0.25 ? '5' : '0');
+/** A price as the page shows it (PROTOCOL.md "0.4.0 hardening and markets"): "32nds" is NinjaTrader's bond format, whole
+ *  points, an apostrophe, the 32nds in two digits, and with a tick under 1/32 (ZN, 1/64) a third digit for the half:
+ *  ZB 118.46875 is 118'15, ZN 104.109375 is 104'035. "decimal" shows the tick's decimals. */
+export function formatPrice(p, priceFormat, tick) {
+  if (priceFormat === '32nds') {
+    const half = tick > 0 && tick < 1 / 32 - 1e-12, steps = Math.round(Math.abs(p) * (half ? 64 : 32));
+    const whole = Math.floor(steps / (half ? 64 : 32)), rest = steps - whole * (half ? 64 : 32);
+    const n32 = half ? Math.floor(rest / 2) : rest;
+    return (p < 0 ? '-' : '') + whole + "'" + String(n32).padStart(2, '0') + (half ? (rest % 2 ? '5' : '0') : '');
   }
-  return p.toFixed(decimals);
+  const s = String(tick), i = s.indexOf('.');
+  return p.toFixed(i < 0 ? 0 : s.length - i - 1);
 }
 
 /** The allocation rule (Order Strategies and Merge): q contracts over whole-percent shares, largest remainder, a tie
@@ -275,7 +279,8 @@ export class OrderDeskV3 extends OrderDesk {
     this['do_' + m.type](m, conn);
     return true;
   }
-  quoteOnly(root) { return this.instruments[root] && this.instruments[root].quoteOnly ? root + ' is quote only: ChartBridge does not trade it.' : null; }
+  /** ChartBridge 0.4.0's one early check (PROTOCOL.md "Quote-only markets"), with its exact words */
+  quoteOnly(root) { return this.instruments[root] && this.instruments[root].quoteOnly ? root + ' is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)' : null; }
   checkEntryAccount(account) {
     if (this.sw.accountChecks && this.acct.has(account) && !this.accounts.includes(account)) {
       const a = this.acct.get(account);
@@ -848,7 +853,7 @@ export class OrderDeskV3 extends OrderDesk {
   }
   welcomeMsg() {
     return { type: 'welcome', version: '0.4.0', mode: this.bot.mode, account: 'Sim101', root: this.botRoot, rails: { maxQty: 1, maxTrades: 5, maxLosses: 3 },
-      instruments: Object.entries(this.instruments).map(([root, i]) => ({ root, name: i.name, tick: i.tick, pointValue: i.pointValue, quoteOnly: !!i.quoteOnly, format: i.format || 'dec', decimals: i.decimals === undefined ? 2 : i.decimals })) };
+      instruments: Object.entries(this.instruments).map(([root, i]) => ({ root, name: i.name, tick: i.tick, pointValue: i.pointValue, quoteOnly: !!i.quoteOnly, priceFormat: i.priceFormat || 'decimal' })) };
   }
   /** every second: the heartbeat (5 s), the copier's sweep, Gone */
   everySecond() {
@@ -867,41 +872,75 @@ export class OrderDeskV3 extends OrderDesk {
   }
 }
 
-/* ---------------- tape timing counters (PROTOCOL.md "Tape timing"): fixed buckets, per root and 15-minute slot */
-export const GAP_EDGES = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
-function bucketOf(ms) { let i = 0; while (i < GAP_EDGES.length - 1 && ms > GAP_EDGES[i]) i++; return ms > GAP_EDGES[GAP_EDGES.length - 1] ? GAP_EDGES.length : i; }
-function rankEdge(counts, q) {
+/* ---------------- tape timing counters, as ChartBridge 0.4.0 built them (PROTOCOL.md "/diag additions", `tape`): per root
+   this session's 15-minute slots (from 18:00 ET) and the last session's; medians and p95 read from fixed log buckets (each
+   about 41 percent wider than the last; the value is the bucket's upper edge), `max` exact; shares of the prints. */
+const SLOTS = 96, NB = 40;
+/** bucket 0 holds values below `unit` (and 0, negatives); bucket k holds [unit * 2^((k-1)/2), unit * 2^(k/2)) */
+export function bucketOf(v, unit = 1, count = NB) {
+  if (!(v >= unit)) return 0;
+  const k = 1 + Math.floor(2 * Math.log2(v / unit));
+  return k < count - 1 ? k : count - 1;
+}
+/** the upper edge of the bucket holding quantile q, or null when empty */
+export function quantile(counts, q, unit = 1) {
   const n = counts.reduce((a, b) => a + b, 0); if (!n) return null;
-  let want = Math.ceil(q * n), i = 0;
-  for (; i < counts.length; i++) { want -= counts[i]; if (want <= 0) break; }
-  return i < GAP_EDGES.length ? GAP_EDGES[i] : Infinity;
+  let want = Math.ceil(q * n), k = 0;
+  for (; k < counts.length; k++) { want -= counts[k]; if (want <= 0) break; }
+  return +(unit * Math.pow(2, k / 2)).toFixed(3);
+}
+const p2 = n => String(n).padStart(2, '0');
+const etText = (et, withDay) => { const d = new Date(et * 1000); return (withDay ? d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()) + ' ' : '') + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()); };
+/** the session start (18:00 ET, bar-time seconds) of a trade at bar time t */
+export const sessionStart = t => { const day = Math.floor(t / 86400) * 86400; return t - day >= 64800 ? day + 64800 : day - 86400 + 64800; };
+function newSession(start) {
+  const z = () => new Array(SLOTS).fill(0);
+  return { start, prints: z(), pairs: z(), peak: z(), secAt: z(), secN: z(), sameU: z(), sameRx: z(), j: [z(), z(), z(), z()], gap: Array.from({ length: SLOTS }, () => new Array(NB).fill(0)),
+    gapMax: z(), delay: Array.from({ length: SLOTS }, () => new Array(NB).fill(0)), neg: z() };
+}
+function sessionJson(s) {
+  if (!s) return null;
+  const slots = []; let prints = 0;
+  for (let k = 0; k < SLOTS; k++) {
+    const n = s.prints[k]; if (n <= 0) continue;
+    prints += n;
+    const pairs = s.pairs[k], jumps = s.j[0][k] + s.j[1][k] + s.j[2][k] + s.j[3][k], share = (a, b) => b > 0 ? +(a / b).toFixed(3) : null;
+    slots.push({ at: etText(s.start + k * 900), prints: n, perSec: +(n / 900).toFixed(3), peakPerSec: s.peak[k],
+      gapMs: { p50: quantile(s.gap[k], 0.5), p95: quantile(s.gap[k], 0.95), max: pairs > 0 ? s.gapMax[k] : null },
+      sameMsU: share(s.sameU[k], pairs), sameMsRx: share(s.sameRx[k], pairs),
+      jumpTicks: { 0: share(s.j[0][k], jumps), 1: share(s.j[1][k], jumps), 2: share(s.j[2][k], jumps), '3+': share(s.j[3][k], jumps) },
+      delayMs: { p50: quantile(s.delay[k], 0.5), p95: quantile(s.delay[k], 0.95), below0: s.neg[k] } });
+  }
+  return { from: etText(s.start, true), slots, prints };
 }
 export class TapeStats {
-  constructor() { this.roots = {}; }
+  constructor() { this.roots = {}; this.failed = 0; }
+  /** one live trade: t bar time (s), p price, u NinjaTrader's time (UTC ms), rx ChartBridge's receipt (UTC ms) */
   add(root, t, p, u, rx, tick) {
-    const slot = Math.floor((((t % 86400) + 86400) % 86400) / 900) * 900, key = String(Math.floor(slot / 3600)).padStart(2, '0') + ':' + String((slot / 60) % 60).padStart(2, '0');
-    const r = this.roots[root] = this.roots[root] || { slots: new Map(), lastT: null, lastP: null };
-    let s = r.slots.get(key);
-    if (!s) { s = { prints: 0, first: t, lastT: t, gaps: new Array(GAP_EDGES.length + 1).fill(0), longest: 0, sameMs: 0, jumps: { 1: 0, 2: 0, '3+': 0 }, rx: new Array(GAP_EDGES.length + 1).fill(0), rxMax: 0 }; r.slots.set(key, s); if (r.slots.size > 96) r.slots.delete(r.slots.keys().next().value); }
-    s.prints++; s.lastT = t;
-    if (r.lastT !== null) {
-      const gap = Math.max(0, Math.round((t - r.lastT) * 1000));
-      s.gaps[bucketOf(gap)]++; s.longest = Math.max(s.longest, gap);
-      if (gap === 0) s.sameMs++;
-      const j = Math.round(Math.abs(p - r.lastP) / tick);
-      if (j === 1) s.jumps[1]++; else if (j === 2) s.jumps[2]++; else if (j >= 3) s.jumps['3+']++;
-    }
-    const d = Math.max(0, Math.round(rx - u)); s.rx[bucketOf(d)]++; s.rxMax = Math.max(s.rxMax, d);
-    r.lastT = t; r.lastP = p;
+    try {
+      const r = this.roots[root] = this.roots[root] || { late: 0, cur: null, last: null, prev: null };
+      const start = sessionStart(t);
+      if (r.cur && start < r.cur.start) { r.late++; return; }
+      if (!r.cur || start > r.cur.start) { r.last = r.cur; r.cur = newSession(start); r.prev = null; }
+      const s = r.cur, k = Math.min(SLOTS - 1, Math.floor((t - start) / 900)), sec = Math.floor(t);
+      s.prints[k]++;
+      if (s.secAt[k] !== sec) { s.secAt[k] = sec; s.secN[k] = 0; }
+      s.peak[k] = Math.max(s.peak[k], ++s.secN[k]);
+      const d = rx - u;
+      if (d < 0) s.neg[k]++; else s.delay[k][bucketOf(d)]++;
+      if (r.prev) {
+        const gap = Math.max(0, u - r.prev.u);
+        s.pairs[k]++; s.gap[k][bucketOf(gap)]++; s.gapMax[k] = Math.max(s.gapMax[k], gap);
+        if (Math.floor(u) === Math.floor(r.prev.u)) s.sameU[k]++;
+        if (Math.floor(rx) === Math.floor(r.prev.rx)) s.sameRx[k]++;
+        const jt = Math.round(Math.abs(p - r.prev.p) / tick); s.j[Math.min(3, jt)][k]++;
+      }
+      r.prev = { u, rx, p };
+    } catch (e) { this.failed++; }
   }
   diag() {
-    const out = {};
-    for (const [root, r] of Object.entries(this.roots)) {
-      out[root] = {};
-      for (const [k, s] of r.slots) out[root][k] = { prints: s.prints, perSec: +(s.prints / Math.max(1, s.lastT - s.first)).toFixed(1),
-        gapMs: { median: rankEdge(s.gaps, 0.5), p95: rankEdge(s.gaps, 0.95), longest: s.longest }, sameMsShare: s.prints > 1 ? +(s.sameMs / (s.prints - 1)).toFixed(3) : 0,
-        jumps: s.jumps, rxMinusU: { median: rankEdge(s.rx, 0.5), p95: rankEdge(s.rx, 0.95), max: s.rxMax } };
-    }
-    return out;
+    const roots = {};
+    for (const root of Object.keys(this.roots).sort()) { const r = this.roots[root]; roots[root] = { late: r.late, session: sessionJson(r.cur), last: sessionJson(r.last) }; }
+    return { failed: this.failed, roots };
   }
 }

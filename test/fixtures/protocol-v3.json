@@ -4,7 +4,7 @@
   "note": "One example of every message protocol v3 adds (nt8/PROTOCOL.md, Protocol v3). Sample values only: made-up accounts (Sim101, EVAL-A, EVAL-B, FUNDED-C, SIM-F1, SIM-F2), a made-up bot, prices are not market data. A key with a dot names a variant of one message type.",
   "config": {
     "accountChecks": "on", "orderTypes": "on", "strategies": "on", "merge": "on", "cancelFromList": "on",
-    "quoteRoots": "YM, RTY, GC, SI, CL, 6E, ZN, ZB", "copier": "on", "bot": "on", "botRoot": "MNQ", "tapeStats": "on"
+    "quoteRoots": "YM, RTY, GC, SI, CL, 6E, ZN, ZB", "copier": "on", "bot": "on", "botRoot": "MNQ"
   },
   "pageToServer": {
     "client": { "type": "client", "v": 3 },
@@ -34,14 +34,14 @@
   "serverToPage": {
     "hello.v3": { "type": "hello", "version": "0.4.0", "now": 1791380800000,
       "instruments": [
-        { "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "settlement": 24950.25, "settlementDate": "2026-10-06", "quoteOnly": false, "format": "dec", "decimals": 2 },
-        { "root": "YM", "name": "YM 12-26", "tick": 1, "pointValue": 5, "settlement": 46210, "settlementDate": "2026-10-06", "quoteOnly": true, "format": "dec", "decimals": 0 },
-        { "root": "ZN", "name": "ZN 12-26", "tick": 0.015625, "pointValue": 1000, "settlement": 104.109375, "settlementDate": "2026-10-06", "quoteOnly": true, "format": "64", "decimals": 6 },
-        { "root": "ZB", "name": "ZB 12-26", "tick": 0.03125, "pointValue": 1000, "settlement": 118.46875, "settlementDate": "2026-10-06", "quoteOnly": true, "format": "32", "decimals": 5 }
+        { "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false, "priceFormat": "decimal", "settlement": 24950.25, "settlementDate": "2026-10-06" },
+        { "root": "YM", "name": "YM 12-26", "tick": 1, "pointValue": 5, "quoteOnly": true, "priceFormat": "decimal", "settlement": 46210, "settlementDate": "2026-10-06" },
+        { "root": "ZN", "name": "ZN 12-26", "tick": 0.015625, "pointValue": 1000, "quoteOnly": true, "priceFormat": "32nds", "settlement": 104.109375, "settlementDate": "2026-10-06" },
+        { "root": "ZB", "name": "ZB 12-26", "tick": 0.03125, "pointValue": 1000, "quoteOnly": true, "priceFormat": "32nds", "settlement": 118.46875, "settlementDate": "2026-10-06" }
       ],
       "accounts": ["EVAL-A", "EVAL-B", "FUNDED-C", "SIM-F1", "SIM-F2", "Sim101"],
       "trading": { "enabled": false, "reason": "This page has not signed in yet (auth with the session token).", "accounts": [], "maxQty": {} },
-      "features": ["liveFirst", "profile", "settlement", "htf", "weekProfile", "v3", "quoteOnly"] },
+      "features": ["liveFirst", "profile", "settlement", "htf", "weekProfile", "v3"] },
     "trading.v3": { "type": "trading", "enabled": true, "accounts": ["EVAL-A", "Sim101"], "maxQty": { "*": 1, "MNQ": 5 },
       "switches": { "accountChecks": true, "orderTypes": true, "strategies": true, "merge": true, "cancelFromList": true, "copier": true, "bot": true } },
     "accounts": { "type": "accounts",
@@ -104,25 +104,36 @@
   },
   "serverToBot": {
     "welcome": { "type": "welcome", "version": "0.4.0", "mode": "shadow", "account": "Sim101", "root": "MNQ", "rails": { "maxQty": 1, "maxTrades": 5, "maxLosses": 3 },
-      "instruments": [{ "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false, "format": "dec", "decimals": 2 }] },
+      "instruments": [{ "root": "MNQ", "name": "MNQ 12-26", "tick": 0.25, "pointValue": 2, "quoteOnly": false, "priceFormat": "decimal" }] },
     "tick": { "type": "tick", "root": "MNQ", "t": 1791366420.137, "u": 1791380820137, "rx": 1791380820141, "p": 25001.25, "v": 2, "s": 1, "sm": 2, "q": 1 },
     "botState": { "type": "botState", "mode": "copilot", "killed": false, "standDown": null, "trades": 2, "losses": 1 },
     "answer": { "type": "answer", "id": "demo-0947-1", "answer": "accepted", "text": "placed as o31 on Sim101" },
     "reject": { "type": "reject", "id": "demo-0951-3", "reason": "The bot has made 5 trades today (the limit)." }
   },
   "diag": {
-    "tape": { "MNQ": { "09:30": { "prints": 18342, "perSec": 20.4, "gapMs": { "median": 20, "p95": 200, "longest": 1730 }, "sameMsShare": 0.31,
-      "jumps": { "1": 4120, "2": 210, "3+": 14 }, "rxMinusU": { "median": 5, "p95": 20, "max": 412 } } } },
-    "memory": { "managedMb": 182.4, "gen0": 412, "gen1": 61, "gen2": 4, "trims": 3, "lastTrimUtcMs": 1791370000000 },
-    "threads": { "workerAvailable": 32763, "workerMax": 32767, "ioAvailable": 1000, "ioMax": 1000, "minWorkerAvailableToday": 32751 },
-    "send": { "1": { "messages": 81234, "medianUs": 50, "p95Us": 200, "maxUs": 5100 } },
-    "reconnects": { "pages": 3, "lagCloses": 0, "feedDrops": 1, "accountReconnects": 2 },
+    "health": {
+      "memory": { "seenFills": 412, "books": 12, "pastSessions": 4, "profileRows": 1830, "windowTrades": 51230, "liveTradesHeld": 0, "sideTaggers": 12, "htfSeries": 6, "weekProfiles": 1,
+        "settlementRoots": 12, "seamsKept": 20, "windowsKept": 4, "lastSweepUtcMs": 1791380810000, "windowsDroppedAfterSession": 2, "lastWindowDropUtcMs": 1791360000000,
+        "heapBytes": 191260672, "gcGen0": 412, "gcGen1": 61, "gcGen2": 4 },
+      "threads": { "poolWorkersFree": 32763, "poolWorkersMin": 8, "poolWorkersMax": 32767, "poolWorkersBusy": 4, "poolIoFree": 1000, "poolIoMin": 8, "poolIoMax": 1000, "processThreads": 88, "pageSendThreads": 3 },
+      "pages": { "connects": 7, "closes": 4, "notKeepingUp": 0, "sendErrors": 0, "lastConnectUtcMs": 1791380700000, "lastNotKeepingUpUtcMs": null, "sendMs": { "n": 81234, "p50": 0.045, "p95": 0.181, "max": 5.1 } },
+      "errors": { "tick send error": 2 }
+    },
+    "pages": [{ "id": 3, "root": "MNQ", "ready": true, "queued": 0, "orderLaneQueued": 0, "oldestDataMs": 0, "sendMs": { "n": 40210, "p50": 0.045, "p95": 0.181, "max": 2.4 } }],
+    "markets": {
+      "MNQ": { "contract": "MNQ 12-26", "quoteOnly": false, "tick": 0.25, "tableTick": null, "priceFormat": "decimal", "settlesBy": "16:00 ET (equity index rule)", "resolvedBy": "the roll rule (12-26)" },
+      "ZN": { "contract": "ZN 12-26", "quoteOnly": true, "tick": 0.015625, "tableTick": 0.015625, "priceFormat": "32nds", "settlesBy": "15:00 ET", "resolvedBy": "NinjaTrader's rollover list (12-26), as the roll rule" }
+    },
+    "tape": { "failed": 0, "roots": { "MNQ": { "late": 0,
+      "session": { "from": "2026-10-06 18:00", "slots": [{ "at": "09:30", "prints": 18342, "perSec": 20.38, "peakPerSec": 212, "gapMs": { "p50": 22.627, "p95": 181.019, "max": 1730 },
+        "sameMsU": 0.31, "sameMsRx": 0.12, "jumpTicks": { "0": 0.71, "1": 0.27, "2": 0.017, "3+": 0.003 }, "delayMs": { "p50": 5.657, "p95": 22.627, "below0": 0 } }], "prints": 18342 },
+      "last": null } } },
     "merges": { "ok": 4, "restored": 1, "failed": 0, "refused": 2, "lastAtUtcMs": 1791380000000 },
     "copier": { "decisions": 18, "skipped": 2, "standDowns": 0, "leaderMsMedian": 14 },
     "bot": { "signals": 7, "proposals": 3, "answered": 2, "notAnswered": 1, "placed": 2, "refused": 0, "heartbeatLost": 0 }
   },
   "refusals": [
-    { "send": { "type": "order", "account": "Sim101", "root": "YM", "side": "buy", "kind": "market", "qty": 1 }, "reason": "YM is quote only: ChartBridge does not trade it." },
+    { "send": { "type": "order", "account": "Sim101", "root": "YM", "side": "buy", "kind": "market", "qty": 1 }, "reason": "YM is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)" },
     { "send": { "type": "order", "account": "Sim101", "root": "MNQ", "side": "buy", "kind": "market", "qty": 2, "strategy": { "name": "Bad", "stop": 8, "t1": 8, "t1Share": 60, "t2": 16, "t2Share": 30 } }, "reason": "The target shares add up to 90; they must add up to 100." },
     { "send": { "type": "copierFollower", "account": "EVAL-A", "on": true, "qty": 1, "size": "micro", "lossLimit": null }, "reason": "EVAL-A is not a Sim account: the copier copies to Sim accounts only." },
     { "send": { "type": "accountArchive", "account": "EVAL-A", "confirm": true }, "reason": "EVAL-A is not gone; only a gone account can be archived." }
