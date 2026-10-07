@@ -2488,14 +2488,16 @@ $('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="w
     <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
     <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
     <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
-  </div>`).join('')}${EXTRA_KEYS.map(a => `
-  <div class="hk-row hk-extra" data-hk="${a.id}" hidden>
+  </div>`).join('')}</div>`;
+/* 1.16.0: Merge's, Accept's and Reject's rows exist only while their switch is on (with every switch off, the 1.15 list) */
+const extraRow = a => `
+  <div class="hk-row hk-extra" data-hk="${a.id}">
     <label class="hk-name" for="wsHk-${a.id}">${esc(OS.keyName(a.id))}</label>
     <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
     <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(OS.keyName(a.id))} hotkey">Clear</button>
     <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
-  </div>`).join('')}</div>`;
-const hkNote = (id, text, level) => { const el = $('wsHkNote-' + id); el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
+  </div>`;
+const hkNote = (id, text, level) => { const el = $('wsHkNote-' + id); if (!el) return; el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
 function renderHotkeys() {
   const HK = readHotkeys(), VK = viewKeys();
   for (const a of OT.HOTKEY_ACTIONS) $('wsHk-' + a.id).value = HK[a.id];
@@ -2503,9 +2505,10 @@ function renderHotkeys() {
   /* 1.16.0: Merge and the copilot's Accept and Reject, each only while its switch is on; kept in The Desk only */
   const mode = deskMode();
   for (const a of EXTRA_KEYS) {
-    const row = document.querySelector('#wsHotkeys .hk-row[data-hk="' + a.id + '"]');
-    row.hidden = !core.switchOn(a.sw);
-    $('wsHk-' + a.id).value = DS.hk ? DS.hk.keys[a.id] : '';
+    let row = document.querySelector('#wsHotkeys .hk-row[data-hk="' + a.id + '"]');
+    if (core.switchOn(a.sw) && !row) { document.querySelector('#wsHotkeys .hk-list').insertAdjacentHTML('beforeend', extraRow(a)); row = true; }
+    else if (!core.switchOn(a.sw) && row) { row.remove(); row = null; }
+    if (row) $('wsHk-' + a.id).value = DS.hk ? DS.hk.keys[a.id] : '';
   }
   for (const el of document.querySelectorAll('#wsHotkeys .hk-in, #wsHotkeys .hk-clear')) {
     const extra = !!el.closest('.hk-extra'), off = mode === 'readonly' || (extra && mode === 'local');
