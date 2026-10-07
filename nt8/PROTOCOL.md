@@ -1695,6 +1695,15 @@ Where the text above leaves a detail open, the build does this. Each is **(lead'
   confirmed leaves every stop in place, and the error says how many contracts have NO STOP. Flat: every ChartBridge leg there is
   cancelled. The `status` `error` and the `merge` text name what covers what (the stops by price, the targets by price);
   `merge` `stop` gives the first leg's stop price and the contracts the stops at that price cover (lead's default).
+- **A cancel not confirmed (fix4, G1).** A stop the swap asked NinjaTrader to cancel, and that is not yet cancelled or filled,
+  never counts as protecting the position (it still counts toward "never over-protected"). When the restore needs that pair
+  back, it waits (3 s at most) for every leg asked to cancel to reach a final state, then places the pair again for what the
+  position still needs. If the cancel is still pending, nothing is placed for it (a cancel that fails would leave two stops),
+  the answer is `failed` (never `restored`), and the `status` `error` names the stop whose cancel is not confirmed. The pair is
+  then watched for 10 minutes: when its cancel lands (stop cancelled), the stops are checked again at once and the pair is
+  placed again at its own prices for what the position still needs, never over it, with a `status` message saying so (an
+  `error` if the stops still do not cover the position). A Flatten since then, or another Merge running, drops it. `restored`
+  is answered only when the stops, none of them waiting on a cancel, cover exactly the position.
 - **A flip during a swap (fix1).** If the position turns to the other side (a long that is now short), nothing is put back (a
   stop or target of the old position is on the side that adds to the new one): every ChartBridge leg of the old position is
   cancelled, the new position's own legs stay, and a `status` `error` says how many contracts held now have no stop. `result`

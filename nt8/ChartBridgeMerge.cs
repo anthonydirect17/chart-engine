@@ -167,6 +167,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public volatile bool Stopped;                      // ChartBridge stopped (Clear): merge_swap.txt stays for the next start
             public volatile bool Restoring;                    // the restore or fallback runs: a fill no longer stops a step
             public volatile string Trouble;                    // a fill, an order error: the next check stops the swap
+            public readonly HashSet<Order> CancelSent = new HashSet<Order>();   // fix4 (G1): every order this swap asked NinjaTrader to cancel (under MergeLock)
         }
 
         private static readonly object MergeLock = new object();       // the swaps, the counters, the fill times; never held while sending
@@ -190,7 +191,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (MergeLock)
             {
                 running = MergeSwaps.Values.ToList();
-                MergeSwaps.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear();
+                running.AddRange(MergeLateRunning);   // fix4 (G1): a late placement sends nothing more either
+                MergeSwaps.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear(); MergeLates.Clear(); MergeFlattenAt.Clear();
                 mergeMarkerRead = false;
             }
             lock (MergeSendLock) foreach (MergeSwapState s in running) { s.Stopped = true; s.Aborted = true; }   // a running swap sends nothing more
@@ -248,7 +250,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void MergeFlattenSend(Account a, Instrument inst, Action flatten)
         {
             List<MergeSwapState> hit;
-            lock (MergeLock) hit = MergeSwaps.Values.Where(s => s.Account == a && SameInstrument(s.Instrument, inst)).ToList();
+            lock (MergeLock)
+            {
+                hit = MergeSwaps.Values.Where(s => s.Account == a && SameInstrument(s.Instrument, inst)).ToList();
+                hit.AddRange(MergeLateRunning.Where(s => s.Account == a && SameInstrument(s.Instrument, inst)));   // fix4 (G1): a late placement stops too
+                MergeFlattenAt[PosKey(a, inst)] = ChartBridgeTime.NowUtcMs();
+            }
             lock (MergeSendLock)
             {
                 foreach (MergeSwapState s in hit) s.Aborted = true;   // after this, the swap sends nothing more
@@ -297,6 +304,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (delta > 0) MergeChangedAt[key] = ChartBridgeTime.NowUtcMs();
                 MergeSwaps.TryGetValue(key, out swap);
             }
+            MergeLateEvent(o);   // fix4 (G1): a late cancel the restore was waiting for
             if (swap != null)
             {
                 if (delta > 0 && swap.Trouble == null) swap.Trouble = "a fill during the merge (" + (o.Name ?? "an order") + ")";
@@ -812,7 +820,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (MergeSendLock)
             {
                 if (s.Aborted) return "Flatten";
-                if (kind == "cancel") { NoteWeCancelSafe(() => orders, "cancel"); s.Account.Cancel(orders.ToArray()); }
+                if (kind == "cancel")
+                {
+                    lock (MergeLock) foreach (Order o in orders) s.CancelSent.Add(o);   // fix4 (G1): a stop asked to cancel no longer counts as protecting
+                    NoteWeCancelSafe(() => orders, "cancel");
+                    s.Account.Cancel(orders.ToArray());
+                }
                 else if (kind == "change") s.Account.Change(orders.ToArray());
                 else
                 {
@@ -898,9 +911,91 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             // The same check: the stops cover exactly the position.
             if (s.Aborted) return "Flatten";
-            int pos = Math.Abs(SignedPosition(s.Account, s.Instrument)), cover = MergeStopCover(s);
+            int pos = Math.Abs(SignedPosition(s.Account, s.Instrument)), cover = MergeStopCover(s), pending = MergePendingCover(s);
+            if (pending > 0) return "after the restore a cancel of a stop for " + pending + " contract(s) is not confirmed yet";   // fix4 (G1): never `restored` on a stop that may still go
             if (cover != pos) return "after the restore the working stops cover " + cover + " of " + pos + " contracts";
             return null;
+        }
+
+        // ---------------------------------------------------------- fix4 (G1): cancels that may still land
+        // The legs of a unit this swap asked to cancel that are not yet cancelled, filled or rejected.
+        private static List<Order> MergePendingCancels(MergeSwapState s, MergeUnit u)
+        {
+            List<Order> legs = new List<Order> { u.Stop };
+            legs.AddRange(u.Targets);
+            lock (MergeLock) return legs.Where(o => o != null && s.CancelSent.Contains(o) && MayFill(o.OrderState)).ToList();
+        }
+
+        // Contracts of the closing-side stops this swap asked to cancel that may still fill (counted in MergeStopCover, which is the
+        // ceiling for "never over-protected", but never as protection).
+        private static int MergePendingCover(MergeSwapState s)
+        {
+            bool closingBuy = s.Pos < 0;
+            List<Order> asked;
+            lock (MergeLock) asked = s.CancelSent.ToList();
+            return asked.Where(o => MayFill(o.OrderState) && IsBuy(o) == closingBuy && MergeParse(o) != null && MergeParse(o).Role == "stop").Sum(o => Math.Max(0, o.Quantity - o.Filled));
+        }
+
+        // A pair whose cancel was not confirmed when the restore needed it: when its cancel lands (every leg asked to cancel is
+        // done and the stop was cancelled), the stops are checked again at once and the pair is placed again for what the position
+        // still needs (never over it), on its own thread, after the swap has ended; a Flatten since then drops it. Watched 10 min.
+        private class MergeLate { public MergeSwapState S; public MergeUnit U; public List<Order> Asked; public double At; }
+        private static readonly List<MergeLate> MergeLates = new List<MergeLate>();
+        private static readonly List<MergeSwapState> MergeLateRunning = new List<MergeSwapState>();   // Flatten aborts these too
+        private static readonly Dictionary<string, double> MergeFlattenAt = new Dictionary<string, double>();   // account|contract -> last Flatten sent
+        public static double MergeLateWatchMs = 600000;
+
+        private static void MergeWatchLate(MergeSwapState s, MergeUnit u)
+        {
+            List<Order> asked = MergePendingCancels(s, u);
+            lock (MergeLock) MergeLates.Add(new MergeLate { S = s, U = u, Asked = asked, At = ChartBridgeTime.NowUtcMs() });
+            ChartBridgeServer.Log("merge on " + s.Where + ": the cancel of " + u.Name() + " is not confirmed; watched, so the pair is placed again when it lands");
+        }
+
+        // MergeOnOrderUpdate, for every order event: a watched late cancel that has now landed.
+        private static void MergeLateEvent(Order o)
+        {
+            MergeLate hit = null;
+            double now = ChartBridgeTime.NowUtcMs();
+            lock (MergeLock)
+            {
+                if (MergeLates.Count == 0) return;
+                MergeLates.RemoveAll(l => now - l.At > MergeLateWatchMs);
+                foreach (MergeLate l in MergeLates)
+                    if (l.Asked.Contains(o) && l.Asked.All(x => IsDone(x.OrderState))) { hit = l; break; }
+                if (hit != null) MergeLates.Remove(hit);
+            }
+            if (hit == null) return;
+            if (hit.U.Stop.OrderState != OrderState.Cancelled) { ChartBridgeServer.Log("merge on " + hit.S.Where + ": the late cancel of " + hit.U.Name() + " did not land (the stop " + StateText(hit.U.Stop.OrderState) + "); nothing to place again"); return; }
+            Thread t = new Thread(() => MergeLateRun(hit)) { IsBackground = true, Name = "ChartBridge merge late cancel" };
+            t.Start();
+        }
+
+        private static void MergeLateRun(MergeLate l)
+        {
+            MergeSwapState o = l.S;
+            MergeSwapState s = new MergeSwapState { Account = o.Account, Instrument = o.Instrument, Root = o.Root, Key = o.Key, Where = o.Where, Client = o.Client,
+                                                    Pos = o.Pos, Units = o.Units, First = o.First, StopPx = o.StopPx, Restoring = true };
+            try
+            {
+                double start = ChartBridgeTime.NowUtcMs();
+                while (MergeFrozen(s.Account, s.Instrument) && ChartBridgeTime.NowUtcMs() - start < 30000) Thread.Sleep(MergePollMs);   // the swap that asked ends first
+                double flat;
+                lock (MergeLock)
+                {
+                    if ((MergeFlattenAt.TryGetValue(s.Key, out flat) && flat >= l.At) || MergeSwaps.ContainsKey(s.Key)) s.Aborted = true;
+                    else MergeLateRunning.Add(s);
+                }
+                if (s.Aborted) { ChartBridgeServer.Log("merge on " + s.Where + ": the late cancel of " + l.U.Name() + " landed after a Flatten or during another Merge; nothing placed"); return; }
+                int before = MergeStopCover(s), pos = Math.Abs(SignedPosition(s.Account, s.Instrument));
+                string why = before >= pos ? null : MergePlaceAgain(s, l.U);
+                string text = s.Where + ": the cancel of " + l.U.Name() + " landed late, after the merge ended; " +
+                              (before >= pos ? "the stops already cover the position, nothing placed" : why == null ? "ChartBridge placed the pair again" : "the pair could not be placed again (" + why + ")") +
+                              "; " + MergeCoverText(s) + "; check NinjaTrader";
+                if (MergeStopCover(s) < Math.Abs(SignedPosition(s.Account, s.Instrument))) Alarm(text); else Warn(text);
+            }
+            catch (Exception ex) { Alarm(s.Where + ": the late cancel of " + l.U.Name() + " landed and ChartBridge could not check the stops (" + ex.Message + "); check the position's stop in NinjaTrader now"); }
+            finally { lock (MergeLock) MergeLateRunning.Remove(s); }
         }
 
         // S (and a kept target) to the contracts of the pairs still in it, never above what the position needs.
@@ -922,7 +1017,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string MergePlaceAgain(MergeSwapState s, MergeUnit u)
         {
             if (s.Aborted) return "Flatten";
-            if (MayFill(u.Stop.OrderState)) return null;   // its cancel never landed: it is still there
+            // Fix4 (G1): a stop this swap asked to cancel and not yet cancelled or filled is NOT protecting: its cancel can still
+            // land. Wait (bounded) for every leg of the pair asked to cancel to reach a final state; then put back what the position
+            // still needs. Still pending: the restore stops here (no `restored`), and the late cancel is watched (MergeWatchLate).
+            List<Order> asked = MergePendingCancels(s, u);
+            if (asked.Count > 0)
+            {
+                string late = MergeWait(s, () => asked.All(o => IsDone(o.OrderState)), () => null, "the cancel of " + (asked[0].Name ?? ""));
+                if (late == "Flatten") return late;
+                if (late != null) { MergeWatchLate(s, u); return late + " (when it lands, ChartBridge places the pair again)"; }
+            }
+            else if (MayFill(u.Stop.OrderState)) return null;   // never asked to cancel (or its cancel was refused): it is still there
             if (MergeFlipped(s)) return "the position turned to the other side";   // fix1: the fallback then cancels the old side (MergeOnFlip)
             int pos = Math.Abs(SignedPosition(s.Account, s.Instrument)), qty = Math.Min(u.Qty, pos - MergeStopCover(s));
             if (qty <= 0) { ChartBridgeServer.Log("merge restore on " + s.Where + ": " + u.Name() + " not placed again; the position no longer needs it"); return null; }
@@ -1075,8 +1180,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (l.Role == "stop") cover += open;
             }
             Func<SortedDictionary<double, int>, string> list = d => string.Join(", ", d.Select(kv => kv.Value + " at " + MergeText(kv.Key)));
+            int pending = MergePendingCover(s);   // fix4 (G1)
             return "the working stops cover " + cover + " of " + pos + " contract(s)" + (stops.Count > 0 ? " (" + list(stops) + ")" : "") +
-                   (cover < pos ? ": " + (pos - cover) + " contract(s) have NO STOP" : "") + (targets.Count > 0 ? "; targets " + list(targets) : "; NO TARGET");
+                   (cover < pos ? ": " + (pos - cover) + " contract(s) have NO STOP" : "") +
+                   (pending > 0 ? "; " + pending + " of them on a stop whose cancel is not confirmed: if it lands, ChartBridge places that pair again" : "") +
+                   (targets.Count > 0 ? "; targets " + list(targets) : "; NO TARGET");
         }
 
         // ---------------------------------------------------------- the position turned to the other side mid-swap
