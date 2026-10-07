@@ -343,7 +343,9 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-panel.gr-narrow .gr-pos .gr-row { grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) 44px; }
 .ws-panel.gr-narrow .gr-ord .gr-row { grid-template-columns: 36px minmax(0, 1fr) 26px; }
 .ws-panel.gr-narrow .gr-fil .gr-row { grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr); }
-.ws-panel.gr-narrow .gr-qb { font-size: 10px; }
+/* 10 px on a narrow board (1.16.0: the doubled class outranks the narrow panels' 10.5 px below; with IBM Plex Mono served
+   from the PC a 9-figure price at 10.5 px no longer fit a 2-column board at 1366 px) */
+.ws-panel.gr-narrow .gr.gr-qb { font-size: 10px; }
 .ws-panel.gr-narrow .gr-qb .gr-row { grid-template-columns: 30px minmax(0, 9fr) minmax(0, 7fr) minmax(0, 9fr); }
 .ws-panel.gr-narrow .gr-qb .pr > :last-child { font-size: 10px; }
 /* a 2 x 1 board: one line, the last, the change and the percent (the high and low in the row's tooltip); at 1366 px only

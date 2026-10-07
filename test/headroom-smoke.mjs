@@ -123,6 +123,9 @@ try {
   check(s.find(x => x.id === big.id).auto === false, 'big panel: after a first leg up, the price scale squashed by hand, auto-fit off for now');
   const bad = { ws: [] }, worst = {}, squash = {};
   let tookOver = null, beforeTake = Infinity;
+  /* 1.16.0: a workspace chart has no text on it, so its header is the plot's top: the price set by hand runs up to 12 px
+     under it before the auto-fit takes over, further than under the 1.15.0 legend: a longer leg, at the same pace */
+  const WS_PTS = TREND_PTS + 30, WS_SECS = Math.round(TREND_SECS * (TREND_PTS + 30) / TREND_PTS);
   const last1 = await trend(L0, async f => {
     const all = await look(wp, 'ws');
     for (const x of all) {
@@ -136,9 +139,9 @@ try {
         if (x.auto) squash[key] = Math.max(squash[key] || 0, x.squash);
       }
     }
-  });
+  }, WS_PTS, WS_SECS);
   check(tookOver !== null && beforeTake >= MARGIN, 'big panel: the auto-fit took over by itself as the price neared the header (at ' + (tookOver === null ? '-' : Math.round(tookOver * 100) + '%') + ' of the move; until then the price stayed ' + Math.round(beforeTake) + ' px or more below the header)');
-  check(bad.ws.length === 0, 'workspace: through +' + TREND_PTS + ' points in ' + TREND_SECS + ' s the last price, the forming high and every high in view stayed at least ' + MARGIN + ' px below the header, and every low above the bottom (closest: big ' + Math.round(worst.big) + ' px, small ' + Math.round(worst.small) + ' px)' + (bad.ws.length ? ': ' + bad.ws.slice(0, 4).join('; ') : ''));
+  check(bad.ws.length === 0, 'workspace: through +' + WS_PTS + ' points in ' + WS_SECS + ' s the last price, the forming high and every high in view stayed at least ' + MARGIN + ' px below the header, and every low above the bottom (closest: big ' + Math.round(worst.big) + ' px, small ' + Math.round(worst.small) + ' px)' + (bad.ws.length ? ': ' + bad.ws.slice(0, 4).join('; ') : ''));
   check(squash.big <= 1.1 && squash.small <= 1.1, 'never squashed more than the move needs: the scale at most ' + Math.max(squash.big, squash.small).toFixed(3) + ' times the fit of the bars in view (easing included)');
   await shot(wp, 'headroom-ws-1366-after-trend.png');
 

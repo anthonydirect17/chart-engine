@@ -2941,6 +2941,8 @@ function create(container, options) {
     },
     /** The VWAP's edge marker as last drawn ({ up, x, y, w, h, price }), or null when the VWAP is on the scale. */
     vwapMarker() { return vwapMark ? Object.assign({}, vwapMark) : null; },
+    /** The VWAP the chart draws at bar i (1.16.0, for reading: a host's own readout, the tests), or null where it has none. */
+    vwapAt(i) { const n = last(); if (!(i >= 0 && i <= n)) return null; const v = vwapOf(i); return typeof v === 'number' && isFinite(v) ? v : null; },
     /** The corner readout (1.15.0): a short quiet text at the plot's bottom right ('' for none), placed clear of the order
         labels and the VWAP's marker, `short` instead on a plot too narrow for it; the page sets it once a second.
         corner() says where it was last drawn and which text, or null. */
