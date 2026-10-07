@@ -10,6 +10,12 @@
 //      the bot never trades the leader's account (lead's default: every exit on the leader is copied, so a bot position mixed
 //      into the leader's would shrink or flatten the followers).
 //   X5 a page that signs in first and sends client after still gets each lane's v3 state (the one handshake tells the lanes).
+//   X6 Merge and Order Strategies: Merge reads B1's own legs (B1's LegNameRx), its shares from B1's state and B1's allocation
+//      rule; breakeven and trailing are paused through the swap; after it the merged position is no longer managed (lead's
+//      default), every stop stays where it is and managed says so.
+//   X7 the copier and Order Strategies: a strategy entry's stop counts for the copier's stop rule, each fill increment is
+//      copied once with its full quantity, and breakeven moves the followers' stops to the leader's new stop price.
+//   X8 the bot and the new lanes: a bot order never carries an Order Strategy and never uses the new order kinds.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -70,8 +76,12 @@ public static class IntegrationHarness
 
     // The stand-in broker: a change takes the new price and quantity, a cancel cancels the order and its OCO partners, a
     // submit is reported; each with NinjaTrader's order event (as MergeHarness's broker).
+    static Func<string, Order, bool> Hold;   // a call NinjaTrader leaves unanswered (X6)
+
     static void Broker(Account a, string kind, Order o)
     {
+        Func<string, Order, bool> hold = Hold;
+        if (hold != null && hold(kind, o)) { if (kind == "submit") o.OrderState = OrderState.Submitted; return; }
         if (kind == "change")
         {
             if (o.QuantityChanged > 0) o.Quantity = o.QuantityChanged;
@@ -163,10 +173,19 @@ public static class IntegrationHarness
             GoneIsOneRule();
             BotNeverCopied();
             LateHandshake();
+            ChartBridgeOrders.StrategyInline = true;   // breakeven and trailing moves on this thread (as StrategiesHarness)
+            ChartBridgeOrders.StrategyClock = () => clock;
+            ChartBridgeSwitches.Note("strategies", "on");
+            StrategyOnTheLeader();
+            MergeStrategyLegs();
+            BotNoStrategy();
         }
         catch (Exception ex) { Check(false, "integration harness threw: " + ex); }
         finally
         {
+            Hold = null;
+            ChartBridgeOrders.StrategyInline = false;
+            ChartBridgeOrders.StrategyClock = null;
             ChartBridgeCopier.Stop();
             ChartBridgeBot.Stop();
             ChartBridgeCopier.HarnessManual = false;
@@ -311,5 +330,145 @@ public static class IntegrationHarness
             Check(late.Trader && !before && bot && copier, "X5: signed in as a v2 page (no bot or copier message), then client v3: the bot strip and the copier's state arrive");
         }
         finally { ChartBridgeClient gone; Clients().TryRemove(72, out gone); ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off"); }
+    }
+
+    // ------------------------------------------------------------ Order Strategies with the other lanes
+    static double clock = 50000000;
+    static void Trade(double price) { clock += 1000; ChartBridgeOrders.NoteLast("MNQ", price); }
+    static string StratOrder(string account, int qty, string strategy) { return "{\"type\":\"order\",\"cid\":\"g\",\"account\":\"" + account + "\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":" + qty + ",\"strategy\":{" + strategy + "}}"; }
+    static Order StrategyEntry(Account a, int qty, double fill, string strategy)
+    {
+        Trade(fill);
+        int n;
+        lock (a.Orders) n = a.Orders.Count;
+        Msg("order", StratOrder(a.Name, qty, strategy));
+        Order e;
+        lock (a.Orders) e = a.Orders.Skip(n).FirstOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} sg$"));
+        if (e == null) { Check(false, "a strategy entry was sent on " + a.Name + ": " + Last()); return null; }
+        e.Filled = qty; e.AverageFillPrice = fill; e.OrderState = OrderState.Filled;
+        Update(a, e);
+        SetPos(a, PosOf(a) + qty);
+        return e;
+    }
+    static void Clean(params Account[] accounts)
+    {
+        foreach (Account a in accounts) { lock (a.Orders) foreach (Order o in a.Orders) if (IsLive(o)) o.OrderState = OrderState.Cancelled; SetPos(a, 0); }
+        Booked();
+        ChartBridgeCopier.Tick();
+    }
+    static List<string> ManagedSaid(Order entry) { string id = IdOf(entry); lock (sent) return sent.Where(m => m.StartsWith("{\"type\":\"managed\"") && m.Contains("\"id\":\"" + id + "\"")).ToList(); }
+
+    // X7: the copier's leader trades an Order Strategy with breakeven
+    static void StrategyOnTheLeader()
+    {
+        lock (sent) sent.Clear();
+        Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r3\"}");
+        int copies = CopyEntries(f1), fCalls = f1.Calls.Count;
+        Order e = StrategyEntry(lead, 2, 25000, "\"name\":\"Two\",\"stop\":8,\"t1\":8,\"t2\":16,\"t1Share\":50,\"t2Share\":50,\"beAfter\":4,\"bePlus\":1");
+        if (e == null) return;
+        List<Order> lstops = LiveStops(lead);
+        Check(lstops.Count == 2 && lstops.All(o => o.StopPrice == 24998 && Regex.IsMatch(o.Name, " k[12]$")), "X7: a strategy entry on the leader (the copier armed): its stop counts for the copier's stop rule; one pair per bucket, stops at 24998");
+        List<Order> newCopies;
+        lock (f1.Orders) newCopies = f1.Orders.Where(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} copy [0-9a-f]{8}$")).Skip(copies).ToList();
+        Check(newCopies.Count == 1 && newCopies[0].Quantity == 2, "X7: the fill increment of 2 is copied once with its full quantity (not once per bucket): " + string.Join(" | ", newCopies.Select(o => o.Name + " x" + o.Quantity)));
+        if (newCopies.Count != 1) return;
+        Order copy = newCopies[0];
+        copy.Filled = 2; copy.AverageFillPrice = 25000; copy.OrderState = OrderState.Filled;
+        Update(f1, copy);
+        SetPos(f1, PosOf(f1) + 2);
+        List<Order> fstops = LiveStops(f1);
+        Check(fstops.Count == 1 && fstops[0].StopPrice == 24998 && fstops[0].Quantity == 2, "X7: the follower's stop for 2 at the leader's stop price 24998");
+        Trade(25001);   // 4 ticks in profit: breakeven plus 1 tick
+        lstops = LiveStops(lead);
+        fstops = LiveStops(f1);
+        Check(lstops.Count == 2 && lstops.All(o => o.StopPrice == 25000.25) && fstops.Count == 1 && fstops[0].StopPrice == 25000.25,
+              "X7: breakeven moves the leader's stops to 25000.25 and the follower's stop to the same price: leader " + string.Join(", ", lstops.Select(o => o.StopPrice)) + ", follower " + string.Join(", ", fstops.Select(o => o.StopPrice)));
+        Clean(lead, f1);
+    }
+
+    // X6: Merge on an account's Order Strategy legs
+    const string NoBe = "\"name\":\"Halves\",\"stop\":8,\"t1\":8,\"t2\":16,\"t1Share\":50,\"t2Share\":50,\"beAfter\":20,\"bePlus\":1";
+
+    static string RunMerge(Account a, string cid)
+    {
+        Thread.Sleep(ChartBridgeOrders.MergeQuietMs + 50);
+        int from;
+        lock (sent) from = sent.Count;
+        Msg("merge", "{\"type\":\"merge\",\"cid\":\"" + cid + "\",\"account\":\"" + a.Name + "\",\"root\":\"MNQ\"}");
+        return WaitFor(from, "\"type\":\"merge\",\"cid\":\"" + cid + "\"", 10000);
+    }
+
+    static void MergeStrategyLegs()
+    {
+        Account m = NewAccount("SIM-M", Provider.Simulator);
+        SetPos(m, 0);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L, SIM-M");
+        Order e1 = StrategyEntry(m, 2, 25000, NoBe), e2 = StrategyEntry(m, 2, 25002, NoBe);
+        if (e1 == null || e2 == null) return;
+        Check(LiveStops(m).Count == 4, "X6: two strategy entries of 2, one pair per bucket each: 4 stops");
+        lock (sent) sent.Clear();
+        int calls = m.Calls.Count;
+        string r = RunMerge(m, "mg1");
+        Stopwatch sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(m, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        List<Order> stops = LiveStops(m);
+        List<Order> targets;
+        lock (m.Orders) targets = m.Orders.Where(o => IsLive(o) && o.OrderType == OrderType.Limit).ToList();
+        Check(r.Contains("\"result\":\"merged\"") && r.Contains("\"stop\":{\"price\":24998,\"qty\":4}") && r.Contains("\"targets\":[{\"price\":25002,\"qty\":2},{\"price\":25004,\"qty\":2}]"),
+              "X6: Merge reads B1's legs (k1, k2), B1's shares (50/50) and B1's allocation: one stop for 4 at 24998, targets 2 and 2 at the first leg's prices: " + r);
+        Check(stops.Count == 1 && stops[0].Name.StartsWith("CB#" + Regex.Match(e1.Name, "^CB#([0-9a-f]{8})").Groups[1].Value + " mstop q4 p24998") && targets.Count == 2,
+              "X6: the merged set as B4 names it: " + string.Join(" | ", stops.Concat(targets).Select(o => o.Name)));
+        List<string> said1 = ManagedSaid(e1), said2 = ManagedSaid(e2);
+        Check(said1.Any(x => x.Contains("\"state\":\"unmanaged\"") && x.Contains("Merge merged")) && said2.Any(x => x.Contains("\"state\":\"unmanaged\"")),
+              "X6: after the merge both entries are no longer managed, and managed says why: " + (said1.LastOrDefault() ?? "(none)"));
+        int before = m.Calls.Count;
+        Trade(25006); Trade(25010); Trade(25014);   // 40+ ticks in profit: breakeven would have moved a managed stop
+        Check(m.Calls.Count == before && stops[0].StopPrice == 24998, "X6: no breakeven or trailing move on the merged stop afterwards; it stays at 24998");
+        Clean(m);
+
+        // the pause: a swap that NinjaTrader does not confirm, with a breakeven trade in the middle; then the restore
+        Order e3 = StrategyEntry(m, 2, 25000, "\"name\":\"Halves\",\"stop\":8,\"t1\":8,\"t2\":16,\"t1Share\":50,\"t2Share\":50,\"beAfter\":4,\"bePlus\":1");
+        Order e4 = StrategyEntry(m, 2, 25000.5, "\"name\":\"Halves\",\"stop\":8,\"t1\":8,\"t2\":16,\"t1Share\":50,\"t2Share\":50,\"beAfter\":4,\"bePlus\":1");
+        if (e3 == null || e4 == null) return;
+        Trade(25000.75);   // under breakeven for both
+        Hold = (kind, o) => kind == "cancel";   // NinjaTrader confirms no cancel: the swap's first step times out
+        int callsBefore = m.Calls.Count;
+        Thread.Sleep(ChartBridgeOrders.MergeQuietMs + 50);
+        int from;
+        lock (sent) from = sent.Count;
+        Msg("merge", "{\"type\":\"merge\",\"cid\":\"mg2\",\"account\":\"SIM-M\",\"root\":\"MNQ\"}");
+        Thread.Sleep(50);
+        bool frozen = ChartBridgeOrders.MergeFrozen(m, mnq);
+        Trade(25003);   // 12 ticks over e3's fill: breakeven is due, but the swap holds it
+        List<string> during = m.Calls.Skip(callsBefore).ToList();
+        string r2 = WaitFor(from, "\"type\":\"merge\",\"cid\":\"mg2\"", 10000);
+        sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(m, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        Hold = null;
+        Check(frozen && !during.Any(c => c.StartsWith("change ") && c.Contains(" S25000.25 ")), "X6: breakeven is paused while the swap runs (no move to 25000.25 during it): " + string.Join(" | ", during.Where(c => c.StartsWith("change "))));
+        Check(r2.Contains("\"result\":\"restored\"") || r2.Contains("\"result\":\"failed\""), "X6: the swap that was not confirmed ends restored (or failed): " + r2);
+        int after = m.Calls.Count;
+        Trade(25004); Trade(25006);
+        Check(m.Calls.Skip(after).All(c => !c.StartsWith("change ")) && ManagedSaid(e3).Any(x => x.Contains("\"state\":\"unmanaged\"")),
+              "X6: after a restore too, the position is no longer managed (its pairs are new orders): no move, and managed says so");
+        Clean(m);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L");
+    }
+
+    // X8: the bot never uses an Order Strategy or a new kind
+    static void BotNoStrategy()
+    {
+        ChartBridgeSwitches.Note("orderTypes", "on");
+        try
+        {
+            Trade(25000);
+            int n = lead.Calls.Count;
+            Order placed;
+            string why1 = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"strategy\":{\"name\":\"X\",\"stop\":8}}", out placed);
+            string why2 = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"mit\",\"qty\":1,\"price\":24990,\"bracket\":{\"stop\":8,\"target\":16}}", out placed);
+            Check(why1 != null && why2 != null && why2.Contains("the bot places market, limit and stop entries") && lead.Calls.Count == n,
+                  "X8: with strategies and orderTypes on, a bot order with a strategy or an MIT is refused, nothing sent: " + why1 + " / " + why2);
+        }
+        finally { ChartBridgeSwitches.Note("orderTypes", "off"); }
     }
 }

@@ -98,6 +98,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             try { ChartBridgeCopier.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("copier error: " + ex.Message); }
             try { ChartBridgeBot.AfterAuth(client); } catch (Exception ex) { ChartBridgeServer.Log("bot error: " + ex.Message); }
+            try { ChartBridgeOrders.SendManagedAfterClient(client); } catch (Exception ex) { ChartBridgeServer.Log("managed error: " + ex.Message); }
         }
 
         public static void SendToV3Traders(string json)

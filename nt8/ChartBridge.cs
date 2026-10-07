@@ -1448,7 +1448,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public Action<string> Tap;              // test hook: sees every message sent (unused in NinjaTrader)
 
         private static readonly string[] OrderLaneTypes = { "hello", "trading", "orders", "order", "position", "reject", "exec", "execs", "status", "pong", "accounts", "merge", "copier", "copierEvent",
-            "bot", "botSignal", "botProposal", "welcome", "botState", "answer" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data
+            "bot", "botSignal", "botProposal", "welcome", "botState", "answer", "managed" };   // 0.4.0 accounts: "accounts" in the order lane   // 0.4.0 B4: merge   // 0.4.0 copier: copier, copierEvent   // 0.4.0 bot: the bot's messages never wait behind market data   // 0.4.0 B1: managed
 
         // The message's type, read from its start ({"type":"...), as every message ChartBridge sends begins.
         public static string TypeOf(string json)

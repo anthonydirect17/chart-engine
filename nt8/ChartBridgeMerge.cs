@@ -57,7 +57,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   merged target "CB#1a2b3c4d mtarget q1 p25010.25 k2"      a merged target of bucket k at that price (no OCO)
         // In leg names p is the fill price; in merged names p is the order's own price.
         private const string MergePx = "([0-9]{1,9}(?:\\.[0-9]{1,8})?)";
-        private static readonly Regex MergeLegRx = new Regex("^CB#([0-9a-f]{8}) (stop|target) f([0-9]{1,6}) q([0-9]{1,6}) p" + MergePx + "(?: k([1-3]))?$");
+        // Integration: a pair's leg is read with ChartBridgeOrders' own LegNameRx (lane B1's, the bucket is group 6), never a copy.
         private static readonly Regex MergedRx = new Regex("^CB#([0-9a-f]{8}) (mstop|mtarget) q([0-9]{1,6}) p" + MergePx + "(?: k([1-3]))?$");
 
         private class MergeLeg { public Order Order; public string Tag, Role; public int Fill, Bucket; public bool Merged; }
@@ -65,8 +65,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static MergeLeg MergeParse(Order o)
         {
             string name = o != null ? o.Name ?? "" : "";
-            Match m = MergeLegRx.Match(name);
-            if (m.Success)
+            Match m = LegNameRx.Match(name);
+            if (m.Success && m.Groups[2].Value != "exit")   // a stop or a target; a market exit is not a leg
                 return new MergeLeg { Order = o, Tag = m.Groups[1].Value, Role = m.Groups[2].Value, Fill = int.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture),
                                       Bucket = m.Groups[6].Success ? int.Parse(m.Groups[6].Value, CultureInfo.InvariantCulture) : 0 };
             m = MergedRx.Match(name);
@@ -117,53 +117,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- the strategy's target shares (the allocation rule)
-        // A multi-target merge resizes the first leg's targets by the strategy's shares. They are read from what lane B1 keeps:
-        // MergeSharesHook (set by the strategies code when it lands, from memory), else the strategy's line in managed.txt
-        // ("<tag>\t<strategy JSON>\t<best>\t<saved ms>", PROTOCOL "Order Strategies"). Never guessed: unknown shares refuse.
-        public static Func<string, int[]> MergeSharesHook;   // tag -> { t1Share, t2Share, t3Share } (0 for none), or null
-        private static readonly Regex ShareRx = new Regex("\"t([1-3])Share\"\\s*:\\s*([0-9]{1,3})\\s*[,}]");
-
-        private static int[] MergeSharesFor(string tag)
-        {
-            Func<string, int[]> hook = MergeSharesHook;
-            if (hook != null) { int[] s = hook(tag); if (s != null && s.Length == 3) return s; }
-            string file = Path.Combine(ChartBridgeConfig.Folder, "managed.txt");
-            try
-            {
-                if (!File.Exists(file)) return null;
-                foreach (string raw in File.ReadAllLines(file))
-                {
-                    string[] f = raw.Split('\t');
-                    if (f.Length < 2 || f[0].Trim() != tag) continue;
-                    int[] shares = new int[3];
-                    foreach (Match m in ShareRx.Matches(f[1])) shares[int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) - 1] = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
-                    return shares;
-                }
-            }
-            catch (Exception ex) { ChartBridgeServer.Log("merge: managed.txt could not be read (" + ex.Message + ")"); }
-            return null;
-        }
-
-        // PROTOCOL "Allocation": q contracts over shares: each gets floor(q * s / total); the rest one each to the largest
-        // remainders, a tie to the later target. Total exactly q. (total is 100 when every bucket of the strategy is there;
-        // lead's default: when a bucket of the first leg is gone, its target filled or the rule dropped it, the position is
-        // allocated over the buckets that are left, by their shares out of their sum.)
-        public static int[] MergeAllocate(int q, int[] shares)
-        {
-            int n = shares.Length, total = shares.Sum();
-            int[] got = new int[n];
-            long[] rem = new long[n];
-            if (total <= 0 || q <= 0) return got;
-            int given = 0;
-            for (int i = 0; i < n; i++) { got[i] = (int)((long)q * shares[i] / total); rem[i] = (long)q * shares[i] % total; given += got[i]; }
-            for (int left = q - given; left > 0; left--)
-            {
-                int best = -1;
-                for (int i = 0; i < n; i++) if (shares[i] > 0 && (best < 0 || rem[i] >= rem[best])) best = i;   // >=: a tie goes to the later target
-                got[best]++; rem[best] = -1;
-            }
-            return got;
-        }
+        // Integration: one rule and one source. The shares come from lane B1's own state (ChartBridgeOrders.StrategyShares: the
+        // live record, or the managed.txt line read at the start), and the allocation is B1's Allocate (PROTOCOL "Allocation";
+        // a bucket that is gone: the position over the buckets left, by their shares out of their sum, lead's default). Never
+        // guessed: unknown shares refuse.
+        private static int[] MergeSharesFor(string tag) { return StrategyShares(tag); }
 
         // ---------------------------------------------------------- what a merge works on
         // A unit is one pair (a fill increment's stop and target, per bucket for a strategy) or one merged set (its stop and targets).
@@ -415,13 +373,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst = ChartBridgeServer.InstrumentFor(root);                 // gate 6: a root ChartBridge trades
             if (inst == null) return MergeRefuse("instrument " + root + " is not served by ChartBridge");
             MergeSwapState s = new MergeSwapState { Account = account, Instrument = inst, Root = root, Key = PosKey(account, inst), Cid = cid, Client = client, Where = Where(account, inst) };
+            // Integration (lane B1): breakeven and trailing paused on this account and contract before the stop prices are read,
+            // until the swap ends (PROTOCOL "Merge", step 1: "breakeven/trailing on it are ... paused for the swap").
+            PauseStrategies(account, inst, true);
             why = MergePlan(s);
-            if (why != null) return MergeRefuse(why);
-            lock (MergeLock)
-            {
-                if (MergeSwaps.ContainsKey(s.Key)) return MergeRefuse("a Merge is already running on " + s.Where);
-                MergeSwaps[s.Key] = s;                                                // the freeze (step 1)
-            }
+            if (why == null)
+                lock (MergeLock)
+                {
+                    if (MergeSwaps.ContainsKey(s.Key)) why = "a Merge is already running on " + s.Where;
+                    else MergeSwaps[s.Key] = s;                                         // the freeze (step 1)
+                }
+            if (why != null) { if (!MergeFrozen(account, inst)) PauseStrategies(account, inst, false); return MergeRefuse(why); }
             ChartBridgeServer.Log("merge started on " + s.Where + ": " + s.Units.Count + " pair(s), position " + s.Pos + ", stop " + MergeText(s.StopPx) +
                                   (s.Multi ? ", " + s.TargetBuckets.Length + " targets resized" : ""));
             Thread t = new Thread(() => MergeRun(s)) { IsBackground = true, Name = "ChartBridge merge" };
@@ -605,6 +567,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (MergeLock) { if (!s.Stopped) { MergeSwaps.Remove(s.Key); MergeChangedAt[s.Key] = ChartBridgeTime.NowUtcMs(); } }   // unfreeze
                 if (!s.Stopped) MergeMarker(s, false);   // ChartBridge stopped mid-swap: the next start says so
             }
+            // Integration (lane B1; lead's default): the pairs breakeven and trailing followed are gone (merged, or placed again as
+            // new orders), so they stop on this position; every stop stays where it is and the pages are told (managed, unmanaged).
+            try { if (!s.Stopped) StrategiesMerged(s.Account, s.Instrument, s.Root + " " + s.Account.Name + ": Merge " + result + "; breakeven and trailing stopped for this position, every stop stays where it is (manage it by hand)"); }
+            catch (Exception ex) { ChartBridgeServer.Log("merge: strategies could not be told (" + ex.Message + ")"); }
             MergeFinish(s, result, text);
         }
 
@@ -651,7 +617,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string why = MergeCancelOrders(s, s.Kept.Targets.Where(t => IsWorking(t.OrderState)).ToList());
                 if (why != null) return why;
             }
-            int[] qty = MergeAllocate(Math.Abs(s.Pos), s.Shares);
+            int[] qty = Allocate(Math.Abs(s.Pos), s.Shares);   // integration: B1's allocation rule
             List<Order> place = new List<Order>();
             for (int b = 0; b < qty.Length; b++)
             {

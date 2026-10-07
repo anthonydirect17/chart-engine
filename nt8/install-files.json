@@ -10,7 +10,8 @@
     "nt8/ChartBridgeAccounts.cs",
     "nt8/ChartBridgeMerge.cs",
     "nt8/ChartBridgeCopier.cs",
-    "nt8/ChartBridgeBot.cs"
+    "nt8/ChartBridgeBot.cs",
+    "nt8/ChartBridgeStrategies.cs"
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },

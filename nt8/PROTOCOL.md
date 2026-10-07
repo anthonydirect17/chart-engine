@@ -1523,6 +1523,48 @@ trailing could not be resumed after the restart; the stop stays at 24,980.25. Ma
 
 A `plan` on a strategy entry is refused in 0.4.0 (lead's default: cancel and place it again).
 
+### Order types and Order Strategies: build notes (0.4.0, lane B1)
+
+Built in `nt8/ChartBridgeStrategies.cs` (the rest of the `ChartBridgeOrders` class, so every v2 gate and the per-fill
+bracket code are the same code). Checked by `nt8/check/StrategiesHarness.cs` inside `npm run check:orders`. Where the
+contract left a detail open:
+
+- **A v3 page.** Lane B2 owns `hello.features` `"v3"`, the `client` handshake and `trading.switches`; this lane uses B2's
+  helper (`ChartBridgeV3.IsV3`, `ChartBridgeV3.SendToV3Traders`). `managed` goes to signed-in v3 pages only, in the order
+  lane (`"managed"` is in `OrderLaneTypes`). `OrderTypesOn` and `StrategiesOn` read the one shared switch store, the same
+  values `trading.switches` sends.
+- **Switched off is 0.3.8 exactly:** `kind` `stopLimit` or `mit` is "kind must be market, limit or stop", `limitOffset` and
+  `limitPrice` are unknown keys, an order with `strategy` is refused as a nested object, a stop-limit moves only in
+  NinjaTrader, order messages carry no `limitPrice`, `by` or `bucket`, and an MIT placed elsewhere is `kind` `other`.
+  (lead's default)
+- **Names:** a stop-limit or MIT strategy entry is `CB#1a2b3c4d atm sg sl` / `CB#1a2b3c4d atm sg mit`. A strategy with no
+  target has one stop per increment named `k1`, no OCO id. A bucket's OCO id is `cb-<tag>-f<filled>-<bucket>`
+  (`cb-1a2b3c4d-f3-2`). A stop already traded gets one market exit per bucket, `CB#1a2b3c4d exit f3 q1 p24990.25 k2`,
+  and one `status` `error`. (lead's default)
+- **A ChartBridge stop-limit moved by the page** (an entry, or a strategy's stop leg) passes gate 5 as a stop, and its new
+  limit (the same offset) passes `maxTicksAway`. (lead's default)
+- **Moves:** a stop level is put on the tick grid on the loose side (a long's stop down, a short's up), so it is never
+  past the level the rule names. Breakeven and trailing move only while `trading` and `strategies` are on. A move is
+  confirmed when NinjaTrader reports the stop working at the new price; one not confirmed in 5 s is let go (the stop's
+  real price counts, and a later trade may move it again). A move NinjaTrader rejects leaves the stop where it is,
+  raises the `status` `error`, and that stop is **not moved again** (no new try every 500 ms into a rejection; Anthony
+  manages it by hand). Flatten stops breakeven and trailing on that account and root at once, so no move races its
+  cancels. (lead's default)
+- **`managed`:** `pairs` lists working pairs only; `best` is the best price over them; `id` is null when NinjaTrader no
+  longer lists the entry (after a NinjaTrader restart the legs are recovered from their names alone). (lead's default)
+- **`managed.txt` best prices:** `f2k1:24995.25,f2k3:24995.25` per pair (fill mark and bucket), `-` for none. Lines older
+  than 7 days are dropped when the file is read. A file that cannot be read is never rewritten that run (one `status`
+  `error` at start). (lead's default)
+- **Restart, unmanaged also when:** `strategies` or `trading` is off at the restart; a working leg is on the entry's side,
+  in a bucket the strategy does not have, a target with a strategy that has none, a target not at the strategy's distance
+  from its fill, a stop of the other type (stop-market or stop-limit), or a pair with a working target and no working
+  stop. The text names the reason. A strategy entry still resting whose line is lost cannot get legs from a guess: the
+  error says it gets NO STOP if it fills (cancel it and place it again), and a fill then raises the NO STOP error and
+  the missing-stop alarm watches it. A finished strategy entry the names still list is recovered quietly (no message).
+  (lead's default)
+- **For Merge (lane B4):** `ChartBridgeOrders.Allocate(q, shares)` is the allocation rule; strategy legs match
+  `LegNameRx` with the bucket in group 6.
+
 ### Merge stops and targets (`merge = on`)
 
 A Merge action (a page button and a hotkey) joins the per-leg stops and targets of one account's position on one root into
@@ -1594,8 +1636,9 @@ Where the text above leaves a detail open, the build does this. Each is **(lead'
 - **One target, kept pair.** The first-leg pair that has the target is kept and grown; any other first-leg pair is merged into
   it like the rest. A merged set from an earlier strategy Merge is kept the same way: its stop grows, and its targets are
   cancelled and placed again for the whole position by the allocation rule.
-- **The shares** for a strategy come from the strategies code (`MergeSharesHook`), else from the entry's line in `managed.txt`;
-  unknown shares refuse ("never guessed"). If a bucket of the first leg is gone (its target filled, or the rule dropped it),
+- **The shares** for a strategy come from the strategies code's own state (`ChartBridgeOrders.StrategyShares`: the live
+  record, or the entry's `managed.txt` line as read at the start); unknown shares refuse ("never guessed"). The allocation is
+  the strategies code's `Allocate` (one rule). If a bucket of the first leg is gone (its target filled, or the rule dropped it),
   the position is allocated over the buckets that are left, by their shares out of their sum.
 - **Names.** `mstop q<n>` carries the whole position at placement; names never change after that.
 - **Restore.** A pair is placed again with its own name and prices and a new OCO id (`...-r<n>`), and only for what the
@@ -1689,8 +1732,7 @@ The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) ru
 - **Switch.** `copier = on` (or `true`, `1`); anything else is off with one Output line. Off: every `copier*` message is
   refused ("The copier is off (copier in config.txt).") and every hook returns at once, so ChartBridge behaves as 0.3.8.
   `trading = true` stays above it; the copier never changes either switch.
-- **v3 pages only.** Copier messages need a v3 page (`ChartBridgeCopier.IsV3`; the `client` handshake is lane B2's, and until
-  it is merged a minimal stub in the copier file, `StubV3Client`, records `{"type":"client","v":3}`). Such a page gets `copier` after `auth`, with
+- **v3 pages only.** Copier messages need a v3 page (`ChartBridgeV3.IsV3`, after lane B2's `client` handshake). Such a page gets `copier` after `auth`, with
   `enabled: false` when the switch is off. `copier` is sent again on every decision and within a second of a position change.
 - **Sim** is read from NinjaTrader: the account's `Provider` (`Account.Provider`, else `Account.Connection.Options.Provider`)
   must read exactly `Simulator`; anything else, or nothing readable, is not Sim; Backtest and Playback never (lead's default;
@@ -1875,14 +1917,39 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   `Host: localhost:<port>` (as `/session`); **405** for a method other than GET or HEAD; **500** with
   `{"error": "..."}` when it is over 2 MB or is not valid JSON. Loopback only, as every request; never through Tailscale or the
   tunnel. ChartBridge checks only that it is JSON; the page lane owns its schema (`docs/BOT_LIBRARY.md`).
-- **`client`**: lane B2 owns the v3 handshake. Until it is merged, `ChartBridgeBot.IsV3Stub` and `V3ClientStub` stand in
-  (they only remember which connections sent `{"type":"client","v":3}`; anything else gets a `status` `warn`). `bot`,
+- **`client`**: lane B2 owns the v3 handshake (`ChartBridgeV3`; anything but `v` 3 gets a `status` `warn`). `bot`,
   `botSignal` and `botProposal` go to signed-in v3 pages only, in the order lane (with `welcome`, `botState` and `answer` to
   the bot). A v3 page that signs in gets `bot` and every open proposal.
 - **`/diag` `bot`** (only with the switch on): `enabled`, `connected`, `mode`, `killed`, `trades`, `losses`, `signals`,
   `proposals`, `answered`, `notAnswered`, `placed`, `refused`, `heartbeatLost`, `secretFile`.
 - **`bot.log`** next to `config.txt`: one line per signal, proposal outcome (`not answered` included), placement, trade and
   mode change, `<UTC ISO time><TAB><what>`. Never the secret.
+
+### The order lanes together (0.4.0 integration)
+
+The five order lanes (accounts, Order types and Order Strategies, Merge, the copier, the bot channel) run as one ChartBridge.
+Where two lanes meet, these rules hold; each is a check in `nt8/check/IntegrationHarness.cs` (inside `check:orders`).
+
+- **One v3 handshake, one v3 send, one switch store.** `client` goes to `ChartBridgeAccounts` only, which marks the page with
+  `ChartBridgeV3.OnClient`; every lane asks `ChartBridgeV3.IsV3` and sends with `ChartBridgeV3.SendToV3Traders`. A page that
+  signed in before its `client` message gets each lane's v3 state then (`copier`, `bot`, `managed`). Every v3 switch is read
+  once from `config.txt` into `ChartBridgeSwitches`; `trading.switches` and each lane read that same value.
+- **A bot order is never copied.** Only entries from ChartBridge's own page reach the copier's leader logic. With the copier on,
+  the bot is refused on the copier's leader account ("Sim101 is the copier's leader: the bot does not trade the leader's
+  account while the copier is on") **(lead's default)**: every exit on the leader is copied, so a bot position mixed into
+  the leader's would shrink or flatten the followers.
+- **A bot order is plain.** No Order Strategy and no `stopLimit` or `mit`, whatever the switches **(lead's default)**.
+- **Merge on the copier's leader** is a leg change, never a new entry: nothing is copied by the swap, and a follower stop whose
+  leader stop the swap cancelled follows the merged stop's price (within a second), then every later move of it.
+- **Merge and Order Strategies.** Merge reads the strategy legs with the same name rule (`LegNameRx`, bucket `k`), the shares
+  from the strategy's own record and the one allocation rule. Breakeven and trailing are paused on the account and root from
+  before the stop prices are read until the swap ends. After a swap that ran (`merged`, `restored` or `failed`), the managed
+  entries on that account and root are no longer managed: every stop stays where it is, nothing moves it again, and `managed`
+  says so (`state` `unmanaged`, with the reason) **(lead's default: the pairs they followed are gone, and the contract gives a
+  merged stop no breakeven or trailing)**.
+- **The copier and Order Strategies.** A strategy entry's stop counts for the copier's stop rule. Each fill increment is copied
+  once, for its whole quantity; the followers' stops follow the stop of the increment's last bucket (all of an increment's
+  stops are at one level and move together), so breakeven and trailing move the followers' stops to the leader's new price.
 
 ### Tape timing and new `/diag` counters
 

@@ -79,7 +79,6 @@ public static class MergeHarness
         {
             watching = false;
             ChartBridgeOrders.MergeConfirmMs = timings[0]; ChartBridgeOrders.MergeQuietMs = timings[1]; ChartBridgeOrders.MergePollMs = timings[2];
-            ChartBridgeOrders.MergeSharesHook = null;
             ChartBridgeClient gone;
             clients.TryRemove(41, out gone);
             ChartBridgeOrders.ResetConfig();
@@ -180,6 +179,7 @@ public static class MergeHarness
     {
         string line = tag + "\t{\"name\":\"Scale out\",\"stop\":8,\"t1\":4,\"t2\":8,\"t3\":16,\"t1Share\":" + s1 + ",\"t2Share\":" + s2 + ",\"t3Share\":" + s3 + "}\t25000\t" + (long)ChartBridgeTime.NowUtcMs() + "\n";
         File.AppendAllText(Path.Combine(ChartBridgeConfig.Folder, "managed.txt"), line);
+        ChartBridgeOrders.LoadPlansNow();   // integration: the shares come from lane B1's state (managed.txt as read at a start)
     }
 
     // Send merge and wait for its answer (or a reject). Returns the merge message, or "" when it was refused.
@@ -346,8 +346,9 @@ public static class MergeHarness
         Check(old.All(o => o.OrderState == OrderState.Cancelled) && LiveStops(a).Count == 1 && Live(a).Count == 4, "every old pair is cancelled; one stop and three targets work");
         List<string> calls = CallsFrom(a, n);
         Check(calls.FindIndex(x => x.Contains("mtarget")) > calls.FindLastIndex(x => x.StartsWith("cancel ")), "the merged targets are placed last: " + string.Join(" | ", calls));
-        Check(ChartBridgeOrders.MergeAllocate(3, new[] { 33, 33, 34 }).SequenceEqual(new[] { 1, 1, 1 }) && ChartBridgeOrders.MergeAllocate(1, new[] { 50, 50 }).SequenceEqual(new[] { 0, 1 }) &&
-              ChartBridgeOrders.MergeAllocate(5, new[] { 50, 30, 20 }).SequenceEqual(new[] { 2, 2, 1 }), "the allocation rule's three examples from the contract");
+        Check(ChartBridgeOrders.Allocate(3, new[] { 33, 33, 34 }).SequenceEqual(new[] { 1, 1, 1 }) && ChartBridgeOrders.Allocate(1, new[] { 50, 50 }).SequenceEqual(new[] { 0, 1 }) &&
+              ChartBridgeOrders.Allocate(5, new[] { 50, 30, 20 }).SequenceEqual(new[] { 2, 2, 1 }) && ChartBridgeOrders.Allocate(3, new[] { 30, 20 }).SequenceEqual(new[] { 2, 1 }),
+              "the allocation rule's three examples from the contract (one rule: B1's Allocate), and the buckets left by their shares out of their sum");
 
         // The legs check and the missing-stop alarm see the merged set as ChartBridge's stop and targets: nothing trimmed, no alarm.
         int k = a.Calls.Count;

@@ -874,6 +874,7 @@ public static class OrdersHarness
         Section("merge (B4)", MergeHarness.Run);        // 0.4.0 B4: Merge stops and targets (check/MergeHarness.cs)
         Section("copier (B5)", CopierHarness.Run);      // 0.4.0 copier: Anthony's Sim test list against the copier engine (check/CopierHarness.cs)
         Section("bot (B3)", BotHarness.Run);            // 0.4.0: the bot channel, Sim101 only, its rails, heartbeat, secret and off switch (check/BotHarness.cs)
+        Section("strategies (B1)", StrategiesHarness.Run);   // 0.4.0 B1: stop-limit and MIT entries, Order Strategies, breakeven and trailing, managed.txt (check/StrategiesHarness.cs)
         Section("cross-lane rules (integration)", IntegrationHarness.Run);   // 0.4.0: the rules that hold only with every lane together (check/IntegrationHarness.cs)
 
         Console.WriteLine("== total: " + checks + " checks");
