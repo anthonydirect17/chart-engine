@@ -1857,7 +1857,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.4.0";
+        public const string Version = "0.4.1";
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2263,7 +2263,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Instruments[root] = inst;
                 Log(root + " -> " + inst.FullName);
             }
-            ResolveQuoteRoots(ChartBridgeTime.NowEastern(), Instrument.GetInstrument);
+            ResolveQuoteRoots(ChartBridgeTime.NowEastern(), n => Instrument.GetInstrument(n));   // a lambda: NinjaTrader 8.1's GetInstrument has an optional second parameter, so the method group does not convert (0.4.1)
         }
 
         // 0.4.0: the quote-only markets (quoteRoots), after the traded roots; each on its own roll (ChartBridgeMarkets.Resolve).
