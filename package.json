@@ -37,6 +37,7 @@
     "smoke:h1": "node test/h1-smoke.mjs",
     "smoke:h1orders": "node test/h1-orders-smoke.mjs",
     "smoke:markup": "node test/markup-smoke.mjs",
+    "smoke:motion": "node test/motion-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "bridge": "node test/fake-bridge.mjs",

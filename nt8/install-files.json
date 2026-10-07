@@ -22,6 +22,8 @@
     { "from": "live/feed.js", "to": "feed.js" },
     { "from": "live/workspace.js", "to": "workspace.js" },
     { "from": "live/workspace.css", "to": "workspace.css" },
+    { "from": "live/motion.js", "to": "motion.js" },
+    { "from": "live/motion.css", "to": "motion.css" },
     { "from": "src/chart-engine.js", "to": "src/chart-engine.js" }
   ]
 }
