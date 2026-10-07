@@ -41,6 +41,33 @@
   everything else in `live/live.js`'s hello; the workspace's connection badge); nothing is fetched or sent for it. Display
   only: the order path is not touched. Tests: `test/update-notice.test.js`, `smoke:update`.
 
+- **Bot tab** (Anthony's addenda 2 to 4; ChartBridge 0.4.0's bot channel, shown only when its `bot` switch is on; with it
+  off the tab says so and offers nothing): its own layout tab with the bot's chart, the Library (one slot; Ready L1 or higher
+  and Research shelves; full screen with the large equity curve, rule card, settings, live record and "Conditions it works
+  best in"; read from `GET /bot-library`, the file's shape in `docs/BOT_LIBRARY.md`), the bot panel (mode, rails with how
+  close to each and their change as ChartBridge built it, kill switch, day type log, today's signals and trades, Log,
+  Options) and **Pop out**
+  (`bot.html`, its own window). The **bot strip** across the top of the Main tab; **copilot proposals** on any tab with
+  `botSeen` and `botAnswer` (The Desk's `accept` and `reject` keys or the buttons; an expired one says "not answered");
+  corner notices (sound off by default); per-chart **ghost marks** of the bot's trades (off by default; the engine's
+  `setTrades` draws `ghost` trades faint and an open trade's entry only). Motion (`live/motion.js`) on the Bot tab and
+  the Library only; Settings > Motion: Less. Files `live/bot-core.js`, `live/bot.js`, `live/bot.css`, `live/bot.html`;
+  tests `test/bot.test.js`, `smoke:bot`, `perf:bot`; the fake bridge gains `botRails` and `/bot-library`. Made-up bots only.
+- **Quote board markets** (Anthony 2026-10-07): each Quote board's header has a ⋯ menu listing every row it can show (NQ,
+  ES and the quote-only markets hello lists), each with a checkbox; an unchecked row is hidden on that board only, saved
+  with the layout (`panel.hide`, kept and cleaned by `cleanPanel`; a root hello no longer lists is ignored); all shown by
+  default; with none shown the board says "No markets shown: pick some in the menu". Display only. `smoke:quoterows`.
+- **One v3 connection per window** (the page integration of the Account page, the ticket's 0.4.0 parts and the Bot tab):
+  `live/accounts.js` `createFeed` is the window's only v3 connection (`client` v3, signed in), shared through `listen` and
+  `post`; the Bot tab opens none of its own (`bot.html` makes its one). The order ticket's connection stays a v2 page
+  exactly as in 0.3.8 and carries every order action (`order` with a strategy or a new kind, `merge`, the Account page's
+  cancel from the list); the ticket's switches, `managed` and the Merge result come from the v3 connection. As ChartBridge
+  0.4.0 built it: `botRails` takes the root and 1 to 5 trades and 1 to 3 losses (kept in `bot-rails.txt`, no 18:00 reset);
+  the bot's orders carry no mark (Sim101 on the bot's root are the bot's); the copilot keys reach the Bot tab only through
+  the `chart-copilot-key` event; The Desk's address is ChartBridge's `deskUrl` (from `/diag`), nothing per browser. The
+  fake bridge sends what the C# sends (`by` only for a strategy, `tradable` to a v3 page only, the bot's `welcome`).
+  `smoke:v038`: with a ChartBridge without v3 no new control and no v3 message, and the ticket's messages equal 1.15.0's.
+
 ## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
 
 - **Markup Studio** (`tools/markup_studio.py`, `live/markup.html`): grade NQ liquidity sweeps blind on the chart's own Range 40

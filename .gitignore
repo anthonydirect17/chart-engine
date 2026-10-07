@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 test/out/
 .DS_Store
 __pycache__/

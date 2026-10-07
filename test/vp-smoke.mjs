@@ -313,6 +313,9 @@ try {
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], label_ = label;
   const dowOf = bt => new Date(bt * 1000).getUTCDay();
   const trades = pg => pg.evaluate(() => window.__kept.slice());   // what the page received, after the live gate below
+  /* how many (counted in the page: a poll that copies the whole record, a million rows and more, can take longer than the
+     wait itself on a busy PC, and then times out after one look) */
+  const keptN = pg => pg.evaluate(() => window.__kept.length);
   const etNowOf = pg => pg.evaluate(() => window.ChartEngine.util.zoneSeconds(Date.now() / 1000));
   const asked = pg => pg.evaluate(() => window.__asked.slice());
   /* The last session with trades before `cut`, counted by hand from the trades the page received: the full session
@@ -423,9 +426,9 @@ try {
     await until(async () => (await etNowOf(q)) >= open + 2, 'the page clock past Sunday 18:00', 30000);
     w = await state(q);
     check(w.day === 'Fri' && w.total === prev.total && / \(Fri\)$/.test(w.legend || ''), 'Sunday 18:00:02 on the clock, no trade yet: still Friday: ' + w.legend);
-    const before = (await trades(q)).length;
+    const before = await keptN(q);
     await q.evaluate(() => { window.__open = true; });                                             // the first trades of Monday's session
-    await until(async () => (await trades(q)).length > before, 'a live trade after 18:00', 5000);
+    await until(async () => (await keptN(q)) > before, 'a live trade after 18:00', 5000);
     await q.waitForTimeout(700);
     await q.evaluate(() => { window.__open = false; }); await q.waitForTimeout(300);                // hold the trades while counting
     w = await state(q);
@@ -452,9 +455,9 @@ try {
     const tue = lastSession(await trades(q), open, true);
     check(tue.day === 'Tue' && w.day === 'Tue' && w.total === tue.total && w.total > 0, 'Tuesday 17:59, RTH: Tuesday\'s: ' + w.total + ' = ' + tue.total);
     await until(async () => (await etNowOf(q)) >= open + 2, 'the page clock past Tuesday 18:00', 30000);
-    const before = (await trades(q)).length;
+    const before = await keptN(q);
     await q.evaluate(() => { window.__open = true; });
-    await until(async () => (await trades(q)).length > before, 'a live trade after 18:00', 5000);
+    await until(async () => (await keptN(q)) > before, 'a live trade after 18:00', 5000);
     await q.waitForTimeout(700);
     w = await state(q);
     check(w.day === 'Tue' && w.total === tue.total && / \(Tue\)$/.test(w.legend || '') && w.note === '', 'after Wednesday\'s first Globex trades: still Tuesday\'s RTH (1.6.0 emptied it at 18:00): ' + w.legend);

@@ -121,3 +121,19 @@ page.
 `npm run smoke:motion` (Chromium, `test/motion-smoke.mjs` on `test/motion-host.html`): the kit as a plain script and
 as a module import, a scene's start and end states in a real page, a click during a scene, reduced motion (page and
 system), and no animation frame while idle. Screenshots `test/out/motion-mid.png` and `motion-end.png`.
+
+`npm run smoke:bot` (the Bot tab, `test/bot-smoke.mjs`): a click during the Bot tab's entrance acts at once and finishes
+it (R4); the kill switch, the mode, position and P&L, the chart and the copilot pop-ups are never animated, even
+mid-entrance (R3); Less motion in Settings shows the Bot tab in its final state at once.
+
+`npm run perf:bot` (R5, `test/perf-bot.mjs`): the Bot tab's entrance and a Library build full screen played over and over
+while the tab's live chart draws a busy tape. It holds the chart's gates (a chart's frame p95 under 4 ms, all charts per
+frame under 8 ms), keeps the kit's own loop under 4 ms at p95, and checks that the kit never runs inside a chart's frame.
+
+## Keeping it cheap on a big page (the Bot tab)
+
+What the Bot tab learned (`live/bot.css`, `live/bot.js`): a `.motion-atmo` glow under a whole screen is painted again
+with every piece that moves over it, so give its `::before` a layer of its own (`will-change: transform`); while a scene
+plays, give the moving pieces layers of their own too (a class on the root until the scene's `onDone`), and take them
+away at rest; read a canvas's size at a scene's first and last frames only (a layout read in every frame is a forced
+layout); and never put a backdrop blur over a live chart.

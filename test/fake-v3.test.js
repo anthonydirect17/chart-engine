@@ -67,11 +67,13 @@ test('fixtures: every page message passes the strict v3 keys; every strategy pas
   assert.doesNotMatch(text, /[–—]/, 'no en or em dashes');
   // as ChartBridge 0.4.0 built it ("0.4.0 hardening and markets" wins): quoteOnly and priceFormat after pointValue, before
   // the settlement; no tapeStats switch; /diag's health, pages, markets and tape
-  for (const i of FIX.serverToPage['hello.v3'].instruments.concat(FIX.serverToBot.welcome.instruments)) {
+  for (const i of FIX.serverToPage['hello.v3'].instruments) {
     assert.deepEqual(Object.keys(i).slice(0, 6), ['root', 'name', 'tick', 'pointValue', 'quoteOnly', 'priceFormat'], i.root);
     assert.ok(['decimal', '32nds'].includes(i.priceFormat) && !('format' in i) && !('decimals' in i), i.root);
     assert.equal(i.priceFormat === '32nds', i.root === 'ZN' || i.root === 'ZB', i.root);
   }
+  // the bot's welcome as ChartBridgeBot.cs WelcomeJson builds it: its own root only, five fields
+  assert.deepEqual(FIX.serverToBot.welcome.instruments.map(i => Object.keys(i)), [['root', 'name', 'tick', 'pointValue', 'quoteOnly']]);
   assert.ok(!('tapeStats' in FIX.config) && !FIX.serverToPage['hello.v3'].features.includes('quoteOnly'));
   assert.deepEqual(Object.keys(FIX.diag).slice(0, 4), ['health', 'pages', 'markets', 'tape']);
 });

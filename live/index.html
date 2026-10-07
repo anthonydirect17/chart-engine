@@ -11,6 +11,9 @@
 <link rel="stylesheet" href="workspace.css">
 <!-- the Account page (1.16.0): every account, its limits, Working orders, Today's trades, the copier -->
 <link rel="stylesheet" href="accounts.css">
+<!-- 1.16.0: the motion kit (the Bot tab and its Library only, docs/MOTION.md) and the Bot tab (live/bot.js) -->
+<link rel="stylesheet" href="motion.css">
+<link rel="stylesheet" href="bot.css">
 </head>
 <body>
 <!-- The trading workspace, ChartBridge's main page (http://localhost:8765/): panels on a 12 x 6 snap grid, one window per
@@ -36,11 +39,16 @@
   <span class="chart-live ws-lv ws-colors" id="wsColors"></span>
   <!-- the laptop preset's two layout tabs (1.16.0), shown when it is on in this browser -->
   <span class="ws-tabs" id="wsTabs" role="tablist" aria-label="Layouts" hidden></span>
+  <!-- the Bot tab (1.16.0, live/bot.js): shown with a ChartBridge that speaks protocol v3; it works only when ChartBridge's bot switch is on -->
+  <button type="button" class="ws-btn bt-tabbtn" id="wsBotTab" aria-pressed="false" hidden>Bot</button>
   <label class="ws-lbl" for="wsLayout">Layout</label>
   <select class="ws-sel" id="wsLayout"></select>
   <button type="button" class="ws-btn add" id="wsAdd" aria-haspopup="menu" aria-expanded="false" aria-controls="wsAddMenu">+ Add panel</button>
   <button type="button" class="ws-btn ws-gear" id="wsSet" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="wsSettings">⚙</button>
 </header>
+
+<!-- the bot strip (1.16.0): one thin line per bot, on the Main tab only; a click opens the Bot tab -->
+<div class="bt-strip" id="btStrip" hidden></div>
 
 <!-- ChartBridge's errors about orders (a bracket leg rejected: check the stop now), and orders or Flattens that were not
      sent: they stay until dismissed -->
@@ -52,6 +60,8 @@
 <main class="ws-grid" id="wsGrid" aria-label="Workspace panels">
   <div class="ws-ghost" id="wsGhost" hidden></div>
 </main>
+<!-- the Bot tab's own layout: Library, its chart, the bot panel (live/bot.js builds it) -->
+<section class="bt-view bt-in-ws" id="btView" aria-label="Bot tab"></section>
 
 <div class="ws-pop ws-menu" id="wsAddMenu" role="menu" aria-label="Add panel" hidden>
   <button type="button" role="menuitem" data-add="chart">Chart</button>
@@ -68,8 +78,13 @@
 <!-- 1.15.0: the drawing tools moved to the ring (middle-click a chart: Trend line, Price line, Clear this chart, Zone) -->
 <div class="ws-pop ws-menu" id="wsMore" role="menu" aria-label="View" hidden>
   <button type="button" role="menuitem" data-do="reset">Reset view</button>
+  <!-- 1.16.0: the bot's trades, faint, on this chart (off by default; shown when ChartBridge's bot switch is on) -->
+  <button type="button" role="menuitem" data-do="ghost" hidden>Bot trades: off</button>
   <p class="ws-menu-note">Drawing tools: middle-click the chart.</p>
 </div>
+
+<!-- 1.16.0: a Quote board's markets, each with a checkbox (hidden rows saved with the layout) -->
+<div class="ws-pop ws-menu ws-qbrows" id="wsQbRows" role="group" aria-label="Markets shown on this Quote board" hidden></div>
 
 <!-- the drawing ring (1.15.0, Anthony): a middle-click on a chart's plot opens it around the pointer -->
 <div class="ws-ring" id="wsRing" role="menu" aria-label="Drawing tools" hidden>
@@ -94,19 +109,40 @@
       <span class="ws-seg" id="wsGridLines" role="group" aria-labelledby="wsGridLinesLbl"><button type="button" data-v="off">Off</button><button type="button" data-v="on">On</button></span></div>
     <div class="ws-field"><span class="ws-flabel" id="wsRoomLbl" title="Empty space right of the last bar, kept at every zoom; Jump to live and End keep it">Room right</span>
       <span class="ws-seg" id="wsRoom" role="group" aria-labelledby="wsRoomLbl"><button type="button" data-v="80">80 px</button><button type="button" data-v="120">120 px</button><button type="button" data-v="160">160 px</button></span></div>
+    <div class="ws-field"><span class="ws-flabel" id="wsMotionLbl" title="The Bot tab and its Library. Less shows every scene in its final state. Charts, orders, the kill switch and P&amp;L never move either way.">Motion</span>
+      <span class="ws-seg" id="wsMotion" role="group" aria-labelledby="wsMotionLbl"><button type="button" data-v="full">Full</button><button type="button" data-v="less">Less</button></span></div>
     <div class="ws-field"><label class="ws-flabel" for="wsAtr" title="The ATR in every chart's corner readout: NinjaTrader's ATR of this many closed bars">ATR period</label>
       <input class="ws-num" id="wsAtr" type="number" min="2" max="100" step="1" inputmode="numeric" aria-label="ATR period, bars"></div>
   </section>
   <section class="ws-sec">
-    <h2 id="wsHkCap">Hotkeys <span>the same keys as the single chart page</span></h2>
+    <h2 id="wsHkCap">Hotkeys <span id="wsHkWhere">the same keys as the single chart page</span></h2>
     <div class="chart-live ws-lv" id="wsHotkeys"></div>
-    <p class="ws-help">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
+    <p class="ws-help" id="wsHkHelpShared" hidden>Click a box, then press the keys; saved in The Desk for every PC. Each does what its button does (Merge: the ticket's Merge; Accept and Reject: the copilot's answer). Never while typing in a box or with a menu open.</p>
+    <p class="ws-help" id="wsHkHelp">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
   </section>
   </div><div class="ws-col">
   <section class="ws-sec">
     <h2>Large prints <span>Time and Sales, contracts</span></h2>
     <p class="ws-help">A trade this size or bigger is shown brighter and bold, and is a bubble on the charts. RTH is 09:30 to 16:15 ET.</p>
     <div id="wsFloors"></div>
+  </section>
+  <!-- 1.16.0 (ChartBridge 0.4.0): shown only while ChartBridge's switches need them. The Desk keeps the hotkeys and the
+       Order Strategies for every PC; the entry types take a key held with a click or with Buy and Sell. -->
+  <section class="ws-sec" id="wsDeskSec" hidden>
+    <h2>The Desk <span>hotkeys and strategies for every PC</span></h2>
+    <div class="ws-field"><span class="ws-flabel" title="deskUrl in ChartBridge's config.txt (where ChartBridge sends the fills): the one place The Desk's address is set for this PC">Address</span><span class="ws-help ws-desk-url" id="wsDeskUrl">http://localhost:8800</span><button type="button" class="ws-btn" id="wsDeskTry">Read again</button></div>
+    <p class="ws-help" id="wsDeskNote" role="status"></p>
+  </section>
+  <section class="ws-sec" id="wsStratSec" hidden>
+    <h2>Order Strategies <span>stop, targets, breakeven, trailing</span></h2>
+    <div class="ws-field"><button type="button" class="ws-btn" id="wsStrat">Order Strategies...</button><span class="ws-help" id="wsStratNote"></span></div>
+  </section>
+  <section class="ws-sec" id="wsTypesSec" hidden>
+    <h2>Entry types <span>a key held with a click, Buy or Sell</span></h2>
+    <div class="ws-field"><label class="ws-flabel" for="wsMod-limit">Limit</label><select class="ws-sel ws-mod" id="wsMod-limit"><option value="">None</option><option>Shift</option><option>Ctrl</option><option>Alt</option></select>
+      <label class="ws-flabel" for="wsMod-stop">Stop</label><select class="ws-sel ws-mod" id="wsMod-stop"><option value="">None</option><option>Shift</option><option>Ctrl</option><option>Alt</option></select></div>
+    <p class="ws-help" id="wsModNote" role="status" hidden></p>
+    <p class="ws-help" title="Limit held: a limit on the better side of the market, a stop-limit on the other (its limit at its stop). Stop held: a stop-market on the worse side, an MIT on the better side. With Buy MKT's or Sell MKT's key, the price is the one under the mouse on a chart of the ticket's instrument. On a chart click only Alt counts, since Shift and Ctrl pick buy or sell.">Limit: a limit, or a stop-limit past the market. Stop: a stop, or an MIT. Keys: at the mouse's price; clicks: Alt only.</p>
   </section>
   <section class="ws-sec" id="wsPinSec" hidden>
     <h2>ChartBridge PIN</h2>
@@ -135,6 +171,8 @@
 <script src="../src/chart-engine.js"></script>
 <script src="bar-builder.js"></script>
 <script src="order-ticket.js"></script>
+<!-- 1.16.0: Order Strategies, entry types, Merge and The Desk's shared hotkeys (the rules; ChartBridge checks them again) -->
+<script src="order-strategies.js"></script>
 <!-- the order logic of the order bar and the workspace's order ticket (one order path, 1.12.0) -->
 <script src="trade.js"></script>
 <!-- ChartBridge's PIN (0.3.2): this page is served by ChartBridge like the single chart page, so it unlocks the same way. -->
@@ -144,8 +182,12 @@
 <script src="feed.js"></script>
 <!-- one order ticket across this browser's windows (BroadcastChannel and the Web Locks API, 1.12.0) -->
 <script src="ticket-link.js"></script>
-<!-- the Account page (1.16.0): its own connection to ChartBridge 0.4.0 (protocol v3), opened only when ChartBridge speaks v3 -->
+<!-- the Account page (1.16.0) and the window's one v3 connection to ChartBridge 0.4.0 (createFeed: shared by the Account page, the ticket's 0.4.0 parts and the Bot tab), opened only when ChartBridge speaks v3 -->
 <script src="accounts.js"></script>
+<!-- 1.16.0: the motion kit, then the Bot tab's logic and page (before workspace.js, which creates the Bot tab) -->
+<script src="motion.js"></script>
+<script src="bot-core.js"></script>
+<script src="bot.js"></script>
 <script src="workspace.js"></script>
 <!-- "Update ready: reload when flat" from the per-PC updater (nt8/update-pc.ps1); never reloads by itself. -->
 <script src="update-notice.js"></script>
