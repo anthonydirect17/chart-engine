@@ -16,8 +16,9 @@
 //      the follower's own stop sold 1 in the same instant, leaving it short 1). Every working order on that contract is
 //      cancelled first; once NinjaTrader confirms each one cancelled or filled, and every fill there has come through
 //      ChartBridge's order events, the position is read again and only what it still holds is closed at market. A
-//      scale-out first shrinks the follower's stops the same way, then reduces to the same share of what it holds. A flat
-//      follower gets nothing. Never an opposite order sized from the leader.
+//      scale-out first shrinks the follower's stops the same way, then reduces it to the same share (nearest contract, no
+//      minimum cut, so a small follower is not taken out early). A flat follower gets nothing. Never an opposite order sized
+//      from the leader.
 //   S5 Skipped, never partly: a follower at its position limit (gate 3), not Connected, unchecked (gate 2), Gone, past
 //      its loss limit, or holding the opposite side.
 //   S6 Mass disconnect: the leader, or 3 or more followers, leaving Connected within 10 s stands the copier down until
@@ -1419,24 +1420,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // A leader scale-out: the follower is reduced by the same share, rounded to the nearest contract, at least 1. Review 2
-        // finding 2: the share is taken of the contracts the copier gave it (Intended), and only those are ever reduced, capped
-        // at what it holds: a follower's own contracts are never touched, and one whose own stop already took some of the
-        // copier's is not reduced twice.
+        // A leader scale-out: the follower keeps the same share, rounded to the nearest contract (half up), with no minimum cut
+        // (0.4.3, Anthony 2026-10-07: with a fixed Qty, "at least 1" took a small follower out early; Qty 3 under a leader of 5
+        // was flat with the leader still at 2). So Qty 3 goes 3, 2, 2, 1, 1, 0 as the leader goes 5 to 0 one at a time, and a
+        // Qty 1 follower rides until the leader is flat (unless one scale-out takes more than half the leader's position,
+        // 4 to 1 say: then it is out too, the same share). Review 2 finding 2: the share is taken of the contracts the copier gave it (Intended),
+        // and only those are ever reduced, capped at what it holds: a follower's own contracts are never touched, and one whose
+        // own stop already took some of the copier's is not reduced twice.
         private static void ScaleOut(Copy c, int prevAbs, int nowAbs, long ts)
         {
-            int target, mine, held = Held(c.A, c.Inst, c.Dir);
+            int target, mine, basis, held = Held(c.A, c.Inst, c.Dir);
             lock (Lk)
             {
-                int basis = c.Intended;
+                basis = c.Intended;
                 if (basis <= 0) return;   // the copier placed nothing there: nothing of the follower's is touched
-                double share = (prevAbs - nowAbs) / (double)prevAbs;
-                int cut = Math.Max(1, (int)Math.Round(basis * share, MidpointRounding.AwayFromZero));
-                target = Math.Max(0, basis - cut);
+                target = Math.Min(basis, Math.Max(0, (int)Math.Round(basis * (double)nowAbs / prevAbs, MidpointRounding.AwayFromZero)));
                 c.Intended = target;
                 mine = Math.Min(basis, held);   // the copier's contracts it still holds
             }
             if (held <= 0) return;   // a flat follower gets nothing
+            if (target >= basis) { Decision(c.A.Name, "reduce", c.Root, "keeps its " + basis + ": the leader's scale-out from " + prevAbs + " to " + nowAbs + " is less than half a contract of its share; nothing sent"); return; }
             if (mine <= target) { Decision(c.A.Name, "reduce", c.Root, "already at " + held + " (its own stop took the rest); nothing sent"); return; }
             if (target <= 0 && held <= mine) { Flatten(c, "the leader scaled out (its share closes the follower)", ts); return; }   // it holds only the copier's: Flatten
             StartReduce(c, target, mine - target, ts, "the leader scaled out from " + prevAbs + " to " + nowAbs);

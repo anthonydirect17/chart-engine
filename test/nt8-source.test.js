@@ -1021,7 +1021,10 @@ test('0.4.0 copier: order calls only in its named functions; every one passes th
   assert.match(copierBodies('CheckReduces'), /SendReduce\(r\);/);
   // review 2 finding 2: the copier's own share only, and never more than leaves the working stops within the position
   assert.match(copierBodies('SendReduce'), /int held = Held\(c\.A, c\.Inst, c\.Dir\), stops = StopsWorking\(c\.A, c\.Inst, c\.Dir\), k = Math\.Min\(r\.Cut, held - stops\);/);
-  assert.match(copierBodies('ScaleOut'), /int basis = c\.Intended;\s*if \(basis <= 0\) return;/);
+  assert.match(copierBodies('ScaleOut'), /basis = c\.Intended;\s*if \(basis <= 0\) return;/);
+  // 0.4.3, Anthony 2026-10-07: the same share, nearest contract, no minimum cut (a small fixed follower is not taken out early)
+  assert.match(copierBodies('ScaleOut'), /target = Math\.Min\(basis, Math\.Max\(0, \(int\)Math\.Round\(basis \* \(double\)nowAbs \/ prevAbs, MidpointRounding\.AwayFromZero\)\)\);/);
+  assert.ok(!/Math\.Max\(1,/.test(copierBodies('ScaleOut')), 'no minimum cut of 1');
   // 0.4.3 (Anthony 2026-10-07): a FIXED quantity per follower, once per leader entry (never per leader contract)
   assert.match(copierBodies('CopyIncrement'), /lock \(Lk\) first = le\.Handled\.Add\(f\.Name\);\s*if \(!first\) continue;[\s\S]*int fq = f\.Qty;/);
   assert.match(copierBodies('PlaceOrdersCopies'), /int fq = f\.Qty;/);

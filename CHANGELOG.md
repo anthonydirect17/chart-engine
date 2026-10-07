@@ -14,7 +14,9 @@ Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of
   events (seeded when an account is first watched) to know when a fill has come through.
 - **A fixed quantity per follower** (Anthony: "I thought we were going with an absolute number"; the old copier moved from a
   multiplier to a fixed quantity in August). A follower's Qty is what it trades for each leader entry, whatever the leader's
-  size; a leader add copies it again; a scale-out reduces it by the same share. 0.4.0 to 0.4.2 multiplied it by the leader's
+  size; a leader add copies it again; a scale-out leaves it the same share, rounded to the nearest contract with no
+  minimum cut (Anthony 2026-10-07: under a leader of 5 scaling out one at a time, Qty 3 holds 3, 2, 2, 1, 1 and Qty 1 keeps
+  its 1 until the leader is flat; "at least 1" had taken a small follower out early). 0.4.0 to 0.4.2 multiplied it by the leader's
   contracts (Sim102 at Qty 1 took 5).
 - **No leader.** `copierSet` with `"leader": null` clears the leader and stands the copier down. 0.4.2 had no way to clear
   it, so the page's "none" did nothing and the bot could not trade the old leader's account. The page's Leader dropdown

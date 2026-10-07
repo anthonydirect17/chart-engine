@@ -1819,8 +1819,9 @@ follower's `qty` again; a scale-out reduces it by the same share.)
   (never more than either shows). A fill NinjaTrader shows whose order event never comes stops blocking after 10 s (a
   `status` `warn`). After a restart, a follower holding a position with a filled copier entry there, no working stop on its
   closing side and no copier record gets one `status` `error`. (0.4.3, from the independent review.) A leader scale-out (a partial
-  exit) reduces each follower by the same share, rounded to the nearest contract, at least 1, capped at what it holds; the
-  leader flat means every follower flat. A flat follower gets nothing.
+  exit) leaves each follower the same share of what the copier gave it, rounded to the nearest contract (half up), with no
+  minimum cut (0.4.3, Anthony 2026-10-07: a Qty 3 follower under a leader of 5 holds 3, 2, 2, 1, 1 as the leader scales out
+  one at a time, and a Qty 1 follower keeps its 1 until the leader is flat); the leader flat means every follower flat. A flat follower gets nothing.
 - **The sweep**: every second, any working order the copier placed on a follower with no position on that root is
   cancelled, unless it is an orders-mode entry whose leader entry is still working.
 - **Skipped** (never partly): a follower at its position limit (gate 3 on its root) is skipped for that entry and
@@ -1884,7 +1885,7 @@ The Mono harness `nt8/check/CopierHarness.cs` (inside `npm run check:orders`) ru
 - **Exits.** The leader's exits are read from its position updates (NinjaTrader's own position), acting only on a leader
   connection that has been Connected for 30 s (v2's steady rule; lead's default). Flat, or turned to the other side in one
   update: every follower copy on the old side is closed on its contract (the close above, 0.4.3). A scale-out: the share is taken of
-  the contracts the copier gave that follower, rounded half away from zero, at least 1, so a follower whose own stop already
+  the contracts the copier gave that follower, rounded half away from zero, no minimum cut (0.4.3), so a follower whose own stop already
   took some is not reduced twice (lead's default). The follower's stops are shrunk to the new size first (stops whose leader
   stop is gone first, then the newest), and the market reduce, sized from the follower's position read again, is sent only
   once NinjaTrader shows the stops shrunk or cancelled; not confirmed within 3 s: no reduce at all, and a `status` `error`.

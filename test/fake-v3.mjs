@@ -724,8 +724,11 @@ export class OrderDeskV3 extends OrderDesk {
         const root = f.root || this.followerRoot(o.root, f.size), p = this.pos(f.account, root);
         if (!p.qty) continue;                             // a flat follower gets nothing
         if (now === 0) { this.followerFlatten(f, root, 'the leader is flat'); continue; }
-        const red = Math.min(Math.abs(p.qty), Math.max(1, Math.round(Math.abs(p.qty) * (Math.abs(was) - Math.abs(now)) / Math.abs(was))));
-        if (red >= Math.abs(p.qty)) { this.followerFlatten(f, root, 'the leader scaled out'); continue; }
+        // 0.4.3 (Anthony 2026-10-07): the same share, nearest contract (half up), no minimum cut
+        const keep = Math.min(Math.abs(p.qty), Math.round(Math.abs(p.qty) * Math.abs(now) / Math.abs(was)));
+        const red = Math.abs(p.qty) - keep;
+        if (red <= 0) continue;                           // less than half a contract of its share: it keeps what it holds
+        if (keep <= 0) { this.followerFlatten(f, root, 'the leader scaled out'); continue; }
         const xo = this.newOrder({ cid: null, account: f.account, root, side: p.qty > 0 ? 'sell' : 'buy', kind: 'market', qty: red, price: null, role: 'other', by: 'copier', copier: true });
         this.emitOrder(xo); this.matchOne(xo, this.last[root], true);
         for (const s of this.orders.values()) if (isWorking(s) && s.copier && s.role === 'stop' && s.account === f.account && s.root === root && s.qty - s.filled > Math.abs(this.pos(f.account, root).qty)) { s.qty = s.filled + Math.abs(this.pos(f.account, root).qty); this.emitOrder(s); }

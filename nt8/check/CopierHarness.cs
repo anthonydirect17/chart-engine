@@ -148,6 +148,7 @@ public static class CopierHarness
             CloseNotOut();     // 0.4.3 review: a close that does not go out is retried; nothing new copied meanwhile; a fill never noted
             FixedQuantity();   // 0.4.3: Anthony 2026-10-07, a fixed quantity per leader entry
             ScaleOut();
+            ScaleOutSmallFollower();   // 0.4.3: Anthony 2026-10-07, the same share with no minimum cut
             StopAlreadyTraded();
             ShortsAndContracts();
             RealFollowerAllowed();
@@ -440,14 +441,15 @@ public static class CopierHarness
     // ------------------------------------------------------------ 0.4.3 review: when a close does not go out
     static void CloseNotOut()
     {
-        // (1) a scale-out to zero (SIM-F3, Qty 1) whose stop cancel NinjaTrader confirms only after the 3 s limit: the close is
-        // retried while the leader still holds, never left without its stop and without a close
-        LeaderEntry(2);
+        // (1) a scale-out to zero (SIM-F3, Qty 1; the leader 3 to 1, a third of 1 rounds to 0) whose stop cancel NinjaTrader
+        // confirms only after the 3 s limit: the close is retried while the leader still holds, never left without its stop
+        // and without a close
+        LeaderEntry(3);
         FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
         int b3 = f3.Calls.Count;
-        Fill(lead, lead.Orders.Last(o => Regex.IsMatch(o.Name ?? "", " target ")), 1, 25004);
+        Fill(lead, lead.Orders.Last(o => Regex.IsMatch(o.Name ?? "", " target ")), 2, 25004);
         Pos(lead, mnq, 1);
-        Check(After(f3, b3).Count == 1 && After(f3, b3)[0].StartsWith("cancel "), "review (1): the leader scales out 2 to 1: SIM-F3 (1) closes, its stop cancelled first");
+        Check(After(f3, b3).Count == 1 && After(f3, b3)[0].StartsWith("cancel "), "review (1): the leader scales out 3 to 1: SIM-F3 (1) closes, its stop cancelled first");
         double t = Now();
         ChartBridgeCopier.Tick(t + ChartBridgeCopier.ReduceConfirmMs + 100);
         Check(Closes(f3, b3).Count == 0 && Logged("could not close this follower"), "review (1): not confirmed in 3 s: nothing sent, an alarm");
@@ -607,6 +609,48 @@ public static class CopierHarness
         Check(After(f1, e1).Count == 0, "scale-out after the follower's own stop took 3 of 6: it already holds the target 3; nothing sent");
         Reset();
         Msg("copierFollower", Follower("SIM-F1", "true", "3", "micro", "null")); Msg("copierFollower", Follower("SIM-F2", "true", "1", "mini", "500")); Msg("copierFollower", Follower("SIM-F3", "true", "1", "micro", "null"));
+    }
+
+    // ------------------------------------------------------------ 0.4.3: a small fixed follower keeps the same share, no minimum cut
+    // Anthony 2026-10-07: the leader 5 scaling out one at a time: SIM-F1 (Qty 3) holds 3, 2, 2, 1, 1, then 0 with the leader;
+    // SIM-F2 and SIM-F3 (Qty 1) ride until the leader is flat. 0.4.2's "at least 1" had SIM-F1 flat with the leader at 2.
+    static void ScaleOutSmallFollower()
+    {
+        LeaderEntry(5);
+        FollowerFill(f1, mnq, 25000); FollowerFill(f2, nq, 25000); FollowerFill(f3, mnq, 25000);
+        Check(f1.Positions.Single().Quantity == 3 && f3.Positions.Single().Quantity == 1, "small follower: SIM-F1 holds 3 and SIM-F3 1 under a leader of 5");
+        Order target = lead.Orders.Last(o => Regex.IsMatch(o.Name ?? "", " target "));
+        int[] want = { 2, 2, 1, 1 };
+        int held = 3;
+        for (int k = 1; k <= 4; k++)
+        {
+            int b1 = f1.Calls.Count, b2 = f2.Calls.Count, b3 = f3.Calls.Count;
+            Fill(lead, target, k, 25004);
+            Pos(lead, mnq, 5 - k);
+            string step = "the leader " + (6 - k) + " to " + (5 - k) + ": ";
+            Check(After(f2, b2).Count == 0 && After(f3, b3).Count == 0, "small follower: " + step + "SIM-F2 and SIM-F3 keep their 1, nothing sent: " + string.Join(" | ", After(f3, b3)));
+            if (want[k - 1] == held)
+            {
+                Check(After(f1, b1).Count == 0 && Logged("keeps its " + held), "small follower: " + step + "SIM-F1 keeps its " + held + ", nothing sent: " + string.Join(" | ", After(f1, b1)));
+                continue;
+            }
+            Order s1 = f1.Orders.Last(o => o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState));
+            Check(After(f1, b1).SequenceEqual(new[] { "change " + s1.Name + " L0 S0 Q" + want[k - 1] }), "small follower: " + step + "SIM-F1's stop shrinks to " + want[k - 1] + " first: " + string.Join(" | ", After(f1, b1)));
+            s1.Quantity = want[k - 1]; Update(f1, s1);
+            List<string> c1 = Closes(f1, b1);
+            Check(c1.Count == 1 && c1[0].Contains("Sell Market " + (held - want[k - 1]) + " "), "small follower: " + step + "then SIM-F1 sells " + (held - want[k - 1]) + " to " + want[k - 1] + ": " + string.Join(" | ", After(f1, b1)));
+            Order red = f1.Orders.Last(o => (o.Name ?? "").EndsWith(" copy out"));
+            Pos(f1, mnq, want[k - 1]);
+            Fill(f1, red, red.Quantity, 25004);
+            held = want[k - 1];
+        }
+        int d1 = f1.Calls.Count, d2 = f2.Calls.Count, d3 = f3.Calls.Count;
+        Fill(lead, target, 5, 25004);
+        Pos(lead, mnq, 0);
+        ConfirmCancels(f1, d1); ConfirmCancels(f2, d2); ConfirmCancels(f3, d3);
+        Check(Closes(f1, d1).Count == 1 && Closes(f1, d1)[0].Contains("Sell Market 1 ") && Closes(f2, d2).Count == 1 && Closes(f2, d2)[0].Contains("Sell Market 1 ") && Closes(f3, d3).Count == 1 && Closes(f3, d3)[0].Contains("Sell Market 1 "),
+              "small follower: the leader flat: each follower closes its last 1: " + string.Join(" | ", After(f1, d1).Concat(After(f3, d3))));
+        Reset();
     }
 
     // ------------------------------------------------------------ the stop level already traded on the follower's contract
@@ -1038,11 +1082,12 @@ public static class CopierHarness
     {
         Pos(f1, mnq, 1); Booked();
         Order own = OwnStop(f1, mnq, 1, 24990);
-        // 0.4.3: a fixed quantity: the leader buys 2, SIM-F1 (qty 1) gets its 1
+        // 0.4.3: a fixed quantity: the leader buys 3, SIM-F1 (qty 1) gets its 1; the leader's 3 to 1 takes it to 0 (a third of
+        // 1 rounds to 0)
         ChartBridgeOrders.NoteLast("MNQ", 25000);
-        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":2,\"bracket\":{\"stop\":8,\"target\":16}"));
+        Msg("order", Leader("\"side\":\"buy\",\"kind\":\"market\",\"qty\":3,\"bracket\":{\"stop\":8,\"target\":16}"));
         Order e = lead.Orders.Last();
-        Fill(lead, e, 2, 25000); Pos(lead, mnq, 2);
+        Fill(lead, e, 3, 25000); Pos(lead, mnq, 3);
         Order fe = CopyEntry(f1);
         if (fe == null || fe.Quantity != 1) { Check(false, "review 2 finding 2: SIM-F1 got a copy of 1"); Reset(); return; }
         Fill(f1, fe, 1, 25000); Pos(f1, mnq, 2);
@@ -1050,7 +1095,7 @@ public static class CopierHarness
         Booked();
         int b = f1.Calls.Count;
         Order target = lead.Orders.First(o => Regex.IsMatch(o.Name ?? "", " target ") && ChartBridgeOrders.IsWorking(o.OrderState));
-        Fill(lead, target, 1, 25004); Pos(lead, mnq, 1);
+        Fill(lead, target, 2, 25004); Pos(lead, mnq, 1);
         Check(cs != null && After(f1, b).SequenceEqual(new[] { "cancel " + cs.Name }), "review 2 finding 2: the copier's whole share closes: its copier stop is cancelled first, no Flatten: " + string.Join(" | ", After(f1, b)));
         if (cs != null) { cs.OrderState = OrderState.Cancelled; Update(f1, cs); }
         List<string> c = After(f1, b);
