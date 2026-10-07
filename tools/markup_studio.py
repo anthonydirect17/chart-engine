@@ -79,10 +79,33 @@ SPAN_ROLES = ("Volume I'm reading", 'Approach')
 PRIOR_TRIES = 10       # in-sample days looked back through for the prior kept day (prior_bars)
 
 
-def visible_count(day, clock_utc, exclusive=False):
+def visible_count(day, clock_utc, exclusive=False, seq=None):
     """NO-FUTURE: the number of ticks the page may have at this clock: at or before it, or (exclusive, blind mode) strictly
-    before it, so the next candle's first trade stamped exactly at the cut stays hidden. Every data path cuts here."""
-    return int(np.searchsorted(day.utc, clock_utc, 'left' if exclusive else 'right'))
+    before it, so the next candle's first trade stamped exactly at the cut stays hidden. Every data path cuts here.
+    seq (a trade's cut, when the bot gives it): an exclusive cut also keeps the first `seq` trades stamped exactly at the
+    clock, in file order. Most days are stamped to the whole second, so the trade that finished the bot's signal bar often
+    shares its stamp with the rest of that bar and with the next bar's first trades; the bot counts how many of the trades
+    on that stamp it had seen (its order's t_from_seq), and exactly those show."""
+    left = int(np.searchsorted(day.utc, clock_utc, 'left'))
+    if not exclusive:
+        return int(np.searchsorted(day.utc, clock_utc, 'right'))
+    if seq:
+        same = int(np.searchsorted(day.utc, clock_utc, 'right')) - left
+        return left + max(0, min(int(seq), same))
+    return left
+
+
+def order_cut_seq(order):
+    """An order's t_from_seq (BOT_API, optional): how many trades stamped exactly at its t_from the bot had seen when it
+    placed it, a whole number of 1 or more. Anything else is None (the cut stays strictly before the stamp)."""
+    v = (order or {}).get('t_from_seq')
+    if isinstance(v, bool) or v in (None, ''):
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 and str(v).strip().lstrip('+').isdigit() else None
 
 
 # ------------------------------------------------------------------------------------------------ data sources
@@ -669,8 +692,13 @@ class Studio:
                 self._release()
 
     # ---------------------------------------------------------------- what the page may see
+    def cut_seq(self):
+        """The bot's count of trades on the cut's own stamp that it had seen, while the clock is at an open trade's cut."""
+        t = self.trade if self.mode == 'trades' else None
+        return t.get('cut_seq') if t and self.clock == t.get('cut_utc') else None
+
     def n_visible(self):
-        return visible_count(self.day, self.clock, self.exclusive)
+        return visible_count(self.day, self.clock, self.exclusive, self.cut_seq())
 
     def vis(self):
         return self.day.upto(self.n_visible())
@@ -720,7 +748,7 @@ class Studio:
             if lv is None:
                 return {'ok': False, 'why': 'mark a Level (or open a candidate) to read it'}
             dirn = self.cand.get('dir') if self.mode == 'blind' and self.cand and cross == self.cand.get('cross_utc_ms') else None
-            return core.machine_read(self.vis(), self.clock, float(lv), cross, tick=self.tick, exclusive=self.exclusive, direction=dirn)
+            return core.machine_read(self.vis(), self.clock, float(lv), cross, tick=self.tick, exclusive=self.exclusive and not self.cut_seq(), direction=dirn)
 
     def _level(self):
         """The level in force and its cross: the open candidate's, the one set in free mode, or else (free mode) the day's
@@ -779,7 +807,7 @@ class Studio:
                     level = {'type': 'marked', 'price': lm[-1]['price']}
             cross = self.cand['cross_utc_ms'] if self.cand else auto_cross if level is not None and level == self._level()[0] else None
             dirn = self.cand.get('dir') if self.cand and cross == self.cand.get('cross_utc_ms') else None
-            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, tick=self.tick, exclusive=self.exclusive,
+            mr = core.machine_read(self.vis(), self.clock, float(level['price']), cross, tick=self.tick, exclusive=self.exclusive and not self.cut_seq(),
                                    direction=dirn) if level else {'ok': False, 'why': 'no level'}
             rule = core.load_rule(self.rule_path)
             draft = core.draft_verdict(mr, rule)
@@ -1248,9 +1276,10 @@ class Studio:
         except ValueError as e:
             raise TradeSkip(f'its entry order cannot be found exactly ({e})') from e
         cut_wall = int(order['t_from'])
+        seq = order_cut_seq(order)
         return {'item': item, 'row': row, 'res': res, 'trade': t, 'order': order, 'how': how,
                 'at_cut': core.trade_at_cut(res, t, order), 'cut_wall': cut_wall,
-                'cut_utc': int(core.wall_to_utc([cut_wall])[0]),
+                'cut_utc': int(core.wall_to_utc([cut_wall])[0]), 'cut_seq': seq,
                 'pre': (day, pday, core.minute_bars(pday) if pday is not None else [])}
 
     def _prefetch(self):
