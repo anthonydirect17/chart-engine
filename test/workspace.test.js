@@ -217,3 +217,21 @@ test('the workspace is the main page (index.html), the single chart page is sing
   const sat = f => single.indexOf('src="' + f + '"');
   assert.ok(sat('order-ticket.js') < sat('trade.js') && sat('trade.js') < sat('live.js') && at('trade.js') < at('live.js') && at('ticket-link.js') < at('workspace.js'), '1.12.0: trade.js (the one order path) before live.js on both pages, ticket-link.js before workspace.js');
 });
+
+test('Quote board rows (1.16.0): cleanPanel keeps the hidden rows, sanitised; none hidden keeps no key; the layout keeps them', () => {
+  const qb = (hide, id = 'q') => Object.assign({ id, type: 'quotes', x: 0, y: 0, w: 3, h: 2 }, hide === undefined ? {} : { hide });
+  assert.deepStrictEqual(W.cleanPanel(qb(['YM', 'ZN'])), { id: 'q', type: 'quotes', hide: ['YM', 'ZN'], x: 0, y: 0, w: 3, h: 2 });
+  assert.deepStrictEqual(W.cleanPanel(qb()), { id: 'q', type: 'quotes', x: 0, y: 0, w: 3, h: 2 }, 'default: every row shown');
+  assert.deepStrictEqual(W.cleanPanel(qb([])), { id: 'q', type: 'quotes', x: 0, y: 0, w: 3, h: 2 }, 'an empty list is the default');
+  // unknown shapes dropped safely: not strings, lower case, too long, markup, duplicates; a root hello may not list is kept
+  assert.deepStrictEqual(W.cleanPanel(qb(['ZN', 'ZN', 'ym', 7, null, '<b>', 'TOOLONGROOT', '6E', 'NQ', { r: 'ES' }])).hide, ['ZN', '6E', 'NQ']);
+  assert.deepStrictEqual(W.cleanPanel(qb('YM')), { id: 'q', type: 'quotes', x: 0, y: 0, w: 3, h: 2 }, 'not a list: nothing hidden');
+  assert.equal(W.cleanHide(Array.from({ length: 60 }, (_, i) => 'R' + i)).length, 40, 'at most 40');
+  assert.equal(W.cleanPanel(Object.assign(qb(['YM']), { type: 'chart', root: 'MNQ', tf: 'm1' })).hide, undefined, 'only a Quote board keeps it');
+  // all hidden is allowed (the board says so); the layout and the store keep it, each board its own
+  const all = ['NQ', 'ES', 'YM', 'RTY', 'GC', 'SI', 'CL', '6E', 'ZN', 'ZB'];
+  const l = W.cleanLayout({ panels: [qb(all, 'q1'), Object.assign(qb(['YM'], 'q2'), { x: 3 })] });
+  assert.deepStrictEqual(l.panels.map(p => p.hide), [all, ['YM']]);
+  const st = W.cleanStore(JSON.stringify({ v: 1, layouts: { Main: { panels: [qb(['ZN', 'bad root'], 'q1')] } } }));
+  assert.deepStrictEqual(st.layouts.Main.panels[0].hide, ['ZN']);
+});

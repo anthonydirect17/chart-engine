@@ -483,3 +483,10 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .sg-sum { color: var(--ws-muted); min-height: 0; }
 .sg-fill { flex: 1 1 auto; }
 .ws-sg input[type="checkbox"] { height: auto; margin: 0; }
+
+/* 1.16.0: a Quote board's markets menu, and the board with none shown */
+.ws-qbrows .qb-pick { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-family: var(--ws-mono); }
+.ws-qbrows .qb-pick:hover { background: var(--ws-tint); }
+.ws-qbrows .qb-pick input { margin: 0; accent-color: var(--ws-accent); }
+.ws-qbrows .qb-pick-q { margin-left: auto; color: var(--ws-muted); font: 11px var(--ws-sans); }
+.qb-empty { margin: 10px; color: var(--ws-muted); font-size: 12px; }

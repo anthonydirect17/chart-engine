@@ -71,6 +71,17 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
 /* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
    Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
 const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts'];
+/* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
+   ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
+   simply ignored; anything else dropped. Display only. */
+const QB_HIDE_MAX = 40, QB_ROOT_RX = /^[A-Z0-9]{1,8}$/;
+/** A Quote board's hidden rows as kept: unique root names, at most 40, in their order; [] for anything else. */
+function cleanHide(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const r of v) if (typeof r === 'string' && QB_ROOT_RX.test(r) && !out.includes(r) && out.length < QB_HIDE_MAX) out.push(r);
+  return out;
+}
 /** One panel, or null when its shape is bad. Position and size are whole cells; re-flow puts them inside the grid. */
 function cleanPanel(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
@@ -86,6 +97,7 @@ function cleanPanel(p) {
     const r = parseRange(p.range);
     if (r !== null) out.range = r;
   } else if (p.type === 'tape') out.root = p.root;
+  else if (p.type === 'quotes') { const hide = cleanHide(p.hide); if (hide.length) out.hide = hide; }   // 1.16.0: absent = every row shown
   return Object.assign(out, { x, y, w, h });
 }
 
@@ -451,7 +463,7 @@ return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
-  roundTrips, fillsToday, QUOTE_ROOTS, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
+  roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -1682,7 +1694,8 @@ function addView(p) {
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
   } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
-  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>';
+  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>' +
+    '<button type="button" class="ws-ic ws-more" data-act="qbrows" aria-haspopup="true" aria-expanded="false" aria-label="Markets shown on this Quote board" title="Markets shown on this board">⋯</button>';
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
@@ -1712,6 +1725,7 @@ function addView(p) {
     else if (b.dataset.act === 'gear') openTapeGear(v, b);
     else if (b.dataset.act === 'view') openViewPop(v, b);
     else if (b.dataset.act === 'more') openMore(v, b);
+    else if (b.dataset.act === 'qbrows') openQbRows(v, b);
   });
   return v;
 }
@@ -2023,14 +2037,18 @@ const qChg = (r, x) => (AQ && instruments[r] && instruments[r].quoteOnly ? AQ.ch
 /* Rows are small grids (ws-grid-rows, workspace.css): on a narrow panel the change and percent, and the high and low, stack
    in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel); the
    quote-only rows scroll inside the board when it is short. */
+/* 1.16.0: the rows this board shows: every row it can show (NQ, ES, then the quote-only markets hello lists) but those its
+   panel hides (panel.hide, saved with the layout; a hidden root hello no longer lists is ignored) */
+const quoteRowsOf = p => { const hide = W.cleanHide(p.hide); return quoteRootsNow().filter(r => !hide.includes(r)); };
 function mountQuotes(v) {
   let roots = [], offs = [], cells = {};
   const build = () => {
     for (const f of offs) f();
-    roots = quoteRootsNow();
+    roots = quoteRowsOf(v.panel);
     const qo = r => !QUOTE_ROOTS.includes(r);
     v.body.innerHTML = '<div class="qb-wrap gr gr-qb' + (roots.some(qo) ? ' qb-more' : '') + '" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
       '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
+      (roots.length ? '' : '<p class="qb-empty" role="note">No markets shown: pick some in the menu</p>') +
       roots.map((r, i) => `<div class="gr-row${qo(r) ? ' qb-q' + (i && !qo(roots[i - 1]) ? ' qb-first' : '') : ''}" role="row" data-root="${esc(r)}"><span class="b" role="cell">${esc(r)}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
       '<p class="qb-foot" data-q="foot"></p></div>';
     offs = roots.map(watchQuote);
@@ -2068,7 +2086,7 @@ function mountQuotes(v) {
   render();
   v.state = 'live';
   /* sync: hello again (another ChartBridge, or its quoteRoots changed): the rows follow when the list changed */
-  v.quotes = { render, sync: () => { if (quoteRootsNow().join() !== roots.join()) { build(); render(); } }, roots: () => roots.slice() };
+  v.quotes = { render, sync: () => { if (quoteRowsOf(v.panel).join() !== roots.join()) { build(); render(); } }, roots: () => roots.slice() };
   /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
      with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
   const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
@@ -2403,6 +2421,26 @@ $('wsView').addEventListener('change', e => {
   v.pane.setView({ range: n });
 });
 $('wsView').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('[data-f="range"]')) { e.preventDefault(); e.target.dispatchEvent(new Event('change', { bubbles: true })); } });
+
+/* 1.16.0 (Anthony 2026-10-07): a Quote board's markets: every row it can show, each with a checkbox; an unchecked row is
+   hidden on this board only, saved with the layout (panel.hide). Display only. */
+function openQbRows(v, anchor) {
+  toggle($('wsQbRows'), anchor, () => {
+    const el = $('wsQbRows'), hide = W.cleanHide(v.panel.hide);
+    el.dataset.id = v.panel.id;
+    el.innerHTML = '<p class="ws-menu-note">Shown on this board</p>' + quoteRootsNow().map(r =>
+      `<label class="qb-pick"><input type="checkbox" data-qroot="${esc(r)}"${hide.includes(r) ? '' : ' checked'}><span>${esc(r)}</span>${instruments[r] && instruments[r].quoteOnly ? '<span class="qb-pick-q">quote only</span>' : ''}</label>`).join('');
+    openPop(el, anchor);
+  });
+}
+$('wsQbRows').addEventListener('change', e => {
+  const i = e.target.closest('input[data-qroot]'), v = views.get($('wsQbRows').dataset.id);
+  if (!i || !v || !v.quotes) return;
+  const r = i.dataset.qroot, hide = W.cleanHide(v.panel.hide).filter(x => x !== r);
+  if (!i.checked) hide.push(r);
+  if (hide.length) v.panel.hide = W.cleanHide(hide); else delete v.panel.hide;
+  save(); v.quotes.sync();
+});
 
 /* A chart's small menu: Reset view (1.15.0: the drawing tools moved to the ring, a middle-click on the chart). */
 function openMore(v, anchor) {

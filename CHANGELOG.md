@@ -53,6 +53,10 @@
   `setTrades` draws `ghost` trades faint and an open trade's entry only). Motion (`live/motion.js`) on the Bot tab and
   the Library only; Settings > Motion: Less. Files `live/bot-core.js`, `live/bot.js`, `live/bot.css`, `live/bot.html`;
   tests `test/bot.test.js`, `smoke:bot`, `perf:bot`; the fake bridge gains `botRails` and `/bot-library`. Made-up bots only.
+- **Quote board markets** (Anthony 2026-10-07): each Quote board's header has a ⋯ menu listing every row it can show (NQ,
+  ES and the quote-only markets hello lists), each with a checkbox; an unchecked row is hidden on that board only, saved
+  with the layout (`panel.hide`, kept and cleaned by `cleanPanel`; a root hello no longer lists is ignored); all shown by
+  default; with none shown the board says "No markets shown: pick some in the menu". Display only. `smoke:quoterows`.
 - **One v3 connection per window** (the page integration of the Account page, the ticket's 0.4.0 parts and the Bot tab):
   `live/accounts.js` `createFeed` is the window's only v3 connection (`client` v3, signed in), shared through `listen` and
   `post`; the Bot tab opens none of its own (`bot.html` makes its one). The order ticket's connection stays a v2 page

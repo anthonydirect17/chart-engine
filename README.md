@@ -77,7 +77,8 @@ and restore** a panel (the square beside its x, or a Maximize panel hotkey set i
 Plex served from the PC** (`live/fonts`, SIL OFL): the pages load nothing from the internet; and the shared feed keeps a
 rolling window of live trades, so a panel added late in a long day loads on its own and no other panel reloads.
 With ChartBridge 0.4.0 the **Quote board** adds the quote-only markets (YM, RTY, GC, SI, CL, 6E, ZN, ZB) in compact rows
-after NQ and ES, the bonds in NinjaTrader's 32nds (ZB 118'15, ZN 104'035), and a new panel, the **Account page**, lists
+after NQ and ES, the bonds in NinjaTrader's 32nds (ZB 118'15, ZN 104'035) (each board's ⋯ menu hides the markets you
+uncheck, on that board only, saved with the layout), and a new panel, the **Account page**, lists
 every account ChartBridge watches: Accounts (connection, balance, today's P&L, position, the room to the trailing
 drawdown and the daily loss limit, amber at 70 percent used and red at 90, also on the charts trading that account; the
 trading checkmark, the Gone list and Archive), Positions, Working orders, Today's trades (gross and net), the Copier and
@@ -774,6 +775,7 @@ npm run smoke:ib         # Initial balance forming, locked, on every view and mo
 npm run smoke:live-first # the served window and the session table: exact range bars, profile and VWAP against the fake's tape
 npm run smoke:update     # "Update ready: reload when flat" with an open position: never over the order bar or the chart, never reloads
 npm run smoke:bot        # the Bot tab against the fake's v3 bot channel: strip, Library, panel, proposals, pop-out, switch off
+npm run smoke:quoterows  # a Quote board's markets menu: hide YM and ZN on one board, reload, the other board unaffected
 npm run smoke:v038       # the page with a ChartBridge without v3: no new control, no v3 message; V115_ROOT=dir compares the orders with 1.15.0
 npm run perf:bot         # the Bot tab's entrance and Library playing while its live chart draws: the chart's gates hold
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout

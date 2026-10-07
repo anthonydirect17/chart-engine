@@ -41,6 +41,7 @@
     "smoke:motion": "node test/motion-smoke.mjs",
     "smoke:accounts": "node test/accounts-smoke.mjs",
     "smoke:v038": "node test/v038-smoke.mjs",
+    "smoke:quoterows": "node test/quoterows-smoke.mjs",
     "smoke:strategies": "node test/strategies-smoke.mjs",
     "smoke:bot": "node test/bot-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
