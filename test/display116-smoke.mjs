@@ -152,7 +152,7 @@ try {
   /* ---------------------------------------------------------------- the stale feed */
   console.log('the stale feed (RTH: 10 s)');
   const stale = () => page.evaluate(ids => ids.map(id => { const pn = document.querySelector(`.ws-panel[data-id="${id}"]`), c = pn.querySelector('.ws-head [id$="-bConn"]');
-    return { id, edge: pn.querySelector('.chart-live').classList.contains('is-stale'), text: c && !c.hidden ? c.textContent : '' }; }), panels.filter(p => p.type === 'chart').map(p => p.id));
+    return { id, edge: pn.querySelector('.ws-body > .chart-live').classList.contains('is-stale'), text: c && !c.hidden ? c.textContent : '' }; }), panels.filter(p => p.type === 'chart').map(p => p.id));
   const st = await until(async () => { const s = await stale(); return s.filter(x => mnqAll.includes(x.id)).every(x => x.edge && /^Feed stale \d+ s$/.test(x.text)) ? s : null; }, 'MNQ stale', 20000);
   if (st) {
     check(st.filter(x => !mnqAll.includes(x.id)).every(x => !x.edge && !x.text), 'MNQ quiet: its charts say "' + st.find(x => mnqAll.includes(x.id)).text + '" with the amber edge; NQ and ES (trading) do not');

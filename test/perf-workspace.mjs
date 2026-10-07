@@ -3,7 +3,7 @@
 // Not part of `npm test`: it takes about 2 minutes per page.
 //
 //   node test/perf-workspace.mjs [--mode=both|workspace|single] [--secs=120] [--warm=10] [--live-rate=300]
-//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape|panels] [--ticket]
+//                                [--tick-rate=15] [--port=8834] [--json=FILE] [--variant=default|no-tape|main-only|main-tape|panels|databox] [--ticket]
 //
 // --live-rate is trades a second per instrument while a page is subscribed to it (with the fake's bursts of 3 times
 // that for 1.5 s in every 10 s), so the workspace's MNQ, NQ and ES each trade at that rate. The single page shows the
@@ -16,7 +16,9 @@
 // forced GC), and the WebSockets open. --variant opens the workspace with part of the default layout (to see what each
 // part costs): no-tape (the 4 charts), main-only (the main chart alone, in its own cells), main-tape (it and the tape);
 // panels (1.15.0): every panel of the default layout plus the Account panel and the Quote board (the ES chart and the tape
-// a row shorter for them; the board watches MES too, a fourth instrument at --live-rate).
+// a row shorter for them; the board watches MES too, a fourth instrument at --live-rate); databox (1.16.0): the default
+// layout with a Data Box in the tape's cells, following the main chart (its newest bar changes with every trade: the most
+// the Data Box can cost).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -80,12 +82,19 @@ async function run(mode) {
     if (mode === 'workspace' && VARIANT !== 'default') {
       const W = (await import('../live/workspace.js')).default;
       const main = (p, i) => i === 0;
-      const keep = { 'no-tape': p => p.type === 'chart', 'main-only': main, 'main-tape': (p, i) => main(p, i) || p.type === 'tape', panels: () => true }[VARIANT];
+      const keep = { 'no-tape': p => p.type === 'chart', 'main-only': main, 'main-tape': (p, i) => main(p, i) || p.type === 'tape', panels: () => true, databox: () => true }[VARIANT];
       if (!keep) throw new Error('unknown --variant ' + VARIANT);
       let panels = W.defaultLayout().panels.filter(keep);
       if (VARIANT === 'panels') {
         panels = panels.map(p => (p.type === 'tape' ? Object.assign({}, p, { h: 1 }) : p.root === 'ES' ? Object.assign({}, p, { h: 2 }) : p));
         panels.push({ id: 'perfAcct', type: 'account', x: 10, y: 4, w: 2, h: 2 }, { id: 'perfQuotes', type: 'quotes', x: 7, y: 5, w: 3, h: 1 });
+      }
+      if (VARIANT === 'databox') {
+        panels = panels.map(p => (p.type === 'tape' ? { id: 'perfDb', type: 'databox', x: p.x, y: p.y, w: p.w, h: p.h } : p));
+        // the main chart with the single chart page's indicators (the delta pane on: the Data Box's buys and sells) and bubbles
+        const LP = (await import('../live/live.js')).default.LivePrefs, pane = LP.defaultPane(LP.MAIN_PANE);
+        pane.ind.bubbles = { on: true, shown: true, pin: true };
+        await ctx.addInitScript(v => { try { localStorage.setItem('live-indicators-v2', v); } catch (e) {} }, JSON.stringify({ [panels[0].id]: pane }));
       }
       const store = JSON.stringify({ v: 1, layouts: { Perf: { panels } } });
       await ctx.addInitScript(v => { try { localStorage.setItem('live-workspace-v1', v); } catch (e) {} }, store);

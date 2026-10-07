@@ -1602,7 +1602,7 @@ function mountDataBox(v) {
     txt(cells.head, (x.hovering ? 'Under the cursor' : 'Newest bar') + (x.forming ? ' · forming' : ''));
     cells.head.classList.toggle('live', !x.hovering);
     set(cells.time, U.fmtDay(x.t) + ' ' + W.fmtClock(x.t) + (Math.abs(x.t - Math.round(x.t)) > 1e-6 ? '.' + Math.floor((x.t % 1) * 10 + 1e-6) : ''));
-    set(cells.dur, W.fmtSpan(x.end - x.t) + (x.forming ? ' so far' : ''));
+    set(cells.dur, W.fmtSpan(Math.max(0, x.end - x.t)) + (x.forming ? ' so far' : ''));   // never below 0 (the data's clock a little ahead of the PC's)
     set(cells.o, px(x.o)); set(cells.h, px(x.h)); set(cells.l, px(x.l)); set(cells.c, px(x.c), x.c > x.o ? 'up' : x.c < x.o ? 'dn' : '');
     set(cells.rng, px(x.h - x.l) + ' (' + Math.round((x.h - x.l) / tick) + ' t)');
     set(cells.v, U.fmtPrice(x.v, 0));

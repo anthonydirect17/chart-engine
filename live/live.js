@@ -1127,7 +1127,7 @@ ${o.legend ? `    <div class="legend" id="${p}legend">
       <div class="lg1"><b id="${p}lgName">MNQ</b><span class="tfbadge" id="${p}lgTf">1m</span><span class="dim" id="${p}lgSrc">NinjaTrader via ChartBridge · chart ${esc(CE.VERSION)}</span><span class="pill" id="${p}connPill">CONNECTING</span>${armPill}<span class="lg-bub" id="${p}lgBub" hidden></span><span class="lg-ro" id="${p}lgBar" hidden></span><span class="lg-ro" id="${p}lgAtr" hidden></span></div>
       <div class="lg2"><span class="dim" id="${p}lgTime">--:--</span><span>O <span id="${p}lgO">-</span></span><span>H <span id="${p}lgH">-</span></span><span>L <span id="${p}lgL">-</span></span><span>C <span id="${p}lgC">-</span></span><span id="${p}lgChg">-</span><span class="lg-ro" id="${p}lgSet" hidden></span><span class="lg-br" aria-hidden="true"></span><span>Vol <span id="${p}lgV">-</span></span></div>
       <div class="lg3" id="${p}lgRow3"><span id="${p}lgVwWrap">VWAP <span class="vw" id="${p}lgVw">-</span></span><span id="${p}lgVp" hidden>POC <span class="vpc" id="${p}lgPoc">-</span> · VA <span id="${p}lgVal">-</span> to <span id="${p}lgVah">-</span><span class="vpday" id="${p}lgVpDay"></span></span><span id="${p}lgDelta" hidden><span id="${p}lgDl">Delta</span> <span class="dv" id="${p}lgDv">-</span><span class="dunk" id="${p}lgDu" hidden></span></span><span id="${p}lgFill"></span></div>
-    </div>` : `    <div class="ch-badge" id="${p}badge" role="status" aria-live="polite"><span class="pill armed" id="${p}bArmed" hidden>ARMED</span><span class="pill" id="${p}bConn" hidden></span></div>`}
+    </div>` : `    <div class="ch-badge" id="${p}badge" role="status" aria-live="polite">${o.hosted ? `<span class="pill armed" id="${p}bArmed" hidden>ARMED</span>` : ''}<span class="pill" id="${p}bConn" hidden></span></div>`}
     <div class="notice" id="${p}notice" hidden>
       <h2 id="${p}noticeTitle">Waiting for ChartBridge</h2>
       <p id="${p}noticeText">Start NinjaTrader with the ChartBridge add-on compiled, then this page connects on its own.</p>
@@ -1209,7 +1209,9 @@ function start(container, opt, PAGE) {
   /* ---------------- this chart's element, lookups, and everything destroy() undoes */
   const rootEl = document.createElement('div');
   rootEl.className = 'chart-live' + (SLIM ? ' slim' : '') + (COMPACT ? ' compact' : '');
-  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN, sideGears: TRADING || SLIM, legend: PAGE });
+  // hosted: a host that trades through the chart (the workspace) gets the ARMED pill in the badge; a read-only mount none
+  const hostTrades = !TRADING && !!opt.trade && ['place', 'move', 'cancel'].every(k => typeof opt.trade[k] === 'function');
+  rootEl.innerHTML = markup(p, { trading: TRADING, brand: opt.brand !== undefined ? !!opt.brand : PAGE, paneId: PANE, pin: !!PIN, sideGears: TRADING || SLIM, legend: PAGE, hosted: hostTrades });
   container.appendChild(rootEl);
   const els = {};
   for (const el of rootEl.querySelectorAll('[id]')) if (el.id.startsWith(p)) els[el.id.slice(p.length)] = el;
