@@ -169,7 +169,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   panels the high ran under the legend): the top keeps the legend's height and 8 px free (8% when that is more, 45% of
   the plot at most). 1.14.0: it also takes in every working
   order, the position's stop and target legs and the planned stop and target lines ("zoom to brackets", Anthony: on HOME
-  the stop sat off the chart), and no longer the VWAP (one far from price squashed the candles).
+  the stop sat off the chart), and no longer the VWAP (one far from price squashed the candles). 1.16.0 (Anthony): it also
+  takes in the large-order bubbles in view (only those, at their drawn radius), so no bubble crosses the top of the plot.
 - Legend top-left over the chart, on `rgba(8,11,16,0.78)`, radius 8: symbol, timeframe, status pill;
   then time, O H L C, change and percent, volume; then VWAP and the trade under the cursor. It shows
   the bar under the crosshair, or the forming bar when the pointer is away. On phones it drops its
@@ -183,7 +184,16 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   real close) in 500 10px mono, the secondary text color on the legend ground, radius 4, 16 px tall; moved up past any order
   label and the VWAP's marker (never on the price axis, the padlock or Jump to live, which sit in the axis column); on a plot
   too narrow for it the short form "0:23 · ATR 12.50". Shown on small panels and with the header text off. The workspace's
-  headers no longer show the change from the settlement (the Quote board has it).
+  headers no longer show the change from the settlement (the Quote board has it). 1.16.0: the bubble under the mouse comes
+  first, "Buy 142 · Bar 0:23 · ATR(14) 12.50" (short form "Buy 142 · 0:23 · ATR 12.50"), set when the bubble changes.
+- **No text inside a mounted chart (1.16.0, Anthony):** the workspace's charts (and a host's) have no legend and no **Aa**
+  toggle; the single chart page keeps its legend as above. A small badge, in the panel header (or the chart's top left
+  corner when a host does not place it), 9px pills: **ARMED · account** in the ARMED pill's colors while the chart takes
+  orders, and the connection only when it is not LIVE (CONNECTING, LOADING, OFFLINE in the loss color).
+- **Stale feed (1.16.0):** no trade for 10 s in RTH (09:30 to 16:00 ET) or 60 s outside it, while the line is live and CME
+  Globex open: a 2 px amber edge (`--warn` at 75%) inside the chart's border, over the candles and taking no room, and
+  "Feed stale 12 s" in the badge in amber (on the single chart page the LIVE pill reads "STALE 12 s"). Gone with the next
+  trade.
 
 ## Drawing
 
@@ -312,7 +322,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     of its own color. Drawn over the candles but see-through (a range bar's body spans nearly the whole bar, so behind it a
     bubble would be hidden), the larger first. 1.14.0: no numbers on the chart; with the mouse over one (the topmost under
     the pointer, 3 px of slop, tested on mouse moves only) the legend's top line says "Bubble Buy 142 @ 31,120.25
-    08:44:05.3" in 500 12px mono, in the side's text color. Floors RTH (09:30 to 16:15 ET) / overnight: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, the same
+    08:44:05.3" in 500 12px mono, in the side's text color (1.16.0: on a workspace chart, "Buy 142" in the corner readout,
+    and the whole line in the Data Box). Floors RTH (09:30 to 16:15 ET) / overnight: NQ 50 / 25, ES 100 / 50, MNQ 100 / 50, MES 100 / 50, the same
     numbers as the workspace's Time and Sales (one key, `live-tape-floors-v1`), editable in the gear and in the
     workspace's Settings; Auto (per instrument) uses the session's top 1% of group sizes once 200 groups have traded.
   - **Divergence arrows** (Anthony's DeltaDivergenceSignal v1.0, the delta pane's gear: Show divergences, off by
@@ -554,7 +565,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today); its x cancels an order of any
   instrument (Armed). On a narrow panel (under 360 px)
   the summary goes two by two and each pair of columns stacks in one cell, so nothing is cut at 1366 px.
-- **Quote board (1.15.0):** NQ, MNQ, ES, MES: last, change and % from the prior settlement (buy green or sell red; blank
+- **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
   stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
 - **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures

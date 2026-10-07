@@ -70,7 +70,7 @@ const PLAN_ID = /^(.+):(sl|tp)$/;
 /** { entry, which: 'stop' | 'target' } of a planned line's id, or null for any other id. */
 function planIdOf(id) { const m = PLAN_ID.exec(String(id)); return m ? { entry: m[1], which: m[2] === 'sl' ? 'stop' : 'target' } : null; }
 const hasPlan = o => !!o && OT_RESTING.includes(o.kind) && o.role === 'entry' && !!o.planned && typeof o.planned === 'object';
-const OT_RESTING = ['limit', 'stop'];
+const OT_RESTING = ['limit', 'stop', 'stopLimit', 'mit'];   // 1.16.0: a stop-limit or MIT entry rests too (ChartBridge 0.4.0, orderTypes)
 /**
  * The chart items for one working entry's planned lines: [{ id, side, kind, price, qty, filled, role, plan }] (the
  * engine's `plan` shape), plus `adds` (what can be added: 'stop' and/or 'target') for the entry itself. Empty for an
@@ -154,7 +154,7 @@ function cancelAllIds(orders, account, root, posQty) {
   return ids;
 }
 
-const KIND = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL' };
+const KIND = { market: 'MKT', limit: 'LMT', stop: 'STP', stopLimit: 'STL', mit: 'MIT' };
 function describe(o, fmt) {
   const kind = o.role === 'target' ? 'TGT' : o.role === 'stop' ? 'STP' : (KIND[o.kind] || o.kind);
   return (o.side === 'sell' ? 'SELL' : 'BUY') + ' ' + kind + ' ' + o.qty + (o.price !== null && o.price !== undefined ? ' @ ' + fmt(o.price) : '');

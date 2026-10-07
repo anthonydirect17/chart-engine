@@ -1,0 +1,254 @@
+/*
+ * The Bot tab, the bot strip, the copilot pop-ups and the corner notices (live/bot.js; chart page 1.16.0). The workspace's
+ * own tokens (workspace.css: --ws-*), the house style: dark grounds, purple accent, green and red only for sides and P&L,
+ * IBM Plex. The approved look is the pre-cruise mockup's Bot tab, rebuilt here.
+ * Never animated (R3): the kill switch, the mode, Accept and Reject, position and P&L, the pop-ups. Motion is the kit's
+ * (live/motion.js) on the Library and the panel's other pieces only; with Less motion the CSS tokens are 0.
+ */
+:root { --bt-cond: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif; --bt-panel2: #0F151D; --bt-panel3: #141C26; --bt-copilot: #100D1C; --bt-r: 12px; }
+
+/* ---------------- the tab button in the top bar */
+.ws-btn.bt-tabbtn { font-weight: 600; letter-spacing: .02em; }
+.ws-btn.bt-tabbtn[aria-pressed="true"] { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); box-shadow: inset 0 0 0 1px var(--ws-tint-line); }
+.ws-btn.bt-tabbtn.bt-alert { border-color: color-mix(in srgb, var(--ws-sell) 60%, transparent); color: #FFC9D3; }
+/* room for the Bot button on a 1366 px screen: the "Layout" word goes (the list says what it is) and the delay readout
+   gives way before any button does */
+body.bt-has-tab .ws-lbl[for="wsLayout"] { display: none; }
+body.bt-has-tab .ws-stat { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+body.bt-has-tab .ws-top > .ws-btn { flex-shrink: 0; }
+body.bt-on .ws-grid { display: none !important; }
+body:not(.bt-on) .bt-view.bt-in-ws { display: none !important; }
+
+/* ---------------- the view: library | chart | panel, filling the window under the top bar (no page scroll) */
+.bt-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; position: relative; color: var(--ws-text); }
+.bt-view .mono, .bt-props .mono, .bt-strip .mono { font-family: var(--ws-mono); font-variant-numeric: tabular-nums; }
+.bt-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr) 330px; gap: 8px; padding: 8px; }
+.bt-piece { background: var(--ws-panel); border: 1px solid var(--ws-line); border-radius: var(--bt-r); min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.bt-ph { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--ws-line); flex-wrap: wrap; flex: none; min-height: 38px; box-sizing: border-box; }
+.bt-t { font: 600 12px/1.2 var(--bt-cond); letter-spacing: .08em; text-transform: uppercase; color: var(--ws-text); }
+.bt-r { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.bt-pb { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+.bt-scroll, .bt-panelb { overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; scrollbar-width: thin; scrollbar-color: var(--ws-line2) transparent; }
+.bt-cap { font: 600 10.5px/1.3 var(--bt-cond); letter-spacing: .1em; text-transform: uppercase; color: var(--ws-muted); }
+.bt-capn { letter-spacing: .04em; color: var(--ws-grip); margin-left: 4px; }
+.bt-faint { color: var(--ws-muted); }
+.bt-pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 1px 9px; font: 600 10.5px/1.6 var(--bt-cond); letter-spacing: .08em; text-transform: uppercase; border: 1px solid var(--ws-line2); color: var(--ws-text2); white-space: nowrap; }
+.bt-pill.bt-legend { border-color: var(--ws-tint-line); color: var(--ws-soft); background: var(--ws-tint); text-transform: none; letter-spacing: .02em; font: 500 11.5px var(--ws-sans); }
+.bt-view .pos, .bt-props .pos, .bt-strip .pos { color: var(--ws-buy); }
+.bt-view .neg, .bt-props .neg, .bt-strip .neg { color: var(--ws-sell); }
+.bt-view .warn { color: var(--ws-warn); }
+.bt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-buy); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ws-buy) 15%, transparent); flex: none; display: inline-block; }
+.bt-dot.off { background: var(--ws-muted); box-shadow: none; }
+.bt-dot.bad { background: var(--ws-sell); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ws-sell) 18%, transparent); }
+.bt-keycap { font: 600 11px/1 var(--ws-mono); border: 1px solid var(--ws-line2); border-bottom-width: 2px; border-radius: 5px; padding: 2px 5px; color: var(--ws-text); background: var(--bt-panel3); margin-left: 4px; }
+.bt-empty { margin: 0; color: var(--ws-text2); font-size: 12px; line-height: 1.45; }
+.bt-empty.warn { color: var(--ws-warn); }
+.bt-help { margin: 0; color: var(--ws-muted); font-size: 11.5px; line-height: 1.4; }
+.bt-help.warn { color: var(--ws-warn); }
+.bt-why { margin: 0; color: var(--ws-text2); font-size: 11.5px; }
+.bt-view :focus-visible, .bt-props :focus-visible, .bt-strip :focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+
+/* Cheap motion (M7, perf:bot): the atmosphere is a still layer of its own, painted once, never again with each piece that
+   moves over it; while a scene plays (.bt-playing, set by bot.js until it ends) the moving pieces are layers of their own,
+   so a fade or a rise is composited, not painted again. At rest nothing has a layer of its own. */
+.bt-view.motion-atmo::before, .bt-dcard.motion-atmo::before { will-change: transform; }
+.bt-playing :is([data-in], [data-grow], .stamp):not(canvas) { will-change: opacity, translate, scale; }
+
+/* off: the bot channel is off on this PC; the tab offers nothing */
+.bt-off { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+.bt-off-card { max-width: 520px; background: var(--ws-panel); border: 1px solid var(--ws-line2); border-radius: var(--bt-r); padding: 18px 20px; display: grid; gap: 6px; }
+.bt-off-card p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ws-text2); }
+
+/* ---------------- the Library */
+.bt-slot { border: 1px dashed var(--ws-tint-line); border-radius: 10px; padding: 8px 10px; display: flex; gap: 8px; align-items: center; color: var(--ws-soft); font-size: 12px; background: color-mix(in srgb, var(--ws-accent) 5%, transparent); }
+.bt-slot b { color: var(--ws-text); font-weight: 600; }
+.bt-shelf-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.bt-shelf { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; }
+.bt-entry { position: relative; text-align: left; width: 100%; border: 1px solid var(--ws-line); background: var(--bt-panel2); border-radius: 10px; padding: 9px 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; color: var(--ws-text); font: inherit; cursor: pointer;
+  transition: border-color var(--motion-fast, 150ms), background var(--motion-fast, 150ms), translate var(--motion-fast, 150ms); }
+.bt-entry:hover { border-color: var(--ws-tint-line); background: var(--bt-panel3); translate: 0 -1px; }
+.bt-entry.loaded { border-color: var(--ws-tint-line); box-shadow: inset 3px 0 0 var(--ws-accent); }
+.bt-entry .nm { font-weight: 600; font-size: 13px; color: #F2F6FA; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bt-entry .sn { grid-column: 1 / -1; color: var(--ws-text2); font-size: 11.5px; line-height: 1.4; }
+.bt-entry .bt-thumb { grid-column: 1 / -1; width: 100%; height: 38px; display: block; }
+.bt-entry .st { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; font: 500 11px var(--ws-mono); color: var(--ws-text2); font-variant-numeric: tabular-nums; }
+.bt-entry .st2 { grid-column: 1 / -1; font-size: 11px; color: var(--ws-muted); }
+.bt-inslot { grid-column: 1 / -1; font: 600 10px/1.2 var(--bt-cond); letter-spacing: .1em; text-transform: uppercase; color: var(--ws-soft); }
+.bt-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 21px; padding: 0 7px; border-radius: 6px; font: 700 10.5px/1 var(--bt-cond); letter-spacing: .06em; border: 1px solid var(--ws-tint-line); color: var(--ws-soft); background: var(--ws-tint); box-sizing: border-box; }
+.bt-badge.l2 { border-color: color-mix(in srgb, var(--ws-buy) 50%, transparent); color: var(--ws-buy); background: color-mix(in srgb, var(--ws-buy) 8%, transparent); }
+.bt-badge.rs { border-color: var(--ws-line2); color: var(--ws-text2); background: var(--bt-panel3); }
+.bt-foot { margin: 0; color: var(--ws-muted); font-size: 11.5px; line-height: 1.4; }
+
+/* ---------------- the chart */
+.bt-chartp .bt-ph .ws-sel.bt-tf { height: 24px; padding: 0 4px; }
+.bt-chartp .ws-lv.chart-live { display: contents; }
+.bt-chart { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.bt-chart > .chart-live { flex: 1 1 auto; min-height: 0; }
+.bt-pop { height: 24px; padding: 0 10px; }
+
+/* ---------------- the bot panel */
+.bt-onoff { font: 700 10.5px/1 var(--bt-cond); letter-spacing: .1em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--ws-line2); color: var(--ws-text2); }
+.bt-onoff.ok { color: var(--ws-buy); border-color: color-mix(in srgb, var(--ws-buy) 50%, transparent); }
+.bt-onoff.bad { color: var(--ws-sell); border-color: color-mix(in srgb, var(--ws-sell) 55%, transparent); }
+.bt-sec { display: grid; gap: 6px; }
+.bt-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; background: var(--bt-panel2); border: 1px solid var(--ws-line2); border-radius: 9px; padding: 3px; }
+.bt-modes button { border: 0; background: transparent; color: var(--ws-text2); border-radius: 6px; padding: 6px 4px; font: 500 12px var(--ws-sans); cursor: pointer; }
+.bt-modes button[aria-pressed="true"] { background: var(--ws-tint); color: var(--ws-soft); box-shadow: inset 0 0 0 1px var(--ws-tint-line); }
+.bt-modes button:disabled { color: var(--ws-grip); cursor: not-allowed; }
+.bt-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px; align-items: baseline; }
+.bt-kv .k { color: var(--ws-muted); font-size: 12px; }
+.bt-kv .v { text-align: right; font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+.bt-money { padding: 7px 0; border-top: 1px solid var(--ws-line); border-bottom: 1px solid var(--ws-line); }
+.bt-money .v { font-size: 13px; font-weight: 600; }
+.bt-rail { display: grid; gap: 4px; }
+.bt-rail .top { display: flex; justify-content: space-between; font-size: 12px; }
+.bt-rail.amber .top .mono { color: var(--ws-warn); }
+.bt-rail.red .top .mono { color: var(--ws-sell); }
+.bt-meter, .bt-smeter { height: 6px; background: var(--bt-panel3); border-radius: 4px; overflow: hidden; display: block; }
+.bt-meter i, .bt-smeter i { display: block; height: 100%; border-radius: 4px; background: var(--ws-accent); transform-origin: left center; }
+.bt-meter i.amber, .bt-smeter i.amber { background: var(--ws-warn); }
+.bt-meter i.red, .bt-smeter i.red { background: var(--ws-sell); }
+.bt-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ws-btn.bt-small { height: 24px; padding: 0 9px; font-size: 11.5px; }
+.bt-rails-edit { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 12px; color: var(--ws-text2); }
+.bt-rails-edit input { width: 54px; height: 24px; box-sizing: border-box; margin-left: 4px; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 5px; padding: 0 6px; font: 12px var(--ws-mono); }
+.bt-rails-edit .ws-btn { height: 24px; padding: 0 9px; }
+/* the kill switch: never animated, always the same place */
+.bt-kill { border: 1px solid color-mix(in srgb, var(--ws-sell) 60%, transparent); background: var(--ws-sell-ground); color: #FFC9D3; border-radius: 9px; padding: 9px; font: 700 12px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; width: 100%; cursor: pointer; }
+.bt-kill:hover { border-color: var(--ws-sell); }
+.bt-kill.on { background: var(--ws-sell); color: #fff; border-color: var(--ws-sell); }
+.bt-kill:disabled { opacity: .5; cursor: not-allowed; }
+.bt-dtype { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.bt-dtype button { border: 1px solid var(--ws-line2); background: var(--bt-panel2); border-radius: 7px; padding: 5px 2px; font: 500 11.5px var(--ws-sans); color: var(--ws-text2); cursor: pointer; }
+.bt-dtype button[aria-pressed="true"] { border-color: var(--ws-tint-line); color: var(--ws-soft); background: var(--ws-tint); }
+.bt-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--ws-line); margin-top: 2px; }
+.bt-tabs button { border: 0; background: transparent; color: var(--ws-muted); padding: 6px 10px; font: 600 11px var(--bt-cond); letter-spacing: .08em; text-transform: uppercase; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
+.bt-tabs button[aria-selected="true"] { color: var(--ws-soft); border-bottom-color: var(--ws-accent); }
+.bt-tabb { display: grid; gap: 0; min-width: 0; }
+.bt-tabb > .bt-cap { margin: 8px 0 2px; }
+.bt-sig { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 0; border-top: 1px solid var(--ws-line); font-size: 12px; }
+.bt-sig .t { color: var(--ws-text2); font-size: 11.5px; }
+.bt-sig b { font-weight: 600; display: block; }
+.bt-sig .why { display: block; color: var(--ws-text2); font-size: 11.5px; line-height: 1.4; }
+.bt-sig.skip b { color: var(--ws-text2); }
+.bt-sig.bad b { color: var(--ws-warn); }
+.bt-log { display: grid; grid-template-columns: 62px 64px minmax(0, 1fr); gap: 6px; padding: 5px 0; border-top: 1px solid var(--ws-line); font-size: 11.5px; color: var(--ws-text2); }
+.bt-log .t { color: var(--ws-muted); }
+.bt-log .kd { color: var(--ws-muted); text-transform: uppercase; font: 600 10px/1.6 var(--bt-cond); letter-spacing: .08em; }
+.bt-log.red { color: #FFC9D3; }
+.bt-log.amber { color: var(--ws-warn-text); }
+.bt-opt { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-top: 1px solid var(--ws-line); font-size: 12px; flex-wrap: wrap; }
+.bt-opt .ws-seg button { height: 24px; }
+
+/* ---------------- the full-screen library entry */
+/* no backdrop blur: it would blur the live chart again in every frame (perf:bot) */
+.bt-detail { position: fixed; inset: 0; z-index: 60; background: rgba(4, 6, 9, .9); display: flex; padding: 16px; box-sizing: border-box; }
+.bt-dcard { margin: auto; width: min(1280px, 100%); max-height: 100%; overflow: auto; background: var(--ws-panel); border: 1px solid var(--ws-line2); border-radius: 18px; box-shadow: 0 40px 120px rgba(0, 0, 0, .7); }
+.bt-dhead { display: flex; gap: 12px 16px; align-items: center; flex-wrap: wrap; padding: 16px 20px 12px; border-bottom: 1px solid var(--ws-line); }
+.bt-dtitle { min-width: 0; flex: 1 1 320px; }
+.bt-dtitle h2 { margin: 0; font: 700 21px/1.15 var(--bt-cond); letter-spacing: .02em; color: #F2F6FA; }
+.bt-dtitle p { margin: 3px 0 0; color: var(--ws-text2); max-width: 75ch; font-size: 12.5px; }
+.bt-stamp { display: inline-flex; align-items: center; padding: 4px 10px; border: 2px solid var(--ws-buy); border-radius: 6px; color: var(--ws-buy); font: 800 12.5px/1 var(--bt-cond); letter-spacing: .1em; text-transform: uppercase; transform: rotate(-5deg); background: color-mix(in srgb, var(--ws-buy) 8%, transparent); white-space: nowrap; }
+.bt-stamp.rs { border-color: var(--ws-text2); color: var(--ws-text2); background: var(--bt-panel3); }
+.bt-close { margin-left: auto; height: 30px; }
+.bt-dbody { padding: 14px 20px 20px; display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; }
+.bt-dcol { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.bt-box { background: var(--bt-panel2); border: 1px solid var(--ws-line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.bt-box h3 { margin: 0 0 10px; font: 600 11.5px/1.2 var(--bt-cond); letter-spacing: .1em; text-transform: uppercase; color: var(--ws-text2); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.bt-box h3 .bt-faint { text-transform: none; letter-spacing: 0; font: 400 11.5px var(--ws-sans); }
+.bt-eqbig { position: relative; height: 260px; }
+.bt-eqbig canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.bt-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.bt-tile { background: var(--bt-panel3); border: 1px solid var(--ws-line); border-radius: 10px; padding: 9px 10px; min-width: 0; }
+.bt-tile .v { font: 600 19px/1.2 var(--ws-mono); font-variant-numeric: tabular-nums; color: #F2F6FA; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bt-tile .l { font-size: 11px; color: var(--ws-muted); }
+.bt-rules { margin: 0; padding-left: 18px; display: grid; gap: 5px; font-size: 12.5px; line-height: 1.45; }
+.bt-rules li::marker { color: var(--ws-soft); }
+.bt-cond { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+.bt-cond > div { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.bt-tod { display: grid; gap: 3px; align-items: end; height: 110px; margin-top: 4px; }
+.bt-tod .b { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 0; }
+.bt-tod .bar { border-radius: 3px 3px 1px 1px; min-height: 2px; transform-origin: bottom center; }
+.bt-tod .bar.up { background: var(--ws-buy); }
+.bt-tod .bar.dn { background: var(--ws-sell); }
+.bt-tod .n { font: 500 9.5px var(--ws-mono); color: var(--ws-muted); text-align: center; margin-top: 3px; }
+.bt-tod-axis { display: grid; gap: 3px; font: 500 9.5px var(--ws-mono); color: var(--ws-muted); }
+.bt-tod-axis span { white-space: nowrap; overflow: visible; }
+.bt-hb { display: grid; grid-template-columns: minmax(0, 110px) minmax(0, 1fr) 86px; gap: 8px; align-items: center; font-size: 12px; padding: 2px 0; }
+.bt-hb .lb { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bt-hb .track { position: relative; height: 8px; background: var(--bt-panel3); border-radius: 4px; overflow: hidden; }
+.bt-hb .track::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--ws-line2); }
+.bt-hb .track i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.bt-hb .track i.up { background: var(--ws-buy); }
+.bt-hb .track i.dn { background: var(--ws-sell); }
+.bt-hb .val { text-align: right; font: 500 11px var(--ws-mono); color: var(--ws-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bt-view .thin, .bt-detail .thin { opacity: .4; }
+
+/* ---------------- the bot strip: one thin line per bot, across the top of the Main tab only */
+.bt-strip { flex: none; padding: 4px 6px 0; background: var(--ws-bg); }
+body.ws-tight .bt-strip { padding: 2px 2px 0; }
+.bt-sline { width: 100%; display: flex; align-items: center; gap: 6px 14px; padding: 4px 12px; min-height: 28px; box-sizing: border-box; background: linear-gradient(90deg, color-mix(in srgb, var(--ws-accent) 12%, transparent), color-mix(in srgb, var(--ws-accent) 2%, transparent)); border: 1px solid var(--ws-tint-line); border-radius: 8px; font: 12px var(--ws-sans); color: var(--ws-text); cursor: pointer; white-space: nowrap; overflow: hidden; text-align: left; }
+.bt-sline:hover { border-color: var(--ws-accent); }
+.bt-sline.amber { border-color: color-mix(in srgb, var(--ws-warn) 60%, transparent); }
+.bt-sline.red, .bt-sline.st-killed, .bt-sline.st-lost, .bt-sline.st-standDown { border-color: color-mix(in srgb, var(--ws-sell) 65%, transparent); }
+.bt-sline .nm { font-weight: 600; color: #F2F6FA; }
+.bt-mode { font: 700 10px/1 var(--bt-cond); letter-spacing: .1em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--ws-tint-line); color: var(--ws-soft); background: var(--ws-tint); }
+.bt-last { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.bt-sline .lim { display: inline-flex; gap: 6px; align-items: center; color: var(--ws-text2); }
+.bt-sline .lim .bt-smeter { width: 56px; }
+.bt-sline .lim.amber .mono { color: var(--ws-warn); }
+.bt-sline .lim.red .mono { color: var(--ws-sell); }
+.bt-state { color: var(--ws-sell); font-weight: 600; }
+.bt-go { margin-left: auto; color: var(--ws-muted); }
+
+/* ---------------- copilot proposals: wherever Anthony is, instant (R3), Accept and Reject always buttons */
+.bt-props { position: fixed; right: 16px; bottom: 16px; z-index: 80; display: flex; flex-direction: column; gap: 10px; width: min(370px, calc(100vw - 32px)); pointer-events: none; }
+.bt-prop { pointer-events: auto; background: var(--bt-copilot); border: 1px solid var(--ws-accent); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, .6), 0 0 0 4px color-mix(in srgb, var(--ws-accent) 14%, transparent); padding: 12px; display: grid; gap: 7px; color: var(--ws-text); font: 12px var(--ws-sans); }
+.bt-prop.bt-ended { border-color: var(--ws-line2); box-shadow: 0 20px 50px rgba(0, 0, 0, .6); }
+.bt-prop-h { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.bt-age { color: var(--ws-muted); font-size: 11px; }
+.bt-prop-big { font: 600 16px/1.2 var(--ws-mono); color: #F2F6FA; }
+.bt-prop-why { color: var(--ws-text); font-size: 12.5px; line-height: 1.45; }
+.bt-prop-legs { color: var(--ws-text2); font-size: 11.5px; }
+.bt-prop-note { color: var(--ws-muted); font-size: 11px; line-height: 1.4; }
+.bt-prop-btns { display: flex; gap: 8px; }
+.bt-acc, .bt-rej { flex: 1; border-radius: 8px; padding: 8px 12px; font: 600 12.5px var(--ws-sans); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+.bt-acc { background: color-mix(in srgb, var(--ws-buy) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ws-buy) 55%, transparent); color: var(--ws-buy); }
+.bt-rej { background: var(--bt-panel2); border: 1px solid var(--ws-line2); color: var(--ws-text); }
+.bt-acc:disabled, .bt-rej:disabled { opacity: .45; cursor: default; }
+.bt-prop-msg { color: var(--ws-text2); font-size: 11.5px; min-height: 0; }
+.bt-prop-msg:empty { display: none; }
+
+/* ---------------- corner notices: a signal, an entry or exit, a limit, a stand-down, the heartbeat */
+.bt-notes { position: fixed; bottom: 12px; left: 12px; z-index: 75; display: flex; flex-direction: column-reverse; gap: 4px; width: min(360px, calc(100vw - 32px)); pointer-events: none; }
+.bt-note { pointer-events: auto; display: flex; gap: 8px; align-items: baseline; background: var(--bt-panel3); border: 1px solid var(--ws-tint-line); border-left: 3px solid var(--ws-accent); border-radius: 8px; padding: 5px 10px; font: 12px/1.35 var(--ws-sans); color: var(--ws-text); box-shadow: 0 14px 34px rgba(0, 0, 0, .5); cursor: pointer; }
+.bt-note.amber { border-left-color: var(--ws-warn); }
+.bt-note.red { border-left-color: var(--ws-sell); border-color: color-mix(in srgb, var(--ws-sell) 45%, transparent); }
+.bt-note .bt-cap { flex: none; }
+
+/* narrow screens: the panel under the chart, the library last */
+@media (max-width: 1100px) {
+  .bt-grid { grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr) minmax(0, 240px); }
+  .bt-lib { grid-column: 1 / -1; grid-row: 2; }
+  .bt-dbody { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .bt-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(260px, 1fr) auto auto; overflow-y: auto; }
+  .bt-lib { grid-row: auto; }
+  .bt-cond { grid-template-columns: minmax(0, 1fr); }
+  .bt-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* the bot's account (Anthony 2026-10-07: the account he chooses, Sim or LIVE): a plain SIM or LIVE word next to the mode, in the
+   strip, the pop-out and on every copilot proposal. LIVE in the house red of the Armed warning (live.css .pill.armed: the
+   crimson with its light ink); never animated (no transition, no motion attribute reaches it). */
+.bt-acct { display: inline-flex; align-items: center; height: 17px; padding: 0 6px; border-radius: 4px; font: 700 10px/1 var(--bt-cond); letter-spacing: .1em;
+  text-transform: uppercase; vertical-align: middle; border: 1px solid var(--ws-line2); color: var(--ws-text2); background: var(--bt-panel3); box-sizing: border-box; transition: none; animation: none; }
+.bt-acct[hidden] { display: none; }
+.bt-acct.live { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+.bt-acct-ask { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 6px 8px; border: 1px solid #E0445E; border-radius: 6px;
+  background: color-mix(in srgb, #9F1239 18%, transparent); font-size: 12px; color: var(--ws-text); }
+.bt-acct-ask[hidden] { display: none; }
+.bt-acct-ask .ws-btn { height: 24px; padding: 0 9px; }
+.bt-acct-ask .bt-live-go { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+.bt-sline .bt-sacct { color: var(--ws-text2); }

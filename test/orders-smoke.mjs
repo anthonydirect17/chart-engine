@@ -878,8 +878,11 @@ try {
     await shot(A, 'orders-390-cancel-all-other-account.png');
     await A.setViewportSize({ width: 1440, height: 860 });
     await A.click('#armBtn');
-    const t26 = await A.evaluate(() => performance.now());
+    // the moment of the click itself (a capture listener runs first): a DEMO-EVAL cancel the batch sends between an earlier
+    // stamp and the click is not "after its click" (the check failed now and then when a pace slot fell in that gap)
+    await A.evaluate(() => document.getElementById('cancelAllBtn').addEventListener('click', () => { window.__t26 = performance.now(); }, { capture: true, once: true }));
     await A.click('#cancelAllBtn');
+    const t26 = await A.evaluate(() => window.__t26);
     await until(async () => (await state5()).orders.filter(o => o.account === 'Sim101').length === 0, 'R26 Sim101 cancelled', 8000);
     const c26 = await A.evaluate(t => window.__sent.filter(m => m.type === 'cancel' && m.__at >= t).map(m => ({ acct: window.__orderAcct[m.id], dt: Math.round(m.__at - t) })), t26);
     const sims = c26.filter(x => x.acct === 'Sim101'), evalAfter = c26.filter(x => x.acct === 'DEMO-EVAL');

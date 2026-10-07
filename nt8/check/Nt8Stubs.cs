@@ -52,7 +52,10 @@ namespace NinjaTrader.Cbi
         public double TickSize { get; set; }
         public double PointValue { get; set; }
         public NinjaTrader.Data.TradingHours TradingHours { get; set; }
+        public List<Rollover> RolloverCollection { get; set; }   // 0.4.0: read by reflection only (ChartBridgeMarkets.NtFrontMonth)
     }
+    // A row of NinjaTrader's rollover list (Tools > Instruments > Rollovers): the contract month, and the date it becomes the front month.
+    public class Rollover { public DateTime ContractMonth { get; set; } public DateTime Date { get; set; } public double Offset { get; set; } }
     public class Instrument
     {
         public string FullName { get; set; }
@@ -133,12 +136,32 @@ namespace NinjaTrader.Cbi
         public int Quantity { get; set; }
         public double AveragePrice { get; set; }
     }
+    // 0.4.0 accounts: NinjaTrader's AccountItem (accountitem.htm lists the documented ones; TrailingMaxDrawdown is not in that
+    // list but is the Accounts tab's "Trailing max drawdown" column and is read by name, so a NinjaTrader without it still
+    // compiles), Currency, the provider, and the account status event (accountstatusupdate.htm: e.Account, e.Status).
+    public enum AccountItem { BuyingPower, CashValue, Commission, ExcessIntradayMargin, ExcessInitialMargin, ExcessMaintenanceMargin, ExcessPositionMargin, Fee,
+                              GrossRealizedProfitLoss, InitialMargin, IntradayMargin, LongOptionValue, LookAheadMaintenanceMargin, LongStockValue, MaintenanceMargin,
+                              NetLiquidation, NetLiquidationByCurrency, PositionMargin, RealizedProfitLoss, ShortOptionValue, ShortStockValue, SodCashValue,
+                              SodLiquidatingValue, UnrealizedProfitLoss, TotalCashBalance, TrailingMaxDrawdown, WeeklyProfitLoss }
+    public enum Currency { UsDollar, Euro, Unknown }
+    // 0.4.0 copier: Unknown first, so a stand-in account is not Sim unless a harness says so (NinjaTrader's own order does not
+    // matter: both lanes read the provider by name).
+    public enum Provider { Unknown, Simulator, Playback, Rithmic, Tradovate }
+    public enum AccountStatus { Enabled, Disabled, Unknown }
+    public class AccountStatusEventArgs : EventArgs { public Account Account { get; set; } public AccountStatus Status { get; set; } }
     // Stand-in account: records every order call so the Mono harness can check the gates.
     public class Account
     {
         public static List<Account> All = new List<Account>();
         public string Name { get; set; }
         public Connection Connection { get; set; }
+        public Provider Provider { get; set; }
+        public Currency Denomination { get; set; }
+        public readonly Dictionary<AccountItem, double> Items = new Dictionary<AccountItem, double>();   // the harness sets what Get answers (0 when unset, as NinjaTrader)
+        public Exception GetThrows;                                                                       // the harness: Get throws this
+        public double Get(AccountItem item, Currency currency) { if (GetThrows != null) throw GetThrows; double v; return Items.TryGetValue(item, out v) ? v : 0; }
+        public static event EventHandler<AccountStatusEventArgs> AccountStatusUpdate;
+        public static void FireStatus(Account a, AccountStatus s) { if (AccountStatusUpdate != null) AccountStatusUpdate(null, new AccountStatusEventArgs { Account = a, Status = s }); }
         public List<Execution> Executions = new List<Execution>();
         public List<Order> Orders = new List<Order>();
         public List<Position> Positions = new List<Position>();
@@ -155,9 +178,13 @@ namespace NinjaTrader.Cbi
             return new Order { Account = this, Instrument = instrument, OrderAction = action, OrderType = orderType, Quantity = quantity, LimitPrice = limitPrice,
                                StopPrice = stopPrice, Oco = oco, Name = name, OrderState = OrderState.Initialized };
         }
-        public void Submit(IEnumerable<Order> orders) { foreach (Order o in orders) { Calls.Add("submit " + o.Name + " " + o.OrderAction + " " + o.OrderType + " " + o.Quantity + " L" + o.LimitPrice + " S" + o.StopPrice + " oco:" + o.Oco); o.OrderState = OrderState.Working; Orders.Add(o); } }
-        public void Change(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("change " + o.Name + " L" + o.LimitPriceChanged + " S" + o.StopPriceChanged + " Q" + o.QuantityChanged); }
-        public void Cancel(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("cancel " + o.Name); }
+        public void Submit(IEnumerable<Order> orders) { foreach (Order o in orders) { Calls.Add("submit " + o.Name + " " + o.OrderAction + " " + o.OrderType + " " + o.Quantity + " L" + o.LimitPrice + " S" + o.StopPrice + " oco:" + o.Oco); o.OrderState = OrderState.Working; Orders.Add(o); } Broker("submit", orders); }
+        public void Change(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("change " + o.Name + " L" + o.LimitPriceChanged + " S" + o.StopPriceChanged + " Q" + o.QuantityChanged); Broker("change", orders); }
+        public void Cancel(IEnumerable<Order> orders) { foreach (Order o in orders) Calls.Add("cancel " + o.Name); Broker("cancel", orders); }
+        // 0.4.0 B4: the harness may answer each call the way NinjaTrader would (confirm a change or a cancel, fire the events);
+        // null (the default) leaves every state as it was, as before.
+        public Action<string, Order> OnCall;
+        private void Broker(string kind, IEnumerable<Order> orders) { Action<string, Order> h = OnCall; if (h != null) foreach (Order o in new List<Order>(orders)) h(kind, o); }
         public void Flatten(ICollection<Instrument> instruments) { foreach (Instrument i in instruments) Calls.Add("flatten " + i.FullName); }
     }
 }

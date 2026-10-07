@@ -369,15 +369,16 @@ try {
   const a4 = await pOf(big1);
   check(a4.x === before.x + 1 && a4.y === before.y + 1 && a4.w === before.w - 1 && a4.h === before.h - 1, 'the top left corner: both edges at once ' + JSON.stringify(a4));
   await edge(big1, 'nw', -cell.cw, -cell.ch * 0.6);
-  // Anthony from WORK (50.png): the high ran under the legend on the smaller panels; every chart keeps it clear
+  // Anthony from WORK (50.png): the high ran under the legend on the smaller panels. 1.16.0: no legend on a workspace
+  // chart; the high stays inside the plot on every chart
   await wp.setViewportSize({ width: 1920, height: 1080 }); await wp.waitForTimeout(800);
   const clear = await W(() => window.workspace.panels().filter(p => p.type === 'chart').map(p => {
-    const c = window.workspace.chart(p.id), el = document.querySelector(`.ws-panel[data-id="${p.id}"]`), lg = el.querySelector('.legend'), box = el.querySelector('.chart-box').getBoundingClientRect();
+    const c = window.workspace.chart(p.id), el = document.querySelector(`.ws-panel[data-id="${p.id}"]`), box = el.querySelector('.chart-box').getBoundingClientRect();
     const w = box.width - 78, bs = c.bars(); let hi = -Infinity;
     for (let i = 0; i < bs.length; i++) { const x = c.barToX(i); if (x >= 0 && x <= w && bs[i].h > hi) hi = bs[i].h; }
-    return { tf: p.tf, legendBottom: Math.round(lg.getBoundingClientRect().bottom - box.top), highY: Math.round(c.priceToY(hi)) };
+    return { tf: p.tf, legend: !!el.querySelector('.legend'), fitTop: c.getFitTop(), highY: Math.round(c.priceToY(hi)) };
   }));
-  check(clear.every(x => x.highY >= x.legendBottom), 'workspace: on every chart the high sits below the legend: ' + JSON.stringify(clear));
+  check(clear.every(x => !x.legend && x.fitTop === 0 && x.highY >= 0), 'workspace: no legend, and on every chart the high sits inside the plot: ' + JSON.stringify(clear));
   for (const [w, h] of [[1366, 768], [1920, 1080], [2560, 1440]]) {
     await wp.setViewportSize({ width: w, height: h }); await wp.waitForTimeout(800);
     await shot(wp, `display-ws-${w}.png`);
@@ -502,7 +503,7 @@ try {
   }
   await page.setViewportSize({ width: 1920, height: 1080 });
 
-  // the workspace: chips at three sizes, the short header on small panels, the header toggle per panel
+  // the workspace: chips at three sizes; 1.16.0: no text on any chart (no legend, short or not, no header text toggle)
   await wp.bringToFront();
   const wch = (await W(() => window.workspace.panels().filter(p => p.type === 'chart').map(p => p.id)))[0];
   const WS = `.ws-panel[data-id="${wch}"]`;
@@ -515,42 +516,21 @@ try {
     const st = await chipState(wp, WS);
     const hd = await W(sc => { const h = document.querySelector(sc + ' .ws-head'); return h.scrollWidth <= h.clientWidth + 1 && h.offsetHeight === 28; }, WS);
     check(st.shown + st.listed === 7 && hd && (st.listed === 0 ? st.more === '' : st.more === '+' + st.listed), `D: workspace ${w}x${h}: ${st.shown} chips shown${st.listed ? ', ' + st.more : ''}, the header one line`);
-    // F: a short header on a panel under 700 px wide or 400 px tall, the full one on a bigger panel
-    const sh = await W(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => { const r = p.querySelector('.chart-live.compact'), b = r.getBoundingClientRect();
-      return { id: p.dataset.id, short: r.classList.contains('short'), want: b.width < 700 || b.height < 400, lg: p.querySelector('.legend').offsetHeight }; }));
-    check(sh.every(x => x.short === x.want), `F: ${w}x${h}: short header exactly on the small panels (${sh.filter(x => x.short).length} of ${sh.length})`);
-    check(sh.filter(x => x.short).every(x => x.lg <= 22), `F: ${w}x${h}: a short header is one line (px): ` + sh.filter(x => x.short).map(x => x.lg).join(','));
     await shot(wp, `display-b2-ws-${w}.png`);
     if (w === 1366) {
-      const sp = sh.find(x => x.short);
-      if (sp) {
-        const box = await wp.locator(`.ws-panel[data-id="${sp.id}"] .chart-box`).boundingBox();
-        await wp.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.55); await wp.waitForTimeout(250);
-        const hov = await W(id => { const pn = document.querySelector(`.ws-panel[data-id="${id}"]`), r = pn.querySelector('.chart-live.compact'); return { cls: r.classList.contains('lg-hover'), h: pn.querySelector('.legend').offsetHeight }; }, sp.id);
-        check(hov.cls && hov.h > 24, 'F: the crosshair over a short header\'s chart brings its second line (OHLC, volume): ' + hov.h + ' px');
-        await shot(wp, 'display-b2-short-header-hover.png', { x: box.x, y: Math.max(0, box.y - 30), width: Math.min(box.width, 700), height: 120 });
-        await wp.mouse.move(4, h - 4); await wp.waitForTimeout(250);
-        check(await W(id => !document.querySelector(`.ws-panel[data-id="${id}"] .chart-live.compact`).classList.contains('lg-hover'), sp.id), 'F: and it goes when the crosshair leaves');
-      } else check(false, 'F: no small panel at 1366x768');
+      // 1.16.0: the crosshair over a small chart brings no text onto it: the corner readout only
+      const sp = await W(() => window.workspace.panels().filter(p => p.type === 'chart').map(p => p.id).pop());
+      const box = await wp.locator(`.ws-panel[data-id="${sp}"] .chart-box`).boundingBox();
+      await wp.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.55); await wp.waitForTimeout(250);
+      const hov = await W(id => { const pn = document.querySelector(`.ws-panel[data-id="${id}"]`); return { legend: pn.querySelectorAll('.legend').length, text: pn.querySelector('.stage').innerText.trim() }; }, sp);
+      check(hov.legend === 0 && hov.text === '', 'F: the crosshair over a chart brings no text onto it (' + JSON.stringify(hov) + ')');
+      await wp.mouse.move(4, h - 4); await wp.waitForTimeout(250);
     }
   }
-  // the header toggle in a panel's header, next to Indicators: off for that panel only, saved, none on hover
+  // 1.16.0 (Anthony): no header text toggle in any panel header, and live-legend-v1 is never read on the workspace
   await wp.setViewportSize({ width: 1920, height: 1080 }); await wp.waitForTimeout(600);
-  const tog = await W(sc => { const t = document.querySelector(sc + ' .ws-head .lg-tog'), i = document.querySelector(sc + ' .ws-head .ind-btn'); return !!t && !!i && !!t.previousElementSibling && t.previousElementSibling.contains(i); }, WS);
-  check(tog, 'the header text toggle sits next to Indicators in the panel header');
-  await wp.click(`${WS} .ws-head .lg-tog`); await wp.waitForTimeout(400);
-  const offs = await W(() => [...document.querySelectorAll('.ws-panel[data-type="chart"]')].map(p => ({ id: p.dataset.id, off: p.querySelector('.chart-live.compact').classList.contains('lg-off'), top: window.workspace.chart(p.dataset.id).getFitTop() })));
-  check(offs.filter(x => x.off).map(x => x.id).join() === wch && offs.find(x => x.id === wch).top === 0 && offs.filter(x => x.id !== wch).every(x => x.top > 0), 'workspace: header text off for that panel only, its scale takes the room back');
-  const pbox = await wp.locator(`${WS} .chart-box`).boundingBox();
-  await wp.mouse.move(pbox.x + pbox.width * 0.4, pbox.y + pbox.height * 0.5); await wp.waitForTimeout(250);
-  check(await W(sc => getComputedStyle(document.querySelector(sc + ' .legend')).display === 'none', WS), 'workspace: no header text on hover either');
-  await shot(wp, 'display-b2-header-off-ws.png');
-  await wp.reload(); await wp.waitForFunction(() => document.getElementById('wsConn') || document.querySelector('.cb-pin-key'));
-  if (await wp.$('.cb-pin-key')) await enterPin(wp, TEST_PIN);
-  await wsLive(wp); await wp.waitForTimeout(1200);
-  check(await W(sc => document.querySelector(sc + ' .chart-live.compact').classList.contains('lg-off') && document.querySelector(sc + ' .ws-head .lg-tog').getAttribute('aria-pressed') === 'false', WS), 'workspace: saved per panel across a reload');
-  await wp.click(`${WS} .ws-head .lg-tog`); await wp.waitForTimeout(300);
-  check(await W(sc => !document.querySelector(sc + ' .chart-live.compact').classList.contains('lg-off'), WS), 'workspace: back on');
+  await W(() => localStorage.setItem('live-legend-v1', JSON.stringify({ x: false })));
+  check(await W(() => !document.querySelector('.ws-head .lg-tog') && [...document.querySelectorAll('.ws-panel[data-type="chart"] .chart-live.compact')].every(r => !r.classList.contains('lg-off'))), 'workspace: no header text toggle in any panel header');
   await ctx.close();
 
   /* ================================================================ an older ChartBridge: no q, no settlement */

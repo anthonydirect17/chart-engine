@@ -343,7 +343,9 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-panel.gr-narrow .gr-pos .gr-row { grid-template-columns: 36px minmax(0, 1fr) minmax(0, 1fr) 44px; }
 .ws-panel.gr-narrow .gr-ord .gr-row { grid-template-columns: 36px minmax(0, 1fr) 26px; }
 .ws-panel.gr-narrow .gr-fil .gr-row { grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr); }
-.ws-panel.gr-narrow .gr-qb { font-size: 10px; }
+/* 10 px on a narrow board (1.16.0: the doubled class outranks the narrow panels' 10.5 px below; with IBM Plex Mono served
+   from the PC a 9-figure price at 10.5 px no longer fit a 2-column board at 1366 px) */
+.ws-panel.gr-narrow .gr.gr-qb { font-size: 10px; }
 .ws-panel.gr-narrow .gr-qb .gr-row { grid-template-columns: 30px minmax(0, 9fr) minmax(0, 7fr) minmax(0, 9fr); }
 .ws-panel.gr-narrow .gr-qb .pr > :last-child { font-size: 10px; }
 /* a 2 x 1 board: one line, the last, the change and the percent (the high and low in the row's tooltip); at 1366 px only
@@ -406,3 +408,85 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ac-sum .lb-short { display: none; }
 .ws-panel.gr-narrow .ac-sum .lb-full { display: none; }
 .ws-panel.gr-narrow .ac-sum .lb-short { display: inline; }
+
+/* ---------------- 1.16.0 (Anthony's display round) */
+/* a chart's ARMED and connection badge (live.js), in its header: only what is not normal shows */
+.ws-head .ws-badge .ch-badge { position: static; flex: none; display: inline-flex; gap: 4px; }
+.ws-head .ws-badge .pill { font-size: 9px; line-height: 16px; padding: 0 6px; }
+/* maximize and restore: the square beside the x; a maximized panel spans the grid, the others wait behind it, unchanged */
+.ws-max { display: inline-flex; align-items: center; padding: 3px 5px; }
+.ws-max svg { display: block; }
+.ws-grid.ws-maxed > .ws-panel:not(.ws-max-on) { visibility: hidden; }
+.ws-grid.ws-maxed > .ws-panel.ws-max-on { z-index: 7; }
+.ws-panel.ws-max-on .ws-edge { display: none; }
+.ws-panel.ws-max-on .ws-head { cursor: default; }
+/* the laptop preset: the two layout tabs, and tight margins (W.GAP_TIGHT, the drag snaps to the same) */
+.ws-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--ws-line2); border-radius: 7px; background: var(--ws-field); flex: none; }
+.ws-tab { height: 22px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: var(--ws-text2); font: inherit; cursor: pointer; }
+.ws-tab[aria-selected="true"] { background: var(--ws-tint); color: var(--ws-soft); font-weight: 600; }
+.ws-tab:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+body.ws-tight .ws-grid { gap: 2px; padding: 2px; }
+body.ws-tight .ws-panel { border-radius: 5px; }
+body.ws-tight .ws-body { border-radius: 0 0 4px 4px; }
+body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
+/* the Data Box: a name and a value per row, mono numbers; two pairs a row on a wide, short panel (fitPanel) */
+.db { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-content: start; column-gap: 12px; padding: 4px 8px; font: 12px var(--ws-mono); font-variant-numeric: tabular-nums; overflow: hidden; }
+.db-head { grid-column: 1 / -1; font: 500 10px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); padding: 2px 0 4px; }
+.db-head.live { color: var(--ws-text2); }
+.db-row { display: contents; }
+.db-k { font: 500 11px var(--ws-sans); color: var(--ws-muted); line-height: 19px; white-space: nowrap; }
+.db-v { text-align: right; line-height: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ws-text); }
+.db-v.up { color: var(--ws-buy); } .db-v.dn { color: var(--ws-sell); } .db-v.mut { color: var(--ws-muted); }
+.db-note { grid-column: 1 / -1; margin: 4px 0 0; font: 11px var(--ws-sans); color: var(--ws-muted); white-space: normal; }
+.ws-db-src { color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ws-panel.db-wide .db { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); }
+.ws-panel.db-short .db-note { display: none; }
+
+/* ---------------- 1.16.0 (ChartBridge 0.4.0): Order Strategies, Merge, entry types and The Desk's shared settings. Shown
+   only while ChartBridge's switches say on. No motion here: nothing moves or fades (rule R3). */
+.chart-live .tk-strat .tk-ssel { flex: 1 1 0; width: 0; min-width: 0; }
+.chart-live .tk-sdesc { flex: none; font: 500 11px var(--mono); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a strategy active: the bracket boxes and its presets step aside (the strategy carries its own stop and targets) */
+.chart-live .tk-has-strat .tk-bk, .chart-live .tk-has-strat .bpre, .chart-live .tk-has-strat .bsave { display: none !important; }
+.chart-live .tk-v3 { font-size: 11px; color: var(--text2); }
+.chart-live .tk-v3:empty { display: none; }
+.chart-live .tk-v3.warn { color: var(--warn); }
+.chart-live .tk-v3.error { color: var(--loss); font-weight: 600; }
+.chart-live .hk-in.hk-ro, .chart-live .hk-clear.hk-ro { opacity: .55; cursor: not-allowed; }
+.ws-in { flex: 1 1 auto; min-width: 0; height: 26px; box-sizing: border-box; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 6px; padding: 0 8px; font: 12px var(--ws-mono); }
+.ws-in[aria-invalid="true"] { border-color: var(--ws-sell); }
+.ws-desk-url { flex: 1 1 auto; min-width: 0; font-family: var(--ws-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* 1.16.0: deskUrl in ChartBridge's config.txt, shown */
+.ws-help.ws-warn, .ws-err.ws-warn, .sg-sum.ws-warn { color: var(--ws-warn); }
+.ws-err.ws-ok { color: var(--ws-buy); }
+.ws-mod { width: 90px; }
+#wsStratSec .ws-field .ws-help { margin: 0; }
+/* the Order Strategies dialog: the list on the left, the form on the right; fits 1366x768 whole */
+.ws-dialog.ws-dialog-wide { width: min(780px, calc(100vw - 32px)); }
+.ws-sg h2 span { color: var(--ws-muted); font-weight: 400; margin-left: 6px; }
+.sg-cols { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 12px; }
+.sg-list { display: flex; flex-direction: column; gap: 4px; max-height: 420px; overflow-y: auto; }
+.sg-item { height: auto; text-align: left; padding: 5px 8px; display: flex; flex-direction: column; gap: 2px; }
+.sg-item b { color: var(--ws-text); font-weight: 600; }
+.sg-item span { color: var(--ws-muted); font: 10.5px var(--ws-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sg-item[aria-pressed="true"] { border-color: var(--ws-accent); background: var(--ws-tint); }
+.sg-new { color: var(--ws-soft); }
+.sg-form { display: flex; flex-direction: column; gap: 6px; }
+.sg-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 28px; }
+.sg-lbl { width: 92px; flex: none; color: var(--ws-muted); display: inline-flex; align-items: center; gap: 4px; }
+.sg-u { color: var(--ws-muted); }
+.sg-u.sg-dim { opacity: .45; }
+.ws-sg .sg-name { flex: 1 1 auto; }
+.ws-sg .ws-num { width: 64px; }
+.ws-sg .ws-num:disabled, .ws-sg select:disabled { opacity: .45; }
+.ws-sg .ws-num[aria-invalid="true"], .ws-sg input[aria-invalid="true"] { border-color: var(--ws-sell); }
+.sg-hk { width: 130px; font: 600 12px var(--ws-mono) !important; caret-color: transparent; cursor: pointer; }
+.sg-sum { color: var(--ws-muted); min-height: 0; }
+.sg-fill { flex: 1 1 auto; }
+.ws-sg input[type="checkbox"] { height: auto; margin: 0; }
+
+/* 1.16.0: a Quote board's markets menu, and the board with none shown */
+.ws-qbrows .qb-pick { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-family: var(--ws-mono); }
+.ws-qbrows .qb-pick:hover { background: var(--ws-tint); }
+.ws-qbrows .qb-pick input { margin: 0; accent-color: var(--ws-accent); }
+.ws-qbrows .qb-pick-q { margin-left: auto; color: var(--ws-muted); font: 11px var(--ws-sans); }
+.qb-empty { margin: 10px; color: var(--ws-muted); font-size: 12px; }

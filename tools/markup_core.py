@@ -1291,6 +1291,10 @@ def export_trade_grades(marks_dir, grades) -> tuple[str, int]:
         eo = cut.get('entry_order') or {}
         r = {k: g.get(k) for k in ('qid', 'trade_id', 'date', 'symbol', 'bot', 'variant', 'label', 'reason', 'confidence', 'saved_utc')}
         r['chips'] = ';'.join(g.get('chips') or [])
+        if g.get('question'):                        # a question set's answers (one column per pair)
+            r['question'] = g['question']
+            for k, v in (g.get('answers') or {}).items():
+                r['answer_' + safe_name(k).lower()] = v
         r.update({'cut_tod': cut.get('cut_tod'), 'dir': cut.get('dir'), 'level_type': cut.get('level_type'), 'level_price': cut.get('level_price'),
                   'bot_entry_order_type': eo.get('type'), 'bot_entry_order_price': eo.get('price'), 'bot_entry_order_limit': eo.get('limit'),
                   'bot_stop': cut.get('stop'), 'bot_target': cut.get('target')})
@@ -1322,3 +1326,257 @@ def export_trade_grades(marks_dir, grades) -> tuple[str, int]:
     dest = os.path.join(marks_dir, 'trade_grades.csv')
     write_text(dest, buf.getvalue())
     return dest, len(rows)
+
+
+# ------------------------------------------------------------------------------------------------ question sets
+# A label set may ask one question (--trade-question): the grade then shows only that question's choices, in pairs, and
+# T, A and P are refused until one choice of every pair is picked. Generic words about what the chart shows; no rule.
+# Each choice has a key (stage 1 of the Trades tab uses T, A, P, X and 1 to 3; the keys here must not be those).
+QUESTIONS = {
+    'approach': {'title': 'The approach into the signal', 'pairs': [
+        {'id': 'volume', 'label': 'Volume into the signal', 'choices': [{'id': 'light', 'key': 'L'}, {'id': 'heavy', 'key': 'H'}]},
+        {'id': 'speed', 'label': 'Speed into the signal', 'choices': [{'id': 'fast push', 'key': 'F'}, {'id': 'slow grind', 'key': 'G'}]},
+    ]},
+}
+
+
+def question(qid):
+    """The question set qid (QUESTIONS), with its id; a ValueError naming the ones there are."""
+    q = QUESTIONS.get(str(qid or ''))
+    if q is None:
+        raise ValueError(f'no question {qid!r}: the Studio knows {", ".join(sorted(QUESTIONS))}')
+    return dict(q, id=str(qid))
+
+
+def question_missing(q, answers):
+    """The pairs of question q not answered with one of their choices: [(pair id, 'label (a or b)')]."""
+    answers = answers if isinstance(answers, dict) else {}
+    out = []
+    for p in q['pairs']:
+        ids = [c['id'] for c in p['choices']]
+        if answers.get(p['id']) not in ids:
+            out.append((p['id'], f'{p["label"].lower()} ({" or ".join(ids)})'))
+    return out
+
+
+def question_answers(q, answers):
+    """The answers to keep (one choice per pair, nothing else), or a ValueError saying what is missing."""
+    miss = question_missing(q, answers)
+    if miss:
+        raise ValueError('answer every question first: ' + '; '.join(m[1] for m in miss))
+    return {p['id']: answers[p['id']] for p in q['pairs']}
+
+
+# ------------------------------------------------------------------------------------------------ the Day tab's call log
+# Day calls (U up, D down, C chop) on the days already graded or seen, in one append-only JSONL file in the marks folder
+# (day_calls.jsonl). Each row has seq (from 1, no gaps), prev_hash (the row before's row_hash; 64 zeros for the first) and
+# row_hash = sha256 of the row's canonical JSON without row_hash. The chain is checked on every load; a broken chain stops
+# the Day tab (the rest of the Studio goes on). A row is never edited: a changed mind is a new row.
+DAY_CALLS = {'U': 'up', 'D': 'down', 'C': 'chop'}
+DAY_LOG = 'day_calls.jsonl'
+GENESIS = '0' * 64
+
+
+class DayLogError(ValueError):
+    pass
+
+
+def canonical(row) -> bytes:
+    return json.dumps(row, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+
+
+def row_hash(row) -> str:
+    return hashlib.sha256(canonical({k: v for k, v in row.items() if k != 'row_hash'})).hexdigest()
+
+
+def verify_chain(rows):
+    """None when the rows form one unbroken chain, else what is wrong and where (line numbers from 1)."""
+    prev = GENESIS
+    for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            return f'line {i} is not a JSON object'
+        if r.get('seq') != i:
+            return f'line {i} has seq {r.get("seq")!r}, not {i} (a row is missing or out of order)'
+        if r.get('prev_hash') != prev:
+            return f'line {i} does not follow line {i - 1} (its prev_hash is not that row\'s hash)'
+        if r.get('row_hash') != row_hash(r):
+            return f'line {i} was changed after it was written (its hash does not match)'
+        prev = r['row_hash']
+    return None
+
+
+def read_day_log(path):
+    """The rows of a day call log, checked (DayLogError when the file cannot be read or the chain is broken). No file: []."""
+    rows = []
+    try:
+        with open(path, encoding='utf-8') as f:
+            lines = f.read().split('\n')
+    except FileNotFoundError:
+        return rows
+    except (OSError, UnicodeDecodeError) as e:
+        raise DayLogError(f'cannot read {os.path.basename(path)}: {e}') from e
+    if lines and lines[-1] == '':
+        lines.pop()
+    for i, line in enumerate(lines, 1):
+        try:
+            rows.append(json.loads(line))
+        except ValueError as e:
+            raise DayLogError(f'{os.path.basename(path)}: line {i} is not JSON') from e
+    why = verify_chain(rows)
+    if why:
+        raise DayLogError(f'{os.path.basename(path)}: the chain is broken: {why}')
+    return rows
+
+
+def append_day_row(path, rows, rec):
+    """Chain rec after rows (seq, prev_hash, row_hash added), append it as one line, flushed to disk; returns the row.
+    The caller holds its lock and passes the rows it read (and checked) from this file."""
+    row = dict(rec, seq=len(rows) + 1, prev_hash=rows[-1]['row_hash'] if rows else GENESIS)
+    row['row_hash'] = row_hash(row)
+    with open(path, 'ab') as f:
+        f.write(canonical(row) + b'\n')
+        f.flush()
+        os.fsync(f.fileno())
+    rows.append(row)
+    return row
+
+
+def calls_upto(rows, d, wall_ms):
+    """The calls on day d stamped at or before wall_ms (replay clock, wall ms), in clock order (then seq): what the Day tab
+    may show at that clock. A call made later in the day (on an earlier visit) stays hidden until the clock reaches it."""
+    out = [r for r in rows if r.get('date') == d and int(r.get('clock_wall_ms', 0)) <= wall_ms]
+    return sorted(out, key=lambda r: (int(r['clock_wall_ms']), int(r['seq'])))
+
+
+def call_in_force(rows, d, wall_ms):
+    """The call in force on day d at wall_ms: the latest stamped at or before it, or None."""
+    got = calls_upto(rows, d, wall_ms)
+    return got[-1] if got else None
+
+
+# ------------------------------------------------------------------------------------------------ the Builds panel
+BUILDS_FILE = 'BUILDS.md'
+PY_PATH = re.compile(r'`?((?:[\w.-]+/)*[\w.-]+\.py)`?')
+
+
+def find_builds(bot_path, levels=6):
+    """BUILDS.md of the repository the bot file is in: the bot's folder and its parents, up to the folder holding .git
+    (or `levels` folders up). None when there is none."""
+    d = os.path.dirname(os.path.abspath(str(bot_path)))
+    for _ in range(levels):
+        p = os.path.join(d, BUILDS_FILE)
+        if os.path.isfile(p):
+            return p
+        if os.path.exists(os.path.join(d, '.git')):
+            return None
+        up = os.path.dirname(d)
+        if up == d:
+            return None
+        d = up
+    return None
+
+
+def _md_cells(line):
+    s = line.strip()
+    if not (s.startswith('|') and s.endswith('|')):
+        return None
+    return [c.strip() for c in s[1:-1].split('|')]
+
+
+def _plain(text):
+    return re.sub(r'\s+', ' ', re.sub(r'\*\*|__|`', '', str(text))).strip()
+
+
+def read_builds(path, note_chars=160):
+    """The builds a BUILDS.md lists by name: the first markdown table whose first column is Name (else Build). Each row:
+    name, file (the table's File column, '-' for none; an empty cell or no column: the first .py path in the row, else
+    ''), note (the What column, else the row's second cell, cut to note_chars). Read only; any other text is ignored."""
+    with open(path, encoding='utf-8') as f:
+        lines = f.read().splitlines()
+    tables, cur = [], None
+    for line in lines + ['']:
+        cells = _md_cells(line)
+        if cells is None:
+            if cur:
+                tables.append(cur)
+            cur = None
+            continue
+        if cur is None:
+            cur = [cells]
+        elif not all(re.fullmatch(r':?-{3,}:?', c) for c in cells):
+            cur.append(cells)
+    pick = None
+    for want in ('name', 'build'):
+        pick = next((t for t in tables if t and t[0] and _plain(t[0][0]).lower() == want and len(t) > 1), None)
+        if pick:
+            break
+    if not pick:
+        return []
+    head = [_plain(h).lower() for h in pick[0]]
+    col = lambda k: head.index(k) if k in head else None
+    fc, wc = col('file'), col('what')
+    out = []
+    for r in pick[1:]:
+        r = r + [''] * (len(head) - len(r))
+        name = _plain(r[0])
+        if not name:
+            continue
+        f = _plain(r[fc]) if fc is not None else ''
+        if f in ('-', 'none', 'n/a'):
+            f = ''
+        elif not f:
+            m = PY_PATH.search(' '.join(r))
+            f = m.group(1) if m else ''
+        note = _plain(r[wc] if wc is not None else (r[1] if len(r) > 1 else ''))
+        if len(note) > note_chars:
+            note = note[:note_chars - 3].rstrip() + '...'
+        out.append({'name': name[:60], 'file': f[:120], 'note': note})
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ Run all results, compared
+RUN_STAMP = re.compile(r'^\d{8}_\d{6}(?:_\d+)?$')
+OLD_SUMMARY_KEYS = {'net_nq': 'net_usd', 'net_nq_per_trade': 'net_usd_per_trade', 'net_mnq': 'net_usd_micro',
+                    'net_mnq_per_trade': 'net_usd_micro_per_trade', 'max_dd_nq': 'max_dd_usd', 'max_dd_mnq': 'max_dd_usd_micro'}
+
+
+def list_runs(marks_dir):
+    """The Run all results in <marks>/botruns (folders named by their stamp, with summary.json), newest first:
+    [{stamp, bot, days, failed, variants}]. A folder whose summary does not read is left out."""
+    base = os.path.join(marks_dir, 'botruns')
+    try:
+        names = sorted(os.listdir(base), reverse=True)
+    except OSError:
+        return []
+    out = []
+    for n in names:
+        if not RUN_STAMP.match(n):
+            continue
+        try:
+            s = read_run(marks_dir, n)
+        except (OSError, ValueError):
+            continue
+        out.append({'stamp': n, 'bot': s['bot'], 'days': s['days'], 'failed': s['failed'], 'variants': len(s['variants'])})
+    return out
+
+
+def read_run(marks_dir, stamp):
+    """One Run all result's counts and its per-exit summary rows (group 'all', as the Run all summary shows them), from
+    <marks>/botruns/<stamp>/summary.json. Runs written before ES support (nq / mnq keys) read as NQ and MNQ."""
+    if not isinstance(stamp, str) or not RUN_STAMP.match(stamp):
+        raise ValueError('no such run')
+    with open(os.path.join(marks_dir, 'botruns', stamp, 'summary.json'), encoding='utf-8') as f:
+        s = json.load(f)
+    if not isinstance(s, dict) or not isinstance(s.get('rows'), list):
+        raise ValueError(f'run {stamp}: summary.json has no rows')
+    rows = []
+    for r in s['rows']:
+        if not isinstance(r, dict) or r.get('group', 'all') != 'all':
+            continue
+        rows.append({OLD_SUMMARY_KEYS.get(k, k): v for k, v in r.items()})
+    variants = [{'id': str(v.get('id')), 'label': str(v.get('label') or v.get('id'))} for v in s.get('variants') or [] if isinstance(v, dict)]
+    return {'stamp': stamp, 'bot': str(s.get('bot') or ''), 'days': len(s.get('days') or []), 'failed': len(s.get('failed_days') or []),
+            'variants': variants, 'exit_ids': list(s.get('exit_ids') or []), 'contract': s.get('contract') or 'NQ',
+            'micro': s.get('micro') or 'MNQ', 'rt': s.get('rt'), 'micro_rt': s.get('micro_rt'),
+            'trades': {v['id']: max([int(r.get('trades') or 0) for r in rows if r.get('variant') == v['id']] or [0]) for v in variants},
+            'rows': rows}

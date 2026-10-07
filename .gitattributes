@@ -1,3 +1,4 @@
 # One line-ending rule for every checkout (Windows included).
 * text=auto eol=lf
 *.png binary
+*.woff2 binary

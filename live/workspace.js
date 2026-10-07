@@ -20,6 +20,9 @@
  *   live-tape-floors-v1   { <root>: { rth, eth } } the large-print floors (Time and Sales), only those set by hand; the same
  *                         key as the charts' bubbles (LivePrefs.largeFloors, read through it since 1.14.0)
  *   live-tape-colors-v1   { above, ask, mid, bid, below } the Time and Sales category colors (1.14.0), only those set by hand
+ *   live-ws-keys-v1       { maximize } the workspace's own hotkeys (1.16.0): Maximize panel, a combo or ''; none by default,
+ *                         never one of the trading hotkeys (live-hotkeys-v1 wins)
+ *   live-ws-laptop-v1     true: this browser shows the layouts as two tabs, Main and Second, with tight margins (1.16.0)
  * Every write reads the key fresh and changes one layout (or one floor), so two windows never undo each other.
  */
 (function (root, factory) {
@@ -31,12 +34,19 @@
 const COLS = 12, ROWS = 6, MIN_W = 2, MIN_H = 1, MAX_PANELS = 12, MAX_LAYOUTS = 50, NAME_MAX = 40;
 /* The same lists as LivePrefs.ROOTS and LivePrefs.TFS in live.js (a test checks they match). */
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
+/* 1.16.0 (Anthony 2026-10-05): the Quote board's rows, NQ and ES only. Display only: the charts and the order ticket still
+   trade every root in ROOTS. */
+const QUOTE_ROOTS = ['NQ', 'ES'];
 const TFS = ['s15', 's30', 'm1', 'm5', 'm15', 'h1', 'range', 'h4', 'd1', 'w1'];
 /* 1.15.0: NinjaTrader's own 4h, 1D and 1W bars (ChartBridge 0.3.7 htf); with an older ChartBridge the choices show and say
    what they need */
 const HTF_TFS = ['h4', 'd1', 'w1'];
 const RANGE_MIN = 1, RANGE_MAX = 400;
-const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1' };
+const KEYS = { store: 'live-workspace-v1', floors: 'live-tape-floors-v1', tapeColors: 'live-tape-colors-v1', viewKeys: 'live-ws-keys-v1', laptop: 'live-ws-laptop-v1' };
+/* 1.16.0 (Anthony): the laptop preset: two layout tabs, both blank to start, arranged by hand; tight margins (the grid's gap
+   and padding, px) */
+const LAPTOP_TABS = ['Main', 'Second'];
+const GAP = 6, GAP_TIGHT = 2;
 const DEFAULT_NAME = 'Main';
 /* Large prints on the tape: RTH 09:30 to 16:15 ET, overnight the rest (Anthony, 2026-10-01). */
 const RTH_START = 9 * 3600 + 30 * 60, RTH_END = 16 * 3600 + 15 * 60;
@@ -58,8 +68,20 @@ function layoutName(v) {
 /** A range size in ticks (a whole number 1 to 400), else null. */
 function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v; return Number.isInteger(n) && n >= RANGE_MIN && n <= RANGE_MAX ? n : null; }
 
-/* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes'];
+/* 1.15.0: the Account panel and the Quote board (Anthony's consolidated form, 2026-10-02) take no instrument; nor does the
+   Data Box (1.16.0: the bar under the cursor on any chart), nor the Account page (1.16.0, live/accounts.js: every account) */
+const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts'];
+/* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
+   ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
+   simply ignored; anything else dropped. Display only. */
+const QB_HIDE_MAX = 40, QB_ROOT_RX = /^[A-Z0-9]{1,8}$/;
+/** A Quote board's hidden rows as kept: unique root names, at most 40, in their order; [] for anything else. */
+function cleanHide(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const r of v) if (typeof r === 'string' && QB_ROOT_RX.test(r) && !out.includes(r) && out.length < QB_HIDE_MAX) out.push(r);
+  return out;
+}
 /** One panel, or null when its shape is bad. Position and size are whole cells; re-flow puts them inside the grid. */
 function cleanPanel(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
@@ -75,6 +97,7 @@ function cleanPanel(p) {
     const r = parseRange(p.range);
     if (r !== null) out.range = r;
   } else if (p.type === 'tape') out.root = p.root;
+  else if (p.type === 'quotes') { const hide = cleanHide(p.hide); if (hide.length) out.hide = hide; }   // 1.16.0: absent = every row shown
   return Object.assign(out, { x, y, w, h });
 }
 
@@ -344,6 +367,34 @@ const decimalsOf = tick => { const s = String(tick); const i = s.indexOf('.'); r
 /** The header text of a chart's timeframe: "5 min", "1 hour", "Range 40". */
 function tfLabel(tf, range) { return tf === 'range' ? 'Range' + (range ? ' ' + range : '') : TF_LABEL[tf] || tf; }
 
+/* ---------------- the workspace's own hotkeys (1.16.0): Maximize panel */
+const VIEW_KEYS = [{ id: 'maximize', name: 'Maximize panel' }];
+/** The workspace's hotkeys as kept: { maximize } each a combo or ''. `trading` are the trading hotkeys in use (they win: a
+    combo one of them has is dropped here), `refused(combo)` the trading hotkeys' own rule ('' when a combo can be a hotkey,
+    OrderTicket.hotkeyRefused). Never throws. */
+function cleanViewKeys(v, trading, refused) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+  const used = new Set(Object.values(trading || {}).filter(Boolean)), out = {};
+  for (const k of VIEW_KEYS) {
+    let c = own(v, k.id) && typeof v[k.id] === 'string' ? v[k.id] : '';
+    if (c && (c.length > 32 || (typeof refused === 'function' && refused(c)) || used.has(c))) c = '';
+    if (c) used.add(c);
+    out[k.id] = c;
+  }
+  return out;
+}
+
+/* ---------------- the Data Box (1.16.0) */
+/** How long a bar lasted, or has lasted so far, from whole seconds: "12 s", "4:05", "1:02:03", "2d 04h". */
+function fmtSpan(sec) {
+  if (!(sec >= 0) || !isFinite(sec)) return '';
+  const s = Math.round(sec);
+  if (s < 60) return s + ' s';
+  if (s >= 86400) return Math.floor(s / 86400) + 'd ' + p2(Math.floor(s % 86400 / 3600)) + 'h';
+  if (s >= 3600) return Math.floor(s / 3600) + ':' + p2(Math.floor(s % 3600 / 60)) + ':' + p2(s % 60);
+  return Math.floor(s / 60) + ':' + p2(s % 60);
+}
+
 /* ---------------- layouts */
 let idSeq = 0;
 /** A new panel id (also the chart's paneId): stable once saved. */
@@ -410,9 +461,9 @@ function setFloor(storage, root, which, value) {
 
 return { COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAME_MAX, ROOTS, TFS, TYPES, KEYS, DEFAULT_NAME, DEFAULT_FLOORS, RTH_START, RTH_END,
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
-  isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout,
+  isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
-  roundTrips, fillsToday, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
+  roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -429,10 +480,13 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.C
   const stop = () => { const d = document.createElement('div'); d.className = 'ws-reload'; d.setAttribute('role', 'alert'); d.textContent = 'The page files were being updated as this window opened. Reload it (when flat) to trade from it.'; document.body.prepend(d); };
   if (ok()) { page(); return; }
   const load = f => new Promise(res => { const sc = document.createElement('script'); sc.src = new URL(f, me ? me.src : location.href).href; sc.onload = sc.onerror = res; document.head.appendChild(sc); });
-  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js']].filter(([g]) => !window[g]).map(([, f]) => load(f))).then(() => { if (ok()) page(); else stop(); });
+  // 1.16.0: the Account page (accounts.js and its styles) is optional: a window without it works as before
+  if (!document.querySelector('link[href$="accounts.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = new URL('accounts.css', me ? me.src : location.href).href; document.head.appendChild(l); }
+  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js'], ['AccountsPage', 'accounts.js']].filter(([g]) => !window[g]).map(([, f]) => load(f))).then(() => { if (ok()) page(); else stop(); });
 })(() => {
 'use strict';
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
+const OS = window.OrderStrategies;                   // 1.16.0: Order Strategies, entry types, Merge, The Desk's shared settings
 const PREFIX = '';                                 // the single chart page's prefix (none): its settings are this page's
 const TAPE_MAX = 500, TAPE_ROW = 18;
 const TF_SHORT = { s15: '15s', s30: '30s', m1: '1m', m5: '5m', m15: '15m', h1: '1h', range: 'Range', h4: '4h', d1: '1D', w1: '1W' };
@@ -495,6 +549,8 @@ function syncConn() {
   if (el.dataset.text !== text) { el.dataset.text = text; el.className = 'ws-conn' + (cls ? ' ' + cls : ''); $('wsConnText').textContent = text; }
   const t = versionText();
   if (el.title !== t) el.title = t;
+  // 1.16.0: the update notice's "copied: press F5" goes once the ChartBridge this window talks to is that version
+  if (window.ChartUpdateNotice && window.ChartUpdateNotice.bridge) window.ChartUpdateNotice.bridge(bridgeVer);
 }
 /* 1.14.0 (Anthony): the versions, quietly: the LIVE badge's tooltip and the foot of Settings */
 let bridgeVer = '', bridgeFeatures = [];
@@ -512,10 +568,12 @@ function note(text, warn, ms) {
 function fmtDelay(v) { return v === null || v === undefined ? '-' : (v < 1 && v >= 0 ? '<1' : Math.round(v)) + ' ms' + (v < 0 ? ' (PC clock behind)' : ''); }
 function syncStats() {
   const per = new Map();
-  let fps = 0, busy = false;
+  let fps = 0, busy = false, frame = null, frameMax = null;
   for (const v of chartViews()) {
     const s = v.pane.stats();
     if (s.chart && !s.chart.idle) { busy = true; fps = Math.max(fps, s.chart.fps || 0); }
+    // 1.16.0: tape timing, ChartBridge's receipt of a trade to the frame that drew it: the worst chart's, last second
+    if (typeof s.drawMax === 'number' && (frameMax === null || s.drawMax > frameMax)) { frameMax = s.drawMax; frame = s.draw; }
     if (!s.root) continue;
     const r = per.get(s.root) || { feed: null, local: null };
     if (s.feed !== null && (r.feed === null || s.feed > r.feed)) r.feed = s.feed;
@@ -535,7 +593,8 @@ function syncStats() {
   const lt = fmtDelay(local) + (local !== null && l95 !== null ? ' (p95 ' + fmtDelay(l95) + ')' : '');
   if ($('wsLocal').textContent !== lt) $('wsLocal').textContent = lt;
   $('wsFps').textContent = !chartViews().length ? '-' : busy ? Math.round(fps) + ' fps' : 'idle';
-  $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown:\n' +
+  $('wsStat').title = 'Feed delay (ChartBridge to here) and local delay per instrument, the worst shown. Frame: a trade\'s receipt by ChartBridge to the chart frame that drew it, ' +
+    (frameMax === null ? 'no trade drawn in the last second' : fmtDelay(frameMax) + ' at worst in the last second (latest ' + fmtDelay(frame) + ')') + '; each chart\'s in the Data Box.\n' +
     ([...per].map(([root, r]) => root + ': feed ' + fmtDelay(r.feed) + ', local ' + fmtDelay(r.local)).join('\n') || 'no data yet');
 }
 setInterval(syncStats, 1000);
@@ -609,10 +668,27 @@ function tnote(text, level) {
 const tTimers = new Set();
 const tlater = (fn, ms) => { const id = setTimeout(() => { tTimers.delete(id); fn(); }, ms); tTimers.add(id); return id; };
 
+/* 1.16.0: the window's one v3 connection (live/accounts.js createFeed): its own WebSocket, `client` v3 and signed in like
+   the ticket, opened only when ChartBridge's hello lists "v3". It is shared by the Account page, the order ticket's 0.4.0
+   parts (the switches, `managed`, the Merge result: below) and the Bot tab (live/bot.js). The ticket's connection stays a
+   v2 page exactly as in 0.3.8, and every order action goes on it (the Account page's cancel from the list too: orderSend).
+   nt8/PROTOCOL.md "The page's v3 connection (chart 1.16.0)". */
+const AF = window.AccountsPage ? window.AccountsPage.createFeed({
+  wsUrl, pin: PIN, framed: FRAMED, fetch: (u, o) => fetch(u, o), note: (text, warn) => note(text, !!warn, warn ? 8000 : 4000),
+  changed: () => { syncV3(); renderLimits(); renderAccountPages(); },
+  orderSend: obj => !!obj && obj.type === 'cancel' && obj.from === 'list' && core.cancelFromList(obj.id, obj.cid),
+}) : null;
+/* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
+let v3Key = 'null';
+function syncV3() {
+  const sw = AF && AF.S.signedIn && AF.S.enabled ? AF.S.switches : null, k = JSON.stringify(sw);
+  if (k === v3Key) return;
+  v3Key = k; core.setSwitches(sw); deskCheck();
+}
 const core = TC.create({
   LP, prefs, pin: PIN, framed: FRAMED, framedReason: 'This page is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own window.',
   fetch: (u, o) => fetch(u, o),
-  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },
+  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },   // the one order path
   open: () => !!tws && tws.readyState === 1, sock: () => tws,
   root: () => ticketRoot(),
   lastPrice: () => ticketPrice(ticketRoot()),
@@ -623,7 +699,7 @@ const core = TC.create({
   tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
   flash: tnote, later: tlater, destroyed: () => false,
   changed: () => renderOrders(), armed: on => ticketArmedUi(on),
-  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && core.TR.account && (cameOn || pick.missed)) ticketAccountNote(pick); renderOrders(); },
+  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && core.TR.account && (cameOn || pick.missed)) ticketAccountNote(pick); deskCheck(); renderOrders(); },
   lost: () => {}, syncAccounts: () => { if (TK.bar) TK.bar.syncTradeAccounts(); },
   batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
   armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
@@ -637,6 +713,19 @@ const core = TC.create({
   },
   dropNoStop: () => dropNoStop(),
   flattened: r => flattenedHere(r),
+  /* 1.16.0 (protocol v3): the active Order Strategy goes with each entry while `strategies` is on (OrderStrategies.toWire,
+     The Desk's form to ChartBridge's); the switches come from the window's v3 connection (syncV3) */
+  strategy: () => { const st = activeStrategy(); return st ? { name: st.name, wire: OS.toWire(st) } : null; },
+  merged: () => {},
+});
+/* 1.16.0: what only the v3 connection gets, for the ticket: `managed` and the Merge result (Merge itself goes on the ticket's
+   connection, as every order action); its errors and warnings are said as the ticket's own (the Bot tab says the bot's) */
+if (AF) AF.listen({
+  message: m => {
+    if (m.type === 'managed' || m.type === 'merge') core.message(m);
+    else if (m.type === 'status' && typeof m.text === 'string' && m.text && (m.level === 'error' || (m.level === 'warn' && !/^Bot\b/.test(m.text)))) alertOnce(m.text, m.level === 'warn', true);
+  },
+  closed: () => core.v3Lost(),
 });
 let forwarding = false;                               // acting on another window's forward (it asked its own questions)
 let noStopQ = null;                                   // the NO STOP question open in this window (askNoStop, below)
@@ -666,13 +755,18 @@ function tmessage(m) {
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
+      if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the window's v3 connection (only when ChartBridge speaks v3)
+      for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
+      if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
-    case 'status': if (m.level === 'error') alertLoud(m.text); else if (m.level === 'warn' && m.text) alertLoud(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
+    case 'status': if (m.level === 'error') alertOnce(m.text); else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
   }
+  // 1.16.0: the Account page's cancel from the list went on this connection; its refusal is said there
+  if (m.type === 'reject' && AF && AF.takeReject(m)) return;
   // an order this window sent for a click in another window: ChartBridge's refusal (or NinjaTrader's rejection) goes
   // back to that window's note too
   const f = m.cid && fwdCids.get(m.cid);
@@ -691,6 +785,16 @@ function alertLoud(text, warn) {
   $('wsAlertText').textContent = alerts.join('\n'); $('wsAlert').hidden = false;
   $('wsAlert').classList.toggle('warn', !alertErr);                // red once an error is in it
 }
+/* 1.16.0: a status ChartBridge sends to both of this window's connections (the ticket's and the v3 one) is said once: the
+   ticket's copy is skipped when the v3 connection said the same within 5 s, and the other way round */
+const alertSaid = new Map();                          // text -> { at, v3 }
+function alertOnce(text, warn, v3) {
+  const now = Date.now(), was = alertSaid.get(text);
+  for (const [k, x] of alertSaid) if (now - x.at > 5000) alertSaid.delete(k);
+  if (was && now - was.at <= 5000 && was.v3 !== !!v3) return;
+  alertSaid.set(text, { at: now, v3: !!v3 });
+  alertLoud(text, warn);
+}
 $('wsAlertClose').addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; });
 function renderUnsent() { const n = core.unsentNote(); $('wsUnsent').hidden = !n.show; $('wsUnsentText').textContent = n.text; }
 $('wsUnsentClose').addEventListener('click', () => core.dismissUnsent());
@@ -706,6 +810,7 @@ function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTra
 function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
   renderCharts();
+  renderLimits();                                        // 1.16.0: the ticket's account may have changed
   renderAccounts();                                      // 1.15.0: the Account panels
   renderFlat();
   syncTitle();
@@ -763,7 +868,7 @@ function actHere(a) {
   const was = capture; capture = notes;
   try {
     const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
-    const otherRoot = !!a.root && a.root !== R && ['place', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
+    const otherRoot = !!a.root && a.root !== R && ['place', 'placeTyped', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
     // asked in the window it came from, and Anthony said Send: only for the instrument and account he was asked about,
     // and not when a Close or Flatten of it went out after he was asked (F2 review, re-review)
     const otherAcct = a.noStopOk === true && !!a.account && a.account !== core.TR.account;
@@ -773,7 +878,14 @@ function actHere(a) {
     else if (otherAcct) tnote('Not sent: the order ticket is on ' + core.TR.account + ' now, not ' + a.account + '.', 'warn');
     else if (stale) tnote('Not sent: a Close or Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
-    else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, a.orderKind === 'limit' || a.orderKind === 'stop' ? a.orderKind : null, +a.price);
+    else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, ['limit', 'stop', 'stopLimit', 'mit'].includes(a.orderKind) ? a.orderKind : null, +a.price);
+    /* 1.16.0: a Buy or Sell key with an entry-type modifier held, at the price under the mouse: the kind by the ticket's own
+       price (OrderStrategies.entryKind), then the very checks of a click */
+    else if (a.kind === 'placeTyped' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price) && (a.family === 'limit' || a.family === 'stop')) {
+      const k = OS.entryKind(a.side, +a.price, ticketPrice(R), a.family);
+      if (k.error) tnote(k.error, 'warn'); else core.placeChecked(a.side, k.kind, +a.price);
+    }
+    else if (a.kind === 'merge') core.merge();
     else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
     else if ((a.kind === 'cancel' || a.kind === 'cancelAny') && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
     else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which);
@@ -802,7 +914,12 @@ function pressOffText(root) {
 }
 const tradeHost = {
   pressOff: root => pressOffText(root),
-  place: (side, price, root, kind) => chartAction({ kind: 'place', side, price, root, orderKind: kind }),
+  /* 1.16.0: an entry-type modifier held on the click (orderTypes on) turns the chart's limit or stop into that entry type,
+     on the same side of the market (OrderStrategies.kindFor); Shift+click alone places what it always has */
+  place: (side, price, root, kind, mods) => {
+    const fam = core.switchOn('orderTypes') ? OS.clickFamily(mods, modifiersNow(), side === 'buy' || !(mods && mods.ctrl) ? ['Shift'] : ['Ctrl']) : '';
+    chartAction({ kind: 'place', side, price, root, orderKind: fam ? OS.kindFor(kind, fam) : kind });
+  },
   move: (id, price, root, from) => chartAction({ kind: 'move', id, price, root, from }),
   cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
   planAdd: (id, which, root) => chartAction({ kind: 'planAdd', id, which, root }),
@@ -855,8 +972,9 @@ function noTicketAccount() {
 const closeTarget = () => ticketAccount() + ' ' + ticketRoot();
 function publish() {
   if (!holds()) return;
+  const sg = activeStrategy();                                                                      // 1.16.0: a strategy always has its stop
   const st = { root: TK.root, account: core.TR.account, armed: core.TR.armed, qty: ticketQty(),
-    stop: OT.cleanBracket(core.brackets[TK.root], core.cap()).stop, noStopOk: !core.noStopAsked(),   // NO STOP: other windows ask before they forward
+    stop: sg ? sg.stop.ticks : OT.cleanBracket(core.brackets[TK.root], core.cap()).stop, noStopOk: !core.noStopAsked(),   // NO STOP: other windows ask before they forward
     offWhy: offWhyNow() };                                                                           // 1.15.0: why Armed went off, for their notes
   const k = JSON.stringify(st);
   if (k === TK.published) return;
@@ -923,14 +1041,17 @@ function mountTicket(v) {
     <div class="tk-row"><span class="glabel">Qty</span><select class="acct-sel oqty" data-tk-id="oQty" aria-label="Order quantity">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('')}</select><span class="ounit" data-tk-id="oQtyCap"></span>
       <select class="acct-sel bpre" data-tk-id="bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
       <span class="bsave" data-tk-id="bSaveBox" hidden><input class="oin bname" data-tk-id="bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" data-tk-id="bSaveOk">Save</button><button type="button" class="btn" data-tk-id="bSaveNo" aria-label="Do not save">x</button></span></div>
+    <div class="tk-row tk-strat" data-tk-id="stratRow" hidden><span class="glabel">Strategy</span><select class="acct-sel tk-ssel" data-tk-id="strat" aria-label="Order Strategy: Shift+click and the order keys send it" title="Order Strategy: Shift+click, Buy MKT, Sell MKT and their keys send it in place of the bracket. None: the bracket."></select></div>
+    <div class="tk-sdesc" data-tk-id="stratDesc" hidden></div>
     <div class="tk-row tk-bk"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-tk-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
       <input class="oin" data-tk-id="bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
       <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
       <span class="nostop" data-tk-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
     <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
-    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button></div>
+    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
     <div class="tk-state ostate">
-      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
+      <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span>
+      <span class="oinfo tk-v3" data-tk-id="managed" role="status"></span><span class="oinfo tk-v3" data-tk-id="mergeLine" role="status"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
       <span class="tk-also" data-tk-id="also"></span>
       <span class="oinfo dim oother" data-tk-id="oOther"></span><span class="oinfo acct-note" data-tk-id="oAcctNote" role="status"></span><span class="oinfo acct-note batch-note" data-tk-id="oCancel" role="status"></span><span class="ooff" data-tk-id="oOff"></span>
       <span class="tk-note" data-tk-id="note" role="status"></span>
@@ -968,6 +1089,14 @@ function mountTicket(v) {
   });
   // the stop the other windows go by for NO STOP: told to them as it is typed
   for (const k of ['bStop', 'bTarget', 'bPreset']) for (const t of ['input', 'change']) map[k].addEventListener(t, () => setTimeout(publish, 0));
+  /* 1.16.0: the Order Strategy picked (every window of this browser shares it), and Merge (by click only, like the order
+     buttons) */
+  map.strat.addEventListener('change', () => { TK.bar.handBack(map.strat); pickStrategy(map.strat.value); });
+  map.mergeBtn.addEventListener('click', e => {
+    e.currentTarget.blur();
+    if (e.detail === 0) { tnote('Order buttons work by click only, not by keyboard.', 'warn'); return; }
+    core.merge();
+  });
   TK.bar.syncTradeAccounts();
   ticketArmedUi(core.TR.armed);
   startTicketPrice();
@@ -989,6 +1118,7 @@ function ticketAccountNote(pick) {
 }
 /* the last fill of the ticket's account and instrument, and the account's other instruments still open */
 function renderTicketExtras() {
+  renderTicketV3();
   const TR = core.TR, acct = TR.account, r = TK.root;
   const fill = TR.enabled && acct ? [...tfills.values()].filter(f => f.account === acct && f.root === r).sort((a, b) => a.t - b.t).pop() : null;
   const fe = tk('fill');
@@ -1042,6 +1172,23 @@ document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
   ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
 }));
+/* 1.16.0: the workspace's own hotkeys (Maximize panel), kept apart from the trading ones (live-ws-keys-v1) and never one
+   of them: a trading key always wins (cleanViewKeys drops a combo they have, and the trading handler above takes the
+   press first). Never while a box has the focus (HOTKEY_IN_BOX), a menu or dialog is open, or on a key the chart reads. */
+const viewKeys = () => W.cleanViewKeys(store.getItem(W.KEYS.viewKeys), HK, OT.hotkeyRefused);
+document.addEventListener('keydown', e => {
+  if (e.defaultPrevented || e.isComposing) return;
+  const combo = OT.hotkeyCombo(e), k = combo ? viewKeys().maximize : '';
+  if (!k || combo !== k || OT.hotkeyAction(HK, combo)) return;
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))) { if (!e.repeat) note(window.ChartLive.HOTKEY_IN_BOX, true); return; }
+  if (busy() || OT.isChartKey(e)) return;
+  e.preventDefault();
+  if (e.repeat) return;
+  if (maxId) { toggleMax(maxId); return; }
+  if (pointerPanel && views.has(pointerPanel)) toggleMax(pointerPanel);
+  else note('Point at a panel, then press ' + k + ' to maximize it', true);
+});
 /* KEYS ON / KEYS OFF: whether a key pressed now would fire a hotkey here */
 function keysOn() {
   if (!document.hasFocus() || busy()) return false;
@@ -1061,6 +1208,417 @@ for (const t of ['focusin', 'focusout', 'pointerup', 'keyup']) document.addEvent
 window.addEventListener('focus', syncKeys); window.addEventListener('blur', syncKeys);
 setInterval(syncKeys, 250);
 
+/* ---------------- 1.16.0 (ChartBridge 0.4.0, protocol v3): Order Strategies, entry types, Merge, and the hotkeys and
+   strategies shared by every PC through The Desk. Each part shows only while ChartBridge's `switches` say it is on
+   (nt8/PROTOCOL.md "Protocol v3"); with every switch off this page is the 1.15 page. The order path is TradeCore's
+   (live/trade.js); the rules are OrderStrategies' (live/order-strategies.js). No motion on any of it.
+   Saved here: live-strategy-v1 (the active strategy's id, every window of this browser), live-desk-cache-v1 (the last copy
+   read of both documents), live-desk-sync-v1 (whether the hotkeys are kept in The Desk now: the single chart page then
+   shows them read only). The Desk's address is not kept here: it is ChartBridge's deskUrl (AccountsPage.deskBase). */
+const EXTRA_KEYS = [{ id: 'merge', sw: 'merge' }, { id: 'accept', sw: 'bot' }, { id: 'reject', sw: 'bot' }];
+const STRAT_KEY = 'live-strategy-v1', DESK_SYNC_KEY = 'live-desk-sync-v1';
+/* The Desk's address: one source for the whole page, ChartBridge's deskUrl (AccountsPage.deskBase, /diag desk.deskUrl) */
+const DESK = OS.createDesk({ fetch: (u, o) => fetch(u, o), storage: store, base: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)) });
+/* on: the switches need The Desk; hk, st: the documents in use (The Desk's, or the last copy read); readAt: when last read */
+const DS = { on: false, hk: null, st: null, readAt: 0, reading: null, firstRead: true };
+const loadDeskCache = () => { const h = DESK.cached('hotkeys'), t = DESK.cached('strategies'); DS.hk = h ? h.doc : null; DS.st = t ? t.doc : null; DS.hkAt = h ? h.at : 0; };
+/** 'local' (the hotkeys are this browser's, as in 1.15: no switch needs The Desk, or it has never answered here), 'desk'
+    (kept in The Desk: every change is a save there), 'readonly' (The Desk does not answer: the last copy read, shown) */
+function deskMode() { return !DS.on || !DS.hk ? 'local' : DESK.reach === 'down' ? 'readonly' : 'desk'; }
+const stratList = () => (DS.on && DS.st ? DS.st.strategies : []);
+const modifiersNow = () => (DS.on && DS.hk ? DS.hk.modifiers : { limit: '', stop: '' });
+const keyCtx = () => ({ keys: DS.hk ? DS.hk.keys : {}, modifiers: modifiersNow(), strategies: stratList() });
+/* After every `trading` message: The Desk is used while a switch needs it (OrderStrategies.deskSyncOn). A dropped
+   connection changes nothing (the last switches stand until ChartBridge says otherwise). */
+function deskCheck() {
+  if (!core.TR.enabled) return;
+  const on = OS.deskSyncOn(core.TR.switches);
+  if (on === DS.on) return;
+  DS.on = on;
+  try { store.setItem(DESK_SYNC_KEY, JSON.stringify(on)); } catch (e) { /* blocked */ }
+  if (on) { loadDeskCache(); deskRead(); }
+  if (!$('wsSettings').hidden) renderHotkeys();
+}
+/* Read both documents (one read at a time). The hotkeys read are written to this browser's keys, so the 1.15 handlers and
+   the single chart page use them as they are. */
+function deskRead() {
+  if (!DS.on) return Promise.resolve();
+  if (DS.reading) return DS.reading;
+  DS.reading = Promise.all([DESK.read('hotkeys'), DESK.read('strategies')]).then(([h]) => {
+    DS.reading = null; DS.readAt = Date.now();
+    const first = DS.firstRead && h.ok; if (h.ok) DS.firstRead = false;
+    loadDeskCache();
+    if (first) firstDeskRead();
+    if (DS.hk) applyDeskHotkeys();
+    deskChanged();
+  }, () => { DS.reading = null; deskChanged(); });
+  return DS.reading;
+}
+/* The first answer on this browser: The Desk's keys are used from now on. When The Desk has none yet (rev 0) and this
+   browser has some, they are saved there (the first PC fills it); when The Desk's differ, a note says this browser's were
+   replaced. Never silently. */
+function firstDeskRead() {
+  const local = readHotkeys(), mx = viewKeys().maximize, doc = DS.hk;
+  const mine = OT.HOTKEY_ACTIONS.map(a => [a.id, local[a.id]]).concat([['maximize', mx]]).filter(x => x[1]);
+  if (!mine.length) return;
+  const differ = mine.filter(([id, c]) => doc.keys[id] !== c);
+  if (doc.rev === 0 && OS.KEY_IDS.every(k => !doc.keys[k])) {
+    const next = OS.emptyHotkeysDoc();
+    for (const [id, c] of mine) next.keys[id] = c;
+    if (OS.checkHotkeysDoc(next, stratList())) return;
+    DESK.save('hotkeys', next).then(r => {
+      loadDeskCache(); if (r.ok) applyDeskHotkeys();
+      note(r.ok ? 'This browser\'s hotkeys are saved in The Desk: every PC uses them from now on.' : 'This browser\'s hotkeys were not saved in The Desk: ' + r.error, !r.ok, 12000);
+      deskChanged();
+    });
+    return;
+  }
+  if (differ.length) note('Hotkeys now come from The Desk, shared by every PC. This browser had ' + differ.map(([id, c]) => OS.keyName(id) + ' ' + c).join(', ') + '; The Desk\'s keys are used.', true, 15000);
+}
+/* The Desk's hotkeys written to this browser's 1.11.0 keys (live-hotkeys-v1) and the workspace's Maximize (live-ws-keys-v1) */
+function applyDeskHotkeys() {
+  const k = DS.hk.keys, five = {};
+  for (const a of OT.HOTKEY_ACTIONS) five[a.id] = k[a.id] || '';
+  const was = JSON.stringify(readHotkeys()) + '|' + viewKeys().maximize;
+  prefs.raw.set(HKKEY, five);
+  try { store.setItem(W.KEYS.viewKeys, JSON.stringify({ maximize: k.maximize || '' })); } catch (e) { /* blocked */ }
+  readHotkeys();
+  if (was !== JSON.stringify(HK) + '|' + viewKeys().maximize) for (const v of views.values()) setMaxButton(v, maxId === v.panel.id);
+}
+function deskChanged() {
+  if (botDesk) botDesk.keysChanged();                           // the copilot's Accept and Reject keys on its buttons
+  if (!$('wsSettings').hidden) renderHotkeys();
+  if (SG.open) renderStrategies();
+  const id = activeStrategyId();
+  if (id && DS.st && core.switchOn('strategies') && !DS.st.strategies.some(x => x.id === id)) {
+    try { store.setItem(STRAT_KEY, JSON.stringify('')); } catch (e) { /* blocked */ }
+    tnote('The active strategy was deleted on The Desk: the ticket is back on its bracket.', 'warn');
+  }
+  renderOrders();
+}
+setInterval(() => { if (DS.on && Date.now() - DS.readAt > 60000) deskRead(); }, 15000);
+window.addEventListener('focus', () => { if (DS.on && Date.now() - DS.readAt > 15000) deskRead(); });
+/* Settings: The Desk's address and what it said */
+function renderDeskUi() {
+  $('wsDeskSec').hidden = !DS.on;
+  $('wsStratSec').hidden = !core.switchOn('strategies');
+  $('wsTypesSec').hidden = !(DS.on && core.switchOn('orderTypes'));
+  const local = deskMode() === 'local';
+  $('wsHkWhere').textContent = local ? 'the same keys as the single chart page' : 'shared by every PC through The Desk';
+  $('wsHkHelp').hidden = !local; $('wsHkHelpShared').hidden = local;   // the short help while shared, so Settings fits 1366x768
+  if (!DS.on) return;
+  if ($('wsDeskUrl').textContent !== DESK.url()) $('wsDeskUrl').textContent = DESK.url();
+  const mode = deskMode(), at = t => (t ? new Date(t).toLocaleTimeString() : '');
+  const n = stratList().length;
+  const text = mode === 'readonly' ? DESK.error + ' The hotkeys and strategies shown are the last copy read (' + at(DS.hkAt) + '), read only, until it answers.'
+    : mode === 'local' ? (DESK.reach === 'down' ? DESK.error + ' ' : 'Reading The Desk... ') + 'Until it answers on this browser, the hotkeys are this browser\'s.'
+      : 'Shared by every PC: the hotkeys (rev ' + DS.hk.rev + ') and ' + n + ' strateg' + (n === 1 ? 'y' : 'ies') + ' (rev ' + (DS.st ? DS.st.rev : 0) + '), read ' + at(DS.readAt || DS.hkAt) + '.';
+  const el = $('wsDeskNote');
+  if (el.textContent !== text) el.textContent = text;
+  el.className = 'ws-help' + (mode === 'desk' ? '' : ' ws-warn');
+  const m = modifiersNow();
+  for (const k of ['limit', 'stop']) {
+    const sel = $('wsMod-' + k);
+    if (document.activeElement !== sel) sel.value = m[k];
+    sel.disabled = mode !== 'desk';
+  }
+  const a = activeStrategy();
+  $('wsStratNote').textContent = mode === 'local' && !DS.st ? 'The strategies are kept in The Desk, which has not answered on this browser yet.'
+    : n + ' strateg' + (n === 1 ? 'y' : 'ies') + (a ? '; ' + a.name + ' is active on the ticket.' : '; the ticket uses its bracket.') + (mode === 'readonly' ? ' Read only: The Desk does not answer.' : '');
+}
+$('wsDeskTry').addEventListener('click', () => deskRead());
+/* Save one hotkey in The Desk (the whole document with the rev read; a 409 reads it again) */
+function saveKeyDesk(id, combo) {
+  if (deskMode() === 'readonly') { renderHotkeys(); hkNote(id, 'Not saved: ' + DESK.error + ' The keys shown are the last copy read, read only.', 'warn'); return; }
+  const next = JSON.parse(JSON.stringify(DS.hk));
+  next.keys[id] = combo;
+  const why = (combo && OS.hotkeyConflict(combo, { key: id }, keyCtx())) || OS.checkHotkeysDoc(next, stratList());
+  if (why) { renderHotkeys(); hkNote(id, why, 'warn'); return; }
+  hkNote(id, 'Saving in The Desk...', '');
+  DESK.save('hotkeys', next).then(r => {
+    loadDeskCache();
+    if (r.ok) applyDeskHotkeys();
+    renderHotkeys();
+    hkNote(id, r.ok ? (combo ? 'Saved in The Desk.' : 'Cleared in The Desk.') : r.error + ' ' + (combo ? 'Press ' + combo + ' again to set it.' : 'Clear it again.'), r.ok ? '' : 'error');
+    deskChanged();
+  });
+}
+/* the entry-type modifiers (orderTypes): Shift, Ctrl or Alt, never one a key already holds */
+for (const k of ['limit', 'stop']) $('wsMod-' + k).addEventListener('change', e => {
+  const mod = e.target.value, note2 = t => { $('wsModNote').textContent = t; $('wsModNote').hidden = !t; };
+  if (deskMode() !== 'desk') { renderDeskUi(); note2('Not saved: The Desk does not answer.'); return; }
+  const why = OS.modifierConflict(k, mod, keyCtx());
+  if (why) { renderDeskUi(); note2(why); return; }
+  const next = JSON.parse(JSON.stringify(DS.hk));
+  next.modifiers[k] = mod;
+  const dw = OS.checkHotkeysDoc(next, stratList());
+  if (dw) { renderDeskUi(); note2(dw); return; }
+  note2('Saving in The Desk...');
+  DESK.save('hotkeys', next).then(r => { loadDeskCache(); renderDeskUi(); note2(r.ok ? 'Saved in The Desk.' : r.error + ' Pick it again.'); deskChanged(); });
+});
+
+/* ---------------- the active Order Strategy (strategies = on): picked on the ticket or by its key, in any window */
+function activeStrategyId() { try { const v = JSON.parse(store.getItem(STRAT_KEY)); return typeof v === 'string' ? v : ''; } catch (e) { return ''; } }
+function activeStrategy() {
+  if (!core.switchOn('strategies')) return null;
+  const id = activeStrategyId();
+  return id ? stratList().find(x => x.id === id) || null : null;
+}
+function pickStrategy(id) {
+  const sg = id ? stratList().find(x => x.id === id) : null;
+  if (id && !sg) { tnote('That strategy is gone (deleted on The Desk).', 'warn'); renderOrders(); return; }
+  try { store.setItem(STRAT_KEY, JSON.stringify(sg ? sg.id : '')); } catch (e) { /* blocked */ }
+  if (activeStrategyId() !== (sg ? sg.id : '')) { tnote('Not picked: this browser blocks site storage.', 'error'); return; }
+  const t = sg ? 'Strategy ' + sg.name + ' is active: Shift+click and the order keys send it (' + OS.describe(sg) + ').' : 'No strategy: orders go with the bracket.';
+  if (holds()) tnote(t, ''); else note(t, false, 6000);
+  publish(); renderOrders();
+}
+/* the ticket's 1.16.0 rows: the strategy, Merge, the managed strategies and the last Merge, written only when changed */
+function setText(el, text, level) {
+  if (el.textContent !== text) { el.textContent = text; el.title = text; }
+  const c = 'oinfo tk-v3' + (level ? ' ' + level : '');
+  if (el.className !== c) el.className = c;
+}
+let stratOptsKey = '';
+function renderTicketV3() {
+  if (!TK.view) return;
+  const TR = core.TR, sOn = core.switchOn('strategies'), sg = activeStrategy();
+  tk('stratRow').hidden = !sOn;
+  if (sOn) {
+    const list = stratList(), key = list.map(x => x.id + '|' + x.name).join(',');
+    if (key !== stratOptsKey) {
+      stratOptsKey = key;
+      tk('strat').replaceChildren(new Option('None (the bracket)', ''), ...list.map(x => new Option(x.name + (x.hotkey ? ' (' + x.hotkey + ')' : ''), x.id)));
+    }
+    const v = sg ? sg.id : '';
+    if (tk('strat').value !== v) tk('strat').value = v;
+  }
+  tk('stratDesc').hidden = !sg;
+  if (sg) setText(tk('stratDesc'), OS.describe(sg), '');
+  tk('stratDesc').className = 'tk-sdesc';
+  tk('obar').classList.toggle('tk-has-strat', !!sg);           // the bracket boxes and presets step aside (the strategy has its own)
+  const mb = tk('mergeBtn'), mOn = core.switchOn('merge');
+  mb.hidden = !mOn;
+  if (mOn) {
+    const pos = TR.positions.get(TR.account + '|' + TK.root), legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, TK.root, pos.qty) : null;
+    const ok = TR.enabled && !!legs && legs.stopLegs >= 2;
+    mb.disabled = !ok;
+    mb.classList.toggle('is-off', !TR.armed);
+    const t = ok ? 'Merge: one stop and one target set for the whole ' + TK.root + ' position at the first leg\'s prices (ChartBridge does the swap and puts the brackets back if anything fails)'
+      : 'Merge needs an open position here with two or more stops working';
+    if (mb.title !== t) mb.title = t;
+  }
+  const mg = core.managedOf(TR.account, TK.root).map(OS.managedLine).filter(x => x.text);
+  setText(tk('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '');
+  const pos = TR.positions.get(TR.account + '|' + TK.root);
+  if (!(pos && pos.qty)) TR.merges.delete(TR.account + '|' + TK.root);   // the last Merge is shown while its position is open
+  const ml = OS.mergeLine(TR.merges.get(TR.account + '|' + TK.root));
+  setText(tk('mergeLine'), ml.text, ml.level);
+}
+/* another window picked a strategy, or read The Desk */
+window.addEventListener('storage', e => {
+  if (e.key === PREFIX + STRAT_KEY) { publish(); renderOrders(); }
+  else if (e.key === PREFIX + OS.DESK_KEYS.cache) { loadDeskCache(); if (!$('wsSettings').hidden) renderHotkeys(); if (SG.open) renderStrategies(); renderOrders(); }
+});
+
+/* ---------------- the keys beyond the five: Merge, each strategy's key, the copilot's Accept and Reject, and Buy or Sell
+   with an entry-type modifier held (the price under the mouse). The same rules as the trading keys (never while typing in
+   a box: HOTKEY_IN_BOX; never with a menu or dialog open; never a key the chart reads), after them. */
+let pointerAt = null;                                       // the mouse over the grid: { x, y } (client px)
+grid.addEventListener('pointermove', e => { pointerAt = { x: e.clientX, y: e.clientY }; }, { passive: true });
+grid.addEventListener('pointerleave', () => { pointerAt = null; });
+document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
+  root: document.body, busy,
+  resolve: combo => (DS.on && DS.hk ? OS.resolveKey(combo, Object.assign(keyCtx(), { on: { merge: core.switchOn('merge'), accept: core.switchOn('bot'), strategies: core.switchOn('strategies'), types: core.switchOn('orderTypes') } })) : ''),
+  run: id => runExtraKey(id),
+}));
+function runExtraKey(id) {
+  if (id === 'merge') { keyAct('merge'); return; }
+  if (id === 'accept' || id === 'reject') {
+    /* the copilot's one-key answer: the bot channel's page part answers it (a cancelable `chart-copilot-key` event) */
+    const ev = new CustomEvent('chart-copilot-key', { cancelable: true, detail: { answer: id } });
+    if (document.dispatchEvent(ev)) note((id === 'accept' ? 'Accept' : 'Reject') + ': no copilot proposal to answer here.', true);
+    return;
+  }
+  if (id.startsWith('strategy:')) { pickStrategy(id.slice(9)); return; }
+  const m = /^(buy|sell):(limit|stop)$/.exec(id);
+  if (m) placeAtPointer(m[1], m[2]);
+}
+/* A Buy or Sell key with an entry-type modifier: the price under the mouse on a chart of the ticket's instrument */
+function placeAtPointer(side, family) {
+  const R = ticketRoot(), v = pointerPanel ? views.get(pointerPanel) : null, what = family === 'limit' ? 'a limit or stop-limit' : 'a stop or MIT';
+  if (!v || !v.pane || !pointerAt) { note('Not sent: point at a ' + R + ' chart, then press the key: ' + what + ' goes at the price under the mouse.', true); return; }
+  if (v.panel.root !== R) { note('Not sent: the order ticket is on ' + R + ', the chart under the mouse is ' + v.panel.root + '.', true); return; }
+  const chart = v.pane.chart, cv = v.el.querySelector('.chart-box canvas');
+  if (!cv) return;
+  const r = cv.getBoundingClientRect(), x = pointerAt.x - r.left, y = pointerAt.y - r.top;
+  if (x < 0 || x >= r.width - 78 || y < 0 || y >= chart.deltaPane().plotHeight) { note('Not sent: point at the ' + R + ' chart\'s prices, then press the key.', true); return; }
+  const tick = tickOf(R), price = Math.round(chart.yToPrice(y) / tick) * tick;
+  const a = { kind: 'placeTyped', side, price: Math.round(price * 1e9) / 1e9, root: R, family };
+  if (holds()) { actHere(a); renderOrders(); } else forward(a);
+}
+
+/* ---------------- Settings > Order Strategies...: build and change them (saved in The Desk, shared by every PC) */
+const SG = { open: false, id: '', dirty: false, closeAsked: false, delAsked: '' };
+const SG_FIELDS = ['name', 'stop', 'stopType', 'limitOffset', 't1', 's1', 't2', 's2', 't3', 's3', 'beOn', 'beAfter', 'bePlus', 'trOn', 'trailAfter', 'trailBy', 'trailStep', 'hotkey'];
+const sgEl = f => $('sg-' + f);
+function openStrategies() {
+  closePops();
+  const d = $('wsDialog');
+  const num = (f, label, max) => `<input class="ws-num" id="sg-${f}" type="number" min="0" max="${max}" step="1" inputmode="numeric" aria-label="${label}">`;
+  const trow = n => `<div class="sg-row"><span class="sg-lbl">Target ${n}</span>${num('t' + n, 'Target ' + n + ' ticks from the fill', 2000)}<span class="sg-u">ticks</span>${num('s' + n, 'Target ' + n + ' share, percent', 100)}<span class="sg-u">%</span></div>`;
+  d.innerHTML = `<form class="ws-dlg ws-sg" method="dialog" aria-label="Order Strategies">
+    <h2>Order Strategies <span id="sg-where"></span></h2>
+    <p class="ws-help" id="sg-desk"></p>
+    <div class="sg-cols"><div class="sg-list" id="sg-list" role="group" aria-label="Strategies"></div>
+    <div class="sg-form" id="sg-form">
+      <div class="sg-row"><label class="sg-lbl" for="sg-name">Name</label><input class="sg-name" id="sg-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"></div>
+      <div class="sg-row"><span class="sg-lbl">Stop</span>${num('stop', 'Stop, ticks from the fill', 1000)}<span class="sg-u">ticks</span>
+        <select class="ws-sel" id="sg-stopType" aria-label="Stop type"><option value="market">Stop market</option><option value="limit">Stop limit</option></select>
+        ${num('limitOffset', 'Stop limit offset, ticks', 100)}<span class="sg-u" id="sg-loU">offset</span></div>
+      ${trow(1)}${trow(2)}${trow(3)}
+      <div class="sg-row sg-sum" id="sg-sum"></div>
+      <div class="sg-row"><label class="sg-lbl"><input type="checkbox" id="sg-beOn"> Breakeven</label><span class="sg-u">after</span>${num('beAfter', 'Breakeven after, ticks in profit', 2000)}<span class="sg-u">ticks, stop to entry +</span>${num('bePlus', 'Breakeven plus, ticks', 100)}</div>
+      <div class="sg-row"><label class="sg-lbl"><input type="checkbox" id="sg-trOn"> Trailing</label><span class="sg-u">after</span>${num('trailAfter', 'Trailing starts after, ticks in profit', 2000)}<span class="sg-u">by</span>${num('trailBy', 'Trails by, ticks', 2000)}<span class="sg-u">steps of</span>${num('trailStep', 'Steps of, ticks', 2000)}</div>
+      <div class="sg-row"><label class="sg-lbl" for="sg-hotkey">Hotkey</label><input class="sg-hk" id="sg-hotkey" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="sg-err"><button type="button" class="ws-btn" id="sg-hkClear">Clear</button><span class="sg-u">picks it on the ticket</span></div>
+    </div></div>
+    <p class="ws-err" id="sg-err" role="alert"></p>
+    <div class="ws-dlg-btns"><button type="button" class="ws-btn" id="sg-del">Delete</button><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel" id="sg-close">Close</button><button type="submit" class="ws-btn primary" id="sg-save">Save</button></div>
+  </form>`;
+  d.classList.add('ws-dialog-wide');
+  SG.open = true; SG.dirty = false; SG.closeAsked = false; SG.delAsked = '';
+  const list = stratList(), cur = activeStrategy();
+  SG.id = cur ? cur.id : list.length ? list[0].id : '';
+  fillStrategy(SG.id ? list.find(x => x.id === SG.id) : null);
+  /* never lose an edit silently: Close or Escape with a change not saved asks once */
+  const closeGuard = e => { if (SG.dirty && !SG.closeAsked) { e.preventDefault(); SG.closeAsked = true; sgErr('Not saved. Save it, or press Close (Escape) again to drop the change.', 'warn'); } };
+  d.addEventListener('cancel', closeGuard);
+  $('sg-close').addEventListener('click', e => { if (SG.dirty && !SG.closeAsked) { e.stopImmediatePropagation(); closeGuard(e); } }, true);
+  d.addEventListener('close', () => { SG.open = false; d.classList.remove('ws-dialog-wide'); d.removeEventListener('cancel', closeGuard); }, { once: true });
+  $('sg-form').addEventListener('input', e => { if (e.target.id !== 'sg-hotkey') { SG.dirty = true; SG.closeAsked = false; checkForm(); } });
+  $('sg-form').addEventListener('change', () => { SG.dirty = true; SG.closeAsked = false; checkForm(); });
+  $('sg-list').addEventListener('click', e => {
+    const b = e.target.closest('button[data-sg]');
+    if (!b) return;
+    if (SG.dirty && !SG.closeAsked) { SG.closeAsked = true; sgErr('Not saved. Save it, or click again to drop the change.', 'warn'); return; }
+    SG.id = b.dataset.sg === '+' ? '' : b.dataset.sg;
+    fillStrategy(SG.id ? stratList().find(x => x.id === SG.id) : null);
+  });
+  $('sg-hotkey').addEventListener('keydown', e => {
+    const tab = e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey;
+    if (tab) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.repeat || e.key === 'Escape') return;
+    const r = OS.keyFromEvent(e, { strategy: SG.id || '+' }, Object.assign(keyCtx(), { strategies: stratList().filter(x => x.id !== SG.id) }));
+    if (r.error) { if (!r.held) sgErr(r.error, 'warn'); return; }
+    e.target.value = r.combo; SG.dirty = true; SG.closeAsked = false; checkForm();
+  });
+  $('sg-hkClear').addEventListener('click', () => { $('sg-hotkey').value = ''; SG.dirty = true; checkForm(); });
+  $('sg-del').addEventListener('click', () => deleteStrategy());
+  showDialog(d, () => { saveStrategy(); return false; });       // Save keeps the dialog open; the result shows under the form
+  renderStrategies();
+  $('sg-name').focus();
+}
+function sgErr(text, level) { const el = $('sg-err'); el.textContent = text || ''; el.className = 'ws-err' + (level === 'warn' ? ' ws-warn' : level === 'ok' ? ' ws-ok' : ''); }
+function renderStrategies() {
+  if (!SG.open) return;
+  const mode = deskMode(), ro = mode !== 'desk', list = stratList();
+  $('sg-where').textContent = ro ? 'read only' : 'shared by every PC through The Desk';
+  $('sg-desk').textContent = mode === 'readonly' ? DESK.error + ' These are the last copy read, read only.' : mode === 'local' ? 'The Desk has not answered on this browser yet: nothing to show or save. ' + (DESK.error || '') : list.length + ' of ' + OS.STRATEGY_MAX + '. Shift+click and the order keys send the one active on the ticket.';
+  $('sg-list').innerHTML = list.map(x => `<button type="button" class="ws-btn sg-item" data-sg="${esc(x.id)}" aria-pressed="${x.id === SG.id}"><b>${esc(x.name)}</b><span>${esc(OS.describe(x))}</span></button>`).join('') +
+    (ro || list.length >= OS.STRATEGY_MAX ? '' : `<button type="button" class="ws-btn sg-item sg-new" data-sg="+" aria-pressed="${!SG.id}">+ New strategy</button>`);
+  for (const f of SG_FIELDS) sgEl(f).disabled = ro;
+  $('sg-hkClear').disabled = ro; $('sg-save').disabled = ro; $('sg-del').disabled = ro || !SG.id;
+  checkForm();
+}
+/* the form from a strategy (or a new one's defaults: a 16 tick stop, one target of 32, no breakeven or trailing) */
+function fillStrategy(x) {
+  const v = (f, val) => { sgEl(f).value = val === null || val === undefined ? '' : String(val); };
+  v('name', x ? x.name : ''); v('stop', x ? x.stop.ticks : 16); v('stopType', x ? x.stop.type : 'market'); v('limitOffset', x ? x.stop.limitOffsetTicks : 0);
+  for (const n of [1, 2, 3]) { const t = x ? x.targets[n - 1] : n === 1 ? { ticks: 32, sharePct: 100 } : null; v('t' + n, t ? t.ticks : ''); v('s' + n, t ? t.sharePct : ''); }
+  sgEl('beOn').checked = !!(x && x.breakeven); v('beAfter', x && x.breakeven ? x.breakeven.afterTicks : 8); v('bePlus', x && x.breakeven ? x.breakeven.plusTicks : 1);
+  sgEl('trOn').checked = !!(x && x.trail); v('trailAfter', x && x.trail ? x.trail.startTicks : 12); v('trailBy', x && x.trail ? x.trail.byTicks : 8); v('trailStep', x && x.trail ? x.trail.stepTicks : 2);
+  v('hotkey', x && x.hotkey ? x.hotkey : '');
+  SG.dirty = false; SG.closeAsked = false; SG.delAsked = '';
+  sgErr('', '');
+  if (SG.open && $('sg-list')) for (const b of $('sg-list').querySelectorAll('button[data-sg]')) b.setAttribute('aria-pressed', String(b.dataset.sg === (SG.id || '+')));
+  if ($('sg-del')) $('sg-del').disabled = deskMode() !== 'desk' || !SG.id;
+  checkForm();
+}
+/* the strategy as typed, in The Desk's form; a box left empty is a missing number (the check names it) */
+function formStrategy() {
+  const n = f => { const t = String(sgEl(f).value).trim(); return t === '' ? NaN : Number(t); };
+  const targets = [];
+  let gap = '';
+  for (const i of [1, 2, 3]) {
+    const t = String(sgEl('t' + i).value).trim(), sh = String(sgEl('s' + i).value).trim();
+    if (t === '' && sh === '') continue;
+    if (targets.length !== i - 1 && !gap) gap = 't' + i;
+    targets.push({ ticks: n('t' + i), sharePct: n('s' + i) });
+  }
+  const market = sgEl('stopType').value !== 'limit';
+  return { gap, s: { id: SG.id || OS.newId(stratList()), name: OS.strategyName(sgEl('name').value),
+    stop: { ticks: n('stop'), type: market ? 'market' : 'limit', limitOffsetTicks: market ? 0 : n('limitOffset') },
+    targets, breakeven: sgEl('beOn').checked ? { afterTicks: n('beAfter'), plusTicks: n('bePlus') } : null,
+    trail: sgEl('trOn').checked ? { startTicks: n('trailAfter'), byTicks: n('trailBy'), stepTicks: n('trailStep') } : null,
+    hotkey: sgEl('hotkey').value || null } };
+}
+/* The Desk's rules as typed (the first problem, and its box marked); ChartBridge's own limit (maxBracketTicks) as a warning */
+function checkForm() {
+  if (!SG.open) return null;
+  const market = sgEl('stopType').value !== 'limit';
+  sgEl('limitOffset').disabled = market || deskMode() !== 'desk'; $('sg-loU').classList.toggle('sg-dim', market);
+  for (const f of ['beAfter', 'bePlus']) sgEl(f).disabled = !sgEl('beOn').checked || deskMode() !== 'desk';
+  for (const f of ['trailAfter', 'trailBy', 'trailStep']) sgEl(f).disabled = !sgEl('trOn').checked || deskMode() !== 'desk';
+  const { gap, s } = formStrategy();
+  const sum = s.targets.reduce((a, t) => a + (isFinite(t.sharePct) ? t.sharePct : 0), 0);
+  $('sg-sum').textContent = 'Shares add up to ' + sum + '%' + (sum === 100 ? '.' : ' (they must add up to 100%).');
+  $('sg-sum').classList.toggle('ws-warn', sum !== 100);
+  for (const f of SG_FIELDS) sgEl(f).removeAttribute('aria-invalid');
+  const why = gap ? { field: gap, text: 'Target ' + gap.slice(1) + ' needs target ' + (+gap.slice(1) - 1) + ' (fill the targets in order).' }
+    : OS.checkStrategy(s, { others: stratList(), hotkeys: DS.hk, page: true });
+  if (why) { if (why.field && sgEl(why.field)) sgEl(why.field).setAttribute('aria-invalid', 'true'); if (SG.dirty) sgErr(why.text, 'warn'); return null; }
+  const cb = OS.checkWire(OS.toWire(s), core.TR.maxBracketTicks);
+  if (cb) { if (SG.dirty) sgErr('ChartBridge on this PC would refuse it: ' + cb, 'warn'); return s; }
+  if (SG.dirty && !SG.closeAsked) sgErr('', '');
+  return s;
+}
+function saveStrategy() {
+  if (deskMode() !== 'desk') { sgErr('Not saved: ' + (DESK.error || 'The Desk has not answered.') + ' Your edit stays in the form.', 'warn'); return; }
+  const { gap, s } = formStrategy();
+  const why = gap ? { text: 'Target ' + gap.slice(1) + ' needs target ' + (+gap.slice(1) - 1) + '.' } : OS.checkStrategy(s, { others: stratList(), hotkeys: DS.hk, page: true });
+  if (why) { SG.dirty = true; checkForm(); sgErr('Not saved: ' + why.text, 'warn'); return; }
+  const list = stratList().slice(), i = list.findIndex(x => x.id === s.id);
+  if (i >= 0) list[i] = s; else list.push(s);
+  const next = { rev: DS.st ? DS.st.rev : 0, strategies: list };
+  const dw = OS.checkStrategiesDoc(next, DS.hk);
+  if (dw) { sgErr('Not saved: ' + dw, 'warn'); return; }
+  sgErr('Saving in The Desk...', '');
+  $('sg-save').disabled = true;
+  DESK.save('strategies', next).then(r => {
+    loadDeskCache();
+    if (r.ok) { SG.id = s.id; SG.dirty = false; renderStrategies(); sgErr('Saved ' + s.name + ' in The Desk: every PC has it.', 'ok'); }
+    else { renderStrategies(); sgErr(r.error + ' Your edit stays in the form: Save again.', 'warn'); }
+    $('sg-save').disabled = deskMode() !== 'desk';
+    deskChanged();
+  });
+}
+function deleteStrategy() {
+  const x = stratList().find(y => y.id === SG.id);
+  if (!x || deskMode() !== 'desk') return;
+  if (SG.delAsked !== x.id) { SG.delAsked = x.id; sgErr('Delete ' + x.name + ' on every PC? Click Delete again.', 'warn'); return; }
+  SG.delAsked = '';
+  const next = { rev: DS.st.rev, strategies: stratList().filter(y => y.id !== x.id) };
+  sgErr('Deleting in The Desk...', '');
+  DESK.save('strategies', next).then(r => {
+    loadDeskCache();
+    if (r.ok) { SG.id = ''; fillStrategy(null); renderStrategies(); sgErr('Deleted ' + x.name + '.', 'ok'); }
+    else { renderStrategies(); sgErr(r.error + ' Delete it again.', 'warn'); }
+    deskChanged();
+  });
+}
+$('wsStrat').addEventListener('click', () => openStrategies());
+
 /* ---------------- saving */
 function save() { W.saveLayout(store, layout, { panels }); }
 
@@ -1073,6 +1631,39 @@ const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(list => 
 }) : null;
 /* A panel whose header menu is open sits above its neighbours (workspace.css .ws-up). */
 const raise = (el, on) => { const p = el && el.closest && el.closest('.ws-panel'); if (p) p.classList.toggle('ws-up', on); };
+
+/* ---------------- maximize and restore (1.16.0, Anthony): a panel fills the grid (the others stay as they are, hidden
+   behind it, and keep running), from the square beside its x or the Maximize panel hotkey (Settings > Hotkeys, none by
+   default): the panel under the mouse, or back again. Not saved: a reload shows the layout as arranged. */
+const MAX_ICON = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" rx=".5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+const RESTORE_ICON = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><rect x="1.5" y="3.5" width="7" height="7" rx=".5" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M3.5 3.5v-2h7v7h-2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+let maxId = null, pointerPanel = null;
+function setMaxButton(v, on) {
+  const b = v.head.querySelector('[data-act="max"]');
+  if (!b) return;
+  b.innerHTML = on ? RESTORE_ICON : MAX_ICON;
+  b.setAttribute('aria-pressed', String(on));
+  const t = on ? 'Restore panel' : 'Maximize panel', k = viewKeys().maximize;
+  b.setAttribute('aria-label', t); b.title = t + (k ? ' (' + k + ')' : '');
+}
+function toggleMax(id) {
+  closePops();
+  const was = maxId;
+  if (was) restoreMax();
+  if (!id || was === id) return;
+  const v = views.get(id); if (!v) return;
+  maxId = id;
+  grid.classList.add('ws-maxed'); v.el.classList.add('ws-max-on');
+  v.el.style.gridColumn = '1 / -1'; v.el.style.gridRow = '1 / -1';
+  setMaxButton(v, true);
+}
+function restoreMax() {
+  const v = maxId ? views.get(maxId) : null;
+  maxId = null;
+  grid.classList.remove('ws-maxed');
+  if (v) { v.el.classList.remove('ws-max-on'); place(v.el, v.panel); setMaxButton(v, false); }
+}
+grid.addEventListener('pointerover', e => { const el = e.target.closest && e.target.closest('.ws-panel'); if (el && el.dataset.id) pointerPanel = el.dataset.id; });
 
 /* The slim header (Anthony, 2026-10-01): the handle, instrument and bars (a click changes them), the chart's own
    Indicators button, a small menu with the drawing tools and Reset view, and the x. */
@@ -1088,10 +1679,14 @@ function addView(p) {
   const el = document.createElement('section');
   el.className = 'ws-panel ' + p.type;
   el.dataset.id = p.id; el.dataset.type = p.type;
-  const close = '<button type="button" class="ws-x" data-act="close" aria-label="Close panel" title="Close panel">✕</button>';
+  /* 1.16.0 (Anthony): maximize and restore, the Windows way (a square; two squares while maximized), beside the x */
+  const close = '<button type="button" class="ws-ic ws-max" data-act="max" aria-pressed="false" aria-label="Maximize panel" title="Maximize panel">' + MAX_ICON + '</button>' +
+    '<button type="button" class="ws-x" data-act="close" aria-label="Close panel" title="Close panel">✕</button>';
   let mid = '';
   if (p.type === 'chart') {
     mid = '<button type="button" class="ws-view" data-act="view" aria-haspopup="dialog" aria-expanded="false"><span class="ws-name"></span><span class="ws-tf"></span><span class="ws-caret" aria-hidden="true"></span></button>' +
+      '<span class="chart-live ws-lv ws-badge"></span>' +    // 1.16.0: ARMED and the connection (the chart has no text on it)
+      '<span class="ws-limit" role="status"></span>' +       // 1.16.0: the ticket's account near its limit (the Account page's warning)
       '<span class="chart-live ws-lv ws-ind"></span>' +
       '<button type="button" class="ws-ic ws-more" data-act="more" aria-haspopup="menu" aria-expanded="false" aria-label="Drawing tools and Reset view" title="Drawing tools, Reset view">⋯</button>';
   } else if (p.type === 'tape') {
@@ -1099,7 +1694,10 @@ function addView(p) {
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
   } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
-  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>';
+  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>' +
+    '<button type="button" class="ws-ic ws-more" data-act="qbrows" aria-haspopup="true" aria-expanded="false" aria-label="Markets shown on this Quote board" title="Markets shown on this board">⋯</button>';
+  else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
+  else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
   else mid = '<span class="ws-name">Order ticket</span><span class="ws-fill"></span>' +
     '<span class="ws-slot" data-slot="copy"></span>';      // the Copy chip's place (the copier comes later)
   // 1.14.0: a resize handle on every edge and corner (the bottom right one keeps its grip lines); moving stays on the header
@@ -1114,6 +1712,8 @@ function addView(p) {
   else if (p.type === 'tape') mountTape(v);
   else if (p.type === 'account') mountAccount(v);        // 1.15.0
   else if (p.type === 'quotes') mountQuotes(v);
+  else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
+  else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
   else { v.destroy = () => { for (const f of v.cleanups.splice(0)) f(); }; renderTicketPanel(); }
   // the handle is the whole header, except its buttons and the chart's Indicators menu
   v.head.addEventListener('pointerdown', e => { if (!e.target.closest('button, select, input, .ws-lv')) startDrag(e, v, 'move'); });
@@ -1121,9 +1721,11 @@ function addView(p) {
   v.head.addEventListener('click', e => {
     const b = e.target.closest('[data-act]'); if (!b || !v.head.contains(b) || b.closest('.ws-lv')) return;
     if (b.dataset.act === 'close') closePanel(p.id);
+    else if (b.dataset.act === 'max') toggleMax(p.id);
     else if (b.dataset.act === 'gear') openTapeGear(v, b);
     else if (b.dataset.act === 'view') openViewPop(v, b);
     else if (b.dataset.act === 'more') openMore(v, b);
+    else if (b.dataset.act === 'qbrows') openQbRows(v, b);
   });
   return v;
 }
@@ -1142,16 +1744,20 @@ function mountChart(v) {
     onColors: () => { for (const o of chartViews()) if (o !== v) o.pane.refreshColors(); },
     onStatus: s => {
       v.state = s.state; syncConn();
-      if (s.state === 'live' && v.pane) { const n = v.pane.element.querySelector('[id$="lgName"]'); v.contract = n ? n.textContent : ''; headChart(v); }
+      if (s.state === 'live' && v.pane) { v.contract = typeof s.contract === 'string' ? s.contract : ''; headChart(v); }   // 1.16.0: from the status (no legend)
     },
   });
   v.pane = pane;
   pane.setTrade(chartTrade(v));                             // its instrument's orders, position and fills on the ticket's account
-  v.head.querySelector('.ws-ind').append(pane.indicators, pane.legendToggle, pane.chips);   // the chart's own Indicators button and menu, its header text toggle (1.14.0), its chips
+  // the chart's own Indicators button and menu, its chips; 1.16.0: no header text toggle (no text on the chart), and its
+  // ARMED and connection badge in the header
+  v.head.querySelector('.ws-ind').append(pane.indicators, pane.chips);
+  if (pane.badge) v.head.querySelector('.ws-badge').append(pane.badge);
+  followBars(v);                                            // the Data Box (1.16.0), when the layout has one
   const indBtn = pane.indicators.querySelector('.ind-btn');
   const mo = typeof MutationObserver === 'function' && indBtn ? new MutationObserver(() => raise(v.el, indBtn.getAttribute('aria-expanded') === 'true')) : null;
   if (mo) mo.observe(indBtn, { attributes: true, attributeFilter: ['aria-expanded'] });
-  v.destroy = () => { if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.legendToggle.remove(); pane.chips.remove(); };
+  v.destroy = () => { if (v.offBar) v.offBar(); if (mo) mo.disconnect(); pane.destroy(); pane.indicators.remove(); pane.chips.remove(); if (pane.badge) pane.badge.remove(); };
 }
 function viewChanged(v, nv) {
   const p = v.panel;
@@ -1160,6 +1766,7 @@ function viewChanged(v, nv) {
   if (nv.tf === 'range') p.range = nv.range; else delete p.range;
   headChart(v); save();
   if (v.pane) v.pane.setTrade(chartTrade(v));
+  if (botDesk) botDesk.chartsChanged();                     // 1.16.0: ghost marks follow the chart's instrument
 }
 /* The first chart of a new default layout starts with the single chart page's indicators (its main pane's defaults);
    any other new pane starts with none (Anthony's rule for new panes). */
@@ -1173,34 +1780,38 @@ function seedMainIndicators(l) {
 function closePanel(id) {
   const v = views.get(id); if (!v) return;
   closePops();
+  if (maxId === id) restoreMax();
   if (v.panel.type === 'ticket') releaseTicket();           // no window has the ticket until one adds it
   v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); views.delete(id);
   panels = panels.filter(p => p.id !== id);
   save(); syncConn(); placeColors(); syncAddMenu();
+  if (botDesk) botDesk.chartsChanged();
 }
 
 function addPanel(type) {
   closePops();
+  if (maxId) restoreMax();                                  // the new panel is seen where it goes
   if (panels.length >= W.MAX_PANELS) { note('At most ' + W.MAX_PANELS + ' panels: close one first', true); return; }
   if (type === 'ticket' && panels.some(q => q.type === 'ticket')) { note('This layout has its order ticket already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : type === 'ticket' || type === 'account' || type === 'quotes' || type === 'databox' || type === 'accounts' ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
   save(); syncConn(); placeColors(); syncAddMenu();
   if (type === 'ticket') takeTicket(ok => { if (!ok && views.has(p.id) && !holds()) closePanel(p.id); });
-  else if (type === 'chart') renderCharts();
+  else if (type === 'chart') { renderCharts(); if (botDesk) botDesk.chartsChanged(); }
 }
 
 /* ---------------- drag and resize: the ghost shows the snapped cells; a place that overlaps is refused */
 let dragging = null;
 function startDrag(e, v, mode, edge) {
   if (e.button !== 0 || dragging) return;
+  if (maxId) { if (mode === 'size') note('Restore the panel to resize it', true); return; }   // 1.16.0: a maximized panel stays put
   e.preventDefault();
   closePops();
-  const p = v.panel, m = W.metrics(grid.clientWidth, grid.clientHeight), sx = e.clientX, sy = e.clientY;
+  const p = v.panel, m = W.metrics(grid.clientWidth, grid.clientHeight, gridGap(), gridGap()), sx = e.clientX, sy = e.clientY;
   const target = e.currentTarget;
   try { target.setPointerCapture(e.pointerId); } catch (err) { /* fine without */ }
   let r = { x: p.x, y: p.y, w: p.w, h: p.h }, ok = true;
@@ -1413,51 +2024,165 @@ function quoteOpen(q) {
 }
 const quoteOf = r => QT.get(r) || null;
 
-/* ---------------- the Quote board: NQ, MNQ, ES, MES (the mockup's order); read only */
-const QUOTE_ROOTS = ['NQ', 'MNQ', 'ES', 'MES'];
+/* ---------------- the Quote board: NQ and ES (1.16.0, Anthony 2026-10-05; the micros' rows are gone); read only.
+   1.16.0 (item 20): then the quote-only markets ChartBridge 0.4.0 serves (hello's quoteOnly: YM, RTY, GC, SI, CL, 6E, ZN,
+   ZB by default), compact rows after NQ and ES, bonds in NinjaTrader's 32nds (priceFormat "32nds": ZB 118'15, ZN 104'035).
+   Display only: a quote-only market never gets an order control (the ticket and the charts keep W.ROOTS). */
+const QUOTE_ROOTS = W.QUOTE_ROOTS;
+const AQ = window.AccountsCore || null;
+const quoteRootsNow = () => (AQ ? AQ.quoteRoots(instruments, QUOTE_ROOTS) : QUOTE_ROOTS.slice());
+/* a price, a change, in the instrument's own format (32nds for ZN and ZB) */
+const qPx = (r, p) => (AQ && instruments[r] && instruments[r].quoteOnly ? AQ.priceText(p, instruments[r]) : U.fmtPrice(p, precisionOf(r)));
+const qChg = (r, x) => (AQ && instruments[r] && instruments[r].quoteOnly ? AQ.changeText(x, instruments[r]) : W.fmtSignedNum(x, precisionOf(r)));
 /* Rows are small grids (ws-grid-rows, workspace.css): on a narrow panel the change and percent, and the high and low, stack
-   in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel). */
+   in one cell each, so the board fits a 2-column panel at 1366 px with nothing cut and nothing scrolling (fitPanel); the
+   quote-only rows scroll inside the board when it is short. */
+/* 1.16.0: the rows this board shows: every row it can show (NQ, ES, then the quote-only markets hello lists) but those its
+   panel hides (panel.hide, saved with the layout; a hidden root hello no longer lists is ignored) */
+const quoteRowsOf = p => { const hide = W.cleanHide(p.hide); return quoteRootsNow().filter(r => !hide.includes(r)); };
 function mountQuotes(v) {
-  v.body.innerHTML = '<div class="qb-wrap gr gr-qb" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
-    '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
-    QUOTE_ROOTS.map(r => `<div class="gr-row" role="row" data-root="${r}"><span class="b" role="cell">${r}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
-    '<p class="qb-foot" data-q="foot"></p></div>';
-  const offs = QUOTE_ROOTS.map(watchQuote);
-  const cells = {};
-  for (const tr of v.body.querySelectorAll('[data-root]')) { const c = cells[tr.dataset.root] = {}; for (const td of tr.querySelectorAll('[data-q]')) c[td.dataset.q] = td; }
+  let roots = [], offs = [], cells = {};
+  const build = () => {
+    for (const f of offs) f();
+    roots = quoteRowsOf(v.panel);
+    const qo = r => !QUOTE_ROOTS.includes(r);
+    v.body.innerHTML = '<div class="qb-wrap gr gr-qb' + (roots.some(qo) ? ' qb-more' : '') + '" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
+      '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
+      (roots.length ? '' : '<p class="qb-empty" role="note">No markets shown: pick some in the menu</p>') +
+      roots.map((r, i) => `<div class="gr-row${qo(r) ? ' qb-q' + (i && !qo(roots[i - 1]) ? ' qb-first' : '') : ''}" role="row" data-root="${esc(r)}"><span class="b" role="cell">${esc(r)}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
+      '<p class="qb-foot" data-q="foot"></p></div>';
+    offs = roots.map(watchQuote);
+    cells = {};
+    for (const tr of v.body.querySelectorAll('[data-root]')) { const c = cells[tr.dataset.root] = {}; for (const td of tr.querySelectorAll('[data-q]')) c[td.dataset.q] = td; }
+  };
   const set = (el, text, cls) => { if (el.textContent !== text) el.textContent = text; const k = cls || ''; if (el.className !== k) el.className = k; };
   const render = () => {
     let noSettle = 0;
-    for (const r of QUOTE_ROOTS) {
-      const q = quoteOf(r), c = cells[r], dec = precisionOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null, pct: null };
+    for (const r of roots) {
+      const q = quoteOf(r), c = cells[r], x = q ? W.quoteChange(q.last, q.settle) : { chg: null, pct: null };
+      if (!c) continue;
       const cls = x.chg > 0 ? 'up' : x.chg < 0 ? 'dn' : '';
-      set(c.last, q && q.last !== null ? U.fmtPrice(q.last, dec) : '-', 'r');
-      set(c.chg, W.fmtSignedNum(x.chg, dec), cls);
+      set(c.last, q && q.last !== null ? qPx(r, q.last) : '-', 'r');
+      set(c.chg, qChg(r, x.chg), cls);
       set(c.pct, x.pct === null ? '' : W.fmtSignedNum(x.pct, 2) + '%', cls);
-      set(c.high, q && q.high !== null ? U.fmtPrice(q.high, dec) : '');
-      set(c.low, q && q.low !== null ? U.fmtPrice(q.low, dec) : '');
+      set(c.high, q && q.high !== null ? qPx(r, q.high) : '');
+      set(c.low, q && q.low !== null ? qPx(r, q.low) : '');
       if (q && q.last !== null && q.settle === null) noSettle++;
     }
     const foot = noSettle ? 'Change from the prior settlement: blank until ChartBridge 0.3.7 or newer gives one.' : '';
-    for (const r of QUOTE_ROOTS) {                         // a tight board shows the last and percent: the rest in the row's tooltip
-      const q = quoteOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null }, dec = precisionOf(r);
-      const tip = r + (q && q.last !== null ? ' ' + U.fmtPrice(q.last, dec) : '') + (x.chg !== null ? ', ' + W.fmtSignedNum(x.chg, dec) + ' from the prior settlement' : '') +
-        (q && q.high !== null ? ', high ' + U.fmtPrice(q.high, dec) + ', low ' + U.fmtPrice(q.low, dec) : '');
+    for (const r of roots) {                               // a tight board shows the last and percent: the rest in the row's tooltip
+      const q = quoteOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null };
+      if (!cells[r]) continue;
+      const tip = r + (q && q.last !== null ? ' ' + qPx(r, q.last) : '') + (x.chg !== null ? ', ' + qChg(r, x.chg) + ' from the prior settlement' : '') +
+        (q && q.high !== null ? ', high ' + qPx(r, q.high) + ', low ' + qPx(r, q.low) : '') + (instruments[r] && instruments[r].quoteOnly ? ' (quote only: ChartBridge takes no order for it)' : '');
       const tr = cells[r].last.parentElement;
       if (tr.title !== tip) tr.title = tip;
     }
     const f = v.body.querySelector('[data-q="foot"]');
     if (f.textContent !== foot) { f.textContent = foot; f.hidden = !foot; }
   };
+  build();
   quoteSubs.add(render);
   render();
   v.state = 'live';
-  v.quotes = { render };
+  /* sync: hello again (another ChartBridge, or its quoteRoots changed): the rows follow when the list changed */
+  v.quotes = { render, sync: () => { if (quoteRowsOf(v.panel).join() !== roots.join()) { build(); render(); } }, roots: () => roots.slice() };
   /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
      with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
   const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
   v.destroy = () => { unfit(); quoteSubs.delete(render); for (const f of offs) f(); };
 }
+/* ---------------- the Data Box (1.16.0, Anthony): the bar under the cursor on any chart (its open, high, low, close, range,
+   volume, buys and sells, delta, the largest trade and the bubbles, its open time and how long it lasted); the newest bar of
+   the last chart hovered when the mouse is on none. Read only. The charts tell it when their bar may have changed (ChartLive
+   onBar, only while a Data Box is open: no cost otherwise); a cell is written only when its text changes. */
+const dataBoxes = () => [...views.values()].filter(v => v.dataBox);
+let dbChart = null;                                       // the chart view the Data Box follows
+const DB_ROWS = [
+  ['time', 'Opened'], ['dur', 'Lasted'], ['o', 'Open'], ['h', 'High'], ['l', 'Low'], ['c', 'Close'], ['rng', 'Range'], ['v', 'Volume'],
+  ['buy', 'Buy vol'], ['sell', 'Sell vol'], ['dlt', 'Delta'], ['big', 'Largest print'], ['bub', 'Bubbles'], ['hov', 'Bubble'],
+  ['tape', 'Tape to frame'],            // 1.16.0 debug: ChartBridge's receipt of a trade to the frame that drew it
+];
+function mountDataBox(v) {
+  v.body.innerHTML = '<div class="db gr" role="table" aria-label="Data Box: the bar under the cursor">' +
+    '<div class="db-head" data-db="head" role="row"></div>' +
+    DB_ROWS.map(([k, name]) => `<div class="db-row" role="row" data-row="${k}"><span class="db-k" role="rowheader">${esc(name)}</span><span class="db-v" role="cell" data-db="${k}"></span></div>`).join('') +
+    '<p class="db-note" data-db="note"></p></div>';
+  const cells = {};
+  for (const el of v.body.querySelectorAll('[data-db]')) cells[el.dataset.db] = el;
+  const rows = {};
+  for (const el of v.body.querySelectorAll('[data-row]')) rows[el.dataset.row] = el;
+  const src = v.head.querySelector('.ws-db-src');
+  const txt = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+  const set = (el, text, cls) => { txt(el, text); const k = 'db-v' + (cls ? ' ' + cls : ''); if (el.className !== k) el.className = k; };
+  const show = (k, on) => { const r = rows[k]; if (r && r.hidden === on) r.hidden = !on; };
+  const render = (c, x, second) => {
+    const name = c ? c.panel.root + ' ' + W.tfLabel(c.panel.tf, c.panel.tf === 'range' ? c.panel.range : 0) : '';
+    if (src.textContent !== name) src.textContent = name;
+    if (!x) {
+      txt(cells.head, c ? 'Waiting for ' + c.panel.root : 'Add a chart: the Data Box shows the bar under the cursor on any chart.');
+      for (const [k] of DB_ROWS) { set(cells[k], ''); show(k, k !== 'hov'); }
+      txt(cells.note, ''); cells.note.hidden = true;
+      return;
+    }
+    const dp = x.dp, px = p => U.fmtPrice(p, dp), tick = x.tick > 0 ? x.tick : 0.25;
+    txt(cells.head, (x.hovering ? 'Under the cursor' : 'Newest bar') + (x.forming ? ' · forming' : ''));
+    cells.head.classList.toggle('live', !x.hovering);
+    set(cells.time, U.fmtDay(x.t) + ' ' + W.fmtClock(x.t) + (Math.abs(x.t - Math.round(x.t)) > 1e-6 ? '.' + Math.floor((x.t % 1) * 10 + 1e-6) : ''));
+    set(cells.dur, W.fmtSpan(Math.max(0, x.end - x.t)) + (x.forming ? ' so far' : ''));   // never below 0 (the data's clock a little ahead of the PC's)
+    set(cells.o, px(x.o)); set(cells.h, px(x.h)); set(cells.l, px(x.l)); set(cells.c, px(x.c), x.c > x.o ? 'up' : x.c < x.o ? 'dn' : '');
+    set(cells.rng, px(x.h - x.l) + ' (' + Math.round((x.h - x.l) / tick) + ' t)');
+    set(cells.v, U.fmtPrice(x.v, 0));
+    const d = x.delta;
+    set(cells.buy, d ? U.fmtPrice(d.buy, 0) : '-', d ? 'up' : 'mut');
+    set(cells.sell, d ? U.fmtPrice(d.sell, 0) : '-', d ? 'dn' : 'mut');
+    const dl = d ? d.buy - d.sell : null;
+    set(cells.dlt, dl === null ? '-' : W.fmtSignedNum(dl, 0) || '0', dl > 0 ? 'up' : dl < 0 ? 'dn' : d ? '' : 'mut');
+    set(cells.big, d && d.big > 0 ? U.fmtPrice(d.big, 0) + ' contracts' : '-', d ? '' : 'mut');
+    const why = { off: 'Buy and sell volume, delta and the largest print come from the chart\'s Cumulative delta: turn it on in Indicators.',
+      old: 'This ChartBridge sends no trade sides: no buy and sell volume.', htf: 'No buy and sell volume on 4h, 1D and 1W bars.',
+      building: 'Counting the trades: buy and sell volume shortly.', before: 'Buy and sell volume count from ' + (x.deltaFrom !== null ? W.fmtClock(x.deltaFrom) + ' ET' : 'the page\'s opening') + ': none for this bar.' }[x.deltaWhy] || '';
+    txt(cells.note, why); if (cells.note.hidden !== !why) cells.note.hidden = !why;
+    const b = x.bubbles;
+    set(cells.bub, !b ? 'Off on this chart' : !b.n ? 'None' : b.n + (b.n > 1 ? ', largest ' : ': ') + (b.side > 0 ? 'Buy ' : 'Sell ') + U.fmtPrice(Math.round(b.max), 0),
+      !b ? 'mut' : b.n ? (b.side > 0 ? 'up' : 'dn') : '');
+    const h = x.bubble;
+    show('hov', !!h);
+    if (h) set(cells.hov, (h.side > 0 ? 'Buy ' : 'Sell ') + U.fmtPrice(Math.round(h.v), 0) + ' @ ' + px(h.p) + ' ' + W.fmtClock(h.t), h.side > 0 ? 'up' : 'dn');
+    if (second || !cells.tape.textContent) {          // once a second (the stamp is one number per frame, kept by the chart)
+      const st = typeof c.pane.timing === 'function' ? c.pane.timing() : {};
+      set(cells.tape, typeof st.drawMax === 'number' ? fmtDelay(st.draw) + ' (worst ' + fmtDelay(st.drawMax) + ')' : '-', 'mut');
+    }
+  };
+  v.state = 'live';
+  v.dataBox = { render };
+  const unfit = fitPanel(v, (w, h) => ({ 'db-wide': w >= 360 && h < 15 * 19 + 40, 'db-short': h < 8 * 19 + 40 }));
+  v.destroy = () => { unfit(); delete v.dataBox; followAll(); };
+  followAll();
+  renderDataBoxes();
+}
+/* The charts' bar changes, while a Data Box is open: the chart hovered becomes the one followed. */
+function followBars(v) {
+  if (v.offBar) { v.offBar(); v.offBar = null; }
+  if (!dataBoxes().length || !v.pane || typeof v.pane.onBar !== 'function') return;
+  v.offBar = v.pane.onBar(hovering => {
+    if (hovering && dbChart !== v) dbChart = v;
+    if (dbChart === v) renderDataBoxes();
+  });
+}
+function followAll() {
+  for (const v of chartViews()) followBars(v);
+  if (dbChart && (!views.has(dbChart.panel.id) || views.get(dbChart.panel.id) !== dbChart)) dbChart = null;
+}
+function renderDataBoxes(second) {
+  const boxes = dataBoxes();
+  if (!boxes.length) return;
+  if (!dbChart || views.get(dbChart.panel.id) !== dbChart) dbChart = chartViews()[0] || null;
+  const x = dbChart && typeof dbChart.pane.barInfo === 'function' ? dbChart.pane.barInfo() : null;
+  for (const b of boxes) b.dataBox.render(dbChart, x, second === true);
+}
+setInterval(() => renderDataBoxes(true), 1000);                      // the forming bar's "so far", and a chart closed or reloaded
+
 /* The Account panel's and the Quote board's classes from their size (`classes(width, height)` -> { class: on }), from a
    ResizeObserver (container queries cost every chart frame, perf:workspace). Returns the undo. */
 function fitPanel(v, classes) {
@@ -1475,7 +2200,7 @@ const accountViews = () => [...views.values()].filter(v => v.account);
 const SIDE_WORD = { buy: 'Buy', sell: 'Sell' };
 function orderTypeName(o) {
   if (o.plan) return 'Planned ' + (o.plan.role === 'stop' ? 'stop' : 'target');
-  const kind = o.role === 'target' ? 'target' : o.role === 'stop' ? 'stop' : o.kind === 'limit' ? 'limit' : o.kind === 'stop' ? 'stop' : o.kind === 'stopLimit' ? 'stop limit' : o.kind === 'market' ? 'market' : String(o.kind || 'order');
+  const kind = o.role === 'target' ? 'target' : o.role === 'stop' ? 'stop' : o.kind === 'limit' ? 'limit' : o.kind === 'stop' ? 'stop' : o.kind === 'stopLimit' ? 'stop limit' : o.kind === 'mit' ? 'MIT' : o.kind === 'market' ? 'market' : String(o.kind || 'order');
   return SIDE_WORD[o.side] + ' ' + kind;
 }
 function mountAccount(v) {
@@ -1591,6 +2316,37 @@ let accountRaf = 0;
 function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
 setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
+/* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on the window's one v3 connection (AF, shared with the ticket's 0.4.0 parts and the Bot tab).
+   Its figures follow the feed (accounts at most once a second) and the prices (quoteSubs, at most 4 times a second). */
+const accountPages = () => [...views.values()].filter(v => v.accountPage);
+function mountAccountsPage(v) {
+  v.state = 'live';
+  if (!AF) { v.body.innerHTML = '<p class="ac-empty">The Account page could not load (accounts.js): reload the window.</p>'; return; }
+  const ap = window.AccountsPage.mount(v, { feed: AF, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
+  v.accountPage = ap;
+  v.destroy = () => { ap.destroy(); delete v.accountPage; };
+}
+let accountPageRaf = 0;
+function renderAccountPages() { if (!accountPageRaf && accountPages().length) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); }); }
+setInterval(renderAccountPages, 1000);                   // the clock (Gone's since, a new trading day)
+/* Item 15: a chart trading an account near its limit says so in its header (amber at 70 percent of the room used to the
+   closer of the daily loss and the trailing drawdown, red at 90). Every chart here shows the ticket's account. Written only
+   when the text changes; nothing in the chart's draw loop. */
+function renderLimits() {
+  const acct = ticketAccount(), s = AF && acct ? AF.limit(acct) : null, lvl = s ? s.level : '';
+  const word = lvl === 'red' ? 'LIMIT ' : 'Limit ', pct = lvl ? Math.round(s.pct * 100) + '%' : '';
+  const text = lvl ? word + pct : '';                  // a narrow chart shows the percent only (accounts.css)
+  const tip = lvl ? acct + ': ' + Math.round(s.pct * 100) + '% of the room used to its ' + (s.closer === 'dd' ? 'trailing drawdown' : 'daily loss limit') + (AQ ? ' (' + AQ.limitText(s) + ')' : '') + '. The Account page has the detail.' : '';
+  for (const v of chartViews()) {
+    const el = v.limitEl || (v.limitEl = v.head.querySelector('.ws-limit'));
+    if (!el) continue;
+    if (el.textContent !== text) el.innerHTML = lvl ? '<span class="ws-limit-w">' + word + '</span>' + pct : '';
+    const cls = 'ws-limit' + (lvl ? ' ' + lvl : '');
+    if (el.className !== cls) el.className = cls;
+    if (el.title !== tip) el.title = tip;
+  }
+}
+
 /* ---------------- popovers (Add panel, Settings, a chart's instrument and bars or its menu, a tape's gear): one open at a
    time; an outside click or Esc closes */
 let pop = null;
@@ -1666,14 +2422,42 @@ $('wsView').addEventListener('change', e => {
 });
 $('wsView').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('[data-f="range"]')) { e.preventDefault(); e.target.dispatchEvent(new Event('change', { bubbles: true })); } });
 
+/* 1.16.0 (Anthony 2026-10-07): a Quote board's markets: every row it can show, each with a checkbox; an unchecked row is
+   hidden on this board only, saved with the layout (panel.hide). Display only. */
+function openQbRows(v, anchor) {
+  toggle($('wsQbRows'), anchor, () => {
+    const el = $('wsQbRows'), hide = W.cleanHide(v.panel.hide);
+    el.dataset.id = v.panel.id;
+    el.innerHTML = '<p class="ws-menu-note">Shown on this board</p>' + quoteRootsNow().map(r =>
+      `<label class="qb-pick"><input type="checkbox" data-qroot="${esc(r)}"${hide.includes(r) ? '' : ' checked'}><span>${esc(r)}</span>${instruments[r] && instruments[r].quoteOnly ? '<span class="qb-pick-q">quote only</span>' : ''}</label>`).join('');
+    openPop(el, anchor);
+  });
+}
+$('wsQbRows').addEventListener('change', e => {
+  const i = e.target.closest('input[data-qroot]'), v = views.get($('wsQbRows').dataset.id);
+  if (!i || !v || !v.quotes) return;
+  const r = i.dataset.qroot, hide = W.cleanHide(v.panel.hide).filter(x => x !== r);
+  if (!i.checked) hide.push(r);
+  if (hide.length) v.panel.hide = W.cleanHide(hide); else delete v.panel.hide;
+  save(); v.quotes.sync();
+});
+
 /* A chart's small menu: Reset view (1.15.0: the drawing tools moved to the ring, a middle-click on the chart). */
 function openMore(v, anchor) {
-  toggle($('wsMore'), anchor, () => { $('wsMore').dataset.id = v.panel.id; openPop($('wsMore'), anchor); });
+  toggle($('wsMore'), anchor, () => {
+    $('wsMore').dataset.id = v.panel.id;
+    // 1.16.0: the bot's trades, faint, on this chart (live/bot.js); only while ChartBridge's bot switch is on
+    const g = $('wsMore').querySelector('[data-do="ghost"]');
+    g.hidden = !(botDesk && botDesk.ghostOffered());
+    if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
+    openPop($('wsMore'), anchor);
+  });
 }
 $('wsMore').addEventListener('click', e => {
   const b = e.target.closest('button'), v = views.get($('wsMore').dataset.id);
   if (!b || !v || !v.pane) return;
   if (b.dataset.do === 'reset') v.pane.chart.reset();
+  else if (b.dataset.do === 'ghost' && botDesk) botDesk.setGhost(v.panel.id, !botDesk.ghostOn(v.panel.id));
   closePops();
 });
 
@@ -1796,7 +2580,13 @@ function renderGeneral() {
   for (const b of $('wsRoom').children) b.setAttribute('aria-pressed', String(+b.dataset.v === room));
   if (document.activeElement !== $('wsAtr')) $('wsAtr').value = s.atr;
   $('wsRangeMode').value = s.rangeMode;
+  const less = !!(window.ChartMotion && window.ChartMotion.reduced());   // 1.16.0: Less motion (the motion kit's own setting)
+  for (const b of $('wsMotion').children) b.setAttribute('aria-pressed', String((b.dataset.v === 'less') === less));
 }
+$('wsMotion').addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b || !window.ChartMotion) return;
+  window.ChartMotion.setReducedMotion(b.dataset.v === 'less'); renderGeneral();
+});
 /* 1.14.0: grid lines (off by default) and the room right of price, for every chart and the single chart page */
 $('wsGridLines').addEventListener('click', e => {
   const b = e.target.closest('button[data-v]'); if (!b || !LP.GRIDS.includes(b.dataset.v)) return;
@@ -1838,14 +2628,66 @@ $('wsHotkeys').innerHTML = `<div class="hk-list" role="group" aria-labelledby="w
     <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
     <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
     <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
+  </div>`).join('')}${W.VIEW_KEYS.map(a => `
+  <div class="hk-row hk-view" data-hk="${a.id}">
+    <label class="hk-name" for="wsHk-${a.id}">${esc(a.name)}</label>
+    <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
+    <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(a.name)} hotkey">Clear</button>
+    <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
   </div>`).join('')}</div>`;
-const hkNote = (id, text, level) => { const el = $('wsHkNote-' + id); el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
-function renderHotkeys() { const HK = readHotkeys(); for (const a of OT.HOTKEY_ACTIONS) $('wsHk-' + a.id).value = HK[a.id]; }
+/* 1.16.0: Merge's, Accept's and Reject's rows exist only while their switch is on (with every switch off, the 1.15 list) */
+const extraRow = a => `
+  <div class="hk-row hk-extra" data-hk="${a.id}">
+    <label class="hk-name" for="wsHk-${a.id}">${esc(OS.keyName(a.id))}</label>
+    <input class="hk-in" id="wsHk-${a.id}" data-hk="${a.id}" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="wsHkNote-${a.id}">
+    <button type="button" class="btn hk-clear" data-hk-clear="${a.id}" aria-label="Clear the ${esc(OS.keyName(a.id))} hotkey">Clear</button>
+    <span class="hk-note" id="wsHkNote-${a.id}" role="status"></span>
+  </div>`;
+const hkNote = (id, text, level) => { const el = $('wsHkNote-' + id); if (!el) return; el.textContent = text; el.className = 'hk-note' + (level ? ' ' + level : ''); };
+function renderHotkeys() {
+  const HK = readHotkeys(), VK = viewKeys();
+  for (const a of OT.HOTKEY_ACTIONS) $('wsHk-' + a.id).value = HK[a.id];
+  for (const a of W.VIEW_KEYS) $('wsHk-' + a.id).value = VK[a.id];
+  /* 1.16.0: Merge and the copilot's Accept and Reject, each only while its switch is on; kept in The Desk only */
+  const mode = deskMode();
+  for (const a of EXTRA_KEYS) {
+    let row = document.querySelector('#wsHotkeys .hk-row[data-hk="' + a.id + '"]');
+    if (core.switchOn(a.sw) && !row) { document.querySelector('#wsHotkeys .hk-list').insertAdjacentHTML('beforeend', extraRow(a)); row = true; }
+    else if (!core.switchOn(a.sw) && row) { row.remove(); row = null; }
+    if (row) $('wsHk-' + a.id).value = DS.hk ? DS.hk.keys[a.id] : '';
+  }
+  for (const el of document.querySelectorAll('#wsHotkeys .hk-in, #wsHotkeys .hk-clear')) {
+    const extra = !!el.closest('.hk-extra'), off = mode === 'readonly' || (extra && mode === 'local');
+    el.classList.toggle('hk-ro', off); el.setAttribute('aria-disabled', String(off));
+  }
+  /* a key The Desk has that this browser keeps for itself (another PC's browser took it): said, never silently dropped */
+  if (mode !== 'local') for (const a of OT.HOTKEY_ACTIONS.concat(W.VIEW_KEYS)) {
+    const c = DS.hk.keys[a.id], why = c && $('wsHk-' + a.id).value !== c ? OT.hotkeyRefused(c) : '';
+    if (why) hkNote(a.id, 'The Desk has ' + c + ' for it, which does nothing on this page: ' + why, 'warn');
+  }
+  renderDeskUi();
+  for (const v of views.values()) setMaxButton(v, maxId === v.panel.id);   // the key in the square's tooltip
+}
+const isViewKey = id => W.VIEW_KEYS.some(a => a.id === id);
+/* a workspace hotkey (1.16.0): never a trading one (checked by the trading hotkeys' own rule, hotkeyFromEvent) */
+function saveViewKey(id, combo) {
+  const next = viewKeys();
+  next[id] = combo;
+  try { store.setItem(W.KEYS.viewKeys, JSON.stringify(next)); } catch (e) { /* blocked */ }
+  if (viewKeys()[id] !== combo) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
+  renderHotkeys();
+  hkNote(id, combo ? 'Saved.' : 'Cleared.', '');
+}
 function saveHotkey(id, combo) {
+  if (deskMode() !== 'local') { saveKeyDesk(id, combo); return; }   // 1.16.0: kept in The Desk, shared by every PC
+  if (EXTRA_KEYS.some(a => a.id === id)) { renderHotkeys(); hkNote(id, 'Not saved: ' + OS.keyName(id) + '\'s key is kept in The Desk, which has not answered on this browser yet.' + (DESK.error ? ' ' + DESK.error : ''), 'warn'); return; }
+  if (isViewKey(id)) { saveViewKey(id, combo); return; }
   const next = Object.assign({}, readHotkeys());
   if (combo) {
     const other = OT.HOTKEY_ACTIONS.find(a => a.id !== id && next[a.id] === combo);
     if (other) { renderHotkeys(); hkNote(id, combo + ' is already ' + other.name + '. Clear it there first.', 'warn'); return; }
+    const view = W.VIEW_KEYS.find(a => viewKeys()[a.id] === combo);    // 1.16.0: nor the workspace's own key
+    if (view) { renderHotkeys(); hkNote(id, combo + ' is already ' + view.name + '. Clear it there first.', 'warn'); return; }
   }
   next[id] = combo;
   if (!prefs.raw.set(HKKEY, next)) { renderHotkeys(); hkNote(id, 'Not saved: this browser blocks site storage.', 'error'); return; }
@@ -1859,7 +2701,10 @@ $('wsHotkeys').addEventListener('keydown', e => {
   const tab = e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey;
   if (!tab) { e.preventDefault(); e.stopPropagation(); }
   if (e.repeat) return;
-  const r = OT.hotkeyFromEvent(e, readHotkeys(), id);
+  if (deskMode() === 'readonly') { hkNote(id, 'Not saved: ' + DESK.error + ' The keys shown are the last copy read, read only.', 'warn'); return; }
+  /* 1.16.0: with the keys in The Desk, one check covers every key (the five, Merge, Maximize, Accept, Reject, each Order
+     Strategy's key and the entry-type modifiers) */
+  const r = deskMode() !== 'local' ? OS.keyFromEvent(e, { key: id }, keyCtx()) : OT.hotkeyFromEvent(e, readHotkeys(), id);
   if (r.error) { hkNote(id, r.error, r.held ? '' : 'warn'); return; }
   saveHotkey(id, r.combo);
 });
@@ -1868,8 +2713,10 @@ $('wsHotkeys').addEventListener('click', e => { const b = e.target.closest('butt
 $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChange(); });
 
 function renderSettings() {
-  renderGeneral(); renderHotkeys();
   for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', '');
+  for (const a of W.VIEW_KEYS.concat(EXTRA_KEYS)) hkNote(a.id, '', '');
+  renderGeneral(); renderHotkeys();
+  if (DS.on) deskRead();                                   // 1.16.0: the shared copy, fresh
   $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
   $('wsPinSec').hidden = !(PIN && PIN.active());
   $('wsResetName').textContent = layout;
@@ -1901,9 +2748,10 @@ function syncSelect() {
 $('wsLayout').addEventListener('change', e => {
   const v = e.target.value;
   e.target.value = layout;
+  // 1.16.0 (Anthony): a new layout starts with no panels (Add panel fills it); Reset still gives the default one
   if (v === '\u0001new') askName('New layout', '', name => {
     if (names().includes(name)) return 'A layout with that name exists';
-    if (!W.saveLayout(store, name, seedMainIndicators(W.defaultLayout()))) return 'Could not save it in this browser';
+    if (!W.saveLayout(store, name, { panels: [] })) return 'Could not save it in this browser';
     openLayout(name); return '';
   });
   else if (v === '\u0001rename') askName('Rename "' + layout + '"', layout, name => {
@@ -1919,11 +2767,44 @@ $('wsLayout').addEventListener('change', e => {
   });
   else if (v && v !== layout) { save(); openLayout(v); }
 });
+/* ---------------- the laptop preset (1.16.0, Anthony): this browser shows two layout tabs, Main and Second, in the top bar,
+   with tight margins (2 px between panels); both start blank and Anthony arranges them. Kept in this browser
+   (live-ws-laptop-v1); the layout list still works. */
+const laptopOn = () => { try { return JSON.parse(store.getItem(W.KEYS.laptop)) === true; } catch (e) { return false; } };
+const gridGap = () => (laptopOn() ? W.GAP_TIGHT : W.GAP);
+function syncLaptop() {
+  const on = laptopOn(), tabs = $('wsTabs');
+  document.body.classList.toggle('ws-tight', on);
+  tabs.hidden = !on;
+  if (on) {
+    const html = W.LAPTOP_TABS.map(n => `<button type="button" role="tab" class="ws-tab" data-tab="${esc(n)}" aria-selected="${n === layout}">${esc(n)}</button>`).join('');
+    if (tabs.dataset.html !== html) { tabs.dataset.html = html; tabs.innerHTML = html; }
+  }
+  $('wsLaptop').textContent = on ? 'Laptop tabs: on (turn off)' : 'Laptop: two blank tabs, Main and Second';
+}
+$('wsTabs').addEventListener('click', e => {
+  const b = e.target.closest('[data-tab]');
+  if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
+  if (!b || b.dataset.tab === layout) return;
+  save(); openLayout(b.dataset.tab);
+});
+$('wsLaptop').addEventListener('click', () => {
+  closePops();
+  if (laptopOn()) { try { store.setItem(W.KEYS.laptop, 'false'); } catch (e) { /* blocked */ } syncLaptop(); return; }
+  const used = W.LAPTOP_TABS.filter(n => { const l = W.readStore(store).layouts[n]; return l && l.panels.length; });
+  confirmBox('Make this browser a laptop: two layout tabs, ' + W.LAPTOP_TABS.join(' and ') + ', both blank, with tight margins. ' +
+    (used.length ? used.join(' and ') + ' lose' + (used.length > 1 ? '' : 's') + ' ' + (used.length > 1 ? 'their' : 'its') + ' panels in this browser. ' : '') + 'Arrange them with Add panel.', 'Make the tabs', () => {
+    for (const n of W.LAPTOP_TABS) W.saveLayout(store, n, { panels: [] });
+    try { store.setItem(W.KEYS.laptop, 'true'); } catch (e) { /* blocked */ }
+    openLayout(W.LAPTOP_TABS[0]);
+  });
+});
+
 function setUrl() {
   const u = new URL(location.href);
   u.searchParams.set('layout', layout);
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
-  syncTitle();
+  syncTitle(); syncLaptop();
 }
 
 /* A small dialog for a name, and one to confirm. */
@@ -2012,6 +2893,7 @@ function teardown() {
   if (core.TR.armed) core.setArmed(false);                 // the ticket is built again: Armed off
   for (const v of views.values()) { v.destroy(); if (sizes) sizes.unobserve(v.el); v.el.remove(); }
   views.clear(); panels = []; colorsOwner = null; TK.el = null; TK.bar = null; TK.view = null;
+  maxId = null; grid.classList.remove('ws-maxed'); dbChart = null;
 }
 function openLayout(name) {
   teardown();
@@ -2024,6 +2906,7 @@ function openLayout(name) {
   setUrl(); syncSelect(); syncConn(); placeColors(); syncAddMenu();
   if (holds() && !panels.some(p => p.type === 'ticket')) releaseTicket();   // a layout without the ticket lets it go
   renderOrders();
+  if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
 }
 
 /* Another window or the single chart page changed something this page uses. Its open layouts stay its own. */
@@ -2035,7 +2918,8 @@ window.addEventListener('storage', e => {
   else if (k === W.KEYS.tapeColors) { tapeColors = W.readTapeColors(store); applyTapeColors(); if (pop && pop.el === $('wsGear')) renderTapeColors(); }
   else if (k === LP.KEYS.settings) { for (const v of chartViews()) v.pane.refreshSettings(); if (pop && pop.el === $('wsSettings')) renderGeneral(); }
   else if (k === LP.KEYS.colors || k === LP.KEYS.indicatorColors) { for (const v of chartViews()) v.pane.refreshColors(); }
-  else if (k === HKKEY) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
+  else if (k === HKKEY || k === W.KEYS.viewKeys) { readHotkeys(); if (pop && pop.el === $('wsSettings')) renderHotkeys(); }
+  else if (k === W.KEYS.laptop) syncLaptop();
   else if (k === LP.KEYS.bracketPresets && TK.bar) { core.readPresets(); TK.bar.render(); }
   else if (k === TICKET_KEY && !holds()) { const r = readTicket().root; if (W.ROOTS.includes(r)) TK.root = r; renderOrders(); }
   else if (k === 'live-account-v1' && !holds() && !holder()) { noTicketAccount(); renderOrders(); }
@@ -2048,9 +2932,38 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   feed: () => hub.stats(),
   /* 1.12.0: the ticket as this window knows it, and a chart's engine (read it; orders still go through the checks) */
   ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
-  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; } };
+  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; },
+  /* 1.16.0: the Account page's connection as this window knows it (read only) */
+  accountFeed: () => (AF ? { v3: AF.S.v3, open: AF.S.open, enabled: AF.S.enabled, switches: Object.assign({}, AF.S.switches), accounts: AF.S.accounts.map(x => x.name), deskState: AF.S.deskState } : null),
+  /* 1.16.0: ChartBridge's switches, The Desk (on, mode, reach) and the active strategy (read it; nothing changes) */
+  v3: () => ({ switches: Object.assign({}, core.TR.switches), desk: { on: DS.on, mode: deskMode(), reach: DESK.reach, url: DESK.url() }, strategy: activeStrategyId() }),
+  /* 1.16.0: the Bot tab (read it; its actions go through ChartBridge's checks) */
+  bot: () => (botDesk ? botDesk.state() : null),
+  /* the Bot tab's entrance played again (test/perf-bot.mjs: the motion kit running while the live chart draws) */
+  botReplay: () => !!(botDesk && botDesk.replay()) };
 
-const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake(); };
+/* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot
+   shows only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */
+let botDesk = null;
+function startBot() {
+  if (!window.BotDesk) return;
+  botDesk = window.BotDesk.create({ v3: AF, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK,
+    copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),            // The Desk's hotkeys document (its accept and reject), as read here
+    charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
+    onTab: on => {
+      document.body.classList.toggle('bt-on', on);
+      if (on) { closePops(); restoreMax(); }
+      const u = new URL(location.href);
+      if (on) u.searchParams.set('tab', 'bot'); else u.searchParams.delete('tab');
+      history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
+    } });
+}
+const start = () => {
+  startBot();
+  openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
+  if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
+};
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
    window that finds another holding it never asks, it shows "Ticket is in the other window". */

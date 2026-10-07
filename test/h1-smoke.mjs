@@ -159,8 +159,9 @@ try {
   await until(async () => (await m2.bars()).length > 5, 'the 4h bars again', 15000);
   const lay4 = await m2.layers();
   check(lay4.vwap === true && lay4.levels === true, '4h: VWAP and levels drawn (from the 1-minute bars)');
-  const vw4 = await page.evaluate(() => { const el = document.querySelector('.ws-panel[data-id="m2"] [id$="lgVw"]'); return el ? el.textContent : ''; });
-  check(/^[\d,]+\.\d\d$/.test(vw4), '4h: the VWAP value in the legend from the 1-minute bars (' + vw4 + ')');
+  // 1.16.0: no legend on a workspace chart: the VWAP the chart draws at the newest 4h bar, from the 1-minute bars
+  const vw4 = await page.evaluate(() => { const c = window.workspace.chart('m2'), n = c.bars().length - 1; return c.vwapAt(n); });
+  check(typeof vw4 === 'number' && isFinite(vw4) && vw4 > 0, '4h: the VWAP the chart draws, from the 1-minute bars (' + vw4 + ')');
   // a refused request: why, and asked again 60 s later
   await control(PORT, 'htf', { fail: 'NinjaTrader did not answer within 15 s; it can be asked again in 60 s (from 2026-10-02 10:15:02.123 ET)' });
   const t1W = Date.now();
@@ -224,12 +225,11 @@ try {
   const head = await page.evaluate(() => [...document.querySelectorAll('.ws-panel .legend')].map(l => l.innerText).join(' | '));
   check(!/vs settle/.test(head) && !/\bBar \d/.test(head) && !/ATR\(/.test(head), 'no countdown, ATR or % change left in the headers');
   check(await page.evaluate(() => document.querySelector('.ws-panel[data-id="m3"] .ws-body > .chart-live').classList.contains('short')), 'm3 is a small panel (short header)');
-  await page.click('.ws-panel[data-id="m3"] .lg-tog');
-  await page.waitForTimeout(1300);
+  // 1.16.0: no header text on a workspace chart at all; the corner readout is the only text on it
+  check(await page.evaluate(() => !document.querySelector('.ws-panel .legend, .ws-panel .lg-tog')), 'no legend and no header text toggle on any workspace chart');
   const c3 = await C(page, 'm3').corner();
-  check(!!c3, 'with the header text off, the corner readout stays (' + (c3 && c3.text) + ')');
+  check(!!c3, 'on a small panel the corner readout stays (' + (c3 && c3.text) + ')');
   await shot(page, 'h1-corner-small-1920.png', await page.locator('.ws-panel[data-id="m3"]').boundingBox());
-  await page.click('.ws-panel[data-id="m3"] .lg-tog');
 
   /* ================================================================ the Quote board */
   console.log('the Quote board');
@@ -238,6 +238,8 @@ try {
   await control(PORT, 'price', { root: 'NQ', p: 31053.75 });
   await control(PORT, 'hold', { root: 'NQ' });
   const qRow = await until(async () => { const r = await page.evaluate(() => { const row = document.querySelector('.ws-panel.quotes [data-root="NQ"]'); return row ? [...row.querySelectorAll('[data-q]')].reduce((o, e) => (o[e.dataset.q] = e.textContent, o), {}) : null; }); return r && r.last === '31,053.75' ? r : null; }, 'the NQ quote', 8000);
+  const qRoots = await page.evaluate(() => [...document.querySelectorAll('.ws-panel.quotes')].map(b => [...b.querySelectorAll('[data-root]')].map(r => r.dataset.root).join(',')));
+  check(qRoots.length > 0 && qRoots.every(x => x === 'NQ,ES'), '1.16.0: every Quote board has rows for NQ and ES only (' + JSON.stringify(qRoots) + ')');
   if (qRow) {
     const chg = 31053.75 - nqSet, pct = chg / nqSet * 100;
     const fmt = (v, d) => (v > 0 ? '+' : v < 0 ? '-' : '') + Math.abs(v).toFixed(d).replace(/\B(?=(\d{3})+(?!\d))/g, ',');

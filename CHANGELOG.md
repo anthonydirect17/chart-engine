@@ -1,5 +1,92 @@
 # Changelog
 
+## 1.16.0 (2026-10-07): the pre-cruise release with ChartBridge 0.4.0 (every new feature on, no Sim locks)
+
+- **No switches, no Sim locks** (Anthony 2026-10-07: "I do not want another arbitrary block ... I am capable of only
+  testing on sim until we clear our tests"). ChartBridge 0.4.0's new features are on as soon as it is installed:
+  `accountChecks`, `orderTypes`, `strategies`, `merge`, `cancelFromList`, `copier` and `bot`. Each `config.txt` key stays
+  only as an optional off line (`merge = off`); `trading.switches` reports the real values; `trading = true` is unchanged
+  (off unless `config.txt` says so). The default is set in one place (`ChartBridgeSwitches.Reset`).
+- **The copier takes real followers** through every account gate (trading on, its checkmark, Connected, not Gone, the caps);
+  every other copier rule stays (never cross zero, the follower's stop at the leader's price, the mass disconnect and
+  Re-arm). `copier.simOnly` is `false`. The Copier tab offers every account but the leader, each marked **SIM** or **LIVE**.
+- **The bot trades the account Anthony chooses** (`botAccount`, kept by ChartBridge in `bot-account.txt`, Sim101 by
+  default), Sim or LIVE, through every gate; refused while the bot has a position or a working entry, when the account is
+  not tradable, and when it is a copier follower or the leader. `bot`, `welcome` and `botProposal` carry `account` and
+  `sim`. The rails are unchanged. The Bot tab shows the account with a SIM or LIVE mark (LIVE in the Armed red, never
+  animated) next to the mode, in the strip, the pop-out and on every proposal; **Change account** lists the tradable
+  accounts, each marked, and asks once in the page before a LIVE one. The mode reads **Auto** (not "Sim auto").
+- Tests: the Mono harness checks "on by default; the off line turns it off" for every switch (its 0.3.8 base runs with every
+  off line written), a real follower copied with every gate, the bot on a chosen LIVE account (auto, proposals, refusals,
+  `bot-account.txt` and a restart), the bot's account never a follower or the leader; the fake bridge defaults to every
+  switch on and models `botAccount`; `smoke:bot` and `smoke:accounts` check the marks, the picker and the in-page question.
+
+- **No text inside a chart** (Anthony 2026-10-07): a mounted chart (every workspace chart, a host's) has no legend and no
+  **Aa** toggle any more (`live-legend-v1` is read by the single chart page only; `legendToggle` is an empty hidden element
+  for hosts that place it). Its badge (`badge`, placed in the workspace's panel header) shows **ARMED · account** while the
+  chart takes orders and the connection when it is not LIVE. The single chart page keeps its 1.14.0 legend.
+- **Stale feed**: no trade for 10 s in RTH (09:30 to 16:00 ET) or 60 s outside it, while the line is live and CME Globex
+  open (not in the 17:00 to 18:00 ET break or the weekend; holidays are not known): a thin amber edge on the chart and
+  "Feed stale 12 s" in its badge (the LIVE pill on the single chart page: "STALE 12 s"); it clears with the next trade.
+  `LivePrefs.staleSeconds`.
+- **The bubble under the mouse** in the corner readout: "Buy 142 · Bar 0:54 · ATR(14) 5.58", set on the bubble event.
+- **Auto-fit and bubbles**: the price scale counts the bubbles in view (only those, their drawn radius, up to 27 px at the
+  default zoom) so none crosses the top of the plot (`util.fitRange`'s `bub`).
+- **Data Box** panel (Add panel > Data Box): the bar under the cursor on any chart, else the newest bar of the last chart
+  hovered: open time, how long it lasted, open, high, low, close, range (points and ticks), volume, buy and sell volume and
+  delta (from the chart's Cumulative delta; says so when it is off), the largest print (the delta core's new `big`), the
+  bubbles on the bar and the one under the mouse, and the tape timing (ChartBridge's receipt of a trade to the frame that
+  drew it, one stamp per frame; the top bar's tooltip has the worst chart's). Cells are written only when they change; the
+  charts tell it only while one is open (`ChartLive.mount`'s `barInfo()`, `onBar(fn)`, `timing()`).
+- **Maximize and restore** a panel: the square beside its x, or the **Maximize panel** hotkey (Settings > Hotkeys, none by
+  default, `live-ws-keys-v1`): never a trading key (both ways refused), never while a box has the focus. Not saved.
+- **Laptop preset** (Settings > Layout): two blank layout tabs, Main and Second, in the top bar, with 2 px margins
+  (`live-ws-laptop-v1`, this browser).
+- **New layout...** starts with no panels (Reset still gives the default layout).
+- **Fonts from the PC**: IBM Plex Mono, Sans and Sans Condensed (the weights in use) in `live/fonts` with `plex.css` and the
+  SIL OFL licence; no Google Fonts link in `index.html` or `single.html`; in the install list; `*.woff2 binary`. A unit
+  test checks that no installed file refers to an http(s) address other than this PC. A narrow Quote board keeps 10 px
+  figures (a 9-figure price was cut at 10.5 px with the real font).
+- **Shared feed**: the live record keeps a rolling window (`LIVE_MAX`, the oldest tenth goes) instead of dropping itself; a
+  panel joining after it rolled gets a load of its own on a new socket and the panels already on the line never reload.
+- Engine: `on('drawn')`, `vwapAt(i)`. Tests: `test/display116.test.js`, `test/offline.test.js`, `test/feed.test.js`,
+  `smoke:display116`; the smokes that read a mounted chart's legend or LIVE pill read its badge (`data-conn`).
+
+- **Quote board: NQ and ES only** (Anthony 2026-10-05): the MNQ and MES rows are gone (`QUOTE_ROOTS` in
+  `live/workspace.js`). Display only: the charts and the order ticket still trade every configured root.
+- **The F5 note clears itself**: "ChartBridge x copied: press F5 when flat" (`live/update-notice.js`) goes as soon as the
+  ChartBridge the page is connected to (its hello version) is x or newer, not at the updater's next run, and comes back if a
+  later hello is older. The page's connections tell the notice their hello version (`ChartUpdateNotice.bridge`, after
+  everything else in `live/live.js`'s hello; the workspace's connection badge); nothing is fetched or sent for it. Display
+  only: the order path is not touched. Tests: `test/update-notice.test.js`, `smoke:update`.
+
+- **Bot tab** (Anthony's addenda 2 to 4; ChartBridge 0.4.0's bot channel, shown only when its `bot` switch is on; with it
+  off the tab says so and offers nothing): its own layout tab with the bot's chart, the Library (one slot; Ready L1 or higher
+  and Research shelves; full screen with the large equity curve, rule card, settings, live record and "Conditions it works
+  best in"; read from `GET /bot-library`, the file's shape in `docs/BOT_LIBRARY.md`), the bot panel (mode, rails with how
+  close to each and their change as ChartBridge built it, kill switch, day type log, today's signals and trades, Log,
+  Options) and **Pop out**
+  (`bot.html`, its own window). The **bot strip** across the top of the Main tab; **copilot proposals** on any tab with
+  `botSeen` and `botAnswer` (The Desk's `accept` and `reject` keys or the buttons; an expired one says "not answered");
+  corner notices (sound off by default); per-chart **ghost marks** of the bot's trades (off by default; the engine's
+  `setTrades` draws `ghost` trades faint and an open trade's entry only). Motion (`live/motion.js`) on the Bot tab and
+  the Library only; Settings > Motion: Less. Files `live/bot-core.js`, `live/bot.js`, `live/bot.css`, `live/bot.html`;
+  tests `test/bot.test.js`, `smoke:bot`, `perf:bot`; the fake bridge gains `botRails` and `/bot-library`. Made-up bots only.
+- **Quote board markets** (Anthony 2026-10-07): each Quote board's header has a ⋯ menu listing every row it can show (NQ,
+  ES and the quote-only markets hello lists), each with a checkbox; an unchecked row is hidden on that board only, saved
+  with the layout (`panel.hide`, kept and cleaned by `cleanPanel`; a root hello no longer lists is ignored); all shown by
+  default; with none shown the board says "No markets shown: pick some in the menu". Display only. `smoke:quoterows`.
+- **One v3 connection per window** (the page integration of the Account page, the ticket's 0.4.0 parts and the Bot tab):
+  `live/accounts.js` `createFeed` is the window's only v3 connection (`client` v3, signed in), shared through `listen` and
+  `post`; the Bot tab opens none of its own (`bot.html` makes its one). The order ticket's connection stays a v2 page
+  exactly as in 0.3.8 and carries every order action (`order` with a strategy or a new kind, `merge`, the Account page's
+  cancel from the list); the ticket's switches, `managed` and the Merge result come from the v3 connection. As ChartBridge
+  0.4.0 built it: `botRails` takes the root and 1 to 5 trades and 1 to 3 losses (kept in `bot-rails.txt`, no 18:00 reset);
+  the bot's orders carry no mark (Sim101 on the bot's root are the bot's); the copilot keys reach the Bot tab only through
+  the `chart-copilot-key` event; The Desk's address is ChartBridge's `deskUrl` (from `/diag`), nothing per browser. The
+  fake bridge sends what the C# sends (`by` only for a strategy, `tradable` to a v3 page only, the bot's `welcome`).
+  `smoke:v038`: with a ChartBridge without v3 no new control and no v3 message, and the ticket's messages equal 1.15.0's.
+
 ## Unreleased: Markup Studio (a tool; the chart stays 1.15.0)
 
 - **Markup Studio** (`tools/markup_studio.py`, `live/markup.html`): grade NQ liquidity sweeps blind on the chart's own Range 40

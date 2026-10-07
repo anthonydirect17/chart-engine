@@ -12,6 +12,9 @@ import random
 import sys
 import threading
 import time
+import types
+
+import numpy as np
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -118,7 +121,7 @@ class Queue(TBase):
         self.assertEqual({it['date'] for it in q['items']}, {D})              # no grading day, holdout or day outside the split
         for it in q['items']:
             self.assertRegex(it['qid'], r'^Q[0-9a-f]{10}$')
-        self.assertEqual(st.trade_counts(), {'total': 3, 'target': 300, 'graded': 0, 'adjusted': 0, 'skipped': 0, 'skipped_days': 0,
+        self.assertEqual(st.trade_counts(), {'total': 3, 'target': None, 'graded': 0, 'adjusted': 0, 'skipped': 0, 'skipped_days': 0,
                                              'refused': 0, 'remaining': 3})
         self.tstudio()                                                       # a restart reads it back, byte for byte the same
         with open(self.qfile()) as f:
@@ -256,7 +259,7 @@ class Cut(TBase):
         st2 = self.tstudio(marks=os.path.join(self.tmp.name, 'mutant'))
         real = ms.visible_count
         try:
-            ms.visible_count = lambda day, clock, exclusive=False: min(len(day.utc), real(day, clock, exclusive) + 1)
+            ms.visible_count = lambda day, clock, exclusive=False, seq=None: min(len(day.utc), real(day, clock, exclusive, seq) + 1)
             st2.trades_next()
             self.assertTrue(self.leaks(st2))
         finally:
@@ -308,6 +311,30 @@ class Cut(TBase):
         self.assertEqual(len(s['passed_over']), 1)
         self.assertIn('no moment before the fill', s['passed_over'][0])
         self.assertEqual(st.trade_counts()['refused'], 1)
+
+
+class CutSeq(unittest.TestCase):
+    """A trade's cut with the bot's t_from_seq: the trades on the cut's own stamp that the bot had seen show, the rest do
+    not (whole-second stamps put a signal bar's last trades and the next bar's first ones on the same stamp)."""
+
+    def day(self, utc):
+        return types.SimpleNamespace(utc=np.asarray(utc, dtype=np.int64))
+
+    def test_seq_keeps_exactly_the_bots_trades_on_the_stamp(self):
+        d = self.day([1000, 2000, 5000, 5000, 5000, 5000, 6000])
+        self.assertEqual(ms.visible_count(d, 5000, True), 2)            # no seq: strictly before, as before
+        self.assertEqual(ms.visible_count(d, 5000, True, 1), 3)
+        self.assertEqual(ms.visible_count(d, 5000, True, 3), 5)
+        self.assertEqual(ms.visible_count(d, 5000, True, 99), 6)        # never past the stamp
+        self.assertEqual(ms.visible_count(d, 5000, True, 0), 2)
+        self.assertEqual(ms.visible_count(d, 5000, False, 1), 6)        # free mode stays inclusive
+        self.assertEqual(ms.visible_count(d, 5500, True, 2), 6)         # no trade on the clock's stamp: nothing extra
+
+    def test_order_cut_seq(self):
+        for raw, want in ((3, 3), ('2', 2), (None, None), ('', None), (0, None), (-1, None), ('x', None), (1.5, None),
+                          (True, None)):
+            self.assertEqual(ms.order_cut_seq({'t_from_seq': raw}), want, raw)
+        self.assertIsNone(ms.order_cut_seq({}))
 
 
 class Grading(TBase):

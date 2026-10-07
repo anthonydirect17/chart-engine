@@ -17,12 +17,14 @@ using NinjaTrader.NinjaScript.AddOns;
 
 public static class OrdersHarness
 {
-    static int fails;
+    static int fails, checks;
     static List<string> sent = new List<string>();
     static ChartBridgeClient c;
     static Instrument mnq, es;
 
-    static void Check(bool ok, string what) { Console.WriteLine((ok ? "ok   " : "FAIL ") + what); if (!ok) fails++; }
+    static void Check(bool ok, string what) { Console.WriteLine((ok ? "ok   " : "FAIL ") + what); checks++; if (!ok) fails++; }
+    // Integration: each 0.4.0 lane's harness prints its own count, so a lost or doubled check shows at once.
+    static void Section(string name, Action<Action<bool, string>> run) { int was = checks, failed = fails; run(Check); Console.WriteLine("== " + name + ": " + (checks - was) + " checks, " + (fails - failed) + " failed"); }
     static string LastSent() { return sent.Count > 0 ? sent[sent.Count - 1] : ""; }
     static bool Rejected(string contains) { string m = LastSent(); return m.Contains("\"type\":\"reject\"") && m.Contains(contains); }
     static void Msg(string type, string json) { lock (c.Actions) c.Actions.Clear(); ChartBridgeOrders.OnMessage(c, type, json); }
@@ -73,8 +75,13 @@ public static class OrdersHarness
         return o;
     }
 
+    // Anthony 2026-10-07: every v3 switch is ON by default; config.txt's off lines turn them off. The base checks below are
+    // 0.3.8's, run with every off line written, so they prove that off is 0.3.8 exactly.
+    public static void AllOffLines() { foreach (string k in ChartBridgeSwitches.Names) ChartBridgeSwitches.Note(k, "off"); }
+
     public static int Main()
     {
+        AllOffLines();
         // 0.3.7: ChartBridge's folder (planned_brackets.txt) in a fresh directory, never a shared /tmp/nt8 from an earlier run
         string home = Path.Combine(Path.GetTempPath(), "cb-orders-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(home, "ChartBridge"));
@@ -866,7 +873,17 @@ public static class OrdersHarness
         SeamHarness.Run(Check);  // where the backfill meets the live trades (check/SeamHarness.cs, 0.3.3)
         SidesHarness.Run(Check); // the side of every trade, as pure rules (check/SidesHarness.cs, 0.3.4; its loads run inside SeamHarness)
         PinHarness.Run(Check);   // the PIN on ChartBridge's own page (check/PinHarness.cs)
+        AllOffLines();           // PinHarness starts ChartBridge (config.txt read: the v3 default, on); the base stays 0.3.8's
+        MarketsHarness.Run(Check);   // 0.4.0: quote-only markets, their rolls and settlement times, tape counters, error lines, /diag health (check/MarketsHarness.cs)
+        Console.WriteLine("== base: " + checks + " checks, " + fails + " failed");
+        Section("accounts (B2)", AccountsHarness.Run);  // 0.4.0: the per-account checkmark, Gone, Archive, cancel from the Working orders tab, switches off = 0.3.8 (check/AccountsHarness.cs)
+        Section("merge (B4)", MergeHarness.Run);        // 0.4.0 B4: Merge stops and targets (check/MergeHarness.cs)
+        Section("copier (B5)", CopierHarness.Run);      // 0.4.0 copier: Anthony's Sim test list against the copier engine (check/CopierHarness.cs)
+        Section("bot (B3)", BotHarness.Run);            // 0.4.0: the bot channel, Sim101 only, its rails, heartbeat, secret and off switch (check/BotHarness.cs)
+        Section("strategies (B1)", StrategiesHarness.Run);   // 0.4.0 B1: stop-limit and MIT entries, Order Strategies, breakeven and trailing, managed.txt (check/StrategiesHarness.cs)
+        Section("cross-lane rules (integration)", IntegrationHarness.Run);   // 0.4.0: the rules that hold only with every lane together (check/IntegrationHarness.cs)
 
+        Console.WriteLine("== total: " + checks + " checks");
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
     }
@@ -1475,6 +1492,8 @@ public static class OrdersHarness
               "allowOrigins: a non-ASCII host is skipped, its punycode form is taken");
         File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "port = 8765" });
         ChartBridgeConfig.Load();
+        Check(ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get), "config.txt with no v3 line: every v3 switch is on (Anthony 2026-10-07)");
+        AllOffLines();   // the base checks run with every v3 off line (0.3.8 exactly)
         Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),
               "config.txt without allowOrigins: only ChartBridge's own page");
         ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.golivepage.com");

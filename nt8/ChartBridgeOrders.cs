@@ -12,7 +12,9 @@
 //      send the token it read from GET /session (new random token each start, no CORS headers);
 //   5. prices on the tick grid, a last price no older than 300 seconds, stops on the right side of the
 //      market (0.3.7: no distance limit unless config.txt sets maxTicksAway; maxBracketTicks likewise);
-//   6. only the roots ChartBridge serves, on the contract it resolved;
+//   6. only the roots ChartBridge serves, on the contract it resolved; never a quote-only root (0.4.0, config.txt quoteRoots:
+//      served for the Quote board only; one early check refuses every order action for them, and the lookups this file
+//      uses, InstrumentFor and RootFor, never return one);
 //   7. at most 10 order actions per second per connection;
 //   8. strict messages: only the keys the protocol names (a misspelt "bracket" is refused, never
 //      ignored), whole numbers must be plain JSON numbers, no duplicate keys, no nested objects other
@@ -46,7 +48,7 @@ using NinjaTrader.Cbi;
 
 namespace NinjaTrader.NinjaScript.AddOns
 {
-    public static class ChartBridgeOrders
+    public static partial class ChartBridgeOrders   // 0.4.0 B4: partial, Merge lives in ChartBridgeMerge.cs   // 0.4.0 copier: partial, so ChartBridgeCopier.cs can read the gates through its wrappers   // 0.4.0 B1: partial; ChartBridgeStrategies.cs is the rest (order types, Order Strategies)
     {
         public const int MaxActionsPerSecond = 10, DefaultMaxQty = 1;
         public const double MaxPriceAgeMs = 300000;
@@ -64,12 +66,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // whenever a page signs in, not only the Output window.
         private static readonly List<string> ConfigWarnings = new List<string>();
 
-        public static void ResetConfig() { Enabled = false; TradeAccounts.Clear(); MaxQty.Clear(); MaxTicksAway = 0; MaxBracketTicks = 0; lock (ConfigWarnings) ConfigWarnings.Clear(); }
+        public static void ResetConfig() { Enabled = false; TradeAccounts.Clear(); MaxQty.Clear(); MaxTicksAway = 0; MaxBracketTicks = 0; lock (ConfigWarnings) ConfigWarnings.Clear(); MergeResetConfig(); ResetV3Config(); }   // 0.4.0 B4: merge off   // 0.4.0 B1: orderTypes, strategies
 
         // Called by ChartBridgeConfig.Load for each key it does not know itself.
         public static bool ReadConfig(string key, string val)
         {
             int n;
+            if (MergeReadConfig(key, val)) return true;   // 0.4.0 B4: merge = on (ChartBridgeMerge.cs)
+            if (ReadV3Config(key, val)) return true;   // 0.4.0 B1: orderTypes, strategies (on by default; an off line turns one off)
             if (key == "trading") { Enabled = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1"; return true; }
             if (key == "tradeAccounts")
             {
@@ -107,6 +111,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static bool AccountTradable(string name)
         {
             if (!Enabled || string.IsNullOrEmpty(name) || IsNeverTradable(name)) return false;
+            if (ChartBridgeAccounts.On) return ChartBridgeAccounts.Checked(name);   // 0.4.0 accounts: with accountChecks on, gate 2 is the page's checkmark (accounts.txt), not tradeAccounts
             foreach (string a in TradeAccounts) if (a.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
@@ -142,7 +147,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(on ? "true" : "false");
             if (!on) b.Append(",\"reason\":").Append(CbJson.Str(reason ?? (Enabled ? "not signed in" : "trading is off in config.txt")));
             b.Append(",\"accounts\":[");
-            if (on) b.Append(string.Join(",", TradeAccounts.Select(a => CbJson.Str(a))));
+            if (on) b.Append(string.Join(",", (ChartBridgeAccounts.On ? ChartBridgeAccounts.CheckedNames() : TradeAccounts).Select(a => CbJson.Str(a))));   // 0.4.0 accounts: the checked accounts with accountChecks on
             b.Append("],\"maxQty\":{\"*\":").Append(DefaultMaxQty);
             foreach (KeyValuePair<string, int> kv in MaxQty) b.Append(',').Append(CbJson.Str(kv.Key)).Append(':').Append(kv.Value);
             b.Append('}');
@@ -154,7 +159,11 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- last price per root (gate 5)
         private static readonly Dictionary<string, double[]> Last = new Dictionary<string, double[]>();   // root -> { price, time ms }
-        public static void NoteLast(string root, double price) { lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() }; }
+        public static void NoteLast(string root, double price)
+        {
+            lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() };
+            if (StrategiesOn) StrategyTrade(root, price);   // 0.4.0 B1: breakeven and trailing (cheap; a move is sent off this thread)
+        }
 
         // A last price no older than maxAgeMs. The market exit needs a tick this fresh, so a lagging price feed
         // cannot trigger a false exit.
@@ -205,13 +214,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   legs  "CB#1a2b3c4d stop f2 q2 p24990.25" and "CB#1a2b3c4d target f2 q2 p24990.25": the pair for the
         //         fill increment that brought the entry to 2 filled, for 2 contracts, filled at 24990.25
         //   exit  "CB#1a2b3c4d exit f2 q2 p24990.25": a market exit sent when the stop level had already traded
-        private static readonly Regex EntryNameRx = new Regex("^CB#([0-9a-f]{8}) s([0-9]{1,9}) t([0-9]{1,9})$");
-        private static readonly Regex RestingNameRx = new Regex("^CB#([0-9a-f]{8}) atm s([0-9]{1,9}) t([0-9]{1,9})$");
+        private static readonly Regex EntryNameRx = new Regex("^CB#([0-9a-f]{8})(?: bot)? s([0-9]{1,9}) t([0-9]{1,9})$");   // 0.4.0 bot: "CB#1a2b3c4d bot s8 t16" too (ChartBridgeBot.cs), ticks from each fill, as a market entry
+        private static readonly Regex RestingNameRx = new Regex("^CB#([0-9a-f]{8}) atm s([0-9]{1,9}) t([0-9]{1,9})(?: (?:sl|mit)){0,1}$");   // 0.4.0 B1: " sl" stop-limit, " mit" MIT
         private static readonly Regex PlanNameRx = new Regex("^CB#([0-9a-f]{8}) plan s([0-9]{1,9}(?:\\.[0-9]{1,8})?) t([0-9]{1,9}(?:\\.[0-9]{1,8})?)$");
 
-        private static bool IsEntryName(string name) { return name != null && (EntryNameRx.IsMatch(name) || RestingNameRx.IsMatch(name) || PlanNameRx.IsMatch(name)); }
-        private static bool IsResting(Order o) { return o.OrderType == OrderType.Limit || o.OrderType == OrderType.StopMarket; }
-        private static readonly Regex LegNameRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f([0-9]{1,6}) q([0-9]{1,6}) p([0-9]{1,9}(?:\\.[0-9]{1,8})?)$");
+        private static bool IsEntryName(string name) { return name != null && (EntryNameRx.IsMatch(name) || RestingNameRx.IsMatch(name) || PlanNameRx.IsMatch(name) || IsStrategyName(name)); }   // 0.4.0 B1: "CB#1a2b3c4d sg"
+        private static bool IsResting(Order o) { return o.OrderType == OrderType.Limit || o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit || o.OrderType == OrderType.MIT; }   // 0.4.0 B1: stop-limit and MIT entries rest too
+        private static readonly Regex LegNameRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f([0-9]{1,6}) q([0-9]{1,6}) p([0-9]{1,9}(?:\\.[0-9]{1,8})?)(?: k([1-3])){0,1}$");   // 0.4.0 B1: " k2", a strategy's target bucket
 
         private class Bracket
         {
@@ -257,13 +266,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             string name = o.Name ?? "";
             if (IsEntryName(name)) return "entry";
             Match m = LegNameRx.Match(name);
-            return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : "other";
+            return m.Success && m.Groups[2].Value != "exit" ? m.Groups[2].Value : MergedRole(name) ?? "other";   // 0.4.0 B4: merged legs
         }
 
         private static bool IsExit(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == "exit"; }
 
         // A ChartBridge stop or target (not an entry, not a market exit).
-        private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value != "exit"; }
+        private static bool IsChartBridgeLeg(Order o) { Match m = LegNameRx.Match(o.Name ?? ""); return (m.Success && m.Groups[2].Value != "exit") || IsMergedLeg(o); }   // 0.4.0 B4: merged legs
 
         public static void Clear()
         {
@@ -274,6 +283,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConnectedSince) ConnectedSince.Clear();
             lock (PlanMemLock) { Plans.Clear(); LegacyPlans.Clear(); plansLoaded = false; plansReadFailed = false; writeWaiting = false; writeFailed = null; planGeneration++; }
             lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }
+            MergeClear();   // 0.4.0 B4
+            ClearStrategies();   // 0.4.0 B1
         }
 
         // ---------------------------------------------------------- strict message reading (gate 8)
@@ -284,8 +295,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "order", new[] { "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" } },
             { "change", new[] { "type", "cid", "id", "price" } },
             { "plan", new[] { "type", "cid", "id", "stopTicks", "targetTicks" } },
-            { "cancel", new[] { "type", "cid", "id" } },
+            { "cancel", new[] { "type", "cid", "id", "from" } },   // 0.4.0 accounts: "from": "list" (the Working orders tab), refused unless cancelFromList is on
             { "flatten", new[] { "type", "cid", "account", "root" } },
+            { "merge", new[] { "type", "cid", "account", "root" } },   // 0.4.0 B4
         };
         private static readonly string[] BracketKeys = { "stop", "target" };
         private static readonly Regex BracketRx = new Regex("\"bracket\"\\s*:\\s*\\{([^{}]*)\\}");
@@ -306,6 +318,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Duplicate(top) || (bracketBody != null && Duplicate(bracketBody))) { why = "message has a key twice"; return null; }
             string[] allowed;
             if (!Keys.TryGetValue(type, out allowed)) { why = "unknown message type " + type; return null; }
+            allowed = WithV3Keys(type, allowed);   // 0.4.0 B1: limitOffset and limitPrice on order, with orderTypes on
             string odd = Unknown(top, allowed) ?? (bracketBody != null ? Unknown(bracketBody, BracketKeys) : null);
             if (odd != null) { why = "unknown key \"" + odd + "\" in " + type; return null; }
             return top;
@@ -364,13 +377,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (type == "auth") { Auth(client, text); return; }
                 string why = Gate(client);
+                string strategyBody = null;   // 0.4.0 B1: the strategy object, cut out as the bracket is (strategies on only)
+                if (why == null && type == "order" && StrategiesOn) why = CutStrategy(ref text, out strategyBody);
                 string bracketBody = null, top = why == null ? TopLevel(type, text, out bracketBody, out why) : null;
+                if (why == null) why = QuoteOnly(top, id);   // 0.4.0: a quote-only market: refused before any other order code runs
+                if (why == null && type != "flatten" && type != "merge") why = MergeFreezeWhy(type, top, id);   // 0.4.0 B4: a Merge swap freezes its account and root
                 if (why != null) { Reject(client, cid, id, why); return; }
-                if (type == "order") why = PlaceOrder(top, bracketBody, cid);
+                if (type == "order") why = PlaceOrder(top, bracketBody, cid, strategyBody);
                 else if (type == "change") why = ChangeOrder(top, id);
                 else if (type == "plan") why = PlanOrder(top, id);
-                else if (type == "cancel") why = CancelOrder(id);
+                else if (type == "cancel") why = CancelOrder(top, id);   // 0.4.0 accounts: top for "from"
                 else if (type == "flatten") why = Flatten(top);
+                else if (type == "merge") why = MergeStart(client, top, cid);   // 0.4.0 B4
                 if (why != null) Reject(client, cid, id, why);
             }
             catch (Exception ex)
@@ -378,6 +396,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeServer.Log("order error: " + ex.Message);
                 Reject(client, cid, id, "ChartBridge error: " + ex.Message);
             }
+        }
+
+        // 0.4.0: the quote-only markets (config.txt quoteRoots; YM, RTY, GC, SI, CL, 6E, ZN, ZB by default) stream to the page for
+        // the Quote board; every order action for them is refused, with a plain reason. The root is the message's own (order,
+        // flatten) or, for change, plan and cancel, that of the order it names.
+        private static string QuoteOnly(string top, string id)
+        {
+            string root = (Str(top, "root") ?? "").ToUpperInvariant();
+            if (root.Length == 0 && !string.IsNullOrEmpty(id))
+            {
+                Order o;
+                lock (Sync) ById.TryGetValue(id, out o);
+                if (o != null && o.Instrument != null && o.Instrument.MasterInstrument != null) root = (o.Instrument.MasterInstrument.Name ?? "").ToUpperInvariant();
+            }
+            if (root.Length == 0 || !ChartBridgeConfig.QuoteOnly(root)) return null;
+            return root + " is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)";
         }
 
         private static void Auth(ChartBridgeClient client, string text)
@@ -388,11 +422,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (!OriginAllowed(client.Origin)) reason = "orders are only accepted from ChartBridge's own page";
             else if (string.IsNullOrEmpty(given) || token.Length == 0 || !SlowEquals(given, token)) reason = "session token does not match; reload the page";
             client.Trader = reason == null;
-            client.Send(TradingJson(client.Trader, reason));
+            client.Send(ChartBridgeAccounts.TradingFor(client, TradingJson(client.Trader, reason)));   // 0.4.0 accounts: a v3 page also gets the switches
             List<string> warnings;
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
-            if (client.Trader) { client.Send(OrdersJson()); foreach (string p in PositionJsons()) client.Send(p); }
+            if (client.Trader) { client.Send(OrdersJson(client)); foreach (string p in PositionJsons(client)) client.Send(p); ChartBridgeAccounts.SignedIn(client); }   // 0.4.0 accounts: a v3 page sees every watched account
+            if (client.Trader) MergeOnAuth(client);   // 0.4.0 B4: a Merge cut by a restart is told to each page that signs in
+            if (client.Trader) ChartBridgeCopier.AfterAuth(client);   // 0.4.0 copier: a v3 page gets the copier's state
+            ChartBridgeBot.AfterAuth(client);   // 0.4.0 bot: a signed-in v3 page gets the bot strip and its open proposals
+            SendManagedTo(client);   // 0.4.0 B1: every live managed entry, to a signed-in v3 page
         }
 
         private static bool SlowEquals(string a, string b)
@@ -404,7 +442,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Gates 1, 4 and 7 for every order action.
-        private static string Gate(ChartBridgeClient client)
+        internal static string Gate(ChartBridgeClient client)   // 0.4.0 accounts: internal, so accountTrade and accountArchive pass the same gates
         {
             if (!Enabled) return "trading is off in config.txt";
             if (!client.Trader || !OriginAllowed(client.Origin)) return "this connection may not trade; reload ChartBridge's page";
@@ -422,11 +460,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static Account FindAccount(string name, out string why)
         {
             why = null;
-            if (!AccountTradable(name)) { why = "account " + (name ?? "(none)") + " may not trade from the chart (tradeAccounts in config.txt)"; return null; }
+            if (!AccountTradable(name)) { why = ChartBridgeAccounts.On ? ChartBridgeAccounts.EntryRefusal(name) : "account " + (name ?? "(none)") + " may not trade from the chart (tradeAccounts in config.txt)"; return null; }   // 0.4.0 accounts: the checkmark's reason
             Account found = null;
             lock (Account.All)
                 foreach (Account a in Account.All) if (a.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { found = a; break; }
-            if (found == null) { why = "account " + name + " is in tradeAccounts but not connected in NinjaTrader"; return null; }
+            if (found == null) { why = "account " + name + (ChartBridgeAccounts.On ? " is not connected in NinjaTrader" : " is in tradeAccounts but not connected in NinjaTrader"); return null; }   // 0.4.0 accounts: no tradeAccounts in the reason when the checkmark is gate 2
             string status = StatusOf(found);
             if (status != "Connected") { why = "account " + name + " is not connected (" + status + ")"; return null; }
             if (!ChartBridgeServer.EnsureWatched(found)) { why = "ChartBridge is not listening to account " + name + " yet; try again in a few seconds"; return null; }
@@ -444,6 +482,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (stale != null) return stale;
             if (MaxTicksAway > 0 && Math.Abs(price - last) > MaxTicksAway * tick + 1e-9)
                 return "price is more than " + MaxTicksAway + " ticks from the last price " + CbJson.Num(last) + " (maxTicksAway in config.txt)";
+            if (kind == "mit") return MitSide(isBuy, price, last);   // 0.4.0 B1: an MIT, a buy below the last price, a sell above
+            if (kind == "stopLimit") kind = "stop";                  // 0.4.0 B1: a stop-limit's trigger follows the stop's rules
             if (kind == "stop" && isBuy && !(price > last)) return "a buy stop must be above the last price " + CbJson.Num(last);
             if (kind == "stop" && !isBuy && !(price < last)) return "a sell stop must be below the last price " + CbJson.Num(last);
             // A limit through the market fills at once: that is a market order in disguise, usually a click
@@ -489,7 +529,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 List<double[]> list;
                 if (!Moves.TryGetValue(key, out list)) Moves[key] = list = new List<double[]>();
-                list.Add(new double[] { IsBuy(o) ? delta : -delta, ChartBridgeTime.NowUtcMs() });
+                list.Add(new double[] { IsBuy(o) ? delta : -delta, ChartBridgeTime.NowUtcMs(), ChartBridgeCopier.IsCopyEntry(o) ? 1 : 0 });   // 0.4.0 copier: minors (2), a copy entry's fill is marked (third value 1)
             }
         }
 
@@ -554,8 +594,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (!SameInstrument(o.Instrument, inst) || !MayFill(o.OrderState)) continue;
                 int left = Math.Max(0, o.Quantity - o.Filled), had;
-                if (string.IsNullOrEmpty(o.Oco)) { if (IsBuy(o)) buys += left; else sells += left; continue; }
-                string key = (IsBuy(o) ? "b|" : "s|") + o.Oco;
+                string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
+                if (grp == null) { if (IsBuy(o)) buys += left; else sells += left; continue; }
+                string key = (IsBuy(o) ? "b|" : "s|") + grp;
                 if (!groups.TryGetValue(key, out had) || left > had) groups[key] = left;
             }
             foreach (KeyValuePair<string, int> g in groups) { if (g.Key[0] == 'b') buys += g.Value; else sells += g.Value; }
@@ -565,10 +606,47 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static bool isBuyOrder(string top) { return Str(top, "side") == "buy"; }
 
-        private static string PlaceOrder(string top, string bracketBody, string cid)
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody) { Order ignored; return PlaceOrder(top, bracketBody, cid, strategyBody, false, out ignored); }
+
+        // 0.4.0 bot: a bot entry (ChartBridgeBot.cs builds the message from the bot's or the proposal's own parameters, always
+        // Sim101 and the bot's root), through the same strict reading, quote-only check and gates as an order from the page.
+        // Integration: never a strategy (no strategy object is cut out of a bot message, so a "strategy" key is refused as unknown).
+        public static string PlaceBotEntry(string text, out Order placed)
+        {
+            placed = null;
+            string bracketBody, why, top = TopLevel("order", text, out bracketBody, out why);
+            if (why == null) why = QuoteOnly(top, null);
+            return why ?? PlaceOrder(top, bracketBody, null, null, true, out placed);
+        }
+
+        // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on the bot's account and root.
+        public static string FlattenForBot(string root) { return Flatten("{\"account\":" + CbJson.Str(ChartBridgeBot.BotAccount) + ",\"root\":\"" + root + "\"}"); }
+
+        // 0.4.0 minors (3): botAccount's check. Any position (either reading: listed, or a fill not yet in it), or any order that may
+        // still fill (NinjaTrader's list and ChartBridge's own just sent), on root in any contract month, on this account.
+        internal static bool BotHoldsOnRoot(Account a, string root)
+        {
+            if (a == null || string.IsNullOrEmpty(root)) return false;
+            Func<Instrument, bool> onRoot = i => i != null && ((i.MasterInstrument != null && string.Equals(i.MasterInstrument.Name, root, StringComparison.OrdinalIgnoreCase)) || ChartBridgeServer.RootFor(i) == root);
+            List<Position> positions;
+            lock (a.Positions) positions = a.Positions.ToList();
+            if (positions.Any(p => onRoot(p.Instrument) && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0)) return true;
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            if (orders.Any(o => onRoot(o.Instrument) && MayFill(o.OrderState))) return true;
+            double now = ChartBridgeTime.NowUtcMs();
+            string prefix = a.Name + "|" + root + " ";
+            lock (Moves)
+                foreach (KeyValuePair<string, List<double[]>> kv in Moves)
+                    if (kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && kv.Value.Where(m => now - m[1] <= MoveTtlMs).Sum(m => m[0]) != 0) return true;
+            return false;
+        }
+
+        private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed)
         {
             string planTag, why;
-            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, out planTag);   // two pages or tabs cannot both pass the cap check
+            lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -580,9 +658,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why;
         }
 
-        private static string PlaceOrderLocked(string top, string bracketBody, string cid, out string planTag)
+        private static string PlaceOrderLocked(string top, string bracketBody, string cid, string strategyBody, bool bot, out string planTag, out Order placed)
         {
-            planTag = null;
+            planTag = null; placed = null;
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
             string side = Str(top, "side"), kind = Str(top, "kind"), why;
             Account account = FindAccount(accountName, out why);
@@ -590,7 +668,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
             if (side != "buy" && side != "sell") return "side must be buy or sell";
-            if (kind != "market" && kind != "limit" && kind != "stop") return "kind must be market, limit or stop";
+            if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
+            if (bot && (NewKind(kind) || strategyBody != null)) return "the bot places market, limit and stop entries with a plain stop and target only";   // 0.4.0 bot: (integration) never a new kind or an Order Strategy
             int qty;
             if (Int(top, "qty", out qty) != 1 || qty < 1) return "qty must be a whole number of 1 or more";
             bool isBuy = side == "buy";
@@ -598,13 +677,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             // order differs between connections, so either can be the stale one: the cap takes the worse.
             int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
             int cap = CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);
+            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3's own count)
             if (qty > cap) return "qty " + qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
             PendingOrders(account, inst, out pendBuy, out pendSell);
             long worst = isBuy ? (long)pos + pendBuy + qty : (long)(-pos) + pendSell + qty;
             if (worst > cap)
                 return "this order could make the " + root + " position " + worst + " contracts (position " + pos + ", working " +
                        (isBuy ? pendBuy : pendSell) + ", this order " + qty + "); the cap is " + cap + " (maxQty." + root + " in config.txt)";
-            double tick = inst.MasterInstrument.TickSize, price = 0;
+            double tick = inst.MasterInstrument.TickSize, price = 0, limitPx = 0;
             if (kind != "market")
             {
                 if (Dec(top, "price", out price) != 1) return "a " + kind + " order needs a plain price";
@@ -612,6 +692,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (bad != null) return bad;
             }
             else if (Has(top, "price")) return "a market order takes no price";
+            string newKind = OrderTypesOn ? NewKindProblem(top, kind, root, tick, isBuy, price, out limitPx) : null;   // 0.4.0 B1: a stop-limit's limit
+            if (newKind != null) return newKind;
             int stopTicks = 0, targetTicks = 0;
             if (bracketBody != null)
             {
@@ -620,6 +702,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (stopTicks < 0 || targetTicks < 0) return "bracket ticks must be whole numbers of 0 or more";
                 if (MaxBracketTicks > 0 && (stopTicks > MaxBracketTicks || targetTicks > MaxBracketTicks))
                     return "bracket ticks must be from 0 to " + MaxBracketTicks + " (maxBracketTicks in config.txt)";
+            }
+            StratParams strat = null;   // 0.4.0 B1: an Order Strategy (strategyBody is cut out only with strategies on)
+            if (strategyBody != null)
+            {
+                string off = StrategiesRunRefusal();   // 0.4.0 fix1 (F5): managed.txt unreadable at the start (or not read yet): no new strategy entry
+                if (off != null) return off;
+                string bad = ParseStrategy(strategyBody, out strat);
+                if (bad != null) return bad;
+                stopTicks = strat.Stop + Math.Max(0, strat.StopLimit); targetTicks = strat.MaxTarget;   // for the leg-at-or-below-zero check
             }
             if (stopTicks > 0 || targetTicks > 0)
             {
@@ -634,27 +725,35 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Refused only when both readings agree the order reduces the position (legs on a reducing order
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));
-            if (wantsLegs && reduces) return "a bracket can only go on an order that opens or adds; this order reduces the position";
+            if (wantsLegs && reduces) return (strat != null ? "a strategy" : "a bracket") + " can only go on an order that opens or adds; this order reduces the position";
+            string copierWhy = bot ? ChartBridgeCopier.BotEntryCheck(account) : ChartBridgeCopier.LeaderEntryCheck(account, stopTicks > 0);   // 0.4.0 copier: a leader entry needs a stop while armed (integration: a bot entry is never a leader entry, and never on the leader's account; a strategy's stop counts)
+            if (copierWhy != null) return copierWhy;   // 0.4.0 copier:
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             // 0.3.8: a resting entry is named "atm": its ticks can change before the fill (plan), and travel with it when moved.
-            string name = "CB#" + tag + (kind == "market" ? "" : " atm") + " s" + stopTicks + " t" + targetTicks;
-            if (kind != "market") { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
-            OrderType type = kind == "market" ? OrderType.Market : kind == "limit" ? OrderType.Limit : OrderType.StopMarket;
+            string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
+            if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
+            OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
-                kind == "limit" ? price : 0, kind == "stop" ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
+                kind == "limit" ? price : kind == "stopLimit" ? limitPx : 0, kind == "stop" || NewKind(kind) ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
             lock (Sync)
             {
                 IdFor(order);
                 Ours.Add(order);
                 if (!string.IsNullOrEmpty(cid)) CidOf[order] = cid;
-                if (kind != "market")
+                if (strat != null) { BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = strat.Stop }; NewManaged(tag, order, account, inst, isBuy, root, strat); }   // 0.4.0 B1
+                else if (kind != "market")
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, Resting = true, StopTicks = stopTicks, TargetTicks = targetTicks };
                 else if (stopTicks > 0 || targetTicks > 0)
                     BracketOfEntry[order] = new Bracket { Account = account, Instrument = inst, Tag = tag, EntryIsBuy = isBuy, StopTicks = stopTicks, TargetTicks = targetTicks };
             }
-            account.Submit(new[] { order });
-            ChartBridgeServer.Log("order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
-                (wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
+            if (strat != null) { string unsaved = SaveNewManaged(tag, order); if (unsaved != null) return unsaved; }   // 0.4.0 fix1 (F5): accepted only once its managed.txt line is written
+            if (!bot) ChartBridgeCopier.LeaderEntryRegister(order, kind, price);   // 0.4.0 copier: the page's entries on the leader are copied (integration: a bot entry never is); review 2: registered before Submit, so a fill inside Submit is copied
+            try { account.Submit(new[] { order }); }
+            catch (Exception) { if (!bot) ChartBridgeCopier.LeaderEntryDropped(order); throw; }   // 0.4.0 copier: review 2: never reached NinjaTrader, nothing copied
+            placed = order;
+            if (!bot) ChartBridgeCopier.LeaderEntrySent(order);   // 0.4.0 copier: orders mode places the followers' orders now (a rejected entry is dropped)
+            ChartBridgeServer.Log((bot ? "bot " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
+                (strat != null ? " with strategy " + strat.Json : wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
         }
 
@@ -667,12 +766,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             Order o;
             lock (Sync) ById.TryGetValue(id ?? "", out o);
             if (o == null) return "no working order " + (id ?? "(none)");
-            if (o.Account == null || !AccountTradable(o.Account.Name)) return "that order's account may not trade from the chart";
+            // 0.4.0 accounts: with accountChecks on, moving a ChartBridge stop or target is an exit (no checkmark needed, closing
+            // always works); moving an entry, or an order placed elsewhere, is an entry action (the checkmark).
+            string exitWhy = null;
+            bool exit = ChartBridgeAccounts.On && IsChartBridgeLeg(o);
+            if (o.Account == null || !(exit ? ChartBridgeAccounts.ExitAllowed(o.Account, out exitWhy) : AccountTradable(o.Account.Name))) return exitWhy ?? "that order's account may not trade from the chart";
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             double price;
             if (Dec(top, "price", out price) != 1) return "change needs a plain price";
             string root = ChartBridgeServer.RootFor(o.Instrument);
             if (root == null) return "instrument is not served by ChartBridge";
+            if (MovesNewKind(o)) return MoveNewKind(o, root, price);   // 0.4.0 B1: a ChartBridge stop-limit (keeps its offset) or MIT
             if (o.OrderType == OrderType.StopLimit) return "stop-limit orders can only be moved in NinjaTrader";
             string kind = o.OrderType == OrderType.Limit ? "limit" : o.OrderType == OrderType.StopMarket ? "stop" : null;
             if (kind == null) return "only limit and stop orders can be moved";
@@ -725,6 +829,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (root == null) return "instrument is not served by ChartBridge";
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             if (RoleFor(o) != "entry") return "only a ChartBridge entry has a planned stop and target; a working leg moves with change";
+            if (IsStrategyName(o.Name)) return "a plan on an Order Strategy entry is refused: cancel it and place it again with the strategy you want";   // 0.4.0 B1 (lead's default)
             if (!IsResting(o)) return "only a resting limit or stop entry has a planned stop and target";
             int st, tt, hs = TicksOf(top, "stopTicks", out st), ht = TicksOf(top, "targetTicks", out tt);
             if (hs == 0 && ht == 0) return "plan needs stopTicks or targetTicks (a whole number of ticks to set it, null to remove it)";
@@ -781,18 +886,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (saveErr != null)
                 PlanSaveAlarm(where + ": the planned stop and target of entry CB#" + br.Tag + " are set (stop " + TicksText(newSt) + " / target " + TicksText(newTt) +
                       " ticks) but could not be saved (" + saveErr + "); after a recompile or restart it would use the ticks it was placed with");
-            if (Enabled && AccountTradable(o.Account.Name)) ChartBridgeServer.SendToTraders(OrderJson(o, null));   // the page sees the new planned ticks
+            if (Enabled && ChartBridgeAccounts.Seen(o.Account.Name)) ChartBridgeAccounts.SendScoped(o.Account, OrderJson(o, null), true, o);   // the page sees the new planned ticks (0.4.0 accounts: each page its scope)   // 0.4.0 review 2: o for a v3 page's "by"
             return null;
         }
 
         private static bool IsNull(string text, string key) { return Regex.IsMatch(text, "\"" + key + "\"\\s*:\\s*null\\s*[,}]"); }
 
-        private static string CancelOrder(string id)
+        private static string CancelOrder(string top, string id)
         {
+            // 0.4.0 accounts: "from": "list" (the Working orders tab) only with cancelFromList on; any other "from" is refused.
+            string why = ChartBridgeAccounts.CancelFromRefusal(Has(top, "from"), Str(top, "from"));
+            if (why != null) return why;
+            // 0.4.0 accounts: a cancel from the list, or any cancel with accountChecks on, is an exit: a watched, Connected,
+            // non-archived account, checkmark or not. Otherwise v2's tradeAccounts, exactly as before.
+            bool exit = Has(top, "from") || ChartBridgeAccounts.On;
             Order o;
             lock (Sync) ById.TryGetValue(id ?? "", out o);
             if (o == null) return "no working order " + (id ?? "(none)");
-            if (o.Account == null || !AccountTradable(o.Account.Name)) return "that order's account may not trade from the chart";
+            if (o.Account == null || !(exit ? ChartBridgeAccounts.ExitAllowed(o.Account, out why) : AccountTradable(o.Account.Name))) return why ?? "that order's account may not trade from the chart";
             if (ChartBridgeServer.RootFor(o.Instrument) == null) return "instrument is not served by ChartBridge";
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             o.Account.Cancel(new[] { o });     // OCO: the broker or NinjaTrader cancels the other leg
@@ -803,15 +914,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Flatten(string top)
         {
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant(), why;
-            Account account = FindAccount(accountName, out why);
+            Account account = ChartBridgeAccounts.On ? ChartBridgeAccounts.FindForExit(accountName, out why) : FindAccount(accountName, out why);   // 0.4.0 accounts: Flatten is an exit (no checkmark needed)
             if (account == null) return why;
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
             lock (Sync)
                 foreach (Bracket br in BracketOfEntry.Values)
                     if (br.Account == account && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;   // a late fill raises an alarm
+            StopManaging(account, inst);   // 0.4.0 B1: no breakeven or trailing move races the flatten
             NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
-            account.Flatten(new[] { inst });   // cancels working orders for the instrument, then closes the position
+            // 0.4.0 fix1 (F1): a Merge swap on this account and root ends only here, once Flatten passed its gates, in one step with
+            // the flatten call (MergeFlattenSend); a refused Flatten leaves the swap to go on or restore as before.
+            MergeFlattenSend(account, inst, () => account.Flatten(new[] { inst }));   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
             return null;
         }
@@ -858,6 +972,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (t == OrderType.Limit) return "limit";
             if (t == OrderType.StopMarket) return "stop";
             if (t == OrderType.StopLimit) return "stopLimit";
+            if (t == OrderType.MIT && OrderTypesOn) return "mit";   // 0.4.0 B1
             return "other";
         }
 
@@ -866,6 +981,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string id = IdFor(o), cid;
             lock (Sync) CidOf.TryGetValue(o, out cid);
             double px = o.OrderType == OrderType.Limit ? o.LimitPrice : (o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit) ? o.StopPrice : 0;
+            if (o.OrderType == OrderType.MIT && OrderTypesOn) px = o.StopPrice;   // 0.4.0 B1: an MIT's trigger
             StringBuilder b = new StringBuilder("{\"type\":\"order\",\"id\":").Append(CbJson.Str(id));
             if (cid != null) b.Append(",\"cid\":").Append(CbJson.Str(cid));
             b.Append(",\"account\":").Append(CbJson.Str(o.Account != null ? o.Account.Name : ""))
@@ -891,6 +1007,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 b.Append(",\"planned\":{\"stopTicks\":").Append(st > 0 ? st.ToString(CultureInfo.InvariantCulture) : "null")
                  .Append(",\"targetTicks\":").Append(tt > 0 ? tt.ToString(CultureInfo.InvariantCulture) : "null").Append('}');
             }
+            b.Append(V3OrderFields(o));   // 0.4.0 B1: a stop-limit's limitPrice; by "strategy" and bucket
             return b.Append('}').ToString();
         }
 
@@ -911,6 +1028,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (role == "stop" || role == "target") KeepPartner(o, role, where);
             }
             catch (Exception ex) { Alarm(where + ": bracket error (" + ex.Message + "); check the position's stop in NinjaTrader"); }
+            try { MergeOnOrderUpdate(account, o, e.Error); } catch (Exception ex) { Alarm(where + ": merge upkeep error (" + ex.Message + "); check the position's stop in NinjaTrader"); }   // 0.4.0 B4
+            try { StrategyOrderUpdate(o, e); } catch (Exception ex) { Alarm(where + ": strategy error (" + ex.Message + "); check the stop in NinjaTrader"); }   // 0.4.0 B1
             if ((role == "stop" || role == "target") && (o.OrderState == OrderState.Cancelled || o.OrderState == OrderState.Rejected))
             {
                 try { NoteLostPair(account, o); } catch (Exception ex) { ChartBridgeServer.Log("OCO check error: " + ex.Message); }
@@ -919,9 +1038,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             if ((o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && IsExit(o) && o.Filled < o.Quantity)
                 Alarm(where + ": the market EXIT was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + "; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);
-            if (Enabled && AccountTradable(account.Name) && root != null)
-                ChartBridgeServer.SendToTraders(OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null));
+            if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: v2 pages the tradable accounts (as before), v3 pages every watched one
+                ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true, o);   // 0.4.0 review 2: o for a v3 page's "by"
+            try { if (ChartBridgeBot.Watching(o)) ChartBridgeBot.OnOrderUpdate(account, o, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null)); }   // 0.4.0 bot: the bot sees its own orders
+            catch (Exception ex) { ChartBridgeServer.Log("bot order update error: " + ex.Message); }
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
+            ChartBridgeCopier.OnOrderUpdate(account, o);   // 0.4.0 copier: follower fills get their stop; the leader's stop moves are followed
         }
 
         private static string Where(Account a, Instrument i)
@@ -970,6 +1092,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // account's orders, so it is called without holding Sync.
         private static Bracket Recover(Order entry, out List<Pair> pairs, out bool deferred)
         {
+            if (IsStrategyName(entry.Name)) return RecoverStrategy(entry, out pairs, out deferred);   // 0.4.0 B1: legs by fill mark and bucket, managed.txt
             pairs = new List<Pair>();
             deferred = false;
             Match m = EntryNameRx.Match(entry.Name ?? ""), am = RestingNameRx.Match(entry.Name ?? ""), pm = PlanNameRx.Match(entry.Name ?? "");
@@ -1346,14 +1469,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (!SameInstrument(o.Instrument, inst) || !IsWorking(o.OrderState) || !IsChartBridgeLeg(o) || IsBuy(o) != buySide) continue;
                 int left = Math.Max(0, o.Quantity - o.Filled), had;
-                if (string.IsNullOrEmpty(o.Oco)) { lone += left; continue; }
-                if (!groups.TryGetValue(o.Oco, out had) || left > had) groups[o.Oco] = left;
+                string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
+                if (grp == null) { lone += left; continue; }
+                if (!groups.TryGetValue(grp, out had) || left > had) groups[grp] = left;
             }
             return lone + groups.Values.Sum();
         }
 
         private static void PlaceLegs(Bracket br, int filled, int qty, double incPrice, string where)
         {
+            if (PlaceStrategyLegs(br, filled, qty, incPrice, where)) return;   // 0.4.0 B1: an Order Strategy entry, one pair per target bucket
             double tick = br.Instrument.MasterInstrument.TickSize;
             OrderAction exit = br.EntryIsBuy ? OrderAction.Sell : OrderAction.Buy;
             string mark = " f" + filled.ToString(CultureInfo.InvariantCulture) + " q" + qty.ToString(CultureInfo.InvariantCulture) +
@@ -1386,6 +1511,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Sync) { IdFor(x); Ours.Add(x); Manage(br.Account, br.Instrument); }
                 br.Account.Submit(new[] { x });
                 Alarm(where + ": price had already passed the stop level " + CbJson.Num(sp) + " (last " + CbJson.Num(last) + "); exited " + qty + " at market");
+                CopierLeaderFill(br, filled, qty, incPrice, null, sp);   // 0.4.0 copier: an increment that exited at once is not copied
                 return;
             }
             string oco = hasStop && hasTarget ? "cb-" + br.Tag + "-" + filled.ToString(CultureInfo.InvariantCulture) : "";
@@ -1406,6 +1532,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             br.Account.Submit(legs.ToArray());
             ChartBridgeServer.Log("bracket placed for " + qty + " on " + where + ": " +
                 (pair.Stop != null ? "stop " + CbJson.Num(sp) : "no stop") + ", " + (pair.Target != null ? "target " + CbJson.Num(tp) : "no target"));
+            CopierLeaderFill(br, filled, qty, incPrice, pair.Stop, sp);   // 0.4.0 copier: the leader's fill and its stop, to the followers
         }
 
         // A leg filled in part: shrink its partner to what is still open. A leg rejected: say so loudly.
@@ -1431,14 +1558,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (account == null || e.Position == null) return;
             Instrument inst = e.Position.Instrument;
             Booked(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);
+            MergeSawPosition(account, inst);   // 0.4.0 B4: the position is changing (Merge waits 2 s)
             string root = ChartBridgeServer.RootFor(inst);
-            if (Enabled && AccountTradable(account.Name) && root != null)
-                ChartBridgeServer.SendToTraders(PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice));
+            if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: each page its scope
+                ChartBridgeAccounts.SendScoped(account, PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice), false);
             // Flat, and still flat now (a newer fill may already have opened a position whose legs must stay),
             // on a connection that has been steady (not a reconnect still loading positions).
             double now = ChartBridgeTime.NowUtcMs();
             if (e.MarketPosition == MarketPosition.Flat && SignedPosition(account, inst) == 0 && Steady(account, now))
                 CancelLeftoverLegs(account, inst, Where(account, inst), now);
+            ChartBridgeCopier.OnPositionUpdate(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);   // 0.4.0 copier: the leader's exits
         }
 
         // Flat: any ChartBridge stop or target still working would open a new position if it filled. Legs
@@ -1520,6 +1649,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // reflection, so a differently named property falls back to resetting every account (the safe side).
         private static void OnConnectionStatus(object sender, EventArgs e)
         {
+            ChartBridgeCopier.ConnectionChanged();   // 0.4.0 copier: a mass disconnect is seen at once
             object conn = null, status = null, previous = null;
             try
             {
@@ -1561,7 +1691,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     bool skip;
                     lock (Sync) skip = Settled.Contains(o);
                     if (skip) continue;
-                    if (!PlansLoaded() && IsResting(o))
+                    if (!PlansLoaded() && (IsResting(o) || IsStrategyName(o.Name)))   // 0.4.0 B1: a strategy entry waits for managed.txt too
                     {
                         // S1: planned_brackets.txt not read yet: its legs wait (never guessed); loud once it has lasted PlanReadAlarmMs.
                         bool known, alarm = false;
@@ -1737,11 +1867,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (Order o in orders)
                 {
                     if (!SameInstrument(o.Instrument, inst) || !IsWorking(o.OrderState)) continue;
-                    Match lm = LegNameRx.Match(o.Name ?? "");
-                    if (!lm.Success || lm.Groups[2].Value == "exit") continue;
+                    string lr = RoleFor(o);   // 0.4.0 B4: "stop" or "target" for a ChartBridge leg, merged ones too
+                    if (lr != "stop" && lr != "target") continue;
                     legsWorking = true;
-                    if (lm.Groups[2].Value == "stop" && pos != 0 && IsBuy(o) == (pos < 0)) stops += Math.Max(0, o.Quantity - o.Filled);
-                    if (lm.Groups[2].Value == "target" && pos != 0 && IsBuy(o) == (pos < 0)) targets += Math.Max(0, o.Quantity - o.Filled);
+                    if (lr == "stop" && pos != 0 && IsBuy(o) == (pos < 0)) stops += Math.Max(0, o.Quantity - o.Filled);
+                    if (lr == "target" && pos != 0 && IsBuy(o) == (pos < 0)) targets += Math.Max(0, o.Quantity - o.Filled);
                 }
                 lock (Sync)
                 {
@@ -1784,6 +1914,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             ScanEntries(now);
             try { CheckStops(now); } catch (Exception ex) { ChartBridgeServer.Log("stop check error: " + ex.Message); }
             try { KeepPlansSaved(); } catch (Exception ex) { ChartBridgeServer.Log("planned brackets check error: " + ex.Message); }   // 0.3.8
+            try { MergeEvery2s(now); } catch (Exception ex) { ChartBridgeServer.Log("merge check error: " + ex.Message); }   // 0.4.0 B4
+            try { KeepStrategies(now); } catch (Exception ex) { ChartBridgeServer.Log("strategies check error: " + ex.Message); }   // 0.4.0 B1
             List<Account> accounts = new List<Account>();
             lock (Account.All) foreach (Account a in Account.All) if (!IsNeverTradable(a.Name ?? "")) accounts.Add(a);
             HashSet<string> seen = new HashSet<string>();
@@ -1814,11 +1946,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (Order o in legs)
             {
                 Unit u;
-                if (string.IsNullOrEmpty(o.Oco) || !byOco.TryGetValue(o.Oco, out u))
+                string grp = MergeUnitKey(o);   // 0.4.0 B4: the OCO id, or a merged set's group
+                if (grp == null || !byOco.TryGetValue(grp, out u))
                 {
                     u = new Unit { Buy = IsBuy(o) };
                     units.Add(u);
-                    if (!string.IsNullOrEmpty(o.Oco)) byOco[o.Oco] = u;
+                    if (grp != null) byOco[grp] = u;
                 }
                 u.Legs.Add(o);
                 u.Left = Math.Max(u.Left, o.Quantity - o.Filled);
@@ -1842,6 +1975,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Unit u = right[i];
                 if (u.Left <= excess) { cancel.AddRange(u.Legs); excess -= u.Left; continue; }
                 int keep = u.Left - excess;
+                if (!MergeShrinkUnit(u.Legs, keep, cancel, change))   // 0.4.0 B4: a merged set shrinks as a set
                 foreach (Order o in u.Legs) if (o.Quantity - o.Filled > keep) { o.QuantityChanged = keep + o.Filled; change.Add(o); }
                 excess = 0;
             }
@@ -1904,6 +2038,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static void LoadPlans(int gen)
         {
+            LoadManaged(gen);   // 0.4.0 B1: managed.txt, read here before planned_brackets.txt counts as read
             Dictionary<string, PlanRecord> read = new Dictionary<string, PlanRecord>();
             Dictionary<string, LegacyRecord> legacy = new Dictionary<string, LegacyRecord>();
             int bad = 0, old = 0;
@@ -2103,30 +2238,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                    ",\"qty\":" + signed + ",\"avgPrice\":" + (signed != 0 ? CbJson.Num(avg) : "null") + "}";
         }
 
-        private static List<Account> TradableAccounts()
-        {
-            List<Account> list = new List<Account>();
-            lock (Account.All) foreach (Account a in Account.All) if (AccountTradable(a.Name)) list.Add(a);
-            return list;
-        }
-
-        private static string OrdersJson()
+        // 0.4.0 accounts: a v2 page gets the tradable accounts (as before), a v3 page every watched one (ChartBridgeAccounts.ScopeFor).
+        private static string OrdersJson(ChartBridgeClient client)
         {
             List<string> items = new List<string>();
-            foreach (Account a in TradableAccounts())
+            foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
             {
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
-                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(OrderJson(o, null));
+                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null), o));   // 0.4.0 review 2: o for a v3 page's "by"
             }
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }
 
-        private static List<string> PositionJsons()
+        private static List<string> PositionJsons(ChartBridgeClient client)
         {
             List<string> items = new List<string>();
-            foreach (Account a in TradableAccounts())
+            foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
             {
                 List<Position> positions;
                 lock (a.Positions) positions = a.Positions.ToList();

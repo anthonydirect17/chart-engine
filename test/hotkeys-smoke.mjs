@@ -380,7 +380,7 @@ try {
     let n = 0;
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: () => 'ws://localhost:' + port + '/ws?ticket=A' + (++n) + '-' + Math.random().toString(36).slice(2), paneId: 'main', storagePrefix: 'desk:' });
   }, P2);
-  await until(() => host.evaluate(() => { const el = document.querySelector('#paneA .pill[id$="-connPill"]'); return !!el && el.textContent === 'LIVE'; }), 'mounted chart live', 20000);
+  await until(() => host.evaluate(() => { const el = document.querySelector('#paneA [id$="-badge"]'); return !!el && el.dataset.conn === 'live'; }), 'mounted chart live', 20000);   // 1.16.0: the badge
   check(await host.evaluate(() => !document.querySelector('#paneA .set-wrap, #paneA .obar')), 'a mounted chart has no Settings and no order bar');
   await host.evaluate(() => { window.__sent.length = 0; });
   await host.click('#paneA canvas');

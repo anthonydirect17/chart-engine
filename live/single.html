@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Live Chart</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap">
+<!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
+<link rel="stylesheet" href="fonts/plex.css">
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
 <style>
@@ -23,6 +22,7 @@ body { background: #080B10; }
 <script src="../src/chart-engine.js"></script>
 <script src="bar-builder.js"></script>
 <script src="order-ticket.js"></script>
+<script src="order-strategies.js"></script>
 <!-- the order bar's order logic, the one order path shared with the order ticket (1.12.0) -->
 <script src="trade.js"></script>
 <!-- ChartBridge's PIN (0.3.2): only this page loads it; a mounted chart never asks for the PIN. -->

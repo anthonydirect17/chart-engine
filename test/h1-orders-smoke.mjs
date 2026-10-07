@@ -80,9 +80,9 @@ try {
   const y = p => A.evaluate(pr => window.workspace.chart('a1').priceToY(pr), p);
   const L = (await state()).last;
 
-  /* ---------------- a header: the bar's change, no percent */
-  const chg = await A.evaluate(() => [...document.querySelectorAll('.ws-panel [id$="lgChg"]')].map(e => e.textContent));
-  check(chg.length >= 3 && chg.every(t => !/%/.test(t)), 'the headers show the bar\'s change without its percent (' + chg.join(', ') + ')');
+  /* ---------------- 1.16.0 (Anthony): no text on a workspace chart (the bar's change was in its legend up to 1.15.0) */
+  const chg = await A.evaluate(() => document.querySelectorAll('.ws-panel .legend, .ws-panel [id$="lgChg"]').length);
+  check(chg === 0, 'no legend on any workspace chart (' + chg + ')');
 
   /* ---------------- long 1 with legs far away, limits to cancel */
   await tk('bStop').fill('200'); await tk('bStop').press('Enter');

@@ -697,7 +697,7 @@ Test '-InstallChartBridge: an add-on file held past the retry puts back every fi
   $said = Get-Said
   Assert-Code $code 1 'STOP'
   Assert ($said -match 'STOP: ChartBridge 0\.4\.1 was not copied and nothing changed in AddOns' -and $said -match 'NinjaScript Editor holds it' -and $said -match 'Close the NinjaScript Editor') "says nothing changed, and why: $said"
-  Assert ((Get-Text $script:P.Log) -match 'the add-on copy failed after 1 of 4 files .*putting back: ChartBridge\.cs') 'ChartBridge.cs had been replaced (the reviewer''s mix), and was put back'
+  Assert ((Get-Text $script:P.Log) -match 'the add-on copy failed after 1 of \d+ files .*putting back: ChartBridge\.cs') 'ChartBridge.cs had been replaced (the reviewer''s mix), and was put back'
   Assert ((Get-AddOnsPrint) -eq $before) "AddOns exactly as before (every file's hash): $(Get-AddOnMarks)"
   Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns | Where-Object { $_.Name -like '*.upd-*' }).Count -eq 0) 'no temporary file left in AddOns'
   $s = Read-State
@@ -778,7 +778,7 @@ Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily
   })
   [void](Run-Update)
   $stage = Read-JsonFile (Join-Path $script:P.Staged 'stage.json')
-  Assert ($stage['chartBridgeVersion'] -eq '0.4.3' -and @($stage['addonFiles']).Count -eq 3 -and @($stage['addonFiles']) -notcontains 'ChartBridgeBars.cs') "staged 0.4.3 without ChartBridgeBars.cs: $(@($stage['addonFiles']) -join ', ')"
+  Assert ($stage['chartBridgeVersion'] -eq '0.4.3' -and @($stage['addonFiles']).Count -eq @((Read-JsonFile (Get-LocalPath $src 'nt8/install-files.json'))['addons']).Count -and @($stage['addonFiles']) -notcontains 'ChartBridgeBars.cs') "staged 0.4.3 without ChartBridgeBars.cs: $(@($stage['addonFiles']) -join ', ')"
   Assert (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs')) 'the 0.4.2 install left ChartBridgeBars.cs in AddOns'
   # the probe: the copy fails on its third file; the file taken out and the one replaced are both put back
   $before = Get-AddOnsPrint
@@ -786,7 +786,7 @@ Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily
   try { $code = Invoke-InstallChartBridge } finally { $script:HoldAddOn = ''; $script:Yes = $false }
   Assert-Code $code 1 'STOP (nothing changed)'
   $log = Get-Text $script:P.Log
-  Assert ($log -match 'ChartBridgeBars\.cs is not in ChartBridge 0\.4\.3''s file list: taken out of AddOns' -and $log -match 'the add-on copy failed after 2 of 4 files .*putting back: ChartBridgeBars\.cs, ChartBridge\.cs') 'taken out first, then put back with ChartBridge.cs'
+  Assert ($log -match 'ChartBridgeBars\.cs is not in ChartBridge 0\.4\.3''s file list: taken out of AddOns' -and $log -match 'the add-on copy failed after 2 of \d+ files .*putting back: ChartBridgeBars\.cs, ChartBridge\.cs') 'taken out first, then put back with ChartBridge.cs'
   Assert ((Get-AddOnsPrint) -eq $before) 'AddOns exactly as before, ChartBridgeBars.cs included'
   Assert (-not (Read-State)['chartBridge'].Contains('mixed')) 'no mix'
   # an install recorded before 0.3.7 has no file list: the list is read from that install's commit
@@ -800,7 +800,7 @@ Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily
   $kept = @(Get-ChildItem -Recurse -LiteralPath $script:P.PrevAddOns -Filter 'ChartBridgeBars.cs')
   Assert ($kept.Count -ge 1) 'its copy is kept in the backup'
   $inst = (Read-State)['chartBridge']['installed']
-  Assert ($inst['version'] -eq '0.4.3' -and (@($inst['files']) -join ',') -eq 'ChartBridge.cs,ChartBridgeOrders.cs,ChartBridgePin.cs') "the install records its file list: $(@($inst['files']) -join ',')"
+  Assert ($inst['version'] -eq '0.4.3' -and (@($inst['files']) -join ',') -eq ((@((Read-JsonFile (Get-LocalPath $src 'nt8/install-files.json'))['addons']) | ForEach-Object { Split-Path -Leaf $_ }) -join ',')) "the install records its file list: $(@($inst['files']) -join ',')"
   $script:FakeDiag = '0.4.3'
   [void](Run-Update)
 }

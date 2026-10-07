@@ -128,7 +128,8 @@ try {
       await page.goto(`http://localhost:${PORT}/test/embed-host.html`);
       await page.evaluate(url => { window.ChartLive.mount(document.getElementById('paneA'), { wsUrl: () => url + '?ticket=' + Math.random().toString(36).slice(2), storagePrefix: '' }); document.getElementById('paneB').remove(); }, `ws://localhost:${PORT}/ws`);
     } else { await page.goto(`http://localhost:${PORT}/live/${SINGLE}`); await unlockIfAsked(page, TEST_PIN, 120000); }
-    await page.waitForFunction(() => { const el = document.querySelector('[id$="connPill"]'); return el && el.textContent === 'LIVE'; }, null, { timeout: 120000, polling: 200 });
+    // the page's LIVE pill; a mounted chart (1.16.0) has its badge's state instead
+    await page.waitForFunction(() => { const el = document.querySelector('[id$="connPill"]'), b = document.querySelector('[id$="-badge"]'); return el ? el.textContent === 'LIVE' : !!b && b.dataset.conn === 'live'; }, null, { timeout: 120000, polling: 200 });
     return { page, loadMs: Date.now() - t0 };
   };
   const other = SECOND ? await open() : null;

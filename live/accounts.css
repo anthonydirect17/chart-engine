@@ -1,0 +1,90 @@
+/* The Account page (live/accounts.js, chart 1.16.0) and the Quote board's quote-only rows. Built on workspace.css's grid
+   rows (.gr, .gr-row) and tabs (.ac-tabs). Nothing here moves (rule R3: order surfaces, the Accounts warnings and the copier
+   stay instant): no transition and no animation on this page. Amber is the house warning colour; red only where a limit is
+   nearly used up (Anthony's spec: amber at 70 percent, red at 90). */
+.apg, .apg *, .ws-limit { transition: none !important; animation: none !important; }
+.apg { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.apg .lb-short { display: none; }
+.ws-panel.gr-narrow .apg .lb-full { display: none; }
+.ws-panel.gr-narrow .apg .lb-short { display: inline; }
+.apg-tabs .ac-tab[hidden] { display: none; }
+.apg-foot { white-space: nowrap; }
+.apg-h { margin: 0; padding: 6px 8px 3px; font: 600 10px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); border-top: 1px solid var(--ws-line); }
+.apg-gh { display: flex; justify-content: space-between; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 11px; color: var(--ws-text); }
+.apg-sum { font: 400 11px var(--ws-mono); color: var(--ws-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.apg-sum b { font-weight: 600; } .apg-sum b.up { color: var(--ws-buy); } .apg-sum b.dn { color: var(--ws-sell); }
+.apg-arch { margin: 6px 8px; color: var(--ws-muted); font-size: 11px; }
+.apg .warn, .apg-g .warn { color: var(--ws-warn); }
+
+/* grids */
+.apg-acc-g .gr-row { grid-template-columns: minmax(64px, 1.1fr) 78px minmax(0, 1fr) minmax(0, .9fr) minmax(0, .9fr) minmax(0, 2.2fr) 44px; }
+.apg-gone-g .gr-row { grid-template-columns: minmax(64px, 1fr) minmax(0, 1.3fr) 90px minmax(0, .8fr) minmax(0, 2fr); }
+.apg-pos-g .gr-row { grid-template-columns: minmax(64px, 1fr) 40px 40px repeat(4, minmax(0, 1fr)); }
+.apg-ord-g .gr-row { grid-template-columns: minmax(64px, 1fr) 40px minmax(0, 1.8fr) 34px minmax(0, 1fr); }
+.apg-ord-g.apg-can .gr-row { grid-template-columns: minmax(64px, 1fr) 40px minmax(0, 1.8fr) 34px minmax(0, 1fr) 28px; }
+.apg-trd-g .gr-row { grid-template-columns: 62px 62px 40px minmax(0, 2.4fr) minmax(0, 1fr) minmax(0, 1fr); }
+.apg-fil-g .gr-row { grid-template-columns: 62px 40px minmax(0, 1fr) minmax(0, 1fr); }
+.apg-cop-g .gr-row { grid-template-columns: minmax(64px, 1fr) 30px 48px 70px 104px 64px 48px minmax(0, 1.4fr); }
+.ws-panel.gr-narrow .apg-acc-g .gr-row { grid-template-columns: minmax(56px, 1fr) 0 0 minmax(0, .9fr) 0 minmax(0, 1.6fr) 36px; column-gap: 4px; }
+.ws-panel.gr-narrow .apg-acc-g .gr-row > :nth-child(2), .ws-panel.gr-narrow .apg-acc-g .gr-row > :nth-child(3), .ws-panel.gr-narrow .apg-acc-g .gr-row > :nth-child(5) { visibility: hidden; }
+.ws-panel.gr-narrow .apg-cop-g .gr-row { grid-template-columns: minmax(56px, 1fr) 26px 44px 64px 96px 0 0 minmax(0, 1fr); column-gap: 4px; }
+.ws-panel.gr-narrow .apg-cop-g .gr-row > :nth-child(6), .ws-panel.gr-narrow .apg-cop-g .gr-row > :nth-child(7) { visibility: hidden; }
+
+/* limit warnings: the row's left edge and its Room cell (item 15) */
+.apg-acc.apg-amber { box-shadow: inset 3px 0 0 var(--ws-warn); background: var(--ws-warn-ground); }
+.apg-acc.apg-red { box-shadow: inset 3px 0 0 var(--ws-sell); background: var(--ws-sell-ground); }
+.apg-g .apg-room.apg-amber { color: var(--ws-warn); font-weight: 600; }
+.apg-g .apg-room.apg-red { color: var(--ws-sell); font-weight: 600; }
+.apg-gone { color: var(--ws-text2); }
+.apg-confirm { grid-column: span 1; display: flex; align-items: center; gap: 6px; white-space: normal !important; color: var(--ws-warn-text); font-family: var(--ws-sans); font-size: 11px; }
+.apg .ac-btn.apg-yes { border-color: var(--ws-warn); color: var(--ws-warn); }
+.apg-chk { width: 14px; height: 14px; margin: 0; accent-color: var(--ws-accent); cursor: pointer; }
+.apg-chk:disabled { cursor: not-allowed; opacity: .5; }
+.apg-link { cursor: pointer; }
+.apg-link:hover { background: var(--ws-row); }
+
+/* Today's trades: Round trips or Fills */
+.apg-bar { padding: 5px 8px; }
+.apg-seg button { height: 22px; padding: 0 8px; font-size: 11px; }
+
+/* the copier */
+.apg-cop-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 8px; border-bottom: 1px solid var(--ws-line); font-size: 11px; }
+.apg-arm { font: 600 10.5px var(--ws-sans); letter-spacing: .06em; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--ws-line2); }
+.apg-arm.on { color: var(--ws-soft); border-color: var(--ws-tint-line); background: var(--ws-tint); }
+.apg-arm.off { color: var(--ws-warn); border-color: var(--ws-warn); background: var(--ws-warn-ground); }
+.apg-why { color: var(--ws-warn-text); }
+.apg .ac-btn.apg-rearm { border-color: var(--ws-warn); color: var(--ws-warn); }
+.apg-lbl { display: inline-flex; align-items: center; gap: 5px; color: var(--ws-muted); }
+.apg .apg-sel { height: 22px; padding: 0 4px; border-radius: 4px; font: 11px var(--ws-mono); max-width: 120px; }
+.apg-sim { color: var(--ws-muted); margin-left: auto; }
+/* a follower's SIM or LIVE mark (Anthony 2026-10-07: no Sim lock): LIVE in the house red of the Armed warning, never animated */
+.apg-fol { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.apg-fol > .b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apg-mark { flex: none; font: 700 9.5px/1 var(--ws-sans); letter-spacing: .08em; padding: 2px 4px; border-radius: 3px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
+.apg-mark.live { color: #FFE4EA; background: #9F1239; border-color: #E0445E; }
+.apg-ll { display: flex; align-items: center; gap: 4px; }
+.apg-ll-in { width: 70px; height: 20px; font: 11px var(--ws-mono); background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 4px; padding: 0 4px; }
+.apg-ll-in:disabled { opacity: .45; }
+.apg-g .apg-skip { color: var(--ws-warn); font-weight: 600; }
+.apg-skipped { background: var(--ws-warn-ground); }
+
+/* the Log */
+.apg-log { font: 11px var(--ws-mono); padding: 2px 0; }
+.apg-ln { margin: 0; padding: 2px 8px; border-top: 1px solid var(--ws-row); white-space: normal; overflow-wrap: anywhere; }
+.apg-ln .mut { color: var(--ws-muted); }
+.apg-ln.warn { color: var(--ws-warn-text); }
+.apg-ln.error { color: var(--ws-sell); }
+
+/* a chart trading an account near its limit: a small warning in the chart's header */
+.ws-limit { flex: none; font: 600 10px var(--ws-sans); letter-spacing: .04em; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+.ws-limit:empty { display: none; }
+.ws-panel.narrow .ws-limit-w { display: none; }
+.ws-limit.amber { color: var(--ws-warn); border: 1px solid var(--ws-warn); background: var(--ws-warn-ground); }
+.ws-limit.red { color: var(--ws-sell); border: 1px solid var(--ws-sell); background: var(--ws-sell-ground); }
+
+/* the Quote board's quote-only markets (item 20): compact rows after NQ and ES; the rows scroll inside the board when
+   the panel is short (as Time and Sales' rows) */
+.qb-wrap.qb-more { overflow-y: auto; overscroll-behavior: contain; }
+.gr-qb .gr-row.qb-q { padding-top: 1px; padding-bottom: 1px; font-size: 11px; }
+.gr-qb .gr-row.qb-q .b { font-weight: 500; color: var(--ws-text2); }
+.gr-qb .gr-row.qb-first { border-top: 1px solid var(--ws-line2); }
