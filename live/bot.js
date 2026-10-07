@@ -224,7 +224,7 @@ function create(o) {
   function onBot(m) {
     const prev = S.bot;
     S.bot = m;
-    if (S.on && prev) for (const n of BC.noticesFrom(prev, m, BC.fmtUsd)) { notice(n); log.add({ k: 'n:' + n.kind + ':' + Date.now(), kind: 'notice', text: n.text, level: n.level }); }
+    if (S.on && prev) for (const n of BC.noticesFrom(prev, m, BC.fmtUsd, v => fmtPx(v))) { notice(n); log.add({ k: 'n:' + n.kind + ':' + Date.now(), kind: 'notice', text: n.text, level: n.level }); }
     if (prev && prev.mode !== m.mode) log.add({ k: 'mode:' + Date.now(), kind: 'mode', text: 'Mode: ' + (BC.MODE_NAME[m.mode] || m.mode) });
     if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses)) log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: ' + m.maxTrades + ' trades, ' + m.maxLosses + ' losing trades' });
     render();
@@ -437,8 +437,8 @@ function create(o) {
       '<span class="sn">' + esc(b.sentence) + '</span>' +
       '<canvas class="bt-thumb" data-thumb="' + i + '" aria-hidden="true"></canvas>' +
       '<span class="st"><span>' + st.trades + ' trades</span><span>' + BC.fmtPct(st.winRate) + ' won</span><span>' + BC.fmtR(st.avgR) + ' avg</span></span>' +
-      '<span class="st2">Rule card ' + BC.ruleLines(b.ruleCard).length + ' rules · ' + Object.keys(b.settings).length + ' settings' + (b.frozen ? ' · frozen ' + esc(b.frozen) : '') + '</span>' +
-      (loaded ? '<span class="bt-inslot" data-k="inslot">In the slot now · ' + esc(liveLine()) + '</span>' : '') + '</button>';
+      '<span class="st2">Rule card: ' + BC.ruleLines(b.ruleCard).length + ' rules, ' + Object.keys(b.settings).length + ' settings</span>' +
+      (loaded ? '<span class="bt-inslot" data-k="inslot">In the slot · ' + esc(liveLine()) + '</span>' : '') + '</button>';
   }
   function renderLibrary() {
     if (!view) return;
@@ -703,7 +703,7 @@ function create(o) {
     if (S.library.state === 'ok') {
       const was = q('.bt-entry.loaded'), inslot = q('[data-k="inslot"]');
       if ((was ? was.dataset.id : null) !== (e ? e.id : null)) renderLibrary();       // the slot changed: the cards say so
-      else if (inslot) put(inslot, 'textContent', 'In the slot now · ' + liveLine());
+      else if (inslot) put(inslot, 'textContent', 'In the slot · ' + liveLine());
     }
     renderPanelTab();
   }

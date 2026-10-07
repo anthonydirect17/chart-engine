@@ -416,15 +416,16 @@ function answerKeys(doc, tradingKeys, refused) {
 /* ======================================================================== notices */
 /**
  * What deserves a corner notice between two `bot` messages (prev may be null): entry, exit, a rail turning amber or red,
- * a stand-down, the heartbeat lost (or back), the kill switch. Returns [{ kind, text, level }].
+ * a stand-down, the heartbeat lost (or back), the kill switch. fmtPnl and fmtPrice write money and prices as the page
+ * does. Returns [{ kind, text, level }].
  */
-function noticesFrom(prev, next, fmtPnl) {
+function noticesFrom(prev, next, fmtPnl, fmtPrice) {
   const out = [], a = prev || {}, b = next || {};
   if (!prev || !next) return out;
-  const money = typeof fmtPnl === 'function' ? fmtPnl : v => String(v);
+  const money = typeof fmtPnl === 'function' ? fmtPnl : v => String(v), px = typeof fmtPrice === 'function' ? fmtPrice : v => String(v);
   const qa = a.position && isNum(a.position.qty) ? a.position.qty : 0, qb = b.position && isNum(b.position.qty) ? b.position.qty : 0;
   const nm = b.name || 'The bot';
-  if (!qa && qb) out.push({ kind: 'entry', level: '', text: nm + ': entered ' + (qb > 0 ? 'long ' : 'short ') + Math.abs(qb) + ' ' + (b.root || '') + (isNum(b.position.avgPrice) ? ' at ' + b.position.avgPrice : '') });
+  if (!qa && qb) out.push({ kind: 'entry', level: '', text: nm + ': entered ' + (qb > 0 ? 'long ' : 'short ') + Math.abs(qb) + ' ' + (b.root || '') + (isNum(b.position.avgPrice) ? ' at ' + px(b.position.avgPrice) : '') });
   else if (qa && !qb) out.push({ kind: 'exit', level: '', text: nm + ': exited; today ' + money(b.pnlToday) });
   else if (qa && qb && Math.sign(qa) !== Math.sign(qb)) out.push({ kind: 'entry', level: '', text: nm + ': reversed to ' + (qb > 0 ? 'long ' : 'short ') + Math.abs(qb) });
   const ra = rails(a), rb = rails(b);

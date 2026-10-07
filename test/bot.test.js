@@ -241,6 +241,7 @@ test('notices: entry, exit, a rail turning amber or red, stand-down, heartbeat, 
   const kinds = (a, b) => BC.noticesFrom(a, b, BC.fmtUsd).map(n => n.kind + (n.level ? ':' + n.level : ''));
   assert.deepEqual(kinds(base, Object.assign({}, base, { position: { qty: -1, avgPrice: 25400.25 } })), ['entry']);
   assert.match(BC.noticesFrom(base, Object.assign({}, base, { position: { qty: -1, avgPrice: 25400.25 } }))[0].text, /entered short 1 MNQ at 25400.25/);
+  assert.match(BC.noticesFrom(base, Object.assign({}, base, { position: { qty: 1, avgPrice: 25400.25 } }), BC.fmtUsd, p => p.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','))[0].text, /long 1 MNQ at 25,400\.25/, 'prices as the page writes them');
   const inPos = Object.assign({}, base, { position: { qty: -1, avgPrice: 25400.25 } });
   assert.match(BC.noticesFrom(inPos, Object.assign({}, base, { pnlToday: 9 }), BC.fmtUsd)[0].text, /exited; today \+\$9\.00/);
   assert.deepEqual(kinds(base, Object.assign({}, base, { trades: 4 })), ['limit:amber']);
