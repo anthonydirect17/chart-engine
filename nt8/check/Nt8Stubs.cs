@@ -136,12 +136,30 @@ namespace NinjaTrader.Cbi
         public int Quantity { get; set; }
         public double AveragePrice { get; set; }
     }
+    // 0.4.0 accounts: NinjaTrader's AccountItem (accountitem.htm lists the documented ones; TrailingMaxDrawdown is not in that
+    // list but is the Accounts tab's "Trailing max drawdown" column and is read by name, so a NinjaTrader without it still
+    // compiles), Currency, the provider, and the account status event (accountstatusupdate.htm: e.Account, e.Status).
+    public enum AccountItem { BuyingPower, CashValue, Commission, ExcessIntradayMargin, ExcessInitialMargin, ExcessMaintenanceMargin, ExcessPositionMargin, Fee,
+                              GrossRealizedProfitLoss, InitialMargin, IntradayMargin, LongOptionValue, LookAheadMaintenanceMargin, LongStockValue, MaintenanceMargin,
+                              NetLiquidation, NetLiquidationByCurrency, PositionMargin, RealizedProfitLoss, ShortOptionValue, ShortStockValue, SodCashValue,
+                              SodLiquidatingValue, UnrealizedProfitLoss, TotalCashBalance, TrailingMaxDrawdown, WeeklyProfitLoss }
+    public enum Currency { UsDollar, Euro, Unknown }
+    public enum Provider { Simulator, Playback, Rithmic, Tradovate, Unknown }
+    public enum AccountStatus { Enabled, Disabled, Unknown }
+    public class AccountStatusEventArgs : EventArgs { public Account Account { get; set; } public AccountStatus Status { get; set; } }
     // Stand-in account: records every order call so the Mono harness can check the gates.
     public class Account
     {
         public static List<Account> All = new List<Account>();
         public string Name { get; set; }
         public Connection Connection { get; set; }
+        public Provider Provider { get; set; }
+        public Currency Denomination { get; set; }
+        public readonly Dictionary<AccountItem, double> Items = new Dictionary<AccountItem, double>();   // the harness sets what Get answers (0 when unset, as NinjaTrader)
+        public Exception GetThrows;                                                                       // the harness: Get throws this
+        public double Get(AccountItem item, Currency currency) { if (GetThrows != null) throw GetThrows; double v; return Items.TryGetValue(item, out v) ? v : 0; }
+        public static event EventHandler<AccountStatusEventArgs> AccountStatusUpdate;
+        public static void FireStatus(Account a, AccountStatus s) { if (AccountStatusUpdate != null) AccountStatusUpdate(null, new AccountStatusEventArgs { Account = a, Status = s }); }
         public List<Execution> Executions = new List<Execution>();
         public List<Order> Orders = new List<Order>();
         public List<Position> Positions = new List<Position>();

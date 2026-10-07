@@ -165,7 +165,7 @@ public static class MarketsHarness
             Check(rejected("CL " + why), "cancelling it from the chart is refused");
             msg("plan", "{\"type\":\"plan\",\"id\":\"" + id + "\",\"stopTicks\":10}");
             Check(rejected("CL " + why) && acc.Calls.Count == 0, "planning on it is refused; nothing reached NinjaTrader for any of them");
-            string orders = (string)typeof(ChartBridgeOrders).GetMethod("OrdersJson", PS).Invoke(null, null);
+            string orders = (string)typeof(ChartBridgeOrders).GetMethod("OrdersJson", PS).Invoke(null, new object[] { null });   // 0.4.0 accounts: OrdersJson(page); no page = v2 scope
             Check(!orders.Contains("\"name\":\"manual\""), "the CL order is not listed to the page as a chart order (RootFor is null for it)");
             // not over-protected: a traded root still goes
             msg("order", "{\"type\":\"order\",\"cid\":\"q3\",\"account\":\"EVAL-Q\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1}");

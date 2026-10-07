@@ -109,6 +109,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static bool AccountTradable(string name)
         {
             if (!Enabled || string.IsNullOrEmpty(name) || IsNeverTradable(name)) return false;
+            if (ChartBridgeAccounts.On) return ChartBridgeAccounts.Checked(name);   // 0.4.0 accounts: with accountChecks on, gate 2 is the page's checkmark (accounts.txt), not tradeAccounts
             foreach (string a in TradeAccounts) if (a.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
@@ -144,7 +145,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(on ? "true" : "false");
             if (!on) b.Append(",\"reason\":").Append(CbJson.Str(reason ?? (Enabled ? "not signed in" : "trading is off in config.txt")));
             b.Append(",\"accounts\":[");
-            if (on) b.Append(string.Join(",", TradeAccounts.Select(a => CbJson.Str(a))));
+            if (on) b.Append(string.Join(",", (ChartBridgeAccounts.On ? ChartBridgeAccounts.CheckedNames() : TradeAccounts).Select(a => CbJson.Str(a))));   // 0.4.0 accounts: the checked accounts with accountChecks on
             b.Append("],\"maxQty\":{\"*\":").Append(DefaultMaxQty);
             foreach (KeyValuePair<string, int> kv in MaxQty) b.Append(',').Append(CbJson.Str(kv.Key)).Append(':').Append(kv.Value);
             b.Append('}');
@@ -286,7 +287,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "order", new[] { "type", "cid", "account", "root", "side", "kind", "qty", "price", "bracket" } },
             { "change", new[] { "type", "cid", "id", "price" } },
             { "plan", new[] { "type", "cid", "id", "stopTicks", "targetTicks" } },
-            { "cancel", new[] { "type", "cid", "id" } },
+            { "cancel", new[] { "type", "cid", "id", "from" } },   // 0.4.0 accounts: "from": "list" (the Working orders tab), refused unless cancelFromList is on
             { "flatten", new[] { "type", "cid", "account", "root" } },
         };
         private static readonly string[] BracketKeys = { "stop", "target" };
@@ -372,7 +373,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (type == "order") why = PlaceOrder(top, bracketBody, cid);
                 else if (type == "change") why = ChangeOrder(top, id);
                 else if (type == "plan") why = PlanOrder(top, id);
-                else if (type == "cancel") why = CancelOrder(id);
+                else if (type == "cancel") why = CancelOrder(top, id);   // 0.4.0 accounts: top for "from"
                 else if (type == "flatten") why = Flatten(top);
                 if (why != null) Reject(client, cid, id, why);
             }
@@ -407,11 +408,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (!OriginAllowed(client.Origin)) reason = "orders are only accepted from ChartBridge's own page";
             else if (string.IsNullOrEmpty(given) || token.Length == 0 || !SlowEquals(given, token)) reason = "session token does not match; reload the page";
             client.Trader = reason == null;
-            client.Send(TradingJson(client.Trader, reason));
+            client.Send(ChartBridgeAccounts.TradingFor(client, TradingJson(client.Trader, reason)));   // 0.4.0 accounts: a v3 page also gets the switches
             List<string> warnings;
             lock (ConfigWarnings) warnings = client.Trader ? ConfigWarnings.ToList() : new List<string>();   // only to a page that signed in
             foreach (string w in warnings) client.Send("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(w) + "}");
-            if (client.Trader) { client.Send(OrdersJson()); foreach (string p in PositionJsons()) client.Send(p); }
+            if (client.Trader) { client.Send(OrdersJson(client)); foreach (string p in PositionJsons(client)) client.Send(p); ChartBridgeAccounts.SignedIn(client); }   // 0.4.0 accounts: a v3 page sees every watched account
         }
 
         private static bool SlowEquals(string a, string b)
@@ -423,7 +424,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // Gates 1, 4 and 7 for every order action.
-        private static string Gate(ChartBridgeClient client)
+        internal static string Gate(ChartBridgeClient client)   // 0.4.0 accounts: internal, so accountTrade and accountArchive pass the same gates
         {
             if (!Enabled) return "trading is off in config.txt";
             if (!client.Trader || !OriginAllowed(client.Origin)) return "this connection may not trade; reload ChartBridge's page";
@@ -441,11 +442,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static Account FindAccount(string name, out string why)
         {
             why = null;
-            if (!AccountTradable(name)) { why = "account " + (name ?? "(none)") + " may not trade from the chart (tradeAccounts in config.txt)"; return null; }
+            if (!AccountTradable(name)) { why = ChartBridgeAccounts.On ? ChartBridgeAccounts.EntryRefusal(name) : "account " + (name ?? "(none)") + " may not trade from the chart (tradeAccounts in config.txt)"; return null; }   // 0.4.0 accounts: the checkmark's reason
             Account found = null;
             lock (Account.All)
                 foreach (Account a in Account.All) if (a.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { found = a; break; }
-            if (found == null) { why = "account " + name + " is in tradeAccounts but not connected in NinjaTrader"; return null; }
+            if (found == null) { why = "account " + name + (ChartBridgeAccounts.On ? " is not connected in NinjaTrader" : " is in tradeAccounts but not connected in NinjaTrader"); return null; }   // 0.4.0 accounts: no tradeAccounts in the reason when the checkmark is gate 2
             string status = StatusOf(found);
             if (status != "Connected") { why = "account " + name + " is not connected (" + status + ")"; return null; }
             if (!ChartBridgeServer.EnsureWatched(found)) { why = "ChartBridge is not listening to account " + name + " yet; try again in a few seconds"; return null; }
@@ -686,7 +687,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             Order o;
             lock (Sync) ById.TryGetValue(id ?? "", out o);
             if (o == null) return "no working order " + (id ?? "(none)");
-            if (o.Account == null || !AccountTradable(o.Account.Name)) return "that order's account may not trade from the chart";
+            // 0.4.0 accounts: with accountChecks on, moving a ChartBridge stop or target is an exit (no checkmark needed, closing
+            // always works); moving an entry, or an order placed elsewhere, is an entry action (the checkmark).
+            string exitWhy = null;
+            bool exit = ChartBridgeAccounts.On && IsChartBridgeLeg(o);
+            if (o.Account == null || !(exit ? ChartBridgeAccounts.ExitAllowed(o.Account, out exitWhy) : AccountTradable(o.Account.Name))) return exitWhy ?? "that order's account may not trade from the chart";
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             double price;
             if (Dec(top, "price", out price) != 1) return "change needs a plain price";
@@ -800,18 +805,24 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (saveErr != null)
                 PlanSaveAlarm(where + ": the planned stop and target of entry CB#" + br.Tag + " are set (stop " + TicksText(newSt) + " / target " + TicksText(newTt) +
                       " ticks) but could not be saved (" + saveErr + "); after a recompile or restart it would use the ticks it was placed with");
-            if (Enabled && AccountTradable(o.Account.Name)) ChartBridgeServer.SendToTraders(OrderJson(o, null));   // the page sees the new planned ticks
+            if (Enabled && ChartBridgeAccounts.Seen(o.Account.Name)) ChartBridgeAccounts.SendScoped(o.Account, OrderJson(o, null), true);   // the page sees the new planned ticks (0.4.0 accounts: each page its scope)
             return null;
         }
 
         private static bool IsNull(string text, string key) { return Regex.IsMatch(text, "\"" + key + "\"\\s*:\\s*null\\s*[,}]"); }
 
-        private static string CancelOrder(string id)
+        private static string CancelOrder(string top, string id)
         {
+            // 0.4.0 accounts: "from": "list" (the Working orders tab) only with cancelFromList on; any other "from" is refused.
+            string why = ChartBridgeAccounts.CancelFromRefusal(Has(top, "from"), Str(top, "from"));
+            if (why != null) return why;
+            // 0.4.0 accounts: a cancel from the list, or any cancel with accountChecks on, is an exit: a watched, Connected,
+            // non-archived account, checkmark or not. Otherwise v2's tradeAccounts, exactly as before.
+            bool exit = Has(top, "from") || ChartBridgeAccounts.On;
             Order o;
             lock (Sync) ById.TryGetValue(id ?? "", out o);
             if (o == null) return "no working order " + (id ?? "(none)");
-            if (o.Account == null || !AccountTradable(o.Account.Name)) return "that order's account may not trade from the chart";
+            if (o.Account == null || !(exit ? ChartBridgeAccounts.ExitAllowed(o.Account, out why) : AccountTradable(o.Account.Name))) return why ?? "that order's account may not trade from the chart";
             if (ChartBridgeServer.RootFor(o.Instrument) == null) return "instrument is not served by ChartBridge";
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             o.Account.Cancel(new[] { o });     // OCO: the broker or NinjaTrader cancels the other leg
@@ -822,7 +833,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Flatten(string top)
         {
             string accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant(), why;
-            Account account = FindAccount(accountName, out why);
+            Account account = ChartBridgeAccounts.On ? ChartBridgeAccounts.FindForExit(accountName, out why) : FindAccount(accountName, out why);   // 0.4.0 accounts: Flatten is an exit (no checkmark needed)
             if (account == null) return why;
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
@@ -938,8 +949,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if ((o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && IsExit(o) && o.Filled < o.Quantity)
                 Alarm(where + ": the market EXIT was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + "; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);
-            if (Enabled && AccountTradable(account.Name) && root != null)
-                ChartBridgeServer.SendToTraders(OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null));
+            if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: v2 pages the tradable accounts (as before), v3 pages every watched one
+                ChartBridgeAccounts.SendScoped(account, OrderJson(o, failed ? "NinjaTrader: " + e.Error.ToString() : null), true);
             if (IsDone(o.OrderState)) Forget(o);   // after OrderJson, which would otherwise hand out a new id
         }
 
@@ -1451,8 +1462,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst = e.Position.Instrument;
             Booked(account, inst, e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0);
             string root = ChartBridgeServer.RootFor(inst);
-            if (Enabled && AccountTradable(account.Name) && root != null)
-                ChartBridgeServer.SendToTraders(PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice));
+            if (Enabled && root != null && ChartBridgeAccounts.Seen(account.Name))   // 0.4.0 accounts: each page its scope
+                ChartBridgeAccounts.SendScoped(account, PositionJson(account.Name, root, e.MarketPosition, e.Quantity, e.AveragePrice), false);
             // Flat, and still flat now (a newer fill may already have opened a position whose legs must stay),
             // on a connection that has been steady (not a reconnect still loading positions).
             double now = ChartBridgeTime.NowUtcMs();
@@ -2122,30 +2133,24 @@ namespace NinjaTrader.NinjaScript.AddOns
                    ",\"qty\":" + signed + ",\"avgPrice\":" + (signed != 0 ? CbJson.Num(avg) : "null") + "}";
         }
 
-        private static List<Account> TradableAccounts()
-        {
-            List<Account> list = new List<Account>();
-            lock (Account.All) foreach (Account a in Account.All) if (AccountTradable(a.Name)) list.Add(a);
-            return list;
-        }
-
-        private static string OrdersJson()
+        // 0.4.0 accounts: a v2 page gets the tradable accounts (as before), a v3 page every watched one (ChartBridgeAccounts.ScopeFor).
+        private static string OrdersJson(ChartBridgeClient client)
         {
             List<string> items = new List<string>();
-            foreach (Account a in TradableAccounts())
+            foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
             {
                 List<Order> orders;
                 lock (a.Orders) orders = a.Orders.ToList();
                 foreach (Order o in orders)
-                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(OrderJson(o, null));
+                    if (IsWorking(o.OrderState) && ChartBridgeServer.RootFor(o.Instrument) != null) items.Add(ChartBridgeAccounts.ForPage(client, a, OrderJson(o, null)));
             }
             return "{\"type\":\"orders\",\"list\":[" + string.Join(",", items) + "]}";
         }
 
-        private static List<string> PositionJsons()
+        private static List<string> PositionJsons(ChartBridgeClient client)
         {
             List<string> items = new List<string>();
-            foreach (Account a in TradableAccounts())
+            foreach (Account a in ChartBridgeAccounts.ScopeFor(client))
             {
                 List<Position> positions;
                 lock (a.Positions) positions = a.Positions.ToList();

@@ -725,6 +725,11 @@ npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTra
 npm run check:orders     # the order gates, the PIN, the seam, trade sides, the served window, the daily bars and the 0.3.7 data side under Mono
 ```
 
+Several checkouts at once on one machine: give each its own build file and smoke port, for example
+`CHARTBRIDGE_ORDERS_EXE=$PWD/.orders.exe CHARTBRIDGE_CHECK_DLL=$PWD/.check.dll npm run check:orders` and
+`ORDERS_SMOKE_PORT=27396 npm run smoke:orders` (the defaults are `/tmp/chartbridge-orders.exe`, `/tmp/chartbridge-check.dll`
+and port 8796).
+
 Keep `CHART_STYLE.md` in step with the code, add a line to `CHANGELOG.md`, and bump the version in
 `package.json` and `src/chart-engine.js` for every release.
 
