@@ -179,6 +179,7 @@ public static class IntegrationHarness
             StrategyOnTheLeader();
             MergeStrategyLegs();
             BotNoStrategy();
+            MergedThenRestart();   // fix1 (F4); last: it restarts ChartBridge's memory
         }
         catch (Exception ex) { Check(false, "integration harness threw: " + ex); }
         finally
@@ -343,7 +344,7 @@ public static class IntegrationHarness
         lock (a.Orders) n = a.Orders.Count;
         Msg("order", StratOrder(a.Name, qty, strategy));
         Order e;
-        lock (a.Orders) e = a.Orders.Skip(n).FirstOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} sg$"));
+        lock (a.Orders) e = a.Orders.Skip(n).FirstOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} sg s[0-9]+$"));   // fix1 (F5): the stop ticks in the name
         if (e == null) { Check(false, "a strategy entry was sent on " + a.Name + ": " + Last()); return null; }
         e.Filled = qty; e.AverageFillPrice = fill; e.OrderState = OrderState.Filled;
         Update(a, e);
@@ -453,6 +454,44 @@ public static class IntegrationHarness
               "X6: after a restore too, the position is no longer managed (its pairs are new orders): no move, and managed says so");
         Clean(m);
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L");
+    }
+
+    // X9 (fix1, F4): after a Merge, breakeven and trailing never move the merged stop again, also after a restart (F5, a
+    // recompile): managed.txt says "merged", so the entry is recovered as unmanaged. A price move after the restart: no change sent.
+    static void MergedThenRestart()
+    {
+        ChartBridgeSwitches.Note("merge", "on");
+        Account z = NewAccount("SIM-Z", Provider.Simulator);
+        SetPos(z, 0);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L, SIM-Z");
+        const string One = "\"name\":\"One\",\"stop\":8,\"t1\":40,\"t1Share\":100,\"beAfter\":4,\"bePlus\":0";
+        Order e1 = StrategyEntry(z, 1, 25000, One), e2 = StrategyEntry(z, 1, 25000, One);
+        if (e1 == null || e2 == null) return;
+        string r = RunMerge(z, "mg9");
+        Stopwatch sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(z, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        Order kept = LiveStops(z).FirstOrDefault();
+        Check(r.Contains("\"result\":\"merged\"") && kept != null && kept.Quantity == 2 && kept.StopPrice == 24998, "X9: one target: the first pair kept and grown to 2 at 24998: " + r);
+        string tag1 = Regex.Match(e1.Name, "^CB#([0-9a-f]{8})").Groups[1].Value;
+        string file = Path.Combine(ChartBridgeConfig.Folder, "managed.txt");
+        Check(File.Exists(file) && File.ReadAllLines(file).Any(l => l.StartsWith(tag1 + "\t") && l.EndsWith("\tmerged")), "X9: managed.txt marks the merged entry (written whole when the swap ended)");
+        int n = z.Calls.Count;
+        Trade(25001.5); Trade(25001.75);
+        Check(z.Calls.Count == n, "X9: the same run: breakeven does not move the merged stop");
+        // ChartBridge restarts: memory gone, managed.txt read again
+        ChartBridgeOrders.Clear();
+        ChartBridgeOrders.LoadPlansNow();
+        foreach (Account a in new[] { lead, f1, other, z }) ((Dictionary<Account, double>)typeof(ChartBridgeOrders).GetField("ConnectedSince", PS).GetValue(null))[a] = 0;
+        lock (sent) sent.Clear();
+        ChartBridgeOrders.CheckLegs(ChartBridgeTime.NowUtcMs());
+        List<string> said;
+        lock (sent) said = sent.Where(m => m.StartsWith("{\"type\":\"managed\"") && m.Contains("\"account\":\"SIM-Z\"")).ToList();
+        Check(said.Any(m => m.Contains("\"state\":\"unmanaged\"") && m.Contains("merged before the restart")) && !said.Any(m => m.Contains("\"state\":\"resumed\"")),
+              "X9: after the restart the merged entry resumes as unmanaged, and managed says it was merged: " + string.Join(" | ", said));
+        n = z.Calls.Count;
+        Trade(25001.5); Trade(25001.75); Trade(25004);
+        Check(z.Calls.Count == n && kept.StopPrice == 24998, "X9: merge, restart, a price move: no change sent; the merged stop stays at 24998: " + string.Join(" | ", z.Calls.Skip(n)));
+        Clean(z);
     }
 
     // X8: the bot never uses an Order Strategy or a new kind
