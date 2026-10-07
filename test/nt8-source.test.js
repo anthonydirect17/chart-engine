@@ -1106,6 +1106,9 @@ test('0.4.0 integration: exactly one v3 handshake and one v3 send; no lane keeps
   assert.match(bodyOf(scode2, 'private static bool PlaceStrategyLegs('), /br\.Account\.Submit\(send\.ToArray\(\)\);[\s\S]*CopierLeaderFill\(br, filled, qty, incPrice, copierStop, sp\);/);
   assert.match(fnBody('PlaceOrderLocked'), /if \(bot && \(NewKind\(kind\) \|\| strategyBody != null\)\) return/);
   assert.match(scode2, /public static bool OrderTypesOn \{ get \{ return ChartBridgeV3\.OrderTypes; \} \}/);
+  // the copier and Merge never act on one account (lead's default)
+  assert.ok(bodyOf(mcode2, 'private static string MergeStart(').indexOf('ChartBridgeCopier.MergeRefusal(account)') < bodyOf(mcode2, 'private static string MergeStart(').indexOf('MergePlan(s)'), 'a follower is refused before anything is planned or sent');
+  assert.match(ccode2, /if \(on\.Groups\[1\]\.Value == "true" && ChartBridgeOrders\.MergeRunningOn\(a\)\)/);
   assert.match(fs.readFileSync(path.join(nt8, 'check', 'OrdersHarness.cs'), 'utf8'), /Section\("cross-lane rules \(integration\)", IntegrationHarness\.Run\);/);
   assert.match(fs.readFileSync(path.join(nt8, 'check', 'orders.sh'), 'utf8'), /check\/IntegrationHarness\.cs/);
 });

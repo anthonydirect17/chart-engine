@@ -268,6 +268,8 @@ test('copier: Sim followers only; a leader entry gives each follower a market en
   const fstop = d.working('SIM-F1').find(o => o.role === 'stop');
   const lstop = d.working('Sim101').find(o => o.role === 'stop');
   assert.equal(fstop.price, lstop.price); assert.equal(fstop.qty, 3);
+  // review 2 (ChartBridgeV3.OrderBy): a v3 page sees by "copier" on the follower's orders; the leader's own orders and a v2 page, none
+  assert.equal(d.desk.orderMsg(fstop, true).by, 'copier'); assert.ok(!('by' in d.desk.orderMsg(fstop, false))); assert.ok(!('by' in d.desk.orderMsg(lstop, true)));
   d.act({ type: 'change', id: lstop.id, price: lstop.price + 1 });
   assert.equal(fstop.price, lstop.price, 'the follower stop moves with the leader\'s');
   d.tick(25404, 'NQ');                                   // the leader's target fills: followers flat (never cross zero)

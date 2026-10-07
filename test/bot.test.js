@@ -54,13 +54,35 @@ test('rails change as ChartBridge 0.4.0 built it: 1 to 5 trades, 1 to 3 losses, 
   assert.match(BC.railsChange({ maxTrades: 5, maxLosses: 3, root: 'MNQ', position: { qty: 1, avgPrice: 25400 } }, { maxTrades: 2, maxLosses: 1 }).error, /has a position/);
 });
 
-test('the bot\'s orders and fills as ChartBridge 0.4.0 sends them: no mark, so Sim101 on the bot\'s root', () => {
+test('the bot\'s orders: only those ChartBridge marks by: "bot" (review 2), never Anthony\'s own Sim101 orders on the bot\'s root', () => {
   const bot = { account: 'Sim101', root: 'MNQ' };
-  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'MNQ', role: 'stop' }, bot), true);
-  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'NQ' }, bot), false);
-  assert.equal(BC.isBotMark({ account: 'EVAL-A', root: 'MNQ' }, bot), false);
-  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'MNQ' }, null), false, 'not before the bot\'s root is known');
-  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'NQ' }, { account: 'Sim101', root: 'NQ' }), true, 'the root set from the page');
+  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'MNQ', role: 'stop', by: 'bot' }, bot), true);
+  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'MNQ', role: 'entry' }, bot), false, 'Anthony\'s own Sim101 order on the bot\'s root: not the bot\'s');
+  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'MNQ', by: 'copier' }, bot), false);
+  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'MNQ', by: 'strategy' }, bot), false);
+  assert.equal(BC.isBotMark({ account: 'EVAL-A', root: 'MNQ', by: 'bot' }, bot), false, 'not on the bot\'s account');
+  assert.equal(BC.isBotMark({ account: 'Sim101', root: 'NQ', by: 'bot' }, null), true, 'the mark is enough before the bot message');
+});
+
+test('the bot\'s fills: claimed only against the contracts its own orders fill (a fill carries no by)', () => {
+  const L = BC.botFillLedger(), bot = { account: 'Sim101', root: 'MNQ' };
+  const fill = (id, side, p, qty) => ({ id, account: 'Sim101', root: 'MNQ', side, p, qty: qty || 1 });
+  // Anthony's own Sim101 order fills first: no bot order owes it, so it is never the bot's
+  assert.equal(L.order({ id: 'o1', account: 'Sim101', root: 'MNQ', side: 'buy', filled: 1, avgFill: 25000 }, bot), false);
+  assert.equal(L.claim(fill('e1', 'buy', 25000)), false, 'an unmarked order\'s fill');
+  // the bot's entry: the fill may come before or after the order message
+  assert.equal(L.claim(fill('e2', 'buy', 25001)), false, 'before its order message: waits');
+  assert.equal(L.order({ id: 'o2', by: 'bot', account: 'Sim101', root: 'MNQ', side: 'buy', filled: 1, avgFill: 25001 }, bot), true);
+  assert.equal(L.claim(fill('e1', 'buy', 25000)), false, 'the price tells Anthony\'s fill from the bot\'s');
+  assert.equal(L.claim(fill('e2', 'buy', 25001)), true, 'claimed once its order says it filled');
+  assert.equal(L.claim(fill('e2', 'buy', 25001)), true, 'the same fill again: the same answer');
+  assert.equal(L.claim(fill('e3', 'buy', 25001)), false, 'nothing more is owed');
+  assert.equal(L.order({ id: 'o2', by: 'bot', account: 'Sim101', root: 'MNQ', side: 'buy', filled: 1, avgFill: 25001 }, bot), false, 'the same filled count: nothing new');
+  // its stop (a leg the bot channel follows) fills
+  L.order({ id: 'o3', by: 'bot', account: 'Sim101', root: 'MNQ', side: 'sell', filled: 1, avgFill: 24990, role: 'stop' }, bot);
+  assert.equal(L.claim(fill('e4', 'sell', 24990)), true);
+  L.clear();
+  assert.equal(L.claim(fill('e5', 'buy', 25001)), false, 'cleared');
 });
 
 test('modes: Research builds run in shadow only; auto only when Sim101 is tradable; the bot switch', () => {
@@ -348,9 +370,11 @@ test('fake bridge: botRails as ChartBridgeBot.cs SetRails: limits, root, all key
   assert.equal(desk.bot.lastSignal.result, 'placed');
   assert.ok([...desk.orders.values()].some(o => o.account === 'Sim101' && o.state === 'working' && o.root === 'NQ' && o.role === 'stop'), 'the bot\'s stop on NQ');
   assert.match(why(act({ type: 'botRails', cid: 'f', maxTrades: 5, maxLosses: 3, root: 'MNQ' })), /the bot has a position or a working entry: change its rails when it is flat/);
-  // what a page sees of the bot's orders: no mark (ChartBridge 0.4.0 sends none), the account and the root only
-  const seen = [...desk.orders.values()].filter(o => o.account === 'Sim101' && o.state === 'working').map(o => desk.orderMsg(o, true));
-  assert.ok(seen.length && seen.every(m => !('by' in m) && m.account === 'Sim101' && m.root === 'NQ'));
+  // what a page sees of the bot's orders (review 2, as ChartBridgeV3.OrderBy): by "bot" on a v3 page, nothing on a v2 page
+  const working = [...desk.orders.values()].filter(o => o.account === 'Sim101' && o.state === 'working');
+  const seen = working.map(o => desk.orderMsg(o, true)), seen2 = working.map(o => desk.orderMsg(o, false));
+  assert.ok(seen.length && seen.every(m => m.by === 'bot' && m.account === 'Sim101' && m.root === 'NQ'), 'v3: the entry and its legs say by bot');
+  assert.ok(seen2.every(m => !('by' in m)), 'v2: no by (0.3.8 byte for byte)');
   // the switch off: refused
   const off = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: {}, port: 8765 }, instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 } },
     knownAccounts: ['Sim101'], token: 'tok', switches: { bot: false }, accountList: [{ name: 'Sim101', sim: true }], send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000 });

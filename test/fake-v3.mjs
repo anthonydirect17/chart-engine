@@ -255,10 +255,13 @@ export class OrderDeskV3 extends OrderDesk {
   orderMsg(o, v3) {
     const m = super.orderMsg(o);
     if (o.kind === 'stopLimit' && o.limitPrice !== undefined) m.limitPrice = o.limitPrice;
-    /* as ChartBridge 0.4.0 built it: `by` only for a strategy's entry and legs (ChartBridgeStrategies.cs V3OrderFields, every
-       page while strategies is on); Merge, the copier and the bot mark nothing on the page (the bot's names, CB#... bot s8
-       t16, stay in NinjaTrader: ChartBridgeBot.cs). `tradable` to a v3 page only (ChartBridgeAccounts.ForPage). */
+    /* as ChartBridge 0.4.0 built it: `by` for a strategy's entry and legs (ChartBridgeStrategies.cs V3OrderFields, every
+       page while strategies is on); review 2: on a v3 page only, `by: "bot"` for a bot entry and the legs the bot channel
+       follows, `by: "copier"` for an order the copier placed on a follower (ChartBridgeV3.OrderBy via ChartBridgeAccounts.ForPage;
+       an order that already says `by` keeps it). Merge marks nothing. `tradable` to a v3 page only. */
     if (o.by === 'strategy') m.by = o.by;
+    else if (v3 && this.isBotOrder(o)) m.by = 'bot';
+    else if (v3 && (o.copier || o.by === 'copier')) m.by = 'copier';
     if (o.bucket && o.by === 'strategy') m.bucket = o.bucket;
     if (v3) m.tradable = this.accounts.includes(o.account);
     return m;

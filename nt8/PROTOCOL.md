@@ -2066,6 +2066,11 @@ Where two lanes meet, these rules hold; each is a check in `nt8/check/Integratio
   entries on that account and root are no longer managed: every stop stays where it is, nothing moves it again, and `managed`
   says so (`state` `unmanaged`, with the reason) **(lead's default: the pairs they followed are gone, and the contract gives a
   merged stop no breakeven or trailing)**.
+- **The copier and Merge never act on one account (lead's default).** The copier closes, shrinks and moves a follower's
+  orders on its own (its "flatten this follower" goes to NinjaTrader directly and would not end a swap). So while the copier
+  is on, Merge is refused on any listed follower, on or off ("SIM-G is a copier follower: Merge is refused on it while the
+  copier is on (the copier manages its orders)"), and an account with a Merge running cannot become a follower until the
+  swap ends. The copier's leader may merge (above).
 - **The copier and Order Strategies.** A strategy entry's stop counts for the copier's stop rule. Each fill increment is copied
   once, for its whole quantity; the followers' stops follow the stop of the increment's last bucket (all of an increment's
   stops are at one level and move together), so breakeven and trailing move the followers' stops to the leader's new price.
@@ -2083,12 +2088,13 @@ tab (`live/bot.js`, lane C4) does with it. The page follows the C#; `test/fake-v
   them (there is no 18:00 reset of the rails; trades and losses start over at 18:00 ET); a file it cannot read stands the
   bot down until it is fixed or deleted. `bot` (`maxTrades`, `maxLosses`, `root`, and `maxQty` 1) and `welcome` carry the
   rails in force. The Bot tab offers exactly these (Change the rails), only while the bot is flat.
-- **The bot's orders on the page.** ChartBridge names them `CB#1a2b3c4d bot s8 t16`, legs as v2, but the order message
-  carries the instrument's name, not the order's, and no `by` for the bot (only Order Strategies add `by`), so nothing
-  marks a bot order or fill to a page. The bot trades only on Sim101 and only on its root, so the Bot tab takes Sim101's
-  working orders and fills on the bot's root (`bot.root`) as the bot's (its lines, its trades, the ghost marks); Anthony's
-  own Sim101 orders on that root show there too, and the panel says so (lead's default). A `by: "bot"` on the order
-  message (the contract's line above) would let the page tell them apart; ChartBridge 0.4.0 does not send it.
+- **The bot's orders on the page.** ChartBridge names them `CB#1a2b3c4d bot s8 t16`, legs as v2, and (review 2) a v3 page's
+  `order` message carries `by: "bot"` for a bot entry and the legs the bot channel follows (`by: "copier"` for the copier's
+  follower orders). The Bot tab takes as the bot's only the orders marked `by: "bot"` (its lines, its working entry, stop and
+  target). A fill (`exec`) carries no `by`, and its `order` is NinjaTrader's id, not the page's, so the page claims a fill for
+  the bot only against the contracts its marked orders are seen to fill (account, root, side and quantity, at the
+  increment's price when known; `BotCore.botFillLedger`) (lead's default). Anthony's own Sim101 orders on the bot's root are
+  his, not the bot's. `test/fake-v3.mjs` sends `by` as the C# does.
 - **`welcome.instruments`** is the bot's own root only: `{root, name, tick, pointValue, quoteOnly}`.
 - **`GET /bot-library`** (lead's default): the frozen Bot-Lab builds for the Bot tab's Library, one local JSON file
   (`botLibrary` in `config.txt`, default `bot-library.json`) served as it is (`Content-Type: application/json`,

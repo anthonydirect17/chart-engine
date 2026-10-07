@@ -525,6 +525,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Decision(a.Name, "refused", null, BotAccountWhy + " (copierFollower refused)");
                 return BotAccountWhy;
             }
+            if (on.Groups[1].Value == "true" && ChartBridgeOrders.MergeRunningOn(a))   // integration (lead's default): the copier and Merge never act on one account
+                return a.Name + " has a Merge running: it can become a copier follower once the merge has ended.";
             lock (Lk)
             {
                 if (IsLeader(a.Name)) return a.Name + " is the leader; it cannot be a follower.";
@@ -571,6 +573,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         private const string BotAccountWhy = "Sim101 is the bot's account: it cannot be a copier follower while the bot is on (bot in config.txt).";
         public const string BotFollowerWhy = "Sim101 is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page).";
         private static bool IsBotAccount(Account a) { return a != null && ChartBridgeBot.Enabled && string.Equals(a.Name, ChartBridgeBot.BotAccount, StringComparison.OrdinalIgnoreCase); }
+
+        // Integration (lead's default): Merge is refused on a copier follower while the copier is on. The copier closes, shrinks and
+        // moves a follower's orders on its own (its "flatten this follower" goes to NinjaTrader directly and would not end a swap),
+        // so the copier and Merge never act on the same account. Any listed follower, on or off: an off follower may still hold
+        // a copier position whose exits and stop moves the copier follows.
+        public static string MergeRefusal(Account account)
+        {
+            if (!Enabled || account == null) return null;
+            lock (Lk) { if (FollowerNamed(account.Name) == null) return null; }
+            return account.Name + " is a copier follower: Merge is refused on it while the copier is on (the copier manages its orders).";
+        }
 
         // Integration (lead's default): with the copier on, the bot never trades the leader's account. Only the page's entries
         // on the leader are copied, but every exit on the leader is (PROTOCOL "Copier engine"), so a bot position mixed into the

@@ -16,6 +16,9 @@
 //   X7 the copier and Order Strategies: a strategy entry's stop counts for the copier's stop rule, each fill increment is
 //      copied once with its full quantity, and breakeven moves the followers' stops to the leader's new stop price.
 //   X8 the bot and the new lanes: a bot order never carries an Order Strategy and never uses the new order kinds.
+//   X9-X11 the review fixes (fix1: a merged entry after a restart; fix2: Sim101 never both the bot's account and a follower).
+//   X12 the copier and Merge never act on one account (lead's default): Merge is refused on a copier follower while the copier
+//      is on, and an account with a Merge running cannot become a follower until the swap ends.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -182,7 +185,8 @@ public static class IntegrationHarness
             MergeStrategyLegs();
             BotNoStrategy();
             MergedThenRestart();   // fix1 (F4); it restarts ChartBridge's memory (the copier's is its own)
-            Sim101NeverAFollowerWithTheBot();   // X10, X11: review 2 findings 3 and 9 (last: Sim101 stays listed as a follower)
+            Sim101NeverAFollowerWithTheBot();
+            MergeNeverOnAFollower();   // X12 (last: SIM-G stays listed as a follower)   // X10, X11: review 2 findings 3 and 9 (last: Sim101 stays listed as a follower)
         }
         catch (Exception ex) { Check(false, "integration harness threw: " + ex); }
         finally
@@ -641,5 +645,58 @@ public static class IntegrationHarness
             ChartBridgeSwitches.Note("bot", "off");
             ChartBridgeClient gone; Clients().TryRemove(73, out gone);
         }
+    }
+
+    // ------------------------------------------------------------ X12: the copier and Merge never act on one account
+    // (lead's default, fixer 1's finding: the copier's "flatten this follower" goes to NinjaTrader directly and would not end a swap)
+    static void MergeNeverOnAFollower()
+    {
+        ChartBridgeSwitches.Note("merge", "on");
+        ChartBridgeSwitches.Note("copier", "on");
+        Account g = NewAccount("SIM-G", Provider.Simulator), h = NewAccount("SIM-H", Provider.Simulator);
+        SetPos(g, 0); SetPos(h, 0);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-F1, SIM-L, SIM-G, SIM-H");
+        const string Two = "\"name\":\"One\",\"stop\":8,\"t1\":40,\"t1Share\":100";
+        // one way: a follower (on, then off) cannot be merged while the copier is on
+        lock (sent) sent.Clear();
+        Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fg\",\"account\":\"SIM-G\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(!Rejected(""), "X12: SIM-G is a copier follower: " + Last());
+        Order g1 = StrategyEntry(g, 1, 25000, Two), g2 = StrategyEntry(g, 1, 25000, Two);
+        int gCalls = g.Calls.Count;
+        string r = RunMerge(g, "mx1");
+        Check(r.Contains("\"type\":\"reject\"") && r.Contains("SIM-G is a copier follower: Merge is refused on it while the copier is on") && g.Calls.Count == gCalls,
+              "X12: Merge on a copier follower is refused in plain words, nothing sent: " + r);
+        Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fg2\",\"account\":\"SIM-G\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        r = RunMerge(g, "mx2");
+        Check(r.Contains("is a copier follower") && g.Calls.Count == gCalls, "X12: a follower that is off is still listed (it may hold a copier position): refused too");
+        ChartBridgeSwitches.Note("copier", "off");
+        r = RunMerge(g, "mx3");
+        Stopwatch sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(g, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        Check(r.Contains("\"result\":\"merged\""), "X12: the copier off: the same account merges: " + r);
+        ChartBridgeSwitches.Note("copier", "on");
+        Clean(g);
+
+        // the other way: an account with a Merge running cannot become a follower until the swap ends
+        Order h1 = StrategyEntry(h, 1, 25000, Two), h2 = StrategyEntry(h, 1, 25000, Two);
+        if (h1 == null || h2 == null) return;
+        Hold = (kind, o) => kind == "cancel";
+        Thread.Sleep(ChartBridgeOrders.MergeQuietMs + 50);
+        int from;
+        lock (sent) from = sent.Count;
+        Msg("merge", "{\"type\":\"merge\",\"cid\":\"mx4\",\"account\":\"SIM-H\",\"root\":\"MNQ\"}");
+        Thread.Sleep(30);
+        bool running = ChartBridgeOrders.MergeFrozen(h, mnq);
+        lock (sent) sent.Clear();
+        Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fh\",\"account\":\"SIM-H\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(running && Rejected("SIM-H has a Merge running: it can become a copier follower once the merge has ended."), "X12: a Merge running on SIM-H: copierFollower on for it is refused: " + Last());
+        sw = Stopwatch.StartNew();
+        while (ChartBridgeOrders.MergeFrozen(h, mnq) && sw.ElapsedMilliseconds < 5000) Thread.Sleep(5);
+        Hold = null;
+        lock (sent) sent.Clear();
+        Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fh2\",\"account\":\"SIM-H\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Check(!Rejected(""), "X12: once the swap has ended it can be a follower: " + Last());
+        Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"fh3\",\"account\":\"SIM-H\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+        Clean(h);
     }
 }

@@ -7,8 +7,9 @@
  *   rails       how close the bot is to each of its limits (trades x of 5, losing trades x of 3): amber from 70%, red from
  *               90%; and the page's change of them (`botRails` as ChartBridge 0.4.0 built it: maxTrades 1 to 5, maxLosses
  *               1 to 3, the root botRoot or its micro or mini, kept by ChartBridge in bot-rails.txt)
- *   the bot's   which orders and fills are the bot's: ChartBridge 0.4.0 marks none on the page, so those on Sim101 on the
- *   orders      bot's root (isBotMark)
+ *   the bot's   which orders and fills are the bot's: a v3 page's order message says `by: "bot"` for the bot's entries and
+ *   orders      the legs it follows (isBotMark); a fill is claimed for the bot against those orders' filled contracts
+ *               (botFillLedger), so Anthony's own Sim101 orders on the bot's root are never taken as the bot's
  *   proposals   a copilot proposal's life on the page: shown (then `botSeen` once), answered once (`botAnswer`), and gone
  *               when ChartBridge says accepted, rejected, withdrawn or not answered (an expired one shows "not answered")
  *   library     the frozen Bot-Lab builds (`GET /bot-library`, docs/BOT_LIBRARY.md): read, checked, shelved
@@ -97,14 +98,53 @@ function railsChange(cur, want, cid) {
 }
 
 /**
- * Is this order or fill the bot's? ChartBridge 0.4.0 sends the page no mark on either (the names, `CB#1a2b3c4d bot s8 t16`,
- * stay in NinjaTrader). The bot trades only on Sim101 and only on its root, so a working order or a fill there is taken
- * as the bot's (Anthony's own Sim101 orders on that root are counted too). bot: the `bot` message (its account and root).
+ * Is this order the bot's? ChartBridge 0.4.0 marks it on a v3 page's order message: `by: "bot"` for a bot entry and the legs
+ * the bot channel follows (ChartBridgeV3.OrderBy; PROTOCOL.md "Who placed it"). Nothing else counts: Anthony's own Sim101
+ * orders on the bot's root are his, not the bot's. bot: the `bot` message; when its account is known the order must be on it.
  */
 function isBotMark(x, bot) {
+  if (!x || x.by !== 'bot') return false;
   const b = bot || {};
-  const account = typeof b.account === 'string' && b.account ? b.account : BOT_ACCOUNT, r = typeof b.root === 'string' ? b.root : '';
-  return !!x && !!r && x.account === account && x.root === r;
+  return !(typeof b.account === 'string' && b.account && x.account !== b.account);
+}
+
+/**
+ * Which fills are the bot's. A fill (`exec`) carries no `by`, and its order id is NinjaTrader's, not the page's, so a fill
+ * is claimed for the bot only against the contracts the bot's own orders (isBotMark) are seen to fill: each rise of an
+ * order's `filled` is owed that many contracts, on its account, root and side (at its fill price when that is known).
+ * A fill that arrives before its order message waits (claim it again after the next order). Pure: no page in it.
+ *   order(o)   note an order message; true when it owes new contracts
+ *   claim(f)   true when the fill is the bot's (it uses up what it covers; the same fill id twice is the same answer)
+ *   clear()    forget everything (ChartBridge went away)
+ */
+function botFillLedger() {
+  const seen = new Map(), owed = [], claimed = new Set();   // seen: order id -> { filled, avg }
+  const same = (a, b) => isNum(a) && isNum(b) && Math.abs(a - b) < 1e-6;
+  return {
+    order(o, bot) {
+      if (!isBotMark(o, bot) || typeof o.id !== 'string') return false;
+      const was = seen.get(o.id) || { filled: 0, avg: null }, now = isNum(o.filled) && o.filled > 0 ? o.filled : 0;
+      if (!(now > was.filled)) return false;
+      const d = now - was.filled, avg = isNum(o.avgFill) ? o.avgFill : null;
+      // the increment's own price: from the average before and after (null when either is unknown)
+      const p = avg === null ? null : was.filled === 0 ? avg : was.avg === null ? null : (avg * now - was.avg * was.filled) / d;
+      seen.set(o.id, { filled: now, avg });
+      owed.push({ account: o.account, root: o.root, side: o.side, qty: d, p });
+      return true;
+    },
+    claim(f) {
+      if (!f || typeof f.id !== 'string') return false;
+      if (claimed.has(f.id)) return true;
+      const fits = w => w.qty >= f.qty && w.account === f.account && w.root === f.root && w.side === f.side;
+      const w = owed.find(x => fits(x) && same(x.p, f.p)) || owed.find(x => fits(x) && x.p === null);   // a known price must match (the bot trades 1 contract: one fill per increment)
+      if (!w) return false;
+      w.qty -= f.qty;
+      if (w.qty <= 0) owed.splice(owed.indexOf(w), 1);
+      claimed.add(f.id);
+      return true;
+    },
+    clear() { seen.clear(); owed.length = 0; claimed.clear(); }
+  };
 }
 
 /* ======================================================================== modes */
@@ -545,7 +585,7 @@ function statusText(b) {
 }
 
 return {
-  VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
+  VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
   railLevel, rails, railsChange, worse,
   modesAllowed, simTradable, botSwitchOn,
   createProposals,

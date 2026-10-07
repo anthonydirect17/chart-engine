@@ -12,10 +12,9 @@
  * is off on this PC and offers nothing (no strip, no pop-ups, no ghost marks).
  *
  * As ChartBridge 0.4.0 built it (nt8/ChartBridgeBot.cs; PROTOCOL.md "The bot channel as built"):
- *   - The bot's orders: ChartBridge sends the page no mark on an order or a fill (its names, `CB#1a2b3c4d bot s8 t16`,
- *     stay in NinjaTrader). The bot trades only on Sim101 and only on its root (`bot.root`), so the page takes the working
- *     orders and the fills on Sim101 on that root as the bot's (Anthony's own Sim101 orders on that root too: said in
- *     the panel).
+ *   - The bot's orders: a v3 page's order message says `by: "bot"` for the bot's entries and the legs it follows
+ *     (ChartBridge 0.4.0 review 2). Only those are the bot's lines; a fill is the bot's only when one of those orders is
+ *     seen to fill it (BotCore.botFillLedger). Anthony's own Sim101 orders on the bot's root stay his.
  *   - The rails (`botRails`): maxTrades 1 to 5, maxLosses 1 to 3 and the root (botRoot or its micro or mini), all three
  *     sent; ChartBridge keeps them in bot-rails.txt (a restart and a new day keep them) and refuses a change while the
  *     bot has a position or a working entry.
@@ -98,7 +97,7 @@ function create(o) {
         '<div class="bt-ph" data-in=".02,.3"><span class="bt-t" data-k="chartName">Chart</span>' +
           '<select class="ws-sel bt-tf" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
           '<span class="chart-live ws-lv" data-k="ind"></span>' +
-          '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge does not mark the bot\'s orders, so these are Sim101\'s on the bot\'s root: your own Sim101 orders there show too.">Bot trades</span>' +
+          '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the bot\'s orders, so your own Sim101 orders do not show here.">Bot trades</span>' +
           (popout ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
         '<div class="bt-chart" data-k="chart" data-no-motion></div>' +
       '</section>' +
@@ -146,7 +145,7 @@ function create(o) {
   const sendRaw = m => !!V3 && V3.post(m);
   const cid = () => 'bt' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
-    S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear();
+    S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear(); ledger.clear();
     S.bot = null;                                    // nothing stale while ChartBridge is away; the next `bot` says it all
     for (const p of props.clear()) dropProposal(p.id);
     S.pending.clear();
@@ -174,9 +173,9 @@ function create(o) {
       case 'bot': onBot(m); return;
       case 'botSignal': onSignal(m); return;
       case 'botProposal': onProposal(m); return;
-      case 'orders': S.orders.clear(); for (const x of m.list || []) noteOrder(x); renderChartLines(); return;
+      case 'orders': S.orders.clear(); for (const x of m.list || []) noteOrder(x); reclaim(); renderChartLines(); return;
       case 'position': return;
-      case 'order': noteOrder(m); renderChartLines(); return;
+      case 'order': noteOrder(m); reclaim(); renderChartLines(); return;
       case 'exec': onExec(m); return;
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); return;
       case 'reject': onReject(m); return;
@@ -184,19 +183,22 @@ function create(o) {
     }
   }
 
-  /* ---------------- the bot's own orders and fills (its lines on the Bot tab's chart, its marks). ChartBridge 0.4.0 marks
-     neither (the order names stay in NinjaTrader): the bot trades only on its account (Sim101) and its root, so those are
-     taken as the bot's (BotCore.isBotMark). Kept by id for every Sim101 order, so a root change shows the right ones. */
+  /* ---------------- the bot's own orders and fills (its lines on the Bot tab's chart, its marks). ChartBridge marks the bot's
+     orders on a v3 page (`by: "bot"`, BotCore.isBotMark); a fill carries no mark, so it is the bot's only when one of the
+     bot's orders is seen to fill it (BotCore.botFillLedger). Kept by id for the bot's working orders only. */
   const isBotMark = x => BC.isBotMark(x, S.bot);
+  const ledger = BC.botFillLedger();
   function noteOrder(x) {
-    if (!x || typeof x.id !== 'string' || x.account !== BC.BOT_ACCOUNT) return;
-    if (x.state === 'working' || x.state === 'partFilled') S.orders.set(x.id, x); else S.orders.delete(x.id);
+    if (!x || typeof x.id !== 'string') return;
+    ledger.order(x, S.bot);
+    if (isBotMark(x) && (x.state === 'working' || x.state === 'partFilled')) S.orders.set(x.id, x); else S.orders.delete(x.id);
   }
-  const simFills = new Map();                      // Sim101's fills this session, by id: read again when the bot's root is known
+  const simFills = new Map();                      // fills not (yet) claimed for the bot, by id: claimed when the bot's order says it filled
+  function reclaim() { let any = false; for (const f of [...simFills.values()]) if (ledger.claim(f)) { onExec(f, true); any = true; } if (any) { renderTrips(); renderPanelTab(); } }
   function onExec(f, quiet) {
-    if (!f || typeof f.id !== 'string' || f.account !== BC.BOT_ACCOUNT) return;
-    simFills.set(f.id, f); if (simFills.size > 500) simFills.delete(simFills.keys().next().value);
-    if (!isBotMark(f)) return;
+    if (!f || typeof f.id !== 'string') return;
+    if (!ledger.claim(f)) { simFills.set(f.id, f); if (simFills.size > 500) simFills.delete(simFills.keys().next().value); return; }
+    simFills.delete(f.id);
     log.add({ k: 'fill:' + f.id, kind: 'fill', at: isNum(f.u) && f.u > 0 ? f.u : Date.now(), text: (f.side === 'buy' ? 'Bought ' : 'Sold ') + f.qty + ' ' + (f.root || '') + ' at ' + fmtPx(f.p),
       extra: { side: f.side, qty: f.qty, p: f.p, t: f.t, root: f.root } });
     if (!quiet) { renderTrips(); renderPanelTab(); }
@@ -208,7 +210,7 @@ function create(o) {
   function onBot(m) {
     const prev = S.bot;
     S.bot = m;
-    if (!prev || prev.root !== m.root || prev.account !== m.account) { for (const f of simFills.values()) onExec(f, true); renderTrips(); }   // the fills that came before the bot's root was known
+    if (!prev || prev.root !== m.root || prev.account !== m.account) renderTrips();
     if (S.on && prev) for (const n of BC.noticesFrom(prev, m, BC.fmtUsd, v => fmtPx(v))) { notice(n); log.add({ k: 'n:' + n.kind + ':' + Date.now(), kind: 'notice', text: n.text, level: n.level }); }
     if (prev && prev.mode !== m.mode) log.add({ k: 'mode:' + Date.now(), kind: 'mode', text: 'Mode: ' + (BC.MODE_NAME[m.mode] || m.mode) });
     if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses || prev.root !== m.root)) log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: ' + m.maxTrades + ' trades, ' + m.maxLosses + ' losing trades, ' + m.root });
@@ -848,7 +850,7 @@ function create(o) {
     const sig = JSON.stringify([[...S.orders.values()], S.bot && S.bot.position, S.bot && S.bot.account]);
     if (sig === linesSig && force !== true) return;
     linesSig = sig;
-    const r = S.chartRoot, list = [...S.orders.values()].filter(x => x.root === r && x.account === ((S.bot && S.bot.account) || 'Sim101'));
+    const r = S.chartRoot, list = [...S.orders.values()].filter(x => x.root === r && isBotMark(x));   // the bot's orders only (`by: "bot"`)
     const OT = window.OrderTicket, out = [];
     for (const x of list) { out.push(x); if (OT && OT.plannedLines && x.planned) { try { for (const l of OT.plannedLines(x, tickOf(r)).lines) out.push(l); } catch (e) { /* older order-ticket.js */ } } }
     const pos = S.bot && S.bot.position && S.bot.position.qty ? { qty: S.bot.position.qty, avgPrice: S.bot.position.avgPrice } : null;

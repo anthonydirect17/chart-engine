@@ -206,6 +206,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the freeze (contract step 1)
         // While a swap runs on an account and root, order, plan, change, cancel (lead's default: cancel too) and merge on it are
         // refused; breakeven and trailing pause (MergeFrozen, for the strategies code); Flatten is always accepted and ends it.
+        // Integration: a swap running on any contract of this account (the copier will not take it as a follower meanwhile).
+        internal static bool MergeRunningOn(Account a)
+        {
+            if (a == null) return false;
+            lock (MergeLock) return MergeSwaps.Values.Any(s => s.Account == a);
+        }
+
         public static bool MergeFrozen(Account a, Instrument i)
         {
             if (a == null || i == null) return false;
@@ -437,6 +444,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             string why, accountName = Str(top, "account"), root = (Str(top, "root") ?? "").ToUpperInvariant();
             Account account = FindAccount(accountName, out why);                    // gate 2: allowed and Connected
             if (account == null) return MergeRefuse(why);
+            why = ChartBridgeCopier.MergeRefusal(account);                           // integration (lead's default): never on a copier follower
+            if (why != null) return MergeRefuse(why);
             Instrument inst = ChartBridgeServer.InstrumentFor(root);                 // gate 6: a root ChartBridge trades
             if (inst == null) return MergeRefuse("instrument " + root + " is not served by ChartBridge");
             MergeSwapState s = new MergeSwapState { Account = account, Instrument = inst, Root = root, Key = PosKey(account, inst), Cid = cid, Client = client, Where = Where(account, inst) };

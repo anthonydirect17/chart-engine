@@ -474,8 +474,8 @@ program on this PC, never AI: **ChartBridge places every bot order**, inside its
   evidence badge, one sentence, its equity curve and numbers; a click opens it full screen with the large curve, the rule
   card, the settings, the live record and "Conditions it works best in". Read from `GET /bot-library`
   (`docs/BOT_LIBRARY.md`); no file: "No frozen builds on this PC".
-- **The bot's own chart** (MNQ by default) with its working entry, stop and target and its trades. ChartBridge 0.4.0
-  does not mark the bot's orders on the page, so these are Sim101's on the bot's root (your own Sim101 orders there too).
+- **The bot's own chart** (MNQ by default) with its working entry, stop and target and its trades. ChartBridge marks the
+  bot's orders (`by: "bot"`), so only the bot's show; your own Sim101 orders on that root do not.
 - **Bot panel:** on or off, Sim101, the size, the status and heartbeat, the position and today's P&L, the mode (Shadow,
   Copilot, Sim auto when ChartBridge allows it; Sim auto asks once more), the **rails** (trades x of 5, losing trades x of
   3; amber from 70%, red from 90%; **Change the rails**: 1 to 5 trades, 1 to 3 losing trades, the bot's root or its micro

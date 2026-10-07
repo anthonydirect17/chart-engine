@@ -233,10 +233,13 @@ try {
   check(/: on/.test(await page.textContent('#wsMore [data-do="ghost"]')), 'the menu says it is on');
   await page.keyboard.press('Escape');
   const trips = (await B()).trips;
-  /* ChartBridge 0.4.0 marks no bot order on the page: Sim101's fills on the bot's root are the bot's (the fake's sample
-     Sim101 MNQ round trip of 2 counts too); the proposal's short of 1 is there (open, or closed by its stop since) */
+  /* ChartBridge marks the bot's orders on a v3 page (`by: "bot"`, review 2): only fills those orders account for are the
+     bot's. The proposal's short of 1 is there (open, or closed by its stop since); the fake's sample Sim101 MNQ round trip
+     of 2 (Anthony's own orders, unmarked) is not. */
   check(trips.some(t => t.dir === -1 && t.qty === 1 && t.tIn > 0), 'the bot\'s trade (the accepted short) is known for its marks (' + JSON.stringify(trips) + ')');
-  check(trips.some(t => t.qty === 2), 'Sim101\'s own fills on the bot\'s root count as the bot\'s (no mark from ChartBridge 0.4.0)');
+  check(!trips.some(t => t.qty === 2), 'Sim101\'s own fills on the bot\'s root (no by "bot") are not the bot\'s');
+  const lines = await page.evaluate(() => [...document.querySelectorAll('.bt-legend')].map(e => e.getAttribute('title')).join(' '));
+  check(/ChartBridge marks the bot's orders/.test(lines), 'the Bot trades legend says only the bot\'s orders show');
   await page.screenshot({ path: path.join(SHOTS, 'bot-ghost.png') });
 
   /* ---------------------------------------------------------------- Research: shadow only; Less motion */
