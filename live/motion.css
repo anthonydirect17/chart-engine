@@ -1,0 +1,63 @@
+/* ChartMotion tokens and small transitions (docs/MOTION.md). Goes with live/motion.js.
+   Never on order surfaces: not on the order ticket, order lines, fills, Flatten, position or P&L figures, the copier,
+   Accounts warnings or any live trading panel (R3).
+   Nothing here hides an element at rest: a page without JavaScript, or with motion off, shows everything. */
+
+:root {
+  /* M5 timing tokens */
+  --motion-fast: 150ms;   /* hover, tooltips: fade and rise 4 px */
+  --motion-base: 250ms;   /* toasts, panels: rise 20 px */
+  --motion-slow: 400ms;
+  /* M3 the four curves as CSS (cubic-bezier fits of ease.out, ease.inOut, ease.in and ease.back in motion.js) */
+  --ease-out: cubic-bezier(.33, 1, .68, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-in: cubic-bezier(.32, 0, .67, 0);
+  --ease-back: cubic-bezier(.34, 1.4, .64, 1);
+}
+
+/* M8 reduced motion: the system setting, or the page setting (ChartMotion.setReducedMotion puts motion-off on <html>) */
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-fast: 0ms; --motion-base: 0ms; --motion-slow: 0ms; }
+}
+:root.motion-off { --motion-fast: 0ms; --motion-base: 0ms; --motion-slow: 0ms; }
+
+/* M4 numbers that count keep their width: tabular digits */
+[data-count], .motion-num { font-variant-numeric: tabular-nums; }
+
+/* bars grow from their left end unless the page says otherwise (:where keeps this the weakest rule) */
+:where([data-grow]) { transform-origin: left center; }
+
+/* Tooltips and hover cards (fast): fade and rise 4 px. Shown at rest; add .motion-out to hide. */
+.motion-tip {
+  transition: opacity var(--motion-fast) var(--ease-out), translate var(--motion-fast) var(--ease-out);
+}
+.motion-tip.motion-out {
+  opacity: 0; translate: 0 4px; pointer-events: none;
+  transition-timing-function: var(--ease-in);
+}
+
+/* Toasts and panels (base): fade and rise 20 px. Shown at rest; add .motion-out to hide. */
+.motion-panel {
+  transition: opacity var(--motion-base) var(--ease-out), translate var(--motion-base) var(--ease-out);
+}
+.motion-panel.motion-out {
+  opacity: 0; translate: 0 20px; pointer-events: none;
+  transition-timing-function: var(--ease-in);
+}
+
+/* M6 atmosphere: a soft glow and a faint grid behind a scene. Colors follow the host's tokens (The Desk and the
+   Studio: --accent, --pos, --text-2; the chart page: --ws-accent, --ws-buy, --ws-text2), or set the --motion-* ones. */
+.motion-atmo {
+  --motion-glow: var(--accent, var(--ws-accent, #7B5CFF));
+  --motion-glow-2: var(--pos, var(--ws-buy, #3DDC97));
+  --motion-grid: var(--text-2, var(--ws-text2, #9AA8B8));
+  position: relative; isolation: isolate;
+}
+.motion-atmo::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background:
+    radial-gradient(900px 340px at 8% -8%, color-mix(in srgb, var(--motion-glow) 13%, transparent), transparent 60%),
+    radial-gradient(700px 300px at 105% 110%, color-mix(in srgb, var(--motion-glow-2) 6%, transparent), transparent 60%),
+    linear-gradient(color-mix(in srgb, var(--motion-grid) 3.5%, transparent) 1px, transparent 1px) 0 0 / 100% 28px,
+    linear-gradient(90deg, color-mix(in srgb, var(--motion-grid) 3.5%, transparent) 1px, transparent 1px) 0 0 / 28px 100%;
+}
