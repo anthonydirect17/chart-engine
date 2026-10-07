@@ -445,7 +445,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 /* ---------------- 1.16.0 (ChartBridge 0.4.0): Order Strategies, Merge, entry types and The Desk's shared settings. Shown
    only while ChartBridge's switches say on. No motion here: nothing moves or fades (rule R3). */
 .chart-live .tk-strat .tk-ssel { flex: 1 1 0; width: 0; min-width: 0; }
-.chart-live .tk-sdesc { font: 500 11px var(--mono); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart-live .tk-sdesc { flex: none; font: 500 11px var(--mono); color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* a strategy active: the bracket boxes and its presets step aside (the strategy carries its own stop and targets) */
 .chart-live .tk-has-strat .tk-bk, .chart-live .tk-has-strat .bpre, .chart-live .tk-has-strat .bsave { display: none !important; }
 .chart-live .tk-v3 { font-size: 11px; color: var(--text2); }

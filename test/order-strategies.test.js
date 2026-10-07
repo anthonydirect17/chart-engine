@@ -258,7 +258,9 @@ test('managedLine and mergeLine: the state in plain words (resumed, NOT MANAGED 
   const m = FIX.serverToPage.managed;
   assert.deepEqual(OS.managedLine(m), { text: 'Scalp 3T resumed after a restart: 3 pairs, 3 at breakeven (ChartBridge restarted; breakeven and trailing resumed)', level: 'warn' });
   const u = OS.managedLine(Object.assign({}, m, { state: 'unmanaged', text: 'MNQ EVAL-A: breakeven and trailing could not be resumed after the restart; the stop stays at 24,980.25. Manage it by hand' }));
-  assert.equal(u.level, 'error'); assert.match(u.text, /^Scalp 3T NOT MANAGED: breakeven and trailing are off; manage the stop by hand \(MNQ EVAL-A: .*24,980\.25/);
+  assert.equal(u.level, 'error');
+  assert.equal(u.text, 'Scalp 3T NOT MANAGED: MNQ EVAL-A: breakeven and trailing could not be resumed after the restart; the stop stays at 24,980.25. Manage the stop by hand.');
+  assert.equal(OS.managedLine(Object.assign({}, m, { state: 'unmanaged', text: null })).text, 'Scalp 3T NOT MANAGED: breakeven and trailing are off. Manage the stop by hand.');
   assert.equal(OS.managedLine(Object.assign({}, m, { state: 'waiting', pairs: [] })).text, 'Scalp 3T: waiting for the fill');
   assert.equal(OS.managedLine(Object.assign({}, m, { state: 'active', text: null })).text, 'Scalp 3T managing: 3 pairs, 3 at breakeven');
   assert.equal(OS.managedLine(Object.assign({}, m, { state: 'done' })).text, '');

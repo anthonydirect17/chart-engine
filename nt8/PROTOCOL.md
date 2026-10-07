@@ -1694,6 +1694,50 @@ they are, the page shows Accept and Reject buttons and `botAnswer` is the same e
 The Desk checks its own rules on save; ChartBridge checks `order.strategy` again on every order (it never trusts the
 store).
 
+#### The page's side (chart 1.16.0, the order ticket lane)
+
+Built in the workspace (`live/index.html`; the rules in `live/order-strategies.js`, the order path in `live/trade.js`).
+Each choice below that the brief left open is marked **(lead's default)**.
+
+- **v3 page.** The workspace's order connection sends `client` v3 right after a `hello` that names `"v3"`, before it signs
+  in. The single chart page (`single.html`) stays a v2 page (lead's default). A control shows only while its switch is
+  true: the Strategy picker on the ticket and Settings > Order Strategies (`strategies`), the Merge button and key
+  (`merge`), the entry-type modifiers (`orderTypes`), Accept and Reject keys (`bot`). With every switch off the page is
+  the 1.15 page: no new control, The Desk never asked, an order is the 1.15 order.
+- **The Desk's address** is a box in Settings, kept per browser (`live-desk-url-v1`), `http://localhost:8800` until one is
+  typed (ChartBridge's `deskUrl` default; ChartBridge does not tell the page its `deskUrl`) (lead's default).
+- **When the hotkeys live in The Desk** (lead's default): while any of `strategies`, `orderTypes`, `merge` or `bot` is on
+  (they need the shared keys). With all four off they stay this browser's, as in 1.15. On The Desk's first answer in a
+  browser: when The Desk has none yet (rev 0) and the browser has keys, they are saved there; otherwise The Desk's keys are
+  used and a note names the browser's keys they replaced. The Desk's keys are written to the browser's own keys
+  (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them; the single chart page then shows them read only
+  (`live-desk-sync-v1`). A key The Desk has that this browser keeps for itself (`hotkeyRefused`) is shown with why it does
+  nothing here.
+- **The hotkeys document** has nine keys: The Desk's seven plus `accept` and `reject` (the copilot's one-key answers, no
+  default key) (lead's default; The Desk lane adds them). The page sends a cancelable `chart-copilot-key` DOM event
+  (`detail.answer` `accept` or `reject`) for the bot channel's page part to answer; nothing handles it: a note says so.
+- **The Desk not reachable:** the last copy read (`live-desk-cache-v1`) is used and shown read only, with a plain note; a
+  key pressed, a modifier picked or a strategy saved is refused and says it was not saved (nothing is queued or guessed).
+  A `409` reads the document again and says another PC saved first; a strategy's edit stays in its form to save again.
+  Read again on Settings, on the Strategies screen, on window focus (15 s apart) and every 60 s.
+- **A strategy's key picks it** as the ticket's active strategy (Anthony's brief: "chosen from a dropdown on the ticket and
+  by its hotkey"); it never places an order (lead's default; the entry-type modifiers apply to the Buy and Sell keys and to
+  clicks). The active strategy is kept per browser (`live-strategy-v1`), the same in each of its windows; one deleted on
+  The Desk puts the ticket back on its bracket, with a note.
+- **Sending a strategy:** Shift+click, Buy MKT, Sell MKT and their keys send the active strategy (`toWire`) in place of
+  the bracket, checked first by ChartBridge's own rules (`checkWire`, `maxBracketTicks` included); never on an order that
+  reduces the position (said in the note, as for a bracket). A strategy always has its stop, so NO STOP never asks for it.
+  The Strategies screen also refuses a name with `"` or `\` (gate 8 would refuse the order).
+- **Entry types** (lead's default): the Limit modifier held places a limit on the better side of the market and a
+  stop-limit on the other; the Stop modifier a stop-market on the worse side and an MIT on the better (an MIT at the last
+  price is refused: use the market button). With the Buy or Sell key, at the price under the mouse on a chart of the
+  ticket's instrument (nothing is sent off a chart). On a click only a modifier beyond the click's own Shift or Ctrl counts
+  (in practice Alt). Shift+click alone and a key alone are as before. A stop-limit entry is sent with `limitOffset` 0
+  (its limit at its stop: it never fills worse than the stop price).
+- **Merge** needs Armed, a position and two or more stops working (as B/E); its result (`merged`, `restored`, `failed`)
+  and each managed strategy's state (`resumed`, `NOT MANAGED` with ChartBridge's text) are shown under the position on the
+  ticket until the position is flat or a newer one comes. No motion on any of it.
+
 ### Order lane
 
 The v3 server-to-page messages `accounts`, `managed`, `merge`, `copier`, `copierEvent`, `bot`, `botSignal` and `botProposal`

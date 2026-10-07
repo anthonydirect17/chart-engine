@@ -386,7 +386,7 @@ function managedLine(m) {
   if (m.state === 'waiting') return { text: name + ': waiting for the fill', level: '' };
   if (m.state === 'active') return { text: name + ' managing' + how, level: '' };
   if (m.state === 'resumed') return { text: name + ' resumed after a restart' + how + why, level: 'warn' };
-  if (m.state === 'unmanaged') return { text: name + ' NOT MANAGED: breakeven and trailing are off; manage the stop by hand' + why, level: 'error' };
+  if (m.state === 'unmanaged') return { text: name + ' NOT MANAGED: ' + (typeof m.text === 'string' && m.text ? m.text.replace(/\.?\s*Manage it by hand\.?$/i, '') : 'breakeven and trailing are off') + '. Manage the stop by hand.', level: 'error' };
   return { text: name + ': ' + String(m.state) + why, level: '' };
 }
 const MERGE_WORD = { merged: 'Merged', restored: 'Merge undone, brackets restored', failed: 'MERGE FAILED' };

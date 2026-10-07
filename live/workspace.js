@@ -1246,6 +1246,9 @@ function renderDeskUi() {
   $('wsDeskSec').hidden = !DS.on;
   $('wsStratSec').hidden = !core.switchOn('strategies');
   $('wsTypesSec').hidden = !(DS.on && core.switchOn('orderTypes'));
+  const local = deskMode() === 'local';
+  $('wsHkWhere').textContent = local ? 'the same keys as the single chart page' : 'shared by every PC through The Desk';
+  $('wsHkHelp').hidden = !local; $('wsHkHelpShared').hidden = local;   // the short help while shared, so Settings fits 1366x768
   if (!DS.on) return;
   if (document.activeElement !== $('wsDeskUrl')) $('wsDeskUrl').value = DESK.url();
   const mode = deskMode(), at = t => (t ? new Date(t).toLocaleTimeString() : '');
@@ -1256,7 +1259,6 @@ function renderDeskUi() {
   const el = $('wsDeskNote');
   if (el.textContent !== text) el.textContent = text;
   el.className = 'ws-help' + (mode === 'desk' ? '' : ' ws-warn');
-  $('wsHkWhere').textContent = mode === 'local' ? 'the same keys as the single chart page' : 'shared by every PC through The Desk';
   const m = modifiersNow();
   for (const k of ['limit', 'stop']) {
     const sel = $('wsMod-' + k);
@@ -1268,7 +1270,7 @@ function renderDeskUi() {
     : n + ' strateg' + (n === 1 ? 'y' : 'ies') + (a ? '; ' + a.name + ' is active on the ticket.' : '; the ticket uses its bracket.') + (mode === 'readonly' ? ' Read only: The Desk does not answer.' : '');
 }
 $('wsDeskUrl').addEventListener('change', e => {
-  if (!DESK.setUrl(e.target.value)) { e.target.setAttribute('aria-invalid', 'true'); $('wsDeskNote').textContent = 'Type The Desk\'s address, like http://localhost:8800, or The Desk PC's Tailscale address and port.'; return; }
+  if (!DESK.setUrl(e.target.value)) { e.target.setAttribute('aria-invalid', 'true'); $('wsDeskNote').textContent = 'Type The Desk\'s address, like http://localhost:8800, or the Tailscale address and port of The Desk\'s PC.'; return; }
   e.target.removeAttribute('aria-invalid');
   DS.firstRead = true; deskRead();
 });
@@ -1292,7 +1294,7 @@ function saveKeyDesk(id, combo) {
 }
 /* the entry-type modifiers (orderTypes): Shift, Ctrl or Alt, never one a key already holds */
 for (const k of ['limit', 'stop']) $('wsMod-' + k).addEventListener('change', e => {
-  const mod = e.target.value, note2 = t => { $('wsModNote').textContent = t; };
+  const mod = e.target.value, note2 = t => { $('wsModNote').textContent = t; $('wsModNote').hidden = !t; };
   if (deskMode() !== 'desk') { renderDeskUi(); note2('Not saved: The Desk does not answer.'); return; }
   const why = OS.modifierConflict(k, mod, keyCtx());
   if (why) { renderDeskUi(); note2(why); return; }
@@ -2509,6 +2511,11 @@ function renderHotkeys() {
     const extra = !!el.closest('.hk-extra'), off = mode === 'readonly' || (extra && mode === 'local');
     el.classList.toggle('hk-ro', off); el.setAttribute('aria-disabled', String(off));
   }
+  /* a key The Desk has that this browser keeps for itself (another PC's browser took it): said, never silently dropped */
+  if (mode !== 'local') for (const a of OT.HOTKEY_ACTIONS.concat(W.VIEW_KEYS)) {
+    const c = DS.hk.keys[a.id], why = c && $('wsHk-' + a.id).value !== c ? OT.hotkeyRefused(c) : '';
+    if (why) hkNote(a.id, 'The Desk has ' + c + ' for it, which does nothing on this page: ' + why, 'warn');
+  }
   renderDeskUi();
   for (const v of views.values()) setMaxButton(v, maxId === v.panel.id);   // the key in the square's tooltip
 }
@@ -2545,6 +2552,7 @@ $('wsHotkeys').addEventListener('keydown', e => {
   const tab = e.key === 'Tab' && !e.ctrlKey && !e.altKey && !e.metaKey;
   if (!tab) { e.preventDefault(); e.stopPropagation(); }
   if (e.repeat) return;
+  if (deskMode() === 'readonly') { hkNote(id, 'Not saved: ' + DESK.error + ' The keys shown are the last copy read, read only.', 'warn'); return; }
   /* 1.16.0: with the keys in The Desk, one check covers every key (the five, Merge, Maximize, Accept, Reject, each Order
      Strategy's key and the entry-type modifiers) */
   const r = deskMode() !== 'local' ? OS.keyFromEvent(e, { key: id }, keyCtx()) : OT.hotkeyFromEvent(e, readHotkeys(), id);
@@ -2556,9 +2564,9 @@ $('wsHotkeys').addEventListener('click', e => { const b = e.target.closest('butt
 $('wsPin').addEventListener('click', () => { closePops(); if (PIN) PIN.openChange(); });
 
 function renderSettings() {
-  renderGeneral(); renderHotkeys();
   for (const a of OT.HOTKEY_ACTIONS) hkNote(a.id, '', '');
   for (const a of W.VIEW_KEYS.concat(EXTRA_KEYS)) hkNote(a.id, '', '');
+  renderGeneral(); renderHotkeys();
   if (DS.on) deskRead();                                   // 1.16.0: the shared copy, fresh
   $('wsFloors').innerHTML = W.ROOTS.map(floorRow).join('');
   $('wsPinSec').hidden = !(PIN && PIN.active());
@@ -2772,7 +2780,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   feed: () => hub.stats(),
   /* 1.12.0: the ticket as this window knows it, and a chart's engine (read it; orders still go through the checks) */
   ticket: () => ({ held: holds(), holder: holder(), root: ticketRoot(), account: ticketAccount(), armed: ticketArmed(), enabled: core.TR.enabled, wid: link ? link.wid : '' }),
-  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; } };
+  chart: id => { const v = views.get(id); return v && v.pane ? v.pane.chart : null; },
+  /* 1.16.0: ChartBridge's switches, The Desk (on, mode, reach) and the active strategy (read it; nothing changes) */
+  v3: () => ({ switches: Object.assign({}, core.TR.switches), desk: { on: DS.on, mode: deskMode(), reach: DESK.reach, url: DESK.url() }, strategy: activeStrategyId() }) };
 
 const start = () => { openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake(); };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony

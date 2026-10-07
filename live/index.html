@@ -97,7 +97,8 @@
   <section class="ws-sec">
     <h2 id="wsHkCap">Hotkeys <span id="wsHkWhere">the same keys as the single chart page</span></h2>
     <div class="chart-live ws-lv" id="wsHotkeys"></div>
-    <p class="ws-help">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
+    <p class="ws-help" id="wsHkHelpShared" hidden>Click a box, then press the keys; saved in The Desk for every PC. Each does what its button does (Merge: the ticket's Merge; Accept and Reject: the copilot's answer). Never while typing in a box or with a menu open.</p>
+    <p class="ws-help" id="wsHkHelp">Click a box, then press the keys. Each does what its button on the order ticket does: Buy MKT and Sell MKT with the ticket's Qty and bracket, B/E, and Close on the ticket's account and instrument; Flatten all flattens every instrument with a position or a working order on that account. Buy, Sell and B/E need Armed and go to the window that has the ticket; Close and Flatten all work with Armed off and go from the window you press them in. KEYS ON in the top bar: a key works now. Never while typing in a box or with a menu open. The same keys work on the single chart page (single.html). Maximize panel fills the screen with the panel under the mouse, and the same key puts it back; it can never be a trading key. Saved in this browser.</p>
   </section>
   </div><div class="ws-col">
   <section class="ws-sec">
@@ -117,11 +118,11 @@
     <div class="ws-field"><button type="button" class="ws-btn" id="wsStrat">Order Strategies...</button><span class="ws-help" id="wsStratNote"></span></div>
   </section>
   <section class="ws-sec" id="wsTypesSec" hidden>
-    <h2>Entry types <span>a key held with a click, or with Buy MKT's or Sell MKT's key</span></h2>
+    <h2>Entry types <span>a key held with a click, Buy or Sell</span></h2>
     <div class="ws-field"><label class="ws-flabel" for="wsMod-limit">Limit</label><select class="ws-sel ws-mod" id="wsMod-limit"><option value="">None</option><option>Shift</option><option>Ctrl</option><option>Alt</option></select>
       <label class="ws-flabel" for="wsMod-stop">Stop</label><select class="ws-sel ws-mod" id="wsMod-stop"><option value="">None</option><option>Shift</option><option>Ctrl</option><option>Alt</option></select></div>
-    <p class="ws-help" id="wsModNote" role="status"></p>
-    <p class="ws-help">Limit held: a limit on the better side of the market, a stop-limit on the other (its limit at its stop). Stop held: a stop-market on the worse side, an MIT on the better. With Buy or Sell's key, at the price under the mouse on a chart of the ticket's instrument; on a click, only Alt counts (Shift and Ctrl pick buy or sell).</p>
+    <p class="ws-help" id="wsModNote" role="status" hidden></p>
+    <p class="ws-help" title="Limit held: a limit on the better side of the market, a stop-limit on the other (its limit at its stop). Stop held: a stop-market on the worse side, an MIT on the better side. With Buy MKT's or Sell MKT's key, the price is the one under the mouse on a chart of the ticket's instrument. On a chart click only Alt counts, since Shift and Ctrl pick buy or sell.">Limit: a limit, or a stop-limit past the market. Stop: a stop, or an MIT. Keys: at the mouse's price; clicks: Alt only.</p>
   </section>
   <section class="ws-sec" id="wsPinSec" hidden>
     <h2>ChartBridge PIN</h2>
