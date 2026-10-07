@@ -154,6 +154,7 @@ function create(o) {
   }
   function lost() {
     S.signedIn = false; S.trading = null; S.orders.clear();
+    S.bot = null;                                    // nothing stale while ChartBridge is away; the next `bot` says it all
     for (const p of props.clear()) dropProposal(p.id);
     S.pending.clear();
     render();
@@ -922,12 +923,20 @@ function create(o) {
   /* (the `bot` message arrives once a second from ChartBridge while the bot is connected: render() covers it) */
 
   if (popout) S.shown = true;
-  connect();
+  /* The workspace passes its order connection's hello (o.waitHello): this page opens its own connection only when
+     ChartBridge speaks v3, so a 0.3.x ChartBridge sees no extra connection at all. The bot-only window connects at once. */
+  if (!o.waitHello) connect();
   render();
   if (!popout) setTimeout(loadKeys, 1500); else loadKeys();
 
   const api = {
     VERSION,
+    /** the workspace's hello (its order connection's): connect for the bot channel only with a v3 ChartBridge */
+    hello(m) {
+      const v3 = !!(m && Array.isArray(m.features) && m.features.includes('v3'));
+      if (!v3) { if (!S.sock && !S.timer) { S.v3 = false; S.version = m && typeof m.version === 'string' ? m.version : ''; render(); } return; }
+      if (!S.sock && !S.timer && !S.destroyed) connect();
+    },
     showTab, shown: () => S.shown, on: () => S.on,
     layoutChanged(name) { S.layout = String(name || ''); if (S.shown && !popout) showTab(false); renderStrip(); },
     /** the chart menu's ghost switch (workspace.js): whether it is offered and on, and to flip it */

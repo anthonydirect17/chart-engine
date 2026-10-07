@@ -711,6 +711,7 @@ function tmessage(m) {
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
       renderOrders();
+      if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab connects only to a ChartBridge that speaks v3
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
@@ -2335,7 +2336,7 @@ let botDesk = null;
 function startBot() {
   if (!window.BotDesk) return;
   botDesk = window.BotDesk.create({ wsUrl, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
-    els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK,
+    els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK, waitHello: true,
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);

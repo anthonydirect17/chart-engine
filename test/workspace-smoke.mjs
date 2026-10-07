@@ -163,7 +163,7 @@ try {
   check(im.open && im.w >= 300 && im.right <= im.vw, 'the header\'s Indicators button opens the chart\'s menu, inside the window (' + Math.round(im.w) + ' px)');
   await page.keyboard.press('Escape');
   await page.click(`.ws-panel[data-id="${nq.id}"] [data-act="more"]`);
-  check(await page.evaluate(() => !document.getElementById('wsMore').hidden && [...document.querySelectorAll('#wsMore button')].map(b => b.textContent).join('|') === 'Reset view'), 'the small menu: Reset view (1.15.0: the drawing tools are the ring\'s, smoke:h1)');
+  check(await page.evaluate(() => !document.getElementById('wsMore').hidden && [...document.querySelectorAll('#wsMore button')].filter(b => !b.hidden).map(b => b.textContent).join('|') === 'Reset view'), 'the small menu: Reset view (1.15.0: the drawing tools are the ring\'s, smoke:h1)');
   await page.click('#wsMore [data-do="reset"]');
   await shot(page, 'workspace-1920x1080.png');
 
