@@ -1496,7 +1496,8 @@ Example: 3 contracts at 33/33/34 give 1/1/1; 1 contract at 50/50 gives 0/1 (T1 d
 bucket `k` gets its own stop and target as an OCO pair for exactly its contracts, at that increment's own fill price
 (stop `stop` ticks away, target `tk` ticks away). With no targets, one stop for `q`. Legs are GTC; the stop-already-traded
 market exit, the legs check, the missing-stop alarm, "never opens a position" and Flatten all work per pair as in v2.
-Names: entry `CB#1a2b3c4d sg` (market) or `CB#1a2b3c4d atm sg` (resting), legs as v2 plus the bucket:
+Names: entry `CB#1a2b3c4d sg s20` (market) or `CB#1a2b3c4d atm sg s20` (resting; `s20` is the strategy's stop in ticks, so
+recovery never depends on `managed.txt` alone; see the fix1 notes below), legs as v2 plus the bucket:
 `CB#1a2b3c4d stop f2 q1 p24990.25 k2`, `CB#1a2b3c4d target f2 q1 p24990.25 k2`.
 
 **Breakeven and trailing**, on ChartBridge's live trades for the root, per pair from that pair's own fill price: once the
@@ -1505,10 +1506,11 @@ once. Once it is `trailAfter` ticks in profit, the stop's level is best minus `t
 least `trailStep` ticks better than the stop now. With both, the better level wins. A stop **never moves back** (never
 loosens), never to a price at or through the last trade (it waits for the next trade), at most one move per stop per
 500 ms (lead's default), always with `change` on the working stop at the broker (a stop-limit keeps its offset). A move
-NinjaTrader rejects leaves the stop where it was and raises a `status` `error`.
+NinjaTrader rejects leaves the stop where it was and raises a `status` `warn`; it is tried once more on the next eligible
+move, and a second rejection halts moves for that stop (fix1).
 
 **Saved for a restart**: `managed.txt` next to `config.txt`, one line per managed entry, `<tag>\t<strategy as the flat
-JSON object sent>\t<best price per pair>\t<saved UTC ms>`, written whole through a temp file off NinjaTrader's thread (at
+JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1), written whole through a temp file off NinjaTrader's thread (at
 placement, at each fill, and at most once a second as the best price moves); a line goes when its entry is done and its
 legs are gone. **On a restart (F5, a crash)** with a managed position open, ChartBridge recovers the legs from their
 names as in v2 and the parameters from `managed.txt`, takes the best price as the larger of the saved one and the trades
@@ -1547,8 +1549,9 @@ contract left a detail open:
   past the level the rule names. Breakeven and trailing move only while `trading` and `strategies` are on. A move is
   confirmed when NinjaTrader reports the stop working at the new price; one not confirmed in 5 s is let go (the stop's
   real price counts, and a later trade may move it again). A move NinjaTrader rejects leaves the stop where it is,
-  raises the `status` `error`, and that stop is **not moved again** (no new try every 500 ms into a rejection; Anthony
-  manages it by hand). Flatten stops breakeven and trailing on that account and root at once, so no move races its
+  with a `status` `warn`, and is tried once more on the next eligible move; a second rejection and that stop is **not moved
+  again** (no new try every 500 ms into a rejection; Anthony manages it by hand). (fix1; before fix1 the first rejection
+  halted it, with a `status` `error`) Flatten stops breakeven and trailing on that account and root at once, so no move races its
   cancels. (lead's default)
 - **`managed`:** `pairs` lists working pairs only; `best` is the best price over them; `id` is null when NinjaTrader no
   longer lists the entry (after a NinjaTrader restart the legs are recovered from their names alone). (lead's default)
@@ -1564,6 +1567,34 @@ contract left a detail open:
   (lead's default)
 - **For Merge (lane B4):** `ChartBridgeOrders.Allocate(q, shares)` is the allocation rule; strategy legs match
   `LegNameRx` with the bucket in group 6.
+
+#### Order Strategies: fix1 (review findings F4, F5 and the minors)
+
+- **The stop ticks in the entry's name (F5).** `CB#1a2b3c4d sg s20`, `CB#1a2b3c4d atm sg s20`, `... sg s20 sl`, `... sg s20
+  mit`. The longest is `CB#1a2b3c4d atm sg s999999999 mit`, 33 characters, under v2's longest entry name (`CB#1a2b3c4d atm
+  s999999999 t999999999 sl`, 40); the name carries only the stop (one number), not the targets or the stop-limit offset. A
+  fill whose strategy cannot be read after a restart (its line lost) gets its protective stop from the name: a stop-market at
+  that many ticks from the increment's fill (more certain to fill than a stop-limit), named as a bucket 1 leg, no target, never
+  moved, and a `status` `error` naming the account and root. A name from before fix1 (`sg` alone) and no line: as before, no
+  legs from a guess, the NO STOP error naming the account and root, and the missing-stop alarm.
+- **managed.txt unreadable at the start (F5).** Every new strategy entry is refused for that run: "Order Strategies are off for
+  this run: managed.txt could not be read; fix the file and restart"; the start's `status` `error` says so too. Until the file
+  has been read (the first moments after a start), a new strategy entry is refused with "try again in a moment". Plain
+  brackets still work.
+- **No write gap (F5).** A strategy entry is sent only once its `managed.txt` line is written (whole, through the temp file,
+  with the usual few tries), on the order path after the order's registration and before `Submit`. A write that still fails
+  refuses the entry ("Order Strategy entry not sent: managed.txt could not be saved (...)"); its record and registration are
+  undone and nothing is sent. The page's `managed` message follows the write.
+- **Merged (F4).** The line's fifth field `merged` (see Merge as built); a line without it reads as before.
+- **The 2 s check and a fill (minor).** The check can call a record done just as the entry's last fill is counted as covered
+  and before its legs are placed. A record called done in the last minute is kept aside; a fill that finds it gone or done
+  brings it back (the page is told it is active again, its line is written again), so legs and management are never silently
+  dropped.
+- **A rejected move (minor; replaces "not moved again" above).** The first move NinjaTrader rejects leaves the stop where it
+  is with a `status` `warn` ("ChartBridge tries once more on the next move"); the next eligible move (same rules: never
+  loosens, never at or through the last trade, 500 ms apart) is tried once. A second rejection halts moves for that stop,
+  with a `status` `warn` to manage it by hand.
+- **A ChartBridge order with no name** is never treated as a stop-limit or MIT to move (a null check).
 
 ### Merge stops and targets (`merge = on`)
 
@@ -1605,10 +1636,12 @@ the working stop quantity before the next:
 **Any failure** (a step rejected, not confirmed in 3 s, a fill during the swap, a reconnect) stops the swap and **restores
 the original brackets**: `S` shrinks back pair by pair (shrink first, then place that pair again at its original prices),
 newest last, with the same checks. The page gets `merge` with `result` `restored` and the reason in plain words. If the
-restore itself fails, ChartBridge makes sure one working stop covers the whole position at the first leg's stop price
-(the stop-already-traded rule applies), and raises a `status` `error` ("MNQ EVAL-A: the merge failed and the original
-brackets could not be put back; ONE STOP at 24,980.25 covers 3 contracts; NO TARGET; check NinjaTrader"), `result`
-`failed`. A restart in the middle of a swap is caught by the legs check and the missing-stop alarm as in v2, with a
+restore itself fails, ChartBridge makes sure working stops cover the whole position, never by cancelling a working stop
+first: what still works stays, and the contracts no stop covers get one stop at the first leg's stop price (the
+stop-already-traded rule applies). It raises a `status` `error` naming what covers what ("MNQ EVAL-A: the merge failed and
+the original brackets could not be put back; nothing working was cancelled, and ONE STOP at 24,980.25 now covers the 1
+contract(s) no stop covered; the working stops cover 3 of 3 contract(s) (2 at 24,980.25, 1 at 24,984.25); targets ...;
+check NinjaTrader"), `result` `failed` (fix1, F3; see the as built notes). A restart in the middle of a swap is caught by the legs check and the missing-stop alarm as in v2, with a
 `status` `error` naming the account and root. Every merge is logged (Output window) and counted in `/diag` `merges`.
 
 | page to server | fields (no others) |
@@ -1641,22 +1674,52 @@ Where the text above leaves a detail open, the build does this. Each is **(lead'
   the strategies code's `Allocate` (one rule). If a bucket of the first leg is gone (its target filled, or the rule dropped it),
   the position is allocated over the buckets that are left, by their shares out of their sum.
 - **Names.** `mstop q<n>` carries the whole position at placement; names never change after that.
-- **Restore.** A pair is placed again with its own name and prices and a new OCO id (`...-r<n>`), and only for what the
+- **Restore.** A pair is placed again with its own name and prices and a new OCO id (`...-r<run>-<n>`, fix1: `<run>` is the
+  run's start in seconds as hex, so an id is never used twice across restarts), and only for what the
   position still needs (after a fill during the swap the position can be smaller), so the stops are never above it. A change
   NinjaTrader never confirmed is sent again with the size it should have.
-- **Fallback.** Every other ChartBridge stop and target on the account and root is cancelled first; then one stop for what is
-  left uncovered: the merged stop resized, or a new `mstop`; a market `exit` when a trade from the last 2 s is at or through
-  the stop price.
+- **Fallback (fix1, F3).** Never a working stop cancelled before a replacement covering the same contracts is confirmed
+  working, and never two stops for the same contracts. So the fallback does not join the stops into one: every stop and target
+  still working stays where it is (a pair keeps its OCO target); this merge's own merged targets, and a target whose OCO stop is
+  gone (a pair put back with its stop rejected), are cancelled (neither is a working stop's partner). Then, by what the working
+  stops cover against the position: fewer contracts: ONE STOP for the contracts no stop covers at the first leg's stop price
+  (the merged stop this merge placed grown, when it has no OCO partner, else a new `mstop`), confirmed; a market `exit` for
+  them instead when a trade from the last 2 s is at or through that price. More: trimmed, this merge's own stop first, then the
+  newest, an OCO target first down to its stop's new size. Exactly: nothing is sent. A placement that is rejected or not
+  confirmed leaves every stop in place, and the error says how many contracts have NO STOP. Flat: every ChartBridge leg there is
+  cancelled. The `status` `error` and the `merge` text name what covers what (the stops by price, the targets by price);
+  `merge` `stop` gives the first leg's stop price and the contracts the stops at that price cover (lead's default).
+- **A flip during a swap (fix1).** If the position turns to the other side (a long that is now short), nothing is put back (a
+  stop or target of the old position is on the side that adds to the new one): every ChartBridge leg of the old position is
+  cancelled, the new position's own legs stay, and a `status` `error` says how many contracts held now have no stop. `result`
+  `failed`.
 - **Flatten during a swap** ends it with no restore: `merge` `result` `failed`, text "Flatten ended the merge; ...", no status
-  error (Flatten closes the position). Counted under `failed`.
+  error (Flatten closes the position). Counted under `failed`. Fix1 (F1): the swap ends only inside Flatten, once Flatten passed
+  its own gates (the account Connected and allowed, the root served), and in one step with the flatten call, under the swap's
+  send lock, so nothing the swap sends can follow it. A Flatten that is refused (a reject) leaves the swap alone: it goes on, or
+  restores, exactly as without it, and its answer never mentions Flatten. If the flatten call itself throws, the swap is let go
+  again and restores. The bot's Flatten goes through the same Flatten; the copier's own "flatten this follower" calls
+  NinjaTrader directly (`ChartBridgeCopier.cs`) and does not end a swap.
 - **The answer** (`merge`) goes to the page that sent the merge, until a v3 `client` flag exists to send it to every v3 page.
 - **After a multi-target merge** (upkeep, even with trading off): a merged target fill shrinks the merged stop by those contracts
   (from the size last asked for, so two fills in a row never leave it larger); a part fill of the merged stop trims the targets
   from the last bucket back. Gate 3, the scan's leg cover and the legs check count a merged set as one group (like an OCO pair),
   and the legs check shrinks it as a set.
+- **After a restart, a merged target's fill (fix1).** ChartBridge never saw the merged set's earlier events, so a target first
+  seen with fills cannot count a delta. The merged stop then shrinks to what NinjaTrader's position holds beyond the other
+  ChartBridge stops, at once when the position already shows the fill, else at the position update that follows (within
+  10 s). NinjaTrader's own position only (the fills in transit reading can count a fill from before the restart twice); it
+  never grows the stop and never cancels it on this reading (flat, the other side or nothing left is for the legs check).
 - **A restart mid-swap.** `merge_swap.txt` (next to `config.txt`) lists running swaps; one left at the first legs check after a
   start is a `status` `error` naming the account and root, also sent to each page that signs in for the next 10 minutes.
 - **Config.** A `merge` value other than on/true/1/off/false/0 is off, with one Output line. `/diag` `merges` also has `running`.
+- **`merge_swap.txt` (fix1)** is read, changed and written whole under one lock (two swaps on two accounts never lose each
+  other's line), through a temp file swapped in.
+- **Merged is saved (fix1, F4).** When a swap ends (merged, restored or failed), every managed entry on that account and root
+  is marked merged and `managed.txt` is written whole (temp file) on the merge's thread, before the swap unfreezes (breakeven
+  and trailing stay paused until then) and before its line leaves `merge_swap.txt`. After a restart such an entry is
+  recovered as `unmanaged` ("merged before the restart: breakeven and trailing stay off for this position, every stop stays
+  where it is"); no status error, since that is expected. Its shares stay in the line, so a later Merge can still use them.
 
 ### Quote-only markets (`quoteRoots`)
 
