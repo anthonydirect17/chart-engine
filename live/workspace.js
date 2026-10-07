@@ -1572,7 +1572,7 @@ function mountQuotes(v) {
 const dataBoxes = () => [...views.values()].filter(v => v.dataBox);
 let dbChart = null;                                       // the chart view the Data Box follows
 const DB_ROWS = [
-  ['time', 'Open'], ['dur', 'Lasted'], ['o', 'Open price'], ['h', 'High'], ['l', 'Low'], ['c', 'Close'], ['rng', 'Range'], ['v', 'Volume'],
+  ['time', 'Opened'], ['dur', 'Lasted'], ['o', 'Open'], ['h', 'High'], ['l', 'Low'], ['c', 'Close'], ['rng', 'Range'], ['v', 'Volume'],
   ['buy', 'Buy vol'], ['sell', 'Sell vol'], ['dlt', 'Delta'], ['big', 'Largest print'], ['bub', 'Bubbles'], ['hov', 'Bubble'],
   ['tape', 'Tape to frame'],            // 1.16.0 debug: ChartBridge's receipt of a trade to the frame that drew it
 ];
