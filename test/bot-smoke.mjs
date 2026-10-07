@@ -14,7 +14,8 @@
 //   - the pop-out window (bot.html) on its own connection;
 //   - with the bot switch off: the Bot tab says the bot channel is off and offers nothing (no strip, no ghost choice);
 //     with no library file: "No frozen builds on this PC".
-//   npm run smoke:bot        (CHROMIUM_PATH=/path/to/chrome; BOT_SMOKE_PORT; SHOTS=dir)
+//   npm run smoke:bot        (CHROMIUM_PATH=/path/to/chrome; BOT_SMOKE_PORT, and the next two ports; SHOTS=dir)
+// Screenshots: bot-strip, bot-tab, bot-detail, bot-proposal, bot-ghost, bot-popout, bot-off, bot-nolib (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -259,6 +260,7 @@ try {
   await page.click('#wsBotTab');
   const offText = await page.textContent('[data-k="offText"]');
   check(/bot channel is off on this PC/.test(offText) && await page.isHidden('.bt-grid') && !(await B()).chart, 'the Bot tab says the bot channel is off and offers nothing: ' + offText);
+  await page.screenshot({ path: path.join(SHOTS, 'bot-off.png') });
   await page.click('#wsBotTab');
   const mnq2 = (await page.evaluate(() => window.workspace.panels())).find(p => p.type === 'chart');
   await page.click(`.ws-panel[data-id="${mnq2.id}"] [data-act="more"]`);
@@ -273,6 +275,7 @@ try {
   const none = await page.textContent('[data-k="shelves"]');
   check(/No frozen builds on this PC/.test(none), 'the Library says so plainly: ' + none.trim());
   check((await B()).shown, '?tab=bot opens on the Bot tab');
+  await page.screenshot({ path: path.join(SHOTS, 'bot-nolib.png') });
 } catch (e) {
   fail('smoke stopped: ' + (e && e.stack || e));
 } finally {
