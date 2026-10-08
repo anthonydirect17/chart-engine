@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased: kit 1.0.0, the shared visual kit (no screen uses it yet; the chart stays 1.16.0)
+
+- **Kit 1.0.0** (`live/kit.css`, `live/kit.js`, docs/KIT.md), as Anthony approved it on 2026-10-08: the colours, the
+  three surfaces (`.kit-trading`, `.kit-desk`, `.kit-agent`), the hybrid fonts, the components, the soft armed outline and
+  the light around a panel's border. `ChartKit.light` keeps Anthony's rules: outside the Agent tab only in a trade, never
+  on the ticket, order lines, Flatten or the copier; no motion on numbers, chips or buttons (R3). No explanatory labelling
+  on a product screen.
+- **The gallery** (`live/kit.html`): every token with its contrast, the fonts, every component in every state, the three
+  surfaces side by side, the armed outline, the light in each colour and its refusal on a mock ticket. Sample data only.
+- **Bundled fonts**: Chakra Petch and JetBrains Mono from `live/fonts` (`agent-fonts.css`, `OFL-agent.txt`, the same files
+  as the Agent tab), IBM Plex Sans from `plex.css`. Nothing from the internet.
+- The three kit files and the fonts are in `nt8/install-files.json`, so the PC updater ships them. No screen uses the kit
+  yet: no behaviour change on any page, and no change to the engine or ChartBridge.
+- Tests: `test/kit.test.js` (in `npm test`) and `npm run smoke:kit`.
+
 ## ChartBridge 0.4.3 (2026-10-07): the copier never crosses zero, copies a fixed quantity, and can have no leader
 
 Found on WORK on Sim, test card section 5 (the copier), Anthony's copier test of 2026-10-07 15:01 ET:
