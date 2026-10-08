@@ -736,10 +736,10 @@ public static class IntegrationHarness
             string strip;
             lock (got) strip = got.FirstOrDefault(m => m.StartsWith("{\"type\":\"agent\",\"agent\":\"xa\"")) ?? "";
             Check(!before && strip != "", "X13: a page that signs in before its client message gets each agent's strip once it is v3 (the one handshake)");
-            // xa starts on Sim101 by default: Sim101 is listed as a copier follower here (X10, X11): it stands down plainly
+            // xa starts on Sim101 by default: Sim101 is the bot's account and a copier follower here (X10, X11): it stands down plainly
             string sd = ChartBridgeAgents.Get("xa").AccountConflict() ?? "";
-            Check(sd.Contains("Sim101 is also a copier follower") && sd.Contains("choose an account for agent xa on the Agent tab") && strip.Contains("\"standDown\":\"Sim101 is also"),
-                  "X13: an agent on the copier's account stands down in plain words: " + sd);
+            Check(sd.StartsWith("Sim101 is also ") && sd.Contains("choose an account for agent xa on the Agent tab") && strip.Contains("\"standDown\":\"Sim101 is also"),
+                  "X13: an agent on the bot's or the copier's account stands down in plain words: " + sd);
             Check(ChartBridgeCopier.Enabled && ChartBridgeAgents.EntryCheck("page", lead, "MNQ") == null, "X13: the copier is left as it was; the agent owns nothing, so the page is free");
             Clients().TryRemove(73, out late);
         }

@@ -798,15 +798,32 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.5.0 agents (ruling 1): an agent never trades the copier's leader or any follower, on or off. Null when the copier does
         // not use the account (or is off).
+        // Lead's default: whether or not the copier is on (off: read from copier.txt; a file that cannot be read refuses every account).
         public static string AgentAccountRefusal(string name)
         {
-            if (!Enabled || string.IsNullOrEmpty(name)) return null;
-            lock (Lk)
+            if (string.IsNullOrEmpty(name)) return null;
+            if (Enabled)
             {
-                if (IsLeader(name)) return name + " is the copier's leader";
-                if (FollowerNamed(name) != null) return name + " is a copier follower";
+                lock (Lk)
+                {
+                    if (loadFailed) return "copier.txt could not be read, so ChartBridge cannot tell whether " + name + " is the copier's";
+                    if (IsLeader(name)) return name + " is the copier's leader";
+                    if (FollowerNamed(name) != null) return name + " is a copier follower";
+                }
+                return null;
             }
-            return null;
+            try
+            {
+                if (!File.Exists(FilePath)) return null;
+                foreach (string raw in File.ReadAllLines(FilePath))
+                {
+                    string[] p = raw.Split('\t');
+                    if (p.Length == 2 && p[0] == "leader" && p[1].Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is the copier's leader";
+                    if (p.Length == 6 && p[0] == "follower" && p[1].Equals(name, StringComparison.OrdinalIgnoreCase)) return name + " is a copier follower";
+                }
+                return null;
+            }
+            catch (Exception ex) { return "copier.txt could not be read (" + ex.Message + "), so ChartBridge cannot tell whether " + name + " is the copier's"; }
         }
 
         // Integration (lead's default): Merge is refused on a copier follower while the copier is on. The copier closes, shrinks and

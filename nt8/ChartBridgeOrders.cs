@@ -865,10 +865,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!IsWorking(o.OrderState)) return "that order is no longer working";
             if (RoleFor(o) != "entry") return "only a ChartBridge entry has a planned stop and target; a working leg moves with change";
             if (IsStrategyName(o.Name)) return "a plan on an Order Strategy entry is refused: cancel it and place it again with the strategy you want";   // 0.4.0 B1 (lead's default)
-            if (ChartBridgeAgents.IsEntryName(o.Name)) return "an agent's entry keeps the stop and target ChartBridge placed it with: cancel it if you do not want it (a working stop or target moves as always)";   // 0.5.0 agents (lead's default)
             if (!IsResting(o)) return "only a resting limit or stop entry has a planned stop and target";
             int st, tt, hs = TicksOf(top, "stopTicks", out st), ht = TicksOf(top, "targetTicks", out tt);
             if (hs == 0 && ht == 0) return "plan needs stopTicks or targetTicks (a whole number of ticks to set it, null to remove it)";
+            if (ChartBridgeAgents.IsEntryName(o.Name) && (hs == 2 || ht == 2 || hs < 0 || ht < 0)) return "an agent's entry always has a stop and a target";   // 0.5.0 agents (lead's default): new distances of 1 or more only
             if (hs < 0) return "stopTicks must be a whole number of 1 or more, or null to remove the stop";
             if (ht < 0) return "targetTicks must be a whole number of 1 or more, or null to remove the target";
             if (MaxBracketTicks > 0 && ((hs == 1 && st > MaxBracketTicks) || (ht == 1 && tt > MaxBracketTicks)))

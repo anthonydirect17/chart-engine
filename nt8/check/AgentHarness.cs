@@ -233,6 +233,7 @@ public static class AgentHarness
         simb = NewAccount("SIM-B", Provider.Simulator);
         simc = NewAccount("SIM-C", Provider.Simulator);
         simd = NewAccount("SIM-D", Provider.Simulator);
+        File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });   // the bot's account counts for agents even with the bot off
         Config();
         Last2();
         ChartBridgeOrders.NewToken();
@@ -303,8 +304,13 @@ public static class AgentHarness
     // ------------------------------------------------------------ agentHello first; welcome, then agentState
     static void Hello()
     {
-        A(Good(NewId()));
-        Check(AgentReject().Contains("send agentHello first"), "a plan before agentHello: refused");
+        int plansShown = Count(page, "agentPlan");
+        string early = NewId();
+        A(Good(early));
+        Check(AgentReject() == "{\"type\":\"reject\",\"id\":null,\"reason\":\"send agentHello first\"}" && Count(page, "agentPlan") == plansShown && !FileText("agent-manrae.log").Contains(early),
+              "a plan before agentHello: refused, never shown to the pages, never logged");
+        A("{\"type\":\"plan\",\"oops\"}");
+        Check(AgentReject().Contains("send agentHello first") && Count(page, "agentPlan") == plansShown, "even an unreadable plan before agentHello: only \"send agentHello first\"");
         A("{\"type\":\"beat\"}");
         Check(AgentReject().Contains("send agentHello first"), "a beat before agentHello: refused too (anything earlier)");
         A("{\"type\":\"agentHello\",\"name\":\"Manrae\"}");
@@ -325,6 +331,11 @@ public static class AgentHarness
         Check(strip.Contains("\"agent\":\"manrae\",\"name\":\"Manrae\",\"build\":\"sample-build-1\",\"enabled\":true,\"connected\":true,\"mode\":\"shadow\"") && strip.Contains("\"lastPlan\":null"), "the page's strip: " + strip);
         ChartBridgeAgents.OnTick("MNQ", "{\"type\":\"tick\",\"root\":\"MNQ\",\"p\":25000.25,\"v\":1}");
         Check(Last(agentOut, "tick").Contains("25000.25"), "the agent reads every live trade");
+        // demob connects and never says hello: closed after 5 s, its id freed
+        ChartBridgeClient mute = new ChartBridgeClient(null, -150);
+        Check(D.Attach(mute) && D.Busy(), "demob attaches");
+        for (int i = 0; i < 6; i++) { clock += 1000; D.OnMessage(mute, "{\"type\":\"beat\"}"); M.OnMessage(ac, "{\"type\":\"beat\"}"); Tick(); }
+        Check(!D.Busy() && D.DiagJson().Contains("\"connected\":false") && M.DiagJson().Contains("\"connected\":true"), "a socket that never says agentHello is closed after 5 s (beats do not count) and frees its id");
     }
 
     // ------------------------------------------------------------ the strict parser (gate 8) and note.text's 1,000
@@ -392,6 +403,9 @@ public static class AgentHarness
         refuse(Good(NewId()).Replace(",\"confidence\":0.6", ""), "confidence must be a number from 0 to 1", "check 1: a missing field");
         refuse(Good(NewId()).Replace("\"confidence\":0.6", "\"confidence\":1.5"), "confidence must be a number from 0 to 1", "check 1: confidence above 1");
         refuse(Good(shadowId), "plan id " + shadowId + " was already used today", "check 1: an id used today (a shadow plan's)");
+        refuse(Good("plan-4"), "plan id plan-4 was already used today", "check 1: an id a refused plan used is used too (lead's default)");
+        string lastPlan = Last(page, "agent");
+        Check(lastPlan.Contains("\"lastPlan\":{\"type\":\"agentPlan\",\"agent\":\"manrae\",\"id\":\"plan-4\"") && lastPlan.Contains("confidence must be"), "a refusal for an id already used is shown on its own; lastPlan stays the plan that id first named");
         // 2. killed, stood down, the account
         P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":true}");
         refuse(Plan(NewId(), "ES", "buy", "market", "24999", 0, 0, 0, 1), "the kill switch is on", "check 2 before 3 and 4: killed");
@@ -402,6 +416,11 @@ public static class AgentHarness
         sim.Connection.Status = ConnectionStatus.ConnectionLost;
         refuse(Good(NewId()), "Sim101 is not connected", "check 2: not Connected");
         sim.Connection.Status = ConnectionStatus.Connected;
+        Account.All.Remove(sim);
+        refuse(Good(NewId()), "Sim101 is not in NinjaTrader", "check 2: an account NinjaTrader no longer lists");
+        P("{\"type\":\"agentMode\",\"cid\":\"m\",\"agent\":\"manrae\",\"mode\":\"auto\"}");
+        Check(PageReject().Contains("auto refused: Sim101 is not in NinjaTrader"), "auto's check refuses it too");
+        Account.All.Insert(0, sim);
         // 3. root and kind
         refuse(Plan(NewId(), "ES", "buy", "limit", "24999", 0, 0, 0, 1), "ES is not one of agent manrae's roots", "check 3 before 4: a root not in roots");
         refuse(Plan(NewId(), "MNQ", "buy", "market", "24999", 1, 8, 16, 600), "an agent's entry is a limit or a stop-limit (market refused)", "check 3: market");
@@ -499,7 +518,12 @@ public static class AgentHarness
         if (pageNq != null) { pageNq.OrderState = OrderState.Cancelled; Update(pageNq); }
         string entryId = (string)typeof(ChartBridgeOrders).GetMethod("IdFor", PS).Invoke(null, new object[] { e });
         P("{\"type\":\"plan\",\"cid\":\"pl\",\"id\":\"" + entryId + "\",\"stopTicks\":null}");
-        Check(PageReject().Contains("an agent's entry keeps the stop and target ChartBridge placed it with"), "a page plan never removes a working agent entry's stop (lead's default): " + PageReject());
+        Check(PageReject().Contains("an agent's entry always has a stop and a target"), "a page plan never removes a working agent entry's stop (lead's default): " + PageReject());
+        P("{\"type\":\"plan\",\"cid\":\"pl0\",\"id\":\"" + entryId + "\",\"targetTicks\":0}");
+        Check(PageReject().Contains("\"cid\":\"pl0\"") && PageReject().Contains("an agent's entry always has a stop and a target"), "nor its target (0)");
+        P("{\"type\":\"plan\",\"cid\":\"pl1\",\"id\":\"" + entryId + "\",\"stopTicks\":10,\"targetTicks\":20}");
+        Check(!PageReject().Contains("\"cid\":\"pl1\"") && Last(page, "order").Contains("\"planned\":{\"stopTicks\":10,\"targetTicks\":20}"), "new distances of 1 or more are allowed");
+        P("{\"type\":\"plan\",\"cid\":\"pl2\",\"id\":\"" + entryId + "\",\"stopTicks\":8,\"targetTicks\":16}");
         // the fill: legs at the fill price, OCO, GTC; a trade; the position in the strip
         Fill(e, 1, 24999);
         List<Order> legs = Legs(sim, e);
@@ -830,6 +854,17 @@ public static class AgentHarness
         P(Rules("MNQ", ",\"maxQtyMNQ\":5,\"maxQtyNQ\":0", "09:45", "15:00", "15:55", 1800, 0, 1));
         A(Good(NewId()));
         Check(AgentReject().Contains("losing trades today (maxLosses 1)") && Last(page, "agent").Contains("\"standDown\":\"1 losing trades today (maxLosses 1)"), "check 9: maxLosses reached: stands down: " + AgentReject());
+        P(Rules("MNQ", ",\"maxQtyMNQ\":5", "09:45", "15:00", "15:55", 1800, 0, 0));
+        A(Good(NewId()));
+        Check(AgentReject().Contains("losing trades today (maxLosses 1)") && FileText("agent-manrae-day.txt").Contains("standDown\t1 losing trades today"), "a rules change never lifts a loss stand-down for the day (lead's default); the day file keeps it");
+        Restart();
+        Mode("manrae", "auto");
+        A(Good(NewId()));
+        Check(AgentReject().Contains("losing trades today (maxLosses 1)"), "and a restart keeps it");
+        string dayFile = Path.Combine(Dir, "agent-manrae-day.txt");
+        File.WriteAllLines(dayFile, File.ReadAllLines(dayFile).Where(l => !l.StartsWith("standDown\t")).ToArray());   // the harness starts the day over (18:00 does it for real, below)
+        Restart();
+        Mode("manrae", "auto");
         // the hard ceiling is in the order path too: PlaceAgentEntry never sends more than the ceiling, whatever comes in
         P(Rules("NQ,MNQ", "", "09:45", "15:00", "15:55", 1800, 0, 0));
         Check(Last(agentOut, "welcome").Contains("\"maxQty\":{\"NQ\":2,\"MNQ\":20}"), "agentRules: a size left out for a chosen root is its hard ceiling");
@@ -938,16 +973,22 @@ public static class AgentHarness
         Mode("manrae", "auto");
         // EVAL-A, a LIVE account: accepted; welcome says so
         P(AccountMsg("manrae", "EVAL-A"));
-        Check(M.Account == "EVAL-A" && Last(agentOut, "welcome").Contains("\"account\":\"EVAL-A\",\"sim\":false") && FileText("agent-manrae-account.txt").Contains("account\tEVAL-A"),
-              "agentAccount EVAL-A (LIVE): saved in agent-manrae-account.txt, welcome again with sim false");
+        Check(M.Account == "EVAL-A" && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\",\"account\":\"EVAL-A\",\"sim\":false") && FileText("agent-manrae-account.txt").Contains("account\tEVAL-A"),
+              "agentAccount EVAL-A (LIVE): saved in agent-manrae-account.txt, welcome again with sim false, and the agent in shadow (it never carries auto onto a new account)");
         Check(FileText("agent-manrae.log").Contains("account EVAL-A (LIVE), was Sim101, set by the page"), "logged with LIVE");
         // the bot: refuses an agent's account; an agent refuses the bot's
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);
         P("{\"type\":\"botAccount\",\"cid\":\"b1\",\"account\":\"EVAL-A\"}");
         Check(PageReject().Contains("EVAL-A is agent manrae's account: the bot does not trade it"), "botAccount: an agent's account is refused: " + PageReject());
-        P(AccountMsg("manrae", "Sim101"));
-        Check(PageReject().Contains("Sim101 is the bot's account: an agent never trades it"), "agentAccount: the bot's account is refused");
+        P(AccountMsg("manrae", "SIM-Z"));
+        Check(PageReject().Contains("SIM-Z is the bot's account: an agent never trades it"), "agentAccount: the bot's account is refused");
+        ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
+        P(AccountMsg("manrae", "SIM-Z"));
+        Check(PageReject().Contains("SIM-Z is the bot's account: an agent never trades it"), "agentAccount: the bot's account is refused with the bot off too (lead's default)");
+        ChartBridgeSwitches.Note("bot", "on");
+        File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
+        ChartBridgeBot.Start(false);
         // a clash from files (both on Sim101 by default): the agent stands down, the bot is left as it was
         File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSim101" });
         Restart();
@@ -955,6 +996,8 @@ public static class AgentHarness
         Mode("manrae", "auto");
         Check(PageReject().Contains("auto refused: Sim101 is also the bot's account"), "auto refused while it clashes");
         ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
+        Check(D.AccountConflict() == null, "demob (SIM-B) is not touched by the bot's file");
+        File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });
         // the copier: refuses an agent's account as leader or follower (turning one off is allowed); an agent refuses its accounts
         ChartBridgeSwitches.Note("copier", "on");
         ChartBridgeCopier.HarnessManual = true;
@@ -976,6 +1019,11 @@ public static class AgentHarness
         Check(PageReject().Contains("SIM-D is a copier follower: an agent never trades it"), "agentAccount: a follower that is off is refused too");
         P(AccountMsg("manrae", "SIM-B"));
         Check(PageReject().Contains("SIM-B is agent demob's account"), "agentAccount: demob's account refused");
+        ChartBridgeCopier.Stop(); ChartBridgeSwitches.Note("copier", "off");
+        P(AccountMsg("manrae", "SIM-C"));
+        Check(PageReject().Contains("SIM-C is a copier follower: an agent never trades it"), "agentAccount: a follower is refused with the copier off too (copier.txt; lead's default)");
+        ChartBridgeSwitches.Note("copier", "on");
+        ChartBridgeCopier.Start();
         // demob takes a free account; manrae moves to SIM-B? no: back to Sim101 (the bot is off now)
         P(AccountMsg("manrae", "Sim101"));
         Mode("manrae", "auto");

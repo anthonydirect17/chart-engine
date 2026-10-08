@@ -153,6 +153,28 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The account the bot trades: Sim101 until Anthony chooses another on the page (botAccount).
         public static string BotAccount { get { lock (Sync) return account; } }
+
+        // 0.5.0 agents (lead's default): the bot's account for the agents' refusals whether or not the bot is on: in memory when on,
+        // else read from bot-account.txt (Sim101 when there is none); null when that file cannot be understood.
+        public static string AccountForAgents()
+        {
+            if (Enabled) return BotAccount;
+            try
+            {
+                if (!File.Exists(AccountFile)) return DefaultAccount;
+                string found = null;
+                foreach (string raw in File.ReadAllLines(AccountFile))
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    string[] p = line.Split('\t');
+                    if (found == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
+                    else return null;
+                }
+                return found;
+            }
+            catch (Exception) { return null; }
+        }
         private static string DayFile { get { return Path.Combine(Folder, "bot-day.txt"); } }
         private static string LogFile { get { return Path.Combine(Folder, "bot.log"); } }
 
