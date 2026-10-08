@@ -420,5 +420,8 @@ test('docs/KIT.md: the tokens, the fonts link, the rules, the API and the storag
   for (const k of Object.keys(K.TOKENS)) assert.ok(md.includes('--kit-' + k), 'KIT.md lists --kit-' + k);
   assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(md), 'no web font link: the fonts are served with the page');
   assert.match(md, /fonts\/agent-fonts\.css/); assert.match(md, /The Desk vendors the same files/);
+  assert.match(md, /## No explanatory labelling/);
+  assert.match(md, /`\.kit-keys`, `\.kit-key`\) is \*\*gallery and docs only, never on a product\s+screen\*\*/);
+  assert.match(read('live/kit.css'), /legend key: gallery and docs only, never on a product screen/);
   for (const s of ['kit-motion-v1', 'data-no-light', 'ChartKit.light', 'ChartKit.armed', 'ChartKit.setMotion', 'kit-trading', 'kit-desk', 'kit-agent', 'kit-armed', 'R3', 'npm run smoke:kit']) assert.ok(md.includes(s), s);
 });

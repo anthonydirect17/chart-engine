@@ -123,6 +123,11 @@ try {
   await page.evaluate(() => document.documentElement.classList.remove('motion-off'));
 
   // ---- screenshots
+  // no explanatory labelling on a product screen: the three surface mocks have no legend, no sentence, no hint
+  const told = await page.evaluate(() => [...document.querySelectorAll('#v-trading, #v-desk, #v-agent')].flatMap(s =>
+    [...s.querySelectorAll('.kit-keys, .kit-key, p, .gal-note, .kit-step-sub')].filter(el => !(el.classList.contains('kit-step-sub') && /^[\d.]+ ?(s|ms)$/.test(el.textContent.trim()))).map(el => s.id + ' ' + el.className + ': ' + el.textContent.trim().slice(0, 40))));
+  check(told.length === 0, 'the product mocks carry no legend, no explaining sentence and no hint: ' + JSON.stringify(told));
+  check(await page.evaluate(() => !/\b(in profit|under water|tap one|tap a row)\b/i.test(['v-trading', 'v-desk', 'v-agent'].map(id => document.getElementById(id).textContent).join(' '))), 'no status words beside the light on the product mocks');
   await page.locator('#v-trading').screenshot({ path: path.join(out, 'kit-trading.png') });
   await page.locator('#v-desk').screenshot({ path: path.join(out, 'kit-desk.png') });
   await page.locator('#v-agent').screenshot({ path: path.join(out, 'kit-agent.png') });
