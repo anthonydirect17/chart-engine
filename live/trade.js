@@ -165,7 +165,7 @@ function create(env) {
     TR.signInStarted = false;
     if (!TR.v2) return;
     batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
-    TR.enabled = false; TR.reason = reason; TR.orders.clear(); TR.positions.clear();
+    TR.enabled = false; TR.reason = reason; TR.orders.clear(); announced.clear(); TR.positions.clear();
     if (OS) TR.switches = OS.cleanSwitches(null);
     TR.managed.clear(); TR.merges.clear();                         // ChartBridge sends the managed ones again after auth
     const was = TR.account;
@@ -173,11 +173,16 @@ function create(env) {
     env.lost(was);
     setArmed(false); env.changed(); env.syncAccounts();
   }
+  /* ChartBridge 0.5.1: what each working order last said in a message of its own (never one sent `again` after a snapshot):
+     the note for an update compares with this, so a re-send that read ahead of NinjaTrader's own message never swallows
+     that message's note. Dropped with TR.orders' entries (finished, reconnect, a new orders list). */
+  const announced = new Map();
   function onOrder(o) {
     if (!served(o.root)) return;
-    const prev = TR.orders.get(o.id) || null;
+    const prev = announced.get(o.id) || null;
     const ev = OT.orderEvent(o, prev, fmt);
     if (OT.isWorking(o)) TR.orders.set(o.id, o); else TR.orders.delete(o.id);
+    if (!OT.isWorking(o)) announced.delete(o.id); else if (o.again !== true) announced.set(o.id, o);
     if (ev) flash(ev.text, ev.level === 'error' ? 'error' : '');
     if (!OT.isWorking(o) && unsent.delete(o.id)) env.unsent();
     env.changed();
@@ -192,7 +197,7 @@ function create(env) {
   function message(m) {
     switch (m && m.type) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); return true;
-      case 'orders': TR.orders.clear(); for (const o of m.list || []) if (served(o.root)) TR.orders.set(o.id, o); unsentCheck(); env.changed(); return true;
+      case 'orders': TR.orders.clear(); announced.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); } unsentCheck(); env.changed(); return true;
       case 'order': onOrder(m); return true;
       case 'position': TR.positions.set(m.account + '|' + m.root, { qty: +m.qty || 0, avgPrice: +m.avgPrice || 0 }); env.changed(); if (env.positionChanged) env.positionChanged(); return true;
       case 'reject': if (!onRefused(m)) flash('Refused by ChartBridge: ' + m.reason, 'error'); env.changed(); return true;

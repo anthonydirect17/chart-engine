@@ -220,3 +220,36 @@ test('ChartBridge 0.5.1: a finished order sent again after a snapshot flashes on
   assert.equal(R.notes.length, 0);
   assert.ok(R.core.TR.orders.has('o9'));
 });
+
+test('ChartBridge 0.5.1: a re-send (again) that reads ahead of NinjaTrader\'s own message never swallows its note', () => {
+  const R = rig();
+  R.on();
+  const q = { type: 'order', id: 'q1', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'buy', kind: 'limit', qty: 2, price: 100, state: 'working', filled: 0 };
+  R.core.message(q);
+  R.notes.length = 0;
+  const part = Object.assign({}, q, { state: 'partFilled', filled: 1, avgFill: 100 });
+  R.core.message(Object.assign({}, part, { again: true }));   // the snapshot's fresh read, ahead of the event
+  R.core.message(part);                                        // NinjaTrader's own message for the part fill
+  assert.equal(R.notes.filter(n => /Part filled/.test(n)).length, 1, 'part fill: ' + R.notes.join(' / '));
+  assert.equal(R.core.TR.orders.get('q1').filled, 1);
+});
+
+test('ChartBridge 0.5.1: a moved order re-sent (again) ahead of NinjaTrader\'s own message: the move is said once', () => {
+  const R = rig();
+  R.on();
+  const q = { type: 'order', id: 'q1', account: 'Sim101', root: 'MNQ', name: 'MNQ 12-26', side: 'buy', kind: 'limit', qty: 2, price: 100, state: 'working', filled: 0 };
+  const q2 = Object.assign({}, q, { id: 'q2' });
+  R.core.message(q2);
+  R.notes.length = 0;
+  const moved = Object.assign({}, q2, { price: 99 });
+  R.core.message(Object.assign({}, moved, { again: true }));
+  R.core.message(moved);
+  assert.equal(R.notes.filter(n => /Moved/.test(n)).length, 1, 'move: ' + R.notes.join(' / '));
+  assert.equal(R.core.TR.orders.get('q2').price, 99);
+  // finished, a new orders list or a dropped connection leave nothing behind (both maps agree)
+  R.core.message(Object.assign({}, moved, { state: 'cancelled' }));
+  R.core.message({ type: 'orders', list: [Object.assign({}, q, { id: 'q3' })] });
+  R.notes.length = 0;
+  R.core.message(Object.assign({}, q, { id: 'q3', price: 98 }));
+  assert.equal(R.notes.filter(n => /Moved/.test(n)).length, 1, 'an order from the orders list: its move is said once: ' + R.notes.join(' / '));
+});
