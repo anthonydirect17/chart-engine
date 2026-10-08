@@ -180,6 +180,7 @@ public static class AgentHarness
             Round3();   // contract section 10, reviewer B's second nits, reviewer A's second round (A1 to A5)
             Round4();   // contract section 10 items 7 to 9, reviewer A's C1 to C5
             Round5();   // reviewer A's D1 to D5 (RS1, RS3)
+            Round6();   // reviewer A's E1 to E3 (RX)
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -2473,6 +2474,94 @@ public static class AgentHarness
             foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
             SetPos(sime, mnq, 0); ClearMoves();
             Advance(1000);
+        });
+        foreach (Account x in Account.All.ToList()) Settle(x);
+    }
+
+    // ------------------------------------------------------------ round 6: reviewer A's E1 to E3
+    static void Round6()
+    {
+        sime = Account.All.First(x => x.Name == "SIM-E");
+
+        // E1 (RX): the entry for 2 fills at once; its first exec of 1, then a close of 2 (Anthony's Flatten), then its late exec of 1
+        Part("E1 net", () =>
+        {
+            Fresh();
+            Order x2 = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 2, 8, 16, 600));
+            if (x2 == null) { Check(false, "E1: an entry was placed: " + AgentReject()); return; }
+            x2.OrderId = "X2"; x2.Filled = 2; x2.AverageFillPrice = 24999; x2.OrderState = OrderState.Filled; Update(x2);
+            Deliver("SIM-E", mnq, MarketPosition.Long, 1, 24999, "X2");
+            SetPos(sime, mnq, 2);
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Deliver("SIM-E", mnq, MarketPosition.Short, 2, 25001, "FLAT2");
+            SetPos(sime, mnq, 0);
+            Deliver("SIM-E", mnq, MarketPosition.Long, 1, 24999, "X2");   // the late exec of the entry
+            ClearMoves();
+            int s0 = N(page);
+            Advance(6000);
+            string st = Last(agentOut, "agentState");
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == null && st.Contains("\"trades\":1") && st.Contains("\"pnlToday\":8") && st.Contains("\"owns\":false") && !Any(page, s0, "was ended"),
+                  "E1 (RX): the late exec nets against the close: one trade of 2 contracts, 8 dollars, no ghost, flat and not the agent's: " + st);
+        });
+
+        // E1: an open trade whose pair is flat by both readings, nothing of it working, for 5 s: ended, with a warning
+        Part("E1 ghost", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "E1: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            SetPos(sime, mnq, 0); ClearMoves();   // closed where ChartBridge saw no execution
+            int s0 = N(page);
+            Advance(3000);
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == "manrae", "E1: for under 5 s the trade stays open (a late execution may still come)");
+            Advance(4000);
+            Check(ChartBridgeAgents.OwnerAgent("SIM-E", "MNQ") == null && Last(agentOut, "agentState").Contains("\"trades\":1") &&
+                  Any(page, s0, "its own executions leave 1 open: some were not seen; check NinjaTrader's fills"), "E1: after 5 s flat it is ended, booked from its executions, with a warning: " + Last(agentOut, "agentState"));
+        });
+
+        // E2: the retry after a rejected close: the stop placed again is cancelled only once the market trades
+        Part("E2", () =>
+        {
+            Fresh();
+            Order e = PlacedOn(sime, Good(NewId()));
+            if (e == null) { Check(false, "E2: an entry was placed: " + AgentReject()); return; }
+            Fill(e, 1, 24999);
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Hold = (kd, o) => kd == "submit" && (o.Name ?? "").EndsWith(" ag:manrae flat");
+            Last2();
+            Advance(4000);
+            Hold = null;
+            Order cl = LiveClose(sime);
+            if (cl != null) { cl.OrderState = OrderState.Rejected; Update(cl); }
+            Advance(1000);
+            Order rs = ReStopOf(sime);
+            Check(rs != null, "E2 setup: the close rejected, its stop placed again");
+            StaleLast("MNQ", 60000);
+            int c0 = sime.Calls.Count, s0 = N(page);
+            Advance(45000);
+            Check(rs != null && IsLive(rs) && !sime.Calls.Skip(c0).Any() && Any(page, s0, "market not trading: its stop placed again at 24997 stays"), "E2: after the 30 s wait with no fresh trade: the stop stays, the error says so");
+            for (int q = 0; q < 6; q++) { Last2(); Advance(1000); }
+            Check(rs != null && !IsLive(rs) && sime.Calls.Skip(c0).Any(c => c.Contains(" ag:manrae flat Sell Market 1 ")), "E2: trading again: the stop cancelled, the close sent");
+            SetPos(sime, mnq, 0); ClearMoves();
+            foreach (Order o in Live(sime)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            et = new DateTime(2026, 10, 9, 10, 0, 0);
+        });
+
+        // E3: a second hello keeps the agent connected and its ticks flowing; agentState still follows the welcome
+        Part("E3", () =>
+        {
+            Fresh();
+            int n = N(agentOut);
+            A(HelloMsg());
+            List<string> got;
+            lock (agentOut) got = agentOut.Skip(n).ToList();
+            Check(got.Count > 1 && got[0].StartsWith("{\"type\":\"welcome\"") && got[1].StartsWith("{\"type\":\"agentState\""), "E3: a second hello: welcome, then agentState");
+            Advance(7000);
+            ChartBridgeAgents.OnTick("MNQ", "{\"type\":\"tick\",\"root\":\"MNQ\",\"p\":25001.75,\"v\":1}");
+            Check(M.DiagJson().Contains("\"connected\":true") && Last(agentOut, "tick").Contains("25001.75"), "E3: still connected after 7 s (never taken for a socket with no hello), ticks flow");
         });
         foreach (Account x in Account.All.ToList()) Settle(x);
     }

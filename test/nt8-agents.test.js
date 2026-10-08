@@ -66,9 +66,11 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   assert.match(restop, /OrderType\.StopMarket, OrderEntry\.Manual, TimeInForce\.Gtc/);
   assert.match(restop, /lock \(ChartBridgeOrders\.AgentPlaceLock\)[\s\S]*AgentListed[\s\S]*AgentEffective[\s\S]*\.CreateOrder\(/);
   assert.match(step, /!ChartBridgeOrders\.AgentFreshLast\(j\.Root, ChartBridgeAgents\.TradingFreshMs, out lastPx\)/, 'no leg cancelled while the market is not trading');
-  // review D4: helloed only after the welcome is queued (no agentState before it)
+  // review D4 and E3: helloed set at the hello as before; agentState waits for welcomeSent, set only after the welcome is queued
   const hello = bodies(acode, 'OnHello');
-  assert.ok(hello.indexOf('ToAgent(WelcomeJson(served));') > 0 && hello.indexOf('ToAgent(WelcomeJson(served));') < hello.indexOf('helloed = true'), 'helloed set after the welcome');
+  const w = hello.indexOf('ToAgent(WelcomeJson(served));');
+  assert.ok(hello.indexOf('helloed = true; welcomeSent = false;') > 0 && hello.indexOf('helloed = true; welcomeSent = false;') < w && w < hello.indexOf('welcomeSent = true;'), 'welcomeSent set after the welcome');
+  assert.match(bodies(acode, 'SendState'), /lock \(Sync\) c = helloed && welcomeSent \? client : null;/);
   // review A C3: agentState is built before StateLock is taken; the lock only compares and sends
   const send = bodies(acode, 'SendState');
   assert.ok(send.indexOf('string json = StateJson();') > 0 && send.indexOf('string json = StateJson();') < send.indexOf('lock (StateLock)'), 'the state is built outside StateLock');
