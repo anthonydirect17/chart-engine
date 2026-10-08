@@ -638,6 +638,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (loadFailed) return "copier.txt could not be read at start: the copier's settings cannot change until it can (restart ChartBridge)";
             Account a = hasLeader ? Find(name) : null;
             if (hasLeader && (a == null || ChartBridgeOrders.IsNeverTradable(a.Name))) return "No account " + name + ".";
+            string agentWhy = hasLeader ? ChartBridgeAgents.AccountTakenWhy(a.Name, "the copier") : null;   // 0.5.0 agents: never an agent's account as the leader
+            if (agentWhy != null) return agentWhy;
             string old;
             lock (Lk)
             {
@@ -725,6 +727,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Decision(a.Name, "refused", null, BotAccountWhy(a.Name) + " (copierFollower refused)");
                 return BotAccountWhy(a.Name);
             }
+            string agentWhy = on.Groups[1].Value == "true" ? ChartBridgeAgents.AccountTakenWhy(a.Name, "the copier") : null;   // 0.5.0 agents: never an agent's account as a follower (turning one off is always allowed)
+            if (agentWhy != null) { Decision(a.Name, "refused", null, agentWhy + " (copierFollower refused)"); return agentWhy; }
             if (on.Groups[1].Value == "true" && ChartBridgeOrders.MergeRunningOn(a))   // integration (lead's default): the copier and Merge never act on one account
                 return a.Name + " has a Merge running: it can become a copier follower once the merge has ended.";
             lock (Lk)
@@ -785,6 +789,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (IsLeader(name)) return name + " is the copier's leader: the bot cannot trade the leader's account while the copier is on (its exits would be copied to the followers).";
                 Follower f = FollowerNamed(name);
                 if (f != null && f.On) return BotFollowerWhy(name);
+            }
+            return null;
+        }
+
+        // 0.5.0 agents (ruling 1): an agent never trades the copier's leader or any follower, on or off. Null when the copier does
+        // not use the account (or is off).
+        public static string AgentAccountRefusal(string name)
+        {
+            if (!Enabled || string.IsNullOrEmpty(name)) return null;
+            lock (Lk)
+            {
+                if (IsLeader(name)) return name + " is the copier's leader";
+                if (FollowerNamed(name) != null) return name + " is a copier follower";
             }
             return null;
         }
@@ -1011,6 +1028,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             { label = "busy"; why = a.Name + " already holds a copy of the leader's " + (ChartBridgeServer.RootFor(c.LInst) ?? "other contract") + " on " + fRoot; return null; }
             string cap = ChartBridgeOrders.CopierCapProblem(a, inst, fRoot, le.Buy, fq);
             if (cap != null) { label = "position limit"; why = a.Name + ": " + cap; return null; }
+            string owned = ChartBridgeAgents.EntryCheck("copier", a, fRoot);   // 0.5.0 agents: the owner lock (an agent's account and root refuses the copier's entries)
+            if (owned != null) { label = "agent"; why = owned; return null; }
             return a;
         }
 

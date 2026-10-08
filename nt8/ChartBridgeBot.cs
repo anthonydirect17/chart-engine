@@ -1438,6 +1438,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool broken;
             lock (Sync) broken = accountBroken != null;
             if (name == old && !broken) return null;   // already the bot's account
+            why = ChartBridgeAgents.AccountTakenWhy(name, "the bot");   // 0.5.0 agents: never an agent's account (ruling 1)
+            if (why != null) return why;
             // Minors (3): any position or working order on the bot's root, the bot's or not, on the account chosen or on the bot's
             // account now, refuses the change (a trade there would sit beside the bot's or under its rails).
             string root = EffectiveRoot();

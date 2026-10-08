@@ -1,0 +1,2167 @@
+// ChartBridge 0.5.0: the agent channel (nt8/PROTOCOL.md, "Agent channel (agents, 0.5.0)"). Part of the ChartBridge add-on;
+// install it with the other ChartBridge files.
+//
+// Any number of agent programs (the first is named in config.txt "agents = ..."; each id has its own files, rules, account,
+// mode and state) connect on their own WebSocket path, /agent/<id>, each with its own secret (agent-<id>-secret.txt next to
+// config.txt, made by ChartBridge on this PC and never printed). AI is never in the order path: an agent sends PLANS, and
+// ChartBridge itself places every agent order, from the plan's parameters, inside that agent's rules, through every v2 gate
+// (ChartBridgeOrders.PlaceAgentEntry, the page's own order path with the agent as its source). Rules, each enforced here:
+//   one object per agent id (ChartBridgeAgent), never one static slot;
+//   the upgrade: loopback only (as every request), the id in "agents" (else 404), NO Origin header (403), the agent's secret in
+//     X-ChartBridge-Agent (constant-time compare; wrong or missing: 403), a WebSocket upgrade (else 400), one connection per id (409);
+//   modes: shadow (nothing placed), copilot (a proposal; only Anthony's accept places it, open until the plan's own expiry),
+//     auto (placed); every start begins in shadow;
+//   plans: checks 1 to 12 of the contract, in that order, in every mode, and again at the moment of placing;
+//   entries: limit or stop-limit only, always with a stop and a target, at most the agent's maxQty and never above the hard
+//     ceiling (minis 2, micros 20: HardCeiling, a code change and a review to raise); one position and one entry at a time;
+//   ChartBridge's own timers cancel an unfilled entry at its expiry and outside the entry window, and at flatAt cancel every
+//     working order of the agent on its account and roots, then close its position at market, even with the agent gone;
+//   heartbeat: 5 s of silence (or a disconnect, or no connection for 5 s after a start) cancels the agent's unfilled entries,
+//     expires its proposals, keeps every stop and target, and tells the pages;
+//   the owner lock: an (account, root) an agent owns refuses entries from every other source (PlaceOrderLocked and the copier's
+//     Eligible ask EntryCheck), and an agent is refused wherever anything else holds a position or a working order;
+//   accounts: never the bot's, never the copier's leader or a follower, never another agent's.
+// Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
+#region Using declarations
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.WebSockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using NinjaTrader.Cbi;
+#endregion
+
+namespace NinjaTrader.NinjaScript.AddOns
+{
+    // ---------------------------------------------------------------- the agent channel's window into ChartBridgeOrders
+    // The agent code reuses the order code's own gates and readings (the same functions, never a copy), through these wrappers.
+    public static partial class ChartBridgeOrders
+    {
+        // 0.5.0 agents: an agent entry (ChartBridgeAgent builds the message from the plan's own parameters, always the agent's
+        // account), through the same strict reading, quote-only check and gates as an order from the page, with the agent as
+        // its source (the owner lock, the agent's ceiling, its name). Never a strategy (no strategy object is cut out).
+        internal static string PlaceAgentEntry(string agentId, string text, out Order placed)
+        {
+            placed = null;
+            string bracketBody, why, top = TopLevel("order", text, out bracketBody, out why);
+            if (why == null) why = QuoteOnly(top, null);
+            return why ?? PlaceOrder(top, bracketBody, null, null, false, agentId, out placed);
+        }
+        internal static object AgentPlaceLock { get { return PlaceLock; } }
+        internal static string AgentPriceProblem(string root, double tick, string kind, bool isBuy, double price) { return PriceProblem(root, tick, kind, isBuy, price); }
+        internal static bool AgentOnGrid(double price, double tick) { return OnGrid(price, tick); }
+        internal static string AgentLastPrice(string root, out double p) { return LastPrice(root, out p); }
+        internal static int AgentListed(Account a, Instrument i) { return SignedPosition(a, i); }
+        internal static int AgentEffective(Account a, Instrument i) { return EffectivePosition(a, i); }
+        internal static bool AgentHoldsOnRoot(Account a, string root) { return BotHoldsOnRoot(a, root); }
+        internal static List<Order> AgentMayFill(Account a, Instrument i) { return CopierMayFill(a, i); }
+        internal static bool AgentMayFillState(OrderState s) { return MayFill(s); }
+        internal static string AgentStatus(Account a) { return StatusOf(a); }
+        internal static int AgentCap(string root) { return CapFor(root); }
+        internal static int AgentMaxBracketTicks { get { return MaxBracketTicks; } }
+        internal static bool AgentOrderTypes { get { return OrderTypesOn; } }
+        // A market close or a cancel ChartBridge sends for an agent: counted in gate 3 at once; the flatten marks the brackets
+        // there (a late entry fill still gets its legs, with an alarm) and notes the legs it cancels (not a lost stop).
+        internal static void AgentSent(Order o) { lock (Sync) { IdFor(o); Ours.Add(o); } }
+        internal static void AgentUnsent(Order o) { lock (Sync) Ours.Remove(o); }
+        internal static void AgentFlattening(Account a, Instrument inst)
+        {
+            lock (Sync)
+                foreach (Bracket br in BracketOfEntry.Values)
+                    if (br.Account == a && SameInstrument(br.Instrument, inst)) br.AfterFlatten = true;
+            NoteWeCancelSafe(() => WorkingLegs(a, inst), "flatten");
+        }
+        // The fill of an order on that account and contract that NinjaTrader shows but whose order event has not come yet (so a
+        // position reading may lack it), or null: the flatten's close waits for it (0.4.3's rule for the copier's close).
+        internal static string AgentUnnotedFill(Account a, Instrument i, double now) { return CopierUnnotedFill(a, i, now); }
+        internal static void AgentAlarm(string text) { Alarm(text); }
+        internal static void AgentWarn(string text) { Warn(text); }
+    }
+
+    // ---------------------------------------------------------------- the channel: the agents in config.txt
+    public static class ChartBridgeAgents
+    {
+        // The hard ceiling (PROTOCOL.md "Agent channel", the rule set): a ChartBridge constant. Raising it is a code change and
+        // a review. Minis 2, micros 20; a root with no ceiling here can never be an agent's root.
+        public static int HardCeiling(string root)
+        {
+            switch ((root ?? "").ToUpperInvariant())
+            {
+                case "NQ": return 2;
+                case "ES": return 2;
+                case "MNQ": return 20;
+                case "MES": return 20;
+                default: return 0;
+            }
+        }
+
+        public const string SecretHeader = "X-ChartBridge-Agent";
+        public const int MaxMessageBytes = 65536, MaxActionsPerSecond = 10;
+        public const double SilenceMs = 5000, StripEveryMs = 1000, CheckEveryMs = 500;
+        public const double FlatErrorEveryMs = 10000, FlatRetryMs = 3000, AcceptMinLeftMs = 5000;
+        public const int NotesKept = 200, PlansKept = 50, StopLimitMaxTicks = 20;
+        private static readonly Regex IdRx = new Regex("^[a-z][a-z0-9]{0,11}$");
+
+        // ---------------------------------------------------------- settings (config.txt "agents"; read at start)
+        private static readonly List<string> ConfigIds = new List<string>();
+        public static void ResetConfig() { lock (ConfigIds) ConfigIds.Clear(); }
+
+        // Called by ChartBridgeConfig.Load for the keys it does not know itself. "agents = manrae" (a comma list); absent or empty:
+        // the channel is off and /agent/... answers 404. An id is 1 to 12 characters, a-z and 0-9, starting with a letter; any
+        // other is left out with one Output line (lead's default).
+        public static bool ReadConfig(string key, string val)
+        {
+            if (key != "agents") return false;
+            lock (ConfigIds)
+            {
+                ConfigIds.Clear();
+                foreach (string raw in (val ?? "").Split(','))
+                {
+                    string id = raw.Trim();
+                    if (id.Length == 0) continue;
+                    if (!IdRx.IsMatch(id)) { ChartBridgeServer.Log("config.txt: agents: \"" + id + "\" is not an agent id (1 to 12 characters, a-z and 0-9, starting with a letter); it is left out"); continue; }
+                    if (!ConfigIds.Contains(id)) ConfigIds.Add(id);
+                }
+            }
+            return true;
+        }
+
+        public static List<string> Ids() { lock (ConfigIds) return ConfigIds.ToList(); }
+
+        // ---------------------------------------------------------- the agents (one object per id)
+        private static readonly object Reg = new object();
+        private static ChartBridgeAgent[] agents = new ChartBridgeAgent[0];   // replaced whole, read without a lock (Volatile)
+        private static Timer timer;
+        private static int checking;
+
+        public static bool Enabled { get { return Volatile.Read(ref agents).Length > 0; } }
+        public static ChartBridgeAgent[] All() { return Volatile.Read(ref agents); }
+        public static ChartBridgeAgent Get(string id)
+        {
+            foreach (ChartBridgeAgent a in All()) if (a.Id == id) return a;
+            return null;
+        }
+
+        // Test hooks (the Mono harness): the clocks. Null in NinjaTrader.
+        public static Func<double> ClockMs;
+        public static Func<DateTime> ClockEt;
+        internal static double Now() { Func<double> f = ClockMs; return f != null ? f() : ChartBridgeTime.NowUtcMs(); }
+        internal static DateTime NowEt() { Func<DateTime> f = ClockEt; return f != null ? f() : ChartBridgeTime.NowEastern(); }
+
+        public static void Start() { Start(true); }
+
+        // withTimer false: the Mono harness runs Check itself, step by step.
+        public static void Start(bool withTimer)
+        {
+            Stop();
+            List<ChartBridgeAgent> list = new List<ChartBridgeAgent>();
+            int n = 0;
+            foreach (string id in Ids()) list.Add(new ChartBridgeAgent(id, -100 - (n++)));
+            Volatile.Write(ref agents, list.ToArray());
+            if (list.Count == 0) return;
+            foreach (ChartBridgeAgent a in list) a.Start();
+            RecoverTags();
+            if (withTimer) timer = new Timer(delegate { try { Check(); } catch (Exception ex) { ChartBridgeServer.Log("agent check error: " + ex.Message); } }, null, (int)CheckEveryMs, (int)CheckEveryMs);
+        }
+
+        public static void Stop()
+        {
+            Timer t = timer;
+            timer = null;
+            if (t != null) { try { t.Dispose(); } catch (Exception) { } }
+            ChartBridgeAgent[] was = Volatile.Read(ref agents);
+            Volatile.Write(ref agents, new ChartBridgeAgent[0]);
+            foreach (ChartBridgeAgent a in was) a.Stop();
+            lock (TagsLock) AgentTags.Clear();
+        }
+
+        // Every 500 ms: each agent's heartbeat, expiries, window, flat time, day and strip. One pass at a time.
+        public static void Check()
+        {
+            if (Interlocked.Exchange(ref checking, 1) == 1) return;
+            try
+            {
+                double now = Now();
+                if (now - lastTagScan >= 2000) { lastTagScan = now; RecoverTags(); }
+                foreach (ChartBridgeAgent a in All())
+                {
+                    try { a.Check(now); } catch (Exception ex) { ChartBridgeServer.Log("agent " + a.Id + " check error: " + ex.Message); }
+                }
+            }
+            finally { Interlocked.Exchange(ref checking, 0); }
+        }
+        private static double lastTagScan;
+
+        // ---------------------------------------------------------- whose order is it (names; legs share their entry's tag)
+        //   entry "CB#1a2b3c4d ag:manrae s8 t16" (limit or stop-limit, ticks from each fill), its legs "CB#1a2b3c4d stop f1 q1 p..."
+        //   and "... target ...", the flat time's close "CB#1a2b3c4d ag:manrae flat" (a market order, never an entry).
+        public static readonly Regex EntryRx = new Regex("^CB#([0-9a-f]{8}) ag:([a-z][a-z0-9]{0,11}) s([0-9]{1,9}) t([0-9]{1,9})$");
+        private static readonly Regex AgentNameRx = new Regex("^CB#([0-9a-f]{8}) ag:([a-z][a-z0-9]{0,11})(?: |$)");
+        private static readonly Regex TagRx = new Regex("^CB#([0-9a-f]{8}) ");
+        private static readonly object TagsLock = new object();
+        private static readonly Dictionary<string, string> AgentTags = new Dictionary<string, string>();   // entry tag -> agent id
+
+        public static string TagOf(string name) { Match m = TagRx.Match(name ?? ""); return m.Success ? m.Groups[1].Value : null; }
+        public static bool IsEntryName(string name) { return name != null && EntryRx.IsMatch(name); }
+        public static bool IsAgentEntry(Order o) { return o != null && IsEntryName(o.Name); }
+        internal static void NoteTag(string tag, string id) { if (tag != null && id != null) lock (TagsLock) AgentTags[tag] = id; }
+
+        // The agent an order belongs to (its entry, a leg of it, its flat close), or null. Name and memory only (NinjaTrader's
+        // threads call it): the tags are learned at placement, from every order update, and by a scan of the accounts every 2 s.
+        public static string AgentOf(Order o)
+        {
+            if (o == null || !Enabled) return null;
+            string name = o.Name ?? "";
+            Match m = AgentNameRx.Match(name);
+            if (m.Success) return m.Groups[2].Value;
+            string tag = TagOf(name), id;
+            if (tag == null) return null;
+            lock (TagsLock) return AgentTags.TryGetValue(tag, out id) ? id : null;
+        }
+
+        // After a start (and every 2 s): the agent entries NinjaTrader lists, so their legs are known as the agent's.
+        private static void RecoverTags()
+        {
+            if (!Enabled) return;
+            List<Account> accounts;
+            lock (Account.All) accounts = Account.All.ToList();
+            foreach (Account a in accounts)
+            {
+                List<Order> orders;
+                lock (a.Orders) orders = a.Orders.ToList();
+                foreach (Order o in orders)
+                {
+                    Match m = AgentNameRx.Match(o.Name ?? "");
+                    if (m.Success) NoteTag(m.Groups[1].Value, m.Groups[2].Value);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------- the owner lock (PROTOCOL.md "Agent channel", section 6)
+        // The agent that owns (account, root) now, or null. Built to the ruling's question only: whether an agent owns it.
+        public static string OwnerAgent(string account, string root)
+        {
+            if (string.IsNullOrEmpty(account) || string.IsNullOrEmpty(root)) return null;
+            foreach (ChartBridgeAgent a in All()) if (a.Account == account && a.Owns(root)) return a.Id;
+            return null;
+        }
+
+        // Every new entry from every source asks here, under PlaceLock (PlaceOrderLocked) or the copier's lock (Eligible): null
+        // when it may go on. source: "page", "bot", "copier" or "agent:<id>". Exits never come here.
+        public static string EntryCheck(string source, Account account, string root)
+        {
+            if (!Enabled || account == null || string.IsNullOrEmpty(root)) return null;
+            string owner = OwnerAgent(account.Name, root);
+            if (source != null && source.StartsWith("agent:", StringComparison.Ordinal))
+            {
+                string id = source.Substring(6);
+                ChartBridgeAgent ag = Get(id);
+                if (ag == null) return "there is no agent " + id + " (agents in config.txt)";
+                if (ag.Account != account.Name) return "agent " + id + " trades its own account " + ag.Account + " only";
+                string conflict = ag.AccountConflict();
+                if (conflict != null) return conflict;
+                if (owner != null && owner != id) return account.Name + " " + root + " belongs to agent " + owner + " until it is flat";
+                if (owner == id) return "agent " + id + " still holds " + account.Name + " " + root + ": one position and one entry at a time";
+                if (ChartBridgeOrders.AgentHoldsOnRoot(account, root))
+                    return account.Name + " " + root + " has a position or a working order that is not agent " + id + "'s: an agent enters only where nothing else is held or working (the owner lock)";
+                return null;
+            }
+            if (owner != null) return account.Name + " " + root + " belongs to agent " + owner + " until it is flat";
+            return null;
+        }
+
+        // The ceiling for an agent entry in PlaceOrderLocked (gate 3's own count): the agent's maxQty for the root, never above the
+        // hard ceiling; 0 (nothing) for an unknown agent or a root it does not trade.
+        public static int CapFor(string id, string root)
+        {
+            ChartBridgeAgent a = Get(id);
+            return a == null ? 0 : Math.Min(HardCeiling(root), a.MaxQtyFor(root));
+        }
+
+        // An account any agent names as its own (its file, or Sim101 by default), for the bot's and the copier's refusals, or null.
+        public static string AgentOfAccount(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            foreach (ChartBridgeAgent a in All()) if (string.Equals(a.Account, name, StringComparison.OrdinalIgnoreCase)) return a.Id;
+            return null;
+        }
+
+        public static string AccountTakenWhy(string name, string by)
+        {
+            string id = AgentOfAccount(name);
+            return id == null ? null : name + " is agent " + id + "'s account: " + by + " does not trade it (choose another account for agent " + id + " on the Agent tab first)";
+        }
+
+        // ---------------------------------------------------------- the /agent/<id> WebSocket (ChartBridgeServer.Handle)
+        // The answer to an upgrade before it happens: 404 while the channel is off or the id is not in agents, 403 for any Origin
+        // header (any browser page) and for a wrong or missing secret, 400 for a request that is not a WebSocket upgrade, 409
+        // while that id is connected; 101 when it may go ahead. The address check (loopback only) has already run.
+        public static int UpgradeCheck(string id, string origin, string givenSecret, bool isWebSocket)
+        {
+            ChartBridgeAgent a = Get(id);
+            if (a == null) return 404;
+            if (origin != null) return 403;
+            if (!a.SecretMatches(givenSecret)) return 403;
+            if (!isWebSocket) return 400;
+            if (a.Busy()) return 409;
+            return 101;
+        }
+
+        public static async Task Serve(HttpListenerContext ctx, string path, CancellationToken token)
+        {
+            string id = path.StartsWith("/agent/", StringComparison.Ordinal) ? path.Substring(7) : "";
+            int code = UpgradeCheck(id, ctx.Request.Headers["Origin"], ctx.Request.Headers[SecretHeader], ctx.Request.IsWebSocketRequest);
+            ChartBridgeAgent a = Get(id);
+            if (code == 101 && !a.Claim()) code = 409;   // the slot, taken before the upgrade
+            if (code != 101) { Answer(ctx, code); return; }
+            WebSocket ws;
+            try { HttpListenerWebSocketContext wsc = await ctx.AcceptWebSocketAsync(null); ws = wsc.WebSocket; }
+            catch (Exception) { a.Unclaim(); throw; }
+            await a.Run(ws, token);
+        }
+
+        private static void Answer(HttpListenerContext ctx, int code)
+        {
+            try
+            {
+                ctx.Response.StatusCode = code;
+                ctx.Response.AddHeader("Cache-Control", "no-store");
+                ctx.Response.ContentLength64 = 0;
+                ctx.Response.Close();
+            }
+            catch (Exception) { try { ctx.Response.Abort(); } catch (Exception) { } }
+        }
+
+        // ---------------------------------------------------------- hooks from the rest of ChartBridge
+        // Every live trade on every served root (the tick path, outside the book's lock): to every agent that said hello, except
+        // the root it subscribed to (that one reaches it through the seam, as a page's, ChartBridgeServer's tick loop).
+        public static void OnTick(string root, string json)
+        {
+            ChartBridgeAgent[] list = Volatile.Read(ref agents);
+            for (int i = 0; i < list.Length; i++) list[i].OnTick(root, json);
+        }
+
+        // Agent connections that subscribed to a root (the tick path's seam and the gate's "a chart is loading").
+        public static List<ChartBridgeClient> Subscribed()
+        {
+            List<ChartBridgeClient> list = new List<ChartBridgeClient>();
+            ChartBridgeAgent[] all = Volatile.Read(ref agents);
+            for (int i = 0; i < all.Length; i++) { ChartBridgeClient c = all[i].SubscribedClient(); if (c != null) list.Add(c); }
+            return list;
+        }
+
+        public static void OnOrderUpdate(Account account, Order o, string json)
+        {
+            if (!Enabled || o == null) return;
+            string id = AgentOf(o);
+            if (id == null) return;
+            ChartBridgeAgent a = Get(id);
+            if (a != null) a.OnOrderUpdate(o, json);
+        }
+
+        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
+        {
+            if (!Enabled) return;
+            foreach (ChartBridgeAgent a in All()) if (a.Account == account) a.OnExec(inst, side, qty, price, orderId, json);
+        }
+
+        public static void OnPosition(Account account, PositionEventArgs e)
+        {
+            if (!Enabled || account == null || e == null || e.Position == null) return;
+            foreach (ChartBridgeAgent a in All()) if (a.Account == account.Name) a.OnPosition(e);
+        }
+
+        // ChartBridgeOrders.Auth and the v3 handshake: a signed-in v3 page gets every agent's strip, its open proposals, its last
+        // 200 notes and its last 50 plans.
+        public static void AfterAuth(ChartBridgeClient client)
+        {
+            if (!Enabled || client == null || !client.Trader || !ChartBridgeV3.IsV3(client)) return;
+            foreach (ChartBridgeAgent a in All()) a.Replay(client);
+        }
+
+        // ---------------------------------------------------------- messages from the page
+        private static readonly Dictionary<string, string[]> PageKeys = new Dictionary<string, string[]>
+        {
+            { "agentMode", new[] { "type", "cid", "agent", "mode" } },
+            { "agentKill", new[] { "type", "cid", "agent", "on" } },
+            { "agentSeen", new[] { "type", "agent", "id", "at" } },
+            { "agentAnswer", new[] { "type", "cid", "agent", "id", "answer", "at" } },
+            { "agentAccount", new[] { "type", "cid", "agent", "account" } },
+            { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses" } },
+        };
+
+        public static void OnPageMessage(ChartBridgeClient client, string type, string text)
+        {
+            string why;
+            Dictionary<string, ChartBridgeAgent.Val> d = ChartBridgeAgent.Parse(text, 200, out why);
+            string cid = d != null ? ChartBridgeAgent.S(d, "cid") : null, id = d != null ? ChartBridgeAgent.S(d, "id") : null;
+            try
+            {
+                if (!Enabled) { PageReject(client, cid, id, "The agent channel is off (no agents in config.txt)."); return; }
+                if (!ChartBridgeOrders.Enabled) { PageReject(client, cid, id, "trading is off in config.txt"); return; }
+                if (!client.Trader || !ChartBridgeOrders.OriginAllowed(client.Origin)) { PageReject(client, cid, id, "this connection may not trade; reload ChartBridge's page"); return; }
+                if (!ChartBridgeV3.IsV3(client)) { PageReject(client, cid, id, "agent messages are protocol v3: send {\"type\":\"client\",\"v\":3} first"); return; }
+                if (d == null) { PageReject(client, cid, id, why); return; }
+                string[] keys;
+                if (!PageKeys.TryGetValue(type, out keys)) { PageReject(client, cid, id, "unknown message type " + type); return; }
+                string odd = ChartBridgeAgent.UnknownKey(d, keys);
+                if (odd != null) { PageReject(client, cid, id, "unknown key \"" + odd + "\" in " + type); return; }
+                if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
+                if (type != "agentSeen" && !RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
+                ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
+                if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
+                why = a.OnPage(type, d);
+                if (why != null) PageReject(client, cid, id, why);
+            }
+            catch (Exception ex)
+            {
+                ChartBridgeServer.Log("agent page message error: " + ex.Message);
+                PageReject(client, cid, id, "ChartBridge error: " + ex.Message);
+            }
+        }
+
+        // Gate 7: at most 10 actions a second (an agent's own queue, or a page's).
+        internal static bool RateOk(Queue<double> q)
+        {
+            double now = Now();
+            lock (q)
+            {
+                while (q.Count > 0 && now - q.Peek() > 1000) q.Dequeue();
+                if (q.Count >= MaxActionsPerSecond) return false;
+                q.Enqueue(now);
+            }
+            return true;
+        }
+
+        private static void PageReject(ChartBridgeClient client, string cid, string id, string reason)
+        {
+            client.Send("{\"type\":\"reject\"" + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + (id != null ? ",\"id\":" + CbJson.Str(id) : "") + ",\"reason\":" + CbJson.Str(reason) + "}");
+        }
+
+        // /diag "agents" (only with the channel on): per id, counts and state. Never a secret: only whether its file reads.
+        public static string DiagJson()
+        {
+            StringBuilder b = new StringBuilder("{");
+            bool first = true;
+            foreach (ChartBridgeAgent a in All()) { if (!first) b.Append(','); first = false; b.Append(CbJson.Str(a.Id)).Append(':').Append(a.DiagJson()); }
+            return b.Append('}').ToString();
+        }
+    }
+
+    // ---------------------------------------------------------------- one agent
+    public sealed class ChartBridgeAgent
+    {
+        public readonly string Id;
+        private readonly int clientId;
+        private readonly object Sync = new object();       // this agent's state; never held during a NinjaTrader or order call
+        private readonly object PlaceGate = new object();  // one check-and-place of this agent at a time
+
+        public ChartBridgeAgent(string id, int clientId) { Id = id; this.clientId = clientId; }
+
+        // ---------------------------------------------------------- the rule set (section 3)
+        public class Rules
+        {
+            public List<string> Roots = new List<string> { "NQ", "MNQ" };
+            public Dictionary<string, int> MaxQty = new Dictionary<string, int> { { "NQ", 2 }, { "MNQ", 20 } };
+            public int EntryFrom = 9 * 60 + 45, EntryUntil = 15 * 60, FlatAt = 15 * 60 + 55;   // New York minutes of the day
+            public int MaxExpireSec = 1800, MaxTrades, MaxLosses;                             // 0: none
+            public Rules Copy()
+            {
+                return new Rules { Roots = Roots.ToList(), MaxQty = new Dictionary<string, int>(MaxQty), EntryFrom = EntryFrom, EntryUntil = EntryUntil, FlatAt = FlatAt,
+                                   MaxExpireSec = MaxExpireSec, MaxTrades = MaxTrades, MaxLosses = MaxLosses };
+            }
+            // A root's maxQty: its line, else the default (NQ 2, MNQ 20; ES and MES 1, lead's default).
+            public int QtyFor(string root) { int n; return MaxQty.TryGetValue(root ?? "", out n) ? n : DefaultQty(root); }
+        }
+        public static int DefaultQty(string root) { return root == "NQ" ? 2 : root == "MNQ" ? 20 : 1; }
+
+        public static string Hm(int minutes) { return (minutes / 60).ToString("00", CultureInfo.InvariantCulture) + ":" + (minutes % 60).ToString("00", CultureInfo.InvariantCulture); }
+        public static int ParseHm(string s)
+        {
+            Match m = Regex.Match(s ?? "", "^([0-9]{2}):([0-9]{2})$");
+            if (!m.Success) return -1;
+            int h = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), mi = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+            return h > 23 || mi > 59 ? -1 : h * 60 + mi;
+        }
+
+        // Why a rule set is not allowed, or null (the page's agentRules and the rules file share it).
+        public static string RulesProblem(Rules r)
+        {
+            if (r.Roots.Count == 0) return "roots must name at least one root";
+            foreach (string root in r.Roots)
+            {
+                if (ChartBridgeAgents.HardCeiling(root) == 0) return root + " is not a root an agent may trade (NQ, MNQ, ES, MES)";
+                int q = r.QtyFor(root);
+                if (q < 1 || q > ChartBridgeAgents.HardCeiling(root)) return "maxQty for " + root + " must be from 1 to " + ChartBridgeAgents.HardCeiling(root) + " (the hard ceiling)";
+            }
+            if (r.Roots.Distinct().Count() != r.Roots.Count) return "roots names a root twice";
+            if (r.EntryFrom < 9 * 60 + 30) return "entryFrom must be 09:30 or later";
+            if (r.EntryFrom >= r.EntryUntil) return "entryFrom must be before entryUntil";
+            if (r.FlatAt <= r.EntryUntil) return "flatAt must be after entryUntil";
+            if (r.FlatAt > 15 * 60 + 59) return "flatAt must be 15:59 at the latest";
+            if (r.MaxExpireSec < 60 || r.MaxExpireSec > 1800) return "maxExpireSec must be from 60 to 1800";
+            if (r.MaxTrades < 0 || r.MaxTrades > 50) return "maxTrades must be none or 1 to 50";
+            if (r.MaxLosses < 0 || r.MaxLosses > 20) return "maxLosses must be none or 1 to 20";
+            return null;
+        }
+
+        // ---------------------------------------------------------- plans and proposals
+        private class Plan
+        {
+            public string Id, Action, Root, Side, Kind, PriceText, LimitText, RiskText, ConfText, Setup, Reason, Result;
+            public int Qty, StopTicks, TargetTicks, ExpireSec;
+            public bool HasQty, HasStop, HasTarget, HasExpire;
+            public double Price, Limit, Risk, Conf, At, ExpiresAt;
+        }
+
+        private class Proposal
+        {
+            public Plan P;
+            public string Account;
+            public bool Sim;
+            public string State = "open";                 // open, accepting, accepted, rejected, withdrawn, not answered, expired
+            public double SeenAt = -1, AnsweredAt = -1;
+            public Order Entry;
+            public string WithdrawnWhy;
+        }
+
+        private class FlatJob
+        {
+            public string Root, Why;
+            public double StartMs, LastCancelMs = -1e18, LastCloseMs = -1e18, LastErrorMs, ApartSinceMs = -1;
+            public Order Close;
+        }
+
+        // ---------------------------------------------------------- state (under Sync)
+        private ChartBridgeClient client;
+        private bool claimed;
+        private volatile bool helloed;
+        private string name, build;
+        private double lastMsgMs, noClientSinceMs, lastStripMs;
+        private string mode = "shadow";
+        private bool killed;
+        private Rules rules = new Rules();
+        private string account = "Sim101";
+        private string rulesBroken, accountBroken, dayBroken;
+        private string secret, secretState = "missing";
+        private string session;
+        private readonly Dictionary<string, double> Trades = new Dictionary<string, double>();   // entry tag -> realized $ (NaN while open)
+        private readonly HashSet<string> PlanIds = new HashSet<string>();
+        private readonly Dictionary<string, double> Expiry = new Dictionary<string, double>();   // entry tag -> its plan's expiry (UTC ms)
+        private string openTag, openRoot;
+        private int ledQty;
+        private double ledCash, ledAvg;
+        private readonly HashSet<string> Sticky = new HashSet<string>();   // roots it owns until flat by both readings with no entry
+        private readonly Dictionary<string, Proposal> Proposals = new Dictionary<string, Proposal>();
+        private readonly Dictionary<string, Order> EntryOfPlan = new Dictionary<string, Order>();
+        private readonly Dictionary<string, string> PlanOfTag = new Dictionary<string, string>();
+        private readonly List<Order> Placed = new List<Order>();
+        private readonly HashSet<Order> CancelSent = new HashSet<Order>();
+        private readonly HashSet<string> MyTags = new HashSet<string>();
+        private readonly Queue<double> Actions = new Queue<double>();
+        private readonly LinkedList<string> Notes = new LinkedList<string>(), PlansShown = new LinkedList<string>();
+        private string lastPlanJson;
+        private readonly Dictionary<string, FlatJob> Flats = new Dictionary<string, FlatJob>();
+        private string flattenedAt;
+        private long nPlans, nProposals, nPlaced, nRefused, nHeartbeatLost;
+
+        public string Account { get { lock (Sync) return account; } }
+        public int MaxQtyFor(string root) { lock (Sync) return rules.Roots.Contains(root ?? "") ? rules.QtyFor(root) : 0; }
+        private Rules RulesNow() { lock (Sync) return rules.Copy(); }
+
+        private string Folder { get { return ChartBridgeConfig.Folder; } }
+        private string SecretFile { get { return Path.Combine(Folder, "agent-" + Id + "-secret.txt"); } }
+        private string AccountFile { get { return Path.Combine(Folder, "agent-" + Id + "-account.txt"); } }
+        private string RulesFile { get { return Path.Combine(Folder, "agent-" + Id + "-rules.txt"); } }
+        private string DayFile { get { return Path.Combine(Folder, "agent-" + Id + "-day.txt"); } }
+        private string LogFile { get { return Path.Combine(Folder, "agent-" + Id + ".log"); } }
+
+        private static double Now() { return ChartBridgeAgents.Now(); }
+        private static DateTime NowEt() { return ChartBridgeAgents.NowEt(); }
+
+        // ---------------------------------------------------------- start and stop
+        public void Start()
+        {
+            LoadSecret();
+            LoadRules();
+            LoadAccount();
+            LoadDay();
+            lock (Sync) { noClientSinceMs = Now(); mode = "shadow"; }
+            Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + Account + (SimNow() ? " (Sim)" : " (LIVE)") + ", starting in shadow)");
+        }
+
+        public void Stop()
+        {
+            ChartBridgeClient c;
+            lock (Sync) { c = client; client = null; helloed = false; }
+            if (c != null) c.Close();
+        }
+
+        // ---------------------------------------------------------- the secret (agent-<id>-secret.txt, as bot-secret.txt)
+        private void LoadSecret()
+        {
+            string s = null, state;
+            try
+            {
+                if (!File.Exists(SecretFile))
+                {
+                    byte[] b = new byte[32];
+                    using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider()) rng.GetBytes(b);
+                    s = BitConverter.ToString(b).Replace("-", "").ToLowerInvariant();
+                    Directory.CreateDirectory(Folder);
+                    string tmp = SecretFile + ".tmp";
+                    File.WriteAllLines(tmp, new[] { "# ChartBridge agent secret for " + Id + " (made by ChartBridge on this PC; the agent reads it from here; never share it)",
+                                                    "# Delete this file to make a new one at the next start.", s });
+                    File.Move(tmp, SecretFile);
+                    state = "ok";
+                    Log("made agent-" + Id + "-secret.txt next to config.txt (the agent reads the secret from that file)");
+                }
+                else
+                {
+                    string[] data = File.ReadAllLines(SecretFile).Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith("#")).ToArray();
+                    if (data.Length == 1 && Regex.IsMatch(data[0], "^[0-9a-fA-F]{64}$")) { s = data[0].ToLowerInvariant(); state = "ok"; }
+                    else state = "unreadable";
+                }
+            }
+            catch (Exception) { s = null; state = "unreadable"; }
+            if (state != "ok") { s = null; Log("agent-" + Id + "-secret.txt could not be read: every connection for agent " + Id + " is refused until it is fixed or deleted (a new one is made at the next start)"); }
+            lock (Sync) { secret = s; secretState = state; }
+        }
+
+        public bool SecretMatches(string given)
+        {
+            string s;
+            lock (Sync) s = secret;
+            if (s == null || given == null || given.Length != s.Length) return false;
+            int diff = 0;
+            for (int i = 0; i < s.Length; i++) diff |= s[i] ^ given[i];   // constant time
+            return diff == 0;
+        }
+
+        // ---------------------------------------------------------- the rules file (agent-<id>-rules.txt)
+        // Two # lines, then key<TAB>value lines; no file: the defaults. A file that cannot be understood (a line it does not know,
+        // a key twice, a value out of range) is never written over and stands the agent down until the page sets the rules or the
+        // file is deleted. A key left out keeps its default (lead's default).
+        private void LoadRules()
+        {
+            Rules r = new Rules();
+            string broken = null;
+            try
+            {
+                if (File.Exists(RulesFile))
+                {
+                    HashSet<string> seen = new HashSet<string>();
+                    Dictionary<string, int> qty = new Dictionary<string, int>();
+                    foreach (string raw in File.ReadAllLines(RulesFile))
+                    {
+                        string line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#")) continue;
+                        string[] p = line.Split('\t');
+                        if (p.Length != 2 || !seen.Add(p[0])) { broken = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
+                        string k = p[0], v = p[1].Trim();
+                        int n;
+                        if (k == "roots") r.Roots = v.Split(',').Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).ToList();
+                        else if (k.StartsWith("maxQty.", StringComparison.Ordinal) && int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out n)) qty[k.Substring(7).ToUpperInvariant()] = n;
+                        else if (k == "entryFrom" && (n = ParseHm(v)) >= 0) r.EntryFrom = n;
+                        else if (k == "entryUntil" && (n = ParseHm(v)) >= 0) r.EntryUntil = n;
+                        else if (k == "flatAt" && (n = ParseHm(v)) >= 0) r.FlatAt = n;
+                        else if (k == "maxExpireSec" && int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out n)) r.MaxExpireSec = n;
+                        else if ((k == "maxTrades" || k == "maxLosses") && (v == "none" || int.TryParse(v, NumberStyles.None, CultureInfo.InvariantCulture, out n)))
+                        {
+                            int val = v == "none" ? 0 : int.Parse(v, CultureInfo.InvariantCulture);
+                            if (v != "none" && val < 1) { broken = "agent-" + Id + "-rules.txt: " + k + " must be none or a whole number of 1 or more"; break; }
+                            if (k == "maxTrades") r.MaxTrades = val; else r.MaxLosses = val;
+                        }
+                        else { broken = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
+                    }
+                    if (broken == null)
+                    {
+                        r.MaxQty = new Dictionary<string, int>();
+                        foreach (string root in r.Roots) r.MaxQty[root] = qty.ContainsKey(root) ? qty[root] : DefaultQty(root);
+                        string bad = RulesProblem(r);
+                        if (bad != null) broken = "agent-" + Id + "-rules.txt: " + bad;
+                    }
+                }
+            }
+            catch (Exception ex) { broken = "agent-" + Id + "-rules.txt could not be read (" + ex.Message + ")"; }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its rules are set on the Agent tab or the file is deleted"; Log(broken); r = new Rules(); }
+            lock (Sync) { rules = r; rulesBroken = broken; }
+        }
+
+        private string SaveRules(Rules r)
+        {
+            try
+            {
+                List<string> lines = new List<string> { "# ChartBridge rules for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
+                    "# roots, maxQty.<ROOT> (1 to the hard ceiling: minis 2, micros 20), entryFrom, entryUntil, flatAt (New York time), maxExpireSec, maxTrades, maxLosses",
+                    "roots\t" + string.Join(",", r.Roots) };
+                foreach (string root in r.Roots) lines.Add("maxQty." + root + "\t" + r.QtyFor(root).ToString(CultureInfo.InvariantCulture));
+                lines.Add("entryFrom\t" + Hm(r.EntryFrom)); lines.Add("entryUntil\t" + Hm(r.EntryUntil)); lines.Add("flatAt\t" + Hm(r.FlatAt));
+                lines.Add("maxExpireSec\t" + r.MaxExpireSec.ToString(CultureInfo.InvariantCulture));
+                lines.Add("maxTrades\t" + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none"));
+                lines.Add("maxLosses\t" + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none"));
+                WriteWhole(RulesFile, lines);
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        private static void WriteWhole(string file, List<string> lines)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            string tmp = file + ".tmp";
+            File.WriteAllLines(tmp, lines.ToArray());
+            if (File.Exists(file)) File.Replace(tmp, file, null); else File.Move(tmp, file);
+        }
+
+        // ---------------------------------------------------------- the account file (agent-<id>-account.txt, as bot-account.txt)
+        private void LoadAccount()
+        {
+            string a = "Sim101", broken = null;
+            try
+            {
+                if (File.Exists(AccountFile))
+                {
+                    string found = null;
+                    foreach (string raw in File.ReadAllLines(AccountFile))
+                    {
+                        string line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#")) continue;
+                        string[] p = line.Split('\t');
+                        if (found == null && p.Length == 2 && p[0] == "account" && PlainName(p[1])) found = p[1];
+                        else { broken = "agent-" + Id + "-account.txt has a line ChartBridge does not understand"; break; }
+                    }
+                    if (broken == null && found == null) broken = "agent-" + Id + "-account.txt names no account";
+                    if (broken == null) a = found;
+                }
+            }
+            catch (Exception ex) { broken = "agent-" + Id + "-account.txt could not be read (" + ex.Message + ")"; }
+            if (broken != null) { broken += ": no new entries for agent " + Id + " until its account is chosen again on the Agent tab or the file is deleted"; Log(broken); }
+            lock (Sync) { account = a; accountBroken = broken; }
+        }
+
+        private string SaveAccount(string nm)
+        {
+            try
+            {
+                WriteWhole(AccountFile, new List<string> { "# ChartBridge account for agent " + Id + " (written by ChartBridge from the page's Agent tab; do not edit)",
+                    "# the one account the agent's orders go to; Sim101 when this file is missing", "account\t" + nm });
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+
+        private static bool PlainName(string nm)
+        {
+            if (string.IsNullOrEmpty(nm) || nm.Length > 200 || nm.Trim() != nm) return false;
+            foreach (char ch in nm) if (ch < 0x20 || ch == 0x7f || ch == '"' || ch == '\\') return false;
+            return true;
+        }
+
+        // ---------------------------------------------------------- the day file (agent-<id>-day.txt; 18:00 ET)
+        // "session<TAB>yyyy-MM-dd", then one line per trade ("trade<TAB><tag><TAB>open" or the realized dollars, as bot-day.txt),
+        // plus (lead's default) "plan<TAB><id>" for each plan id used today, so a restart still refuses an id twice, and
+        // "entry<TAB><tag><TAB><expiry UTC ms>" for each entry placed, so its expiry still fires after a restart. A file that
+        // cannot be read stands the agent down for this run and is never written over.
+        private static string SessionOf(DateTime et) { return (et.Hour >= 18 ? et.Date.AddDays(1) : et.Date).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
+
+        private void LoadDay()
+        {
+            string today = SessionOf(NowEt()), fileSession = null, broken = null;
+            Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
+            HashSet<string> ids = new HashSet<string>();
+            try
+            {
+                if (File.Exists(DayFile))
+                {
+                    foreach (string raw in File.ReadAllLines(DayFile))
+                    {
+                        string line = raw.Trim();
+                        if (line.Length == 0 || line.StartsWith("#")) continue;
+                        string[] p = line.Split('\t');
+                        double v;
+                        if (p.Length == 2 && p[0] == "session" && Regex.IsMatch(p[1], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) fileSession = p[1];
+                        else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && p[2] == "open") trades[p[1]] = double.NaN;
+                        else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v)) trades[p[1]] = v;
+                        else if (p.Length == 2 && p[0] == "plan" && p[1].Length >= 1 && p[1].Length <= 40) ids.Add(p[1]);
+                        else if (p.Length == 3 && p[0] == "entry" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && Regex.IsMatch(p[2], "^[0-9]{1,15}$")) expiry[p[1]] = double.Parse(p[2], CultureInfo.InvariantCulture);
+                        else { broken = "agent-" + Id + "-day.txt has a line ChartBridge does not understand"; break; }
+                    }
+                    if (broken == null && fileSession == null) broken = "agent-" + Id + "-day.txt has no session line";
+                }
+            }
+            catch (Exception ex) { broken = "agent-" + Id + "-day.txt could not be read (" + ex.Message + ")"; }
+            lock (Sync)
+            {
+                session = today;
+                Trades.Clear(); PlanIds.Clear(); Expiry.Clear();
+                if (broken != null) dayBroken = broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)";
+                else
+                {
+                    foreach (KeyValuePair<string, double> kv in expiry) Expiry[kv.Key] = kv.Value;   // entries outlive the day line
+                    if (fileSession == today)
+                    {
+                        foreach (KeyValuePair<string, double> kv in trades) Trades[kv.Key] = kv.Value;
+                        foreach (string id in ids) PlanIds.Add(id);
+                    }
+                    else foreach (KeyValuePair<string, double> kv in trades) if (double.IsNaN(kv.Value)) Trades[kv.Key] = kv.Value;   // a trade still open goes on
+                }
+            }
+            if (broken != null) Log(broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)");
+        }
+
+        private void SaveDay()
+        {
+            List<string> lines = new List<string> { "# ChartBridge day for agent " + Id + " (written by ChartBridge; do not edit)", "# session, its trades (tag and open or realized dollars), plan ids used, entries and their expiry" };
+            lock (Sync)
+            {
+                if (dayBroken != null) return;   // never written over a file that could not be read
+                lines.Add("session\t" + session);
+                foreach (KeyValuePair<string, double> kv in Trades)
+                    lines.Add("trade\t" + kv.Key + "\t" + (double.IsNaN(kv.Value) ? "open" : kv.Value.ToString("0.##", CultureInfo.InvariantCulture)));
+                foreach (string id in PlanIds) lines.Add("plan\t" + id);
+                foreach (KeyValuePair<string, double> kv in Expiry) lines.Add("entry\t" + kv.Key + "\t" + kv.Value.ToString("0", CultureInfo.InvariantCulture));
+            }
+            try { WriteWhole(DayFile, lines); }
+            catch (Exception ex) { Log("agent-" + Id + "-day.txt could not be saved (" + ex.Message + "); a restart would forget today's trades and plan ids"); }
+        }
+
+        // A new trading day at 18:00 ET: trades, losses and plan ids start over. A trade still open goes on into the new day.
+        private void RollDay()
+        {
+            string today = SessionOf(NowEt());
+            lock (Sync)
+            {
+                if (session == today) return;
+                session = today;
+                List<KeyValuePair<string, double>> open = Trades.Where(kv => double.IsNaN(kv.Value)).ToList();
+                Trades.Clear();
+                foreach (KeyValuePair<string, double> kv in open) Trades[kv.Key] = kv.Value;
+                PlanIds.Clear();
+            }
+            SaveDay();
+            AgentLog("a new trading day: trades, losses and plan ids start over");
+            Notify();
+        }
+
+        private int LossesLocked() { return Trades.Values.Count(v => v < 0); }
+
+        // Why no new entry may go now (files, losses), or null. Under Sync.
+        private string StandDownLocked()
+        {
+            if (dayBroken != null) return dayBroken;
+            if (rulesBroken != null) return rulesBroken;
+            if (accountBroken != null) return accountBroken;
+            int losses = LossesLocked();
+            if (rules.MaxLosses > 0 && losses >= rules.MaxLosses) return losses + " losing trades today (maxLosses " + rules.MaxLosses + "): no new entries for agent " + Id + " until 18:00 ET";
+            return null;
+        }
+
+        private string StandDown() { string sd; lock (Sync) sd = StandDownLocked(); return sd ?? AccountConflict(); }
+
+        // A file that cannot be read (check 2), or null. Under Sync.
+        private string FilesBrokenLocked() { return dayBroken ?? rulesBroken ?? accountBroken; }
+
+        // The account is not usable by this agent: the bot's (bot on), the copier's leader or a follower, on or off (copier on), or
+        // another agent's. On such a clash the agent stands down and the other user of the account is left as it was (lead's
+        // default: both start on Sim101 when no file chose another).
+        public string AccountConflict()
+        {
+            string acct = Account;
+            if (ChartBridgeBot.Enabled && string.Equals(acct, ChartBridgeBot.BotAccount, StringComparison.OrdinalIgnoreCase))
+                return acct + " is the bot's account: agent " + Id + " does not trade it (choose another account for the agent on the Agent tab)";
+            string cw = ChartBridgeCopier.AgentAccountRefusal(acct);
+            if (cw != null) return cw + ": agent " + Id + " does not trade it (choose another account for the agent on the Agent tab)";
+            foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
+                if (other != this && string.Equals(other.Account, acct, StringComparison.OrdinalIgnoreCase))
+                    return acct + " is also agent " + other.Id + "'s account: agent " + Id + " does not trade it (each agent has its own account)";
+            return null;
+        }
+
+        // ---------------------------------------------------------- strict messages (gate 8, the agent's form)
+        // One flat JSON object. Values: a plain string (no backslash, no control character, at most maxLen characters), a plain
+        // number (no sign, no exponent, no leading zero), true, false or null. Any nested object or list, a key twice, an escape or
+        // trailing text is refused. The caller allows each key and checks each value (strings at most 200, note.text 1,000).
+        public class Val { public char K; public string T; }   // K: 's' string, 'n' whole number, 'd' decimal, 'b' bool, 'z' null
+
+        public static Dictionary<string, Val> Parse(string text, int maxLen, out string why)
+        {
+            why = null;
+            Dictionary<string, Val> d = new Dictionary<string, Val>();
+            int i = 0, n = text == null ? 0 : text.Length;
+            if (n == 0) { why = "empty message"; return null; }
+            if (text.IndexOf('\\') >= 0) { why = "message has an escape sequence"; return null; }
+            Action ws = () => { while (i < n && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n' || text[i] == '\r')) i++; };
+            Func<string> str = () =>
+            {
+                if (i >= n || text[i] != '"') return null;
+                int start = ++i;
+                while (i < n && text[i] != '"') { char c = text[i]; if (c < 0x20 || c == 0x7f || i - start >= maxLen) return null; i++; }
+                if (i >= n) return null;
+                return text.Substring(start, i++ - start);
+            };
+            ws();
+            if (i >= n || text[i] != '{') { why = "not a JSON object"; return null; }
+            i++; ws();
+            if (i < n && text[i] == '}') i++;
+            else
+                for (;;)
+                {
+                    string key = str();
+                    if (string.IsNullOrEmpty(key) || key.Length > 40) { why = "a key is not a plain string"; return null; }
+                    ws();
+                    if (i >= n || text[i] != ':') { why = "malformed"; return null; }
+                    i++; ws();
+                    Val v = new Val();
+                    if (i < n && text[i] == '"') { v.K = 's'; v.T = str(); if (v.T == null) { why = key + " is not a plain string of at most " + maxLen + " characters"; return null; } }
+                    else if (i < n && (text[i] == '{' || text[i] == '[')) { why = "message has a nested object or list"; return null; }
+                    else if (string.CompareOrdinal(text, i, "true", 0, 4) == 0) { v.K = 'b'; v.T = "true"; i += 4; }
+                    else if (string.CompareOrdinal(text, i, "false", 0, 5) == 0) { v.K = 'b'; v.T = "false"; i += 5; }
+                    else if (string.CompareOrdinal(text, i, "null", 0, 4) == 0) { v.K = 'z'; v.T = "null"; i += 4; }
+                    else
+                    {
+                        int st = i;
+                        while (i < n && text[i] >= '0' && text[i] <= '9') i++;
+                        string whole = text.Substring(st, i - st), frac = null;
+                        if (i < n && text[i] == '.')
+                        {
+                            int fs = ++i;
+                            while (i < n && text[i] >= '0' && text[i] <= '9') i++;
+                            frac = text.Substring(fs, i - fs);
+                        }
+                        if (whole.Length == 0 || whole.Length > 15 || (whole.Length > 1 && whole[0] == '0') || (frac != null && (frac.Length == 0 || frac.Length > 10)))
+                        { why = key + " is not a plain value"; return null; }
+                        v.K = frac == null ? 'n' : 'd';
+                        v.T = text.Substring(st, i - st);
+                    }
+                    if (d.ContainsKey(key)) { why = "message has a key twice (" + key + ")"; return null; }
+                    d[key] = v;
+                    ws();
+                    if (i < n && text[i] == ',') { i++; ws(); continue; }
+                    if (i < n && text[i] == '}') { i++; break; }
+                    why = "malformed"; return null;
+                }
+            ws();
+            if (i != n) { why = "text after the object"; return null; }
+            return d;
+        }
+
+        public static string UnknownKey(Dictionary<string, Val> d, string[] allowed)
+        {
+            foreach (string k in d.Keys) if (Array.IndexOf(allowed, k) < 0) return k;
+            return null;
+        }
+
+        public static string S(Dictionary<string, Val> d, string k) { Val v; return d != null && d.TryGetValue(k, out v) && v.K == 's' ? v.T : null; }
+
+        // A whole number by gate 8's rule (at most 9 digits): 1 ok, 0 absent, -1 anything else.
+        private static int Whole(Dictionary<string, Val> d, string k, out int value)
+        {
+            value = 0;
+            Val v;
+            if (!d.TryGetValue(k, out v)) return 0;
+            if (v.K != 'n' || v.T.Length > 9) return -1;
+            value = int.Parse(v.T, CultureInfo.InvariantCulture);
+            return 1;
+        }
+
+        // A plain number (whole or decimal): 1 ok, 0 absent, -1 anything else.
+        private static int Number(Dictionary<string, Val> d, string k, out double value, out string raw)
+        {
+            value = 0; raw = null;
+            Val v;
+            if (!d.TryGetValue(k, out v)) return 0;
+            if (v.K != 'n' && v.K != 'd') return -1;
+            raw = v.T;
+            value = double.Parse(v.T, CultureInfo.InvariantCulture);
+            return 1;
+        }
+
+        private static bool Ms(Dictionary<string, Val> d, string k, out double value)
+        {
+            value = 0;
+            Val v;
+            if (!d.TryGetValue(k, out v) || v.K != 'n') return false;
+            value = double.Parse(v.T, CultureInfo.InvariantCulture);
+            return value >= 1;
+        }
+
+        private static bool Bool(Dictionary<string, Val> d, string k, out bool value)
+        {
+            value = false;
+            Val v;
+            if (!d.TryGetValue(k, out v) || v.K != 'b') return false;
+            value = v.T == "true";
+            return true;
+        }
+
+        private static readonly Dictionary<string, string[]> AgentKeys = new Dictionary<string, string[]>
+        {
+            { "agentHello", new[] { "type", "name", "build" } },
+            { "beat", new[] { "type" } },
+            { "subscribe", new[] { "type", "root", "days", "tickHours", "sub" } },
+            { "plan", new[] { "type", "id", "root", "side", "kind", "price", "limitPrice", "qty", "stopTicks", "targetTicks", "expireSec", "riskDollars", "setup", "reason", "confidence" } },
+            { "skip", new[] { "type", "id", "setup", "reason" } },
+            { "withdraw", new[] { "type", "id", "reason" } },
+            { "note", new[] { "type", "kind", "text" } },
+            { "flatten", new[] { "type" } },
+        };
+
+        // ---------------------------------------------------------- the connection
+        public bool Busy() { lock (Sync) return client != null || claimed; }
+        public bool Claim() { lock (Sync) { if (client != null || claimed) return false; claimed = true; return true; } }
+        public void Unclaim() { lock (Sync) claimed = false; }
+
+        public async Task Run(WebSocket ws, CancellationToken token)
+        {
+            ChartBridgeClient c = new ChartBridgeClient(ws, clientId);
+            if (!Attach(c)) { Unclaim(); c.Close(); return; }
+            // As a page's: the send loop on its own thread, never inline (0.1.0 deadlock), never a pool thread.
+            Task sending = Task.Factory.StartNew(() => c.SendLoop(), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            byte[] buf = new byte[16384];
+            try
+            {
+                while (ws.State == WebSocketState.Open && !token.IsCancellationRequested)
+                {
+                    MemoryStream bytes = new MemoryStream();
+                    int size = 0;
+                    WebSocketReceiveResult r;
+                    do
+                    {
+                        r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), token);
+                        if (r.MessageType == WebSocketMessageType.Close) break;
+                        size += r.Count;
+                        if (size > ChartBridgeAgents.MaxMessageBytes) break;
+                        bytes.Write(buf, 0, r.Count);
+                    } while (!r.EndOfMessage);
+                    if (r.MessageType == WebSocketMessageType.Close || size > ChartBridgeAgents.MaxMessageBytes) break;   // over 64 KB closes the agent's connection
+                    OnMessage(c, Encoding.UTF8.GetString(bytes.ToArray()));
+                }
+            }
+            catch (Exception) { }
+            finally
+            {
+                Lose(c, "agent " + Id + " disconnected", false);
+                c.Close();
+                try { await sending; } catch (Exception) { }
+            }
+        }
+
+        // Takes this agent's one slot for the connection (Run, after the upgrade; the harness with a stand-in client).
+        public bool Attach(ChartBridgeClient c)
+        {
+            lock (Sync)
+            {
+                if (c == null || client != null) return false;
+                client = c; claimed = false; helloed = false; name = null; build = null; lastMsgMs = Now(); Actions.Clear();
+            }
+            Log("agent " + Id + " connected; it is told nothing until its agentHello");
+            Notify();
+            return true;
+        }
+
+        public ChartBridgeClient SubscribedClient() { ChartBridgeClient c = Volatile.Read(ref client); return c != null && helloed && c.Root != null ? c : null; }
+
+        // The agent is gone (heartbeat lost, its connection closed): its unfilled entries are cancelled, its open proposals expire
+        // as "not answered", every stop and target stays, and the pages are told. The flat time still runs.
+        private void Lose(ChartBridgeClient c, string why, bool heartbeat)
+        {
+            List<Proposal> expired;
+            lock (Sync)
+            {
+                if (client != c) return;
+                client = null; helloed = false; noClientSinceMs = Now();
+                if (heartbeat) nHeartbeatLost++;
+                expired = ExpireOpenLocked("not answered");
+            }
+            if (heartbeat) c.Close();
+            int n = CancelUnfilled(why);
+            foreach (Proposal p in expired) { ToPages(ProposalJson(p)); AgentLog("proposal " + p.P.Id + " not answered (" + why + ")"); }
+            string text = "Agent " + Id + ": " + why + ": " + (n > 0 ? n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled" : "no unfilled entry to cancel") +
+                          "; any position keeps its stop and target; its flat time still runs";
+            Log(text);
+            AgentLog(text);
+            ToPages(StatusJson("warn", text));
+            Notify();
+        }
+
+        // Every agent message: strict keys, then by type. Any message counts for the heartbeat, even one that is refused.
+        public void OnMessage(ChartBridgeClient c, string text)
+        {
+            bool hello;
+            lock (Sync) { if (c != client) return; lastMsgMs = Now(); hello = helloed; }
+            string why;
+            Dictionary<string, Val> d = Parse(text, 1000, out why);
+            string type = d != null ? S(d, "type") : null, id = d != null ? S(d, "id") : null;
+            if (d == null) { ToAgent(Reject(null, "ChartBridge refused a message: " + why)); RefusedPlanIfPlan(text, why); return; }
+            string[] keys;
+            if (type == null || !AgentKeys.TryGetValue(type, out keys)) { ToAgent(Reject(id, "unknown agent message type " + (type ?? "(none)"))); return; }
+            string odd = UnknownKey(d, keys);
+            if (odd == null)
+                foreach (KeyValuePair<string, Val> kv in d)
+                    if (kv.Value.K == 's' && kv.Value.T.Length > 200 && !(type == "note" && kv.Key == "text")) { odd = null; why = kv.Key + " is longer than 200 characters"; break; }
+            if (odd != null) why = "unknown key \"" + odd + "\" in " + type;
+            if (why != null)
+            {
+                ToAgent(Reject(id, why));
+                if (type == "plan") RefusedPlan(d, why);
+                return;
+            }
+            if (type != "beat" && !ChartBridgeAgents.RateOk(Actions)) { ToAgent(Reject(id, "too many agent messages (more than " + ChartBridgeAgents.MaxActionsPerSecond + " a second)")); if (type == "plan") RefusedPlan(d, "too many agent messages"); return; }
+            if (type == "agentHello") { OnHello(d); return; }
+            if (!hello) { ToAgent(Reject(id, "send agentHello first")); return; }
+            if (type == "beat") return;
+            if (type == "plan") OnPlan(d);
+            else if (type == "skip") OnSkip(d);
+            else if (type == "withdraw") OnWithdraw(d);
+            else if (type == "note") OnNote(d);
+            else if (type == "subscribe") OnSubscribe(c, d);
+            else if (type == "flatten") OnAgentFlatten();
+        }
+
+        private void RefusedPlanIfPlan(string text, string why)
+        {
+            if (text == null || !Regex.IsMatch(text, "\"type\"\\s*:\\s*\"plan\"")) return;
+            Plan p = new Plan { Action = "plan", At = Now(), Result = "refused: " + why };
+            lock (Sync) { nPlans++; nRefused++; }
+            ShowPlan(p);
+            AgentLog("plan (unreadable) refused: " + why);
+        }
+
+        private void RefusedPlan(Dictionary<string, Val> d, string why)
+        {
+            Plan p = ReadPlanLoose(d);
+            p.Result = "refused: " + why;
+            lock (Sync) { nPlans++; nRefused++; }
+            ShowPlan(p);
+            AgentLog("plan " + (p.Id ?? "(no id)") + " refused: " + why);
+        }
+
+        private void OnHello(Dictionary<string, Val> d)
+        {
+            string nm = S(d, "name"), bd = S(d, "build");
+            if (nm == null || nm.Length < 1 || nm.Length > 40) { ToAgent(Reject(null, "agentHello needs a name of 1 to 40 characters")); return; }
+            if (bd == null || bd.Length < 1 || bd.Length > 40) { ToAgent(Reject(null, "agentHello needs a build of 1 to 40 characters")); return; }
+            lock (Sync) { helloed = true; name = nm; build = bd; }
+            ToAgent(WelcomeJson());
+            ToAgent(StateJson());
+            Log("agent " + Id + " (\"" + nm + "\", build " + bd + ") said hello");
+            AgentLog("hello: \"" + nm + "\", build " + bd);
+            Notify();
+        }
+
+        // subscribe: answered as for a page (history, ticks, ready, then live tick for that root). Strict values (lead's default:
+        // root required; days, tickHours and sub whole numbers, the page's defaults when left out).
+        private void OnSubscribe(ChartBridgeClient c, Dictionary<string, Val> d)
+        {
+            string root = (S(d, "root") ?? "").ToUpperInvariant();
+            int days, tickHours, sub;
+            int hd = Whole(d, "days", out days), ht = Whole(d, "tickHours", out tickHours), hs = Whole(d, "sub", out sub);
+            if (root.Length == 0) { ToAgent(Reject(null, "subscribe needs a root")); return; }
+            if (hd < 0 || ht < 0 || hs < 0) { ToAgent(Reject(null, "days, tickHours and sub must be whole numbers")); return; }
+            if (ChartBridgeServer.ServedInstrumentFor(root) == null) { ToAgent(Reject(null, root + " is not served by ChartBridge")); return; }
+            ChartBridgeServer.AgentSubscribe(c, root, hd == 1 ? Math.Max(1, Math.Min(60, days)) : ChartBridgeConfig.DefaultDays,
+                ht == 1 ? Math.Max(0, Math.Min(48, tickHours)) : ChartBridgeConfig.DefaultTickHours, hs == 1 ? sub.ToString(CultureInfo.InvariantCulture) : null);
+        }
+
+        // ---------------------------------------------------------- plans (section 4: checks 1 to 12, in that order)
+        private Plan ReadPlanLoose(Dictionary<string, Val> d)
+        {
+            Plan p = new Plan { Action = "plan", At = Now(), Id = S(d, "id"), Root = S(d, "root"), Side = S(d, "side"), Kind = S(d, "kind"), Setup = S(d, "setup"), Reason = S(d, "reason") };
+            double x; string raw; int w;
+            if (Number(d, "price", out x, out raw) == 1) { p.Price = x; p.PriceText = raw; }
+            if (Number(d, "limitPrice", out x, out raw) == 1) { p.Limit = x; p.LimitText = raw; }
+            if (Number(d, "riskDollars", out x, out raw) == 1) { p.Risk = x; p.RiskText = raw; }
+            if (Number(d, "confidence", out x, out raw) == 1) { p.Conf = x; p.ConfText = raw; }
+            if (Whole(d, "qty", out w) == 1) { p.Qty = w; p.HasQty = true; }
+            if (Whole(d, "stopTicks", out w) == 1) { p.StopTicks = w; p.HasStop = true; }
+            if (Whole(d, "targetTicks", out w) == 1) { p.TargetTicks = w; p.HasTarget = true; }
+            if (Whole(d, "expireSec", out w) == 1) { p.ExpireSec = w; p.HasExpire = true; }
+            if (p.HasExpire) p.ExpiresAt = p.At + p.ExpireSec * 1000.0;
+            return p;
+        }
+
+        // Check 1: a strict message (every field present and of its kind; limitPrice is checked with the kind, check 3).
+        private static string Strict(Dictionary<string, Val> d, Plan p)
+        {
+            if (p.Id == null || p.Id.Length < 1 || p.Id.Length > 40) return "a plan needs an id of 1 to 40 characters";
+            if (p.Root == null) return "a plan needs a root";
+            if (p.Side != "buy" && p.Side != "sell") return "side must be buy or sell";
+            if (p.Kind == null) return "a plan needs a kind";
+            if (p.PriceText == null) return "price must be a plain number";
+            if (d.ContainsKey("limitPrice") && p.LimitText == null) return "limitPrice must be a plain number";
+            if (!p.HasQty) return "qty must be a whole number";
+            if (!p.HasStop) return "stopTicks must be a whole number";
+            if (!p.HasTarget) return "targetTicks must be a whole number";
+            if (!p.HasExpire) return "expireSec must be a whole number";
+            if (p.RiskText == null) return "riskDollars must be a plain number";
+            if (p.Setup == null || p.Setup.Length < 1 || p.Setup.Length > 40) return "setup must be 1 to 40 characters";
+            if (p.Reason == null || p.Reason.Length < 1 || p.Reason.Length > 200) return "reason must be 1 to 200 characters";
+            if (p.ConfText == null || p.Conf < 0 || p.Conf > 1) return "confidence must be a number from 0 to 1";
+            return null;
+        }
+
+        private void OnPlan(Dictionary<string, Val> d)
+        {
+            Plan p = ReadPlanLoose(d);
+            RollDay();
+            string why = Strict(d, p);
+            if (why == null)
+            {
+                lock (Sync)
+                {
+                    if (PlanIds.Contains(p.Id)) why = "plan id " + p.Id + " was already used today";
+                    else PlanIds.Add(p.Id);
+                }
+                if (why == null) SaveDay();
+            }
+            lock (Sync) nPlans++;
+            if (why == null) why = Checks(p, null, false);   // checks 2 to 11
+            string m;
+            lock (Sync) m = mode;
+            if (why != null) p.Result = "refused: " + why;
+            else if (m == "shadow") p.Result = "shadow";
+            else if (m == "copilot")
+            {
+                Proposal pr = new Proposal { P = p, Account = Account, Sim = SimNow() };
+                lock (Sync) { Proposals[p.Id] = pr; nProposals++; }
+                p.Result = "proposed";
+                ToPages(ProposalJson(pr));
+                ToAgent(AnswerJson(p.Id, "proposed", "a proposal on the page until " + Iso(p.ExpiresAt)));
+            }
+            else
+            {
+                Order placed;
+                why = Place(p, null, out placed);
+                p.Result = why == null ? "placed" : "refused: " + why;
+                if (why == null) ToAgent(AnswerJson(p.Id, "placed", "placed on " + Account + "; it works until " + Iso(p.ExpiresAt)));
+            }
+            if (why != null) { lock (Sync) nRefused++; ToAgent(Reject(p.Id, why)); }
+            ShowPlan(p);
+            AgentLog("plan " + (p.Id ?? "(no id)") + " " + p.Side + " " + p.Qty + " " + p.Root + " " + p.Kind + " @ " + (p.PriceText ?? "?") + (p.LimitText != null ? " limit " + p.LimitText : "") +
+                     " stop " + p.StopTicks + " target " + p.TargetTicks + " expire " + p.ExpireSec + "s risk " + (p.RiskText ?? "?") + " (" + (p.Setup ?? "") + ": " + (p.Reason ?? "") + "): " + p.Result);
+            Notify();
+        }
+
+        // Checks 2 to 11 of the contract, in order (the id, check 1, is the caller's). forAccount: a proposal's account (placed only
+        // if it is still this agent's). The first that fails is the answer.
+        private string Checks(Plan p, string forAccount, bool placing)
+        {
+            Rules r = RulesNow();
+            string acct = Account, sd;
+            bool k;
+            lock (Sync) { k = killed; sd = FilesBrokenLocked(); }
+            // 2. not killed, not stood down, the files readable, the account tradable now
+            if (k) return "the kill switch is on (release it on the Agent tab)";
+            if (sd != null) return sd;
+            if (forAccount != null && forAccount != acct) return "agent " + Id + "'s account changed from " + forAccount + " to " + acct + " after this proposal: nothing placed";
+            string aw = AccountProblemFor(acct, true) ?? AccountConflict();
+            if (aw != null) return aw;
+            // 3. the root and the kind
+            string root = (p.Root ?? "").ToUpperInvariant();
+            if (!r.Roots.Contains(root)) return root + " is not one of agent " + Id + "'s roots (" + string.Join(", ", r.Roots) + ")";
+            if (ChartBridgeConfig.QuoteOnly(root)) return root + " is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)";
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (inst == null) return "instrument " + root + " is not served by ChartBridge";
+            if (p.Kind != "limit" && p.Kind != "stopLimit") return "an agent's entry is a limit or a stop-limit (" + (p.Kind ?? "(none)") + " refused)";
+            if (p.Kind == "stopLimit" && p.LimitText == null) return "a stopLimit plan needs a limitPrice";
+            if (p.Kind == "limit" && p.LimitText != null) return "limitPrice goes on a stopLimit plan only";
+            if (p.Kind == "stopLimit" && !ChartBridgeOrders.AgentOrderTypes) return "stop-limit entries are off (orderTypes = off in config.txt)";
+            // 4. the size, the stop and the target
+            int ceiling = Math.Min(ChartBridgeAgents.HardCeiling(root), r.QtyFor(root)), cap = ChartBridgeOrders.AgentCap(root);
+            if (p.Qty < 1 || p.Qty > ceiling) return "qty must be a whole number from 1 to " + ceiling + " (agent " + Id + "'s maxQty for " + root + ")";
+            if (p.Qty > cap) return "qty " + p.Qty + " is over the " + root + " cap of " + cap + " (maxQty." + root + " in config.txt)";
+            if (p.StopTicks < 1 || p.TargetTicks < 1) return "every agent entry needs a stop and a target: stopTicks and targetTicks must be whole numbers of 1 or more";
+            int mb = ChartBridgeOrders.AgentMaxBracketTicks;
+            if (mb > 0 && (p.StopTicks > mb || p.TargetTicks > mb)) return "stopTicks and targetTicks must be at most " + mb + " (maxBracketTicks in config.txt)";
+            // 5. the risk in dollars
+            double tick = inst.MasterInstrument.TickSize, pv = inst.MasterInstrument.PointValue;
+            double risk = Math.Round(p.StopTicks * tick * pv * p.Qty, 2);
+            if (Math.Abs(p.Risk - risk) > 0.01 + 1e-9) return "riskDollars " + p.RiskText + " is not stopTicks x tick x point value x qty (" + risk.ToString("0.00", CultureInfo.InvariantCulture) + ")";
+            // 6. the expiry
+            if (p.ExpireSec < 60 || p.ExpireSec > r.MaxExpireSec) return "expireSec must be from 60 to " + r.MaxExpireSec;
+            // 7. the entry window (New York time)
+            DateTime et = NowEt();
+            double tod = et.TimeOfDay.TotalSeconds;
+            if (tod < r.EntryFrom * 60 || tod >= r.EntryUntil * 60) return "outside agent " + Id + "'s entry window (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + " New York time)";
+            // 8. one at a time (Owns first: it clears a lock whose position is flat by both readings)
+            bool entry = WorkingEntries().Count > 0, owns = r.Roots.Any(x => Owns(x)), open, proposal;
+            lock (Sync)
+            {
+                open = openTag != null || Sticky.Count > 0;
+                proposal = Proposals.Values.Any(x => x.State == "open" || x.State == "accepting") && !placing;
+            }
+            if (entry) return "one at a time: agent " + Id + " already has a working entry";
+            if (open || owns) return "one at a time: agent " + Id + " already has a position";
+            if (proposal) return "one at a time: agent " + Id + " already has an open proposal";
+            // 9. maxTrades, maxLosses
+            int trades, losses;
+            lock (Sync) { trades = Trades.Count; losses = LossesLocked(); }
+            if (r.MaxTrades > 0 && trades >= r.MaxTrades) return "agent " + Id + " has made " + trades + " trades today (maxTrades " + r.MaxTrades + ")";
+            if (r.MaxLosses > 0 && losses >= r.MaxLosses) return losses + " losing trades today (maxLosses " + r.MaxLosses + "): no new entries for agent " + Id + " until 18:00 ET";
+            // 10. the owner lock
+            Account a = FindAccount(acct);
+            string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
+            if (lockWhy != null) return lockWhy;
+            // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
+            bool buy = p.Side == "buy";
+            string bad = ChartBridgeOrders.AgentPriceProblem(root, tick, p.Kind == "limit" ? "limit" : "stop", buy, p.Price);
+            if (bad != null) return bad;
+            if (p.Kind == "stopLimit")
+            {
+                if (!(p.Limit > 0) || !ChartBridgeOrders.AgentOnGrid(p.Limit, tick)) return "limitPrice " + p.LimitText + " is not on the " + CbJson.Num(tick) + " tick grid";
+                double lo = buy ? p.Price : p.Price - ChartBridgeAgents.StopLimitMaxTicks * tick, hi = buy ? p.Price + ChartBridgeAgents.StopLimitMaxTicks * tick : p.Price;
+                if (p.Limit < lo - 1e-9 || p.Limit > hi + 1e-9)
+                    return "a " + p.Side + " stop-limit's limitPrice must be from its price " + (buy ? "up to " : "down to ") + ChartBridgeAgents.StopLimitMaxTicks + " ticks " + (buy ? "above" : "below") + " it";
+            }
+            return null;
+        }
+
+        // Placing (auto, or an accepted proposal): every check again at this moment, then ChartBridgeOrders.PlaceAgentEntry builds the
+        // order from the plan's own parameters on the agent's own account, through every v2 gate and the owner lock.
+        private string Place(Plan p, string forAccount, out Order placed)
+        {
+            placed = null;
+            lock (PlaceGate)
+            {
+                string why = Checks(p, forAccount, forAccount != null);
+                if (why != null) return why;
+                string acct = Account, root = p.Root.ToUpperInvariant();
+                string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(acct) + ",\"root\":\"" + root + "\",\"side\":\"" + p.Side + "\",\"kind\":\"" + p.Kind + "\",\"qty\":" +
+                              p.Qty.ToString(CultureInfo.InvariantCulture) + ",\"price\":" + p.PriceText + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
+                              ",\"bracket\":{\"stop\":" + p.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + p.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
+                why = ChartBridgeOrders.PlaceAgentEntry(Id, text, out placed);
+                if (why != null) { placed = null; return why; }
+                string tag = ChartBridgeAgents.TagOf(placed.Name);
+                ChartBridgeAgents.NoteTag(tag, Id);
+                lock (Sync)
+                {
+                    Placed.Add(placed); MyTags.Add(tag); Sticky.Add(root); nPlaced++;
+                    EntryOfPlan[p.Id] = placed; PlanOfTag[tag] = p.Id; Expiry[tag] = p.ExpiresAt;
+                }
+            }
+            SaveDay();
+            AgentLog("placed " + p.Side + " " + p.Qty + " " + p.Root + " " + p.Kind + " @ " + p.PriceText + (p.LimitText != null ? " limit " + p.LimitText : "") + " stop " + p.StopTicks +
+                     " target " + p.TargetTicks + " on " + Account + (SimNow() ? " (Sim)" : " (LIVE)") + " (plan " + p.Id + ", until " + Iso(p.ExpiresAt) + ")");
+            return null;
+        }
+
+        // The account: in NinjaTrader under that exact name, never Backtest or Playback, and (gates) tradable by gate 2 and Connected.
+        private static string AccountProblemFor(string nm, bool gates)
+        {
+            if (!ChartBridgeOrders.Enabled) return "trading is off in config.txt";
+            if (ChartBridgeOrders.IsNeverTradable(nm ?? "")) return nm + " is a Backtest or Playback account: an agent never trades one";
+            Account a = FindAccount(nm);
+            if (a == null) return nm + " is not in NinjaTrader";
+            if (gates && !ChartBridgeOrders.AccountTradable(nm))
+                return (ChartBridgeAccounts.On ? ChartBridgeAccounts.EntryRefusal(nm) : nm + " may not trade from the chart (tradeAccounts in config.txt)") + ": the agent needs it tradable";
+            if (gates && (a.Connection == null || a.Connection.Status != ConnectionStatus.Connected)) return nm + " is not connected";
+            if (gates && ChartBridgeAccounts.On && ChartBridgeAccounts.IsGone(a)) return nm + " is gone: entries wait until it is back";
+            return null;
+        }
+
+        private static Account FindAccount(string nm)
+        {
+            if (string.IsNullOrEmpty(nm)) return null;
+            lock (NinjaTrader.Cbi.Account.All)
+                foreach (Account a in NinjaTrader.Cbi.Account.All) if (a.Name == nm) return a;   // exact, case and all
+            return null;
+        }
+
+        private bool SimNow() { Account a = FindAccount(Account); return a != null && ChartBridgeBot.IsSim(a); }
+
+        private void OnSkip(Dictionary<string, Val> d)
+        {
+            string id = S(d, "id"), setup = S(d, "setup"), reason = S(d, "reason");
+            if (id == null || id.Length < 1 || id.Length > 40 || reason == null || reason.Length < 1 || (d.ContainsKey("setup") && (setup == null || setup.Length < 1 || setup.Length > 40)))
+            { ToAgent(Reject(id, "skip needs an id (1 to 40), a reason (1 to 200) and, if given, a setup (1 to 40)")); return; }
+            Plan p = new Plan { Action = "skip", Id = id, Setup = setup, Reason = reason, At = Now(), Result = "skipped" };
+            ShowPlan(p);
+            AgentLog("skip " + id + (setup != null ? " (" + setup + ")" : "") + ": " + reason);
+        }
+
+        private void OnNote(Dictionary<string, Val> d)
+        {
+            string kind = S(d, "kind"), text = S(d, "text");
+            if (kind != "look" && kind != "thinking" && kind != "lesson" && kind != "notebook" && kind != "status") { ToAgent(Reject(null, "note kind must be look, thinking, lesson, notebook or status")); return; }
+            if (text == null || text.Length < 1 || text.Length > 1000) { ToAgent(Reject(null, "note text must be 1 to 1,000 characters")); return; }
+            string json = "{\"type\":\"agentNote\",\"agent\":" + CbJson.Str(Id) + ",\"at\":" + Ms(Now()) + ",\"kind\":" + CbJson.Str(kind) + ",\"text\":" + CbJson.Str(text) + "}";
+            lock (Sync) { Notes.AddLast(json); while (Notes.Count > ChartBridgeAgents.NotesKept) Notes.RemoveFirst(); }
+            ToPages(json);
+        }
+
+        private void OnWithdraw(Dictionary<string, Val> d)
+        {
+            string id = S(d, "id"), reason = S(d, "reason");
+            if (id == null || reason == null || reason.Length < 1) { ToAgent(Reject(id, "withdraw needs an id and a reason")); return; }
+            Proposal p;
+            Order entry;
+            string was = null;
+            lock (Sync)
+            {
+                Proposals.TryGetValue(id, out p);
+                EntryOfPlan.TryGetValue(id, out entry);
+                if (p != null && p.State == "open") { p.State = "withdrawn"; was = "open"; }
+                else if (p != null && p.State == "accepting") { p.WithdrawnWhy = reason; was = "accepting"; }
+            }
+            if (was == "accepting") { AgentLog("withdraw " + id + " arrived while its accept is being placed: the entry is cancelled once placed if it has not filled (" + reason + ")"); return; }
+            if (was == "open")
+            {
+                ToAgent(AnswerJson(id, "withdrawn", "withdrawn by the agent before an answer: " + reason));
+                ToPages(ProposalJson(p));
+                AgentLog("proposal " + id + " withdrawn by the agent (" + reason + ")");
+                Notify();
+                return;
+            }
+            bool cancelled = entry != null && Cancel(entry, "withdrawn by the agent: " + reason);
+            if (!cancelled) { ToAgent(Reject(id, "nothing to withdraw for " + id)); return; }
+            if (p != null) { lock (Sync) p.State = "withdrawn"; ToPages(ProposalJson(p)); }
+            ToAgent(AnswerJson(id, "withdrawn", "its unfilled entry cancelled (" + reason + ")" + (entry.Filled > 0 ? "; the " + entry.Filled + " filled keep their stop and target" : "")));
+            AgentLog("withdraw " + id + ": its unfilled entry cancelled (" + reason + ")");
+            Notify();
+        }
+
+        // flatten from the agent: auto only, not while killed: cancel its orders on its account and roots, then market out.
+        private void OnAgentFlatten()
+        {
+            string m;
+            bool k;
+            lock (Sync) { m = mode; k = killed; }
+            string why = m != "auto" ? "flatten is for auto mode only" : k ? "the kill switch is on" : null;
+            if (why == null && StartFlatten("flatten from agent " + Id, false) == 0) why = "agent " + Id + " has nothing to flatten";
+            if (why != null) { ToAgent(Reject(null, why)); return; }
+            AgentLog("flatten from the agent (auto) on " + Account);
+        }
+
+        // ---------------------------------------------------------- the agent's orders
+        public bool Owns(string root)
+        {
+            string acct;
+            bool open, stick;
+            lock (Sync) { acct = account; open = openTag != null && openRoot == root; stick = Sticky.Contains(root); }
+            if (open) return true;
+            Account a = FindAccount(acct);
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (a == null || inst == null) return stick;
+            bool entryWorks = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o) && ChartBridgeAgents.IsAgentEntry(o));
+            if (entryWorks) return true;
+            int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+            bool recordOpen;
+            lock (Sync) recordOpen = openTag == null && Trades.Values.Any(v => double.IsNaN(v));   // after a restart, before the executions are read again
+            if (recordOpen && (p1 != 0 || p2 != 0)) return true;
+            if (!stick) return false;
+            if (p1 == 0 && p2 == 0) { lock (Sync) { if (!(openTag != null && openRoot == root)) Sticky.Remove(root); } return false; }   // flat by both readings, no entry: the lock clears
+            return true;
+        }
+
+        private bool IsMine(Order o) { return o != null && ChartBridgeAgents.AgentOf(o) == Id; }
+        private bool IsMyEntry(Order o) { if (o == null) return false; Match m = ChartBridgeAgents.EntryRx.Match(o.Name ?? ""); return m.Success && m.Groups[2].Value == Id; }
+
+        // Every working entry of this agent on its account: those NinjaTrader lists (also after a restart, by name) and those just sent.
+        private List<Order> WorkingEntries()
+        {
+            List<Order> list = new List<Order>();
+            Account a = FindAccount(Account);
+            if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (IsMyEntry(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
+            lock (Sync) foreach (Order o in Placed) if (!list.Contains(o) && ChartBridgeOrders.IsWorking(o.OrderState)) list.Add(o);
+            return list;
+        }
+
+        // Cancel an unfilled (or part-filled) entry of this agent: never a stop or a target; the filled part keeps its legs.
+        private bool Cancel(Order o, string why)
+        {
+            if (o == null || o.Account == null || !ChartBridgeOrders.IsWorking(o.OrderState) || !IsMyEntry(o)) return false;
+            lock (Sync) { if (!CancelSent.Add(o)) return false; }
+            o.Account.Cancel(new[] { o });
+            Log("agent " + Id + " entry cancel sent: " + (o.Name ?? "") + " on " + o.Account.Name + " (" + why + ")");
+            return true;
+        }
+
+        // Heartbeat lost, the kill switch, leaving auto, outside the window: every unfilled entry goes, with an answer.
+        private int CancelUnfilled(string why)
+        {
+            int n = 0;
+            foreach (Order o in WorkingEntries()) if (Cancel(o, why)) { n++; AnswerEntryEnded(o, "expired", why); }
+            return n;
+        }
+
+        private void AnswerEntryEnded(Order o, string answer, string why)
+        {
+            string tag = ChartBridgeAgents.TagOf(o.Name), planId;
+            lock (Sync) PlanOfTag.TryGetValue(tag ?? "", out planId);
+            if (planId == null) return;
+            ToAgent(AnswerJson(planId, answer, why + (o.Filled > 0 ? "; the rest cancelled, the " + o.Filled + " filled keep their stop and target" : "; its entry cancelled")));
+            AgentLog("plan " + planId + " " + answer + ": " + why + (o.Filled > 0 ? " (" + o.Filled + " filled keep their legs)" : ""));
+        }
+
+        // ChartBridgeOrders.OnOrderUpdate: the agent sees its own orders; done entries are forgotten.
+        public void OnOrderUpdate(Order o, string json)
+        {
+            string tag = ChartBridgeAgents.TagOf(o.Name);
+            if (IsMyEntry(o)) { ChartBridgeAgents.NoteTag(tag, Id); lock (Sync) MyTags.Add(tag); }
+            bool done = !ChartBridgeOrders.AgentMayFillState(o.OrderState), rejectedEntry = false;
+            string planId = null;
+            ChartBridgeClient c;
+            lock (Sync)
+            {
+                if (done)
+                {
+                    rejectedEntry = o.OrderState == OrderState.Rejected && Placed.Contains(o);
+                    Placed.Remove(o); CancelSent.Remove(o);
+                    if (IsMyEntry(o) && tag != null) { Expiry.Remove(tag); PlanOfTag.TryGetValue(tag, out planId); }
+                }
+                c = helloed ? client : null;
+            }
+            if (c != null && json != null) c.Send(json);
+            if (done && IsMyEntry(o)) SaveDay();
+            if (rejectedEntry && planId != null) { ToAgent(AnswerJson(planId, "refused", "NinjaTrader rejected its entry")); AgentLog("plan " + planId + ": NinjaTrader rejected its entry"); }
+        }
+
+        // Every execution on this agent's account (ChartBridgeServer.Deliver). Follows the agent's trade: it opens with the first fill
+        // of its entry (a trade, even part filled) and closes when that position is flat again, whatever closed it; its realized
+        // dollars come from those executions (as the bot's).
+        public void OnExec(Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
+        {
+            if (inst == null || qty <= 0) return;
+            string root = ChartBridgeServer.RootFor(inst);
+            if (root == null) return;
+            Rules r = RulesNow();
+            if (!r.Roots.Contains(root)) return;
+            Order o = FindOrder(orderId);
+            string entryTag = IsMyEntry(o) ? ChartBridgeAgents.TagOf(o.Name) : null;
+            bool mine = o != null && IsMine(o);
+            RollDay();
+            string closedTag = null, opened = null;
+            double pnl = 0;
+            ChartBridgeClient c;
+            lock (Sync)
+            {
+                double was;
+                if (openTag == null && entryTag != null && (!Trades.TryGetValue(entryTag, out was) || double.IsNaN(was)))
+                {
+                    openTag = entryTag; openRoot = root; ledQty = 0; ledCash = 0; ledAvg = 0; Sticky.Add(root);
+                    if (!Trades.ContainsKey(entryTag)) { Trades[entryTag] = double.NaN; opened = entryTag; }   // a trade (counted once, also after a restart)
+                }
+                if (openTag != null && root == openRoot)
+                {
+                    int signed = side == MarketPosition.Long ? qty : -qty;
+                    if (ledQty == 0 || Math.Sign(signed) == Math.Sign(ledQty)) ledAvg = (ledAvg * Math.Abs(ledQty) + price * qty) / (Math.Abs(ledQty) + qty);
+                    ledQty += signed;
+                    ledCash -= signed * price;
+                    if (ledQty == 0)
+                    {
+                        pnl = Math.Round(ledCash * inst.MasterInstrument.PointValue, 2);
+                        Trades[openTag] = pnl;
+                        closedTag = openTag; openTag = null; openRoot = null; ledAvg = 0;
+                    }
+                }
+                c = helloed ? client : null;
+            }
+            if (mine && c != null && json != null) c.Send(json);
+            if (opened == null && closedTag == null) return;
+            SaveDay();
+            if (opened != null) AgentLog("trade " + opened + " opened on " + root);
+            if (closedTag != null)
+            {
+                AgentLog("trade " + closedTag + " closed: " + pnl.ToString("0.##", CultureInfo.InvariantCulture) + " dollars");
+                string sd;
+                lock (Sync) sd = StandDownLocked();
+                if (sd != null && pnl < 0) { Log("agent " + Id + " stands down: " + sd); ToPages(StatusJson("warn", "Agent " + Id + " stands down: " + sd)); }
+            }
+            Notify();
+        }
+
+        private Order FindOrder(string orderId)
+        {
+            if (string.IsNullOrEmpty(orderId)) return null;
+            Account a = FindAccount(Account);
+            if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (o.OrderId == orderId) return o;
+            lock (Sync) foreach (Order o in Placed) if (o.OrderId == orderId) return o;
+            return null;
+        }
+
+        // The account's position on the agent's roots, to the agent.
+        public void OnPosition(PositionEventArgs e)
+        {
+            string root = ChartBridgeServer.RootFor(e.Position.Instrument);
+            if (root == null || !RulesNow().Roots.Contains(root)) return;
+            ChartBridgeClient c;
+            lock (Sync) c = helloed ? client : null;
+            if (c == null) return;
+            int q = e.MarketPosition == MarketPosition.Long ? e.Quantity : e.MarketPosition == MarketPosition.Short ? -e.Quantity : 0;
+            c.Send("{\"type\":\"position\",\"account\":" + CbJson.Str(Account) + ",\"root\":" + CbJson.Str(root) + ",\"qty\":" + q.ToString(CultureInfo.InvariantCulture) +
+                   ",\"avgPrice\":" + (q != 0 ? CbJson.Num(e.AveragePrice) : "null") + "}");
+        }
+
+        public void OnTick(string root, string json)
+        {
+            ChartBridgeClient c = Volatile.Read(ref client);
+            if (c == null || !helloed || c.Root == root) return;   // the subscribed root comes through the seam
+            c.Send(json);
+        }
+
+        // ---------------------------------------------------------- the timer: heartbeat, expiries, the window, the flat time
+        public void Check(double now)
+        {
+            RollDay();
+            ChartBridgeClient silent = null;
+            bool none, strip = false;
+            lock (Sync)
+            {
+                if (client != null && now - lastMsgMs > ChartBridgeAgents.SilenceMs) silent = client;
+                none = client == null && !claimed;
+                if (!none) noClientSinceMs = now;
+                if (client != null && helloed && now - lastStripMs >= ChartBridgeAgents.StripEveryMs) { strip = true; lastStripMs = now; }
+            }
+            if (silent != null) Lose(silent, "no message from agent " + Id + " for 5 s (heartbeat lost)", true);
+            double since;
+            lock (Sync) since = noClientSinceMs;
+            if (none && now - since > ChartBridgeAgents.SilenceMs)
+            {
+                int n = CancelUnfilled("no agent " + Id + " connected for 5 s");
+                if (n > 0) { string text = "Agent " + Id + ": not connected: " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target"; Log(text); AgentLog(text); ToPages(StatusJson("warn", text)); Notify(); }
+            }
+            Rules r = RulesNow();
+            double tod = NowEt().TimeOfDay.TotalSeconds;
+            bool inWindow = tod >= r.EntryFrom * 60 && tod < r.EntryUntil * 60;
+            // proposals live until their plan's expiry (Anthony's ruling 4), and never outside the window
+            List<Proposal> ended = new List<Proposal>();
+            lock (Sync)
+                foreach (Proposal p in Proposals.Values)
+                    if (p.State == "open" && (now >= p.P.ExpiresAt || !inWindow)) { p.State = "expired"; ended.Add(p); }
+            foreach (Proposal p in ended)
+            {
+                string why = now >= p.P.ExpiresAt ? "its plan expired unanswered" : "the entry window closed at " + Hm(r.EntryUntil);
+                ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "expired", why)); AgentLog("proposal " + p.P.Id + " expired (" + why + ")");
+            }
+            // entries: cancelled at their expiry (from ChartBridge's own clock), outside the window, and when the expiry is not known
+            int cancelled = 0;
+            foreach (Order o in WorkingEntries())
+            {
+                string tag = ChartBridgeAgents.TagOf(o.Name);
+                double exp;
+                bool known;
+                lock (Sync) known = Expiry.TryGetValue(tag ?? "", out exp);
+                string why = !inWindow ? "outside the entry window (" + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) + ")" : !known ? "its expiry is not known (ChartBridge restarted)" : now >= exp ? "its plan expired" : null;
+                if (why != null && Cancel(o, why)) { cancelled++; AnswerEntryEnded(o, "expired", why); }
+            }
+            if (cancelled > 0 || ended.Count > 0) Notify();
+            // the flat time (ruling 2): from flatAt until 18:00 ET, whatever the agent does or whether it is there
+            if (tod >= r.FlatAt * 60 && tod < 18 * 3600) StartFlatten(Id + " flattened at " + Hm(r.FlatAt) + " by its rules", true);
+            StepFlatten(now);
+            if (strip) ToPages(StripJson());
+        }
+
+        // ---------------------------------------------------------- the flatten (flatAt, or the agent's own in auto)
+        // Per root it owns or has orders working on: every order that may fill on that contract of its account is cancelled; once
+        // NinjaTrader confirms each one done, every fill there has come through, and both position readings agree, what it holds is
+        // closed at market ("CB#<tag> ag:<id> flat"). Readings still apart after 3 s: the smaller is closed (never more than either
+        // shows). Not flat 10 s after the start: a status error to the pages, every 10 s until flat. Returns how many roots started.
+        private int StartFlatten(string why, bool byRules)
+        {
+            Rules r = RulesNow();
+            Account a = FindAccount(Account);
+            if (a == null) return 0;
+            int started = 0;
+            foreach (string root in r.Roots)
+            {
+                Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                if (inst == null) continue;
+                bool busy;
+                lock (Sync) busy = Flats.ContainsKey(root);
+                if (busy) continue;
+                bool mineWorking = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => IsMine(o));
+                if (!Owns(root) && !mineWorking) continue;
+                lock (Sync) { Flats[root] = new FlatJob { Root = root, Why = why, StartMs = Now() }; }
+                started++;
+                string text = byRules ? why : "Agent " + Id + ": " + why + ": " + root + " on " + a.Name;
+                Log(text); AgentLog(text + " (" + root + " on " + a.Name + ")");
+                ChartBridgeServer.SendToTraders(StatusJson("info", text));
+            }
+            if (started > 0) Notify();
+            return started;
+        }
+
+        private void StepFlatten(double now)
+        {
+            List<FlatJob> jobs;
+            lock (Sync) jobs = Flats.Values.ToList();
+            if (jobs.Count == 0) return;
+            Account a = FindAccount(Account);
+            foreach (FlatJob j in jobs)
+            {
+                Instrument inst = ChartBridgeServer.InstrumentFor(j.Root);
+                if (a == null || inst == null) { lock (Sync) Flats.Remove(j.Root); continue; }
+                string exitWhy;
+                bool up = ChartBridgeAccounts.ExitAllowed(a, out exitWhy);
+                int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
+                List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
+                List<Order> others = may.Where(o => o != j.Close).ToList();
+                bool closeWorks = j.Close != null && may.Contains(j.Close);
+                if (up && others.Count > 0)
+                {
+                    if (now - j.LastCancelMs >= ChartBridgeAgents.FlatRetryMs)
+                    {
+                        j.LastCancelMs = now;
+                        ChartBridgeOrders.AgentFlattening(a, inst);
+                        foreach (Order o in others) lock (Sync) CancelSent.Add(o);
+                        a.Cancel(others.ToArray());
+                        Log("agent " + Id + " flatten: cancel sent for " + others.Count + " order(s) on " + j.Root + " " + a.Name);
+                    }
+                }
+                else if (up && !closeWorks)
+                {
+                    if (p1 == 0 && p2 == 0)
+                    {
+                        string at = Iso(now);
+                        lock (Sync) { Flats.Remove(j.Root); flattenedAt = at; }
+                        AgentLog("flat on " + j.Root + " " + a.Name + " (" + j.Why + ")");
+                        Notify();
+                        continue;
+                    }
+                    string unnoted = ChartBridgeOrders.AgentUnnotedFill(a, inst, now);
+                    int qty = 0, dir = 0;
+                    if (unnoted == null && p1 == p2) { qty = Math.Abs(p1); dir = Math.Sign(p1); j.ApartSinceMs = -1; }
+                    else
+                    {
+                        if (j.ApartSinceMs < 0) j.ApartSinceMs = now;
+                        if (now - j.ApartSinceMs >= ChartBridgeAgents.FlatRetryMs && Math.Sign(p1) == Math.Sign(p2) && p1 != 0)
+                        { qty = Math.Min(Math.Abs(p1), Math.Abs(p2)); dir = Math.Sign(p1); }
+                    }
+                    if (qty > 0 && now - j.LastCloseMs >= ChartBridgeAgents.FlatRetryMs) { j.LastCloseMs = now; j.Close = SendClose(a, inst, dir, qty, j.Root); }
+                }
+                bool flat = p1 == 0 && p2 == 0;
+                if (!flat && now - j.StartMs >= ChartBridgeAgents.FlatErrorEveryMs && now - j.LastErrorMs >= ChartBridgeAgents.FlatErrorEveryMs)
+                {
+                    j.LastErrorMs = now;
+                    string text = "Agent " + Id + ": NOT FLAT " + ((now - j.StartMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s after its flatten (" + j.Why + "): " + j.Root + " on " + a.Name +
+                                  " still shows " + p1 + (p2 != p1 ? " (or " + p2 + " with fills not yet in the position)" : "") + (up ? "" : "; the account is not connected (" + exitWhy + ")") + "; act in NinjaTrader now";
+                    ChartBridgeOrders.AgentAlarm(text);
+                    AgentLog(text);
+                }
+            }
+        }
+
+        // The flatten's one market order: closes what the position holds, never more (an exit: no entry gate, a Connected account).
+        private Order SendClose(Account a, Instrument inst, int dir, int qty, string root)
+        {
+            string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
+            Order x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
+                "CB#" + tag + " ag:" + Id + " flat", NinjaTrader.Core.Globals.MaxDate, null);
+            ChartBridgeAgents.NoteTag(tag, Id);
+            lock (ChartBridgeOrders.AgentPlaceLock)
+            {
+                ChartBridgeOrders.AgentSent(x);
+                try { a.Submit(new[] { x }); }
+                catch (Exception ex) { ChartBridgeOrders.AgentUnsent(x); Log("agent " + Id + " flatten: the close could not be sent (" + ex.Message + ")"); return null; }
+            }
+            string text = "agent " + Id + " flatten: " + (dir > 0 ? "sell " : "buy ") + qty + " " + root + " at market on " + a.Name;
+            Log(text); AgentLog(text);
+            return x;
+        }
+
+        // ---------------------------------------------------------- messages from the page
+        public string OnPage(string type, Dictionary<string, Val> d)
+        {
+            if (type == "agentMode") return SetMode(d);
+            if (type == "agentKill") return SetKill(d);
+            if (type == "agentSeen") return Seen(d);
+            if (type == "agentAnswer") return AnswerProposal(d);
+            if (type == "agentAccount") return SetAccount(d);
+            if (type == "agentRules") return SetRules(d);
+            return "unknown message type " + type;
+        }
+
+        private string SetMode(Dictionary<string, Val> d)
+        {
+            string m = S(d, "mode");
+            if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
+            if (m == "auto") { string why = AccountProblemFor(Account, true) ?? AccountConflict(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
+            string old;
+            List<Proposal> expired = new List<Proposal>();
+            lock (Sync)
+            {
+                old = mode; mode = m;
+                if (old == "copilot" && m != "copilot") expired = ExpireOpenLocked("not answered");
+            }
+            foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the mode changed to " + m)); AgentLog("proposal " + p.P.Id + " not answered (the mode changed to " + m + ")"); }
+            if (old == "auto" && m != "auto") CancelUnfilled("the mode changed to " + m);   // leaving auto: its unfilled entries go (lead's default)
+            Log("agent " + Id + " mode " + m + " (was " + old + "), set by the page");
+            AgentLog("mode " + m + " (was " + old + "), set by the page");
+            ToAgent(WelcomeJson());
+            Notify();
+            return null;
+        }
+
+        private string SetKill(Dictionary<string, Val> d)
+        {
+            bool on;
+            if (!Bool(d, "on", out on)) return "on must be true or false";
+            List<Proposal> expired = new List<Proposal>();
+            lock (Sync) { killed = on; if (on) expired = ExpireOpenLocked("not answered"); }
+            if (on)
+            {
+                int n = CancelUnfilled("the kill switch is on");
+                foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the kill switch is on")); }
+                string text = "Agent " + Id + ": the kill switch is on: " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; every agent order is refused until it is released";
+                ToPages(StatusJson("warn", text));
+                Log(text); AgentLog(text);
+            }
+            else { Log("agent " + Id + " kill switch released by the page"); AgentLog("kill switch released by the page"); }
+            Notify();
+            return null;
+        }
+
+        private string Seen(Dictionary<string, Val> d)
+        {
+            string id = S(d, "id");
+            double at;
+            if (!Ms(d, "at", out at)) return "at must be page UTC ms (a whole number)";
+            Proposal p;
+            lock (Sync)
+            {
+                if (id == null || !Proposals.TryGetValue(id, out p)) return "no proposal " + (id ?? "(none)") + " from agent " + Id;
+                if (p.SeenAt >= 0) return null;
+                p.SeenAt = at;
+            }
+            AgentLog("proposal " + id + " seen on the page at " + at.ToString("0", CultureInfo.InvariantCulture));
+            ToPages(ProposalJson(p));
+            return null;
+        }
+
+        // Anthony's answer. Accept places the order from the PROPOSAL's own parameters (the page sends none), through every check
+        // again; with under 5 s of its expiry left it is refused as expired. The entry works only the time left.
+        private string AnswerProposal(Dictionary<string, Val> d)
+        {
+            string id = S(d, "id"), answer = S(d, "answer");
+            double at;
+            if (answer != "accept" && answer != "reject") return "answer must be accept or reject";
+            if (!Ms(d, "at", out at)) return "at must be page UTC ms (a whole number)";
+            Proposal p;
+            bool late = false;
+            lock (Sync)
+            {
+                if (id == null || !Proposals.TryGetValue(id, out p)) return "no proposal " + (id ?? "(none)") + " from agent " + Id;
+                if (p.State != "open") return "proposal " + id + " is " + p.State + "; it can no longer be answered";
+                p.AnsweredAt = at;
+                if (answer == "accept" && p.P.ExpiresAt - Now() < ChartBridgeAgents.AcceptMinLeftMs) { p.State = "expired"; late = true; }
+                else p.State = answer == "accept" ? "accepting" : "rejected";
+            }
+            if (late)
+            {
+                ToPages(ProposalJson(p));
+                ToAgent(AnswerJson(id, "expired", "accepted with under 5 s of its expiry left: not placed"));
+                AgentLog("proposal " + id + " accepted with under 5 s left: expired, nothing placed");
+                Notify();
+                return "proposal " + id + " expired (under 5 s left): nothing placed";
+            }
+            if (answer == "reject")
+            {
+                ToPages(ProposalJson(p));
+                ToAgent(AnswerJson(id, "rejected", "rejected on the page"));
+                AgentLog("proposal " + id + " rejected on the page");
+                Notify();
+                return null;
+            }
+            Order placed;
+            string why = Place(p.P, p.Account, out placed), withdrawn;
+            lock (Sync) { p.State = why == null ? "accepted" : "rejected"; p.Entry = placed; withdrawn = p.WithdrawnWhy; }
+            bool cancelled = why == null && withdrawn != null && placed != null && Cancel(placed, "withdrawn by the agent during placement: " + withdrawn);
+            if (cancelled) lock (Sync) p.State = "withdrawn";
+            ToPages(ProposalJson(p));
+            if (why == null)
+            {
+                ToAgent(AnswerJson(id, "accepted", "accepted on the page"));
+                ToAgent(AnswerJson(id, cancelled ? "withdrawn" : "placed", cancelled ? "withdrawn during placement: its entry is cancelled" : "placed on " + p.Account + "; it works until " + Iso(p.P.ExpiresAt)));
+            }
+            else { lock (Sync) nRefused++; ToAgent(AnswerJson(id, "refused", why)); }
+            AgentLog("proposal " + id + " accepted on the page" + (why == null ? ": placed on " + p.Account + (cancelled ? " and withdrawn during placement" : "") : " but refused: " + why));
+            Notify();
+            return why == null ? null : "accepted, but refused: " + why;
+        }
+
+        // agentAccount (ruling 1): refused for the bot's account, the copier's leader or any follower (on or off), another agent's
+        // account, an account not tradable now, while this agent has a position, a working entry or a proposal, and while the old or
+        // the new account holds any position or working order on the agent's roots (as botAccount). Saved; the agent gets welcome.
+        private string SetAccount(Dictionary<string, Val> d)
+        {
+            string nm = S(d, "account");
+            if (!PlainName(nm)) return "account must be an account name";
+            if (ChartBridgeBot.Enabled && string.Equals(nm, ChartBridgeBot.BotAccount, StringComparison.OrdinalIgnoreCase)) return nm + " is the bot's account: an agent never trades it";
+            string cw = ChartBridgeCopier.AgentAccountRefusal(nm);
+            if (cw != null) return cw + ": an agent never trades it";
+            foreach (ChartBridgeAgent other in ChartBridgeAgents.All())
+                if (other != this && string.Equals(other.Account, nm, StringComparison.OrdinalIgnoreCase)) return nm + " is agent " + other.Id + "'s account: each agent has its own";
+            string why = AccountProblemFor(nm, true);
+            if (why != null) return why;
+            if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: choose its account when it is flat";
+            string old = Account;
+            bool broken;
+            lock (Sync) broken = accountBroken != null;
+            if (nm == old && !broken) return null;
+            foreach (string root in RulesNow().Roots)
+            {
+                if (ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(nm), root)) return nm + " holds a position or a working order on " + root + ": choose agent " + Id + "'s account when both accounts are flat on its roots";
+                if (nm != old && ChartBridgeOrders.AgentHoldsOnRoot(FindAccount(old), root)) return "agent " + Id + "'s account " + old + " holds a position or a working order on " + root + ": choose its account when both accounts are flat on its roots";
+            }
+            string err = SaveAccount(nm);
+            if (err != null) return "agent-" + Id + "-account.txt could not be saved (" + err + "); nothing changed";
+            lock (Sync) { account = nm; accountBroken = null; Sticky.Clear(); }
+            string mark = SimNow() ? "Sim" : "LIVE";
+            Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page");
+            AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page");
+            ToAgent(WelcomeJson());
+            Notify();
+            return null;
+        }
+
+        private bool Exposed()
+        {
+            bool ex;
+            lock (Sync) ex = openTag != null || Proposals.Values.Any(p => p.State == "open" || p.State == "accepting");
+            return ex || WorkingEntries().Count > 0 || RulesNow().Roots.Any(r => Owns(r));
+        }
+
+        // agentRules: flat keys (the strict parser allows no nesting): roots "NQ,MNQ", maxQty<ROOT> for each root named (required
+        // for each, lead's default), entryFrom, entryUntil, flatAt (HH:MM New York), maxExpireSec, maxTrades and maxLosses (0 = none).
+        private string SetRules(Dictionary<string, Val> d)
+        {
+            Rules r = new Rules();
+            string roots = S(d, "roots");
+            if (roots == null) return "roots must be a list like \"NQ,MNQ\"";
+            r.Roots = roots.Split(',').Select(x => x.Trim().ToUpperInvariant()).Where(x => x.Length > 0).ToList();
+            r.MaxQty = new Dictionary<string, int>();
+            foreach (string root in r.Roots)
+            {
+                int q;
+                if (ChartBridgeAgents.HardCeiling(root) == 0) return root + " is not a root an agent may trade (NQ, MNQ, ES, MES)";
+                if (Whole(d, "maxQty" + root, out q) != 1) return "maxQty" + root + " must be a whole number (every root named needs its maxQty)";
+                r.MaxQty[root] = q;
+                if (ChartBridgeConfig.QuoteOnly(root) || ChartBridgeServer.InstrumentFor(root) == null) return root + " is not traded by ChartBridge (roots, quoteRoots in config.txt)";
+            }
+            foreach (string k in new[] { "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES" }) { int q; if (d.ContainsKey(k) && Whole(d, k, out q) != 1) return k + " must be a whole number"; }
+            r.EntryFrom = ParseHm(S(d, "entryFrom")); r.EntryUntil = ParseHm(S(d, "entryUntil")); r.FlatAt = ParseHm(S(d, "flatAt"));
+            if (r.EntryFrom < 0 || r.EntryUntil < 0 || r.FlatAt < 0) return "entryFrom, entryUntil and flatAt must be HH:MM (New York time)";
+            int n;
+            if (Whole(d, "maxExpireSec", out n) != 1) return "maxExpireSec must be a whole number from 60 to 1800";
+            r.MaxExpireSec = n;
+            if (Whole(d, "maxTrades", out n) != 1) return "maxTrades must be a whole number (0 = none)";
+            r.MaxTrades = n;
+            if (Whole(d, "maxLosses", out n) != 1) return "maxLosses must be a whole number (0 = none)";
+            r.MaxLosses = n;
+            string bad = RulesProblem(r);
+            if (bad != null) return bad;
+            if (Exposed()) return "agent " + Id + " has a position, a working entry or an open proposal: change its rules when it is flat";
+            string err = SaveRules(r);
+            if (err != null) return "agent-" + Id + "-rules.txt could not be saved (" + err + "); nothing changed";
+            lock (Sync) { rules = r; rulesBroken = null; }
+            string said = RulesText(r);
+            Log("agent " + Id + " rules set by the page: " + said);
+            AgentLog("rules set by the page: " + said);
+            ToAgent(WelcomeJson());
+            Notify();
+            return null;
+        }
+
+        private static string RulesText(Rules r)
+        {
+            return "roots " + string.Join(",", r.Roots) + ", maxQty " + string.Join(" ", r.Roots.Select(x => x + " " + r.QtyFor(x))) + ", entries " + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) +
+                   ", flat at " + Hm(r.FlatAt) + ", maxExpireSec " + r.MaxExpireSec + ", maxTrades " + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none") +
+                   ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none");
+        }
+
+        // Under Sync: every open proposal ends (never placed).
+        private List<Proposal> ExpireOpenLocked(string state)
+        {
+            List<Proposal> list = new List<Proposal>();
+            foreach (Proposal p in Proposals.Values) if (p.State == "open") { p.State = state; list.Add(p); }
+            return list;
+        }
+
+        // A signed-in v3 page: this agent's strip, its open proposals, its last 50 plans and its last 200 notes.
+        public void Replay(ChartBridgeClient c)
+        {
+            c.Send(StripJson());
+            List<Proposal> open;
+            List<string> plans, notes;
+            lock (Sync) { open = Proposals.Values.Where(p => p.State == "open").ToList(); plans = PlansShown.ToList(); notes = Notes.ToList(); }
+            foreach (Proposal p in open) c.Send(ProposalJson(p));
+            foreach (string j in plans) c.Send(j);
+            foreach (string j in notes) c.Send(j);
+        }
+
+        // ---------------------------------------------------------- messages out
+        private void ToAgent(string json)
+        {
+            ChartBridgeClient c;
+            lock (Sync) c = client;
+            if (c != null) c.Send(json);
+        }
+
+        private static void ToPages(string json) { ChartBridgeV3.SendToV3Traders(json); }
+
+        private void Notify()
+        {
+            ToPages(StripJson());
+            ChartBridgeClient c;
+            lock (Sync) c = helloed ? client : null;
+            if (c != null) c.Send(StateJson());
+        }
+
+        private void ShowPlan(Plan p)
+        {
+            string json = PlanJson(p);
+            lock (Sync)
+            {
+                if (p.Action == "plan") lastPlanJson = json;
+                PlansShown.AddLast(json);
+                while (PlansShown.Count > ChartBridgeAgents.PlansKept) PlansShown.RemoveFirst();
+            }
+            ToPages(json);
+        }
+
+        private static string Reject(string id, string reason)
+        {
+            return "{\"type\":\"reject\",\"id\":" + (id != null ? CbJson.Str(id) : "null") + ",\"reason\":" + CbJson.Str(reason) + "}";
+        }
+
+        private static string StatusJson(string level, string text) { return "{\"type\":\"status\",\"level\":" + CbJson.Str(level) + ",\"text\":" + CbJson.Str(text) + "}"; }
+
+        private static string AnswerJson(string id, string answer, string text)
+        {
+            return "{\"type\":\"answer\",\"id\":" + CbJson.Str(id) + ",\"answer\":" + CbJson.Str(answer) + ",\"text\":" + CbJson.Str(text) + "}";
+        }
+
+        private static string Ms(double v) { return v >= 0 ? v.ToString("0", CultureInfo.InvariantCulture) : "null"; }
+        private static string Iso(double ms) { return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(ms).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture); }
+        private static string Raw(string t) { return t ?? "null"; }
+        private static string Str(string s) { return s != null ? CbJson.Str(s) : "null"; }
+
+        private static string RulesJson(Rules r)
+        {
+            StringBuilder b = new StringBuilder("{\"roots\":[");
+            b.Append(string.Join(",", r.Roots.Select(x => CbJson.Str(x)).ToArray())).Append("],\"maxQty\":{");
+            b.Append(string.Join(",", r.Roots.Select(x => CbJson.Str(x) + ":" + r.QtyFor(x).ToString(CultureInfo.InvariantCulture)).ToArray())).Append('}');
+            b.Append(",\"entryFrom\":").Append(CbJson.Str(Hm(r.EntryFrom))).Append(",\"entryUntil\":").Append(CbJson.Str(Hm(r.EntryUntil))).Append(",\"flatAt\":").Append(CbJson.Str(Hm(r.FlatAt)))
+             .Append(",\"maxExpireSec\":").Append(r.MaxExpireSec)
+             .Append(",\"maxTrades\":").Append(r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "null")
+             .Append(",\"maxLosses\":").Append(r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "null");
+            return b.Append('}').ToString();
+        }
+
+        private string PlanFields(Plan p)
+        {
+            return ",\"root\":" + Str(p.Root) + ",\"side\":" + Str(p.Side) + ",\"kind\":" + Str(p.Kind) + ",\"price\":" + Raw(p.PriceText) + ",\"limitPrice\":" + Raw(p.LimitText) +
+                   ",\"qty\":" + (p.HasQty ? p.Qty.ToString(CultureInfo.InvariantCulture) : "null") + ",\"stopTicks\":" + (p.HasStop ? p.StopTicks.ToString(CultureInfo.InvariantCulture) : "null") +
+                   ",\"targetTicks\":" + (p.HasTarget ? p.TargetTicks.ToString(CultureInfo.InvariantCulture) : "null") + ",\"expireSec\":" + (p.HasExpire ? p.ExpireSec.ToString(CultureInfo.InvariantCulture) : "null") +
+                   ",\"riskDollars\":" + Raw(p.RiskText) + ",\"setup\":" + Str(p.Setup) + ",\"reason\":" + Str(p.Reason) + ",\"confidence\":" + Raw(p.ConfText);
+        }
+
+        private string PlanJson(Plan p)
+        {
+            return "{\"type\":\"agentPlan\",\"agent\":" + CbJson.Str(Id) + ",\"id\":" + Str(p.Id) + ",\"at\":" + Ms(p.At) + ",\"action\":" + CbJson.Str(p.Action) + PlanFields(p) +
+                   ",\"result\":" + CbJson.Str(p.Result ?? "") + "}";
+        }
+
+        private string ProposalJson(Proposal pr)
+        {
+            string state;
+            double seen, answered;
+            lock (Sync) { state = pr.State == "accepting" ? "open" : pr.State; seen = pr.SeenAt; answered = pr.AnsweredAt; }
+            return "{\"type\":\"agentProposal\",\"agent\":" + CbJson.Str(Id) + ",\"id\":" + CbJson.Str(pr.P.Id) + ",\"at\":" + Ms(pr.P.At) + ",\"account\":" + CbJson.Str(pr.Account) +
+                   ",\"sim\":" + (pr.Sim ? "true" : "false") + PlanFields(pr.P) + ",\"expiresAt\":" + Ms(pr.P.ExpiresAt) + ",\"state\":" + CbJson.Str(state) +
+                   ",\"seenAt\":" + Ms(seen) + ",\"answeredAt\":" + Ms(answered) + "}";
+        }
+
+        private string WelcomeJson()
+        {
+            Rules r = RulesNow();
+            string m;
+            lock (Sync) m = mode;
+            StringBuilder ins = new StringBuilder("[");
+            bool first = true;
+            foreach (string root in r.Roots)
+            {
+                Instrument inst = ChartBridgeServer.InstrumentFor(root);
+                if (inst == null) continue;
+                if (!first) ins.Append(','); first = false;
+                ins.Append("{\"root\":").Append(CbJson.Str(root)).Append(",\"name\":").Append(CbJson.Str(inst.FullName)).Append(",\"tick\":").Append(CbJson.Num(inst.MasterInstrument.TickSize))
+                   .Append(",\"pointValue\":").Append(CbJson.Num(inst.MasterInstrument.PointValue)).Append('}');
+            }
+            ins.Append(']');
+            return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + CbJson.Str(Account) +
+                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"rules\":" + RulesJson(r) + ",\"instruments\":" + ins + "}";
+        }
+
+        private bool OwnsAny() { return RulesNow().Roots.Any(x => Owns(x)); }
+
+        private string StateJson()
+        {
+            string sd = StandDown();
+            bool owns = OwnsAny();
+            lock (Sync)
+            {
+                return "{\"type\":\"agentState\",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") + ",\"standDown\":" + Str(sd) +
+                       ",\"trades\":" + Trades.Count + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
+                       ",\"owns\":" + (owns ? "true" : "false") + "}";
+            }
+        }
+
+        public string StripJson()
+        {
+            bool sim = SimNow(), owns = OwnsAny();
+            string sd = StandDown();
+            Rules r = RulesNow();
+            StringBuilder b = new StringBuilder("{\"type\":\"agent\"");
+            lock (Sync)
+            {
+                double now = Now();
+                b.Append(",\"agent\":").Append(CbJson.Str(Id))
+                 .Append(",\"name\":").Append(Str(name)).Append(",\"build\":").Append(Str(build))
+                 .Append(",\"enabled\":true")
+                 .Append(",\"connected\":").Append(client != null && helloed ? "true" : "false")
+                 .Append(",\"mode\":").Append(CbJson.Str(mode))
+                 .Append(",\"account\":").Append(CbJson.Str(account))
+                 .Append(",\"sim\":").Append(sim ? "true" : "false")
+                 .Append(",\"rules\":").Append(RulesJson(r))
+                 .Append(",\"position\":").Append(openTag != null && ledQty != 0 ? "{\"root\":" + CbJson.Str(openRoot) + ",\"qty\":" + ledQty.ToString(CultureInfo.InvariantCulture) + ",\"avgPrice\":" + CbJson.Num(ledAvg) + "}" : "null")
+                 .Append(",\"pnlToday\":").Append(CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)))
+                 .Append(",\"trades\":").Append(Trades.Count)
+                 .Append(",\"losses\":").Append(LossesLocked())
+                 .Append(",\"killed\":").Append(killed ? "true" : "false")
+                 .Append(",\"standDown\":").Append(Str(sd))
+                 .Append(",\"owns\":").Append(owns ? "true" : "false")
+                 .Append(",\"lastBeatMs\":").Append(client != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
+                 .Append(",\"lastPlan\":").Append(lastPlanJson ?? "null");
+            }
+            return b.Append('}').ToString();
+        }
+
+        public string DiagJson()
+        {
+            lock (Sync)
+            {
+                return "{\"connected\":" + (client != null ? "true" : "false") + ",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") +
+                       ",\"plans\":" + nPlans + ",\"proposals\":" + nProposals + ",\"placed\":" + nPlaced + ",\"refused\":" + nRefused + ",\"heartbeatLost\":" + nHeartbeatLost +
+                       ",\"flattenedAt\":" + Str(flattenedAt) + ",\"secretFile\":" + CbJson.Str(secretState) + "}";
+            }
+        }
+
+        // ---------------------------------------------------------- logs (never the secret)
+        private void Log(string text) { ChartBridgeServer.Log("agent: " + text); }
+
+        private int logFailed;
+        private void AgentLog(string text)
+        {
+            try { File.AppendAllText(LogFile, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture) + "\t" + text.Replace('\n', ' ') + Environment.NewLine); }
+            catch (Exception ex) { if (Interlocked.Exchange(ref logFailed, 1) == 0) Log("agent-" + Id + ".log could not be written (" + ex.Message + ")"); }
+        }
+    }
+}
